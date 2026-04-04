@@ -136,6 +136,18 @@ func (r *profileRepository) queryUser(ctx context.Context, query string, args ..
 	}
 	user.Email = decryptedEmail
 
+	decryptedPaddleCustomerID, err := r.enc.DecryptNullableString(user.PaddleCustomerID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt paddle_customer_id: %w", err)
+	}
+	user.PaddleCustomerID = decryptedPaddleCustomerID
+
+	decryptedPaddleSubscriptionID, err := r.enc.DecryptNullableString(user.PaddleSubscriptionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt paddle_subscription_id: %w", err)
+	}
+	user.PaddleSubscriptionID = decryptedPaddleSubscriptionID
+
 	return &user, nil
 }
 
@@ -175,6 +187,18 @@ func (r *profileRepository) queryUsers(ctx context.Context, query string, args .
 		}
 		user.Email = decryptedEmail
 
+		decryptedPaddleCustomerID, err := r.enc.DecryptNullableString(user.PaddleCustomerID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt paddle_customer_id: %w", err)
+		}
+		user.PaddleCustomerID = decryptedPaddleCustomerID
+
+		decryptedPaddleSubscriptionID, err := r.enc.DecryptNullableString(user.PaddleSubscriptionID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt paddle_subscription_id: %w", err)
+		}
+		user.PaddleSubscriptionID = decryptedPaddleSubscriptionID
+
 		users = append(users, &user)
 	}
 	return users, rows.Err()
@@ -193,7 +217,8 @@ func (r *profileRepository) GetUserByID(ctx context.Context, id string) (*domain
 
 // GetUserByPaddleSubscriptionID retrieves a user by their Paddle subscription ID
 func (r *profileRepository) GetUserByPaddleSubscriptionID(ctx context.Context, subscriptionID string) (*domain.User, error) {
-	return r.queryUser(ctx, userSelectQuery+" WHERE paddle_subscription_id = $1 AND is_deleted = FALSE", subscriptionID)
+	blindIdx := r.enc.BlindIndex(subscriptionID)
+	return r.queryUser(ctx, userSelectQuery+" WHERE paddle_subscription_id_blind_idx = $1 AND is_deleted = FALSE", blindIdx)
 }
 
 // CreateUser creates a new user in the database
@@ -220,6 +245,16 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 	}
 	clerkUserIDBlindIdx := r.enc.BlindIndex(user.ClerkUserID)
 
+	encryptedPaddleCustomerID, err := r.enc.EncryptNullableString(user.PaddleCustomerID)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt paddle_customer_id: %w", err)
+	}
+	encryptedPaddleSubscriptionID, err := r.enc.EncryptNullableString(user.PaddleSubscriptionID)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt paddle_subscription_id: %w", err)
+	}
+	paddleSubscriptionIDBlindIdx := r.enc.BlindIndexNullable(user.PaddleSubscriptionID)
+
 	query := `
 		INSERT INTO users (
 			id, clerk_user_id, email, email_verified,
@@ -228,7 +263,7 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 			paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted,
 			deletion_requested_at, deletion_scheduled_at,
 			created_at, updated_at, last_login_at,
-			email_blind_idx, clerk_user_id_blind_idx
+			email_blind_idx, clerk_user_id_blind_idx, paddle_subscription_id_blind_idx
 		) VALUES (
 			$1, $2, $3, $4,
 			$5, $6, $7, $8,
@@ -236,7 +271,7 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 			$12, $13, $14, $15, $16,
 			$17, $18,
 			$19, $20, $21,
-			$22, $23
+			$22, $23, $24
 		)
 	`
 
@@ -252,8 +287,8 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 		user.TrialStartedAt,
 		user.TrialEndsAt,
 		user.HadTrial,
-		user.PaddleCustomerID,
-		user.PaddleSubscriptionID,
+		encryptedPaddleCustomerID,
+		encryptedPaddleSubscriptionID,
 		user.PrimaryRegion,
 		user.IsActive,
 		user.IsDeleted,
@@ -264,6 +299,7 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 		user.LastLoginAt,
 		emailBlindIdx,
 		clerkUserIDBlindIdx,
+		paddleSubscriptionIDBlindIdx,
 	)
 
 	return r.checkDuplicateError(err)
@@ -303,6 +339,16 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 	}
 	clerkUserIDBlindIdx := r.enc.BlindIndex(user.ClerkUserID)
 
+	encryptedPaddleCustomerID, err := r.enc.EncryptNullableString(user.PaddleCustomerID)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt paddle_customer_id: %w", err)
+	}
+	encryptedPaddleSubscriptionID, err := r.enc.EncryptNullableString(user.PaddleSubscriptionID)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt paddle_subscription_id: %w", err)
+	}
+	paddleSubscriptionIDBlindIdx := r.enc.BlindIndexNullable(user.PaddleSubscriptionID)
+
 	query := `
 		INSERT INTO users (
 			id, clerk_user_id, email, email_verified,
@@ -311,7 +357,7 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 			paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted,
 			deletion_requested_at, deletion_scheduled_at,
 			created_at, updated_at, last_login_at,
-			email_blind_idx, clerk_user_id_blind_idx
+			email_blind_idx, clerk_user_id_blind_idx, paddle_subscription_id_blind_idx
 		) VALUES (
 			$1, $2, $3, $4,
 			$5, $6, $7, $8,
@@ -319,7 +365,7 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 			$12, $13, $14, $15, $16,
 			$17, $18,
 			$19, $20, $21,
-			$22, $23
+			$22, $23, $24
 		)
 	`
 
@@ -327,10 +373,10 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 		user.ID, encryptedClerkUserID, encryptedEmail, user.EmailVerified,
 		user.SubscriptionTier, user.SubscriptionStatus, user.SubscriptionStartedAt, user.SubscriptionEndsAt,
 		user.TrialStartedAt, user.TrialEndsAt, user.HadTrial,
-		user.PaddleCustomerID, user.PaddleSubscriptionID, user.PrimaryRegion, user.IsActive, user.IsDeleted,
+		encryptedPaddleCustomerID, encryptedPaddleSubscriptionID, user.PrimaryRegion, user.IsActive, user.IsDeleted,
 		user.DeletionRequestedAt, user.DeletionScheduledAt,
 		user.CreatedAt, user.UpdatedAt, user.LastLoginAt,
-		emailBlindIdx, clerkUserIDBlindIdx,
+		emailBlindIdx, clerkUserIDBlindIdx, paddleSubscriptionIDBlindIdx,
 	)
 	return r.checkDuplicateError(err)
 }
@@ -402,6 +448,11 @@ func (r *profileRepository) UpdateLastLogin(ctx context.Context, clerkUserID str
 func (r *profileRepository) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error {
 	now := time.Now()
 
+	encryptedPaddleCustomerID, err := r.enc.EncryptString(paddleCustomerID)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt paddle_customer_id: %w", err)
+	}
+
 	query := `
 		UPDATE users
 		SET paddle_customer_id = $1,
@@ -409,7 +460,7 @@ func (r *profileRepository) UpdatePaddleCustomerID(ctx context.Context, userID, 
 		WHERE id = $3 AND is_deleted = FALSE
 	`
 
-	ct, err := r.db.Exec(ctx, query, paddleCustomerID, now, userID)
+	ct, err := r.db.Exec(ctx, query, encryptedPaddleCustomerID, now, userID)
 	if err != nil {
 		return err
 	}
@@ -433,6 +484,18 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 ) error {
 	now := time.Now()
 
+	var encryptedSubscriptionID *string
+	var subBlindIdx *string
+	if subscriptionID != nil {
+		enc, err := r.enc.EncryptString(*subscriptionID)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt paddle_subscription_id: %w", err)
+		}
+		encryptedSubscriptionID = &enc
+		blind := r.enc.BlindIndex(*subscriptionID)
+		subBlindIdx = &blind
+	}
+
 	query := `
 		UPDATE users
 		SET subscription_tier = $1,
@@ -440,8 +503,9 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 		    subscription_started_at = $3,
 		    subscription_ends_at = $4,
 		    paddle_subscription_id = $5,
-		    updated_at = $6
-		WHERE id = $7 AND is_deleted = FALSE
+		    paddle_subscription_id_blind_idx = $6,
+		    updated_at = $7
+		WHERE id = $8 AND is_deleted = FALSE
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -449,7 +513,8 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 		status,
 		startedAt,
 		endsAt,
-		subscriptionID,
+		encryptedSubscriptionID,
+		subBlindIdx,
 		now,
 		userID,
 	)
@@ -620,8 +685,10 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		    email = $1,
 		    clerk_user_id = $2,
 		    paddle_customer_id = NULL,
+		    paddle_subscription_id = NULL,
 		    email_blind_idx = NULL,
 		    clerk_user_id_blind_idx = NULL,
+		    paddle_subscription_id_blind_idx = NULL,
 		    deletion_requested_at = NULL,
 		    deletion_scheduled_at = NULL,
 		    updated_at = $3
@@ -724,7 +791,7 @@ func (r *profileRepository) GetUsersWithExpiringTrials(ctx context.Context, with
 // GetUsersWithActivePaddleSubscriptions returns users with active Paddle subscriptions
 // Issue #762: Paddle admin tools reconciliation
 func (r *profileRepository) GetUsersWithActivePaddleSubscriptions(ctx context.Context) ([]*domain.User, error) {
-	query := userSelectQuery + ` WHERE paddle_subscription_id IS NOT NULL AND subscription_status NOT IN ('inactive', 'cancelled') AND is_deleted = FALSE`
+	query := userSelectQuery + ` WHERE paddle_subscription_id_blind_idx IS NOT NULL AND subscription_status NOT IN ('inactive', 'cancelled') AND is_deleted = FALSE`
 	users, err := r.queryUsers(ctx, query)
 	if err != nil {
 		return nil, err

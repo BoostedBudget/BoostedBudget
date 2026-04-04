@@ -39,7 +39,7 @@ type TransactionSyncService interface {
 	// If sync fails on page N, cursor is already at page N-1, so retry continues from there.
 	//
 	// Process:
-	// 1. Decrypt access token using EncryptionService
+	// 1. Get plaintext access token (decrypted by repository layer on read)
 	// 2. Loop: call PlaidService.TransactionsSync with cursor
 	// 3. Aggregate Added/Modified/Removed from each page
 	// 4. Update cursor in database IMMEDIATELY after each page

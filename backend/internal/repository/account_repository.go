@@ -160,6 +160,15 @@ func (r *accountRepository) decryptAccountPIIFields(a *domain.Account) error {
 	}
 	a.Mask = decryptedMask
 
+	// InstitutionName is only populated by JOIN queries; decrypt when present
+	if a.InstitutionName != "" {
+		decryptedInstitutionName, err := r.enc.DecryptString(a.InstitutionName)
+		if err != nil {
+			return err
+		}
+		a.InstitutionName = decryptedInstitutionName
+	}
+
 	return nil
 }
 

@@ -105,3 +105,14 @@ ALTER TABLE webhook_events ALTER COLUMN payload TYPE TEXT USING payload::TEXT;
 ALTER TABLE paddle_webhook_events ALTER COLUMN payload TYPE TEXT USING payload::TEXT;
 ALTER TABLE paddle_transactions ALTER COLUMN payload TYPE TEXT USING payload::TEXT;
 ALTER TABLE audit_logs ALTER COLUMN changes TYPE TEXT USING changes::TEXT;
+
+-- audit_logs: ip_address must be TEXT to store encrypted ciphertext (INET cannot hold base64)
+ALTER TABLE audit_logs ALTER COLUMN ip_address TYPE TEXT USING ip_address::TEXT;
+
+-- user_identities: add blind index for clerk_user_id lookup
+ALTER TABLE user_identities ADD COLUMN IF NOT EXISTS clerk_user_id_blind_idx TEXT;
+CREATE INDEX IF NOT EXISTS idx_user_identities_clerk_id_blind ON user_identities (clerk_user_id_blind_idx);
+
+-- users: add blind index for paddle_subscription_id lookup
+ALTER TABLE users ADD COLUMN IF NOT EXISTS paddle_subscription_id_blind_idx TEXT;
+CREATE INDEX IF NOT EXISTS idx_users_paddle_subscription_id_blind ON users (paddle_subscription_id_blind_idx);

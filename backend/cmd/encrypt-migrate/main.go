@@ -132,17 +132,22 @@ func allTables() []tableSpec {
 			},
 		},
 		{
-			name:  "users",
-			idCol: "id",
+			name:         "users",
+			idCol:        "id",
+			nullableCols: []string{"paddle_customer_id"},
 			blindCols: []blindColSpec{
 				{col: "email", blindIdx: "email_blind_idx", lower: true},
 				{col: "clerk_user_id", blindIdx: "clerk_user_id_blind_idx"},
+				{col: "paddle_subscription_id", blindIdx: "paddle_subscription_id_blind_idx"},
 			},
 		},
 		{
 			name:       "user_identities",
 			idCol:      "id",
 			stringCols: []string{"email", "provider_user_id"},
+			blindCols: []blindColSpec{
+				{col: "clerk_user_id", blindIdx: "clerk_user_id_blind_idx"},
+			},
 		},
 		{
 			name:  "accounts",
