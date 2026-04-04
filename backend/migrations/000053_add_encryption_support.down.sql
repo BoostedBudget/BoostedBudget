@@ -7,6 +7,17 @@
 -- (only safe after running the decrypt tool)
 -- ============================================================
 
+-- Revert user_identities clerk_user_id blind index
+DROP INDEX IF EXISTS idx_user_identities_clerk_id_blind;
+ALTER TABLE user_identities DROP COLUMN IF EXISTS clerk_user_id_blind_idx;
+
+-- Revert users paddle_subscription_id blind index
+DROP INDEX IF EXISTS idx_users_paddle_subscription_id_blind;
+ALTER TABLE users DROP COLUMN IF EXISTS paddle_subscription_id_blind_idx;
+
+-- Revert audit_logs ip_address from TEXT back to INET
+ALTER TABLE audit_logs ALTER COLUMN ip_address TYPE INET USING ip_address::INET;
+
 ALTER TABLE audit_logs ALTER COLUMN changes TYPE JSONB USING changes::JSONB;
 ALTER TABLE paddle_transactions ALTER COLUMN payload TYPE JSONB USING payload::JSONB;
 ALTER TABLE paddle_webhook_events ALTER COLUMN payload TYPE JSONB USING payload::JSONB;
