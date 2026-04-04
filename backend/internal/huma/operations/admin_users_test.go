@@ -46,7 +46,7 @@ func (m *mockAdminUserService) UpdateUserTier(ctx context.Context, clerkUserID s
 func TestListUsers_Success(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -114,7 +114,7 @@ func TestListUsers_Success(t *testing.T) {
 func TestListUsers_WithSearch(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -165,7 +165,7 @@ func TestListUsers_WithSearch(t *testing.T) {
 func TestListUsers_WithTierFilter(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 
@@ -205,7 +205,7 @@ func TestListUsers_WithTierFilter(t *testing.T) {
 func TestListUsers_ServiceError(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 
@@ -233,7 +233,7 @@ func TestListUsers_ServiceError(t *testing.T) {
 // TestListUsers_ServiceNotConfigured tests 503 when service is nil
 func TestListUsers_ServiceNotConfigured(t *testing.T) {
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil, cfg) // adminUserService is nil
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg) // adminUserService is nil
 
 	ctx := context.Background()
 
@@ -259,7 +259,7 @@ func TestListUsers_ServiceNotConfigured(t *testing.T) {
 func TestGetUserDetail_Success(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -307,7 +307,7 @@ func TestGetUserDetail_Success(t *testing.T) {
 func TestGetUserDetail_NotFound(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -334,7 +334,7 @@ func TestGetUserDetail_NotFound(t *testing.T) {
 func TestGetUserDetail_ServiceError(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -359,7 +359,7 @@ func TestGetUserDetail_ServiceError(t *testing.T) {
 // TestGetUserDetail_ServiceNotConfigured tests 503 when service is nil
 func TestGetUserDetail_ServiceNotConfigured(t *testing.T) {
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil, cfg) // adminUserService is nil
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg) // adminUserService is nil
 
 	ctx := context.Background()
 	userID := uuid.New().String()

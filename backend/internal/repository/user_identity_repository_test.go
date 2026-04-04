@@ -21,7 +21,7 @@ func setupMockIdentityDB(t *testing.T) (pgxmock.PgxPoolIface, UserIdentityReposi
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewUserIdentityRepository(mock)
+	repo := NewUserIdentityRepository(mock, newTestFieldEncryptor(t))
 	return mock, repo
 }
 
@@ -172,15 +172,15 @@ func TestCreate_Success(t *testing.T) {
 	userID := uuid.New().String()
 	identity := domain.NewUserIdentity(userID, "google-oauth2|123456", "test@gmail.com", true, true)
 
-	// Expect INSERT query
+	// Expect INSERT query — provider_user_id and email are now encrypted
 	mock.ExpectExec(`INSERT INTO user_identities \( id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at \) VALUES`).
 		WithArgs(
 			pgxmock.AnyArg(), // id (generated UUID)
 			identity.UserID,
 			identity.ClerkUserID,
 			identity.Provider,
-			identity.ProviderUserID,
-			identity.Email,
+			pgxmock.AnyArg(), // provider_user_id (encrypted)
+			pgxmock.AnyArg(), // email (encrypted)
 			identity.EmailVerified,
 			identity.IsPrimary,
 			pgxmock.AnyArg(), // created_at
@@ -208,18 +208,19 @@ func TestCreate_DuplicateClerkUserID(t *testing.T) {
 	identity := domain.NewUserIdentity(userID, "google-oauth2|123456", "test@gmail.com", true, true)
 
 	// Simulate unique constraint violation on clerk_user_id
+	// provider_user_id and email are now encrypted
 	mock.ExpectExec(`INSERT INTO user_identities`).
 		WithArgs(
-			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // id
 			identity.UserID,
 			identity.ClerkUserID,
 			identity.Provider,
-			identity.ProviderUserID,
-			identity.Email,
+			pgxmock.AnyArg(), // provider_user_id (encrypted)
+			pgxmock.AnyArg(), // email (encrypted)
 			identity.EmailVerified,
 			identity.IsPrimary,
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // created_at
+			pgxmock.AnyArg(), // updated_at
 			identity.LastUsedAt,
 		).
 		WillReturnError(errors.New("pq: duplicate key value violates unique constraint \"user_identities_clerk_user_id_key\""))

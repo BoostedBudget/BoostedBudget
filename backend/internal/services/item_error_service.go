@@ -102,13 +102,12 @@ type ItemErrorService interface {
 
 // itemErrorService implements ItemErrorService
 type itemErrorService struct {
-	logger            *slog.Logger
-	linkedItemRepo    repository.LinkedItemRepository
-	notificationRepo  repository.NotificationRepository
-	userRepo          UserRepository
-	plaidService      PlaidService
-	encryptionService EncryptionService
-	emailService      EmailService
+	logger           *slog.Logger
+	linkedItemRepo   repository.LinkedItemRepository
+	notificationRepo repository.NotificationRepository
+	userRepo         UserRepository
+	plaidService     PlaidService
+	emailService     EmailService
 }
 
 // NewItemErrorService creates a new ItemErrorService instance
@@ -117,7 +116,6 @@ func NewItemErrorService(
 	notificationRepo repository.NotificationRepository,
 	userRepo UserRepository,
 	plaidService PlaidService,
-	encryptionService EncryptionService,
 	emailService EmailService,
 	logger *slog.Logger,
 ) ItemErrorService {
@@ -125,13 +123,12 @@ func NewItemErrorService(
 		logger = slog.Default()
 	}
 	return &itemErrorService{
-		logger:            logger,
-		linkedItemRepo:    linkedItemRepo,
-		notificationRepo:  notificationRepo,
-		userRepo:          userRepo,
-		plaidService:      plaidService,
-		encryptionService: encryptionService,
-		emailService:      emailService,
+		logger:           logger,
+		linkedItemRepo:   linkedItemRepo,
+		notificationRepo: notificationRepo,
+		userRepo:         userRepo,
+		plaidService:     plaidService,
+		emailService:     emailService,
 	}
 }
 
@@ -159,14 +156,8 @@ func (s *itemErrorService) HandleLoginRequired(
 	errorCode string,
 	errorMessage string,
 ) error {
-	// 1. Decrypt access token (critical - return error if fails)
-	decryptedAccessToken, err := s.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt access token for item %s: %w", linkedItem.ItemID, err)
-	}
-
 	// 2. Create update mode link token for re-authentication (critical - return error if fails)
-	linkTokenResponse, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, decryptedAccessToken)
+	linkTokenResponse, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, linkedItem.AccessToken)
 	if err != nil {
 		return fmt.Errorf("failed to create update mode link token for item %s: %w", linkedItem.ItemID, err)
 	}
@@ -261,14 +252,8 @@ func (s *itemErrorService) HandlePendingExpiration(
 	errorCode string,
 	errorMessage string,
 ) error {
-	// 1. Decrypt access token (critical - return error if fails)
-	decryptedAccessToken, err := s.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt access token for item %s: %w", linkedItem.ItemID, err)
-	}
-
 	// 2. Create update mode link token for re-authentication (critical)
-	linkTokenResponse, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, decryptedAccessToken)
+	linkTokenResponse, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, linkedItem.AccessToken)
 	if err != nil {
 		return fmt.Errorf("failed to create update mode link token for item %s: %w", linkedItem.ItemID, err)
 	}
@@ -320,14 +305,8 @@ func (s *itemErrorService) HandlePermissionRevoked(
 	errorCode string,
 	errorMessage string,
 ) error {
-	// 1. Decrypt access token (critical - return error if fails)
-	decryptedAccessToken, err := s.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt access token for item %s: %w", linkedItem.ItemID, err)
-	}
-
 	// 2. Create update mode link token for re-linking (critical)
-	linkTokenResponse, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, decryptedAccessToken)
+	linkTokenResponse, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, linkedItem.AccessToken)
 	if err != nil {
 		return fmt.Errorf("failed to create update mode link token for item %s: %w", linkedItem.ItemID, err)
 	}

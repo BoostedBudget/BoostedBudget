@@ -185,14 +185,13 @@ func makeMinimalPlaidItem() plaid.Item {
 // ============================================================================
 
 type investmentSyncDeps struct {
-	webhookRepo   *MockWebhookRepository
+	webhookRepo    *MockWebhookRepository
 	linkedItemRepo *MockLinkedItemRepository
-	accountRepo   *MockAccountRepository
-	securityRepo  *MockSecurityRepository
-	holdingRepo   *MockHoldingRepository
-	invTxnRepo    *MockInvestmentTransactionRepository
-	plaidSvc      *MockPlaidService
-	encryptionSvc *MockEncryptionService
+	accountRepo    *MockAccountRepository
+	securityRepo   *MockSecurityRepository
+	holdingRepo    *MockHoldingRepository
+	invTxnRepo     *MockInvestmentTransactionRepository
+	plaidSvc       *MockPlaidService
 }
 
 func setupInvestmentSyncService(t *testing.T) (InvestmentSyncService, investmentSyncDeps) {
@@ -205,7 +204,6 @@ func setupInvestmentSyncService(t *testing.T) (InvestmentSyncService, investment
 		holdingRepo:    new(MockHoldingRepository),
 		invTxnRepo:     new(MockInvestmentTransactionRepository),
 		plaidSvc:       new(MockPlaidService),
-		encryptionSvc:  new(MockEncryptionService),
 	}
 	svc := NewInvestmentSyncService(
 		deps.webhookRepo,
@@ -215,18 +213,18 @@ func setupInvestmentSyncService(t *testing.T) (InvestmentSyncService, investment
 		deps.holdingRepo,
 		deps.invTxnRepo,
 		deps.plaidSvc,
-		deps.encryptionSvc,
 		nil, // logger
 	)
 	return svc, deps
 }
 
+// makeLinkedItem creates a test LinkedItem with AccessToken already decrypted (repo-layer encryption).
 func makeLinkedItem(itemID, userID string) *domain.LinkedItem {
 	return &domain.LinkedItem{
-		ID:                   uuid.New().String(),
-		ItemID:               itemID,
-		UserID:               userID,
-		AccessTokenEncrypted: "enc-" + itemID,
+		ID:          uuid.New().String(),
+		ItemID:      itemID,
+		UserID:      userID,
+		AccessToken: "tok", // repo layer provides decrypted token
 	}
 }
 
@@ -246,9 +244,8 @@ func TestInvestmentSyncService_SyncHoldings_HappyPath(t *testing.T) {
 	internalSecurityID := uuid.New().String()
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
-
-	accessToken := "access-token-decrypted"
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return(accessToken, nil)
+	// AccessToken is already decrypted by the repository layer
+	accessToken := linkedItem.AccessToken
 
 	sec := makePlaidSecurity(plaidSecurityID, "Apple Inc.", "AAPL")
 	holding := makePlaidHolding(plaidAccountID, plaidSecurityID, 10.0, 165.0, 1650.0, 1500.0)
@@ -296,7 +293,6 @@ func TestInvestmentSyncService_SyncHoldings_SecurityMappingCorrect(t *testing.T)
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
 
 	sec := makePlaidSecurity(plaidSecurityID, "Apple Inc.", "AAPL")
 	holding := makePlaidHolding(plaidAccountID, plaidSecurityID, 5.0, 165.0, 825.0, 750.0)
@@ -344,7 +340,6 @@ func TestInvestmentSyncService_SyncHoldings_EmptyHoldings(t *testing.T) {
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
 
 	// No securities, no holdings in response (account was fully liquidated)
 	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(
@@ -382,7 +377,6 @@ func TestInvestmentSyncService_SyncHoldings_UnmappedAccount(t *testing.T) {
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
 
 	// Plaid returns a holding for an account we don't have internally
 	plaidSecurityID := "plaid-sec-001"
@@ -412,24 +406,6 @@ func TestInvestmentSyncService_SyncHoldings_UnmappedAccount(t *testing.T) {
 	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount")
 }
 
-// TestInvestmentSyncService_SyncHoldings_DecryptionFailure verifies that
-// a decryption error is propagated and no Plaid API call is made.
-func TestInvestmentSyncService_SyncHoldings_DecryptionFailure(t *testing.T) {
-	svc, deps := setupInvestmentSyncService(t)
-	ctx := context.Background()
-
-	linkedItem := makeLinkedItem("item-001", "user-001")
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).
-		Return("", errors.New("decryption failed: invalid key"))
-
-	result, err := svc.SyncHoldings(ctx, linkedItem)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "decrypt")
-	assert.Nil(t, result)
-	deps.plaidSvc.AssertNotCalled(t, "InvestmentsHoldingsGet")
-}
-
 // TestInvestmentSyncService_SyncHoldings_PlaidAPIError verifies that Plaid API
 // errors are propagated without crashing.
 func TestInvestmentSyncService_SyncHoldings_PlaidAPIError(t *testing.T) {
@@ -437,7 +413,7 @@ func TestInvestmentSyncService_SyncHoldings_PlaidAPIError(t *testing.T) {
 	ctx := context.Background()
 
 	linkedItem := makeLinkedItem("item-001", "user-001")
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, "tok").
 		Return(nil, errors.New("plaid: PRODUCT_NOT_READY"))
 
@@ -463,9 +439,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_FirstSync_NoLastSynced
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 	// No InvestmentsLastSyncedDate → first sync
-
-	accessToken := "access-tok"
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return(accessToken, nil)
+	// AccessToken is already decrypted by the repository layer
 
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
@@ -485,7 +459,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_FirstSync_NoLastSynced
 
 	// Verify start date is 2-year lookback
 	deps.plaidSvc.On("InvestmentsTransactionsGet",
-		ctx, accessToken,
+		ctx, linkedItem.AccessToken,
 		mock.MatchedBy(func(sd string) bool { return sd == expectedStartDate }),
 		mock.AnythingOfType("string"), // endDate
 		int32(0), int32(500),
@@ -516,9 +490,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_IncrementalSync_UsesLa
 	lastSyncedDate := time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)
 	linkedItem := makeLinkedItem("item-001", userID)
 	linkedItem.InvestmentsLastSyncedDate = &lastSyncedDate
-
-	accessToken := "access-tok"
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return(accessToken, nil)
+	// AccessToken is already decrypted by the repository layer
 
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
@@ -538,7 +510,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_IncrementalSync_UsesLa
 	)
 
 	deps.plaidSvc.On("InvestmentsTransactionsGet",
-		ctx, accessToken, expectedStartDate,
+		ctx, linkedItem.AccessToken, expectedStartDate,
 		mock.AnythingOfType("string"),
 		int32(0), int32(500),
 	).Return(txnResp, nil)
@@ -564,7 +536,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_Pagination_SinglePage(
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
@@ -606,7 +578,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_Pagination_MultiplePag
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
@@ -681,7 +653,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_Pagination_ExactBounda
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
@@ -725,7 +697,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_DuplicatesSkipped(t *t
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
@@ -762,7 +734,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_UpdatesLastSyncedDate(
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
@@ -802,7 +774,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_PartialPageError_NoDat
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
@@ -852,7 +824,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_NullSecurityID(t *test
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
@@ -896,7 +868,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_SecurityResolution(t *
 	internalSecurityID := "internal-" + uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
@@ -963,7 +935,7 @@ func TestInvestmentSyncService_ProcessWebhook_RoutesHoldings(t *testing.T) {
 	deps.linkedItemRepo.On("GetByItemID", ctx, itemID).Return(linkedItem, nil)
 
 	// SyncHoldings dependencies
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, "tok").Return(
 		plaid.NewInvestmentsHoldingsGetResponse(
 			nil, nil, nil, makeMinimalPlaidItem(), "req-001",
@@ -1001,7 +973,7 @@ func TestInvestmentSyncService_ProcessWebhook_RoutesInvestmentTransactions(t *te
 	deps.linkedItemRepo.On("GetByItemID", ctx, itemID).Return(linkedItem, nil)
 
 	// SyncInvestmentTransactions dependencies (empty response)
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	deps.plaidSvc.On("InvestmentsTransactionsGet", ctx, "tok", mock.Anything, mock.Anything, int32(0), int32(500)).
 		Return(plaid.NewInvestmentsTransactionsGetResponse(
@@ -1064,7 +1036,6 @@ func TestInvestmentSyncService_SyncHoldings_UnmappedSecurity_SkipsAccountReplace
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
 
 	// Two holdings: one with a known security, one with an unknown security
 	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(
@@ -1130,8 +1101,6 @@ func TestInvestmentSyncService_ProcessWebhook_HoldingsPartialFailure(t *testing.
 
 	deps.webhookRepo.On("Update", ctx, mock.Anything).Return(nil)
 	deps.linkedItemRepo.On("GetByItemID", ctx, itemID).Return(linkedItem, nil)
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok-partial", nil)
-
 	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(
 		[]plaid.AccountBase{},
 		[]plaid.Holding{
@@ -1145,7 +1114,7 @@ func TestInvestmentSyncService_ProcessWebhook_HoldingsPartialFailure(t *testing.
 		makeMinimalPlaidItem(),
 		"req-partial",
 	)
-	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, "tok-partial").Return(holdingsResp, nil)
+	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, linkedItem.AccessToken).Return(holdingsResp, nil)
 	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).Return(map[string]string{
 		plaidSecurityID: internalSecurityID,
 		// unknownSecurityID absent — will trigger skip

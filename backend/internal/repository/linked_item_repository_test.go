@@ -19,7 +19,7 @@ func setupLinkedItemMockDB(t *testing.T) (pgxmock.PgxPoolIface, LinkedItemReposi
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewLinkedItemRepository(mock)
+	repo := NewLinkedItemRepository(mock, newTestFieldEncryptor(t))
 	return mock, repo
 }
 
@@ -32,31 +32,33 @@ func TestLinkedItemRepository_Create(t *testing.T) {
 	now := time.Now()
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   uuid.New().String(),
-		UserID:               uuid.New().String(),
-		ItemID:               "plaid-item-123",
-		AccessTokenEncrypted: "encrypted-base64-token",
-		InstitutionID:        "ins_109508",
-		InstitutionName:      "Chase",
-		Provider:             "plaid",
-		CreatedAt:            now,
-		UpdatedAt:            now,
+		ID:              uuid.New().String(),
+		UserID:          uuid.New().String(),
+		ItemID:          "plaid-item-123",
+		AccessToken:     "plaintext-access-token",
+		InstitutionID:   "ins_109508",
+		InstitutionName: "Chase",
+		Provider:        "plaid",
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO linked_items
-		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at, item_id_blind_idx, institution_id_blind_idx)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`)).WithArgs(
 		linkedItem.ID,
 		linkedItem.UserID,
-		linkedItem.ItemID,
-		linkedItem.AccessTokenEncrypted,
-		linkedItem.InstitutionID,
-		linkedItem.InstitutionName,
+		pgxmock.AnyArg(), // item_id (encrypted by repo)
+		pgxmock.AnyArg(), // access_token_encrypted (encrypted by repo)
+		pgxmock.AnyArg(), // institution_id (encrypted by repo)
+		pgxmock.AnyArg(), // institution_name (encrypted by repo)
 		linkedItem.Provider,
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
+		pgxmock.AnyArg(), // item_id_blind_idx
+		pgxmock.AnyArg(), // institution_id_blind_idx
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
@@ -147,8 +149,8 @@ func TestLinkedItemRepository_GetByItemID(t *testing.T) {
 		nil, nil,
 	)
 
-	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE item_id").
-		WithArgs(itemID).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE item_id_blind_idx").
+		WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
 	// Execute
 	item, err := repo.GetByItemID(ctx, itemID)
@@ -170,8 +172,8 @@ func TestLinkedItemRepository_GetByItemID_NotFound(t *testing.T) {
 	ctx := context.Background()
 	itemID := "nonexistent-item"
 
-	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE item_id").
-		WithArgs(itemID).WillReturnError(pgx.ErrNoRows)
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE item_id_blind_idx").
+		WithArgs(pgxmock.AnyArg()).WillReturnError(pgx.ErrNoRows)
 
 	// Execute
 	item, err := repo.GetByItemID(ctx, itemID)
@@ -423,8 +425,8 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Active(t *testing.T) {
 			nil, nil,
 		)
 
-	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status").
-		WithArgs(userID, institutionID, "active").
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status").
+		WithArgs(userID, pgxmock.AnyArg(), "active").
 		WillReturnRows(rows)
 
 	// Execute - this method should exist for re-link detection
@@ -457,8 +459,8 @@ func TestLinkedItemRepository_GetByUserAndInstitution_NotFound(t *testing.T) {
 		"investments_last_synced_date", "liabilities_last_synced_at",
 	})
 
-	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status").
-		WithArgs(userID, institutionID, "active").
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status").
+		WithArgs(userID, pgxmock.AnyArg(), "active").
 		WillReturnRows(rows)
 
 	// Execute
@@ -500,8 +502,8 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Replaced(t *testing.T) {
 			nil, nil,
 		)
 
-	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status").
-		WithArgs(userID, institutionID, "replaced").
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status").
+		WithArgs(userID, pgxmock.AnyArg(), "replaced").
 		WillReturnRows(rows)
 
 	// Execute
@@ -543,8 +545,9 @@ func TestLinkedItemRepository_Update_WithSoftDeleteFields(t *testing.T) {
 	mock.ExpectExec("UPDATE linked_items.*SET.*replaced_at.*replaced_by_id").
 		WithArgs(
 			pgxmock.AnyArg(), // id
-			pgxmock.AnyArg(), // institution_id
-			pgxmock.AnyArg(), // institution_name
+			pgxmock.AnyArg(), // institution_id (encrypted)
+			pgxmock.AnyArg(), // institution_id_blind_idx
+			pgxmock.AnyArg(), // institution_name (encrypted)
 			pgxmock.AnyArg(), // provider
 			pgxmock.AnyArg(), // cursor
 			pgxmock.AnyArg(), // last_synced_at
@@ -602,8 +605,8 @@ func TestLinkedItemRepository_GetByUserAndInstitution_MultipleDisconnected_Retur
 	)
 
 	// The regex must include ORDER BY created_at DESC to verify the fix is in place.
-	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status.*ORDER BY created_at DESC").
-		WithArgs(userID, institutionID, "disconnected").
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status.*ORDER BY created_at DESC").
+		WithArgs(userID, pgxmock.AnyArg(), "disconnected").
 		WillReturnRows(rows)
 
 	item, err := repo.GetByUserAndInstitution(ctx, userID, institutionID, "disconnected")
@@ -642,8 +645,8 @@ func TestLinkedItemRepository_GetByUserAndInstitution_SingleDisconnected_Returns
 		nil, nil,
 	)
 
-	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status.*ORDER BY created_at DESC").
-		WithArgs(userID, institutionID, "disconnected").
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status.*ORDER BY created_at DESC").
+		WithArgs(userID, pgxmock.AnyArg(), "disconnected").
 		WillReturnRows(rows)
 
 	item, err := repo.GetByUserAndInstitution(ctx, userID, institutionID, "disconnected")
@@ -674,8 +677,8 @@ func TestLinkedItemRepository_GetByUserAndInstitution_NoMatch_ReturnsNotFound(t 
 		"investments_last_synced_date", "liabilities_last_synced_at",
 	})
 
-	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id.*AND status.*ORDER BY created_at DESC").
-		WithArgs(userID, institutionID, "disconnected").
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status.*ORDER BY created_at DESC").
+		WithArgs(userID, pgxmock.AnyArg(), "disconnected").
 		WillReturnRows(rows)
 
 	item, err := repo.GetByUserAndInstitution(ctx, userID, institutionID, "disconnected")
@@ -719,8 +722,8 @@ func TestLinkedItemRepository_GetByItemID_ReturnsInvestmentsLastSyncedDate(t *te
 		&syncDate, nil,
 	)
 
-	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE item_id").
-		WithArgs(itemID).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE item_id_blind_idx").
+		WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
 	item, err := repo.GetByItemID(ctx, itemID)
 

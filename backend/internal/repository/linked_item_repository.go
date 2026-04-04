@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -113,7 +114,8 @@ type LinkedItemRepository interface {
 
 // linkedItemRepository implements LinkedItemRepository using PostgreSQL
 type linkedItemRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // Standard SELECT columns for linked_items (used across all repository methods).
@@ -126,8 +128,98 @@ const linkedItemSelectCols = `id, user_id, item_id, access_token_encrypted,
        investments_last_synced_date, liabilities_last_synced_at`
 
 // NewLinkedItemRepository creates a new LinkedItemRepository instance
-func NewLinkedItemRepository(db DB) LinkedItemRepository {
-	return &linkedItemRepository{db: db}
+func NewLinkedItemRepository(db DB, enc *appcrypto.FieldEncryptor) LinkedItemRepository {
+	return &linkedItemRepository{db: db, enc: enc}
+}
+
+// encryptLinkedItemPIIFields encrypts PII fields on the item before writing to the database.
+// It computes blind indexes from plaintext values (before encryption).
+// The access token is encrypted from item.AccessToken (plaintext) into item.AccessTokenEncrypted.
+// If item.AccessToken is empty but item.AccessTokenEncrypted is set (legacy), the existing
+// encrypted value is preserved.
+func (r *linkedItemRepository) encryptLinkedItemPIIFields(item *domain.LinkedItem) (itemIDBlind, institutionIDBlind string, err error) {
+	// Compute blind index from plaintext BEFORE encrypting (order matters)
+	itemIDBlind = r.enc.BlindIndex(item.ItemID)
+	if item.InstitutionID != "" {
+		institutionIDBlind = r.enc.BlindIndex(item.InstitutionID)
+	}
+
+	// Encrypt item_id
+	encItemID, err := r.enc.EncryptString(item.ItemID)
+	if err != nil {
+		return "", "", fmt.Errorf("encrypt item_id: %w", err)
+	}
+	item.ItemID = encItemID
+
+	// Encrypt institution_id (if set)
+	if item.InstitutionID != "" {
+		encInstID, err := r.enc.EncryptString(item.InstitutionID)
+		if err != nil {
+			return "", "", fmt.Errorf("encrypt institution_id: %w", err)
+		}
+		item.InstitutionID = encInstID
+	}
+
+	// Encrypt institution_name (if set)
+	if item.InstitutionName != "" {
+		encInstName, err := r.enc.EncryptString(item.InstitutionName)
+		if err != nil {
+			return "", "", fmt.Errorf("encrypt institution_name: %w", err)
+		}
+		item.InstitutionName = encInstName
+	}
+
+	// Encrypt access token: prefer plaintext AccessToken, fall back to existing encrypted value
+	if item.AccessToken != "" {
+		encToken, err := r.enc.EncryptString(item.AccessToken)
+		if err != nil {
+			return "", "", fmt.Errorf("encrypt access_token: %w", err)
+		}
+		item.AccessTokenEncrypted = encToken
+	}
+	// If item.AccessToken == "" and item.AccessTokenEncrypted != "", keep existing encrypted value (legacy)
+
+	return itemIDBlind, institutionIDBlind, nil
+}
+
+// decryptLinkedItemPIIFields decrypts PII fields on the item after reading from the database.
+// It also populates item.AccessToken by decrypting item.AccessTokenEncrypted.
+func (r *linkedItemRepository) decryptLinkedItemPIIFields(item *domain.LinkedItem) error {
+	// Decrypt item_id
+	plainItemID, err := r.enc.DecryptString(item.ItemID)
+	if err != nil {
+		return fmt.Errorf("decrypt item_id: %w", err)
+	}
+	item.ItemID = plainItemID
+
+	// Decrypt institution_id
+	if item.InstitutionID != "" {
+		plainInstID, err := r.enc.DecryptString(item.InstitutionID)
+		if err != nil {
+			return fmt.Errorf("decrypt institution_id: %w", err)
+		}
+		item.InstitutionID = plainInstID
+	}
+
+	// Decrypt institution_name
+	if item.InstitutionName != "" {
+		plainInstName, err := r.enc.DecryptString(item.InstitutionName)
+		if err != nil {
+			return fmt.Errorf("decrypt institution_name: %w", err)
+		}
+		item.InstitutionName = plainInstName
+	}
+
+	// Decrypt access token and populate AccessToken field
+	if item.AccessTokenEncrypted != "" {
+		plainToken, err := r.enc.DecryptString(item.AccessTokenEncrypted)
+		if err != nil {
+			return fmt.Errorf("decrypt access_token: %w", err)
+		}
+		item.AccessToken = plainToken
+	}
+
+	return nil
 }
 
 // Create creates a new linked item in the database
@@ -142,13 +234,19 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 	item.CreatedAt = now
 	item.UpdatedAt = now
 
+	// Encrypt PII fields and compute blind indexes before writing
+	itemIDBlind, institutionIDBlind, err := r.encryptLinkedItemPIIFields(item)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt linked item fields: %w", err)
+	}
+
 	query := `
 		INSERT INTO linked_items
-		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at, item_id_blind_idx, institution_id_blind_idx)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`
 
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		item.ID,
 		item.UserID,
 		item.ItemID,
@@ -158,6 +256,8 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 		item.Provider,
 		item.CreatedAt,
 		item.UpdatedAt,
+		itemIDBlind,
+		institutionIDBlind,
 	)
 
 	if err != nil {
@@ -210,6 +310,10 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 		return nil, err
 	}
 
+	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
+		return nil, err
+	}
+
 	return &item, nil
 }
 
@@ -253,6 +357,9 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 		if err != nil {
 			return nil, err
 		}
+		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
+			return nil, err
+		}
 		items = append(items, item)
 	}
 
@@ -268,10 +375,11 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 
 // GetByItemID retrieves a linked item by its Plaid item ID
 func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (*domain.LinkedItem, error) {
-	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE item_id = $1`
+	blindIdx := r.enc.BlindIndex(itemID)
+	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE item_id_blind_idx = $1`
 
 	var item domain.LinkedItem
-	err := r.db.QueryRow(ctx, query, itemID).Scan(
+	err := r.db.QueryRow(ctx, query, blindIdx).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
@@ -299,6 +407,10 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 		return nil, ErrLinkedItemNotFound
 	}
 	if err != nil {
+		return nil, err
+	}
+
+	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 		return nil, err
 	}
 
@@ -337,28 +449,50 @@ func (r *linkedItemRepository) Update(ctx context.Context, item *domain.LinkedIt
 	now := time.Now()
 	item.UpdatedAt = now
 
+	// Encrypt PII fields and compute blind indexes before writing.
+	// institution_id and institution_name are decrypted when read, so must be re-encrypted on write.
+	// item_id is not updated here (set once on Create).
+	institutionIDBlind := ""
+	if item.InstitutionID != "" {
+		institutionIDBlind = r.enc.BlindIndex(item.InstitutionID)
+		encInstID, err := r.enc.EncryptString(item.InstitutionID)
+		if err != nil {
+			return fmt.Errorf("encrypt institution_id: %w", err)
+		}
+		item.InstitutionID = encInstID
+	}
+	if item.InstitutionName != "" {
+		encInstName, err := r.enc.EncryptString(item.InstitutionName)
+		if err != nil {
+			return fmt.Errorf("encrypt institution_name: %w", err)
+		}
+		item.InstitutionName = encInstName
+	}
+
 	query := `
 		UPDATE linked_items
 		SET institution_id = $2,
-		    institution_name = $3,
-		    provider = $4,
-		    cursor = $5,
-		    last_synced_at = $6,
-		    status = $7,
-		    error_code = $8,
-		    error_message = $9,
-		    last_error_at = $10,
-		    retry_count = $11,
-		    next_retry_at = $12,
-		    replaced_at = $13,
-		    replaced_by_id = $14,
-		    updated_at = $15
+		    institution_id_blind_idx = $3,
+		    institution_name = $4,
+		    provider = $5,
+		    cursor = $6,
+		    last_synced_at = $7,
+		    status = $8,
+		    error_code = $9,
+		    error_message = $10,
+		    last_error_at = $11,
+		    retry_count = $12,
+		    next_retry_at = $13,
+		    replaced_at = $14,
+		    replaced_by_id = $15,
+		    updated_at = $16
 		WHERE id = $1
 	`
 
 	ct, err := r.db.Exec(ctx, query,
 		item.ID,
 		item.InstitutionID,
+		institutionIDBlind,
 		item.InstitutionName,
 		item.Provider,
 		item.Cursor,
@@ -448,6 +582,10 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 		return nil, err
 	}
 
+	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
+		return nil, err
+	}
+
 	return &item, nil
 }
 
@@ -531,6 +669,10 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 		return nil, err
 	}
 
+	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
+		return nil, err
+	}
+
 	return &item, nil
 }
 
@@ -540,10 +682,11 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 //
 // Returns nil, nil if no matching item found (not an error).
 func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, userID, institutionID, status string) (*domain.LinkedItem, error) {
-	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE user_id = $1 AND institution_id = $2 AND status = $3 ORDER BY created_at DESC LIMIT 1`
+	institutionIDBlind := r.enc.BlindIndex(institutionID)
+	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE user_id = $1 AND institution_id_blind_idx = $2 AND status = $3 ORDER BY created_at DESC LIMIT 1`
 
 	var item domain.LinkedItem
-	err := r.db.QueryRow(ctx, query, userID, institutionID, status).Scan(
+	err := r.db.QueryRow(ctx, query, userID, institutionIDBlind, status).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
@@ -572,6 +715,10 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 		return nil, nil
 	}
 	if err != nil {
+		return nil, err
+	}
+
+	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 		return nil, err
 	}
 
@@ -656,6 +803,9 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 		if err != nil {
 			return nil, err
 		}
+		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
+			return nil, err
+		}
 		items = append(items, item)
 	}
 
@@ -720,6 +870,9 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 			&item.LiabilitiesLastSyncedAt,
 		)
 		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -832,6 +985,9 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 			&item.LiabilitiesLastSyncedAt,
 		)
 		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

@@ -207,6 +207,7 @@ func createTestLinkedItem() *domain.LinkedItem {
 		ID:                   "linked-item-123",
 		UserID:               "user-123",
 		ItemID:               "plaid-item-123",
+		AccessToken:          "decrypted-access-token",
 		AccessTokenEncrypted: "encrypted-token",
 		InstitutionID:        "ins_123",
 		InstitutionName:      "Test Bank",
@@ -224,11 +225,8 @@ func TestFireWebhook_Success(t *testing.T) {
 	mockRepo := &mockLinkedItemRepo{
 		item: createTestLinkedItem(),
 	}
-	mockEncrypt := &mockEncryptionService{
-		decryptedToken: "decrypted-access-token",
-	}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, nil, nil, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -257,9 +255,8 @@ func TestFireWebhook_ItemNotFound(t *testing.T) {
 	mockRepo := &mockLinkedItemRepo{
 		getErr: repository.ErrLinkedItemNotFound,
 	}
-	mockEncrypt := &mockEncryptionService{}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, nil, nil, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -279,36 +276,6 @@ func TestFireWebhook_ItemNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "Item not found")
 }
 
-// TestFireWebhook_DecryptionError tests 500 when decryption fails.
-func TestFireWebhook_DecryptionError(t *testing.T) {
-	mockPlaid := &mockPlaidServiceForAdmin{}
-	mockRepo := &mockLinkedItemRepo{
-		item: createTestLinkedItem(),
-	}
-	mockEncrypt := &mockEncryptionService{
-		decryptErr: errors.New("decryption failed"),
-	}
-
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
-
-	input := &FireWebhookInput{
-		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
-			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
-			ClerkUserID:        "clerk_user_123",
-		},
-	}
-	input.Body = FireWebhookRequestBody{
-		ItemID:      "plaid-item-123",
-		WebhookCode: "DEFAULT_UPDATE",
-	}
-
-	output, err := handler.FireWebhook(context.Background(), input)
-
-	assert.Nil(t, output)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Internal server error")
-}
-
 // TestFireWebhook_PlaidAPIError tests 500 when Plaid API fails.
 func TestFireWebhook_PlaidAPIError(t *testing.T) {
 	mockPlaid := &mockPlaidServiceForAdmin{
@@ -317,11 +284,8 @@ func TestFireWebhook_PlaidAPIError(t *testing.T) {
 	mockRepo := &mockLinkedItemRepo{
 		item: createTestLinkedItem(),
 	}
-	mockEncrypt := &mockEncryptionService{
-		decryptedToken: "decrypted-access-token",
-	}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, nil, nil, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -345,10 +309,9 @@ func TestFireWebhook_PlaidAPIError(t *testing.T) {
 func TestAdminRouteRegistration(t *testing.T) {
 	mockPlaid := &mockPlaidServiceForAdmin{}
 	mockRepo := &mockLinkedItemRepo{}
-	mockEncrypt := &mockEncryptionService{}
 
 	_, api := humatest.New(t)
-	handler := NewAdminHandler(mockPlaid, mockRepo, mockEncrypt, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, nil, nil, nil, nil, nil, nil)
 	RegisterAdminRoutes(api, handler)
 
 	// Test POST /api/v1/admin/plaid/fire-webhook (without auth, should fail with 401)
@@ -364,7 +327,7 @@ func TestAdminRouteRegistration(t *testing.T) {
 // TestGrantTrial_Success tests successful trial grant.
 func TestGrantTrial_Success(t *testing.T) {
 	mockTrial := &mockTrialService{}
-	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(nil, nil, mockTrial, nil, nil, nil, nil, nil)
 
 	input := &GrantTrialInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -386,7 +349,7 @@ func TestGrantTrial_UserAlreadyHadTrial(t *testing.T) {
 	mockTrial := &mockTrialService{
 		grantTrialErr: errors.New("user has already had a trial"),
 	}
-	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(nil, nil, mockTrial, nil, nil, nil, nil, nil)
 
 	input := &GrantTrialInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -406,7 +369,7 @@ func TestGrantTrial_UserAlreadyHadTrial(t *testing.T) {
 
 // TestGrantTrial_ServiceNotConfigured tests 503 when trial service is nil.
 func TestGrantTrial_ServiceNotConfigured(t *testing.T) {
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil)
 
 	input := &GrantTrialInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -427,7 +390,7 @@ func TestGrantTrial_ServiceError(t *testing.T) {
 	mockTrial := &mockTrialService{
 		grantTrialErr: errors.New("database connection error"),
 	}
-	handler := NewAdminHandler(nil, nil, nil, mockTrial, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(nil, nil, mockTrial, nil, nil, nil, nil, nil)
 
 	input := &GrantTrialInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -493,7 +456,7 @@ func TestGetSystemHealth_Success(t *testing.T) {
 		},
 	}
 
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, mockHealth, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, mockHealth, nil, nil)
 
 	input := &GetSystemHealthInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -519,7 +482,7 @@ func TestGetSystemHealth_Success(t *testing.T) {
 
 // TestGetSystemHealth_ServiceNotConfigured tests 503 when service is nil.
 func TestGetSystemHealth_ServiceNotConfigured(t *testing.T) {
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil)
 
 	input := &GetSystemHealthInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -541,7 +504,7 @@ func TestGetSystemHealth_ServiceError(t *testing.T) {
 		healthErr: errors.New("database connection error"),
 	}
 
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, mockHealth, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, mockHealth, nil, nil)
 
 	input := &GetSystemHealthInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{

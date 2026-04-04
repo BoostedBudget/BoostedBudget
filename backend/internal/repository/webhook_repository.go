@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -62,12 +63,13 @@ type WebhookRepository interface {
 
 // webhookRepository implements WebhookRepository using PostgreSQL
 type webhookRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewWebhookRepository creates a new WebhookRepository instance
-func NewWebhookRepository(db DB) WebhookRepository {
-	return &webhookRepository{db: db}
+func NewWebhookRepository(db DB, enc *appcrypto.FieldEncryptor) WebhookRepository {
+	return &webhookRepository{db: db, enc: enc}
 }
 
 // Create stores a new webhook event in the database
@@ -77,23 +79,35 @@ func (r *webhookRepository) Create(ctx context.Context, event *domain.WebhookEve
 		event.ID = uuid.New().String()
 	}
 
+	encPayload, err := r.enc.EncryptJSON(event.Payload)
+	if err != nil {
+		return fmt.Errorf("encrypt webhook payload: %w", err)
+	}
+
+	encItemID, err := r.enc.EncryptNullableString(event.ItemID)
+	if err != nil {
+		return fmt.Errorf("encrypt webhook item_id: %w", err)
+	}
+	itemIDBlindIdx := r.enc.BlindIndexNullable(event.ItemID)
+
 	query := `
 		INSERT INTO webhook_events (
-			webhook_type, webhook_code, item_id, error_code,
+			webhook_type, webhook_code, item_id, item_id_blind_idx, error_code,
 			new_transactions, removed_transactions, payload,
 			signature, signature_valid, processed
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, created_at, updated_at
 	`
 
-	err := r.db.QueryRow(ctx, query,
+	err = r.db.QueryRow(ctx, query,
 		event.WebhookType,
 		event.WebhookCode,
-		event.ItemID,
+		encItemID,
+		itemIDBlindIdx,
 		event.ErrorCode,
 		event.NewTransactions,
 		event.RemovedTransactions,
-		event.Payload,
+		encPayload,
 		event.Signature,
 		event.SignatureValid,
 		event.Processed,
@@ -121,6 +135,7 @@ func (r *webhookRepository) GetByID(ctx context.Context, id string) (*domain.Web
 	`
 
 	var event domain.WebhookEvent
+	var rawPayload string
 	err := r.db.QueryRow(ctx, query, id).Scan(
 		&event.ID,
 		&event.WebhookType,
@@ -129,7 +144,7 @@ func (r *webhookRepository) GetByID(ctx context.Context, id string) (*domain.Web
 		&event.ErrorCode,
 		&event.NewTransactions,
 		&event.RemovedTransactions,
-		&event.Payload,
+		&rawPayload,
 		&event.Signature,
 		&event.SignatureValid,
 		&event.Processed,
@@ -150,7 +165,28 @@ func (r *webhookRepository) GetByID(ctx context.Context, id string) (*domain.Web
 		return nil, fmt.Errorf("failed to get webhook event by id: %w", err)
 	}
 
+	if err := r.decryptWebhookEvent(&event, rawPayload); err != nil {
+		return nil, fmt.Errorf("failed to decrypt webhook event: %w", err)
+	}
+
 	return &event, nil
+}
+
+// decryptWebhookEvent decrypts the encrypted fields on a WebhookEvent in place.
+func (r *webhookRepository) decryptWebhookEvent(event *domain.WebhookEvent, rawPayload string) error {
+	var err error
+
+	event.Payload, err = r.enc.DecryptJSON(rawPayload)
+	if err != nil {
+		return fmt.Errorf("decrypt payload: %w", err)
+	}
+
+	event.ItemID, err = r.enc.DecryptNullableString(event.ItemID)
+	if err != nil {
+		return fmt.Errorf("decrypt item_id: %w", err)
+	}
+
+	return nil
 }
 
 // MarkProcessed marks a webhook event as processed
@@ -191,6 +227,7 @@ func (r *webhookRepository) GetUnprocessed(ctx context.Context) ([]domain.Webhoo
 	var events []domain.WebhookEvent
 	for rows.Next() {
 		var event domain.WebhookEvent
+		var rawPayload string
 		err := rows.Scan(
 			&event.ID,
 			&event.WebhookType,
@@ -199,7 +236,7 @@ func (r *webhookRepository) GetUnprocessed(ctx context.Context) ([]domain.Webhoo
 			&event.ErrorCode,
 			&event.NewTransactions,
 			&event.RemovedTransactions,
-			&event.Payload,
+			&rawPayload,
 			&event.Signature,
 			&event.SignatureValid,
 			&event.Processed,
@@ -209,6 +246,9 @@ func (r *webhookRepository) GetUnprocessed(ctx context.Context) ([]domain.Webhoo
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan webhook event: %w", err)
+		}
+		if err := r.decryptWebhookEvent(&event, rawPayload); err != nil {
+			return nil, fmt.Errorf("failed to decrypt webhook event: %w", err)
 		}
 		events = append(events, event)
 	}
@@ -228,12 +268,12 @@ func (r *webhookRepository) GetByItemID(ctx context.Context, itemID string, limi
 		       signature, signature_valid, processed, processed_at,
 		       created_at, updated_at
 		FROM webhook_events
-		WHERE item_id = $1
+		WHERE item_id_blind_idx = $1
 		ORDER BY created_at DESC
 		LIMIT $2
 	`
 
-	rows, err := r.db.Query(ctx, query, itemID, limit)
+	rows, err := r.db.Query(ctx, query, r.enc.BlindIndex(itemID), limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get webhooks by item_id: %w", err)
 	}
@@ -242,6 +282,7 @@ func (r *webhookRepository) GetByItemID(ctx context.Context, itemID string, limi
 	var events []domain.WebhookEvent
 	for rows.Next() {
 		var event domain.WebhookEvent
+		var rawPayload string
 		err := rows.Scan(
 			&event.ID,
 			&event.WebhookType,
@@ -250,7 +291,7 @@ func (r *webhookRepository) GetByItemID(ctx context.Context, itemID string, limi
 			&event.ErrorCode,
 			&event.NewTransactions,
 			&event.RemovedTransactions,
-			&event.Payload,
+			&rawPayload,
 			&event.Signature,
 			&event.SignatureValid,
 			&event.Processed,
@@ -260,6 +301,9 @@ func (r *webhookRepository) GetByItemID(ctx context.Context, itemID string, limi
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan webhook event: %w", err)
+		}
+		if err := r.decryptWebhookEvent(&event, rawPayload); err != nil {
+			return nil, fmt.Errorf("failed to decrypt webhook event: %w", err)
 		}
 		events = append(events, event)
 	}
@@ -340,6 +384,7 @@ func (r *webhookRepository) GetUnprocessedByType(ctx context.Context, webhookTyp
 	var events []domain.WebhookEvent
 	for rows.Next() {
 		var event domain.WebhookEvent
+		var rawPayload string
 		err := rows.Scan(
 			&event.ID,
 			&event.WebhookType,
@@ -348,7 +393,7 @@ func (r *webhookRepository) GetUnprocessedByType(ctx context.Context, webhookTyp
 			&event.ErrorCode,
 			&event.NewTransactions,
 			&event.RemovedTransactions,
-			&event.Payload,
+			&rawPayload,
 			&event.Signature,
 			&event.SignatureValid,
 			&event.Processed,
@@ -363,6 +408,9 @@ func (r *webhookRepository) GetUnprocessedByType(ctx context.Context, webhookTyp
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan webhook event: %w", err)
+		}
+		if err := r.decryptWebhookEvent(&event, rawPayload); err != nil {
+			return nil, fmt.Errorf("failed to decrypt webhook event: %w", err)
 		}
 		events = append(events, event)
 	}

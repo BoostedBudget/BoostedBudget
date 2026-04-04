@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -94,12 +95,72 @@ type AccountRepository interface {
 
 // accountRepository implements AccountRepository using PostgreSQL
 type accountRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewAccountRepository creates a new AccountRepository instance
-func NewAccountRepository(db DB) AccountRepository {
-	return &accountRepository{db: db}
+func NewAccountRepository(db DB, enc *appcrypto.FieldEncryptor) AccountRepository {
+	return &accountRepository{db: db, enc: enc}
+}
+
+// encryptAccountPIIFields encrypts PII fields on an account before writing to the database.
+// Blind indexes must be computed from plaintext BEFORE calling this function.
+func (r *accountRepository) encryptAccountPIIFields(a *domain.Account) error {
+	encryptedPlaidAccountID, err := r.enc.EncryptString(a.PlaidAccountID)
+	if err != nil {
+		return err
+	}
+	a.PlaidAccountID = encryptedPlaidAccountID
+
+	encryptedName, err := r.enc.EncryptString(a.Name)
+	if err != nil {
+		return err
+	}
+	a.Name = encryptedName
+
+	encryptedOfficialName, err := r.enc.EncryptNullableString(a.OfficialName)
+	if err != nil {
+		return err
+	}
+	a.OfficialName = encryptedOfficialName
+
+	encryptedMask, err := r.enc.EncryptNullableString(a.Mask)
+	if err != nil {
+		return err
+	}
+	a.Mask = encryptedMask
+
+	return nil
+}
+
+// decryptAccountPIIFields decrypts PII fields on an account after reading from the database.
+func (r *accountRepository) decryptAccountPIIFields(a *domain.Account) error {
+	decryptedPlaidAccountID, err := r.enc.DecryptString(a.PlaidAccountID)
+	if err != nil {
+		return err
+	}
+	a.PlaidAccountID = decryptedPlaidAccountID
+
+	decryptedName, err := r.enc.DecryptString(a.Name)
+	if err != nil {
+		return err
+	}
+	a.Name = decryptedName
+
+	decryptedOfficialName, err := r.enc.DecryptNullableString(a.OfficialName)
+	if err != nil {
+		return err
+	}
+	a.OfficialName = decryptedOfficialName
+
+	decryptedMask, err := r.enc.DecryptNullableString(a.Mask)
+	if err != nil {
+		return err
+	}
+	a.Mask = decryptedMask
+
+	return nil
 }
 
 // Create creates a new account in the database
@@ -114,12 +175,19 @@ func (r *accountRepository) Create(ctx context.Context, account *domain.Account)
 	account.CreatedAt = now
 	account.UpdatedAt = now
 
+	// Compute blind index from plaintext before encrypting
+	plaidAccountIDBlindIdx := r.enc.BlindIndex(account.PlaidAccountID)
+
+	if err := r.encryptAccountPIIFields(account); err != nil {
+		return err
+	}
+
 	query := `
 		INSERT INTO accounts
-		(id, linked_item_id, user_id, plaid_account_id, name, official_name,
+		(id, linked_item_id, user_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
 		 type, subtype, mask, current_balance, available_balance, currency_code,
 		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`
 
 	_, err := r.db.Exec(ctx, query,
@@ -127,6 +195,7 @@ func (r *accountRepository) Create(ctx context.Context, account *domain.Account)
 		account.LinkedItemID,
 		account.UserID,
 		account.PlaidAccountID,
+		plaidAccountIDBlindIdx,
 		account.Name,
 		account.OfficialName,
 		account.Type,
@@ -142,7 +211,7 @@ func (r *accountRepository) Create(ctx context.Context, account *domain.Account)
 	if err != nil {
 		// Check for unique constraint violations
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			if strings.Contains(err.Error(), "unique_user_account") {
+			if strings.Contains(err.Error(), "unique_user_account") || strings.Contains(err.Error(), "unique_accounts_plaid_id_blind") {
 				return ErrDuplicateAccount
 			}
 		}
@@ -167,10 +236,10 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 
 	query := `
 		INSERT INTO accounts
-		(id, linked_item_id, user_id, plaid_account_id, name, official_name,
+		(id, linked_item_id, user_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
 		 type, subtype, mask, current_balance, available_balance, currency_code,
 		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`
 
 	now := time.Now()
@@ -187,11 +256,19 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 		account.CreatedAt = now
 		account.UpdatedAt = now
 
+		// Compute blind index from plaintext before encrypting
+		plaidAccountIDBlindIdx := r.enc.BlindIndex(account.PlaidAccountID)
+
+		if err := r.encryptAccountPIIFields(account); err != nil {
+			return err
+		}
+
 		_, err := tx.Exec(ctx, query,
 			account.ID,
 			account.LinkedItemID,
 			account.UserID,
 			account.PlaidAccountID,
+			plaidAccountIDBlindIdx,
 			account.Name,
 			account.OfficialName,
 			account.Type,
@@ -207,7 +284,7 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 		if err != nil {
 			// Check for unique constraint violations
 			if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-				if strings.Contains(err.Error(), "unique_user_account") {
+				if strings.Contains(err.Error(), "unique_user_account") || strings.Contains(err.Error(), "unique_accounts_plaid_id_blind") {
 					return ErrDuplicateAccount
 				}
 			}
@@ -257,6 +334,9 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 			&account.UpdatedAt,
 		)
 		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptAccountPIIFields(&account); err != nil {
 			return nil, err
 		}
 		accounts = append(accounts, account)
@@ -309,6 +389,9 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 		if err != nil {
 			return nil, err
 		}
+		if err := r.decryptAccountPIIFields(&account); err != nil {
+			return nil, err
+		}
 		accounts = append(accounts, account)
 	}
 
@@ -359,6 +442,9 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 			&account.InstitutionName,
 		)
 		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptAccountPIIFields(&account); err != nil {
 			return nil, err
 		}
 		accounts = append(accounts, account)
@@ -425,13 +511,9 @@ func (r *accountRepository) Delete(ctx context.Context, accountID, userID string
 	if err != nil {
 		return err
 	}
-
-	// Check if any rows were affected (validates ownership and existence)
 	if ct.RowsAffected() == 0 {
-		// Account not found OR user doesn't own it (both cases return same error for security)
 		return ErrAccountNotFound
 	}
-
 	return nil
 }
 
@@ -465,6 +547,10 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		return nil, err
 	}
 
+	if err := r.decryptAccountPIIFields(&account); err != nil {
+		return nil, err
+	}
+
 	return &account, nil
 }
 
@@ -487,11 +573,9 @@ func (r *accountRepository) Update(ctx context.Context, account *domain.Account,
 	if err != nil {
 		return err
 	}
-
 	if ct.RowsAffected() == 0 {
 		return ErrAccountNotFound
 	}
-
 	return nil
 }
 
@@ -571,6 +655,9 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		if err != nil {
 			return nil, err
 		}
+		if err := r.decryptAccountPIIFields(&account); err != nil {
+			return nil, err
+		}
 		accounts = append(accounts, account)
 	}
 
@@ -615,6 +702,9 @@ func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userA
 			&account.CreatedAt, &account.UpdatedAt,
 		)
 		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptAccountPIIFields(&account); err != nil {
 			return nil, err
 		}
 		accounts = append(accounts, account)
@@ -663,6 +753,9 @@ func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountI
 		if err != nil {
 			return nil, err
 		}
+		if err := r.decryptAccountPIIFields(&account); err != nil {
+			return nil, err
+		}
 		accounts = append(accounts, account)
 	}
 
@@ -694,10 +787,8 @@ func (r *accountRepository) UpdateStatus(ctx context.Context, accountID, userID 
 	if err != nil {
 		return err
 	}
-
 	if result.RowsAffected() == 0 {
 		return ErrAccountNotFound
 	}
-
 	return nil
 }
