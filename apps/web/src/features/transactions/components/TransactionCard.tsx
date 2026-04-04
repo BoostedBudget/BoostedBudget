@@ -1,5 +1,6 @@
 import type { Transaction, CategorySource } from '../types'
 import type { Account } from '../../accounts/types'
+import { ReadOnlyGuard, useReadOnly } from '@/auth'
 import { TransactionBudgetBadge } from '../../budgets/components/transaction-link'
 import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetMatcher'
 import { getCategoryColor } from '@/lib/category-colors'
@@ -156,6 +157,7 @@ function formatDate(dateStr: string | null | undefined): string {
 }
 
 export function TransactionCard({ transaction, account, onEdit, onCategorize, budgetMatch }: TransactionCardProps) {
+  const { isReadOnly } = useReadOnly()
   const {
     id,
     name,
@@ -172,13 +174,13 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
   } = transaction
 
   const handleClick = () => {
-    onEdit?.(transaction)
+    if (!isReadOnly) onEdit?.(transaction)
   }
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
-      onEdit?.(transaction)
+      if (!isReadOnly) onEdit?.(transaction)
     }
   }
 
@@ -308,24 +310,28 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
         {(onEdit || onCategorize) && (
           <div className="transaction-card__quick-actions">
             {onEdit && (
-              <button
-                className="transaction-card__action-btn"
-                onClick={handleEditClick}
-                aria-label="Edit transaction"
-                type="button"
-              >
-                <Pencil className="transaction-card__action-icon" />
-              </button>
+              <ReadOnlyGuard message="Resubscribe to edit transactions">
+                <button
+                  className="transaction-card__action-btn"
+                  onClick={handleEditClick}
+                  aria-label="Edit transaction"
+                  type="button"
+                >
+                  <Pencil className="transaction-card__action-icon" />
+                </button>
+              </ReadOnlyGuard>
             )}
             {onCategorize && (
-              <button
-                className="transaction-card__action-btn"
-                onClick={handleCategorizeClick}
-                aria-label="Categorize transaction"
-                type="button"
-              >
-                <Tag className="transaction-card__action-icon" />
-              </button>
+              <ReadOnlyGuard message="Resubscribe to categorize transactions">
+                <button
+                  className="transaction-card__action-btn"
+                  onClick={handleCategorizeClick}
+                  aria-label="Categorize transaction"
+                  type="button"
+                >
+                  <Tag className="transaction-card__action-icon" />
+                </button>
+              </ReadOnlyGuard>
             )}
           </div>
         )}

@@ -9,6 +9,7 @@
 
 import { useCallback } from 'react'
 import { Edit, Tag, ChevronUp, ChevronDown, Clock } from 'lucide-react'
+import { ReadOnlyGuard } from '@/auth'
 import type { Transaction } from '../types'
 import type { Account } from '../../accounts/types'
 import { getCategoryColor } from '@/lib/category-colors'
@@ -368,28 +369,32 @@ export function TransactionTable({
                 >
                   <div className="transaction-table__actions">
                     {onEdit && (
-                      <button
-                        type="button"
-                        onClick={() => onEdit(transaction)}
-                        disabled={loading}
-                        className="transaction-table__action-btn"
-                        aria-label="Edit transaction"
-                        title="Edit transaction"
-                      >
-                        <Edit aria-hidden="true" />
-                      </button>
+                      <ReadOnlyGuard message="Resubscribe to edit transactions">
+                        <button
+                          type="button"
+                          onClick={() => onEdit(transaction)}
+                          disabled={loading}
+                          className="transaction-table__action-btn"
+                          aria-label="Edit transaction"
+                          title="Edit transaction"
+                        >
+                          <Edit aria-hidden="true" />
+                        </button>
+                      </ReadOnlyGuard>
                     )}
                     {onCategorize && (
-                      <button
-                        type="button"
-                        onClick={() => onCategorize(transaction)}
-                        disabled={loading}
-                        className="transaction-table__action-btn"
-                        aria-label="Categorize transaction"
-                        title="Categorize transaction"
-                      >
-                        <Tag aria-hidden="true" />
-                      </button>
+                      <ReadOnlyGuard message="Resubscribe to categorize transactions">
+                        <button
+                          type="button"
+                          onClick={() => onCategorize(transaction)}
+                          disabled={loading}
+                          className="transaction-table__action-btn"
+                          aria-label="Categorize transaction"
+                          title="Categorize transaction"
+                        >
+                          <Tag aria-hidden="true" />
+                        </button>
+                      </ReadOnlyGuard>
                     )}
                   </div>
                 </td>
