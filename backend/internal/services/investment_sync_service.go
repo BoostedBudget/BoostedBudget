@@ -53,7 +53,6 @@ type investmentSyncService struct {
 	holdingRepo       repository.HoldingRepository
 	investmentTxnRepo repository.InvestmentTransactionRepository
 	plaidService      PlaidService
-	encryptionService EncryptionService
 }
 
 // SetAnalytics sets the PostHog analytics client.
@@ -70,7 +69,6 @@ func NewInvestmentSyncService(
 	holdingRepo repository.HoldingRepository,
 	investmentTxnRepo repository.InvestmentTransactionRepository,
 	plaidService PlaidService,
-	encryptionService EncryptionService,
 	logger *slog.Logger,
 ) InvestmentSyncService {
 	if logger == nil {
@@ -85,7 +83,6 @@ func NewInvestmentSyncService(
 		holdingRepo:       holdingRepo,
 		investmentTxnRepo: investmentTxnRepo,
 		plaidService:      plaidService,
-		encryptionService: encryptionService,
 	}
 }
 
@@ -95,7 +92,6 @@ func (s *investmentSyncService) ProcessWebhook(ctx context.Context, webhook *dom
 	if webhook == nil {
 		return errors.New("webhook event is nil")
 	}
-
 	if webhook.ItemID == nil || *webhook.ItemID == "" {
 		errorMsg := "webhook missing item_id — cannot process investment webhook"
 		webhook.ProcessingError = &errorMsg
@@ -169,10 +165,7 @@ func (s *investmentSyncService) ProcessWebhook(ctx context.Context, webhook *dom
 // replaces all holdings per account. Since Plaid returns a full snapshot (no delta),
 // we delete existing holdings and insert fresh ones inside a single DB transaction.
 func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *domain.LinkedItem) (*domain.HoldingSyncResult, error) {
-	accessToken, err := s.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt access token: %w", err)
-	}
+	accessToken := linkedItem.AccessToken
 
 	resp, err := s.plaidService.InvestmentsHoldingsGet(ctx, accessToken)
 	if err != nil {
@@ -278,10 +271,7 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 // On incremental sync, startDate = investments_last_synced_date - 1 day (safety overlap).
 // On first sync, uses a 2-year lookback. Updates investments_last_synced_date only on full success.
 func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, linkedItem *domain.LinkedItem) (*domain.InvestmentTransactionSyncResult, error) {
-	accessToken, err := s.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt access token: %w", err)
-	}
+	accessToken := linkedItem.AccessToken
 
 	now := time.Now().UTC()
 	endDate := now.Format("2006-01-02") // Today in YYYY-MM-DD format

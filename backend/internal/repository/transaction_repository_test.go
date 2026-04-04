@@ -21,7 +21,7 @@ func TestTransactionRepository_Create_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	externalID := "plaid_tx_123"
@@ -36,7 +36,7 @@ func TestTransactionRepository_Create_Success(t *testing.T) {
 		Name:                  "Starbucks",
 	}
 
-	// Expect INSERT query
+	// Expect INSERT query (20 args: added external_transaction_id_blind_idx)
 	mock.ExpectExec("INSERT INTO transactions").
 		WithArgs(
 			pgxmock.AnyArg(), // id (UUID generated)
@@ -44,8 +44,9 @@ func TestTransactionRepository_Create_Success(t *testing.T) {
 			transaction.AccountID,
 			transaction.LinkedItemID,
 			string(transaction.Source),
-			transaction.ExternalTransactionID,
-			pgxmock.AnyArg(), // external_metadata
+			pgxmock.AnyArg(), // external_transaction_id (encrypted)
+			pgxmock.AnyArg(), // external_transaction_id_blind_idx
+			pgxmock.AnyArg(), // external_metadata (encrypted)
 			transaction.Amount,
 			pgxmock.AnyArg(), // date
 			pgxmock.AnyArg(), // authorized_date
@@ -77,7 +78,7 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	externalID1 := "plaid_tx_1"
@@ -105,9 +106,9 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with multiple value sets (20 fields per transaction * 2 transactions = 40 args)
-	// Issue #171: Added user_account_id as the 5th field
-	args := make([]interface{}, 40)
+	// Expect batch INSERT with multiple value sets (21 fields per transaction * 2 transactions = 42 args)
+	// Issue #171: Added user_account_id as the 5th field; encryption adds external_transaction_id_blind_idx
+	args := make([]interface{}, 42)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -128,7 +129,7 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	externalID := "plaid_tx_123"
@@ -177,15 +178,15 @@ func TestTransactionRepository_DeleteByExternalID_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	externalID := "plaid_tx_123"
 	userID := "user-123"
 
-	// Expect DELETE query (source is passed as string, not domain type)
+	// Expect DELETE query using blind index (not raw externalID)
 	mock.ExpectExec("DELETE FROM transactions").
-		WithArgs(string(domain.SourcePlaid), externalID, userID).
+		WithArgs(string(domain.SourcePlaid), pgxmock.AnyArg(), userID).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err = repo.DeleteByExternalID(ctx, domain.SourcePlaid, externalID, userID)
@@ -201,7 +202,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -263,7 +264,7 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	accountID := "account-123"
@@ -312,7 +313,7 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -362,7 +363,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -413,7 +414,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -470,7 +471,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -525,7 +526,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -582,7 +583,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Category(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -637,7 +638,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -692,7 +693,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -753,7 +754,7 @@ func TestTransactionRepository_CountByUserID_NoFilters(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -781,7 +782,7 @@ func TestTransactionRepository_CountByUserID_WithFilters(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -814,7 +815,7 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	externalID := "plaid_tx_123"
@@ -846,9 +847,9 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 			nil, nil, nil, nil,
 		)
 
-	// Expect SELECT query with WHERE source = $1 AND external_transaction_id = $2 AND user_id = $3
-	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE source (.+) AND external_transaction_id (.+) AND user_id").
-		WithArgs(string(source), externalID, userID).
+	// Expect SELECT query with WHERE source = $1 AND external_transaction_id_blind_idx = $2 AND user_id = $3
+	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE source (.+) AND external_transaction_id_blind_idx (.+) AND user_id").
+		WithArgs(string(source), pgxmock.AnyArg(), userID).
 		WillReturnRows(rows)
 
 	transaction, err := repo.GetByExternalID(ctx, source, externalID, userID)
@@ -869,7 +870,7 @@ func TestTransactionRepository_GetByExternalID_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	externalID := "nonexistent_tx"
@@ -877,8 +878,8 @@ func TestTransactionRepository_GetByExternalID_NotFound(t *testing.T) {
 	source := domain.SourcePlaid
 
 	// Expect SELECT query to return pgx.ErrNoRows (which gets converted to ErrTransactionNotFound)
-	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE source (.+) AND external_transaction_id (.+) AND user_id").
-		WithArgs(string(source), externalID, userID).
+	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE source (.+) AND external_transaction_id_blind_idx (.+) AND user_id").
+		WithArgs(string(source), pgxmock.AnyArg(), userID).
 		WillReturnError(pgx.ErrNoRows)
 
 	transaction, err := repo.GetByExternalID(ctx, source, externalID, userID)
@@ -897,7 +898,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -952,7 +953,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1015,7 +1016,7 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	txID := "tx-123"
@@ -1075,7 +1076,7 @@ func TestTransactionRepository_UpdateCategory_PreservesOriginalCategory(t *testi
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	txID := "tx-123"
@@ -1109,7 +1110,7 @@ func TestTransactionRepository_GetDistinctPlaidCategories_Success(t *testing.T) 
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1142,7 +1143,7 @@ func TestTransactionRepository_GetDistinctPlaidCategories_Empty(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-no-transactions"
@@ -1172,7 +1173,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1202,7 +1203,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_NoMatches(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1231,7 +1232,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_DBError(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1258,7 +1259,7 @@ func TestTransactionRepository_GetIncomeSumByTag_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1287,7 +1288,7 @@ func TestTransactionRepository_GetIncomeSumByTag_NoMatches(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1315,7 +1316,7 @@ func TestTransactionRepository_GetIncomeSumByTag_DBError(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1347,7 +1348,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly(t *test
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1380,7 +1381,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_TagOnly(t *testing.T
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1413,7 +1414,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_And(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1446,7 +1447,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_Or(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1479,7 +1480,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_EmptyMatchLogic(t *t
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1512,7 +1513,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_NoMatches(t *testing
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1544,7 +1545,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_DBError(t *testing.T
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1574,7 +1575,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1612,7 +1613,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_SingleCategory(t *tes
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1646,7 +1647,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_MultipleCategories(t 
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1684,7 +1685,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_TagOnly(t *testing.T)
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1718,7 +1719,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_And(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1752,7 +1753,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_Or(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1786,7 +1787,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_NoMatches(t *testing.
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1818,7 +1819,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_DBError(t *testing.T)
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -1853,7 +1854,7 @@ func TestTransactionRepository_CreateBatch_WithUserAccountID(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	externalID := "plaid_tx_relink_1"
@@ -1872,9 +1873,9 @@ func TestTransactionRepository_CreateBatch_WithUserAccountID(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with user_account_id field (20 fields now)
-	// Build arguments for 20 fields per transaction
-	args := make([]interface{}, 20)
+	// Expect batch INSERT with user_account_id and external_transaction_id_blind_idx (21 fields now)
+	// Build arguments for 21 fields per transaction
+	args := make([]interface{}, 21)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -1896,7 +1897,7 @@ func TestTransactionRepository_CreateBatch_DOUpdateBehavior(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	externalID := "plaid_tx_duplicate_1"
@@ -1917,8 +1918,8 @@ func TestTransactionRepository_CreateBatch_DOUpdateBehavior(t *testing.T) {
 		},
 	}
 
-	// Build arguments for 20 fields per transaction
-	args := make([]interface{}, 20)
+	// Build arguments for 21 fields per transaction (includes external_transaction_id_blind_idx)
+	args := make([]interface{}, 21)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -1943,7 +1944,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewTransactionRepository(mock)
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
 	userID := "user-123"

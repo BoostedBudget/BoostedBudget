@@ -16,6 +16,7 @@ import (
 	echomiddleware "github.com/labstack/echo/v4/middleware"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/database"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
@@ -223,18 +224,44 @@ func main() {
 	var paddleWebhookRepo repository.PaddleWebhookRepository
 	var paddleTransactionRepo repository.PaddleTransactionRepository // Issues #747 #748
 
+	// Declare encryption service and field encryptor at outer scope so they are accessible
+	// in both the authenticated block and later public webhook handlers.
+	var encryptionService services.EncryptionService
+	var fieldEncryptor *appcrypto.FieldEncryptor
+
 	if db != nil && cfg.ClerkSecretKey != "" {
+		// Create encryption service (required for repository-layer PII encryption)
+		if cfg.EncryptionKey != "" {
+			encryptionService, err = services.NewEncryptionService(cfg)
+			if err != nil {
+				appLogger.Error("Failed to initialize encryption service", "error", err)
+				appLogger.Error("Encryption service is required for account linking")
+				os.Exit(1)
+			}
+			appLogger.Info("Encryption service initialized")
+		} else {
+			appLogger.Error("ENCRYPTION_KEY environment variable is required")
+			os.Exit(1)
+		}
+
+		// Create field encryptor for repository-layer PII encryption
+		fieldEncryptor, err = appcrypto.NewFieldEncryptor(encryptionService, []byte(cfg.EncryptionKey))
+		if err != nil {
+			appLogger.Error("Failed to initialize field encryptor", "error", err)
+			os.Exit(1)
+		}
+
 		// Create repositories
-		profileRepo := repository.NewProfileRepository(db)
+		profileRepo := repository.NewProfileRepository(db, fieldEncryptor)
 		privacyRepo := repository.NewPrivacyRepository(db)
-		linkedItemRepo := repository.NewLinkedItemRepository(db)
-		accountRepo := repository.NewAccountRepository(db)
-		transactionRepo := repository.NewTransactionRepository(db)
-		webhookRepo := repository.NewWebhookRepository(db)
-		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db)            // Issue #45, #46: Paddle webhooks
-		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db)   // Issues #747 #748: Paddle transaction audit log
-		identityRepo := repository.NewUserIdentityRepository(db)                 // Maps Clerk IDs to user UUIDs
-		notificationRepo := repository.NewNotificationRepository(db)             // Issue #257: Notification storage
+		linkedItemRepo := repository.NewLinkedItemRepository(db, fieldEncryptor)
+		accountRepo := repository.NewAccountRepository(db, fieldEncryptor)
+		transactionRepo := repository.NewTransactionRepository(db, fieldEncryptor)
+		webhookRepo := repository.NewWebhookRepository(db, fieldEncryptor)
+		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db, fieldEncryptor)            // Issue #45, #46: Paddle webhooks
+		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db, fieldEncryptor)   // Issues #747 #748: Paddle transaction audit log
+		identityRepo := repository.NewUserIdentityRepository(db, fieldEncryptor) // Maps Clerk IDs to user UUIDs
+		notificationRepo := repository.NewNotificationRepository(db, fieldEncryptor)             // Issue #257: Notification storage
 		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db)       // Issue #353: Balance tracking
 		userTagRepo := repository.NewUserTagRepository(db)                       // Issue #345: User tags
 		customCategoryRepo := repository.NewCustomCategoryRepository(db)         // Issue #345: Custom categories
@@ -245,15 +272,15 @@ func main() {
 		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db)   // Issue #354: Dashboard preferences
 		transferSuggestionRepo := repository.NewTransferSuggestionRepository(db) // Issue #36: Transfer suggestions
 		automationRuleRepo := repository.NewAutomationRulesRepository(db)        // Issue #37: Automation rules
-		adminUserRepo := repository.NewAdminUserRepository(db)                   // Issue #639: Admin user management
+		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)    // Issue #639: Admin user management
 		systemHealthRepo := repository.NewSystemHealthRepository(db)             // Issue #640: System health monitoring
 		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)           // Issue #640: Dead letter queue metrics
 		securityRepo := repository.NewSecurityRepository(db)                           // Issue #659: Plaid Investments
 		holdingRepo := repository.NewHoldingRepository(db)                             // Issue #659: Plaid Investments
 		investmentTxnRepo := repository.NewInvestmentTransactionRepository(db)        // Issue #659: Plaid Investments
 		creditLiabilityRepo := repository.NewCreditLiabilityRepository(db)            // Issue #910: Plaid Liabilities
-		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db)        // Issue #910: Plaid Liabilities
-		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db)  // Issue #910: Plaid Liabilities
+		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db, fieldEncryptor)       // Issue #910: Plaid Liabilities
+		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor) // Issue #910: Plaid Liabilities
 
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
@@ -390,21 +417,6 @@ func main() {
 			appLogger.Warn("Deletion services disabled (requires DELETION_TOKEN_SECRET)")
 		}
 
-		// Create encryption service (if configured)
-		var encryptionService services.EncryptionService
-		if cfg.EncryptionKey != "" {
-			encryptionService, err = services.NewEncryptionService(cfg)
-			if err != nil {
-				appLogger.Error("Failed to initialize encryption service", "error", err)
-				appLogger.Error("Encryption service is required for account linking")
-				os.Exit(1)
-			}
-			appLogger.Info("Encryption service initialized")
-		} else {
-			appLogger.Error("ENCRYPTION_KEY environment variable is required")
-			os.Exit(1)
-		}
-
 		// Create Paddle services (if configured) - Issue #45, #46: Paddle Payment Integration
 		if cfg.PaddleAPIKey != "" {
 			logger := appLogger
@@ -473,7 +485,6 @@ func main() {
 				accountService = services.NewAccountService(
 					plaidService,
 					subscriptionService,
-					encryptionService,
 					linkedItemRepo,
 					accountRepo,
 					profileRepo,
@@ -491,7 +502,6 @@ func main() {
 				plaidCleanupService = services.NewPlaidItemCleanupService(
 					linkedItemRepo,
 					plaidService,
-					encryptionService,
 				)
 				appLogger.Info("Plaid item cleanup service initialized")
 
@@ -553,7 +563,6 @@ func main() {
 					profileRepo,
 					balanceSnapshotRepo,
 					plaidService,
-					encryptionService,
 					subscriptionService,
 					ruleApplicationService,
 					budgetSyncService,
@@ -568,7 +577,6 @@ func main() {
 					notificationRepo,
 					profileRepo,
 					plaidService,
-					encryptionService,
 					emailService,
 					appLogger,
 				)
@@ -582,7 +590,6 @@ func main() {
 					holdingRepo,
 					investmentTxnRepo,
 					plaidService,
-					encryptionService,
 					appLogger,
 				)
 				appLogger.Info("Investment sync service initialized")
@@ -599,7 +606,6 @@ func main() {
 					mortgageLiabilityRepo,
 					studentLoanLiabilityRepo,
 					plaidService,
-					encryptionService,
 					appLogger,
 				)
 				appLogger.Info("Liability sync service initialized")
@@ -990,8 +996,8 @@ func main() {
 		// Issue #638: Pass adminService for check-role endpoint
 		// Issue #639: Pass adminUserService for user management endpoints
 		// Issue #640: Pass systemHealthService for system health monitoring
-		if plaidService != nil && encryptionService != nil {
-			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
+		if plaidService != nil {
+			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
 				WithPaddleTransactionRepo(paddleTransactionRepo).
 				WithPaddleWebhookRepo(paddleWebhookRepo).
 				WithJobQueue(jobQueue)
@@ -1075,7 +1081,7 @@ func main() {
 	// Issue #573: Now enqueues River jobs for async processing
 	if db != nil && plaidService != nil {
 		// Webhook repository for audit trail
-		webhookRepoForHandler := repository.NewWebhookRepository(db)
+		webhookRepoForHandler := repository.NewWebhookRepository(db, fieldEncryptor)
 
 		// Initialize webhook service for JWT signature verification
 		webhookService := services.NewWebhookService(plaidService.GetClient())
@@ -1100,7 +1106,7 @@ func main() {
 		// Fallback: Basic webhook handler without signature verification
 		// Used when Plaid credentials are not configured (e.g., local development)
 		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(operations.PlaidWebhookHandlerDeps{
-			WebhookRepo: repository.NewWebhookRepository(db),
+			WebhookRepo: repository.NewWebhookRepository(db, fieldEncryptor),
 			JobQueue:    jobQueue,
 			Logger:      slog.Default(),
 		})

@@ -77,7 +77,7 @@ func setupAdminSubscriptionsAPI(t *testing.T) (huma.API, *MockAdminUserService, 
 	mockAdminService := new(MockAdminService)
 
 	cfg := &config.Config{Environment: "qa"} // Set to QA so middleware allows the request
-	handler := NewAdminHandler(nil, nil, nil, nil, mockAdminService, mockAdminUserService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, mockAdminService, mockAdminUserService, nil, nil, cfg)
 	RegisterAdminSubscriptionsOperations(api, handler)
 	return api, mockAdminUserService, mockAdminService
 }

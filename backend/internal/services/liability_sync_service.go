@@ -39,7 +39,6 @@ type liabilitySyncService struct {
 	mortgageRepo    repository.MortgageLiabilityRepository
 	studentLoanRepo repository.StudentLoanLiabilityRepository
 	plaidService    PlaidService
-	encryptionSvc   EncryptionService
 }
 
 // SetAnalytics sets the PostHog analytics client.
@@ -56,7 +55,6 @@ func NewLiabilitySyncService(
 	mortgageRepo repository.MortgageLiabilityRepository,
 	studentLoanRepo repository.StudentLoanLiabilityRepository,
 	plaidService PlaidService,
-	encryptionSvc EncryptionService,
 	logger *slog.Logger,
 ) LiabilitySyncService {
 	if logger == nil {
@@ -71,7 +69,6 @@ func NewLiabilitySyncService(
 		mortgageRepo:    mortgageRepo,
 		studentLoanRepo: studentLoanRepo,
 		plaidService:    plaidService,
-		encryptionSvc:   encryptionSvc,
 	}
 }
 
@@ -81,7 +78,6 @@ func (s *liabilitySyncService) ProcessWebhook(ctx context.Context, webhook *doma
 	if webhook == nil {
 		return errors.New("webhook event is nil")
 	}
-
 	if webhook.ItemID == nil || *webhook.ItemID == "" {
 		errorMsg := "webhook missing item_id — cannot process liabilities webhook"
 		webhook.ProcessingError = &errorMsg
@@ -142,10 +138,7 @@ func (s *liabilitySyncService) ProcessWebhook(ctx context.Context, webhook *doma
 // each account's liabilities atomically. Since Plaid returns a full snapshot (no delta),
 // each category is fully replaced per account when present in the response.
 func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *domain.LinkedItem) (*domain.LiabilitySyncResult, error) {
-	accessToken, err := s.encryptionSvc.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt access token: %w", err)
-	}
+	accessToken := linkedItem.AccessToken
 
 	resp, err := s.plaidService.LiabilitiesGet(ctx, accessToken)
 	if err != nil {

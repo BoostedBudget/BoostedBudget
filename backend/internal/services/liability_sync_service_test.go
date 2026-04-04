@@ -98,14 +98,13 @@ func (m *MockStudentLoanLiabilityRepository) GetByAccountID(ctx context.Context,
 // ============================================================================
 
 type liabilitySyncDeps struct {
-	webhookRepo      *MockWebhookRepository
-	linkedItemRepo   *MockLinkedItemRepository
-	accountRepo      *MockAccountRepository
-	creditRepo       *MockCreditLiabilityRepository
-	mortgageRepo     *MockMortgageLiabilityRepository
-	studentLoanRepo  *MockStudentLoanLiabilityRepository
-	plaidSvc         *MockPlaidService
-	encryptionSvc    *MockEncryptionService
+	webhookRepo     *MockWebhookRepository
+	linkedItemRepo  *MockLinkedItemRepository
+	accountRepo     *MockAccountRepository
+	creditRepo      *MockCreditLiabilityRepository
+	mortgageRepo    *MockMortgageLiabilityRepository
+	studentLoanRepo *MockStudentLoanLiabilityRepository
+	plaidSvc        *MockPlaidService
 }
 
 func setupLiabilitySyncService(t *testing.T) (LiabilitySyncService, liabilitySyncDeps) {
@@ -118,7 +117,6 @@ func setupLiabilitySyncService(t *testing.T) (LiabilitySyncService, liabilitySyn
 		mortgageRepo:    new(MockMortgageLiabilityRepository),
 		studentLoanRepo: new(MockStudentLoanLiabilityRepository),
 		plaidSvc:        new(MockPlaidService),
-		encryptionSvc:   new(MockEncryptionService),
 	}
 	svc := NewLiabilitySyncService(
 		deps.webhookRepo,
@@ -128,7 +126,6 @@ func setupLiabilitySyncService(t *testing.T) (LiabilitySyncService, liabilitySyn
 		deps.mortgageRepo,
 		deps.studentLoanRepo,
 		deps.plaidSvc,
-		deps.encryptionSvc,
 		nil, // logger
 	)
 	return svc, deps
@@ -338,9 +335,7 @@ func TestLiabilitySyncService_ProcessWebhook_Success(t *testing.T) {
 
 	deps.webhookRepo.On("Update", ctx, mock.Anything).Return(nil)
 	deps.linkedItemRepo.On("GetByItemID", ctx, itemID).Return(linkedItem, nil)
-
-	accessToken := "decrypted-token"
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return(accessToken, nil)
+	// AccessToken is already decrypted by the repository layer
 
 	credit := makePlaidCreditLiability(plaidAccountID)
 	resp := makePlaidLiabilitiesResponse(
@@ -348,7 +343,7 @@ func TestLiabilitySyncService_ProcessWebhook_Success(t *testing.T) {
 		[]plaid.MortgageLiability{},
 		[]plaid.StudentLoan{},
 	)
-	deps.plaidSvc.On("LiabilitiesGet", ctx, accessToken).Return(resp, nil)
+	deps.plaidSvc.On("LiabilitiesGet", ctx, linkedItem.AccessToken).Return(resp, nil)
 
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
@@ -377,7 +372,8 @@ func TestLiabilitySyncService_ProcessWebhook_SyncFailure(t *testing.T) {
 
 	deps.webhookRepo.On("Update", ctx, mock.Anything).Return(nil)
 	deps.linkedItemRepo.On("GetByItemID", ctx, itemID).Return(linkedItem, nil)
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("", errors.New("decrypt failed"))
+	// Simulate sync failure via Plaid API error (decryption now happens at repo layer)
+	deps.plaidSvc.On("LiabilitiesGet", ctx, linkedItem.AccessToken).Return(nil, errors.New("plaid API error"))
 
 	err := svc.ProcessWebhook(ctx, webhook)
 	require.Error(t, err)
@@ -388,26 +384,13 @@ func TestLiabilitySyncService_ProcessWebhook_SyncFailure(t *testing.T) {
 // SyncLiabilities Tests
 // ============================================================================
 
-// TestLiabilitySyncService_SyncLiabilities_DecryptFailure verifies error propagation.
-func TestLiabilitySyncService_SyncLiabilities_DecryptFailure(t *testing.T) {
-	svc, deps := setupLiabilitySyncService(t)
-	ctx := context.Background()
-
-	linkedItem := makeLinkedItem("item-001", "user-001")
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("", errors.New("bad key"))
-
-	_, err := svc.SyncLiabilities(ctx, linkedItem)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "decrypt")
-}
-
 // TestLiabilitySyncService_SyncLiabilities_PlaidAPIFailure verifies Plaid error propagation.
 func TestLiabilitySyncService_SyncLiabilities_PlaidAPIFailure(t *testing.T) {
 	svc, deps := setupLiabilitySyncService(t)
 	ctx := context.Background()
 
 	linkedItem := makeLinkedItem("item-001", "user-001")
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 	deps.plaidSvc.On("LiabilitiesGet", ctx, "tok").Return(nil, errors.New("plaid 500"))
 
 	_, err := svc.SyncLiabilities(ctx, linkedItem)
@@ -426,7 +409,7 @@ func TestLiabilitySyncService_SyncLiabilities_CreditHappyPath(t *testing.T) {
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 
 	credit := makePlaidCreditLiability(plaidAccountID)
 	resp := makePlaidLiabilitiesResponse(
@@ -470,7 +453,7 @@ func TestLiabilitySyncService_SyncLiabilities_MortgageHappyPath(t *testing.T) {
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 
 	mortgage := makePlaidMortgageLiability(plaidAccountID)
 	resp := makePlaidLiabilitiesResponse(
@@ -510,7 +493,7 @@ func TestLiabilitySyncService_SyncLiabilities_StudentLoanHappyPath(t *testing.T)
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 
 	student := makePlaidStudentLoan(plaidAccountID)
 	resp := makePlaidLiabilitiesResponse(
@@ -551,7 +534,7 @@ func TestLiabilitySyncService_SyncLiabilities_UnmappedAccountSkipped(t *testing.
 
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", "user-001")
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 
 	credit := makePlaidCreditLiability("unknown-plaid-account")
 	resp := makePlaidLiabilitiesResponse(
@@ -597,7 +580,7 @@ func TestLiabilitySyncService_SyncLiabilities_MixedTypes(t *testing.T) {
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-multi", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 
 	resp := makePlaidLiabilitiesResponse(
 		[]plaid.CreditCardLiability{makePlaidCreditLiability(plaidCCID)},
@@ -649,7 +632,7 @@ func TestLiabilitySyncService_SyncLiabilities_EmptyArrayClearsData(t *testing.T)
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 
 	// All arrays empty — Plaid no longer reports any liabilities for this item
 	resp := makePlaidLiabilitiesResponse(
@@ -685,7 +668,7 @@ func TestLiabilitySyncService_SyncLiabilities_UpdatesLastSyncedAt(t *testing.T) 
 	ctx := context.Background()
 
 	linkedItem := makeLinkedItem("item-001", "user-001")
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 
 	resp := makePlaidLiabilitiesResponse(
 		[]plaid.CreditCardLiability{},
@@ -719,7 +702,7 @@ func TestLiabilitySyncService_SyncLiabilities_CreditRepoError(t *testing.T) {
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.encryptionSvc.On("Decrypt", linkedItem.AccessTokenEncrypted).Return("tok", nil)
+
 
 	credit := makePlaidCreditLiability(plaidAccountID)
 	resp := makePlaidLiabilitiesResponse(

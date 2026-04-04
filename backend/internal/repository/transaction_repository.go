@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/lib/pq"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -135,12 +136,53 @@ type TransactionRepository interface {
 
 // transactionRepository implements TransactionRepository using PostgreSQL
 type transactionRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewTransactionRepository creates a new TransactionRepository instance
-func NewTransactionRepository(db DB) TransactionRepository {
-	return &transactionRepository{db: db}
+func NewTransactionRepository(db DB, enc *appcrypto.FieldEncryptor) TransactionRepository {
+	return &transactionRepository{db: db, enc: enc}
+}
+
+// encryptTransactionPIIFields encrypts PII fields on a transaction in-place.
+// Returns the computed blind index for external_transaction_id (nil when ExternalTransactionID is nil).
+func (r *transactionRepository) encryptTransactionPIIFields(t *domain.Transaction) (extIDBlindIdx *string, err error) {
+	// Compute blind index from plaintext before encrypting; keep nil when source is nil.
+	if t.ExternalTransactionID != nil {
+		blind := r.enc.BlindIndex(*t.ExternalTransactionID)
+		extIDBlindIdx = &blind
+		encrypted, encErr := r.enc.EncryptNullableString(t.ExternalTransactionID)
+		if encErr != nil {
+			return nil, fmt.Errorf("encrypt external_transaction_id: %w", encErr)
+		}
+		t.ExternalTransactionID = encrypted
+	}
+
+	encMeta, encErr := r.enc.EncryptNullableString(t.ExternalMetadata)
+	if encErr != nil {
+		return nil, fmt.Errorf("encrypt external_metadata: %w", encErr)
+	}
+	t.ExternalMetadata = encMeta
+
+	return extIDBlindIdx, nil
+}
+
+// decryptTransactionPIIFields decrypts PII fields on a transaction in-place.
+func (r *transactionRepository) decryptTransactionPIIFields(t *domain.Transaction) error {
+	decExtID, err := r.enc.DecryptNullableString(t.ExternalTransactionID)
+	if err != nil {
+		return fmt.Errorf("decrypt external_transaction_id: %w", err)
+	}
+	t.ExternalTransactionID = decExtID
+
+	decMeta, err := r.enc.DecryptNullableString(t.ExternalMetadata)
+	if err != nil {
+		return fmt.Errorf("decrypt external_metadata: %w", err)
+	}
+	t.ExternalMetadata = decMeta
+
+	return nil
 }
 
 // Create creates a new transaction in the database
@@ -155,22 +197,29 @@ func (r *transactionRepository) Create(ctx context.Context, transaction *domain.
 	transaction.CreatedAt = now
 	transaction.UpdatedAt = now
 
+	// Encrypt PII fields and compute blind index before writing
+	extIDBlindIdx, err := r.encryptTransactionPIIFields(transaction)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt transaction fields: %w", err)
+	}
+
 	query := `
 		INSERT INTO transactions
 		(id, user_id, account_id, linked_item_id, source, external_transaction_id,
-		 external_metadata, amount, date, authorized_date, name, merchant_name,
-		 category, personal_finance_category, payment_channel, pending, user_notes,
-		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+		 external_transaction_id_blind_idx, external_metadata, amount, date, authorized_date,
+		 name, merchant_name, category, personal_finance_category, payment_channel, pending,
+		 user_notes, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 	`
 
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		transaction.ID,
 		transaction.UserID,
 		transaction.AccountID,
 		transaction.LinkedItemID,
 		string(transaction.Source),
 		transaction.ExternalTransactionID,
+		extIDBlindIdx,
 		transaction.ExternalMetadata,
 		transaction.Amount,
 		transaction.Date,
@@ -203,7 +252,7 @@ func (r *transactionRepository) Create(ctx context.Context, transaction *domain.
 // Uses a multi-row INSERT for performance.
 //
 // Issue #171: Changed from DO NOTHING to DO UPDATE for re-link handling.
-// When a duplicate transaction is encountered (same source, external_transaction_id, user_id),
+// When a duplicate transaction is encountered (same source, external_transaction_id_blind_idx, user_id),
 // we update the FKs (account_id, linked_item_id, user_account_id) and Plaid fields while
 // PRESERVING user enrichments (user_notes, category_override, tags, tags_source).
 func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []domain.Transaction) error {
@@ -212,8 +261,8 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 	}
 
 	// Build multi-row INSERT query
-	// Issue #171: Added user_account_id field (20 fields now instead of 19)
-	const numFields = 20
+	// Issue #171: Added user_account_id field; encryption adds external_transaction_id_blind_idx (21 fields)
+	const numFields = 21
 	valueStrings := make([]string, 0, len(transactions))
 	valueArgs := make([]interface{}, 0, len(transactions)*numFields)
 
@@ -228,6 +277,12 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		transactions[i].CreatedAt = now
 		transactions[i].UpdatedAt = now
 
+		// Encrypt PII fields and compute blind index before writing
+		extIDBlindIdx, err := r.encryptTransactionPIIFields(&transactions[i])
+		if err != nil {
+			return fmt.Errorf("failed to encrypt transaction fields: %w", err)
+		}
+
 		// Create placeholders for this row
 		placeholders := make([]string, numFields)
 		for j := 0; j < numFields; j++ {
@@ -235,7 +290,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		}
 		valueStrings = append(valueStrings, fmt.Sprintf("(%s)", strings.Join(placeholders, ", ")))
 
-		// Add values (including user_account_id)
+		// Add values (including user_account_id and external_transaction_id_blind_idx)
 		valueArgs = append(valueArgs,
 			transactions[i].ID,
 			transactions[i].UserID,
@@ -244,6 +299,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			transactions[i].UserAccountID, // Issue #171: Stable reference for re-links
 			string(transactions[i].Source),
 			transactions[i].ExternalTransactionID,
+			extIDBlindIdx,
 			transactions[i].ExternalMetadata,
 			transactions[i].Amount,
 			transactions[i].Date,
@@ -261,22 +317,24 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 	}
 
 	// Issue #171: Changed from DO NOTHING to DO UPDATE for re-link handling.
-	// On conflict (duplicate transaction), we:
+	// On conflict (duplicate transaction by blind index), we:
 	// - UPDATE: FKs (account_id, linked_item_id, user_account_id) - changes on re-link
 	// - UPDATE: Plaid fields (amount, date, name, merchant_name, pending, etc.) - may change
+	// - UPDATE: external_transaction_id_blind_idx in case it was previously NULL
 	// - PRESERVE: User enrichments (user_notes, category_override, tags, tags_source)
 	query := fmt.Sprintf(`
 		INSERT INTO transactions
 		(id, user_id, account_id, linked_item_id, user_account_id,
-		 source, external_transaction_id, external_metadata,
+		 source, external_transaction_id, external_transaction_id_blind_idx, external_metadata,
 		 amount, date, authorized_date, name, merchant_name,
 		 category, personal_finance_category, payment_channel, pending, user_notes,
 		 created_at, updated_at)
 		VALUES %s
-		ON CONFLICT (source, external_transaction_id, user_id) DO UPDATE SET
+		ON CONFLICT (source, external_transaction_id_blind_idx, user_id) DO UPDATE SET
 			account_id = EXCLUDED.account_id,
 			linked_item_id = EXCLUDED.linked_item_id,
 			user_account_id = EXCLUDED.user_account_id,
+			external_transaction_id_blind_idx = EXCLUDED.external_transaction_id_blind_idx,
 			external_metadata = EXCLUDED.external_metadata,
 			amount = EXCLUDED.amount,
 			date = EXCLUDED.date,
@@ -304,6 +362,12 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 func (r *transactionRepository) Update(ctx context.Context, transaction *domain.Transaction) error {
 	transaction.UpdatedAt = time.Now()
 
+	// Encrypt external_metadata before writing
+	encMeta, err := r.enc.EncryptNullableString(transaction.ExternalMetadata)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt external_metadata: %w", err)
+	}
+
 	query := `
 		UPDATE transactions
 		SET amount = $1, date = $2, authorized_date = $3, name = $4,
@@ -323,7 +387,7 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 		transaction.PersonalFinanceCategory,
 		transaction.PaymentChannel,
 		transaction.Pending,
-		transaction.ExternalMetadata,
+		encMeta,
 		transaction.UserNotes,
 		transaction.UpdatedAt,
 		transaction.ID,
@@ -344,10 +408,10 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 func (r *transactionRepository) DeleteByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) error {
 	query := `
 		DELETE FROM transactions
-		WHERE source = $1 AND external_transaction_id = $2 AND user_id = $3
+		WHERE source = $1 AND external_transaction_id_blind_idx = $2 AND user_id = $3
 	`
 
-	ct, err := r.db.Exec(ctx, query, string(source), externalID, userID)
+	ct, err := r.db.Exec(ctx, query, string(source), r.enc.BlindIndex(externalID), userID)
 	if err != nil {
 		return fmt.Errorf("failed to delete transaction: %w", err)
 	}
@@ -487,23 +551,24 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 		       tags, tags_source,
 		       category_override, category_source, category_override_date, original_category
 		FROM transactions
-		WHERE source = $1 AND external_transaction_id = $2 AND user_id = $3
+		WHERE source = $1 AND external_transaction_id_blind_idx = $2 AND user_id = $3
 	`
 
 	var tx domain.Transaction
 	var sourceStr string
+	var metaStr *string
 	var tagsJSON []byte
 	var tagsSourceJSON []byte
 	var categorySource sql.NullString
 
-	err := r.db.QueryRow(ctx, query, string(source), externalID, userID).Scan(
+	err := r.db.QueryRow(ctx, query, string(source), r.enc.BlindIndex(externalID), userID).Scan(
 		&tx.ID,
 		&tx.UserID,
 		&tx.AccountID,
 		&tx.LinkedItemID,
 		&sourceStr,
 		&tx.ExternalTransactionID,
-		&tx.ExternalMetadata,
+		&metaStr,
 		&tx.Amount,
 		&tx.Date,
 		&tx.AuthorizedDate,
@@ -532,6 +597,12 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 	}
 
 	tx.Source = domain.TransactionSource(sourceStr)
+	tx.ExternalMetadata = metaStr
+
+	// Decrypt PII fields
+	if err := r.decryptTransactionPIIFields(&tx); err != nil {
+		return nil, fmt.Errorf("failed to decrypt transaction: %w", err)
+	}
 
 	// Parse tags from JSONB
 	if tagsJSON != nil {
@@ -682,6 +753,7 @@ func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transa
 	for rows.Next() {
 		var tx domain.Transaction
 		var source string
+		var metaStr *string
 		var tagsJSON []byte
 		var tagsSourceJSON []byte
 		var categorySource sql.NullString
@@ -693,7 +765,7 @@ func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transa
 			&tx.LinkedItemID,
 			&source,
 			&tx.ExternalTransactionID,
-			&tx.ExternalMetadata,
+			&metaStr,
 			&tx.Amount,
 			&tx.Date,
 			&tx.AuthorizedDate,
@@ -719,6 +791,12 @@ func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transa
 		}
 
 		tx.Source = domain.TransactionSource(source)
+		tx.ExternalMetadata = metaStr
+
+		// Decrypt PII fields
+		if err := r.decryptTransactionPIIFields(&tx); err != nil {
+			return nil, fmt.Errorf("failed to decrypt transaction: %w", err)
+		}
 
 		// Parse tags from JSONB
 		if tagsJSON != nil {
@@ -763,6 +841,7 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 
 	var tx domain.Transaction
 	var source string
+	var metaStr *string
 	var tagsJSON []byte
 	var tagsSourceJSON []byte
 	var categorySource sql.NullString
@@ -774,7 +853,7 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 		&tx.LinkedItemID,
 		&source,
 		&tx.ExternalTransactionID,
-		&tx.ExternalMetadata,
+		&metaStr,
 		&tx.Amount,
 		&tx.Date,
 		&tx.AuthorizedDate,
@@ -803,6 +882,12 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 	}
 
 	tx.Source = domain.TransactionSource(source)
+	tx.ExternalMetadata = metaStr
+
+	// Decrypt PII fields
+	if err := r.decryptTransactionPIIFields(&tx); err != nil {
+		return nil, fmt.Errorf("failed to decrypt transaction: %w", err)
+	}
 
 	// Parse tags from JSONB
 	if tagsJSON != nil {
@@ -1301,6 +1386,7 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 	for rows.Next() {
 		var tx domain.Transaction
 		var source string
+		var metaStr *string
 		var tagsJSON []byte
 		var tagsSourceJSON []byte
 		var categorySource sql.NullString
@@ -1313,7 +1399,7 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 			&tx.UserAccountID,
 			&source,
 			&tx.ExternalTransactionID,
-			&tx.ExternalMetadata,
+			&metaStr,
 			&tx.Amount,
 			&tx.Date,
 			&tx.AuthorizedDate,
@@ -1339,6 +1425,12 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 		}
 
 		tx.Source = domain.TransactionSource(source)
+		tx.ExternalMetadata = metaStr
+
+		// Decrypt PII fields
+		if err := r.decryptTransactionPIIFields(&tx); err != nil {
+			return nil, fmt.Errorf("failed to decrypt transaction: %w", err)
+		}
 
 		// Parse tags from JSONB
 		if tagsJSON != nil {
