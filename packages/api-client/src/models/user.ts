@@ -47,6 +47,10 @@ export interface User {
   paddle_customer_id?: string;
   paddle_subscription_id?: string;
   primary_region: string;
+  retention_expires_at?: string;
+  retention_notice_30d_sent_at?: string;
+  retention_notice_7d_sent_at?: string;
+  retention_started_at?: string;
   subscription_ends_at?: string;
   subscription_started_at?: string;
   subscription_status: string;

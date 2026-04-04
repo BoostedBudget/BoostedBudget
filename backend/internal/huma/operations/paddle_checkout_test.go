@@ -119,6 +119,14 @@ func (m *mockProfileRepo) GetUsersScheduledForDeletion(ctx context.Context) ([]*
 func (m *mockProfileRepo) MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error                                           { return nil }
 func (m *mockProfileRepo) UpdateUser(ctx context.Context, user *domain.User) error                                                                   { return nil }
 func (m *mockProfileRepo) GetUsersWithActivePaddleSubscriptions(ctx context.Context) ([]*domain.User, error)                                         { return nil, nil }
+func (m *mockProfileRepo) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error)                                          { return "", nil }
+func (m *mockProfileRepo) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error                                 { return nil }
+func (m *mockProfileRepo) ClearRetentionDates(ctx context.Context, userID string) error                                                              { return nil }
+func (m *mockProfileRepo) SetRetentionNotice30dSent(ctx context.Context, userID string) error                                                        { return nil }
+func (m *mockProfileRepo) SetRetentionNotice7dSent(ctx context.Context, userID string) error                                                         { return nil }
+func (m *mockProfileRepo) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error)                                             { return nil, nil }
+func (m *mockProfileRepo) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error)                                              { return nil, nil }
+func (m *mockProfileRepo) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error)                                                  { return nil, nil }
 
 // setupTestCheckoutHandler creates a handler with mock dependencies
 func setupTestCheckoutHandler(t *testing.T) (*PaddleCheckoutHandler, *mockPaddleCheckoutService, *mockProfileRepo) {

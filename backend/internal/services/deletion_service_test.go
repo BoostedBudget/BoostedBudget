@@ -130,6 +130,33 @@ func (m *MockProfileRepositoryForDeletion) GetUsersWithActivePaddleSubscriptions
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
+// Retention tracking stubs (#930)
+func (m *MockProfileRepositoryForDeletion) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+	args := m.Called(ctx, userID)
+	return args.String(0), args.Error(1)
+}
+func (m *MockProfileRepositoryForDeletion) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
+	return nil
+}
+func (m *MockProfileRepositoryForDeletion) ClearRetentionDates(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepositoryForDeletion) SetRetentionNotice30dSent(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepositoryForDeletion) SetRetentionNotice7dSent(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepositoryForDeletion) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+func (m *MockProfileRepositoryForDeletion) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+func (m *MockProfileRepositoryForDeletion) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+
 // MockEmailService for testing
 type MockEmailService struct {
 	mock.Mock

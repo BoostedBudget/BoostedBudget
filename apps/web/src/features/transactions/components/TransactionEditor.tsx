@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
+import { ReadOnlyGuard } from '@/auth'
 import type { Transaction } from '../types'
 import type { UserTag } from '../../tags/types'
 import type { CustomCategory } from '../../categories/types'
@@ -46,18 +47,6 @@ function parseCategory(categoryJson: string | null | undefined): string[] {
 function getOriginalCategoryName(originalCategory: string | null | undefined): string | null {
   const parsed = parseCategory(originalCategory)
   return parsed.length > 0 ? parsed[0] : null
-}
-
-/**
- * Format amount for display
- */
-function formatAmount(amount: number): string {
-  const absAmount = Math.abs(amount)
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-  }).format(absAmount)
 }
 
 export function TransactionEditor({
@@ -154,8 +143,12 @@ export function TransactionEditor({
 
         <div className="transaction-editor__transaction-info">
           <div className="transaction-editor__name">{displayName}</div>
-          <div className="transaction-editor__amount">
-            {formatAmount(transaction.amount)}
+          <div className="transaction-editor__amount" data-ph-mask>
+            {new Intl.NumberFormat('en-US', {
+              style: 'currency',
+              currency: 'USD',
+              minimumFractionDigits: 2,
+            }).format(Math.abs(transaction.amount))}
           </div>
         </div>
 
@@ -207,14 +200,16 @@ export function TransactionEditor({
           >
             Cancel
           </button>
-          <button
-            type="button"
-            className="transaction-editor__save"
-            onClick={handleSave}
-            disabled={isSaving || !hasChanges}
-          >
-            {isSaving ? 'Saving...' : 'Save'}
-          </button>
+          <ReadOnlyGuard message="Resubscribe to edit transactions">
+            <button
+              type="button"
+              className="transaction-editor__save"
+              onClick={handleSave}
+              disabled={isSaving || !hasChanges}
+            >
+              {isSaving ? 'Saving...' : 'Save'}
+            </button>
+          </ReadOnlyGuard>
         </div>
       </div>
     </div>

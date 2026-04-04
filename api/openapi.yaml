@@ -3654,6 +3654,18 @@ components:
           type: string
         primary_region:
           type: string
+        retention_expires_at:
+          format: date-time
+          type: string
+        retention_notice_30d_sent_at:
+          format: date-time
+          type: string
+        retention_notice_7d_sent_at:
+          format: date-time
+          type: string
+        retention_started_at:
+          format: date-time
+          type: string
         subscription_ends_at:
           format: date-time
           type: string

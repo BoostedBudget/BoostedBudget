@@ -468,6 +468,58 @@ func (m *MockUserRepository) GetUsersWithActivePaddleSubscriptions(ctx context.C
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
+// GetSubscriptionStatusByUserID returns subscription status for the read-only middleware (#930)
+func (m *MockUserRepository) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+	args := m.Called(ctx, userID)
+	return args.String(0), args.Error(1)
+}
+
+// Retention tracking methods (#930)
+
+func (m *MockUserRepository) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
+	args := m.Called(ctx, userID, startedAt, expiresAt)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) ClearRetentionDates(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) SetRetentionNotice30dSent(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) SetRetentionNotice7dSent(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
 // TestAccountService_LinkAccounts_Success tests successful account linking flow
 func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	// Given: All dependencies mocked with successful responses

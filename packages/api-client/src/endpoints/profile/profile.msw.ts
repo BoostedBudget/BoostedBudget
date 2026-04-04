@@ -78,6 +78,22 @@ export const getGetUserProfileResponseMock = (
     undefined,
   ]),
   primary_region: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  retention_expires_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  retention_notice_30d_sent_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  retention_notice_7d_sent_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  retention_started_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
   subscription_ends_at: faker.helpers.arrayElement([
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
@@ -149,6 +165,22 @@ export const getUpdateUserProfileResponseMock = (
     undefined,
   ]),
   primary_region: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  retention_expires_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  retention_notice_30d_sent_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  retention_notice_7d_sent_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  retention_started_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
   subscription_ends_at: faker.helpers.arrayElement([
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,

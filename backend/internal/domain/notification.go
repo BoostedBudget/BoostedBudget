@@ -47,7 +47,7 @@ func (n *Notification) Validate() error {
 		"budget_alert":            true,
 		"payment_failed":          true,
 		"subscription_past_due":   true,
-		"subscription_paused":     true,
+		"subscription_cancelled":  true,
 		"subscription_resumed":    true,
 		"subscription_activated":  true,
 		"subscription_trialing":   true,
