@@ -57,6 +57,36 @@ type ProfileRepository interface {
 	// UpdateSubscriptionStatus updates just the subscription status
 	UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error
 
+	// GetSubscriptionStatusByUserID retrieves only the subscription_status for a user.
+	// Used by read-only middleware (#930) to avoid a full user fetch on every request.
+	GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error)
+
+	// Retention tracking methods (#930: 6-month read-only before auto-deletion)
+
+	// SetRetentionDates sets the retention_started_at and retention_expires_at for a user.
+	SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error
+
+	// ClearRetentionDates clears all retention tracking fields (called on resubscription).
+	ClearRetentionDates(ctx context.Context, userID string) error
+
+	// SetRetentionNotice30dSent marks the 30-day pre-deletion notice as sent.
+	SetRetentionNotice30dSent(ctx context.Context, userID string) error
+
+	// SetRetentionNotice7dSent marks the 7-day pre-deletion notice as sent.
+	SetRetentionNotice7dSent(ctx context.Context, userID string) error
+
+	// GetUsersNeedingRetention30dNotice returns users whose retention_expires_at is within 30 days
+	// and whose 30-day notice has not yet been sent.
+	GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error)
+
+	// GetUsersNeedingRetention7dNotice returns users whose retention_expires_at is within 7 days
+	// and whose 7-day notice has not yet been sent.
+	GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error)
+
+	// GetUsersWithExpiredRetention returns users whose retention_expires_at has passed
+	// and who are not already deleted or pending deletion.
+	GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error)
+
 	// GetUsersWithExpiredTrials returns users with trial status but past trial_ends_at
 	GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error)
 
@@ -101,7 +131,8 @@ const userSelectQuery = `
 	       is_active, is_deleted,
 	       deletion_requested_at, deletion_scheduled_at,
 	       created_at, updated_at, last_login_at,
-	       manual_tier_override, manual_tier_ends_at
+	       manual_tier_override, manual_tier_ends_at,
+	       retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at
 	FROM users`
 
 // queryUser is a helper that scans a user from a query row
@@ -116,6 +147,7 @@ func (r *profileRepository) queryUser(ctx context.Context, query string, args ..
 		&user.DeletionRequestedAt, &user.DeletionScheduledAt,
 		&user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
 		&user.ManualTierOverride, &user.ManualTierEndsAt,
+		&user.RetentionStartedAt, &user.RetentionExpiresAt, &user.RetentionNotice30dSentAt, &user.RetentionNotice7dSentAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
@@ -171,6 +203,7 @@ func (r *profileRepository) queryUsers(ctx context.Context, query string, args .
 			&user.DeletionRequestedAt, &user.DeletionScheduledAt,
 			&user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
 			&user.ManualTierOverride, &user.ManualTierEndsAt,
+			&user.RetentionStartedAt, &user.RetentionExpiresAt, &user.RetentionNotice30dSentAt, &user.RetentionNotice7dSentAt,
 		); err != nil {
 			return nil, err
 		}
@@ -758,6 +791,23 @@ func (r *profileRepository) UpdateSubscriptionStatus(ctx context.Context, userID
 	return nil
 }
 
+// GetSubscriptionStatusByUserID retrieves only the subscription_status for a user.
+// Used by the read-only middleware (#930) for efficient per-request status checks.
+func (r *profileRepository) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+	var status string
+	err := r.db.QueryRow(ctx,
+		`SELECT subscription_status FROM users WHERE id = $1 AND is_deleted = FALSE`,
+		userID,
+	).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrUserNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	return status, nil
+}
+
 // GetUsersWithExpiredTrials returns users with trial status but past trial_ends_at
 // Issue #680: Trial expiration cron job
 func (r *profileRepository) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
@@ -792,6 +842,154 @@ func (r *profileRepository) GetUsersWithExpiringTrials(ctx context.Context, with
 // Issue #762: Paddle admin tools reconciliation
 func (r *profileRepository) GetUsersWithActivePaddleSubscriptions(ctx context.Context) ([]*domain.User, error) {
 	query := userSelectQuery + ` WHERE paddle_subscription_id_blind_idx IS NOT NULL AND subscription_status NOT IN ('inactive', 'cancelled') AND is_deleted = FALSE`
+	users, err := r.queryUsers(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if users == nil {
+		return []*domain.User{}, nil
+	}
+	return users, nil
+}
+
+// SetRetentionDates sets the retention_started_at and retention_expires_at for a user.
+// Called when a user's subscription is cancelled or trial expires (#930).
+func (r *profileRepository) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
+	now := time.Now()
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET retention_started_at = $1,
+		    retention_expires_at = $2,
+		    updated_at = $3
+		WHERE id = $4 AND is_deleted = FALSE`,
+		startedAt, expiresAt, now, userID,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// ClearRetentionDates clears all retention tracking fields on resubscription (#930).
+func (r *profileRepository) ClearRetentionDates(ctx context.Context, userID string) error {
+	now := time.Now()
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET retention_started_at = NULL,
+		    retention_expires_at = NULL,
+		    retention_notice_30d_sent_at = NULL,
+		    retention_notice_7d_sent_at = NULL,
+		    updated_at = $1
+		WHERE id = $2 AND is_deleted = FALSE`,
+		now, userID,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// SetRetentionNotice30dSent marks the 30-day pre-deletion notice as sent (#930).
+func (r *profileRepository) SetRetentionNotice30dSent(ctx context.Context, userID string) error {
+	now := time.Now()
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET retention_notice_30d_sent_at = $1,
+		    updated_at = $1
+		WHERE id = $2 AND is_deleted = FALSE`,
+		now, userID,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// SetRetentionNotice7dSent marks the 7-day pre-deletion notice as sent (#930).
+func (r *profileRepository) SetRetentionNotice7dSent(ctx context.Context, userID string) error {
+	now := time.Now()
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET retention_notice_7d_sent_at = $1,
+		    updated_at = $1
+		WHERE id = $2 AND is_deleted = FALSE`,
+		now, userID,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// GetUsersNeedingRetention30dNotice returns users whose retention_expires_at is within 30 days
+// and who have not yet received a 30-day pre-deletion warning (#930).
+func (r *profileRepository) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) {
+	query := userSelectQuery + `
+		WHERE retention_expires_at IS NOT NULL
+		  AND retention_expires_at - INTERVAL '30 days' <= NOW()
+		  AND retention_expires_at > NOW()
+		  AND retention_notice_30d_sent_at IS NULL
+		  AND subscription_status IN ('inactive', 'cancelled')
+		  AND is_deleted = FALSE
+		  AND deletion_requested_at IS NULL
+		ORDER BY retention_expires_at ASC
+	`
+	users, err := r.queryUsers(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if users == nil {
+		return []*domain.User{}, nil
+	}
+	return users, nil
+}
+
+// GetUsersNeedingRetention7dNotice returns users whose retention_expires_at is within 7 days
+// and who have not yet received a 7-day pre-deletion warning (#930).
+func (r *profileRepository) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
+	query := userSelectQuery + `
+		WHERE retention_expires_at IS NOT NULL
+		  AND retention_expires_at - INTERVAL '7 days' <= NOW()
+		  AND retention_expires_at > NOW()
+		  AND retention_notice_7d_sent_at IS NULL
+		  AND subscription_status IN ('inactive', 'cancelled')
+		  AND is_deleted = FALSE
+		  AND deletion_requested_at IS NULL
+		ORDER BY retention_expires_at ASC
+	`
+	users, err := r.queryUsers(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if users == nil {
+		return []*domain.User{}, nil
+	}
+	return users, nil
+}
+
+// GetUsersWithExpiredRetention returns users whose retention_expires_at has passed
+// and who are not already deleted or pending deletion (#930).
+func (r *profileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
+	query := userSelectQuery + `
+		WHERE retention_expires_at IS NOT NULL
+		  AND retention_expires_at <= NOW()
+		  AND subscription_status IN ('inactive', 'cancelled')
+		  AND is_deleted = FALSE
+		  AND deletion_requested_at IS NULL
+		ORDER BY retention_expires_at ASC
+	`
 	users, err := r.queryUsers(ctx, query)
 	if err != nil {
 		return nil, err

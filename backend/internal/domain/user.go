@@ -52,6 +52,12 @@ type User struct {
 	DeletionRequestedAt *time.Time `json:"deletion_requested_at,omitempty" db:"deletion_requested_at"`
 	DeletionScheduledAt *time.Time `json:"deletion_scheduled_at,omitempty" db:"deletion_scheduled_at"`
 
+	// GDPR: Retention tracking - 6 months read-only, then auto-delete (Issue #930)
+	RetentionStartedAt       *time.Time `json:"retention_started_at,omitempty" db:"retention_started_at"`
+	RetentionExpiresAt       *time.Time `json:"retention_expires_at,omitempty" db:"retention_expires_at"`
+	RetentionNotice30dSentAt *time.Time `json:"retention_notice_30d_sent_at,omitempty" db:"retention_notice_30d_sent_at"`
+	RetentionNotice7dSentAt  *time.Time `json:"retention_notice_7d_sent_at,omitempty" db:"retention_notice_7d_sent_at"`
+
 	// Timestamps
 	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at"`

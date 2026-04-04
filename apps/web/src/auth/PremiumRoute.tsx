@@ -9,6 +9,8 @@
 
 import { Navigate, useLocation } from 'react-router-dom'
 import { useProfile } from '@/features/profile/hooks/useProfile'
+import { ReadOnlyProvider } from './ReadOnlyContext'
+import { ReadOnlyBanner } from './ReadOnlyBanner'
 
 interface PremiumRouteProps {
   children: React.ReactNode
@@ -94,17 +96,38 @@ export function PremiumRoute({ children }: PremiumRouteProps) {
     return <LoadingSkeleton />
   }
 
-  const hasActiveSubscription = user.subscription_status === 'active' || user.subscription_status === 'trial'
+  // Active: full access
+  const isActive = user.subscription_status === 'active'
+    || user.subscription_status === 'trial'
+    || user.subscription_status === 'trialing'
 
-  if (!hasActiveSubscription) {
+  // Read-only: view data but cannot mutate
+  const isReadOnly = user.subscription_status === 'inactive'
+    || user.subscription_status === 'cancelled'
+
+  if (isActive) {
     return (
-      <Navigate
-        to="/pricing"
-        state={{ from: location, frozen: true }}
-        replace
-      />
+      <ReadOnlyProvider isReadOnly={false} subscriptionStatus={user.subscription_status}>
+        {children}
+      </ReadOnlyProvider>
     )
   }
 
-  return <>{children}</>
+  if (isReadOnly) {
+    return (
+      <ReadOnlyProvider isReadOnly={true} subscriptionStatus={user.subscription_status}>
+        <ReadOnlyBanner status={user.subscription_status} />
+        {children}
+      </ReadOnlyProvider>
+    )
+  }
+
+  // Fallback for past_due, etc. — keep existing redirect behavior
+  return (
+    <Navigate
+      to="/pricing"
+      state={{ from: location, frozen: true }}
+      replace
+    />
+  )
 }

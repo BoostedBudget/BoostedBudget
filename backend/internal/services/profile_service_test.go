@@ -131,6 +131,32 @@ func (m *MockProfileRepository) GetUsersWithActivePaddleSubscriptions(ctx contex
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
+// Retention tracking stubs (#930)
+func (m *MockProfileRepository) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+	return "", nil
+}
+func (m *MockProfileRepository) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
+	return nil
+}
+func (m *MockProfileRepository) ClearRetentionDates(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepository) SetRetentionNotice30dSent(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepository) SetRetentionNotice7dSent(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepository) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+func (m *MockProfileRepository) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+func (m *MockProfileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+
 // TestGetProfile_ExistingUser tests retrieving an existing user
 // NOTE: After PR #197, GetProfile now receives internal user UUID, not Clerk ID
 func TestGetProfile_ExistingUser(t *testing.T) {

@@ -1862,6 +1862,16 @@ func (m *mockProfileRepoForCursorTests) GetUsersWithActivePaddleSubscriptions(ct
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
+// Retention tracking stubs (#930)
+func (m *mockProfileRepoForCursorTests) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) { return "", nil }
+func (m *mockProfileRepoForCursorTests) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error { return nil }
+func (m *mockProfileRepoForCursorTests) ClearRetentionDates(ctx context.Context, userID string) error { return nil }
+func (m *mockProfileRepoForCursorTests) SetRetentionNotice30dSent(ctx context.Context, userID string) error { return nil }
+func (m *mockProfileRepoForCursorTests) SetRetentionNotice7dSent(ctx context.Context, userID string) error { return nil }
+func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) { return nil, nil }
+func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) { return nil, nil }
+func (m *mockProfileRepoForCursorTests) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) { return nil, nil }
+
 // ============================================================================
 // CURSOR PERSISTENCE TESTS (Critical)
 // Plaid Staging Validation - Cursor handling edge cases
