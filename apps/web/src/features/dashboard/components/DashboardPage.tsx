@@ -1,18 +1,18 @@
 import { useState, useCallback, useEffect } from 'react'
-import { Link } from 'react-router'
 import { useAuth } from '@clerk/react-router'
 import { ReadOnlyGuard } from '@/auth'
 import { PlusIcon, PencilIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
-import { LightbulbIcon, Landmark, Plus } from 'lucide-react'
+import { LightbulbIcon } from 'lucide-react'
 import { Alert } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/empty-state'
 import { DashboardProvider, useDashboardContext } from '../context/DashboardContext'
 import { useDashboardLayout } from '../hooks/useDashboardLayout'
 import { useDashboardOnboarding } from '../hooks/useDashboardOnboarding'
+import { useGettingStarted } from '../hooks/useGettingStarted'
 import { DashboardGrid, WidgetCatalog } from '../widgets'
 import { AccountTypeFilter } from './AccountTypeFilter'
 import { TimeframeSelector } from './TimeframeSelector'
+import { GettingStartedChecklist } from './GettingStartedChecklist'
 import { useDashboardData } from '../hooks/useDashboardData'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
@@ -38,7 +38,7 @@ import '../widgets'
 
 function DashboardContent() {
   const { getToken } = useAuth()
-  const { filters, setFilters, isEditing, setIsEditing, hasAccounts, accountsLoading } = useDashboardContext()
+  const { filters, setFilters, isEditing, setIsEditing, hasAccounts } = useDashboardContext()
   const trackEvent = useTrackEvent()
 
   useEffect(() => {
@@ -57,7 +57,20 @@ function DashboardContent() {
   })
 
   const { showHint, dismissHint } = useDashboardOnboarding()
+  const gettingStarted = useGettingStarted()
   const [catalogOpen, setCatalogOpen] = useState(false)
+
+  useEffect(() => {
+    if (gettingStarted.shouldShow && !gettingStarted.isLoading) {
+      trackEvent(ANALYTICS_EVENTS.GETTING_STARTED_VIEWED)
+    }
+  }, [gettingStarted.shouldShow, gettingStarted.isLoading, trackEvent])
+
+  useEffect(() => {
+    if (gettingStarted.isCelebrating) {
+      trackEvent(ANALYTICS_EVENTS.GETTING_STARTED_COMPLETED)
+    }
+  }, [gettingStarted.isCelebrating, trackEvent])
 
   // Fetch account types for filter
   const { accountTypes } = useDashboardData({
@@ -80,6 +93,8 @@ function DashboardContent() {
     setIsEditing(false)
   }, [resetToDefault, setIsEditing])
 
+  // Issue #470: Save pending changes immediately when exiting edit mode
+  // This ensures changes are persisted before the user can navigate away
   const handleExitEditMode = useCallback(async () => {
     await saveNow()
     setIsEditing(false)
@@ -140,8 +155,8 @@ function DashboardContent() {
             <p className="mt-2 text-gray-600 dark:text-gray-400">
               {isEditing ? 'Drag widgets to reorder, resize from corners' : 'Track your balance and cash flow'}
             </p>
-            {/* Onboarding hint for first-time users - Issue #412 */}
-            {showHint && !isEditing && (
+            {/* Onboarding hint - Issue #412: only show after first bank connected */}
+            {showHint && !isEditing && hasAccounts && (
               <Alert
                 variant="info"
                 dismissible
@@ -200,23 +215,18 @@ function DashboardContent() {
           </div>
         </div>
 
-        {/* Welcome banner for new users with no accounts - Issue #834 */}
-        {!hasAccounts && !accountsLoading && (
+        {/* Getting Started checklist for new users - Issue #848 */}
+        {gettingStarted.shouldShow && !gettingStarted.isLoading && (
           <div className="mb-6">
-            <EmptyState
-              icon={<Landmark />}
-              title="Welcome to BoostedBudget!"
-              description="Connect your first bank account to start tracking your finances"
-              action={
-                <ReadOnlyGuard message="Resubscribe to connect bank accounts">
-                  <Button asChild>
-                    <Link to="/accounts">
-                      <Plus className="h-4 w-4" />
-                      Connect Bank Account
-                    </Link>
-                  </Button>
-                </ReadOnlyGuard>
-              }
+            <GettingStartedChecklist
+              steps={gettingStarted.steps}
+              completedCount={gettingStarted.completedCount}
+              totalSteps={gettingStarted.totalSteps}
+              isCelebrating={gettingStarted.isCelebrating}
+              onDismiss={() => {
+                gettingStarted.dismiss()
+                trackEvent(ANALYTICS_EVENTS.GETTING_STARTED_DISMISSED)
+              }}
             />
           </div>
         )}

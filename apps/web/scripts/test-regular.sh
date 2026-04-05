@@ -37,6 +37,8 @@ EXCLUDE_PATTERNS=(
     "src/features/budgets/hooks/useSavingsGoals.test.tsx"
     "src/features/budgets/hooks/useBudgetDetail.test.tsx"
     "src/features/budgets/hooks/useAvailableCategories.test.tsx"
+    # Hook implementation tests (need API-level mocks, not wrapper mocks)
+    "src/features/dashboard/hooks/useGettingStarted.test.ts"
     # Isolated tests polluted by other tests (run via test-isolated.sh)
     "src/features/dashboard/widgets/DashboardGrid.test.tsx"
     "src/features/dashboard/widgets/WidgetCatalog.test.tsx"
