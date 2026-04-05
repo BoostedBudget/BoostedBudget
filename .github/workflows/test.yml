@@ -61,12 +61,7 @@ jobs:
   # =============================================================================
   e2e-test:
     name: E2E Tests
-    needs: detect-changes
-    if: |
-      always() && !cancelled() &&
-      (needs.detect-changes.outputs.backend == 'true' ||
-       needs.detect-changes.outputs.frontend == 'true' ||
-       needs.detect-changes.outputs.workflow == 'true')
+    if: always() && !cancelled()
     timeout-minutes: 20
     runs-on: [self-hosted, macOS, mac-mini]
     environment: e2e  # Access Clerk secrets from e2e environment
