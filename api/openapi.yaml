@@ -2504,6 +2504,57 @@ components:
         - failed
         - completed_last_hour
       type: object
+    RegionResponse:
+      additionalProperties: false
+      properties:
+        city:
+          description: City name
+          type: string
+        code:
+          description: Fly.io IATA region code
+          type: string
+        country:
+          description: Country name
+          type: string
+        display_name:
+          description: Human-readable region name
+          type: string
+        flag:
+          description: Country flag emoji
+          type: string
+      required:
+        - code
+        - display_name
+        - country
+        - city
+        - flag
+      type: object
+    RegionsResponseBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RegionsResponseBody.json
+          format: uri
+          readOnly: true
+          type: string
+        default_region:
+          description: Default region for new users
+          type: string
+        regions:
+          additionalProperties:
+            $ref: "#/components/schemas/RegionResponse"
+          description: Available regions keyed by Fly.io IATA code
+          type: object
+        server_region:
+          description: Region this server instance runs in
+          type: string
+      required:
+        - regions
+        - default_region
+        - server_region
+      type: object
     ReorderAccountsOutputBody:
       additionalProperties: false
       properties:
@@ -4243,7 +4294,8 @@ info:
 
     ## Regions
 
-    All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+    Use the GET /api/v1/regions endpoint to discover available data residency regions.
+    Multi-region support planned for Phase 7+.
   license:
     name: Proprietary
     url: https://boostedbudget.com/terms
@@ -6407,6 +6459,30 @@ paths:
       summary: QA auth bypass
       tags:
         - QA
+  /api/v1/regions:
+    get:
+      description: Returns all available data residency regions. Use this to populate region selectors. This is a public endpoint.
+      operationId: getRegions
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegionsResponseBody"
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get available regions
+      tags:
+        - Regions
   /api/v1/rules:
     get:
       description: Retrieves all automation rules for the authenticated user, ordered by priority.
