@@ -1043,6 +1043,21 @@ components:
         - transaction_count
         - total_amount
       type: object
+    CategorySpending:
+      additionalProperties: false
+      properties:
+        category:
+          type: string
+        display_name:
+          type: string
+        total:
+          format: double
+          type: number
+      required:
+        - category
+        - display_name
+        - total
+      type: object
     CategoryTransactionsResponse:
       additionalProperties: false
       properties:
@@ -2791,6 +2806,161 @@ components:
         - database
         - clerk
         - plaid
+      type: object
+    SpendingByCategory:
+      additionalProperties: false
+      properties:
+        category:
+          type: string
+        display_name:
+          type: string
+        percentage:
+          format: double
+          type: number
+        total:
+          format: double
+          type: number
+        transaction_count:
+          format: int64
+          type: integer
+      required:
+        - category
+        - display_name
+        - total
+        - percentage
+        - transaction_count
+      type: object
+    SpendingByCategoryResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SpendingByCategoryResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        categories:
+          items:
+            $ref: "#/components/schemas/SpendingByCategory"
+          type:
+            - array
+            - "null"
+        end_date:
+          type: string
+        start_date:
+          type: string
+        total_spent:
+          format: double
+          type: number
+      required:
+        - start_date
+        - end_date
+        - total_spent
+        - categories
+      type: object
+    SpendingByMerchant:
+      additionalProperties: false
+      properties:
+        merchant_name:
+          type: string
+        percentage:
+          format: double
+          type: number
+        total:
+          format: double
+          type: number
+        transaction_count:
+          format: int64
+          type: integer
+      required:
+        - merchant_name
+        - total
+        - transaction_count
+        - percentage
+      type: object
+    SpendingByMerchantResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SpendingByMerchantResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        end_date:
+          type: string
+        merchants:
+          items:
+            $ref: "#/components/schemas/SpendingByMerchant"
+          type:
+            - array
+            - "null"
+        start_date:
+          type: string
+        top_n:
+          format: int64
+          type: integer
+      required:
+        - start_date
+        - end_date
+        - top_n
+        - merchants
+      type: object
+    SpendingTrendPeriod:
+      additionalProperties: false
+      properties:
+        categories:
+          items:
+            $ref: "#/components/schemas/CategorySpending"
+          type:
+            - array
+            - "null"
+        period_end:
+          type: string
+        period_start:
+          type: string
+        total:
+          format: double
+          type: number
+      required:
+        - period_start
+        - period_end
+        - categories
+        - total
+      type: object
+    SpendingTrendsResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SpendingTrendsResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        end_date:
+          type: string
+        periods:
+          items:
+            $ref: "#/components/schemas/SpendingTrendPeriod"
+          type:
+            - array
+            - "null"
+        start_date:
+          type: string
+        top_categories:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - start_date
+        - end_date
+        - periods
+        - top_categories
       type: object
     SubscriptionFeatures:
       additionalProperties: false
@@ -4793,6 +4963,181 @@ paths:
       security:
         - clerk: []
       summary: Get cash flow summary
+      tags:
+        - Analytics
+  /api/v1/analytics/spending-by-category:
+    get:
+      description: Returns spending totals grouped by category with percentages. Pass category param for subcategory drill-down.
+      operationId: getSpendingByCategory
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: Comma-separated account types to filter
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter
+            type: string
+        - description: Include transfer transactions (true/false, default false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfer transactions (true/false, default false)
+            type: string
+        - description: Primary category to drill into subcategories
+          explode: false
+          in: query
+          name: category
+          schema:
+            description: Primary category to drill into subcategories
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpendingByCategoryResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get spending by category
+      tags:
+        - Analytics
+  /api/v1/analytics/spending-by-merchant:
+    get:
+      description: Returns top merchants by spending with percentages.
+      operationId: getSpendingByMerchant
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: Comma-separated account types to filter
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter
+            type: string
+        - description: Include transfer transactions (true/false, default false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfer transactions (true/false, default false)
+            type: string
+        - description: Maximum number of merchants to return (default 10)
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 10
+            description: Maximum number of merchants to return (default 10)
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpendingByMerchantResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get spending by merchant
+      tags:
+        - Analytics
+  /api/v1/analytics/spending-trends:
+    get:
+      description: Returns monthly category spending trends for stacked bar charts. Top 5 categories plus Other.
+      operationId: getSpendingTrends
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: Comma-separated account types to filter
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter
+            type: string
+        - description: Include transfer transactions (true/false, default false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfer transactions (true/false, default false)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpendingTrendsResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get spending trends
       tags:
         - Analytics
   /api/v1/auto-categorization:

@@ -39,6 +39,9 @@ TEST_FILES=(
     # useGettingStarted needs centralized mocks (dashboard-context, budgets-api, etc.)
     # but can't run in regular suite: DashboardPage.test.tsx mocks useGettingStarted globally (#848)
     "src/features/dashboard/hooks/useGettingStarted.test.ts"
+    # ToggleGroup component test needs real module, but TimeframeSelector/DateRangePicker
+    # tests mock @/components/ui/toggle-group globally in the regular suite (#953)
+    "src/components/ui/toggle-group.test.tsx"
 )
 
 # Build test command

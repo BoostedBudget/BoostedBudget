@@ -38,6 +38,7 @@ export {
   ACCOUNT_TYPE_COLORS,
   CASH_FLOW_COLORS,
   THEME_COLORS,
+  CATEGORY_COLORS,
 } from './colors';
 
 // Formatters
