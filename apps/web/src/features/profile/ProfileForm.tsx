@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import { useUpdateUserProfile } from '@boostedbudget/api-client/endpoints/profile/profile'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
-import { REGIONS, getRegionWithFlag } from '../../config/regions'
+import { useRegions } from '../../shared/hooks/useRegions'
 import {
   Dialog,
   DialogContent,
@@ -24,8 +24,7 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
   const [validationError, setValidationError] = useState<string | null>(null)
   const [showRegionConfirm, setShowRegionConfirm] = useState(false)
   const trackEvent = useTrackEvent()
-
-  // Use the generated mutation hook
+  const { regions, loading: regionsLoading } = useRegions()
   const updateProfileMutation = useUpdateUserProfile()
   const submitting = updateProfileMutation.isPending
 
@@ -39,6 +38,10 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
   const hasChanges =
     email !== user.email || primaryRegion !== user.primary_region
   const hasRegionChange = primaryRegion !== user.primary_region
+
+  function getRegionDisplay(code: string): string {
+    return regions?.[code]?.display_name ?? code
+  }
 
   function validateEmail(emailValue: string): boolean {
     if (!emailValue || emailValue.trim() === '') {
@@ -153,11 +156,11 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
             id="region"
             value={primaryRegion}
             onChange={(e) => setPrimaryRegion(e.target.value)}
-            disabled={submitting}
+            disabled={submitting || regionsLoading}
           >
-            {Object.entries(REGIONS).map(([code, info]) => (
+            {regions && Object.entries(regions).map(([code, info]) => (
               <option key={code} value={code}>
-                {info.flag} {info.displayName}
+                {info.flag} {info.display_name}
               </option>
             ))}
           </select>
@@ -182,8 +185,8 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
             <DialogTitle>Change Data Region?</DialogTitle>
             <DialogDescription>
               You&apos;re changing your data region from{' '}
-              <strong>{getRegionWithFlag(user.primary_region)}</strong> to{' '}
-              <strong>{getRegionWithFlag(primaryRegion)}</strong>.
+              <strong>{getRegionDisplay(user.primary_region)}</strong> to{' '}
+              <strong>{getRegionDisplay(primaryRegion)}</strong>.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

@@ -66,15 +66,14 @@ describe('ProfileForm', () => {
       expect(screen.getByRole('button', { name: /save changes/i })).toBeInTheDocument()
     })
 
-    it('should render all valid region options', () => {
+    it('should render all valid region options from API', () => {
       render(<ProfileForm user={mockUser} />)
 
       const regionSelect = screen.getByLabelText(/primary region/i) as HTMLSelectElement
       const options = Array.from(regionSelect.options).map((o) => o.value)
 
       expect(options).toContain('iad')
-      expect(options).toContain('lhr')
-      expect(options).toContain('syd')
+      expect(options).toContain('ewr')
     })
   })
 
@@ -146,7 +145,7 @@ describe('ProfileForm', () => {
     })
 
     it('should update region when changed after confirmation', async () => {
-      const updatedUser = { ...mockUser, primary_region: 'lhr' }
+      const updatedUser = { ...mockUser, primary_region: 'ewr' }
       configureMutateSuccess(updatedUser)
 
       const user = userEvent.setup({ delay: null })
@@ -155,7 +154,7 @@ describe('ProfileForm', () => {
       const regionSelect = screen.getByLabelText(/primary region/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
 
-      await user.selectOptions(regionSelect, 'lhr')
+      await user.selectOptions(regionSelect, 'ewr')
       await user.click(saveButton)
 
       await waitFor(() => {
@@ -167,7 +166,7 @@ describe('ProfileForm', () => {
 
       await waitFor(() => {
         expect(mockUpdateUserProfileMutate).toHaveBeenCalledWith(
-          { data: { email: 'test@example.com', primary_region: 'lhr' } },
+          { data: { email: 'test@example.com', primary_region: 'ewr' } },
           expect.any(Object)
         )
       })
@@ -245,8 +244,8 @@ describe('ProfileForm', () => {
       await updateEmailField(user, 'new@example.com')
       expect(emailInput).toHaveValue('new@example.com')
 
-      await user.selectOptions(regionSelect, 'lhr')
-      expect(regionSelect).toHaveValue('lhr')
+      await user.selectOptions(regionSelect, 'ewr')
+      expect(regionSelect).toHaveValue('ewr')
     })
 
     it('should reset form to updated user data after successful submission', async () => {

@@ -183,6 +183,19 @@ func main() {
 	subscriptionTiersHandler := operations.NewSubscriptionTiersHandler(tierConfig)
 	operations.RegisterSubscriptionTiersRoutes(humaAPI, subscriptionTiersHandler)
 
+	// Load region configuration and initialize domain registry (#974)
+	regionConfig, err := config.LoadRegionConfig()
+	if err != nil {
+		appLogger.Error("Failed to load region config", "error", err)
+		os.Exit(1)
+	}
+	domain.InitRegionRegistry(convertRegionConfig(regionConfig), regionConfig.GetDefaultRegion(), regionConfig.GetServerRegion())
+	appLogger.Info("Region configuration loaded", "regions", len(regionConfig.Regions))
+
+	// Regions endpoint (public - needed for profile region selector)
+	regionsHandler := operations.NewRegionsHandler(regionConfig)
+	operations.RegisterRegionRoutes(humaAPI, regionsHandler)
+
 	// Default dashboard layout endpoint migrated to Huma (see humaDashboardHandler) - Issue #559
 
 	// Declare plaidService at package scope for use in both authenticated routes and webhook endpoint
@@ -1235,7 +1248,7 @@ func main() {
 	// Start server
 	// Bind to 0.0.0.0 to be accessible from outside the container (required for Fly.io)
 	address := fmt.Sprintf("0.0.0.0:%s", cfg.Port)
-	appLogger.Info("Starting BoostedBudget API", "address", address, "region", cfg.PrimaryRegion)
+	appLogger.Info("Starting BoostedBudget API", "address", address, "region", regionConfig.GetServerRegion())
 
 	// Graceful shutdown
 	go func() {
@@ -1356,4 +1369,20 @@ func boolStatus(configured bool) string {
 		return "configured"
 	}
 	return "not configured"
+}
+
+// convertRegionConfig maps config.RegionConfig to domain.RegionInfo map for InitRegionRegistry.
+func convertRegionConfig(rc *config.RegionConfig) map[string]domain.RegionInfo {
+	result := make(map[string]domain.RegionInfo, len(rc.Regions))
+	for code, def := range rc.Regions {
+		result[code] = domain.RegionInfo{
+			Code:        code,
+			DisplayName: def.DisplayName,
+			Country:     def.Country,
+			City:        def.City,
+			Flag:        def.Flag,
+			FlyRegion:   def.Infrastructure.FlyRegion,
+		}
+	}
+	return result
 }

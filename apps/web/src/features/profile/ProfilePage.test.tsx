@@ -336,7 +336,7 @@ describe('ProfilePage', () => {
     it('should submit updated region via API after confirmation', async () => {
       configureMutateSuccess({
         ...mockUser,
-        primary_region: 'lhr',
+        primary_region: 'ewr',
       })
 
       renderWithProviders(<ProfilePage />)
@@ -348,10 +348,10 @@ describe('ProfilePage', () => {
       const user = userEvent.setup({ delay: null })
       const regionSelect = screen.getByLabelText(/region/i)
 
-      await user.selectOptions(regionSelect, 'lhr')
+      await user.selectOptions(regionSelect, 'ewr')
 
       await waitFor(() => {
-        expect((regionSelect as HTMLSelectElement).value).toBe('lhr')
+        expect((regionSelect as HTMLSelectElement).value).toBe('ewr')
       })
 
       const saveButton = screen.getByRole('button', { name: /save/i })
@@ -366,7 +366,7 @@ describe('ProfilePage', () => {
 
       await waitFor(() => {
         expect(mockUpdateUserProfileMutate).toHaveBeenCalledWith(
-          { data: { email: 'test@example.com', primary_region: 'lhr' } },
+          { data: { email: 'test@example.com', primary_region: 'ewr' } },
           expect.any(Object)
         )
       })
