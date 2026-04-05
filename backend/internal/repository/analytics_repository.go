@@ -17,6 +17,16 @@ type AnalyticsRepository interface {
 
 	// GetCashFlowGrouped returns cash flow data grouped by period (daily/weekly/monthly)
 	GetCashFlowGrouped(ctx context.Context, userID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error)
+
+	// GetSpendingByCategory returns expense totals grouped by effective category.
+	// When filters.Category is set, returns subcategory breakdown for that primary category.
+	GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error)
+
+	// GetSpendingByMerchant returns expense totals grouped by merchant, ordered by total desc.
+	GetSpendingByMerchant(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error)
+
+	// GetSpendingTrends returns monthly expense totals per category for trend analysis.
+	GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error)
 }
 
 // analyticsRepository implements AnalyticsRepository using PostgreSQL
@@ -257,4 +267,189 @@ func advancePeriod(t time.Time, grouping string) time.Time {
 	default: // daily
 		return t.AddDate(0, 0, 1)
 	}
+}
+
+// effectiveCategoryExpr returns the SQL expression for computing effective category.
+// When subcategory is true, uses the 'detailed' field instead of 'primary'.
+func effectiveCategoryExpr(subcategory bool) string {
+	field := "primary"
+	if subcategory {
+		field = "detailed"
+	}
+	return fmt.Sprintf(`COALESCE(t.category_override->>'%s', t.personal_finance_category->>'%s', 'UNCATEGORIZED')`, field, field)
+}
+
+// spendingBaseQuery returns the common WHERE clause args and starting argIndex for spending queries.
+func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{}) (string, []interface{}, int) {
+	args := baseArgs
+	argIndex := len(args) + 1
+	clause := ""
+
+	if len(filters.AccountTypes) > 0 {
+		placeholders := make([]string, len(filters.AccountTypes))
+		for i, at := range filters.AccountTypes {
+			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+			args = append(args, at)
+			argIndex++
+		}
+		clause += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
+	}
+
+	if !filters.IncludeTransfers {
+		clause += ` AND (t.personal_finance_category IS NULL OR
+			COALESCE(t.personal_finance_category->>'primary', '') NOT LIKE 'TRANSFER%')`
+	}
+
+	return clause, args, argIndex
+}
+
+// GetSpendingByCategory returns expense totals grouped by effective primary category.
+// When filters.Category is non-empty, returns the detailed subcategory breakdown.
+func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+	isDrillDown := filters.Category != ""
+	catExpr := effectiveCategoryExpr(isDrillDown)
+
+	args := []interface{}{userID, filters.StartDate, filters.EndDate}
+
+	var categoryFilter string
+	if isDrillDown {
+		args = append(args, filters.Category)
+		primaryCatExpr := effectiveCategoryExpr(false)
+		categoryFilter = fmt.Sprintf(" AND %s = $4", primaryCatExpr)
+	}
+
+	extraClause, args, _ := buildSpendingFilter(filters, args)
+
+	query := fmt.Sprintf(`
+		SELECT
+			%s as category,
+			COALESCE(SUM(ABS(t.amount)), 0) as total,
+			COUNT(*) as transaction_count
+		FROM transactions t
+		JOIN accounts a ON t.account_id = a.id
+		WHERE t.user_id = $1
+		  AND t.date >= $2
+		  AND t.date <= $3
+		  AND t.amount < 0
+		  AND t.pending = false
+		%s%s
+		GROUP BY category
+		ORDER BY total DESC
+	`, catExpr, categoryFilter, extraClause)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get spending by category: %w", err)
+	}
+	defer rows.Close()
+
+	var results []domain.SpendingByCategory
+	for rows.Next() {
+		var row domain.SpendingByCategory
+		if err := rows.Scan(&row.Category, &row.Total, &row.TransactionCount); err != nil {
+			return nil, fmt.Errorf("failed to scan spending by category: %w", err)
+		}
+		results = append(results, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating spending by category rows: %w", err)
+	}
+
+	return results, nil
+}
+
+// GetSpendingByMerchant returns expense totals grouped by merchant name, ordered by total descending.
+// Null merchant names are coalesced to "Unknown".
+func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error) {
+	args := []interface{}{userID, filters.StartDate, filters.EndDate}
+	extraClause, args, argIndex := buildSpendingFilter(filters, args)
+
+	args = append(args, limit)
+	limitPlaceholder := fmt.Sprintf("$%d", argIndex)
+
+	query := fmt.Sprintf(`
+		SELECT
+			COALESCE(t.merchant_name, 'Unknown') as merchant_name,
+			COALESCE(SUM(ABS(t.amount)), 0) as total,
+			COUNT(*) as transaction_count
+		FROM transactions t
+		JOIN accounts a ON t.account_id = a.id
+		WHERE t.user_id = $1
+		  AND t.date >= $2
+		  AND t.date <= $3
+		  AND t.amount < 0
+		  AND t.pending = false
+		%s
+		GROUP BY merchant_name
+		ORDER BY total DESC
+		LIMIT %s
+	`, extraClause, limitPlaceholder)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get spending by merchant: %w", err)
+	}
+	defer rows.Close()
+
+	var results []domain.SpendingByMerchant
+	for rows.Next() {
+		var row domain.SpendingByMerchant
+		if err := rows.Scan(&row.MerchantName, &row.Total, &row.TransactionCount); err != nil {
+			return nil, fmt.Errorf("failed to scan spending by merchant: %w", err)
+		}
+		results = append(results, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating spending by merchant rows: %w", err)
+	}
+
+	return results, nil
+}
+
+// GetSpendingTrends returns monthly expense totals per category for trend chart data.
+// Results are ordered by period_start ASC, total DESC.
+func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error) {
+	catExpr := effectiveCategoryExpr(false)
+	args := []interface{}{userID, filters.StartDate, filters.EndDate}
+	extraClause, args, _ := buildSpendingFilter(filters, args)
+
+	query := fmt.Sprintf(`
+		SELECT
+			DATE_TRUNC('month', t.date)::date as period_start,
+			%s as category,
+			COALESCE(SUM(ABS(t.amount)), 0) as total
+		FROM transactions t
+		JOIN accounts a ON t.account_id = a.id
+		WHERE t.user_id = $1
+		  AND t.date >= $2
+		  AND t.date <= $3
+		  AND t.amount < 0
+		  AND t.pending = false
+		%s
+		GROUP BY period_start, category
+		ORDER BY period_start ASC, total DESC
+	`, catExpr, extraClause)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get spending trends: %w", err)
+	}
+	defer rows.Close()
+
+	var results []domain.SpendingTrendRow
+	for rows.Next() {
+		var row domain.SpendingTrendRow
+		if err := rows.Scan(&row.PeriodStart, &row.Category, &row.Total); err != nil {
+			return nil, fmt.Errorf("failed to scan spending trend row: %w", err)
+		}
+		results = append(results, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating spending trends rows: %w", err)
+	}
+
+	return results, nil
 }

@@ -540,8 +540,9 @@ describe('DashboardPage', () => {
       const user = userEvent.setup()
       render(<DashboardPage />)
 
-      // Click on "7 Days" toggle in real TimeframeSelector
-      const timeframeButton = screen.getByRole('radio', { name: '7 Days' })
+      // Click "This Week" in TimeframeSelector — uses getByText since ToggleGroup
+      // may render as radio or button depending on mock state in combined test runs
+      const timeframeButton = screen.getByText('This Week')
       await user.click(timeframeButton)
 
       await waitFor(() => {
@@ -623,8 +624,9 @@ describe('DashboardPage', () => {
       const user = userEvent.setup()
       render(<DashboardPage />)
 
-      // Click "7 Days" in real TimeframeSelector
-      const button = screen.getByRole('radio', { name: '7 Days' })
+      // Click "Last Month" in TimeframeSelector — uses getByText since ToggleGroup
+      // may render as radio or button depending on mock state in combined test runs
+      const button = screen.getByText('Last Month')
       await user.click(button)
 
       await waitFor(() => {

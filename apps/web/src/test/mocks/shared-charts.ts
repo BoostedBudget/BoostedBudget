@@ -98,6 +98,11 @@ export const MOCK_CASH_FLOW_COLORS = {
   netNegative: '#ef4444',
 }
 
+export const MOCK_CATEGORY_COLORS = [
+  '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#f97316',
+  '#06b6d4', '#ec4899', '#84cc16', '#6366f1', '#14b8a6',
+] as const
+
 export const MOCK_THEME_COLORS = {
   light: {
     background: '#ffffff',
@@ -147,6 +152,7 @@ mock.module('@/shared/charts', () => ({
   CHART_COLORS: MOCK_CHART_COLORS,
   ACCOUNT_TYPE_COLORS: MOCK_ACCOUNT_TYPE_COLORS,
   CASH_FLOW_COLORS: MOCK_CASH_FLOW_COLORS,
+  CATEGORY_COLORS: MOCK_CATEGORY_COLORS,
   THEME_COLORS: MOCK_THEME_COLORS,
   formatCurrency: mockFormatCurrency,
   formatCurrencyCompact: mockFormatCurrencyCompact,
