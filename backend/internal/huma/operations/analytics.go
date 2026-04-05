@@ -4,9 +4,9 @@ import (
 	"context"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/maxnussbaum/BoostedBudget/internal/dateutil"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
@@ -61,30 +61,12 @@ type GetCashFlowHistoryOutput struct {
 func parseCashFlowFilters(startDateStr, endDateStr, accountTypes, includeTransfers, grouping string) (*domain.CashFlowFilters, error) {
 	filters := &domain.CashFlowFilters{}
 
-	// Parse start_date (required)
-	if startDateStr == "" {
-		return nil, huma.Error400BadRequest("start_date is required")
-	}
-	startDate, err := time.Parse("2006-01-02", startDateStr)
+	startDate, endDate, err := dateutil.ParseDateRange(startDateStr, endDateStr)
 	if err != nil {
-		return nil, huma.Error400BadRequest("Invalid start_date format. Use YYYY-MM-DD")
+		return nil, err
 	}
 	filters.StartDate = startDate
-
-	// Parse end_date (required)
-	if endDateStr == "" {
-		return nil, huma.Error400BadRequest("end_date is required")
-	}
-	endDate, err := time.Parse("2006-01-02", endDateStr)
-	if err != nil {
-		return nil, huma.Error400BadRequest("Invalid end_date format. Use YYYY-MM-DD")
-	}
 	filters.EndDate = endDate
-
-	// Validate date range
-	if endDate.Before(startDate) {
-		return nil, huma.Error400BadRequest("end_date cannot be before start_date")
-	}
 
 	// Parse account_types (optional, comma-separated)
 	if accountTypes != "" {

@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/maxnussbaum/BoostedBudget/internal/dateutil"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
@@ -127,21 +127,12 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 	}
 
 	// Date range filters
-	if input.StartDate != "" {
-		startDate, err := time.Parse("2006-01-02", input.StartDate)
-		if err != nil {
-			return nil, huma.Error400BadRequest("Invalid start_date format (expected YYYY-MM-DD)")
-		}
-		filters.StartDate = &startDate
+	startDate, endDate, err := dateutil.ParseOptionalDateRange(input.StartDate, input.EndDate)
+	if err != nil {
+		return nil, err
 	}
-
-	if input.EndDate != "" {
-		endDate, err := time.Parse("2006-01-02", input.EndDate)
-		if err != nil {
-			return nil, huma.Error400BadRequest("Invalid end_date format (expected YYYY-MM-DD)")
-		}
-		filters.EndDate = &endDate
-	}
+	filters.StartDate = startDate
+	filters.EndDate = endDate
 
 	// Category filter (single, deprecated)
 	if input.Category != "" {
