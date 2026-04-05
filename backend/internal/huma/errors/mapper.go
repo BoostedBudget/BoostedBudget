@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getsentry/sentry-go"
@@ -147,7 +148,9 @@ func MapError(err error) error {
 	case errors.Is(err, services.ErrInvalidEmail):
 		return huma.Error400BadRequest("Invalid email address")
 	case errors.Is(err, services.ErrInvalidRegion):
-		return huma.Error400BadRequest("Invalid primary region. Valid regions: iad, lhr, syd")
+		validCodes := domain.GetValidRegions()
+		msg := fmt.Sprintf("Invalid primary region. Valid regions: %s", strings.Join(validCodes, ", "))
+		return huma.Error400BadRequest(msg)
 	case errors.Is(err, services.ErrInvalidLimit):
 		return huma.Error400BadRequest("Limit must be between 1 and 100")
 	case errors.Is(err, services.ErrInvalidOffset):

@@ -18,13 +18,6 @@ var (
 	ErrForbiddenUpdate = errors.New("cannot update subscription fields")
 )
 
-// Valid regions for data residency (Fly.io IATA codes)
-// Uses the region validation from domain.Regions
-var validRegions = map[string]bool{
-	domain.RegionIAD: true, // iad - US East (Virginia)
-	domain.RegionLHR: true, // lhr - UK (London)
-	domain.RegionSYD: true, // syd - Australia (Sydney)
-}
 
 // ProfileService defines the interface for user profile business logic
 type ProfileService interface {
@@ -120,9 +113,9 @@ func validateEmail(email string) error {
 	return nil
 }
 
-// validateRegion validates a primary region value
+// validateRegion validates a primary region value against the configured region registry.
 func validateRegion(region string) error {
-	if !validRegions[region] {
+	if !domain.IsValidRegion(region) {
 		return ErrInvalidRegion
 	}
 	return nil

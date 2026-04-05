@@ -46,7 +46,7 @@ func TestListUsers_Success(t *testing.T) {
 		"linked_accounts_count", "automation_rules_count", "referrals_count",
 	}).
 		AddRow(user1ID, "user1@example.com", "premium", "active", nil, nil, "iad", now, &now, true, 3, 5, 2).
-		AddRow(user2ID, "user2@example.com", "free", "trial", nil, nil, "lhr", now, nil, true, 1, 2, 0)
+		AddRow(user2ID, "user2@example.com", "free", "trial", nil, nil, "iad", now, nil, true, 1, 2, 0)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
 		WithArgs(20, 0).
@@ -379,7 +379,7 @@ func TestGetUserDetail_ZeroCounts(t *testing.T) {
 		"transactions_count", "budgets_count",
 	}).AddRow(
 		userID, "newuser@example.com", "free", "trial",
-		nil, nil, "lhr",
+		nil, nil, "iad",
 		now, nil, true,
 		0, 0, 0, 0, 0,
 	)

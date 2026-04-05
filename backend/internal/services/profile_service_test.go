@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -13,6 +14,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
+
+// TestMain initializes the domain region registry before running tests.
+func TestMain(m *testing.M) {
+	domain.InitRegionRegistry(
+		map[string]domain.RegionInfo{
+			"iad": {Code: "iad", DisplayName: "USA (Virginia)", Country: "USA", City: "Virginia", Flag: "🇺🇸", FlyRegion: "iad"},
+		},
+		"iad",
+		"iad",
+	)
+	os.Exit(m.Run())
+}
 
 // MockProfileRepository is a mock implementation of ProfileRepository
 type MockProfileRepository struct {
@@ -400,7 +413,7 @@ func TestUpdateProfile_ValidRegion(t *testing.T) {
 		PrimaryRegion: "iad",
 	}
 
-	newRegion := "lhr"
+	newRegion := "iad"
 	req := &domain.UpdateProfileRequest{
 		PrimaryRegion: &newRegion,
 	}
@@ -520,8 +533,8 @@ func TestValidateRegion(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid iad", "iad", false},
-		{"valid lhr", "lhr", false},
-		{"valid syd", "syd", false},
+		{"lhr now invalid", "lhr", true},
+		{"syd now invalid", "syd", true},
 		{"invalid region", "invalid-region", true},
 		{"invalid empty", "", true},
 		{"invalid us-west-1", "us-west-1", true},
