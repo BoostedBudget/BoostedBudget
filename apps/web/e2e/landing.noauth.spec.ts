@@ -68,6 +68,9 @@ test.describe('Landing Page - Unauthenticated', () => {
       // Click "See How It Works" button
       await page.getByRole('button', { name: /see how it works/i }).click();
 
+      // Wait for smooth scroll to complete
+      await page.waitForTimeout(500);
+
       // How it works section should be in viewport
       const howItWorksSection = page.locator('#how-it-works');
       await expect(howItWorksSection).toBeInViewport();
@@ -113,8 +116,9 @@ test.describe('Landing Page - Unauthenticated', () => {
           }),
         });
       });
-      // Re-navigate to apply the mock (cookie banner already dismissed by parent beforeEach)
+      // Re-navigate to apply the mock
       await page.goto('/');
+      await acceptCookieConsent(page);
     });
 
     test('should display pricing section', async ({ page }) => {
@@ -250,8 +254,9 @@ test.describe('Landing Page - Unauthenticated', () => {
           }),
         });
       });
-      // Re-navigate with mock (cookie banner already dismissed by parent beforeEach)
+      // Re-navigate with mock
       await page.goto('/');
+      await acceptCookieConsent(page);
       await page.setViewportSize({ width: 1280, height: 720 });
 
       // Full layout should be visible

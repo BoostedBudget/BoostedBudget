@@ -20,7 +20,7 @@ test.describe('Account Deletion - Public Endpoints', () => {
   test('should show invalid link message when accessing cancellation page without token', async ({ page }) => {
     // No Clerk auth token - cancellation pages are public endpoints
     await page.goto('/cancel-deletion/')
-    await page.waitForLoadState('domcontentloaded')
+    await page.waitForLoadState('networkidle')
 
     // Verify invalid link message is displayed
     await expect(page.getByText(/invalid cancellation link/i)).toBeVisible()
@@ -63,9 +63,12 @@ test.describe('Account Deletion - Public Endpoints', () => {
     })
 
     await page.goto(`/cancel-deletion/${invalidToken}`)
-    await page.waitForLoadState('domcontentloaded')
+    await page.waitForLoadState('networkidle')
 
-    // Verify error icon and message (Playwright retries until visible)
+    // Wait for error state to appear
+    await page.waitForTimeout(500)
+
+    // Verify error icon and message
     await expect(page.getByText('✗')).toBeVisible()
     await expect(page.getByText(/cancellation failed/i)).toBeVisible()
 
@@ -91,9 +94,12 @@ test.describe('Account Deletion - Public Endpoints', () => {
     })
 
     await page.goto(`/cancel-deletion/${validToken}`)
-    await page.waitForLoadState('domcontentloaded')
+    await page.waitForLoadState('networkidle')
 
-    // Verify success icon and heading (Playwright retries until visible)
+    // Wait for success state
+    await page.waitForTimeout(500)
+
+    // Verify success icon and heading
     await expect(page.getByText('✓')).toBeVisible()
     await expect(page.getByText('Account Deletion Canceled')).toBeVisible()
 
@@ -119,14 +125,14 @@ test.describe('Account Deletion - Public Endpoints', () => {
     })
 
     await page.goto(`/cancel-deletion/${validToken}`)
-    await page.waitForLoadState('domcontentloaded')
+    await page.waitForTimeout(500)
 
     // Click "Go to Profile" button
     const profileButton = page.getByRole('button', { name: /go to profile/i })
     await profileButton.click()
 
     // Verify navigation (will redirect to login if not authenticated)
-    await page.waitForLoadState('domcontentloaded')
+    await page.waitForLoadState('networkidle')
     const url = page.url()
 
     // Should either be at profile or redirected to login

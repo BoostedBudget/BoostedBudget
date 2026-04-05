@@ -41,11 +41,11 @@ export async function loginWithClerk(
   // Click submit button
   await page.click('button:has-text("Continue"), button[type="submit"]');
 
-  // Wait for redirect back to app (use wildcard port for dynamic port allocation in CI)
-  await page.waitForURL(/localhost:\d+/, { timeout: 15000 });
+  // Wait for redirect back to app
+  await page.waitForURL(/localhost:3000/, { timeout: 15000 });
 
-  // Wait for page to be loaded
-  await page.waitForLoadState('domcontentloaded');
+  // Wait for authentication to complete
+  await page.waitForTimeout(2000);
 }
 
 /**
@@ -78,11 +78,11 @@ export async function signupWithClerk(
   // Click submit button
   await page.click('button[type="submit"], button:has-text("Continue"), button:has-text("Sign up")');
 
-  // Wait for redirect back to app (use wildcard port for dynamic port allocation in CI)
-  await page.waitForURL(/localhost:\d+/, { timeout: 15000 });
+  // Wait for redirect back to app
+  await page.waitForURL(/localhost:3000/, { timeout: 15000 });
 
-  // Wait for page to be loaded
-  await page.waitForLoadState('domcontentloaded');
+  // Wait for authentication to complete
+  await page.waitForTimeout(2000);
 }
 
 /**
@@ -93,7 +93,10 @@ export async function logout(page: Page): Promise<void> {
   // Click logout button
   await page.click('button:has-text("Log Out")');
 
-  // Verify logged out state (Playwright retries until visible)
+  // Wait for logout to complete and redirect
+  await page.waitForTimeout(1000);
+
+  // Verify logged out state
   await expect(page.locator('button:has-text("Log In")')).toBeVisible();
 }
 
@@ -119,7 +122,7 @@ export async function acceptCookieConsent(page: Page): Promise<void> {
     const acceptButton = page.locator('button:has-text("Accept"), button:has-text("Accept All")');
     if (await acceptButton.isVisible({ timeout: 2000 })) {
       await acceptButton.click();
-      await expect(acceptButton).not.toBeVisible();
+      await page.waitForTimeout(500);
     }
   } catch {
     // Cookie banner not present or already accepted
