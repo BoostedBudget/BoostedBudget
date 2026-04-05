@@ -654,13 +654,14 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
 
-      // Date presets should be visible
-      await expect(page.getByRole('button', { name: '7 days' })).toBeVisible()
-      await expect(page.getByRole('button', { name: '30 days' })).toBeVisible()
-      await expect(page.getByRole('button', { name: '90 days' })).toBeVisible()
-      await expect(page.getByRole('button', { name: '1 year' })).toBeVisible()
-      await expect(page.getByRole('button', { name: 'All time' })).toBeVisible()
-      await expect(page.getByRole('button', { name: 'Custom', exact: true })).toBeVisible()
+      // Date presets should be visible (Issue #953: migrated to shared calendar-aligned presets)
+      // ToggleGroup renders radio items (Radix single toggle group), not buttons
+      await expect(page.getByRole('radio', { name: 'This Week' })).toBeVisible()
+      await expect(page.getByRole('radio', { name: 'This Month' })).toBeVisible()
+      await expect(page.getByRole('radio', { name: 'Last Month' })).toBeVisible()
+      await expect(page.getByRole('radio', { name: 'Last 3 Months' })).toBeVisible()
+      await expect(page.getByRole('radio', { name: 'All Time' })).toBeVisible()
+      await expect(page.getByRole('radio', { name: 'Custom', exact: true })).toBeVisible()
     })
 
     test('should apply date preset and update URL', async ({ page }) => {
@@ -674,8 +675,8 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
 
-      // Click 30 days preset
-      await page.getByRole('button', { name: '30 days' }).click()
+      // Click This Month preset (Issue #953: migrated from '30 days' to calendar-aligned presets)
+      await page.getByRole('radio', { name: 'This Month' }).click()
 
       // URL should contain date params
       await expect(page).toHaveURL(/start_date=/)
@@ -693,12 +694,13 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
 
-      // Click Custom (exact match to avoid cookie banner "Customize" button)
-      await page.getByRole('button', { name: 'Custom', exact: true }).click()
+      // Click Custom — force:true because on narrow CI viewports, the status filter
+      // div overlaps the last ToggleGroup item when presets wrap to a second row
+      await page.getByRole('radio', { name: 'Custom', exact: true }).click({ force: true })
 
-      // Custom date inputs should appear
-      await expect(page.getByText('Start date')).toBeVisible()
-      await expect(page.getByText('End date')).toBeVisible()
+      // Custom date inputs should appear (Issue #953: shared DateRangePicker uses "Start Date"/"End Date")
+      await expect(page.getByText('Start Date')).toBeVisible()
+      await expect(page.getByText('End Date')).toBeVisible()
     })
   })
 

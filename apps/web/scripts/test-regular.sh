@@ -45,6 +45,9 @@ EXCLUDE_PATTERNS=(
     "src/features/rules/components/RulesPage.test.tsx"
     # AccountsPage uses local component mocks that can pollute AccountTable etc. (#839)
     "src/features/accounts/AccountsPage.test.tsx"
+    # ToggleGroup component test needs real implementation but TimeframeSelector/DateRangePicker
+    # tests mock @/components/ui/toggle-group globally, polluting it in the full suite (#953)
+    "src/components/ui/toggle-group.test.tsx"
 )
 
 echo "Running regular tests (excluding real-implementation tests)..."

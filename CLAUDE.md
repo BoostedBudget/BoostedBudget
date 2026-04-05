@@ -288,6 +288,20 @@ Out-of-sync causes infinite dashboard reset loops. Increment when adding/removin
 
 **Example**: Adding new `email` queue - Add to queues list in service, frontend auto-renders from API response.
 
+## Analytics & AI Chatbot Direction
+
+The analytics layer (`backend/internal/services/analytics_service.go`, `repository/analytics_repository.go`) is intentionally designed to expand well beyond spending reports. Planned domains include net worth analytics, savings rate tracking, budget vs. actual, subscription detection, and more.
+
+**Long-term goal**: These analytics functions will serve as tool-callable functions for an in-app AI financial assistant. When adding new analytics endpoints:
+
+1. **Token efficiency** — Return pre-computed summaries (totals, percentages, change amounts) so the AI doesn't waste tokens doing arithmetic. Never return raw transaction dumps when aggregates suffice.
+2. **Single-responsibility** — Each service method should answer exactly one well-defined question. Compose at the API layer, not inside service methods.
+3. **Consistent filters** — All analytics methods should accept the same `SpendingFilters` / `CashFlowFilters` pattern so the AI can apply uniform date/account-type constraints across all tools.
+4. **One DB round-trip** — Each repository method should be a single efficient SQL query (no N+1). The AI may call many tools per turn; latency compounds.
+5. **Structured, named fields** — Use explicit `json` tags with snake_case names; avoid generic maps. Predictable schema = fewer tokens for the AI to interpret.
+
+When implementing new analytics features, ask: "Could an LLM use this as a function call to answer a user's financial question?" If yes, design the signature accordingly.
+
 ## Key Files
 
 - `boosted-budget-complete-plan.md`: Full roadmap (Phases 0-7+)

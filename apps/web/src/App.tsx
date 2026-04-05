@@ -32,6 +32,7 @@ import { CancelDeletionPage } from './features/deletion/components/CancelDeletio
 import { AutoCategorizationPageWrapper } from './features/auto-categorization/components/AutoCategorizationPageWrapper'
 import { BudgetsPage, BudgetDetailPage } from './features/budgets'
 import { RulesPage, RuleBuilder } from './features/rules'
+import { SpendingReportsPage } from './features/reports'
 import { LandingPage } from './features/landing'
 import { AdminRoute, AdminLayout, AdminDashboardPage, UsersPage, HealthDashboardPage, WebhooksPage } from './features/admin'
 import { NotFoundPage } from './features/not-found/NotFoundPage'
@@ -192,6 +193,16 @@ function App() {
                 <ProtectedRoute>
                   <PremiumRoute>
                     <TransactionsPage />
+                  </PremiumRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/reports"
+              element={
+                <ProtectedRoute>
+                  <PremiumRoute>
+                    <SpendingReportsPage />
                   </PremiumRoute>
                 </ProtectedRoute>
               }

@@ -229,53 +229,53 @@ describe('useTransactionFilters', () => {
   })
 
   describe('Date Presets', () => {
-    it('should convert date preset 7d to date range', () => {
+    it('should convert date preset this_week to date range', () => {
       const { result } = renderHook(() => useTransactionFilters(), {
         wrapper: createWrapper(),
       })
 
       act(() => {
-        result.current.setDatePreset('7d')
+        result.current.setDatePreset('this_week')
       })
 
       expect(result.current.filters.start_date).toBeDefined()
       expect(result.current.filters.end_date).toBeDefined()
-      expect(result.current.datePreset).toBe('7d')
+      expect(result.current.datePreset).toBe('this_week')
     })
 
-    it('should convert date preset 30d to date range', () => {
+    it('should convert date preset this_month to date range', () => {
       const { result } = renderHook(() => useTransactionFilters(), {
         wrapper: createWrapper(),
       })
 
       act(() => {
-        result.current.setDatePreset('30d')
-      })
-
-      expect(result.current.filters.start_date).toBeDefined()
-      expect(result.current.filters.end_date).toBeDefined()
-    })
-
-    it('should convert date preset 90d to date range', () => {
-      const { result } = renderHook(() => useTransactionFilters(), {
-        wrapper: createWrapper(),
-      })
-
-      act(() => {
-        result.current.setDatePreset('90d')
+        result.current.setDatePreset('this_month')
       })
 
       expect(result.current.filters.start_date).toBeDefined()
       expect(result.current.filters.end_date).toBeDefined()
     })
 
-    it('should convert date preset 1y to date range', () => {
+    it('should convert date preset last_3_months to date range', () => {
       const { result } = renderHook(() => useTransactionFilters(), {
         wrapper: createWrapper(),
       })
 
       act(() => {
-        result.current.setDatePreset('1y')
+        result.current.setDatePreset('last_3_months')
+      })
+
+      expect(result.current.filters.start_date).toBeDefined()
+      expect(result.current.filters.end_date).toBeDefined()
+    })
+
+    it('should convert date preset ytd to date range', () => {
+      const { result } = renderHook(() => useTransactionFilters(), {
+        wrapper: createWrapper(),
+      })
+
+      act(() => {
+        result.current.setDatePreset('ytd')
       })
 
       expect(result.current.filters.start_date).toBeDefined()
