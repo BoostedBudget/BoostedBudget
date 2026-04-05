@@ -11,6 +11,10 @@ export const ANALYTICS_EVENTS = {
   // Onboarding
   FIRST_ACCOUNT_LINKED: 'first_account_linked',
   FIRST_BUDGET_CREATED: 'first_budget_created',
+  GETTING_STARTED_VIEWED: 'getting_started_viewed',
+  GETTING_STARTED_DISMISSED: 'getting_started_dismissed',
+  GETTING_STARTED_STEP_CLICKED: 'getting_started_step_clicked',
+  GETTING_STARTED_COMPLETED: 'getting_started_completed',
 
   // Accounts
   PLAID_LINK_STARTED: 'plaid_link_started',

@@ -54,15 +54,21 @@ TEST_FILES=(
     "$FRONTEND_DIR/src/features/budgets/hooks/useSavingsGoals.test.tsx"
     "$FRONTEND_DIR/src/features/budgets/hooks/useBudgetDetail.test.tsx"
     "$FRONTEND_DIR/src/features/budgets/hooks/useAvailableCategories.test.tsx"
+    "$FRONTEND_DIR/src/features/dashboard/hooks/useGettingStarted.test.ts"
 )
 
 # Preload files for real implementation tests (absolute paths)
-# Only DOM, testing-library, and savings-goals-api (for useSavingsGoals.test.tsx)
+# Only DOM, testing-library, and minimal API-level mocks needed by each test
 # NO wrapper-level mocks that would interfere with testing real hook implementations
 PRELOAD_FILES=(
     "$FRONTEND_DIR/src/test/happydom.ts"
     "$FRONTEND_DIR/src/test/testing-library.ts"
     "$FRONTEND_DIR/src/test/mocks/savings-goals-api.ts"
+    # For useGettingStarted.test.ts: API-level mocks for its dependencies
+    "$FRONTEND_DIR/src/test/mocks/dashboard-context.ts"
+    "$FRONTEND_DIR/src/test/mocks/budgets-api.ts"
+    "$FRONTEND_DIR/src/test/mocks/automation-rules-api.ts"
+    "$FRONTEND_DIR/src/test/mocks/auto-categorization-api.ts"
 )
 
 # Build preload arguments
