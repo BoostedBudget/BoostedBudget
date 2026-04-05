@@ -55,17 +55,14 @@ export default defineConfig({
   // Retry on CI only
   retries: process.env.CI ? 2 : 0,
 
-  // Opt out of parallel tests on CI
-  // Limit to 2 workers locally to prevent memory exhaustion (was 8 on 8-core system)
+  // 2 workers on CI and locally — safe on Mac Mini (original 8-worker memory issue, not 2)
   // See: Memory leak investigation Oct 2025 - saves 1.5GB vs unlimited workers
-  workers: process.env.CI ? 1 : 2,
+  workers: 2,
 
-  // Reporter to use
-  reporter: [
-    ['html', { outputFolder: 'playwright-report' }],
-    ['json', { outputFile: 'playwright-report/results.json' }],
-    ['list']
-  ],
+  // Lightweight reporters in CI (no HTML processing overhead); HTML locally for debugging
+  reporter: process.env.CI
+    ? [['list'], ['json', { outputFile: 'playwright-report/results.json' }]]
+    : [['html', { outputFolder: 'playwright-report' }], ['list']],
 
   // Shared settings for all the projects below
   use: {
