@@ -157,6 +157,42 @@ widgets:
 - 24hr client-side caching minimizes network overhead
 - Hook-based pattern (useSubscriptionTiers) follows React best practices
 
+### `regions.yaml`
+
+**Primary configuration** for available data residency regions (GDPR compliance).
+
+**Used by**:
+- **Backend** (`backend/internal/config/region_config.go`): Loaded at startup, validates default/server region, cached as singleton, served via API
+- **Frontend** (`apps/web/src/shared/hooks/useRegions.ts`): Fetched from `GET /api/v1/regions` with 24hr caching
+
+**Adding a new region** (Phase 7+):
+1. Add entry to `regions.yaml` under `regions:`
+2. Set env vars for new region infrastructure
+3. Create DB migration to widen `valid_primary_region` CHECK constraint
+4. Deploy new Fly.io machines in target region
+
+**Structure**:
+```yaml
+server_region: "iad"     # Region this server instance runs in
+default_region: "iad"    # Default for new users
+
+regions:
+  iad:
+    display_name: "USA (Virginia)"
+    country: "USA"
+    city: "Virginia"
+    flag: "🇺🇸"
+    infrastructure:
+      fly_region: "iad"
+      neon_project_env: "NEON_PROJECT_ID"
+      database_url_env: "DATABASE_URL"
+```
+
+**Validation**:
+- Backend validates `default_region` and `server_region` must exist in `regions` map
+- Invalid configs prevent server startup
+- Infrastructure fields are never exposed via the API (display info only)
+
 ## Future Extensions
 
 When adding new config files:
@@ -168,7 +204,6 @@ When adding new config files:
 
 Example future configs:
 - `feature_flags.yaml` - Feature toggle configuration
-- `regions.yaml` - Multi-region deployment config (Phase 7+)
 - `integrations.yaml` - Third-party service endpoints
 
 ## Troubleshooting
@@ -223,4 +258,4 @@ curl http://localhost:8080/api/v1/subscription/tiers | jq '.tiers.premium_plus'
 
 ---
 
-Last updated: 2025-10-23 (Issue #188 - Migration to API-based architecture)
+Last updated: 2026-04-05 (Issue #974 - Dynamic regions config; Issue #188 - API-based architecture)

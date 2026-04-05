@@ -87,7 +87,7 @@ func TestNewUser_DefaultValues(t *testing.T) {
 	assert.True(t, user.EmailVerified)
 	assert.Equal(t, "premium", user.SubscriptionTier)
 	assert.Equal(t, "trial", user.SubscriptionStatus)
-	assert.Equal(t, DefaultRegion, user.PrimaryRegion)
+	assert.Equal(t, "iad", user.PrimaryRegion)
 	assert.True(t, user.IsActive)
 	assert.False(t, user.IsDeleted)
 }
