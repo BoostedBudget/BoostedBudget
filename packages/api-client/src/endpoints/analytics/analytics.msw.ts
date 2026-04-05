@@ -34,6 +34,9 @@ import type { RequestHandlerOptions } from "msw";
 import type {
   CashFlowHistoryResponse,
   CashFlowSummaryResponse,
+  SpendingByCategoryResponse,
+  SpendingByMerchantResponse,
+  SpendingTrendsResponse,
 } from "../../models";
 
 export const getGetCashFlowHistoryResponseMock = (
@@ -88,6 +91,89 @@ export const getGetCashFlowSummaryResponseMock = (
   ...overrideResponse,
 });
 
+export const getGetSpendingByCategoryResponseMock = (
+  overrideResponse: Partial<Extract<SpendingByCategoryResponse, object>> = {},
+): SpendingByCategoryResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  categories: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      display_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      percentage: faker.number.float({ fractionDigits: 2 }),
+      total: faker.number.float({ fractionDigits: 2 }),
+      transaction_count: faker.number.int(),
+    })),
+    null,
+  ]),
+  end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  total_spent: faker.number.float({ fractionDigits: 2 }),
+  ...overrideResponse,
+});
+
+export const getGetSpendingByMerchantResponseMock = (
+  overrideResponse: Partial<Extract<SpendingByMerchantResponse, object>> = {},
+): SpendingByMerchantResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  merchants: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      merchant_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      percentage: faker.number.float({ fractionDigits: 2 }),
+      total: faker.number.float({ fractionDigits: 2 }),
+      transaction_count: faker.number.int(),
+    })),
+    null,
+  ]),
+  start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  top_n: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetSpendingTrendsResponseMock = (
+  overrideResponse: Partial<Extract<SpendingTrendsResponse, object>> = {},
+): SpendingTrendsResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  periods: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      categories: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          display_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          total: faker.number.float({ fractionDigits: 2 }),
+        })),
+        null,
+      ]),
+      period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      total: faker.number.float({ fractionDigits: 2 }),
+    })),
+    null,
+  ]),
+  start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  top_categories: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
 export const getGetCashFlowHistoryMockHandler = (
   overrideResponse?:
     | CashFlowHistoryResponse
@@ -139,7 +225,88 @@ export const getGetCashFlowSummaryMockHandler = (
     options,
   );
 };
+
+export const getGetSpendingByCategoryMockHandler = (
+  overrideResponse?:
+    | SpendingByCategoryResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<SpendingByCategoryResponse> | SpendingByCategoryResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/spending-by-category",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetSpendingByCategoryResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetSpendingByMerchantMockHandler = (
+  overrideResponse?:
+    | SpendingByMerchantResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<SpendingByMerchantResponse> | SpendingByMerchantResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/spending-by-merchant",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetSpendingByMerchantResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetSpendingTrendsMockHandler = (
+  overrideResponse?:
+    | SpendingTrendsResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<SpendingTrendsResponse> | SpendingTrendsResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/spending-trends",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetSpendingTrendsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 export const getAnalyticsMock = () => [
   getGetCashFlowHistoryMockHandler(),
   getGetCashFlowSummaryMockHandler(),
+  getGetSpendingByCategoryMockHandler(),
+  getGetSpendingByMerchantMockHandler(),
+  getGetSpendingTrendsMockHandler(),
 ];

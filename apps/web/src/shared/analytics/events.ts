@@ -56,6 +56,12 @@ export const ANALYTICS_EVENTS = {
   PRIVACY_SETTINGS_CHANGED: 'privacy_settings_changed',
   PROFILE_UPDATED: 'profile_updated',
 
+  // Reports
+  REPORTS_VIEWED: 'reports_viewed',
+  REPORT_DATE_CHANGED: 'report_date_changed',
+  REPORT_CATEGORY_CLICKED: 'report_category_clicked',
+  REPORT_MERCHANT_CLICKED: 'report_merchant_clicked',
+
   // Admin
   ADMIN_PAGE_VIEWED: 'admin_page_viewed',
 } as const

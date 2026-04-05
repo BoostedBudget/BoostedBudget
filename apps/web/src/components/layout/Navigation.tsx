@@ -13,6 +13,7 @@ const baseNavItems = [
   { to: '/accounts', label: 'Accounts' },
   { to: '/transactions', label: 'Transactions' },
   { to: '/budgets', label: 'Budgets' },
+  { to: '/reports', label: 'Reports' },
   { to: '/rules', label: 'Rules' },
   { to: '/auto-categorization', label: 'Auto-Cat' },
 ]

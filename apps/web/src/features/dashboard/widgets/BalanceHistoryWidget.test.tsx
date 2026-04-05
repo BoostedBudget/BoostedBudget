@@ -65,7 +65,7 @@ describe('BalanceHistoryWidget', () => {
       accountTypes: undefined,
     },
     setFilters: mockSetFilters,
-    timeframe: 'month' as const,
+    timeframe: 'this_month' as const,
     setTimeframe: mockSetTimeframe,
     isEditing: false,
     setIsEditing: mockSetIsEditing,
