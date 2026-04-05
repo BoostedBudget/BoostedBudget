@@ -694,8 +694,9 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
 
-      // Click Custom (exact match to avoid cookie banner "Customize" button)
-      await page.getByRole('radio', { name: 'Custom', exact: true }).click()
+      // Click Custom — force:true because on narrow CI viewports, the status filter
+      // div overlaps the last ToggleGroup item when presets wrap to a second row
+      await page.getByRole('radio', { name: 'Custom', exact: true }).click({ force: true })
 
       // Custom date inputs should appear (Issue #953: shared DateRangePicker uses "Start Date"/"End Date")
       await expect(page.getByText('Start Date')).toBeVisible()
