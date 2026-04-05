@@ -42,7 +42,7 @@ type User struct {
 	PaddleSubscriptionID *string `json:"paddle_subscription_id,omitempty" db:"paddle_subscription_id"`
 
 	// GDPR: Primary region for data residency (Fly.io IATA codes)
-	PrimaryRegion string `json:"primary_region" db:"primary_region"` // iad, lhr, syd
+	PrimaryRegion string `json:"primary_region" db:"primary_region"` // see config/regions.yaml
 
 	// Account status
 	IsActive  bool `json:"is_active" db:"is_active"`
@@ -99,7 +99,7 @@ func (u *User) ComputeEffectiveTier() string {
 	return u.SubscriptionTier
 }
 
-// NewUser creates a new user with default values (premium trial, iad region)
+// NewUser creates a new user with default values (premium trial, default region)
 // Used when a user logs in for the first time via Clerk
 func NewUser(clerkUserID, email string, emailVerified bool) *User {
 	now := time.Now()

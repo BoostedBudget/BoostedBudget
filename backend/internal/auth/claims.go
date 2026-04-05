@@ -102,7 +102,7 @@ func ExtractSubscriptionTier(claims *clerk.SessionClaims) string {
 }
 
 // ExtractPrimaryRegion extracts the primary region from Clerk claims.
-// Returns DefaultPrimaryRegion ("iad") if not found.
+// Returns DefaultPrimaryRegion() if not found.
 // The region should be set in the user's public metadata in Clerk.
 //
 // Supports two claim formats:
