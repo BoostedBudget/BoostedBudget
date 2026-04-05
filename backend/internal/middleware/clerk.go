@@ -208,7 +208,7 @@ func GetSubscriptionTier(c echo.Context) string {
 }
 
 // GetPrimaryRegion extracts the primary region from Clerk claims.
-// Returns "iad" if not found (default region for MVP).
+// Returns default region if not found.
 // The region should be set in the user's public metadata in Clerk.
 func GetPrimaryRegion(c echo.Context) string {
 	claims, err := GetClerkClaims(c)

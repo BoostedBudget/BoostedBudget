@@ -1248,7 +1248,7 @@ func main() {
 	// Start server
 	// Bind to 0.0.0.0 to be accessible from outside the container (required for Fly.io)
 	address := fmt.Sprintf("0.0.0.0:%s", cfg.Port)
-	appLogger.Info("Starting BoostedBudget API", "address", address, "region", cfg.PrimaryRegion)
+	appLogger.Info("Starting BoostedBudget API", "address", address, "region", regionConfig.GetServerRegion())
 
 	// Graceful shutdown
 	go func() {
