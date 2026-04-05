@@ -16,6 +16,7 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet'
 import type { TransactionFilters, DatePreset, StatusFilter } from '../types'
+import { PRESETS } from '@/shared/dates'
 import {
   TransactionDateFilter,
   TransactionStatusFilter,
@@ -119,15 +120,8 @@ export function TransactionFilterPanel({
     if (datePreset === 'custom' && filters.start_date && filters.end_date) {
       return `${filters.start_date} - ${filters.end_date}`
     }
-    const presetLabels: Record<DatePreset, string> = {
-      '7d': '7 days',
-      '30d': '30 days',
-      '90d': '90 days',
-      '1y': '1 year',
-      all: 'All time',
-      custom: 'Custom',
-    }
-    return presetLabels[datePreset]
+    const match = PRESETS.find((p) => p.value === datePreset)
+    return match?.label ?? datePreset
   }
 
   const getStatusDisplayValue = () => {
