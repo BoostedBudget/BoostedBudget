@@ -23,7 +23,7 @@ function setupNewUser() {
   mockUseDashboardContext.mockReturnValue({
     filters: { startDate: '2025-01-01', endDate: '2025-01-31' },
     setFilters: () => {},
-    timeframe: 'month' as const,
+    timeframe: 'this_month' as const,
     setTimeframe: () => {},
     isEditing: false,
     setIsEditing: () => {},
@@ -41,7 +41,7 @@ function setupFullyOnboardedUser() {
   mockUseDashboardContext.mockReturnValue({
     filters: { startDate: '2025-01-01', endDate: '2025-01-31' },
     setFilters: () => {},
-    timeframe: 'month' as const,
+    timeframe: 'this_month' as const,
     setTimeframe: () => {},
     isEditing: false,
     setIsEditing: () => {},
@@ -59,7 +59,7 @@ function setupExistingUserWithAccounts() {
   mockUseDashboardContext.mockReturnValue({
     filters: { startDate: '2025-01-01', endDate: '2025-01-31' },
     setFilters: () => {},
-    timeframe: 'month' as const,
+    timeframe: 'this_month' as const,
     setTimeframe: () => {},
     isEditing: false,
     setIsEditing: () => {},
@@ -126,7 +126,7 @@ describe('useGettingStarted', () => {
       mockUseDashboardContext.mockReturnValue({
         filters: { startDate: '2025-01-01', endDate: '2025-01-31' },
         setFilters: () => {},
-        timeframe: 'month' as const,
+        timeframe: 'this_month' as const,
         setTimeframe: () => {},
         isEditing: false,
         setIsEditing: () => {},
@@ -171,7 +171,7 @@ describe('useGettingStarted', () => {
       mockUseDashboardContext.mockReturnValue({
         filters: { startDate: '2025-01-01', endDate: '2025-01-31' },
         setFilters: () => {},
-        timeframe: 'month' as const,
+        timeframe: 'this_month' as const,
         setTimeframe: () => {},
         isEditing: false,
         setIsEditing: () => {},
@@ -192,7 +192,7 @@ describe('useGettingStarted', () => {
       mockUseDashboardContext.mockReturnValue({
         filters: { startDate: '2025-01-01', endDate: '2025-01-31' },
         setFilters: () => {},
-        timeframe: 'month' as const,
+        timeframe: 'this_month' as const,
         setTimeframe: () => {},
         isEditing: false,
         setIsEditing: () => {},
@@ -283,7 +283,7 @@ describe('useGettingStarted', () => {
       mockUseDashboardContext.mockReturnValue({
         filters: { startDate: '2025-01-01', endDate: '2025-01-31' },
         setFilters: () => {},
-        timeframe: 'month' as const,
+        timeframe: 'this_month' as const,
         setTimeframe: () => {},
         isEditing: false,
         setIsEditing: () => {},

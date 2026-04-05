@@ -165,7 +165,7 @@ describe('DashboardPage', () => {
       includeTransfers: false,
     },
     setFilters: mockSetFilters,
-    timeframe: 'month' as const,
+    timeframe: 'this_month' as const,
     setTimeframe: mockSetTimeframe,
     isEditing: false,
     setIsEditing: mockSetIsEditing,
