@@ -55,9 +55,10 @@ export default defineConfig({
   // Retry on CI only
   retries: process.env.CI ? 2 : 0,
 
-  // 2 workers on CI and locally — safe on Mac Mini (original 8-worker memory issue, not 2)
+  // Opt out of parallel tests on CI (memory stability on self-hosted Mac Mini runner)
+  // Limit to 2 workers locally to prevent memory exhaustion (was 8 on 8-core system)
   // See: Memory leak investigation Oct 2025 - saves 1.5GB vs unlimited workers
-  workers: 2,
+  workers: process.env.CI ? 1 : 2,
 
   // Lightweight reporters in CI (no HTML processing overhead); HTML locally for debugging
   reporter: process.env.CI
