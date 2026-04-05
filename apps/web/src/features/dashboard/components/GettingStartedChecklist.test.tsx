@@ -49,10 +49,12 @@ const MOCK_STEPS: GettingStartedStep[] = [
 ]
 
 const mockOnDismiss = mock(() => {})
+const mockOnStepClick = mock((_stepId: string) => {})
 
 describe('GettingStartedChecklist', () => {
   beforeEach(() => {
     mockOnDismiss.mockClear()
+    mockOnStepClick.mockClear()
   })
 
   const renderComponent = (overrides: Partial<{
@@ -181,6 +183,36 @@ describe('GettingStartedChecklist', () => {
     })
   })
 
+  describe('Step click tracking', () => {
+    it('calls onStepClick with the step id when an incomplete step link is clicked', async () => {
+      const user = userEvent.setup()
+      render(
+        <MemoryRouter>
+          <GettingStartedChecklist
+            steps={MOCK_STEPS}
+            completedCount={1}
+            totalSteps={5}
+            isCelebrating={false}
+            onDismiss={mockOnDismiss}
+            onStepClick={mockOnStepClick}
+          />
+        </MemoryRouter>
+      )
+      await user.click(screen.getByRole('link', { name: /connect your first bank/i }))
+      expect(mockOnStepClick).toHaveBeenCalledTimes(1)
+      expect(mockOnStepClick).toHaveBeenCalledWith('connect-bank')
+    })
+
+    it('does not throw when onStepClick is omitted and a step is clicked', async () => {
+      const user = userEvent.setup()
+      renderComponent()
+      // click an incomplete step — should not throw even without onStepClick prop
+      await expect(
+        user.click(screen.getByRole('link', { name: /connect your first bank/i }))
+      ).resolves.toBeUndefined()
+    })
+  })
+
   describe('Accessibility', () => {
     it('renders steps as an accessible list', () => {
       renderComponent()
@@ -190,6 +222,15 @@ describe('GettingStartedChecklist', () => {
     it('dismiss button has accessible label', () => {
       renderComponent()
       expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument()
+    })
+
+    it('progress bar has accessible label and range', () => {
+      renderComponent({ completedCount: 2 })
+      const progressBar = screen.getByRole('progressbar')
+      expect(progressBar).toHaveAttribute('aria-label', 'Getting started progress')
+      expect(progressBar).toHaveAttribute('aria-valuemin', '0')
+      expect(progressBar).toHaveAttribute('aria-valuenow', '2')
+      expect(progressBar).toHaveAttribute('aria-valuemax', '5')
     })
   })
 })
