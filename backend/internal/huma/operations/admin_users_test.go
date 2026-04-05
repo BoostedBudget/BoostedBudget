@@ -72,7 +72,7 @@ func TestListUsers_Success(t *testing.T) {
 				Email:                "user2@example.com",
 				SubscriptionTier:     "free",
 				SubscriptionStatus:   "trial",
-				PrimaryRegion:        "lhr",
+				PrimaryRegion:        "iad",
 				CreatedAt:            now,
 				IsActive:             true,
 				LinkedAccountsCount:  1,

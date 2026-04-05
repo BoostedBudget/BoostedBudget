@@ -213,7 +213,7 @@ func GetSubscriptionTier(c echo.Context) string {
 func GetPrimaryRegion(c echo.Context) string {
 	claims, err := GetClerkClaims(c)
 	if err != nil {
-		return auth.DefaultPrimaryRegion
+		return auth.DefaultPrimaryRegion()
 	}
 	return auth.ExtractPrimaryRegion(claims)
 }
