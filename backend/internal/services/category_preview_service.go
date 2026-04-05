@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/dateutil"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -49,19 +50,9 @@ func (s *categoryPreviewService) PreviewCategoryMatches(ctx context.Context, use
 	}
 
 	// Parse dates
-	startDate, err := time.Parse("2006-01-02", req.StartDate)
+	startDate, endDate, err := dateutil.ParseDateRange(req.StartDate, req.EndDate)
 	if err != nil {
-		return nil, errors.New("invalid start_date format, expected YYYY-MM-DD")
-	}
-
-	endDate, err := time.Parse("2006-01-02", req.EndDate)
-	if err != nil {
-		return nil, errors.New("invalid end_date format, expected YYYY-MM-DD")
-	}
-
-	// Validate date range
-	if !endDate.After(startDate) && !endDate.Equal(startDate) {
-		return nil, errors.New("end_date must be on or after start_date")
+		return nil, errors.New(err.Error())
 	}
 
 	// Set end date to end of day for inclusive range

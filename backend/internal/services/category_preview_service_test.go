@@ -225,7 +225,7 @@ func TestCategoryPreviewService_PreviewCategoryMatches_InvalidStartDate(t *testi
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "invalid start_date format")
+	assert.Contains(t, err.Error(), "start_date")
 }
 
 // TestCategoryPreviewService_PreviewCategoryMatches_InvalidEndDate tests invalid end date
@@ -246,7 +246,7 @@ func TestCategoryPreviewService_PreviewCategoryMatches_InvalidEndDate(t *testing
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "invalid end_date format")
+	assert.Contains(t, err.Error(), "end_date")
 }
 
 // TestCategoryPreviewService_PreviewCategoryMatches_NoCategoriesForCategoryOnly tests validation
