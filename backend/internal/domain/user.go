@@ -110,7 +110,7 @@ func NewUser(clerkUserID, email string, emailVerified bool) *User {
 		EmailVerified:      emailVerified,
 		SubscriptionTier:   "premium",
 		SubscriptionStatus: "trial",
-		PrimaryRegion:      DefaultRegion, // iad - uses constant from regions.go
+		PrimaryRegion:      DefaultRegionCode(),
 		IsActive:           true,
 		IsDeleted:          false,
 		CreatedAt:          now,
