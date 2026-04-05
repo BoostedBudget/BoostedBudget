@@ -9,7 +9,6 @@
 # - src/features/dashboard/widgets/registry.test.ts (tests real registry)
 # - src/features/dashboard/context/DashboardContext.test.tsx (tests real context)
 # - src/features/budgets/hooks/useSavingsGoals.test.tsx (tests real hook with API mocks)
-# - src/features/dashboard/hooks/useGettingStarted.test.ts (tests real hook, #848)
 
 [test]
 # Only preload DOM, testing-library, and minimal mocks needed for real implementation tests

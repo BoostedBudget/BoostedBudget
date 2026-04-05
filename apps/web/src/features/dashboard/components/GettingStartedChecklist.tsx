@@ -9,6 +9,7 @@ interface GettingStartedChecklistProps {
   totalSteps: number
   isCelebrating: boolean
   onDismiss: () => void
+  onStepClick?: (stepId: string) => void
 }
 
 export function GettingStartedChecklist({
@@ -17,6 +18,7 @@ export function GettingStartedChecklist({
   totalSteps,
   isCelebrating,
   onDismiss,
+  onStepClick,
 }: GettingStartedChecklistProps) {
   const progressPercent = Math.round((completedCount / totalSteps) * 100)
 
@@ -32,7 +34,9 @@ export function GettingStartedChecklist({
           </p>
           <div
             role="progressbar"
+            aria-label="Getting started progress"
             aria-valuenow={completedCount}
+            aria-valuemin={0}
             aria-valuemax={totalSteps}
             className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700"
           >
@@ -93,6 +97,7 @@ export function GettingStartedChecklist({
                   ) : (
                     <Link
                       to={step.href}
+                      onClick={() => onStepClick?.(step.id)}
                       className="group flex items-center justify-between gap-1 text-sm font-medium text-gray-800 hover:text-blue-600 dark:text-gray-200 dark:hover:text-blue-400"
                     >
                       <span>{step.label}</span>

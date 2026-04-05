@@ -53,7 +53,7 @@ function DashboardContent() {
       } catch {
         return null
       }
-    }
+    },
   })
 
   const { showHint, dismissHint } = useDashboardOnboarding()
@@ -109,9 +109,6 @@ function DashboardContent() {
     removeWidget(widgetId)
     trackEvent(ANALYTICS_EVENTS.WIDGET_REMOVED, { widget_id: widgetId })
   }, [removeWidget, trackEvent])
-
-  // Get existing widget types for catalog
-  const existingWidgetTypes = layout.widgets.map(w => w.type)
 
   // Loading state
   if (loading) {
@@ -204,7 +201,7 @@ function DashboardContent() {
             {/* Issue #470: Use handleExitEditMode to save on Done click */}
             <ReadOnlyGuard message="Resubscribe to customize your dashboard">
               <Button
-                onClick={() => isEditing ? handleExitEditMode() : setIsEditing(true)}
+                onClick={() => (isEditing ? handleExitEditMode() : setIsEditing(true))}
                 variant={isEditing ? 'default' : 'outline'}
                 className="gap-1.5"
               >
@@ -227,6 +224,7 @@ function DashboardContent() {
                 gettingStarted.dismiss()
                 trackEvent(ANALYTICS_EVENTS.GETTING_STARTED_DISMISSED)
               }}
+              onStepClick={(stepId) => trackEvent(ANALYTICS_EVENTS.GETTING_STARTED_STEP_CLICKED, { step_id: stepId })}
             />
           </div>
         )}
@@ -257,7 +255,7 @@ function DashboardContent() {
         isOpen={catalogOpen}
         onClose={() => setCatalogOpen(false)}
         onAddWidget={handleAddWidget}
-        existingWidgetTypes={existingWidgetTypes}
+        existingWidgetTypes={layout.widgets.map(w => w.type)}
       />
     </div>
   )

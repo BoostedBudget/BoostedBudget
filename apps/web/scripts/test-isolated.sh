@@ -36,6 +36,9 @@ TEST_FILES=(
     "src/features/rules/components/RulesPage.test.tsx"
     # AccountsPage uses local component mocks that can pollute AccountTable etc. (#839)
     "src/features/accounts/AccountsPage.test.tsx"
+    # useGettingStarted needs centralized mocks (dashboard-context, budgets-api, etc.)
+    # but can't run in regular suite: DashboardPage.test.tsx mocks useGettingStarted globally (#848)
+    "src/features/dashboard/hooks/useGettingStarted.test.ts"
 )
 
 # Build test command

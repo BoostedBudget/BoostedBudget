@@ -12,6 +12,7 @@ import type {
 
 // Import centralized mocks
 import { mockUseAuth, createMockClerkAuth } from '@/test/mocks/clerk'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import {
   mockUseDashboardContext,
   mockSetFilters,
@@ -34,9 +35,19 @@ import {
   mockDismissGettingStarted,
 } from '@/test/mocks/dashboard-wrapper-hooks'
 
+// Local mock for useTrackEvent — avoids posthog module resolution ordering issues in full suite
+const mockTrackEvent = mock(() => {})
+
 // Issue #575: Register wrapper hook mocks inline (not globally preloaded)
 // This must be BEFORE importing the component
 // Note: We use spread args to capture arguments for test assertions
+mock.module('@/shared/hooks/useTrackEvent', () => ({
+  useTrackEvent: () => mockTrackEvent,
+}))
+mock.module('../../../shared/hooks/useTrackEvent', () => ({
+  useTrackEvent: () => mockTrackEvent,
+}))
+
 mock.module('@/features/dashboard/hooks/useDashboardData', () => ({
   useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
 }))
@@ -76,9 +87,10 @@ mock.module('../widgets/WidgetCatalog', () => ({
 }))
 
 mock.module('./GettingStartedChecklist', () => ({
-  GettingStartedChecklist: ({ onDismiss }: { onDismiss: () => void }) => (
+  GettingStartedChecklist: ({ onDismiss, onStepClick }: { onDismiss: () => void; onStepClick?: (stepId: string) => void }) => (
     <div data-testid="getting-started-checklist">
       <button data-testid="dismiss-checklist" onClick={onDismiss}>Dismiss</button>
+      <button data-testid="step-click-trigger" onClick={() => onStepClick?.('connect-bank')}>Step</button>
     </div>
   ),
 }))
@@ -180,6 +192,7 @@ describe('DashboardPage', () => {
     mockDismissHint.mockClear()
     mockUseGettingStarted.mockClear()
     mockDismissGettingStarted.mockClear()
+    mockTrackEvent.mockClear()
     mockSetFilters.mockClear()
     mockSetTimeframe.mockClear()
     mockSetIsEditing.mockClear()
@@ -697,6 +710,29 @@ describe('DashboardPage', () => {
 
       expect(screen.getByTestId('getting-started-checklist')).toBeInTheDocument()
       expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
+    })
+
+    it('should fire GETTING_STARTED_STEP_CLICKED analytics when a step is clicked', async () => {
+      const user = userEvent.setup()
+      mockUseGettingStarted.mockReturnValue({
+        steps: [],
+        completedCount: 0,
+        totalSteps: 5,
+        allComplete: false,
+        shouldShow: true,
+        isLoading: false,
+        isCelebrating: false,
+        dismiss: mockDismissGettingStarted,
+      })
+
+      render(<DashboardPage />)
+
+      await user.click(screen.getByTestId('step-click-trigger'))
+
+      expect(mockTrackEvent).toHaveBeenCalledWith(
+        ANALYTICS_EVENTS.GETTING_STARTED_STEP_CLICKED,
+        { step_id: 'connect-bank' }
+      )
     })
   })
 
