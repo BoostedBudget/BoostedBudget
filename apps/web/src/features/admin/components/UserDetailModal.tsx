@@ -16,6 +16,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Loader2, User, Calendar, MapPin, CreditCard, Link2, Zap, Receipt, PiggyBank, Shield } from 'lucide-react'
 import type { AdminUserDetail } from '@boostedbudget/api-client/models'
+import { useRegions } from '../../../shared/hooks/useRegions'
 import './UserDetailModal.css'
 
 export interface UserDetailModalProps {
@@ -57,6 +58,8 @@ const TIER_DISPLAY_MAP: Record<string, string> = {
  * UserDetailModal - Modal for viewing user details
  */
 export function UserDetailModal({ user, loading, open, onClose }: UserDetailModalProps) {
+  const { getRegionWithFlag } = useRegions()
+
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
       <DialogContent className="user-detail-modal" aria-describedby="user-detail-description">
@@ -102,7 +105,7 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
                     <MapPin className="user-detail-modal__field-icon" size={16} />
                     <div className="user-detail-modal__field-content">
                       <span className="user-detail-modal__field-label">Region</span>
-                      <span className="user-detail-modal__field-value">{user.primary_region}</span>
+                      <span className="user-detail-modal__field-value">{getRegionWithFlag(user.primary_region)}</span>
                     </div>
                   </div>
 

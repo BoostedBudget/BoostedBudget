@@ -22,6 +22,7 @@ import {
   Edit2,
 } from 'lucide-react'
 import { useUserFilters } from '../hooks/useUserFilters'
+import { useRegions } from '../../../shared/hooks/useRegions'
 import { UserDetailModal } from './UserDetailModal'
 import { SubscriptionOverrideModal } from './SubscriptionOverrideModal'
 import './UsersPage.css'
@@ -95,6 +96,7 @@ export function UsersPage() {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
   const [overrideUser, setOverrideUser] = useState<SelectedUser | null>(null)
   const trackEvent = useTrackEvent()
+  const { getRegionWithFlag } = useRegions()
 
   useEffect(() => {
     trackEvent(ANALYTICS_EVENTS.ADMIN_PAGE_VIEWED, { page: 'users' })
@@ -230,7 +232,7 @@ export function UsersPage() {
                           <span className="users-page__override-status--none">—</span>
                         )}
                       </td>
-                      <td className="users-page__region">{user.primary_region}</td>
+                      <td className="users-page__region">{getRegionWithFlag(user.primary_region)}</td>
                       <td>{formatDate(user.last_login_at)}</td>
                       <td className="users-page__numeric">{user.linked_accounts_count}</td>
                       <td className="users-page__numeric">{user.automation_rules_count}</td>

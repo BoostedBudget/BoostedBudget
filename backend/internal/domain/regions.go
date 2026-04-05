@@ -1,5 +1,7 @@
 package domain
 
+import "sort"
+
 // RegionInfo contains display and routing information for a data residency region.
 type RegionInfo struct {
 	Code        string // Fly.io IATA code (e.g., "iad")
@@ -71,7 +73,7 @@ func GetDisplayName(code string) string {
 	return code
 }
 
-// GetValidRegions returns a slice of all configured region codes.
+// GetValidRegions returns a sorted slice of all configured region codes.
 func GetValidRegions() []string {
 	if regionRegistry == nil {
 		return nil
@@ -80,5 +82,6 @@ func GetValidRegions() []string {
 	for code := range regionRegistry.regions {
 		codes = append(codes, code)
 	}
+	sort.Strings(codes)
 	return codes
 }
