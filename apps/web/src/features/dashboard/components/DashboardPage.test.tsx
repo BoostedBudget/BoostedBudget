@@ -4,7 +4,6 @@
  */
 
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
-import { MemoryRouter } from 'react-router'
 import type {
   BalanceSummary,
   BalanceHistory,
@@ -13,6 +12,7 @@ import type {
 
 // Import centralized mocks
 import { mockUseAuth, createMockClerkAuth } from '@/test/mocks/clerk'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import {
   mockUseDashboardContext,
   mockSetFilters,
@@ -31,11 +31,23 @@ import {
   DEFAULT_LAYOUT_MOCK,
   mockUseDashboardOnboarding,
   mockDismissHint,
+  mockUseGettingStarted,
+  mockDismissGettingStarted,
 } from '@/test/mocks/dashboard-wrapper-hooks'
+
+// Local mock for useTrackEvent — avoids posthog module resolution ordering issues in full suite
+const mockTrackEvent = mock(() => {})
 
 // Issue #575: Register wrapper hook mocks inline (not globally preloaded)
 // This must be BEFORE importing the component
 // Note: We use spread args to capture arguments for test assertions
+mock.module('@/shared/hooks/useTrackEvent', () => ({
+  useTrackEvent: () => mockTrackEvent,
+}))
+mock.module('../../../shared/hooks/useTrackEvent', () => ({
+  useTrackEvent: () => mockTrackEvent,
+}))
+
 mock.module('@/features/dashboard/hooks/useDashboardData', () => ({
   useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
 }))
@@ -57,6 +69,13 @@ mock.module('../hooks/useDashboardOnboarding', () => ({
   useDashboardOnboarding: (...args: unknown[]) => mockUseDashboardOnboarding(...args),
 }))
 
+mock.module('@/features/dashboard/hooks/useGettingStarted', () => ({
+  useGettingStarted: (...args: unknown[]) => mockUseGettingStarted(...args),
+}))
+mock.module('../hooks/useGettingStarted', () => ({
+  useGettingStarted: (...args: unknown[]) => mockUseGettingStarted(...args),
+}))
+
 // Mock child components (these are isolated mocks specific to this test)
 mock.module('../widgets/DashboardGrid', () => ({
   DashboardGrid: () => <div data-testid="dashboard-grid">Dashboard Grid</div>,
@@ -65,6 +84,15 @@ mock.module('../widgets/DashboardGrid', () => ({
 mock.module('../widgets/WidgetCatalog', () => ({
   WidgetCatalog: ({ isOpen }: { isOpen: boolean }) =>
     isOpen ? <div data-testid="widget-catalog">Widget Catalog</div> : null,
+}))
+
+mock.module('./GettingStartedChecklist', () => ({
+  GettingStartedChecklist: ({ onDismiss, onStepClick }: { onDismiss: () => void; onStepClick?: (stepId: string) => void }) => (
+    <div data-testid="getting-started-checklist">
+      <button data-testid="dismiss-checklist" onClick={onDismiss}>Dismiss</button>
+      <button data-testid="step-click-trigger" onClick={() => onStepClick?.('connect-bank')}>Step</button>
+    </div>
+  ),
 }))
 
 // Issue #575: Use REAL AccountTypeFilter and TimeframeSelector components
@@ -162,6 +190,9 @@ describe('DashboardPage', () => {
     mockResetToDefault.mockClear()
     mockSaveNow.mockClear()
     mockDismissHint.mockClear()
+    mockUseGettingStarted.mockClear()
+    mockDismissGettingStarted.mockClear()
+    mockTrackEvent.mockClear()
     mockSetFilters.mockClear()
     mockSetTimeframe.mockClear()
     mockSetIsEditing.mockClear()
@@ -187,6 +218,16 @@ describe('DashboardPage', () => {
     mockUseDashboardOnboarding.mockReturnValue({
       showHint: false,
       dismissHint: mockDismissHint,
+    })
+    mockUseGettingStarted.mockReturnValue({
+      steps: [],
+      completedCount: 0,
+      totalSteps: 5,
+      allComplete: false,
+      shouldShow: false,
+      isLoading: false,
+      isCelebrating: false,
+      dismiss: mockDismissGettingStarted,
     })
     mockUseDashboardContext.mockReturnValue(defaultContextValue)
     mockUseDashboardData.mockReturnValue({
@@ -592,83 +633,106 @@ describe('DashboardPage', () => {
     })
   })
 
-  describe('Welcome Banner', () => {
-    const noBankAccountContext = {
-      ...defaultContextValue,
-      hasAccounts: false,
-      accountsLoading: false,
-    }
-
-    it('should show welcome banner when hasAccounts is false', () => {
-      mockUseDashboardContext.mockReturnValue(noBankAccountContext)
-
-      render(
-        <MemoryRouter>
-          <DashboardPage />
-        </MemoryRouter>
-      )
-
-      expect(screen.getByText('Welcome to BoostedBudget!')).toBeInTheDocument()
-    })
-
-    it('should show connect account description in banner', () => {
-      mockUseDashboardContext.mockReturnValue(noBankAccountContext)
-
-      render(
-        <MemoryRouter>
-          <DashboardPage />
-        </MemoryRouter>
-      )
-
-      expect(
-        screen.getByText('Connect your first bank account to start tracking your finances')
-      ).toBeInTheDocument()
-    })
-
-    it('should show CTA link to /accounts in banner', () => {
-      mockUseDashboardContext.mockReturnValue(noBankAccountContext)
-
-      render(
-        <MemoryRouter>
-          <DashboardPage />
-        </MemoryRouter>
-      )
-
-      const link = screen.getByRole('link', { name: /connect bank account/i })
-      expect(link).toBeInTheDocument()
-      expect(link).toHaveAttribute('href', '/accounts')
-    })
-
-    it('should hide welcome banner when hasAccounts is true', () => {
-      mockUseDashboardContext.mockReturnValue({ ...defaultContextValue, hasAccounts: true })
-
-      render(<DashboardPage />)
-
-      expect(screen.queryByText('Welcome to BoostedBudget!')).not.toBeInTheDocument()
-    })
-
-    it('should hide welcome banner while accounts are loading', () => {
-      mockUseDashboardContext.mockReturnValue({
-        ...defaultContextValue,
-        hasAccounts: false,
-        accountsLoading: true,
+  describe('Getting Started Checklist', () => {
+    it('should render checklist when shouldShow is true and not loading', () => {
+      mockUseGettingStarted.mockReturnValue({
+        steps: [],
+        completedCount: 0,
+        totalSteps: 5,
+        allComplete: false,
+        shouldShow: true,
+        isLoading: false,
+        isCelebrating: false,
+        dismiss: mockDismissGettingStarted,
       })
 
       render(<DashboardPage />)
 
-      expect(screen.queryByText('Welcome to BoostedBudget!')).not.toBeInTheDocument()
+      expect(screen.getByTestId('getting-started-checklist')).toBeInTheDocument()
     })
 
-    it('should still show dashboard grid below banner', () => {
-      mockUseDashboardContext.mockReturnValue(noBankAccountContext)
+    it('should not render checklist when shouldShow is false', () => {
+      // Default beforeEach sets shouldShow: false
+      render(<DashboardPage />)
 
-      render(
-        <MemoryRouter>
-          <DashboardPage />
-        </MemoryRouter>
-      )
+      expect(screen.queryByTestId('getting-started-checklist')).not.toBeInTheDocument()
+    })
 
+    it('should not render checklist when isLoading is true', () => {
+      mockUseGettingStarted.mockReturnValue({
+        steps: [],
+        completedCount: 0,
+        totalSteps: 5,
+        allComplete: false,
+        shouldShow: true,
+        isLoading: true,
+        isCelebrating: false,
+        dismiss: mockDismissGettingStarted,
+      })
+
+      render(<DashboardPage />)
+
+      expect(screen.queryByTestId('getting-started-checklist')).not.toBeInTheDocument()
+    })
+
+    it('should call dismiss when checklist dismiss is triggered', async () => {
+      const user = userEvent.setup()
+      mockUseGettingStarted.mockReturnValue({
+        steps: [],
+        completedCount: 0,
+        totalSteps: 5,
+        allComplete: false,
+        shouldShow: true,
+        isLoading: false,
+        isCelebrating: false,
+        dismiss: mockDismissGettingStarted,
+      })
+
+      render(<DashboardPage />)
+
+      await user.click(screen.getByTestId('dismiss-checklist'))
+      expect(mockDismissGettingStarted).toHaveBeenCalledTimes(1)
+    })
+
+    it('should still show dashboard grid alongside checklist', () => {
+      mockUseGettingStarted.mockReturnValue({
+        steps: [],
+        completedCount: 0,
+        totalSteps: 5,
+        allComplete: false,
+        shouldShow: true,
+        isLoading: false,
+        isCelebrating: false,
+        dismiss: mockDismissGettingStarted,
+      })
+
+      render(<DashboardPage />)
+
+      expect(screen.getByTestId('getting-started-checklist')).toBeInTheDocument()
       expect(screen.getByTestId('dashboard-grid')).toBeInTheDocument()
+    })
+
+    it('should fire GETTING_STARTED_STEP_CLICKED analytics when a step is clicked', async () => {
+      const user = userEvent.setup()
+      mockUseGettingStarted.mockReturnValue({
+        steps: [],
+        completedCount: 0,
+        totalSteps: 5,
+        allComplete: false,
+        shouldShow: true,
+        isLoading: false,
+        isCelebrating: false,
+        dismiss: mockDismissGettingStarted,
+      })
+
+      render(<DashboardPage />)
+
+      await user.click(screen.getByTestId('step-click-trigger'))
+
+      expect(mockTrackEvent).toHaveBeenCalledWith(
+        ANALYTICS_EVENTS.GETTING_STARTED_STEP_CLICKED,
+        { step_id: 'connect-bank' }
+      )
     })
   })
 

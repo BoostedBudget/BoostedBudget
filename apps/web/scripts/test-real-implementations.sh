@@ -57,7 +57,7 @@ TEST_FILES=(
 )
 
 # Preload files for real implementation tests (absolute paths)
-# Only DOM, testing-library, and savings-goals-api (for useSavingsGoals.test.tsx)
+# Only DOM, testing-library, and minimal API-level mocks needed by each test
 # NO wrapper-level mocks that would interfere with testing real hook implementations
 PRELOAD_FILES=(
     "$FRONTEND_DIR/src/test/happydom.ts"
