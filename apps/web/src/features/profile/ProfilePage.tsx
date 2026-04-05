@@ -4,7 +4,7 @@ import { ProfileForm } from './ProfileForm'
 import { PrivacySettings } from './PrivacySettings'
 import { useProfile } from './hooks/useProfile'
 import { useIsAdmin, useAdminMode, AdminSettingsSection } from '@/features/admin'
-import { getRegionWithFlag } from '../../config/regions'
+import { useRegions } from '../../shared/hooks/useRegions'
 import { useTabState, useCopyToClipboard } from '../../shared/hooks'
 import { abbreviateUUID } from '../../shared/utils'
 import type { User, PrivacySettings as PrivacySettingsType } from './types'
@@ -20,6 +20,7 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
   const { adminModeEnabled, toggleAdminMode } = useAdminMode()
   const [activeTab, setActiveTab] = useTabState('tab', 'profile', ['profile', 'privacy'] as const)
   const { copy, copied } = useCopyToClipboard()
+  const { getRegionWithFlag } = useRegions()
 
   function handleProfileUpdate(_updatedUser: User) {
     // Refetch to get the updated user data from server

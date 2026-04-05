@@ -50,7 +50,7 @@ const mockUsers = [
     subscription_status: 'trial',
     manual_tier_override: 'premium',
     manual_tier_ends_at: null,
-    primary_region: 'lhr',
+    primary_region: 'iad',
     created_at: '2024-02-20T08:00:00Z',
     last_login_at: null,
     is_active: true,
