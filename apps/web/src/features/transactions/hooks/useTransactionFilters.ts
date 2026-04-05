@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { format, subDays, subYears, startOfDay } from 'date-fns'
+import { getDateRange, inferPreset } from '@/shared/dates'
 import type { TransactionFilters, DatePreset, StatusFilter } from '../types'
 
 /**
@@ -39,68 +39,6 @@ const ARRAY_PARAMS = ['account_ids', 'categories'] as const
 
 // URL param names for numeric filters
 const NUMERIC_PARAMS = ['min_amount', 'max_amount'] as const
-
-/**
- * Calculate date range from preset
- */
-function getDateRangeFromPreset(preset: DatePreset): { startDate: string; endDate: string } | null {
-  const today = startOfDay(new Date())
-  const todayStr = format(today, 'yyyy-MM-dd')
-
-  switch (preset) {
-    case '7d':
-      return {
-        startDate: format(subDays(today, 7), 'yyyy-MM-dd'),
-        endDate: todayStr,
-      }
-    case '30d':
-      return {
-        startDate: format(subDays(today, 30), 'yyyy-MM-dd'),
-        endDate: todayStr,
-      }
-    case '90d':
-      return {
-        startDate: format(subDays(today, 90), 'yyyy-MM-dd'),
-        endDate: todayStr,
-      }
-    case '1y':
-      return {
-        startDate: format(subYears(today, 1), 'yyyy-MM-dd'),
-        endDate: todayStr,
-      }
-    case 'all':
-      return null // No date filter
-    case 'custom':
-      return null // Custom dates handled separately
-    default:
-      return null
-  }
-}
-
-/**
- * Infer date preset from current start_date and end_date
- */
-function inferDatePreset(startDate?: string, endDate?: string): DatePreset {
-  if (!startDate && !endDate) return 'all'
-
-  const today = format(startOfDay(new Date()), 'yyyy-MM-dd')
-
-  // Check if endDate is today (or not set)
-  if (endDate && endDate !== today) return 'custom'
-
-  if (!startDate) return 'all'
-
-  const todayDate = startOfDay(new Date())
-  const start = new Date(startDate)
-  const diffDays = Math.floor((todayDate.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
-
-  if (diffDays === 7) return '7d'
-  if (diffDays === 30) return '30d'
-  if (diffDays === 90) return '90d'
-  if (diffDays >= 364 && diffDays <= 366) return '1y'
-
-  return 'custom'
-}
 
 /**
  * Hook for managing transaction filters with URL state synchronization
@@ -273,7 +211,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
 
   // Date preset (inferred from current dates)
   const datePreset = useMemo<DatePreset>(
-    () => inferDatePreset(filters.start_date, filters.end_date),
+    () => inferPreset(filters.start_date, filters.end_date),
     [filters.start_date, filters.end_date]
   )
 
@@ -285,7 +223,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
         return
       }
 
-      const range = getDateRangeFromPreset(preset)
+      const range = getDateRange(preset)
       if (range) {
         setFilters({
           start_date: range.startDate,

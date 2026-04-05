@@ -79,8 +79,9 @@ export interface TransactionFilters {
 /**
  * Date range preset options for quick filtering
  * Issue #529: Transaction page filtering
+ * Issue #953: Standardized — now uses shared DatePreset from shared/dates
  */
-export type DatePreset = '7d' | '30d' | '90d' | '1y' | 'all' | 'custom'
+export type { DatePreset } from '@/shared/dates'
 
 /**
  * Status filter options
