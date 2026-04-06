@@ -53,6 +53,11 @@ type UserAccountRepository interface {
 	// UpdatePrimaryTypeAndSubtype updates the type information (from most recent Plaid account).
 	// Returns ErrUserAccountNotFound if not found.
 	UpdatePrimaryTypeAndSubtype(ctx context.Context, id, primaryType, primarySubtype string) error
+
+	// UpdateHidden sets the is_hidden flag on a user account by ID.
+	// Returns ErrUserAccountNotFound if not found.
+	// Ownership is not checked here; callers must validate ownership beforehand.
+	UpdateHidden(ctx context.Context, id string, hidden bool) error
 }
 
 // userAccountRepository implements UserAccountRepository using PostgreSQL
@@ -429,6 +434,24 @@ func (r *userAccountRepository) UpdatePrimaryTypeAndSubtype(ctx context.Context,
 		time.Now(),
 		id,
 	)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return ErrUserAccountNotFound
+	}
+	return nil
+}
+
+// UpdateHidden sets the is_hidden flag on a user account by ID.
+// Ownership is not checked here; callers must validate ownership beforehand.
+func (r *userAccountRepository) UpdateHidden(ctx context.Context, id string, hidden bool) error {
+	query := `
+		UPDATE user_accounts
+		SET is_hidden = $1, updated_at = $2
+		WHERE id = $3
+	`
+	result, err := r.db.Exec(ctx, query, hidden, time.Now(), id)
 	if err != nil {
 		return err
 	}
