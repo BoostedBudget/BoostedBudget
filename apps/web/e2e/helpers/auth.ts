@@ -41,8 +41,8 @@ export async function loginWithClerk(
   // Click submit button
   await page.click('button:has-text("Continue"), button[type="submit"]');
 
-  // Wait for redirect back to app
-  await page.waitForURL(/localhost:3000/, { timeout: 15000 });
+  // Wait for redirect back to app (use dynamic port from env, fallback to 3000)
+  await page.waitForURL(new RegExp(`localhost:${process.env.E2E_FRONTEND_PORT || '3000'}`), { timeout: 15000 });
 
   // Wait for authentication to complete
   await page.waitForTimeout(2000);
@@ -78,8 +78,8 @@ export async function signupWithClerk(
   // Click submit button
   await page.click('button[type="submit"], button:has-text("Continue"), button:has-text("Sign up")');
 
-  // Wait for redirect back to app
-  await page.waitForURL(/localhost:3000/, { timeout: 15000 });
+  // Wait for redirect back to app (use dynamic port from env, fallback to 3000)
+  await page.waitForURL(new RegExp(`localhost:${process.env.E2E_FRONTEND_PORT || '3000'}`), { timeout: 15000 });
 
   // Wait for authentication to complete
   await page.waitForTimeout(2000);
