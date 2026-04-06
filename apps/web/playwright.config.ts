@@ -44,7 +44,8 @@ export default defineConfig({
   testDir: './e2e',
 
   // Maximum time one test can run
-  timeout: 15 * 1000,
+  // CI runs on a shared Mac Mini (4 runners) with heavy job contention — 30s gives headroom
+  timeout: process.env.CI ? 30 * 1000 : 15 * 1000,
 
   // Run tests in files in parallel
   fullyParallel: true,

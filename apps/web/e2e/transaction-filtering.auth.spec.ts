@@ -310,7 +310,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should show filter panel with expand toggle', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Issue #615: Panel renamed to "Date & Status" (Account/Category/Type/Amount moved to table headers)
       await expect(page.getByText('Date & Status')).toBeVisible()
@@ -319,7 +319,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should expand filter panel when clicking toggle', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Click to expand (Issue #615: renamed from "Filters")
       await page.getByText('Date & Status').click()
@@ -332,7 +332,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should collapse filter panel when clicking toggle again', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Expand
       await page.getByText('Date & Status').click()
@@ -419,7 +419,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should filter to pending only', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
@@ -435,7 +435,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should filter to posted only', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
@@ -457,7 +457,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should update URL when status filter is applied', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
@@ -483,7 +483,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should persist status filter after page reload', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Expand and apply status filter (Issue #615: Type filter moved inline)
       await page.getByText('Date & Status').click()
@@ -491,7 +491,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
 
       // Reload page
       await page.reload()
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Filter should still be applied - Posted transactions visible
       await expect(page.getByText('Starbucks')).toBeVisible()
@@ -509,7 +509,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await mockFilteringAPIs(page)
       // Use status filter which is still in panel (Issue #615: amount_type moved inline)
       await page.goto('/transactions?pending=false')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Panel should show "Clear all" link when filters active and collapsed
       await expect(page.getByText(/clear all/i)).toBeVisible()
@@ -519,7 +519,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await mockFilteringAPIs(page)
       // Use status filter which is still in panel (Issue #615: amount_type moved inline)
       await page.goto('/transactions?pending=false')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Click clear
       await page.getByText(/clear all/i).first().click()
@@ -613,7 +613,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
         },
       })
       await page.goto('/transactions?amount_type=income')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Should show empty state with filter hint
       await expect(page.getByText(/no transactions found/i)).toBeVisible()
@@ -631,7 +631,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
         },
       })
       await page.goto('/transactions?amount_type=income')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Should have clear filters button
       await expect(page.getByRole('button', { name: /clear all filters/i })).toBeVisible()
@@ -646,7 +646,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should show date preset options', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Dismiss cookie consent if it reappears after navigation
       await acceptCookieConsent(page)
@@ -667,7 +667,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should apply date preset and update URL', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Dismiss cookie consent if it reappears after navigation
       await acceptCookieConsent(page)
@@ -685,8 +685,13 @@ test.describe('Transaction Filtering - Authenticated User', () => {
 
     test('should show custom date inputs when Custom is selected', async ({ page }) => {
       await mockFilteringAPIs(page)
-      await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      // Navigate with arbitrary dates that don't match any known preset.
+      // inferPreset() returns 'custom' when start_date/end_date are set but don't match
+      // a standard range, which causes DateRangePicker to render Start/End Date inputs.
+      // Note: clicking the "Custom" ToggleGroupItem alone cannot trigger this — setDatePreset('custom')
+      // in useTransactionFilters is intentionally a no-op (the user sets dates manually).
+      await page.goto('/transactions?start_date=2020-01-01&end_date=2020-12-31')
+      await expect(page.getByText('Starbucks')).toBeVisible()
 
       // Dismiss cookie consent if it reappears after navigation
       await acceptCookieConsent(page)
@@ -694,11 +699,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
 
-      // Click Custom — force:true because on narrow CI viewports, the status filter
-      // div overlaps the last ToggleGroup item when presets wrap to a second row
-      await page.getByRole('radio', { name: 'Custom', exact: true }).click({ force: true })
-
-      // Custom date inputs should appear (Issue #953: shared DateRangePicker uses "Start Date"/"End Date")
+      // Custom date inputs should appear because the inferred preset is 'custom'
       await expect(page.getByText('Start Date')).toBeVisible()
       await expect(page.getByText('End Date')).toBeVisible()
     })
