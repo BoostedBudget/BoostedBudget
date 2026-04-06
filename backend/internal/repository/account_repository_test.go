@@ -571,6 +571,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 	ctx := context.Background()
 	accountID := uuid.New().String()
 	userID := uuid.New().String()
+	userAccountID := uuid.New().String()
 	now := time.Now()
 
 	// Helper for nullable float64 values
@@ -583,6 +584,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
+		"user_account_id",
 		"created_at", "updated_at",
 	}).AddRow(
 		accountID, uuid.New().String(), userID, "plaid-acc-1",
@@ -590,6 +592,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		&balance, &available, "USD",
 		strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), strPtr("💰"),
 		&displayOrder, false,
+		&userAccountID,
 		now, now,
 	)
 
@@ -599,6 +602,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		       current_balance, available_balance, currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
+		       user_account_id,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -621,6 +625,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 	assert.Equal(t, "💰", *account.CustomEmoji)
 	assert.Equal(t, 1, *account.DisplayOrder)
 	assert.False(t, account.IsHidden)
+	assert.Equal(t, userAccountID, *account.UserAccountID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -639,6 +644,7 @@ func TestAccountRepository_GetByIDAndUser_NotFound(t *testing.T) {
 		       current_balance, available_balance, currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
+		       user_account_id,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2

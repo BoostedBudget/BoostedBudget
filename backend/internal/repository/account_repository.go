@@ -534,6 +534,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		       current_balance, available_balance, currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
+		       user_account_id,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -546,6 +547,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
 		&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 		&account.DisplayOrder, &account.IsHidden,
+		&account.UserAccountID,
 		&account.CreatedAt, &account.UpdatedAt,
 	)
 
