@@ -128,7 +128,7 @@ test.describe('Account Deletion - Public Endpoints', () => {
     await profileButton.click()
 
     // Verify navigation (will redirect to login if not authenticated)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     const url = page.url()
 
     // Should either be at profile or redirected to login
