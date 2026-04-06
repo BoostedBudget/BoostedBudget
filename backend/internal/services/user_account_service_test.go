@@ -65,6 +65,11 @@ func (m *MockUserAccountRepository) UpdatePrimaryTypeAndSubtype(ctx context.Cont
 	return args.Error(0)
 }
 
+func (m *MockUserAccountRepository) UpdateHidden(ctx context.Context, id string, hidden bool) error {
+	args := m.Called(ctx, id, hidden)
+	return args.Error(0)
+}
+
 // =============================================================================
 // MatchOrCreate Tests - Core Re-Link Matching Logic
 // =============================================================================
