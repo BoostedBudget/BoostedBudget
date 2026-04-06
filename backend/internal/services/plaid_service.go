@@ -216,7 +216,8 @@ func (s *plaidService) GetClient() *plaid.APIClient {
 // The link token is a short-lived (30 minute) credential that enables the frontend
 // to initialize Plaid Link for connecting bank accounts. Configured with:
 //   - User identification (client_user_id from Clerk)
-//   - Products: TRANSACTIONS only (account data + transaction history)
+//   - Required products: TRANSACTIONS (account data + transaction history)
+//   - Optional products: LIABILITIES + INVESTMENTS (enabled when available, no error when absent)
 //   - OAuth redirect URI for institutions like Chase, Capital One, Wells Fargo
 //   - Country codes (US) and language (English)
 //
@@ -253,12 +254,18 @@ func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*dom
 		*plaid.NewLinkTokenCreateRequestUser(userID), // User identifier (dereferenced from pointer)
 	)
 
-	// Set products: Phase 2 (#241) - TRANSACTIONS + LIABILITIES + INVESTMENTS
+	// Required product: TRANSACTIONS is core to the budgeting app
 	// Issue #237: AUTH removed (only supports checking/savings, caused NO_AUTH_ACCOUNTS for credit cards/CDs)
-	// Issue #241: LIABILITIES and INVESTMENTS added (full processing deferred to follow-up issues)
 	// Balance data is automatically included in /accounts/get response (FREE)
 	request.SetProducts([]plaid.Products{
 		plaid.PRODUCTS_TRANSACTIONS,
+	})
+
+	// Optional products: enabled when available, no error when absent
+	// Issue #976: LIABILITIES + INVESTMENTS moved from required to optional — required products
+	// cause ITEM_ERROR (NO_LIABILITY_ACCOUNTS / NO_INVESTMENT_ACCOUNTS) when the user's
+	// institution has no accounts of that type (e.g. BoA with only checking/savings).
+	request.SetOptionalProducts([]plaid.Products{
 		plaid.PRODUCTS_LIABILITIES,
 		plaid.PRODUCTS_INVESTMENTS,
 	})
@@ -346,9 +353,14 @@ func (s *plaidService) CreateUpdateModeLinkToken(ctx context.Context, userID str
 	// Common mistake: Using item_id instead of access_token (SetAccessToken needs access_token!)
 	request.SetAccessToken(accessToken)
 
-	// Set products: same 3 as CreateLinkToken (TRANSACTIONS + LIABILITIES + INVESTMENTS, Phase 2 #241)
+	// Required product: TRANSACTIONS only (same as CreateLinkToken)
 	request.SetProducts([]plaid.Products{
 		plaid.PRODUCTS_TRANSACTIONS,
+	})
+
+	// Optional products: LIABILITIES + INVESTMENTS (same as CreateLinkToken)
+	// Issue #976: moved from required to optional to avoid NO_LIABILITY_ACCOUNTS errors
+	request.SetOptionalProducts([]plaid.Products{
 		plaid.PRODUCTS_LIABILITIES,
 		plaid.PRODUCTS_INVESTMENTS,
 	})
