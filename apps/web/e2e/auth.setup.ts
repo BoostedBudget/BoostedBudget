@@ -78,9 +78,14 @@ setup('authenticate', async ({ page }) => {
     emailAddress: email,
   });
 
+  // Wait for page to stabilize after sign-in.
+  // clerk.signIn() can trigger a page reload that destroys the JS execution context.
+  // Waiting for domcontentloaded + a brief hydration pause prevents "Execution context
+  // was destroyed" errors during subsequent page.evaluate() calls.
+  await page.waitForLoadState('domcontentloaded');
+  await page.waitForTimeout(2000);
+
   // Wait for Clerk session to be fully hydrated before proceeding.
-  // clerk.signIn() completes, but the JS session object may lag behind — polling
-  // is more reliable than a fixed sleep and avoids navigation-race JWT extraction errors.
   console.log('   Waiting for session to establish...');
   try {
     await page.waitForFunction(
@@ -103,17 +108,28 @@ setup('authenticate', async ({ page }) => {
   const apiUrl = `http://localhost:${backendPort}`;
 
   // Extract Clerk JWT from browser session for direct API calls.
-  // Wrapped in a retry loop — page.evaluate() can fail with "Execution context was destroyed"
-  // if a navigation happens concurrently. Retrying after 1s recovers reliably.
+  // Uses a retry loop with progressive backoff — page.evaluate() can fail with
+  // "Execution context was destroyed" if a navigation happens concurrently.
+  // Also validates that the JWT contains an email claim before accepting it,
+  // since the first token after sign-in may not yet have custom claims populated.
   let authToken: string | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     try {
       authToken = await page.evaluate(async () => {
         const clerk = (window as unknown as { Clerk?: { session?: { getToken: () => Promise<string | null> } } }).Clerk;
-        if (clerk?.session) {
-          return await clerk.session.getToken();
+        if (!clerk?.session) return null;
+        const token = await clerk.session.getToken();
+        if (!token) return null;
+        // Verify the JWT contains an email claim before accepting.
+        // The first token after sign-in may lack custom claims if Clerk hasn't
+        // completed its token refresh cycle yet.
+        try {
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          if (!payload.email && !payload.primary_email) return null;
+        } catch {
+          // If we can't decode the payload, accept the token and let the backend handle it
         }
-        return null;
+        return token;
       });
       if (authToken) {
         console.log('   ✓ Extracted Clerk JWT for API calls');
@@ -121,8 +137,9 @@ setup('authenticate', async ({ page }) => {
       }
     } catch (error) {
       console.log(`   [Warning] JWT extraction attempt ${attempt + 1} failed: ${error}`);
-      if (attempt < 2) await page.waitForTimeout(1000);
     }
+    // Progressive backoff: 1s, 2s, 3s, 4s
+    if (attempt < 4) await page.waitForTimeout(1000 * (attempt + 1));
   }
 
   const doTrialGrant = async (token: string | null): Promise<boolean> => {
@@ -148,7 +165,10 @@ setup('authenticate', async ({ page }) => {
     }
   };
 
-  await doTrialGrant(authToken);
+  const trialGranted = await doTrialGrant(authToken);
+  if (!trialGranted) {
+    console.log('   [Info] Trial grant failed — DB seeding should provide subscription');
+  }
 
   // Verify by accessing protected page
   // This confirms the session is properly established

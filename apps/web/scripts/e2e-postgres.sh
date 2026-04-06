@@ -284,8 +284,16 @@ _get_clerk_user_id() {
     return 1
   fi
 
+  # URL-encode the email address before passing as query parameter
+  # The + character in emails (e.g. e2e+test@domain.com) must be encoded as %2B
+  local encoded_email
+  encoded_email=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${test_email}', safe='@'))" 2>/dev/null)
+  if [ -z "$encoded_email" ]; then
+    encoded_email="$test_email"
+  fi
+
   local response
-  response=$(curl -s -X GET "https://api.clerk.dev/v1/users?email_address=${test_email}" \
+  response=$(curl -s -X GET "https://api.clerk.dev/v1/users?email_address=${encoded_email}" \
     -H "Authorization: Bearer ${secret_key}" \
     -H "Content-Type: application/json" 2>/dev/null)
 

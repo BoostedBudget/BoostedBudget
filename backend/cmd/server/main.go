@@ -919,13 +919,6 @@ func main() {
 		// Admin handler dependencies used by Huma admin routes - Issue #559
 		// plaidService, linkedItemRepo, and encryptionService are used in the Huma admin handler registration below
 
-		// Create Clerk middleware with identity resolution and auto-registration
-		clerkMiddleware := middleware.ClerkMiddleware(
-			cfg.ClerkSecretKey,
-			identityRepo,        // Resolves Clerk IDs to internal user UUIDs
-			registrationService, // Auto-registers new users on first login
-		)
-
 		// Apply Huma Clerk middleware for authenticated Huma routes
 		// #930: Pass profileRepo so the middleware stores subscription_status in context
 		humaClerkMiddleware := humamiddleware.NewClerkMiddleware(
@@ -1070,61 +1063,11 @@ func main() {
 			appLogger.Info("QA auth bypass route registered")
 		}
 
-		// API v1 routes (Echo - to be migrated to Huma incrementally)
-		api := e.Group("/api/v1")
-		api.Use(clerkMiddleware)
-		// Profile and privacy routes migrated to Huma (see humaProfileHandler and humaPrivacyHandler above)
-		// api.GET("/user/profile", profileHandler.GetProfile)
-		// api.PUT("/user/profile", profileHandler.UpdateProfile)
-		// api.GET("/user/privacy", privacyHandler.GetPrivacySettings)
-		// api.PUT("/user/privacy", privacyHandler.UpdatePrivacySettings)
-
-		// Transaction routes migrated to Huma (see humaTransactionHandler above)
-		// Tag routes migrated to Huma (see humaTagHandler above)
-		// Category routes migrated to Huma (see humaCategoryHandler above)
-		// Auto-categorization routes migrated to Huma (see humaRuleHandler above)
-
-		// Notification routes migrated to Huma (see humaNotificationHandler above)
-
-
-		// Dashboard routes migrated to Huma (see humaDashboardHandler above)
-
-		// Analytics routes migrated to Huma (see humaAnalyticsHandler above)
-
-		// Dashboard preferences routes migrated to Huma (see humaDashboardPrefsHandler above)
-
-		// Budget routes migrated to Huma (see humaBudgetHandler above) - Issue #559
-		// Category preview route migrated to Huma (see humaCategoryPreviewHandler above) - Issue #559
-		// api.POST("/budgets/categories/preview", categoryPreviewHandler.PreviewCategoryMatches) // Issue #497: Category preview
-
-		// Savings Goal routes migrated to Huma (see humaSavingsGoalHandler above) - Issue #559
-
-		// Plaid routes migrated to Huma (see humaPlaidHandler above) - Issue #559
-		// Old Echo routes commented out:
-		// if plaidHandler != nil {
-		// 	api.POST("/plaid/link-token", plaidHandler.CreateLinkToken)
-		// 	api.POST("/plaid/exchange-token", plaidHandler.ExchangePublicToken)
-		// 	api.GET("/accounts", plaidHandler.GetAccounts)
-		// 	api.PATCH("/accounts/reorder", plaidHandler.ReorderAccounts)  // Issue #307: Must be before :id route
-		// 	api.PATCH("/accounts/:id", plaidHandler.UpdateAccount)        // Issue #307: Account customization
-		// 	api.DELETE("/accounts/:id", plaidHandler.DeleteAccount)
-		// 	api.DELETE("/linked-items/:id", plaidHandler.DisconnectInstitution)
-		// }
-
-		// Admin routes migrated to Huma (see humaAdminHandler above) - Issue #559
-		// Note: Security maintained - routes only registered in qa environment
-		// if adminHandler != nil && cfg.Environment == "qa" {
-		// 	admin := api.Group("/admin", middleware.AdminMiddleware(cfg))
-		// 	admin.POST("/plaid/fire-webhook", adminHandler.FireWebhook)
-		// 	appLogger.Info("Admin endpoints enabled (qa only)")
-		// }
-
-		// Deletion routes migrated to Huma (see humaDeletionHandler below) - Issue #559
-		// Old Echo routes commented out:
-		// if deletionHandler != nil {
-		// 	api.POST("/user/delete", deletionHandler.RequestDeletion)
-		// 	api.GET("/user/delete/cancel/:token", deletionHandler.CancelDeletion)
-		// }
+		// All API v1 routes fully migrated to Huma (Issue #559)
+		// The legacy Echo group and its Clerk middleware have been removed —
+		// the Echo group's prefix-matching was shadowing Huma routes and
+		// blocking requests with 401 (the Echo middleware lacks the Clerk API
+		// email fallback that the Huma middleware provides).
 
 		appLogger.Info("Authenticated routes enabled (Clerk + Database)")
 	}
