@@ -742,3 +742,85 @@ func TestUserAccountRepository_UpdatePrimaryTypeAndSubtype_NotFound(t *testing.T
 	assert.ErrorIs(t, err, ErrUserAccountNotFound)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// =============================================================================
+// UpdateHidden Tests
+// =============================================================================
+
+// TestUserAccountRepository_UpdateHidden_SetTrue tests setting hidden=true on an existing account
+func TestUserAccountRepository_UpdateHidden_SetTrue(t *testing.T) {
+	mock, repo := setupUserAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userAccountID := uuid.New().String()
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE user_accounts
+		SET is_hidden = $1, updated_at = $2
+		WHERE id = $3
+	`)).WithArgs(
+		true,
+		pgxmock.AnyArg(), // updated_at
+		userAccountID,
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	// Execute
+	err := repo.UpdateHidden(ctx, userAccountID, true)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUserAccountRepository_UpdateHidden_SetFalse tests setting hidden=false on an existing account
+func TestUserAccountRepository_UpdateHidden_SetFalse(t *testing.T) {
+	mock, repo := setupUserAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userAccountID := uuid.New().String()
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE user_accounts
+		SET is_hidden = $1, updated_at = $2
+		WHERE id = $3
+	`)).WithArgs(
+		false,
+		pgxmock.AnyArg(), // updated_at
+		userAccountID,
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	// Execute
+	err := repo.UpdateHidden(ctx, userAccountID, false)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUserAccountRepository_UpdateHidden_NotFound tests that ErrUserAccountNotFound is returned when RowsAffected=0
+func TestUserAccountRepository_UpdateHidden_NotFound(t *testing.T) {
+	mock, repo := setupUserAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userAccountID := uuid.New().String()
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE user_accounts
+		SET is_hidden = $1, updated_at = $2
+		WHERE id = $3
+	`)).WithArgs(
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		userAccountID,
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	// Execute
+	err := repo.UpdateHidden(ctx, userAccountID, true)
+
+	// Assert
+	assert.ErrorIs(t, err, ErrUserAccountNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
