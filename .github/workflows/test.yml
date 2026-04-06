@@ -122,6 +122,7 @@ jobs:
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
           TEST_CLERK_EMAIL: ${{ secrets.TEST_CLERK_EMAIL }}
           TEST_CLERK_PASSWORD: ${{ secrets.TEST_CLERK_PASSWORD }}
+          E2E_CLERK_USER_ID: ${{ secrets.E2E_CLERK_USER_ID }}
         run: bun run test:e2e
 
       - name: Upload E2E test results
