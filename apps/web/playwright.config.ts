@@ -47,6 +47,12 @@ export default defineConfig({
   // CI runs on a shared Mac Mini (4 runners) with heavy job contention — 30s gives headroom
   timeout: process.env.CI ? 30 * 1000 : 15 * 1000,
 
+  // Global assertion timeout (default is 5s — too tight under CI resource contention)
+  // Raises all expect() calls to 10s so below-fold content and slow renders don't time out
+  expect: {
+    timeout: 10 * 1000,
+  },
+
   // Run tests in files in parallel
   fullyParallel: true,
 
