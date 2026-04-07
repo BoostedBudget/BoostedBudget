@@ -1330,6 +1330,7 @@ func TestDeleteAccount_DoesNotHideWhenOtherAccountsRemain(t *testing.T) {
 
 	require.NoError(t, err, "DeleteAccount should succeed")
 	mockAccountRepo.AssertExpectations(t)
+	mockJobQueue.AssertExpectations(t)
 	// SetHidden must NOT be called when other accounts remain
 	mockUserAccountSvc.AssertNotCalled(t, "SetHidden", mock.Anything, mock.Anything, mock.Anything)
 }

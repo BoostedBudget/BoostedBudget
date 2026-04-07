@@ -540,50 +540,43 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 		return err
 	}
 
-	// Step 3: Check if zero-account cleanup should be triggered
-	// Only proceed if jobQueue is available (optional dependency)
-	if s.jobQueue == nil {
-		return nil
-	}
-
-	// Step 4: Count remaining active accounts for this linked item
-	remainingCount, err := s.accountRepo.CountActiveByLinkedItemID(ctx, linkedItemID)
-	if err != nil {
-		// Log error but don't fail the deletion
-		if s.logger != nil {
-			s.logger.Warn("failed to count remaining accounts after deletion",
-				"account_id", accountID,
-				"linked_item_id", linkedItemID,
-				"error", err,
-			)
-		}
-		return nil
-	}
-
-	// Step 5: If no accounts remain, enqueue cleanup job
-	if remainingCount == 0 {
-		cleanupJob := itemCleanupJobArgs{
-			LinkedItemID: linkedItemID,
-			UserID:       userID,
-			Reason:       "zero_accounts",
-		}
-		uniqueOpts := itemCleanupUniqueOpts()
-		_, err := s.jobQueue.Enqueue(ctx, cleanupJob, queue.WithUnique(*uniqueOpts))
+	// Steps 4-5: Zero-account item cleanup (requires job queue)
+	if s.jobQueue != nil {
+		// Step 4: Count remaining active accounts for this linked item
+		remainingCount, err := s.accountRepo.CountActiveByLinkedItemID(ctx, linkedItemID)
 		if err != nil {
 			// Log error but don't fail the deletion
 			if s.logger != nil {
-				s.logger.Warn("failed to enqueue item cleanup job",
+				s.logger.Warn("failed to count remaining accounts after deletion",
+					"account_id", accountID,
 					"linked_item_id", linkedItemID,
-					"user_id", userID,
 					"error", err,
 				)
 			}
-		} else if s.logger != nil {
-			s.logger.Info("enqueued item cleanup job for zero-account item",
-				"linked_item_id", linkedItemID,
-				"user_id", userID,
-				"reason", "zero_accounts",
-			)
+		} else if remainingCount == 0 {
+			// Step 5: If no accounts remain, enqueue cleanup job
+			cleanupJob := itemCleanupJobArgs{
+				LinkedItemID: linkedItemID,
+				UserID:       userID,
+				Reason:       "zero_accounts",
+			}
+			uniqueOpts := itemCleanupUniqueOpts()
+			_, err := s.jobQueue.Enqueue(ctx, cleanupJob, queue.WithUnique(*uniqueOpts))
+			if err != nil {
+				if s.logger != nil {
+					s.logger.Warn("failed to enqueue item cleanup job",
+						"linked_item_id", linkedItemID,
+						"user_id", userID,
+						"error", err,
+					)
+				}
+			} else if s.logger != nil {
+				s.logger.Info("enqueued item cleanup job for zero-account item",
+					"linked_item_id", linkedItemID,
+					"user_id", userID,
+					"reason", "zero_accounts",
+				)
+			}
 		}
 	}
 
