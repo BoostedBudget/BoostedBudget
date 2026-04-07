@@ -128,26 +128,43 @@ func (w *SubscriptionWebhookWorker) SetAnalytics(a phclient.Analytics) {
 	w.analytics = a
 }
 
+// notificationParams holds parameters for creating an in-app notification.
+type notificationParams struct {
+	userID             string
+	notificationType   string
+	title              string
+	message            string
+	actionURL          *string
+	actionLabel        *string
+	interactionPattern string
+}
+
 // createNotification creates an in-app notification for a user.
 // Logs and swallows errors so notification failures don't abort webhook processing.
-func (w *SubscriptionWebhookWorker) createNotification(ctx context.Context, userID, notifType, title, message string) {
+func (w *SubscriptionWebhookWorker) createNotification(ctx context.Context, params notificationParams) {
 	if w.notificationRepo == nil {
 		return
 	}
 	if err := w.notificationRepo.Create(ctx, &domain.Notification{
-		ID:      uuid.New().String(),
-		UserID:  userID,
-		Type:    notifType,
-		Title:   title,
-		Message: message,
+		ID:                 uuid.New().String(),
+		UserID:             params.userID,
+		Type:               params.notificationType,
+		Title:              params.title,
+		Message:            params.message,
+		ActionURL:          params.actionURL,
+		ActionLabel:        params.actionLabel,
+		InteractionPattern: params.interactionPattern,
 	}); err != nil {
 		w.logger.Error("failed to create notification",
-			"user_id", userID,
-			"type", notifType,
+			"user_id", params.userID,
+			"type", params.notificationType,
 			"error", err,
 		)
 	}
 }
+
+// stringPtr returns a pointer to a string value.
+func stringPtr(s string) *string { return &s }
 
 // syncClerkMetadata updates a user's Clerk public metadata with their current tier and status.
 // Logs and swallows errors so Clerk failures don't abort webhook processing.
@@ -453,10 +470,13 @@ func (w *SubscriptionWebhookWorker) processSubscriptionActivated(ctx context.Con
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
 
-	w.createNotification(ctx, userID, "subscription_activated",
-		"Subscription Activated",
-		"Your BoostedBudget subscription is now active. Welcome aboard!",
-	)
+	w.createNotification(ctx, notificationParams{
+		userID:             userID,
+		notificationType:   "subscription_activated",
+		title:              "Subscription Activated",
+		message:            "Your BoostedBudget subscription is now active. Welcome aboard!",
+		interactionPattern: "informational",
+	})
 	w.syncClerkMetadata(ctx, userID, string(tier), status)
 
 	// #930: Clear retention clock — user resubscribed, data is no longer pending deletion
@@ -587,10 +607,15 @@ func (w *SubscriptionWebhookWorker) processSubscriptionPastDue(ctx context.Conte
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
 
-	w.createNotification(ctx, userID, "subscription_past_due",
-		"Payment Overdue",
-		"Your subscription payment is overdue. Please update your payment method to maintain access.",
-	)
+	w.createNotification(ctx, notificationParams{
+		userID:             userID,
+		notificationType:   "subscription_past_due",
+		title:              "Payment Overdue",
+		message:            "Your subscription payment is overdue. Please update your payment method to maintain access.",
+		actionURL:          stringPtr("/billing"),
+		actionLabel:        stringPtr("Update Payment"),
+		interactionPattern: "action_required",
+	})
 	w.syncClerkMetadata(ctx, userID, user.SubscriptionTier, string(domain.SubscriptionStatusPastDue))
 
 	return nil
@@ -623,10 +648,13 @@ func (w *SubscriptionWebhookWorker) processSubscriptionResumed(ctx context.Conte
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
 
-	w.createNotification(ctx, userID, "subscription_resumed",
-		"Subscription Resumed",
-		"Your BoostedBudget subscription has been resumed. Welcome back!",
-	)
+	w.createNotification(ctx, notificationParams{
+		userID:             userID,
+		notificationType:   "subscription_resumed",
+		title:              "Subscription Resumed",
+		message:            "Your BoostedBudget subscription has been resumed. Welcome back!",
+		interactionPattern: "informational",
+	})
 	w.syncClerkMetadata(ctx, userID, string(tier), string(domain.SubscriptionStatusActive))
 
 	// #930: Clear retention clock — user resubscribed, data is no longer pending deletion
@@ -669,8 +697,13 @@ func (w *SubscriptionWebhookWorker) processSubscriptionTrialing(ctx context.Cont
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
 
-	w.createNotification(ctx, userID, "subscription_trialing", "Trial Started",
-		"Your BoostedBudget trial is now active. Enjoy full access during your trial period!")
+	w.createNotification(ctx, notificationParams{
+		userID:             userID,
+		notificationType:   "subscription_trialing",
+		title:              "Trial Started",
+		message:            "Your BoostedBudget trial is now active. Enjoy full access during your trial period!",
+		interactionPattern: "informational",
+	})
 	w.syncClerkMetadata(ctx, userID, string(tier), string(domain.SubscriptionStatusTrialing))
 
 	// #930: Clear retention clock — trialing is an active state, user should not be auto-deleted
@@ -732,10 +765,15 @@ func (w *SubscriptionWebhookWorker) processTransactionPaymentFailed(ctx context.
 		}
 	}
 
-	w.createNotification(ctx, txn.UserID, "payment_failed",
-		"Payment Failed",
-		"We couldn't process your payment. Please update your payment method to keep your subscription active.",
-	)
+	w.createNotification(ctx, notificationParams{
+		userID:             txn.UserID,
+		notificationType:   "payment_failed",
+		title:              "Payment Failed",
+		message:            "We couldn't process your payment. Please update your payment method to keep your subscription active.",
+		actionURL:          stringPtr("/billing"),
+		actionLabel:        stringPtr("Update Payment"),
+		interactionPattern: "action_required",
+	})
 
 	user, err := w.profileRepo.GetUserByID(ctx, txn.UserID)
 	if err == nil {
@@ -771,10 +809,15 @@ func (w *SubscriptionWebhookWorker) processTransactionPastDue(ctx context.Contex
 		}
 	}
 
-	w.createNotification(ctx, txn.UserID, "transaction_past_due",
-		"Payment Past Due",
-		"Your subscription payment is past due. Please update your payment method to avoid service interruption.",
-	)
+	w.createNotification(ctx, notificationParams{
+		userID:             txn.UserID,
+		notificationType:   "transaction_past_due",
+		title:              "Payment Past Due",
+		message:            "Your subscription payment is past due. Please update your payment method to avoid service interruption.",
+		actionURL:          stringPtr("/billing"),
+		actionLabel:        stringPtr("Update Payment"),
+		interactionPattern: "action_required",
+	})
 
 	return nil
 }
@@ -799,10 +842,13 @@ func (w *SubscriptionWebhookWorker) processTransactionCanceled(ctx context.Conte
 		}
 	}
 
-	w.createNotification(ctx, txn.UserID, "payment_failed",
-		"Transaction Canceled",
-		"Your transaction was canceled. Contact support if you have any questions.",
-	)
+	w.createNotification(ctx, notificationParams{
+		userID:             txn.UserID,
+		notificationType:   "payment_failed",
+		title:              "Transaction Canceled",
+		message:            "Your transaction was canceled. Contact support if you have any questions.",
+		interactionPattern: "informational",
+	})
 
 	return nil
 }

@@ -179,14 +179,15 @@ func (s *itemErrorService) HandleLoginRequired(
 	actionLabel := "Reconnect Bank"
 
 	notification := &domain.Notification{
-		UserID:      linkedItem.UserID,
-		Type:        "login_required",
-		Title:       "Reconnect Your Bank",
-		Message:     fmt.Sprintf("We need you to reconnect %s to continue syncing transactions. This usually happens when your credentials change or when your bank requires additional verification.", linkedItem.InstitutionName),
-		ActionURL:   &actionURL,
-		ActionLabel: &actionLabel,
-		Read:        false,
-		SentEmail:   false,
+		UserID:             linkedItem.UserID,
+		Type:               "login_required",
+		Title:              "Reconnect Your Bank",
+		Message:            fmt.Sprintf("We need you to reconnect %s to continue syncing transactions. This usually happens when your credentials change or when your bank requires additional verification.", linkedItem.InstitutionName),
+		ActionURL:          &actionURL,
+		ActionLabel:        &actionLabel,
+		InteractionPattern: "action_required",
+		Read:               false,
+		SentEmail:          false,
 	}
 
 	err = s.notificationRepo.Create(ctx, notification)
@@ -224,12 +225,13 @@ func (s *itemErrorService) HandleError(
 	// 2. Create notification (non-blocking - log error but continue)
 	// Note: No action URL for general errors (unlike LOGIN_REQUIRED)
 	notification := &domain.Notification{
-		UserID:    linkedItem.UserID,
-		Type:      "error",
-		Title:     "Connection Error",
-		Message:   fmt.Sprintf("We're experiencing a connection issue with %s: %s. We'll automatically retry, but you can also try reconnecting your account if the issue persists.", linkedItem.InstitutionName, errorMessage),
-		Read:      false,
-		SentEmail: false,
+		UserID:             linkedItem.UserID,
+		Type:               "item_error",
+		Title:              "Connection Error",
+		Message:            fmt.Sprintf("We're experiencing a connection issue with %s: %s. We'll automatically retry, but you can also try reconnecting your account if the issue persists.", linkedItem.InstitutionName, errorMessage),
+		InteractionPattern: "informational",
+		Read:               false,
+		SentEmail:          false,
 	}
 
 	err = s.notificationRepo.Create(ctx, notification)
@@ -275,14 +277,15 @@ func (s *itemErrorService) HandlePendingExpiration(
 	actionLabel := "Reconnect Bank"
 
 	notification := &domain.Notification{
-		UserID:      linkedItem.UserID,
-		Type:        "pending_expiration",
-		Title:       "Bank Connection Expiring Soon",
-		Message:     fmt.Sprintf("Your connection to %s is expiring soon. Please reconnect your account to ensure uninterrupted access to your financial data.", linkedItem.InstitutionName),
-		ActionURL:   &actionURL,
-		ActionLabel: &actionLabel,
-		Read:        false,
-		SentEmail:   false,
+		UserID:             linkedItem.UserID,
+		Type:               "pending_expiration",
+		Title:              "Bank Connection Expiring Soon",
+		Message:            fmt.Sprintf("Your connection to %s is expiring soon. Please reconnect your account to ensure uninterrupted access to your financial data.", linkedItem.InstitutionName),
+		ActionURL:          &actionURL,
+		ActionLabel:        &actionLabel,
+		InteractionPattern: "action_required",
+		Read:               false,
+		SentEmail:          false,
 	}
 
 	err = s.notificationRepo.Create(ctx, notification)
@@ -328,14 +331,15 @@ func (s *itemErrorService) HandlePermissionRevoked(
 	actionLabel := "Reconnect Bank"
 
 	notification := &domain.Notification{
-		UserID:      linkedItem.UserID,
-		Type:        "permission_revoked",
-		Title:       "Bank Access Revoked",
-		Message:     fmt.Sprintf("You have revoked BoostedBudget's access to %s at your bank. To restore access and continue syncing your transactions, please reconnect your account.", linkedItem.InstitutionName),
-		ActionURL:   &actionURL,
-		ActionLabel: &actionLabel,
-		Read:        false,
-		SentEmail:   false,
+		UserID:             linkedItem.UserID,
+		Type:               "permission_revoked",
+		Title:              "Bank Access Revoked",
+		Message:            fmt.Sprintf("You have revoked BoostedBudget's access to %s at your bank. To restore access and continue syncing your transactions, please reconnect your account.", linkedItem.InstitutionName),
+		ActionURL:          &actionURL,
+		ActionLabel:        &actionLabel,
+		InteractionPattern: "action_required",
+		Read:               false,
+		SentEmail:          false,
 	}
 
 	err = s.notificationRepo.Create(ctx, notification)

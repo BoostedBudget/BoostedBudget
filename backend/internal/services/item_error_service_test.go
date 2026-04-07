@@ -360,6 +360,11 @@ func (m *MockNotificationRepositoryForItemError) GetUnsentEmails(ctx context.Con
 	return args.Get(0).([]domain.Notification), args.Error(1)
 }
 
+func (m *MockNotificationRepositoryForItemError) MarkAllAsRead(ctx context.Context, userID string) (int64, error) {
+	args := m.Called(ctx, userID)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 // ============================================================================
 // HandleError Tests
 // ============================================================================
@@ -407,7 +412,7 @@ func TestHandleError_Success(t *testing.T) {
 	// Mock: Create notification (no action URL for general errors)
 	mockNotificationRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
 		return n.UserID == "user-456" &&
-			n.Type == "error" &&
+			n.Type == "item_error" &&
 			n.Title == "Connection Error" &&
 			n.ActionURL == nil && // No action URL for general errors
 			n.ActionLabel == nil
@@ -569,6 +574,58 @@ func TestHandleError_EmailFailureNonBlocking(t *testing.T) {
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockNotificationRepo.AssertExpectations(t)
 	mockEmailService.AssertExpectations(t)
+}
+
+// TestHandleError_NotificationType_IsItemError is a regression test verifying that
+// HandleError creates a notification with Type "item_error" (not the historical bug "error").
+func TestHandleError_NotificationType_IsItemError(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockUserRepo,
+		mockPlaidService,
+		mockEmailService,
+		nil,
+	)
+
+	linkedItem := &domain.LinkedItem{
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		InstitutionName: "Test Bank",
+		Status:          "active",
+	}
+
+	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+
+	// Capture the notification to verify its Type field
+	var capturedNotification *domain.Notification
+	mockNotificationRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		capturedNotification = n
+		return true
+	})).Return(nil)
+
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
+	mockEmailService.On("SendNotificationEmail", ctx, "real@user.com", mock.Anything).
+		Return(nil)
+
+	err := service.HandleError(ctx, linkedItem, "ITEM_ERROR", "Connection error")
+
+	require.NoError(t, err)
+	require.NotNil(t, capturedNotification)
+	assert.Equal(t, "item_error", capturedNotification.Type, "HandleError must use type 'item_error', not 'error'")
+	assert.Equal(t, "informational", capturedNotification.InteractionPattern)
+
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockNotificationRepo.AssertExpectations(t)
 }
 
 // ============================================================================
