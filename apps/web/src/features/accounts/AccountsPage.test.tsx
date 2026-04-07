@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -24,10 +24,23 @@ mock.module('./components/AccountCustomizationModal', () => ({
   AccountCustomizationModal: () => null,
 }))
 
-// Simplify AccountCard
+// Stub ConfirmDeleteDialog so we can inspect its props without full Radix Dialog setup
+mock.module('@/components/ui/confirm-delete-dialog', () => ({
+  ConfirmDeleteDialog: ({ open, title, confirmText }: { open: boolean; title: string; confirmText: string }) =>
+    open ? (
+      <div data-testid="confirm-delete-dialog" data-title={title} data-confirm-text={confirmText}>
+        Confirm Delete
+      </div>
+    ) : null,
+}))
+
+// Simplify AccountCard — exposes a Delete button that calls onDelete with the full account object
 mock.module('./AccountCard', () => ({
-  AccountCard: ({ account }: { account: { name: string } }) => (
-    <div data-testid="account-card">{account.name}</div>
+  AccountCard: ({ account, onDelete }: { account: any; onDelete?: (account: any) => void }) => (
+    <div data-testid="account-card">
+      {account.name}
+      <button onClick={() => onDelete?.(account)}>Delete</button>
+    </div>
   ),
 }))
 
@@ -238,6 +251,65 @@ describe('AccountsPage', () => {
     it('does not show Monthly Sync Limits card', () => {
       renderAccountsPage()
       expect(screen.queryByText('Monthly Sync Limits')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('delete dialog integration (Task 7)', () => {
+    const mockAccount = {
+      id: 'acc-1',
+      linked_item_id: 'item-1',
+      name: 'Chase Checking',
+      institution_name: 'Chase',
+      type: 'depository',
+      subtype: 'checking',
+      status: 'active',
+      is_hidden: false,
+      current_balance: 1000,
+      created_at: '2025-01-01T00:00:00Z',
+    }
+
+    beforeEach(() => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [mockAccount] },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      })
+      mockUseDeleteAccount.mockReturnValue({
+        mutateAsync: mock(() => Promise.resolve()),
+        isPending: false,
+        isError: false,
+        error: null,
+      })
+    })
+
+    it('does not show ConfirmDeleteDialog initially', () => {
+      renderAccountsPage()
+      expect(screen.queryByTestId('confirm-delete-dialog')).not.toBeInTheDocument()
+    })
+
+    it('shows ConfirmDeleteDialog when account delete is triggered from card', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByText('Delete'))
+
+      expect(screen.getByTestId('confirm-delete-dialog')).toBeInTheDocument()
+    })
+
+    it('passes correct title to ConfirmDeleteDialog', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByText('Delete'))
+
+      expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-title', 'Delete Account')
+    })
+
+    it('passes account name as confirmText to ConfirmDeleteDialog', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByText('Delete'))
+
+      expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-confirm-text', 'Chase Checking')
     })
   })
 })
