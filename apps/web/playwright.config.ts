@@ -62,6 +62,9 @@ export default defineConfig({
   // Retry on CI only
   retries: process.env.CI ? 2 : 0,
 
+  // Stop after 5 failures in CI — prevents 12+ min of timeout waste when PostgreSQL dies
+  maxFailures: process.env.CI ? 5 : undefined,
+
   // Opt out of parallel tests on CI
   // Limit to 2 workers locally to prevent memory exhaustion (was 8 on 8-core system)
   // See: Memory leak investigation Oct 2025 - saves 1.5GB vs unlimited workers
