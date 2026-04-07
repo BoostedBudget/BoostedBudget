@@ -47,20 +47,34 @@ _generate_container_name() {
   fi
 }
 
-# Clean up any orphaned e2e-postgres containers from previous failed runs
-# This helps prevent port conflicts and resource leaks
+# Clean up e2e-postgres containers from previous failed runs.
+# In CI: only cleans up containers from the CURRENT run to avoid killing sibling
+# runs' databases on shared Mac Mini runners (multiple PRs can run concurrently).
+# Locally: cleans all e2e containers (safe — no concurrent runs).
 cleanup_orphan_containers() {
-  local containers
-  containers=$(docker ps -a --filter "name=e2e-postgres-" --format "{{.Names}}" 2>/dev/null)
+  local current_run_id="${GITHUB_RUN_ID:-}"
 
-  if [ -n "$containers" ]; then
-    echo "🧹 Cleaning up orphaned e2e-postgres containers..."
-    for container in $containers; do
-      echo "   Removing: $container"
+  if [ -n "$current_run_id" ]; then
+    # CI: scope to current run only — never kill another run's database
+    local container="e2e-postgres-${current_run_id}"
+    if docker ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
+      echo "🧹 Cleaning up container from previous attempt: $container"
       docker stop "$container" 2>/dev/null || true
       docker rm -f "$container" 2>/dev/null || true
-    done
-    echo "   ✅ Orphan cleanup complete"
+    fi
+  else
+    # Local: clean all e2e containers (no concurrent local runs)
+    local containers
+    containers=$(docker ps -a --filter "name=e2e-postgres-" --format "{{.Names}}" 2>/dev/null)
+    if [ -n "$containers" ]; then
+      echo "🧹 Cleaning up orphaned e2e-postgres containers..."
+      for container in $containers; do
+        echo "   Removing: $container"
+        docker stop "$container" 2>/dev/null || true
+        docker rm -f "$container" 2>/dev/null || true
+      done
+      echo "   ✅ Orphan cleanup complete"
+    fi
   fi
 }
 
@@ -132,13 +146,17 @@ start_postgres() {
     }
   done
 
-  # Start container with explicit port mapping
+  # Start container with explicit port mapping and resource limits.
+  # --memory=512m: cap OOM risk on shared Mac Mini runners with concurrent CI jobs
+  # --shm-size=256m: PostgreSQL uses /dev/shm for IPC; Docker default 64MB can cause crashes
   docker run -d \
     --name "$E2E_POSTGRES_CONTAINER" \
     -e POSTGRES_USER="$E2E_POSTGRES_USER" \
     -e POSTGRES_PASSWORD="$E2E_POSTGRES_PASSWORD" \
     -e POSTGRES_DB="$E2E_POSTGRES_DB" \
     -p "${port}:5432" \
+    --memory=512m \
+    --shm-size=256m \
     --health-cmd "pg_isready -U $E2E_POSTGRES_USER" \
     --health-interval 5s \
     --health-timeout 3s \
