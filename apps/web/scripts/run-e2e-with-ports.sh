@@ -22,8 +22,28 @@ BACKEND_DIR="${SCRIPT_DIR}/../../../backend"
 # Source postgres helper functions
 source "${SCRIPT_DIR}/e2e-postgres.sh"
 
+# Background health monitor — logs if PostgreSQL dies mid-run so failures have clear evidence
+monitor_postgres() {
+  local container_name
+  container_name=$(docker ps --filter "name=e2e-postgres-" --format "{{.Names}}" 2>/dev/null | head -1)
+  [ -z "$container_name" ] && return
+
+  while true; do
+    sleep 30
+    local status
+    status=$(docker inspect --format='{{.State.Status}}' "$container_name" 2>/dev/null || echo "missing")
+    if [ "$status" != "running" ]; then
+      echo ""
+      echo "🚨 PostgreSQL container '$container_name' is $status! Remaining tests will likely fail."
+      docker logs --tail 20 "$container_name" 2>/dev/null || true
+      break
+    fi
+  done
+}
+
 # Cleanup function - called on exit (success or failure)
 cleanup() {
+  kill "${MONITOR_PID:-}" 2>/dev/null || true
   echo ""
   echo "🧹 Cleaning up..."
   stop_postgres
@@ -93,6 +113,10 @@ else
 
         echo ""
         echo "✅ Database ready for E2E tests!"
+
+        # Start background monitor to log if postgres dies mid-run
+        monitor_postgres &
+        MONITOR_PID=$!
       else
         echo ""
         echo "❌ PostgreSQL failed to become ready"
