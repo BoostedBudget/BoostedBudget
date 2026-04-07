@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +58,7 @@ type ruleExecutionService struct {
 	ruleRepo            repository.AutomationRulesRepository
 	savingsGoalRepo     repository.SavingsGoalRepository
 	notificationService NotificationService
+	notificationRepo    repository.NotificationRepository
 	analytics           phclient.Analytics
 }
 
@@ -88,6 +90,11 @@ func (s *ruleExecutionService) SetAnalytics(analytics phclient.Analytics) {
 // SetSavingsGoalRepo sets the savings goal repository for savings goal executor.
 func (s *ruleExecutionService) SetSavingsGoalRepo(repo repository.SavingsGoalRepository) {
 	s.savingsGoalRepo = repo
+}
+
+// SetNotificationRepo sets the notification repository for creating transfer suggestion notifications.
+func (s *ruleExecutionService) SetNotificationRepo(repo repository.NotificationRepository) {
+	s.notificationRepo = repo
 }
 
 // ExecuteRule executes a single rule with the given trigger data.
@@ -368,7 +375,44 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 		Status:          domain.SuggestionStatusPending,
 	}
 
-	return s.suggestionRepo.Create(ctx, suggestion)
+	if err := s.suggestionRepo.Create(ctx, suggestion); err != nil {
+		return err
+	}
+
+	s.createTransferSuggestionNotification(ctx, suggestion)
+	return nil
+}
+
+// createTransferSuggestionNotification creates an accept_reject notification for a new transfer suggestion.
+// This is non-blocking: errors are logged and ignored so a notification failure never blocks rule execution.
+func (s *ruleExecutionService) createTransferSuggestionNotification(ctx context.Context, suggestion *domain.TransferSuggestion) {
+	if s.notificationRepo == nil {
+		return
+	}
+
+	message := ""
+	if suggestion.Reason != nil {
+		message = *suggestion.Reason
+	}
+
+	suggestionID := suggestion.ID
+	notification := &domain.Notification{
+		UserID:               suggestion.UserID,
+		Type:                 "transfer_suggestion",
+		Title:                "Transfer Suggestion",
+		Message:              message,
+		InteractionPattern:   "accept_reject",
+		TransferSuggestionID: &suggestionID,
+		Read:                 false,
+		SentEmail:            false,
+	}
+
+	if err := s.notificationRepo.Create(ctx, notification); err != nil {
+		slog.Warn("failed to create transfer suggestion notification",
+			"suggestion_id", suggestion.ID,
+			"error", err,
+		)
+	}
 }
 
 // calculateTransferAmount calculates the transfer amount based on action type.
@@ -462,7 +506,12 @@ func (s *ruleExecutionService) executeCategoryRollover(ctx context.Context, rule
 		suggestion.FromAccountID = ptrString(rollover.SourceBudgetCategoryID)
 	}
 
-	return s.suggestionRepo.Create(ctx, suggestion)
+	if err := s.suggestionRepo.Create(ctx, suggestion); err != nil {
+		return err
+	}
+
+	s.createTransferSuggestionNotification(ctx, suggestion)
+	return nil
 }
 
 // calculateRolloverAmount calculates the rollover amount based on rollover type.
@@ -538,7 +587,12 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 		Status:          domain.SuggestionStatusPending,
 	}
 
-	return s.suggestionRepo.Create(ctx, suggestion)
+	if err := s.suggestionRepo.Create(ctx, suggestion); err != nil {
+		return err
+	}
+
+	s.createTransferSuggestionNotification(ctx, suggestion)
+	return nil
 }
 
 // calculateSavingsGoalAmount calculates the contribution amount based on action type.
