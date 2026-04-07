@@ -4,18 +4,26 @@
  */
 
 import * as React from 'react'
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { ConfirmDeleteDialog } from './confirm-delete-dialog'
 
+const onOpenChange = mock(() => {})
+const onConfirm = mock(() => {})
+
 const defaultProps = {
   open: true,
-  onOpenChange: mock(() => {}),
-  onConfirm: mock(() => {}),
+  onOpenChange,
+  onConfirm,
   title: 'Delete Account',
   description: 'This action cannot be undone.',
   confirmText: 'Delete',
 }
+
+beforeEach(() => {
+  onOpenChange.mockReset()
+  onConfirm.mockReset()
+})
 
 describe('ConfirmDeleteDialog', () => {
   describe('Rendering', () => {
@@ -104,6 +112,23 @@ describe('ConfirmDeleteDialog', () => {
       render(<ConfirmDeleteDialog {...defaultProps} loading={true} />)
       expect(screen.getByRole('button', { name: /cancel/i })).toBeDisabled()
       expect(screen.getByRole('button', { name: /delete/i })).toBeDisabled()
+    })
+
+    it('disables the input when loading=true', () => {
+      render(<ConfirmDeleteDialog {...defaultProps} loading={true} />)
+      expect(screen.getByRole('textbox')).toBeDisabled()
+    })
+  })
+
+  describe('Disabled delete button', () => {
+    it('does not call onConfirm when input does not match confirmText', () => {
+      const localOnConfirm = mock(() => {})
+      render(
+        <ConfirmDeleteDialog {...defaultProps} onConfirm={localOnConfirm} confirmText="Delete" />
+      )
+      // Button is disabled — clicking it should not call onConfirm
+      fireEvent.click(screen.getByRole('button', { name: /delete/i }))
+      expect(localOnConfirm).not.toHaveBeenCalled()
     })
   })
 
