@@ -1223,6 +1223,212 @@ func TestDeleteAccount_EnqueueErrorDoesNotFailDeletion(t *testing.T) {
 	mockJobQueue.AssertExpectations(t)
 }
 
+// ===========================================================================
+// UserAccount Hiding Tests (Issue #978: Account Deletion)
+// ===========================================================================
+
+// TestDeleteAccount_HidesUserAccountWhenLastAccount tests that when the last active account
+// referencing a UserAccount is deleted, SetHidden(true) is called on the UserAccount.
+func TestDeleteAccount_HidesUserAccountWhenLastAccount(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockJobQueue := &MockJobQueue{}
+	mockUserAccountSvc := &MockUserAccountService{}
+
+	userAccountID := uuid.New().String()
+
+	svc := NewAccountService(
+		nil, // plaid not needed
+		nil, // subscription not needed
+		nil, // linkedItemRepo not needed
+		mockAccountRepo,
+		nil, // userRepo not needed
+		nil, // db not needed
+		WithJobQueue(mockJobQueue),
+		WithUserAccountService(mockUserAccountSvc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{
+		ID:            accountID,
+		LinkedItemID:  linkedItemID,
+		UserID:        userID,
+		UserAccountID: &userAccountID,
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "item_cleanup"
+	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
+	// No remaining active accounts for this user_account
+	mockAccountRepo.On("GetByUserAccountAndStatus", ctx, userAccountID, string(domain.AccountStatusActive)).
+		Return([]domain.Account{}, nil)
+	mockUserAccountSvc.On("SetHidden", ctx, userAccountID, true).Return(nil)
+
+	err := svc.DeleteAccount(ctx, accountID, userID)
+
+	require.NoError(t, err, "DeleteAccount should succeed")
+	mockAccountRepo.AssertExpectations(t)
+	mockUserAccountSvc.AssertExpectations(t)
+}
+
+// TestDeleteAccount_DoesNotHideWhenOtherAccountsRemain tests that SetHidden is NOT called
+// when other active accounts still reference the UserAccount.
+func TestDeleteAccount_DoesNotHideWhenOtherAccountsRemain(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockJobQueue := &MockJobQueue{}
+	mockUserAccountSvc := &MockUserAccountService{}
+
+	userAccountID := uuid.New().String()
+
+	svc := NewAccountService(
+		nil,
+		nil,
+		nil,
+		mockAccountRepo,
+		nil,
+		nil,
+		WithJobQueue(mockJobQueue),
+		WithUserAccountService(mockUserAccountSvc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+	otherAccountID := uuid.New().String()
+
+	account := &domain.Account{
+		ID:            accountID,
+		LinkedItemID:  linkedItemID,
+		UserID:        userID,
+		UserAccountID: &userAccountID,
+	}
+
+	// Another active account still references this user_account
+	remainingAccount := domain.Account{
+		ID:            otherAccountID,
+		LinkedItemID:  linkedItemID,
+		UserID:        userID,
+		UserAccountID: &userAccountID,
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(1, nil)
+	mockAccountRepo.On("GetByUserAccountAndStatus", ctx, userAccountID, string(domain.AccountStatusActive)).
+		Return([]domain.Account{remainingAccount}, nil)
+
+	err := svc.DeleteAccount(ctx, accountID, userID)
+
+	require.NoError(t, err, "DeleteAccount should succeed")
+	mockAccountRepo.AssertExpectations(t)
+	// SetHidden must NOT be called when other accounts remain
+	mockUserAccountSvc.AssertNotCalled(t, "SetHidden", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestDeleteAccount_SkipsHidingWhenUserAccountSvcNil tests that the hiding logic is skipped
+// entirely when userAccountSvc is nil (optional dependency).
+func TestDeleteAccount_SkipsHidingWhenUserAccountSvcNil(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockJobQueue := &MockJobQueue{}
+
+	userAccountID := uuid.New().String()
+
+	svc := NewAccountService(
+		nil,
+		nil,
+		nil,
+		mockAccountRepo,
+		nil,
+		nil,
+		WithJobQueue(mockJobQueue),
+		// No WithUserAccountService — intentionally nil
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{
+		ID:            accountID,
+		LinkedItemID:  linkedItemID,
+		UserID:        userID,
+		UserAccountID: &userAccountID,
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "item_cleanup"
+	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
+	// GetByUserAccountAndStatus should NOT be called when userAccountSvc is nil
+
+	err := svc.DeleteAccount(ctx, accountID, userID)
+
+	require.NoError(t, err, "DeleteAccount should succeed even without userAccountSvc")
+	mockAccountRepo.AssertExpectations(t)
+	mockAccountRepo.AssertNotCalled(t, "GetByUserAccountAndStatus", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestDeleteAccount_SkipsHidingWhenUserAccountIDNil tests that the hiding logic is skipped
+// when account.UserAccountID is nil (legacy accounts not yet linked to a UserAccount).
+func TestDeleteAccount_SkipsHidingWhenUserAccountIDNil(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockJobQueue := &MockJobQueue{}
+	mockUserAccountSvc := &MockUserAccountService{}
+
+	svc := NewAccountService(
+		nil,
+		nil,
+		nil,
+		mockAccountRepo,
+		nil,
+		nil,
+		WithJobQueue(mockJobQueue),
+		WithUserAccountService(mockUserAccountSvc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	// UserAccountID is nil — legacy account
+	account := &domain.Account{
+		ID:            accountID,
+		LinkedItemID:  linkedItemID,
+		UserID:        userID,
+		UserAccountID: nil,
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "item_cleanup"
+	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
+
+	err := svc.DeleteAccount(ctx, accountID, userID)
+
+	require.NoError(t, err, "DeleteAccount should succeed even when UserAccountID is nil")
+	mockAccountRepo.AssertExpectations(t)
+	// SetHidden and GetByUserAccountAndStatus should NOT be called
+	mockUserAccountSvc.AssertNotCalled(t, "SetHidden", mock.Anything, mock.Anything, mock.Anything)
+	mockAccountRepo.AssertNotCalled(t, "GetByUserAccountAndStatus", mock.Anything, mock.Anything, mock.Anything)
+}
+
 // TestDisconnectInstitution_Success tests successful institution disconnection
 func TestDisconnectInstitution_Success(t *testing.T) {
 	// Setup mocks
@@ -1981,6 +2187,11 @@ func (m *MockUserAccountService) UpdateCustomization(ctx context.Context, id, us
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.UserAccount), args.Error(1)
+}
+
+func (m *MockUserAccountService) SetHidden(ctx context.Context, userAccountID string, hidden bool) error {
+	args := m.Called(ctx, userAccountID, hidden)
+	return args.Error(0)
 }
 
 // NOTE: MockUserAccountRepository is defined in user_account_service_test.go
