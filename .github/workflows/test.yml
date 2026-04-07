@@ -775,15 +775,17 @@ jobs:
   # =============================================================================
   # Lighthouse CI Audit (Performance, Accessibility, Best Practices, SEO)
   # =============================================================================
+  # DISABLED: Lighthouse CI has macOS-specific Chrome isolation issues on self-hosted
+  # Mac Mini runners (LHCI uses --headless=new which interferes with running Chrome
+  # sessions). Re-enable when migrating CI to Ubicloud Linux runners (#996).
   # Audits the landing page with 3 runs (median scoring) against hard thresholds:
   #   Performance >= 80, Accessibility >= 95, Best Practices >= 90, SEO >= 95
   # Uses dynamic port allocation (45000-49900) to prevent concurrent run collisions.
-  # Reuses Playwright's Chromium install — no separate Chrome download.
   # No artifacts stored — assertions only, workspace cleaned up after.
   lighthouse-audit:
     name: Lighthouse CI Audit
     needs: detect-changes
-    if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    if: false  # Disabled — re-enable on Ubicloud Linux runners (#996)
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-lighthouse-${{ github.run_id }}
