@@ -322,5 +322,21 @@ func (r *notificationRepository) GetUnsentEmails(ctx context.Context, limit int)
 	return notifications, nil
 }
 
+// MarkAllAsRead marks all unread notifications as read for a user.
+// Returns the number of notifications marked as read.
+func (r *notificationRepository) MarkAllAsRead(ctx context.Context, userID string) (int64, error) {
+	query := `
+		UPDATE notifications
+		SET read = true,
+		    updated_at = $2
+		WHERE user_id = $1 AND read = false
+	`
+	ct, err := r.db.Exec(ctx, query, userID, time.Now())
+	if err != nil {
+		return 0, fmt.Errorf("failed to mark all notifications as read: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
 // Compile-time check to ensure notificationRepository implements NotificationRepository
 var _ NotificationRepository = (*notificationRepository)(nil)

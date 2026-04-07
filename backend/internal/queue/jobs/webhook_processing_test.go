@@ -88,10 +88,6 @@ func newTestWebhookProcessingJob(args WebhookProcessingArgs) *river.Job[WebhookP
 	}
 }
 
-func stringPtr(s string) *string {
-	return &s
-}
-
 func TestWebhookProcessingArgs_Kind(t *testing.T) {
 	args := WebhookProcessingArgs{}
 	assert.Equal(t, "webhook_processing", args.Kind())
