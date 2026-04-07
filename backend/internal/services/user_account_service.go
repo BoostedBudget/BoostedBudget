@@ -32,6 +32,10 @@ type UserAccountService interface {
 	// UpdateCustomization updates user account customization fields.
 	// Returns the updated UserAccount.
 	UpdateCustomization(ctx context.Context, id, userID string, req *domain.UpdateUserAccountRequest) (*domain.UserAccount, error)
+
+	// SetHidden updates the is_hidden flag on a UserAccount.
+	// Used by DeleteAccount to hide the UserAccount when its last active account is deleted.
+	SetHidden(ctx context.Context, userAccountID string, hidden bool) error
 }
 
 // userAccountService implements UserAccountService
@@ -197,6 +201,11 @@ func (s *userAccountService) UpdateCustomization(
 	}
 
 	return existing, nil
+}
+
+// SetHidden updates the is_hidden flag on a UserAccount.
+func (s *userAccountService) SetHidden(ctx context.Context, userAccountID string, hidden bool) error {
+	return s.repo.UpdateHidden(ctx, userAccountID, hidden)
 }
 
 // strPtrIfNotEmpty returns a pointer to s if s is not empty, otherwise nil

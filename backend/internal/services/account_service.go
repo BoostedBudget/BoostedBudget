@@ -587,6 +587,34 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 		}
 	}
 
+	// Step 6: Hide UserAccount if no other active accounts reference it.
+	// account.UserAccountID is populated by GetByIDAndUser (Task 1 fix).
+	// This is best-effort: log on failure, never return an error.
+	if s.userAccountSvc != nil && account.UserAccountID != nil {
+		remaining, err := s.accountRepo.GetByUserAccountAndStatus(ctx, *account.UserAccountID, string(domain.AccountStatusActive))
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Warn("failed to check remaining accounts for user_account",
+					"user_account_id", *account.UserAccountID,
+					"error", err,
+				)
+			}
+		} else if len(remaining) == 0 {
+			if hideErr := s.userAccountSvc.SetHidden(ctx, *account.UserAccountID, true); hideErr != nil {
+				if s.logger != nil {
+					s.logger.Warn("failed to hide user_account after last account deletion",
+						"user_account_id", *account.UserAccountID,
+						"error", hideErr,
+					)
+				}
+			} else if s.logger != nil {
+				s.logger.Info("hid user_account after last account deletion",
+					"user_account_id", *account.UserAccountID,
+				)
+			}
+		}
+	}
+
 	return nil
 }
 
