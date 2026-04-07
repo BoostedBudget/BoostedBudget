@@ -132,6 +132,8 @@ func TestItemCleanupWorker_Work_ItemNotFoundSkipsCleanup(t *testing.T) {
 	// Return item not found error - this should result in success
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).
 		Return(repository.ErrLinkedItemNotFound)
+	// Delete IS called even when item-not-found — orphan DB row must be cleaned up
+	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
 
 	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
 		PlaidCleanupSvc: mockCleanupSvc,
@@ -150,6 +152,7 @@ func TestItemCleanupWorker_Work_ItemNotFoundSkipsCleanup(t *testing.T) {
 	// Should succeed - item was already removed
 	require.NoError(t, err)
 	mockCleanupSvc.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
 	// ClearCleanupSchedule should NOT be called when item not found
 	mockRepo.AssertNotCalled(t, "ClearCleanupSchedule")
 }
@@ -347,39 +350,6 @@ func TestItemCleanupWorker_Work_AllReasons(t *testing.T) {
 			mockRepo.AssertExpectations(t)
 		})
 	}
-}
-
-func TestItemCleanupWorker_Work_DeletesLinkedItemAfterSuccess(t *testing.T) {
-	ctx := context.Background()
-	linkedItemID := "item-to-delete"
-	userID := "user-456"
-
-	mockCleanupSvc := new(MockPlaidCleanupService)
-	mockRepo := new(MockLinkedItemRepoForCleanup)
-
-	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
-	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
-	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
-
-	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
-		PlaidCleanupSvc: mockCleanupSvc,
-		LinkedItemRepo:  mockRepo,
-		Logger:          slog.Default(),
-	})
-
-	job := newTestItemCleanupJob(ItemCleanupArgs{
-		LinkedItemID: linkedItemID,
-		UserID:       userID,
-		Reason:       "long_term_error",
-	})
-
-	err := worker.Work(ctx, job)
-
-	require.NoError(t, err)
-	mockCleanupSvc.AssertExpectations(t)
-	mockRepo.AssertExpectations(t)
-	// Verify Delete was called with the correct linked item ID
-	mockRepo.AssertCalled(t, "Delete", ctx, linkedItemID)
 }
 
 func TestItemCleanupWorker_Work_DeleteErrorDoesNotFail(t *testing.T) {
