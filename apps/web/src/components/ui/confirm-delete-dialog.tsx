@@ -48,7 +48,7 @@ export function ConfirmDeleteDialog({
     }
   }, [open])
 
-  const isConfirmed = typed.toLocaleLowerCase() === confirmText.toLocaleLowerCase()
+  const isConfirmed = typed.toLowerCase() === confirmText.toLowerCase()
   const label = confirmLabel ?? `Type "${confirmText}" to confirm`
 
   return (

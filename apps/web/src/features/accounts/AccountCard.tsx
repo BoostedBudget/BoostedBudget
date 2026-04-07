@@ -85,16 +85,8 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
   const currentBalanceFormatted = formatCurrency(current_balance, currency_code)
   const availableBalanceFormatted = formatCurrency(available_balance, currency_code)
 
-  function handleDelete() {
-    if (!onDelete) return
-    onDelete(account)
-  }
-
-  function handleEdit() {
-    if (onEdit) {
-      onEdit(account)
-    }
-  }
+  const handleDelete = () => onDelete?.(account)
+  const handleEdit = () => onEdit?.(account)
 
   return (
     <div

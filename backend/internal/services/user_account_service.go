@@ -67,14 +67,8 @@ func (s *userAccountService) MatchOrCreate(
 	if existing != nil {
 		// Found existing - this is a re-link scenario
 		// Check if type/subtype needs updating
-		existingType := ""
-		existingSubtype := ""
-		if existing.PrimaryType != nil {
-			existingType = *existing.PrimaryType
-		}
-		if existing.PrimarySubtype != nil {
-			existingSubtype = *existing.PrimarySubtype
-		}
+		existingType := derefPtr(existing.PrimaryType)
+		existingSubtype := derefPtr(existing.PrimarySubtype)
 
 		if existingType != accountType || existingSubtype != accountSubtype {
 			// Update type/subtype from new Plaid data
@@ -225,4 +219,12 @@ func strPtrIfNotEmpty(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// derefPtr safely dereferences a pointer to string, returning empty string if nil
+func derefPtr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
