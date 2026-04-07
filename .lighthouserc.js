@@ -12,12 +12,21 @@ module.exports = {
       // that can produce different scores and breaks after Playwright updates.
       settings: {
         // Desktop emulation — BoostedBudget targets desktop users
-        emulatedFormFactor: 'desktop',
-        // Explicit Chrome flags for macOS Mac Mini stability:
-        // --headless=new: modern headless mode, more consistent rendering
-        // --disable-gpu: eliminates GPU compositing variance on macOS Metal
-        // --no-first-run / --disable-extensions: reduce noise
-        chromeFlags: '--headless=new --disable-gpu --no-first-run --disable-extensions',
+        formFactor: 'desktop',
+        // Chrome flags for macOS Mac Mini CI stability.
+        // --headless (not --headless=new): old headless is proven stable in macOS CI;
+        //   --headless=new causes EPERM/WebSocket failures on self-hosted macOS runners.
+        // --no-sandbox: required for CI — system Chrome helper processes run with
+        //   different permissions, causing kill EPERM without this flag.
+        // --disable-dev-shm-usage: prevents memory issues in constrained CI environments.
+        chromeFlags: [
+          '--headless',
+          '--disable-gpu',
+          '--no-sandbox',
+          '--no-first-run',
+          '--disable-extensions',
+          '--disable-dev-shm-usage',
+        ],
         // No CPU throttling on dedicated Mac Mini CI hardware (avoids amplifying score variance)
         throttling: {
           cpuSlowdownMultiplier: 1,
