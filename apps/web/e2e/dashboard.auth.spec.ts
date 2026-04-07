@@ -10,6 +10,7 @@
 
 import { test, expect, type Page } from '@playwright/test'
 import { acceptCookieConsent } from './helpers/auth'
+import { mockAuthDependencies } from './helpers/api-mocks'
 
 // Mock data for dashboard APIs
 const mockBalanceSummary = {
@@ -172,6 +173,9 @@ async function mockDashboardAPIs(
     historyStatus = 200,
     accountTypesStatus = 200,
   } = overrides
+
+  // Mock auth-dependent endpoints (PremiumRoute blocks rendering until /user/profile resolves)
+  await mockAuthDependencies(page)
 
   // Mock balance summary endpoint
   await page.route('**/api/v1/dashboard/summary**', (route) => {
