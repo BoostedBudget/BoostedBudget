@@ -18,4 +18,5 @@ ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_interaction_pa
 ALTER TABLE notifications DROP COLUMN IF EXISTS interaction_pattern;
 
 -- Drop transfer_suggestion_id FK and column
+ALTER TABLE notifications DROP CONSTRAINT IF EXISTS fk_notifications_transfer_suggestion;
 ALTER TABLE notifications DROP COLUMN IF EXISTS transfer_suggestion_id;

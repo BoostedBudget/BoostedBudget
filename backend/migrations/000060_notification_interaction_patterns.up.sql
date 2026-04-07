@@ -8,7 +8,12 @@ ALTER TABLE notifications ADD CONSTRAINT notifications_interaction_pattern_check
     CHECK (interaction_pattern IN ('informational', 'action_required', 'acknowledgeable', 'accept_reject'));
 
 -- Add nullable FK to transfer_suggestions for accept_reject notifications
-ALTER TABLE notifications ADD COLUMN IF NOT EXISTS transfer_suggestion_id UUID REFERENCES transfer_suggestions(id);
+-- Use NOT VALID + VALIDATE pattern to avoid SHARE ROW EXCLUSIVE lock on both tables (Squawk: adding-foreign-key-constraint)
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS transfer_suggestion_id UUID;
+ALTER TABLE notifications DROP CONSTRAINT IF EXISTS fk_notifications_transfer_suggestion;
+ALTER TABLE notifications ADD CONSTRAINT fk_notifications_transfer_suggestion
+    FOREIGN KEY (transfer_suggestion_id) REFERENCES transfer_suggestions(id) NOT VALID;
+ALTER TABLE notifications VALIDATE CONSTRAINT fk_notifications_transfer_suggestion;
 
 -- Add transfer_suggestion to the notification type CHECK constraint
 -- First drop the old constraint, then re-create with the new type
