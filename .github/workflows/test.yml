@@ -772,3 +772,108 @@ jobs:
       - name: Final workspace cleanup
         if: always()
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+  # =============================================================================
+  # Lighthouse CI Audit (Performance, Accessibility, Best Practices, SEO)
+  # =============================================================================
+  # Audits the landing page with 3 runs (median scoring) against hard thresholds:
+  #   Performance >= 80, Accessibility >= 95, Best Practices >= 90, SEO >= 95
+  # Uses dynamic port allocation (45000-49900) to prevent concurrent run collisions.
+  # Reuses Playwright's Chromium install — no separate Chrome download.
+  # No artifacts stored — assertions only, workspace cleaned up after.
+  lighthouse-audit:
+    name: Lighthouse CI Audit
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-lighthouse-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+          fetch-depth: 1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install workspace dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bun install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: bun run build
+
+      - name: Allocate dynamic LHCI port
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # Derive isolated port range from GITHUB_RUN_ID (same pattern as E2E tests)
+          # LHCI range: 45000-49900 (50 ranges of 100 ports, supports 50 concurrent jobs)
+          PORT_OFFSET=$(( (${RUN_ID:-0} % 50) * 100 ))
+          LHCI_PORT=$(( 45000 + PORT_OFFSET ))
+          echo "LHCI_PORT=${LHCI_PORT}" >> "$GITHUB_ENV"
+          echo "Allocated LHCI port ${LHCI_PORT}"
+
+      - name: Run Lighthouse CI
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        env:
+          LHCI_PORT: ${{ env.LHCI_PORT }}
+        run: npx lhci autorun
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # Bundle Size Check (size-limit)
+  # =============================================================================
+  # Hard fails if gzipped JS or CSS bundle exceeds configured budgets.
+  # Budgets set to current baseline + 10% buffer to catch accidental dependency bloat.
+  bundle-size:
+    name: Bundle Size Check
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-bundle-size-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+          fetch-depth: 1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install workspace dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bun install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: bun run build
+
+      - name: Check bundle size
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: npx size-limit
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
