@@ -107,6 +107,15 @@ describe('ConfirmDeleteDialog', () => {
     })
   })
 
+  describe('Escape key', () => {
+    it('calls onOpenChange with false when Escape is pressed', () => {
+      const onOpenChange = mock(() => {})
+      render(<ConfirmDeleteDialog {...defaultProps} onOpenChange={onOpenChange} />)
+      fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape' })
+      expect(onOpenChange).toHaveBeenCalledWith(false)
+    })
+  })
+
   describe('Input clearing on close', () => {
     it('clears the input when dialog is closed and reopened', () => {
       function Wrapper() {
