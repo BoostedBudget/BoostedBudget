@@ -213,7 +213,7 @@ func TestLinkedItemRepository_UpdateCursor(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestLinkedItemRepository_Delete tests deletion of a linked item (and cascade to accounts)
+// TestLinkedItemRepository_Delete tests deletion of a linked item
 func TestLinkedItemRepository_Delete(t *testing.T) {
 	mock, repo := setupLinkedItemMockDB(t)
 	defer mock.Close()
@@ -224,12 +224,34 @@ func TestLinkedItemRepository_Delete(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`
 		DELETE FROM linked_items
 		WHERE id = $1
-	`)).WithArgs(itemID).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		AND NOT EXISTS (SELECT 1 FROM accounts WHERE linked_item_id = $1)
+	`)).WithArgs(itemID).WillReturnResult(pgxmock.NewResult("DELETE", 1))
 
-	// Execute
 	err := repo.Delete(ctx, itemID)
 
-	// Assert
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestLinkedItemRepository_Delete_SkipsWhenHasAccounts tests that Delete is a no-op
+// when accounts still reference the linked item (guards against CASCADE delete of replaced accounts)
+func TestLinkedItemRepository_Delete_SkipsWhenHasAccounts(t *testing.T) {
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	itemID := uuid.New().String()
+
+	// 0 rows affected = NOT EXISTS guard prevented deletion (replaced accounts still exist)
+	mock.ExpectExec(regexp.QuoteMeta(`
+		DELETE FROM linked_items
+		WHERE id = $1
+		AND NOT EXISTS (SELECT 1 FROM accounts WHERE linked_item_id = $1)
+	`)).WithArgs(itemID).WillReturnResult(pgxmock.NewResult("DELETE", 0))
+
+	err := repo.Delete(ctx, itemID)
+
+	// No error — skipping is expected, not a failure
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

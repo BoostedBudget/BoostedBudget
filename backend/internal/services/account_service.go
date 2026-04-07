@@ -540,50 +540,70 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 		return err
 	}
 
-	// Step 3: Check if zero-account cleanup should be triggered
-	// Only proceed if jobQueue is available (optional dependency)
-	if s.jobQueue == nil {
-		return nil
-	}
-
-	// Step 4: Count remaining active accounts for this linked item
-	remainingCount, err := s.accountRepo.CountActiveByLinkedItemID(ctx, linkedItemID)
-	if err != nil {
-		// Log error but don't fail the deletion
-		if s.logger != nil {
-			s.logger.Warn("failed to count remaining accounts after deletion",
-				"account_id", accountID,
-				"linked_item_id", linkedItemID,
-				"error", err,
-			)
-		}
-		return nil
-	}
-
-	// Step 5: If no accounts remain, enqueue cleanup job
-	if remainingCount == 0 {
-		cleanupJob := itemCleanupJobArgs{
-			LinkedItemID: linkedItemID,
-			UserID:       userID,
-			Reason:       "zero_accounts",
-		}
-		uniqueOpts := itemCleanupUniqueOpts()
-		_, err := s.jobQueue.Enqueue(ctx, cleanupJob, queue.WithUnique(*uniqueOpts))
+	// Steps 4-5: Zero-account item cleanup (requires job queue)
+	if s.jobQueue != nil {
+		// Step 4: Count remaining active accounts for this linked item
+		remainingCount, err := s.accountRepo.CountActiveByLinkedItemID(ctx, linkedItemID)
 		if err != nil {
 			// Log error but don't fail the deletion
 			if s.logger != nil {
-				s.logger.Warn("failed to enqueue item cleanup job",
+				s.logger.Warn("failed to count remaining accounts after deletion",
+					"account_id", accountID,
 					"linked_item_id", linkedItemID,
-					"user_id", userID,
 					"error", err,
 				)
 			}
-		} else if s.logger != nil {
-			s.logger.Info("enqueued item cleanup job for zero-account item",
-				"linked_item_id", linkedItemID,
-				"user_id", userID,
-				"reason", "zero_accounts",
-			)
+		} else if remainingCount == 0 {
+			// Step 5: If no accounts remain, enqueue cleanup job
+			cleanupJob := itemCleanupJobArgs{
+				LinkedItemID: linkedItemID,
+				UserID:       userID,
+				Reason:       "zero_accounts",
+			}
+			_, err := s.jobQueue.Enqueue(ctx, cleanupJob, queue.WithUnique(*itemCleanupUniqueOpts()))
+			if err != nil {
+				if s.logger != nil {
+					s.logger.Warn("failed to enqueue item cleanup job",
+						"linked_item_id", linkedItemID,
+						"user_id", userID,
+						"error", err,
+					)
+				}
+			} else if s.logger != nil {
+				s.logger.Info("enqueued item cleanup job for zero-account item",
+					"linked_item_id", linkedItemID,
+					"user_id", userID,
+					"reason", "zero_accounts",
+				)
+			}
+		}
+	}
+
+	// Step 6: Hide UserAccount if no other active accounts reference it.
+	// account.UserAccountID is populated by GetByIDAndUser (Task 1 fix).
+	// This is best-effort: log on failure, never return an error.
+	if s.userAccountSvc != nil && account.UserAccountID != nil {
+		remaining, err := s.accountRepo.GetByUserAccountAndStatus(ctx, *account.UserAccountID, string(domain.AccountStatusActive))
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Warn("failed to check remaining accounts for user_account",
+					"user_account_id", *account.UserAccountID,
+					"error", err,
+				)
+			}
+		} else if len(remaining) == 0 {
+			if hideErr := s.userAccountSvc.SetHidden(ctx, *account.UserAccountID, true); hideErr != nil {
+				if s.logger != nil {
+					s.logger.Warn("failed to hide user_account after last account deletion",
+						"user_account_id", *account.UserAccountID,
+						"error", hideErr,
+					)
+				}
+			} else if s.logger != nil {
+				s.logger.Info("hid user_account after last account deletion",
+					"user_account_id", *account.UserAccountID,
+				)
+			}
 		}
 	}
 

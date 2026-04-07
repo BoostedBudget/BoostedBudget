@@ -49,6 +49,11 @@ func (m *MockLinkedItemCleanupRepo) ClearCleanupSchedule(ctx context.Context, it
 	return args.Error(0)
 }
 
+func (m *MockLinkedItemCleanupRepo) Delete(ctx context.Context, id string) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
 // Test helpers
 func newTestItemCleanupCheckLogger() *slog.Logger {
 	return slog.Default()
