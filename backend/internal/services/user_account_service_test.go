@@ -279,6 +279,82 @@ func TestUserAccountService_MatchOrCreate_PreservesCustomizations(t *testing.T) 
 	mockRepo.AssertExpectations(t)
 }
 
+// TestUserAccountService_MatchOrCreate_UnhidesHiddenUserAccount tests that when a matching
+// UserAccount has IsHidden=true (set by a prior deletion), MatchOrCreate calls UpdateHidden
+// to un-hide it and returns the account with IsHidden=false.
+func TestUserAccountService_MatchOrCreate_UnhidesHiddenUserAccount(t *testing.T) {
+	mockRepo := new(MockUserAccountRepository)
+	service := NewUserAccountService(mockRepo)
+
+	ctx := context.Background()
+	userID := "user-123"
+	institutionID := "ins_bofa"
+	mask := "1234"
+	accountName := "BoA Checking"
+	accountType := "depository"
+	accountSubtype := "checking"
+
+	existingUA := &domain.UserAccount{
+		ID:             "ua-existing",
+		UserID:         userID,
+		InstitutionID:  institutionID,
+		Mask:           &mask,
+		PrimaryType:    userAccountStrPtr("depository"),
+		PrimarySubtype: userAccountStrPtr("checking"),
+		IsHidden:       true, // Previously deleted (hidden)
+	}
+
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
+	// UpdateHidden must be called to un-hide the account
+	mockRepo.On("UpdateHidden", ctx, existingUA.ID, false).Return(nil)
+
+	// Execute
+	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, accountName, accountType, accountSubtype)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, existingUA.ID, result.ID)
+	assert.False(t, result.IsHidden, "re-linked account should be un-hidden")
+	mockRepo.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+}
+
+// TestUserAccountService_MatchOrCreate_DoesNotCallUpdateHiddenWhenNotHidden tests that when
+// a matching UserAccount already has IsHidden=false, UpdateHidden is NOT called.
+func TestUserAccountService_MatchOrCreate_DoesNotCallUpdateHiddenWhenNotHidden(t *testing.T) {
+	mockRepo := new(MockUserAccountRepository)
+	service := NewUserAccountService(mockRepo)
+
+	ctx := context.Background()
+	userID := "user-123"
+	institutionID := "ins_bofa"
+	mask := "1234"
+
+	existingUA := &domain.UserAccount{
+		ID:             "ua-existing",
+		UserID:         userID,
+		InstitutionID:  institutionID,
+		Mask:           &mask,
+		PrimaryType:    userAccountStrPtr("depository"),
+		PrimarySubtype: userAccountStrPtr("checking"),
+		IsHidden:       false, // Already visible
+	}
+
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
+	// UpdateHidden must NOT be called
+
+	// Execute
+	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, "BoA Checking", "depository", "checking")
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.False(t, result.IsHidden)
+	mockRepo.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "UpdateHidden", mock.Anything, mock.Anything, mock.Anything)
+}
+
 // =============================================================================
 // Edge Case Tests
 // =============================================================================
