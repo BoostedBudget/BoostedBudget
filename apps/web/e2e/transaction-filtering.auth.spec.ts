@@ -13,6 +13,7 @@
 
 import { test, expect, type Page } from '@playwright/test'
 import { acceptCookieConsent } from './helpers/auth'
+import { mockAuthDependencies } from './helpers/api-mocks'
 
 // Mock data for transactions
 const mockTransactions = {
@@ -176,6 +177,9 @@ async function mockFilteringAPIs(
     plaidCategories = mockPlaidCategories,
     transactionsStatus = 200,
   } = overrides
+
+  // Mock auth-dependent endpoints (PremiumRoute blocks rendering until /user/profile resolves)
+  await mockAuthDependencies(page)
 
   // Mock transactions endpoint with filter handling
   await page.route('**/api/v1/transactions**', (route) => {

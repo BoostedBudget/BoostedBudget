@@ -542,6 +542,8 @@ jobs:
             -e POSTGRES_PASSWORD=test \
             -e POSTGRES_DB=test \
             -p 5432 \
+            --memory=512m \
+            --shm-size=256m \
             --health-cmd pg_isready \
             --health-interval 10s \
             --health-timeout 5s \

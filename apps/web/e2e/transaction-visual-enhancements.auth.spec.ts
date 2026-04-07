@@ -13,9 +13,12 @@
 
 import { test, expect } from '@playwright/test'
 import { setupClerkTestingToken } from '@clerk/testing/playwright'
+import { skipIfBackendDown } from './helpers/health'
 
 test.describe('Transaction Visual Enhancements', () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page }, testInfo) => {
+    // Skip immediately if backend is down — this test file uses real DB data (no mocks)
+    await skipIfBackendDown(page, testInfo)
     await setupClerkTestingToken({ page })
     // Navigate to the transactions page
     // Note: This requires authentication - use a logged in session
