@@ -37,7 +37,9 @@ type LinkedItemCleanupRepository interface {
 	MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error
 	// ClearCleanupSchedule clears the cleanup schedule (e.g., if user reconnected)
 	ClearCleanupSchedule(ctx context.Context, itemID string) error
-	// Delete hard-deletes the linked_items row after Plaid billing is stopped
+	// Delete hard-deletes the linked_items row after Plaid billing is stopped.
+	// Safe no-op: skips deletion if accounts (any status) still reference the item,
+	// preventing cascade-deletion of historical 'replaced' accounts and their balance_snapshots.
 	Delete(ctx context.Context, id string) error
 }
 
