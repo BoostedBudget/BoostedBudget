@@ -519,24 +519,20 @@ func (r *linkedItemRepository) Update(ctx context.Context, item *domain.LinkedIt
 	return nil
 }
 
-// Delete removes a linked item from the database
+// Delete removes a linked item from the database.
+//
+// Safety: only deletes if no accounts (any status) still reference this item.
+// The accounts.linked_item_id FK is ON DELETE CASCADE — deleting while replaced
+// accounts still exist would cascade-delete historical balance snapshots.
+// This guard is a no-op (returns nil, 0 rows affected) when accounts remain.
 func (r *linkedItemRepository) Delete(ctx context.Context, id string) error {
 	query := `
 		DELETE FROM linked_items
 		WHERE id = $1
+		AND NOT EXISTS (SELECT 1 FROM accounts WHERE linked_item_id = $1)
 	`
-
-	ct, err := r.db.Exec(ctx, query, id)
-	if err != nil {
-		return err
-	}
-
-	// Check if any rows were affected
-	if ct.RowsAffected() == 0 {
-		return ErrLinkedItemNotFound
-	}
-
-	return nil
+	_, err := r.db.Exec(ctx, query, id)
+	return err
 }
 
 // GetByIDAndUser retrieves a linked item by ID with ownership validation.
