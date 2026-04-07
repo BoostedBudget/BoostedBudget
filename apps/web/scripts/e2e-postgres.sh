@@ -172,7 +172,16 @@ start_postgres() {
   return 0
 }
 
-# Wait for PostgreSQL to be ready to accept connections
+# Wait for PostgreSQL to be ready to accept connections.
+#
+# Uses an actual SQL query (SELECT 1) rather than pg_isready alone, because
+# Docker's postgres entrypoint has a two-phase startup: an init phase (temp
+# postgres for DB creation) that accepts pg_isready but then shuts down, followed
+# by the real production startup. pg_isready can pass during the init phase,
+# causing "connection reset by peer" when the migration tool connects during
+# the shutdown-restart window. SELECT 1 against the target database only
+# succeeds once the production postgres is fully ready.
+#
 # Arguments:
 #   $1 - Port (used for logging, actual check uses container name)
 #   $2 - Max attempts (default: 30)
@@ -184,7 +193,9 @@ wait_for_postgres() {
   echo "   Waiting for PostgreSQL to be ready..."
 
   for i in $(seq 1 $max_attempts); do
-    if docker exec "$E2E_POSTGRES_CONTAINER" pg_isready -U "$E2E_POSTGRES_USER" > /dev/null 2>&1; then
+    # Use an actual query instead of pg_isready to avoid the init-phase race condition
+    if docker exec "$E2E_POSTGRES_CONTAINER" \
+      psql -U "$E2E_POSTGRES_USER" -d "$E2E_POSTGRES_DB" -c "SELECT 1" > /dev/null 2>&1; then
       echo "   ✅ PostgreSQL is ready on port $port!"
       return 0
     fi
