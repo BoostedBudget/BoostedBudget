@@ -71,6 +71,11 @@ func (m *MockLinkedItemRepoForCleanup) MarkForCleanup(ctx context.Context, itemI
 	return args.Error(0)
 }
 
+func (m *MockLinkedItemRepoForCleanup) Delete(ctx context.Context, id string) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
 func newTestItemCleanupJob(args ItemCleanupArgs) *river.Job[ItemCleanupArgs] {
 	return &river.Job[ItemCleanupArgs]{
 		JobRow: &rivertype.JobRow{
@@ -96,6 +101,7 @@ func TestItemCleanupWorker_Work_Success(t *testing.T) {
 
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
 
 	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
 		PlaidCleanupSvc: mockCleanupSvc,
@@ -190,6 +196,7 @@ func TestItemCleanupWorker_Work_ClearScheduleErrorDoesNotFail(t *testing.T) {
 	// ClearCleanupSchedule fails - but job should still succeed
 	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).
 		Return(errors.New("database error"))
+	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
 
 	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
 		PlaidCleanupSvc: mockCleanupSvc,
@@ -221,6 +228,7 @@ func TestItemCleanupWorker_Work_ZeroAccountsReason(t *testing.T) {
 
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
 
 	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
 		PlaidCleanupSvc: mockCleanupSvc,
@@ -252,6 +260,7 @@ func TestItemCleanupWorker_Work_UserDeletionReason(t *testing.T) {
 
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
 
 	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
 		PlaidCleanupSvc: mockCleanupSvc,
@@ -317,6 +326,7 @@ func TestItemCleanupWorker_Work_AllReasons(t *testing.T) {
 
 			mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 			mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+			mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
 
 			worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
 				PlaidCleanupSvc: mockCleanupSvc,
@@ -337,4 +347,70 @@ func TestItemCleanupWorker_Work_AllReasons(t *testing.T) {
 			mockRepo.AssertExpectations(t)
 		})
 	}
+}
+
+func TestItemCleanupWorker_Work_DeletesLinkedItemAfterSuccess(t *testing.T) {
+	ctx := context.Background()
+	linkedItemID := "item-to-delete"
+	userID := "user-456"
+
+	mockCleanupSvc := new(MockPlaidCleanupService)
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+
+	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
+	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
+
+	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
+		PlaidCleanupSvc: mockCleanupSvc,
+		LinkedItemRepo:  mockRepo,
+		Logger:          slog.Default(),
+	})
+
+	job := newTestItemCleanupJob(ItemCleanupArgs{
+		LinkedItemID: linkedItemID,
+		UserID:       userID,
+		Reason:       "long_term_error",
+	})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockCleanupSvc.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+	// Verify Delete was called with the correct linked item ID
+	mockRepo.AssertCalled(t, "Delete", ctx, linkedItemID)
+}
+
+func TestItemCleanupWorker_Work_DeleteErrorDoesNotFail(t *testing.T) {
+	ctx := context.Background()
+	linkedItemID := "item-delete-fails"
+	userID := "user-456"
+
+	mockCleanupSvc := new(MockPlaidCleanupService)
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+
+	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
+	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+	// Delete fails - job should still succeed (best-effort)
+	mockRepo.On("Delete", ctx, linkedItemID).Return(errors.New("database error"))
+
+	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
+		PlaidCleanupSvc: mockCleanupSvc,
+		LinkedItemRepo:  mockRepo,
+		Logger:          slog.Default(),
+	})
+
+	job := newTestItemCleanupJob(ItemCleanupArgs{
+		LinkedItemID: linkedItemID,
+		UserID:       userID,
+		Reason:       "user_deletion",
+	})
+
+	err := worker.Work(ctx, job)
+
+	// Job should succeed even though Delete failed
+	require.NoError(t, err)
+	mockCleanupSvc.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
 }
