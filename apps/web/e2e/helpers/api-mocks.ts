@@ -42,4 +42,22 @@ export async function mockAuthDependencies(
       body: JSON.stringify({ is_admin: isAdmin }),
     })
   })
+
+  // Issue #952: NotificationBell is now in the Header on all authenticated pages.
+  // Mock notification endpoints to prevent unmocked API calls causing retries/re-renders.
+  await page.route('**/api/v1/notifications/unread/count*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ count: 0 }),
+    })
+  })
+
+  await page.route('**/api/v1/notifications*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([]),
+    })
+  })
 }
