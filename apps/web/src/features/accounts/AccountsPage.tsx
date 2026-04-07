@@ -59,7 +59,7 @@ export function AccountsPage() {
   const [accountToDelete, setAccountToDelete] = useState<Account | null>(null)
 
   // Issue #590: Sorting state
-  const [sortColumn, setSortColumn] = useState<AccountSortColumn | undefined>(undefined)
+  const [sortColumn, setSortColumn] = useState<AccountSortColumn>()
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
   // Issue #590: Inline filter state (URL-synced)
@@ -97,10 +97,8 @@ export function AccountsPage() {
   // Fetch subscription tiers for limit enforcement
   const { tiers, loading: tiersLoading } = useSubscriptionTiers()
 
-  // Combined loading state
+  // Combined loading and error state
   const loading = accountsLoading || userLoading
-
-  // Error message
   const error = accountsError ? 'Failed to load accounts. Please try again.' : null
 
   // Issue #307: Account customization hook

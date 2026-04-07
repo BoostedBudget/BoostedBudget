@@ -560,8 +560,7 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 				UserID:       userID,
 				Reason:       "zero_accounts",
 			}
-			uniqueOpts := itemCleanupUniqueOpts()
-			_, err := s.jobQueue.Enqueue(ctx, cleanupJob, queue.WithUnique(*uniqueOpts))
+			_, err := s.jobQueue.Enqueue(ctx, cleanupJob, queue.WithUnique(*itemCleanupUniqueOpts()))
 			if err != nil {
 				if s.logger != nil {
 					s.logger.Warn("failed to enqueue item cleanup job",

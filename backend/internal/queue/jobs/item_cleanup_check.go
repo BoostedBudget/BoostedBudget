@@ -181,10 +181,7 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 	)
 
 	now := time.Now()
-	// Calculate default cleanup time (grace period from now)
 	defaultCleanupAt := now.Add(time.Duration(w.gracePeriodDays) * 24 * time.Hour)
-	// Immediate cleanup time (for zero-account items)
-	immediateCleanupAt := now
 
 	// Process each item
 	var scheduledCount, skippedCount, errorCount int
@@ -205,7 +202,7 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 		// Use immediate or grace period based on reason
 		cleanupAt := defaultCleanupAt
 		if isImmediate {
-			cleanupAt = immediateCleanupAt
+			cleanupAt = now
 		}
 
 		// Mark item for cleanup
