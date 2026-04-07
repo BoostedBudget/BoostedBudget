@@ -125,6 +125,14 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 		)
 	}
 
+	// Delete the linked_items row now that Plaid billing is stopped (best-effort)
+	if deleteErr := w.linkedItemRepo.Delete(ctx, args.LinkedItemID); deleteErr != nil {
+		w.logger.Warn("failed to delete linked item from database after Plaid removal",
+			"linked_item_id", args.LinkedItemID,
+			"error", deleteErr,
+		)
+	}
+
 	w.logger.Info("item cleanup completed",
 		"job_id", job.ID,
 		"linked_item_id", args.LinkedItemID,
