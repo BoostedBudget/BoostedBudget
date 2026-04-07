@@ -103,6 +103,13 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 				"job_id", job.ID,
 				"linked_item_id", args.LinkedItemID,
 			)
+			// Item already gone from Plaid — still clean up the DB row (best-effort)
+			if deleteErr := w.linkedItemRepo.Delete(ctx, args.LinkedItemID); deleteErr != nil {
+				w.logger.Warn("failed to delete linked item from database after item-not-found",
+					"linked_item_id", args.LinkedItemID,
+					"error", deleteErr,
+				)
+			}
 			return nil
 		}
 
