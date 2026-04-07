@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -24,10 +24,23 @@ mock.module('./components/AccountCustomizationModal', () => ({
   AccountCustomizationModal: () => null,
 }))
 
-// Simplify AccountCard
+// Stub ConfirmDeleteDialog so we can inspect its props without full Radix Dialog setup
+mock.module('@/components/ui/confirm-delete-dialog', () => ({
+  ConfirmDeleteDialog: ({ open, title, confirmText, description }: { open: boolean; title: string; confirmText: string; description: unknown }) =>
+    open ? (
+      <div data-testid="confirm-delete-dialog" data-title={title} data-confirm-text={confirmText}>
+        <div data-testid="dialog-description">{description}</div>
+      </div>
+    ) : null,
+}))
+
+// Simplify AccountCard — exposes a Delete button that calls onDelete with the full account object
 mock.module('./AccountCard', () => ({
-  AccountCard: ({ account }: { account: { name: string } }) => (
-    <div data-testid="account-card">{account.name}</div>
+  AccountCard: ({ account, onDelete }: { account: { name: string; [key: string]: unknown }; onDelete?: (account: unknown) => void }) => (
+    <div data-testid="account-card">
+      {account.name}
+      <button onClick={() => onDelete?.(account)}>Delete</button>
+    </div>
   ),
 }))
 
@@ -238,6 +251,109 @@ describe('AccountsPage', () => {
     it('does not show Monthly Sync Limits card', () => {
       renderAccountsPage()
       expect(screen.queryByText('Monthly Sync Limits')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('delete dialog integration (Task 7)', () => {
+    const mockAccount = {
+      id: 'acc-1',
+      linked_item_id: 'item-1',
+      name: 'Chase Checking',
+      institution_name: 'Chase',
+      type: 'depository',
+      subtype: 'checking',
+      status: 'active',
+      is_hidden: false,
+      current_balance: 1000,
+      created_at: '2025-01-01T00:00:00Z',
+    }
+
+    beforeEach(() => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [mockAccount] },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      })
+      mockUseDeleteAccount.mockReturnValue({
+        mutateAsync: mock(() => Promise.resolve()),
+        isPending: false,
+        isError: false,
+        error: null,
+      })
+    })
+
+    it('does not show ConfirmDeleteDialog initially', () => {
+      renderAccountsPage()
+      expect(screen.queryByTestId('confirm-delete-dialog')).not.toBeInTheDocument()
+    })
+
+    it('shows ConfirmDeleteDialog when account delete is triggered from card', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByText('Delete'))
+
+      expect(screen.getByTestId('confirm-delete-dialog')).toBeInTheDocument()
+    })
+
+    it('passes correct title to ConfirmDeleteDialog', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByText('Delete'))
+
+      expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-title', 'Delete Account')
+    })
+
+    it('passes account name as confirmText to ConfirmDeleteDialog', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByText('Delete'))
+
+      expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-confirm-text', 'Chase Checking')
+    })
+
+    it('shows transaction-preserved and balance-removed messages in description', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByText('Delete'))
+
+      const desc = screen.getByTestId('dialog-description')
+      expect(desc.textContent).toContain('transactions will be preserved')
+      expect(desc.textContent).toContain('Balance history will be removed')
+    })
+
+    it('shows institution removal message when account is the last for its linked_item_id', () => {
+      // Only one account → last for item-1
+      renderAccountsPage()
+      fireEvent.click(screen.getByText('Delete'))
+
+      const desc = screen.getByTestId('dialog-description')
+      expect(desc.textContent).toContain('bank connection to')
+      expect(desc.textContent).toContain('Chase')
+    })
+
+    it('does NOT show institution removal message when other accounts share the same linked_item_id', () => {
+      const secondAccount = {
+        ...mockAccount,
+        id: 'acc-2',
+        name: 'Chase Savings',
+        linked_item_id: 'item-1', // same linked_item_id
+      }
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [mockAccount, secondAccount] },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      })
+
+      renderAccountsPage()
+
+      // Click delete on the first card
+      const deleteButtons = screen.getAllByText('Delete')
+      fireEvent.click(deleteButtons[0])
+
+      const desc = screen.getByTestId('dialog-description')
+      expect(desc.textContent).not.toContain('bank connection')
     })
   })
 })
