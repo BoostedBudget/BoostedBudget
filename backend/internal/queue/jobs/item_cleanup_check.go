@@ -37,6 +37,8 @@ type LinkedItemCleanupRepository interface {
 	MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error
 	// ClearCleanupSchedule clears the cleanup schedule (e.g., if user reconnected)
 	ClearCleanupSchedule(ctx context.Context, itemID string) error
+	// Delete hard-deletes the linked_items row after Plaid billing is stopped
+	Delete(ctx context.Context, id string) error
 }
 
 // AccountCountRepository defines methods needed to count accounts for cleanup decisions.
