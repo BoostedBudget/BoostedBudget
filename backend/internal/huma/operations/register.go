@@ -63,6 +63,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Issue #821: QA auth bypass (zero-value OK—handler not called during spec generation)
 	qaBypassHandler := &QAAuthBypassHandler{}
 
+	// Issue #952: Notification Center — Transfer Suggestion API
+	transferSuggestionHandler := &TransferSuggestionHandler{}
+
 	// Register all routes
 	RegisterHealthRoutes(api, healthHandler)
 	RegisterMetricsRoutes(api, metricsHandler)
@@ -100,4 +103,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #974: Dynamic region configuration
 	RegisterRegionRoutes(api, regionsHandler)
+
+	// Issue #952: Notification Center — Transfer Suggestion API
+	RegisterTransferSuggestionRoutes(api, transferSuggestionHandler)
 }

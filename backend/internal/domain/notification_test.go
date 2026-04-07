@@ -56,6 +56,12 @@ func TestNotification_Validate_InteractionPattern(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			n := base
 			n.InteractionPattern = tt.pattern
+			// accept_reject requires a TransferSuggestionID
+			if tt.pattern == "accept_reject" {
+				sid := "sugg-123"
+				n.Type = "transfer_suggestion"
+				n.TransferSuggestionID = &sid
+			}
 
 			err := n.Validate()
 			if tt.wantErr {
@@ -80,12 +86,14 @@ func TestNotification_Validate_InteractionPattern(t *testing.T) {
 
 // TestNotification_Validate_TransferSuggestionType tests that transfer_suggestion is a valid notification type
 func TestNotification_Validate_TransferSuggestionType(t *testing.T) {
+	suggID := "sugg-456"
 	n := Notification{
-		UserID:             "user-123",
-		Type:               "transfer_suggestion",
-		Title:              "Transfer Suggestion",
-		Message:            "We suggest a transfer",
-		InteractionPattern: "accept_reject",
+		UserID:               "user-123",
+		Type:                 "transfer_suggestion",
+		Title:                "Transfer Suggestion",
+		Message:              "We suggest a transfer",
+		InteractionPattern:   "accept_reject",
+		TransferSuggestionID: &suggID,
 	}
 
 	err := n.Validate()

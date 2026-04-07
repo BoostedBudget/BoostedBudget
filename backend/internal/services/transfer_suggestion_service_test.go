@@ -190,7 +190,7 @@ func TestTransferSuggestionService_AcceptSuggestion_AlreadyProcessed(t *testing.
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "already processed")
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
 	suggestionRepo.AssertExpectations(t)
 }
 

@@ -47,6 +47,7 @@ import type {
   ErrorModel,
   GetNotificationsParams,
   GetUnreadCountOutputBody,
+  MarkAllNotificationsReadOutputBody,
   MarkNotificationReadOutputBody,
   Notification,
 } from "../../models";
@@ -220,6 +221,90 @@ export function useGetNotifications<
   return { ...query, queryKey: queryOptions.queryKey };
 }
 
+/**
+ * Marks all unread notifications as read for the authenticated user.
+ * @summary Mark all notifications as read
+ */
+export const markAllNotificationsAsRead = (
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<MarkAllNotificationsReadOutputBody>(
+    { url: `/api/v1/notifications/read-all`, method: "PATCH", signal },
+    options,
+  );
+};
+
+export const getMarkAllNotificationsAsReadMutationOptions = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof markAllNotificationsAsRead>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customInstance>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof markAllNotificationsAsRead>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["markAllNotificationsAsRead"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof markAllNotificationsAsRead>>,
+    void
+  > = () => {
+    return markAllNotificationsAsRead(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type MarkAllNotificationsAsReadMutationResult = NonNullable<
+  Awaited<ReturnType<typeof markAllNotificationsAsRead>>
+>;
+
+export type MarkAllNotificationsAsReadMutationError = ErrorType<ErrorModel>;
+
+/**
+ * @summary Mark all notifications as read
+ */
+export const useMarkAllNotificationsAsRead = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof markAllNotificationsAsRead>>,
+      TError,
+      void,
+      TContext
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof markAllNotificationsAsRead>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(
+    getMarkAllNotificationsAsReadMutationOptions(options),
+    queryClient,
+  );
+};
 /**
  * Returns the count of unread notifications for the authenticated user.
  * @summary Get unread notification count
