@@ -263,11 +263,13 @@ func TestUserAccountService_MatchOrCreate_PreservesCustomizations(t *testing.T) 
 
 	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
 	// Type matches, no update needed
+	// Account was hidden (deleted), so UpdateHidden is called to un-hide on re-link
+	mockRepo.On("UpdateHidden", ctx, existingUA.ID, false).Return(nil)
 
 	// Execute - re-link with same account info
 	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, "New Plaid Name", "depository", "checking")
 
-	// Assert - all customizations preserved
+	// Assert - all customizations preserved, IsHidden cleared on re-link
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, "My Custom Name", *result.Nickname)
@@ -275,7 +277,7 @@ func TestUserAccountService_MatchOrCreate_PreservesCustomizations(t *testing.T) 
 	assert.Equal(t, "bank", *result.CustomIcon)
 	assert.Equal(t, "💰", *result.CustomEmoji)
 	assert.Equal(t, 5, *result.DisplayOrder)
-	assert.True(t, result.IsHidden)
+	assert.False(t, result.IsHidden, "re-link should un-hide a previously deleted account")
 	mockRepo.AssertExpectations(t)
 }
 
