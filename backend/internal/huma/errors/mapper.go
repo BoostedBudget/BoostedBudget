@@ -57,6 +57,8 @@ func MapError(err error) error {
 		return huma.Error404NotFound("Automation rule not found")
 	case errors.Is(err, domain.ErrTransferSuggestionNotFound):
 		return huma.Error404NotFound("Transfer suggestion not found")
+	case errors.Is(err, domain.ErrTransferSuggestionAlreadyActioned):
+		return huma.Error409Conflict("Transfer suggestion has already been accepted or rejected")
 
 	// Repository errors
 	case errors.Is(err, repository.ErrTransactionNotFound):

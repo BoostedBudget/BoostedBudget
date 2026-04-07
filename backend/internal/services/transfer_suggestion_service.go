@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 )
 
 // TransferSuggestionRepository defines the data access interface for transfer suggestions.
@@ -33,13 +34,20 @@ type TransferSuggestionService interface {
 // transferSuggestionService implements TransferSuggestionService.
 type transferSuggestionService struct {
 	suggestionRepo TransferSuggestionRepository
+	analytics      phclient.Analytics
 }
 
 // NewTransferSuggestionService creates a new TransferSuggestionService.
-func NewTransferSuggestionService(suggestionRepo TransferSuggestionRepository) TransferSuggestionService {
+// Returns the concrete type so callers can invoke optional setter methods (SetAnalytics).
+func NewTransferSuggestionService(suggestionRepo TransferSuggestionRepository) *transferSuggestionService {
 	return &transferSuggestionService{
 		suggestionRepo: suggestionRepo,
 	}
+}
+
+// SetAnalytics sets the analytics client for event capture.
+func (s *transferSuggestionService) SetAnalytics(a phclient.Analytics) {
+	s.analytics = a
 }
 
 // AcceptSuggestion accepts a pending transfer suggestion.
@@ -60,20 +68,30 @@ func (s *transferSuggestionService) AcceptSuggestion(
 		return nil, domain.ErrTransferSuggestionNotFound
 	}
 
-	// 3. Check if already processed
+	// 3. Check if already processed (optimistic guard — the DB has the authoritative guard via AND status='pending')
 	if suggestion.Status != domain.SuggestionStatusPending {
 		return nil, fmt.Errorf("suggestion already processed with status: %s", suggestion.Status)
 	}
 
-	// 4. Update status to accepted
+	// 4. Update status to accepted (the DB-level AND status='pending' guard handles races)
 	if err := s.suggestionRepo.UpdateStatus(ctx, suggestionID, domain.SuggestionStatusAccepted, notes); err != nil {
-		return nil, fmt.Errorf("failed to update suggestion status: %w", err)
+		return nil, err
 	}
 
 	// 5. Update local copy and return
 	suggestion.Status = domain.SuggestionStatusAccepted
 	if notes != nil {
 		suggestion.UserNotes = notes
+	}
+
+	// 6. Fire analytics event
+	if s.analytics != nil {
+		s.analytics.Capture(userID, phclient.TransferSuggestionAccepted, map[string]interface{}{
+			"amount":        suggestion.Amount,
+			"currency_code": suggestion.CurrencyCode,
+			"source":        string(suggestion.Source),
+			"rule_id":       suggestion.RuleID,
+		})
 	}
 
 	return suggestion, nil
@@ -97,20 +115,30 @@ func (s *transferSuggestionService) RejectSuggestion(
 		return nil, domain.ErrTransferSuggestionNotFound
 	}
 
-	// 3. Check if already processed
+	// 3. Check if already processed (optimistic guard — the DB has the authoritative guard via AND status='pending')
 	if suggestion.Status != domain.SuggestionStatusPending {
 		return nil, fmt.Errorf("suggestion already processed with status: %s", suggestion.Status)
 	}
 
-	// 4. Update status to rejected
+	// 4. Update status to rejected (the DB-level AND status='pending' guard handles races)
 	if err := s.suggestionRepo.UpdateStatus(ctx, suggestionID, domain.SuggestionStatusRejected, notes); err != nil {
-		return nil, fmt.Errorf("failed to update suggestion status: %w", err)
+		return nil, err
 	}
 
 	// 5. Update local copy and return
 	suggestion.Status = domain.SuggestionStatusRejected
 	if notes != nil {
 		suggestion.UserNotes = notes
+	}
+
+	// 6. Fire analytics event
+	if s.analytics != nil {
+		s.analytics.Capture(userID, phclient.TransferSuggestionRejected, map[string]interface{}{
+			"amount":        suggestion.Amount,
+			"currency_code": suggestion.CurrencyCode,
+			"source":        string(suggestion.Source),
+			"rule_id":       suggestion.RuleID,
+		})
 	}
 
 	return suggestion, nil

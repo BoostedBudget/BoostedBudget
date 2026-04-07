@@ -167,14 +167,16 @@ func (r *transferSuggestionRepository) GetPendingByUserID(ctx context.Context, u
 	return r.querySuggestions(ctx, query, userID)
 }
 
-// UpdateStatus updates the status of a suggestion.
+// UpdateStatus updates the status of a pending suggestion.
+// The AND status = 'pending' guard prevents concurrent accept+reject race conditions.
+// If no rows are affected, it distinguishes between "not found" and "already actioned".
 func (r *transferSuggestionRepository) UpdateStatus(ctx context.Context, id string, status domain.SuggestionStatus, userNotes *string) error {
 	now := time.Now()
 
 	query := `
 		UPDATE transfer_suggestions
 		SET status = $1, user_action_at = $2, user_notes = $3, updated_at = $4
-		WHERE id = $5
+		WHERE id = $5 AND status = 'pending'
 	`
 
 	ct, err := r.db.Exec(ctx, query, status, now, userNotes, now, id)
@@ -183,7 +185,14 @@ func (r *transferSuggestionRepository) UpdateStatus(ctx context.Context, id stri
 	}
 
 	if ct.RowsAffected() == 0 {
-		return domain.ErrTransferSuggestionNotFound
+		// Distinguish: does the row exist but was already actioned, or does it not exist at all?
+		_, getErr := r.GetByID(ctx, id)
+		if getErr != nil {
+			// Not found (or other DB error): return not found.
+			return domain.ErrTransferSuggestionNotFound
+		}
+		// Row exists but status != 'pending' — a concurrent action already processed it.
+		return domain.ErrTransferSuggestionAlreadyActioned
 	}
 
 	return nil
