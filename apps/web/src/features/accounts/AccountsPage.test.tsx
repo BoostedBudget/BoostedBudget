@@ -36,7 +36,7 @@ mock.module('@/components/ui/confirm-delete-dialog', () => ({
 
 // Simplify AccountCard — exposes a Delete button that calls onDelete with the full account object
 mock.module('./AccountCard', () => ({
-  AccountCard: ({ account, onDelete }: { account: any; onDelete?: (account: any) => void }) => (
+  AccountCard: ({ account, onDelete }: { account: { name: string; [key: string]: unknown }; onDelete?: (account: unknown) => void }) => (
     <div data-testid="account-card">
       {account.name}
       <button onClick={() => onDelete?.(account)}>Delete</button>
