@@ -1,4 +1,4 @@
-.PHONY: help dev build test clean migrate-up migrate-down generate docker-up docker-down docker-rebuild test-fast test-all
+.PHONY: help dev build test clean migrate-up migrate-down generate docker-up docker-down docker-rebuild test-fast test-all lighthouse check-bundle-size perf-check
 
 # Default target
 help:
@@ -291,3 +291,35 @@ clean:
 	rm -rf backend/tmp
 	rm -rf .turbo
 	docker-compose down -v
+
+# =============================================================================
+# Performance Checks
+# =============================================================================
+
+# Run Lighthouse CI audit against the local build
+lighthouse:
+	@echo "========================================"
+	@echo "Running Lighthouse CI audit"
+	@echo "========================================"
+	@echo "Building frontend..."
+	@cd apps/web && bun run build
+	@echo "Running LHCI audit..."
+	@npx lhci autorun
+	@echo "✅ Lighthouse audit complete"
+
+# Check bundle size against configured budgets
+check-bundle-size:
+	@echo "========================================"
+	@echo "Checking bundle size"
+	@echo "========================================"
+	@echo "Building frontend..."
+	@cd apps/web && bun run build
+	@echo "Checking sizes..."
+	@npx size-limit
+	@echo "✅ Bundle size check complete"
+
+# Run both lighthouse and bundle size checks
+perf-check: lighthouse check-bundle-size
+	@echo "========================================"
+	@echo "✅ All performance checks complete!"
+	@echo "========================================"

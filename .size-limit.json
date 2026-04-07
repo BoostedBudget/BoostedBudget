@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Main JS bundle",
+    "path": "apps/web/dist/assets/*.js",
+    "limit": "976 KB",
+    "gzip": true
+  },
+  {
+    "name": "Main CSS bundle",
+    "path": "apps/web/dist/assets/*.css",
+    "limit": "52 KB",
+    "gzip": true
+  }
+]
