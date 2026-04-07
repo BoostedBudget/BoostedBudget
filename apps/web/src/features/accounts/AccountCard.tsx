@@ -6,7 +6,7 @@ import './AccountCard.css'
 
 interface AccountCardProps {
   account: Account
-  onDelete?: (accountId: string) => void
+  onDelete?: (account: Account) => void
   onEdit?: (account: Account) => void
   isDragging?: boolean
   dragHandleProps?: React.HTMLAttributes<HTMLDivElement>
@@ -57,7 +57,6 @@ function getAccountTypeLabel(type: string, subtype?: string): string {
 
 export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleProps }: AccountCardProps) {
   const {
-    id,
     name,
     official_name,
     type,
@@ -88,15 +87,7 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
 
   function handleDelete() {
     if (!onDelete) return
-
-    const accountName = nickname || official_name || name
-    const confirmed = window.confirm(
-      `Are you sure you want to delete "${accountName}"?\n\nThis action cannot be undone. Other accounts from ${institution_name} will remain connected.`
-    )
-
-    if (confirmed) {
-      onDelete(id)
-    }
+    onDelete(account)
   }
 
   function handleEdit() {

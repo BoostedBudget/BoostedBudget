@@ -1,9 +1,12 @@
 import { useCallback, useMemo, useState } from 'react'
+import React from 'react'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { useQueryClient } from '@tanstack/react-query'
 import { Eye, EyeOff, Landmark } from 'lucide-react'
+import { toast } from 'sonner'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ConfirmDeleteDialog } from '@/components/ui/confirm-delete-dialog'
 import { PlaidLinkButton } from './PlaidLinkButton'
 import { AccountCard } from './AccountCard'
 import { AccountTable, type SortColumn as AccountSortColumn, type SortDirection } from './components/AccountTable'
@@ -51,6 +54,9 @@ export function AccountsPage() {
   // Issue #307: Modal state
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+
+  // Issue #978: Delete confirmation dialog state
+  const [accountToDelete, setAccountToDelete] = useState<Account | null>(null)
 
   // Issue #590: Sorting state
   const [sortColumn, setSortColumn] = useState<AccountSortColumn | undefined>(undefined)
@@ -110,16 +116,43 @@ export function AccountsPage() {
   }
 
   // Handle account deletion
-  async function handleDeleteAccount(accountId: string) {
+  async function handleDeleteAccount(account: Account) {
     try {
-      await deleteAccountMutation.mutateAsync({ id: accountId })
+      await deleteAccountMutation.mutateAsync({ id: account.id })
       trackEvent(ANALYTICS_EVENTS.ACCOUNT_REMOVED)
-      // Refetch accounts after successful deletion
+      setAccountToDelete(null)
       await refetchAccounts()
     } catch (err) {
       console.error('Failed to delete account:', err)
-      // Error will be shown from query error state
+      toast.error('Failed to delete account. Please try again.')
     }
+  }
+
+  // Issue #978: Detect if the account is the last one for its linked_item_id
+  function isLastAccountForItem(account: Account): boolean {
+    const allAccounts = accountsData?.accounts ?? []
+    return allAccounts.filter(a =>
+      a.linked_item_id === account.linked_item_id && a.status !== 'replaced'
+    ).length === 1
+  }
+
+  // Issue #978: Build descriptive ReactNode for the delete confirmation dialog
+  function buildDeleteDescription(account: Account): React.ReactNode {
+    const displayName = account.nickname || account.official_name || account.name
+    const maskPart = account.mask ? ` (...${account.mask})` : ''
+    const isLast = isLastAccountForItem(account)
+    return (
+      <span>
+        You are about to permanently delete <strong>{displayName}{maskPart}</strong>.
+        <br />Your transactions will be preserved.
+        <br />Balance history will be removed.
+        {isLast && (
+          <>
+            <br />The bank connection to <strong>{account.institution_name}</strong> will also be removed.
+          </>
+        )}
+      </span>
+    )
   }
 
   // Issue #307: Handle edit button click
@@ -387,7 +420,7 @@ export function AccountsPage() {
             <AccountTable
               accounts={displayedAccounts}
               onEdit={handleEditAccount}
-              onDelete={(account) => handleDeleteAccount(account.id)}
+              onDelete={(account) => setAccountToDelete(account)}
               sortable
               sortColumn={sortColumn}
               sortDirection={sortDirection}
@@ -408,7 +441,7 @@ export function AccountsPage() {
                 <AccountCard
                   key={account.id}
                   account={account}
-                  onDelete={handleDeleteAccount}
+                  onDelete={(acc) => setAccountToDelete(acc)}
                   onEdit={handleEditAccount}
                 />
               ))}
@@ -424,6 +457,17 @@ export function AccountsPage() {
         onOpenChange={setIsModalOpen}
         onSave={handleSaveAccount}
         isSaving={isUpdating}
+      />
+
+      {/* Issue #978: Delete confirmation dialog */}
+      <ConfirmDeleteDialog
+        open={accountToDelete !== null}
+        onOpenChange={(open) => { if (!open) setAccountToDelete(null) }}
+        onConfirm={() => accountToDelete && handleDeleteAccount(accountToDelete)}
+        title="Delete Account"
+        description={accountToDelete ? buildDeleteDescription(accountToDelete) : ''}
+        confirmText={accountToDelete ? (accountToDelete.nickname || accountToDelete.official_name || accountToDelete.name) : ''}
+        loading={deleteAccountMutation.isPending}
       />
     </div>
   )
