@@ -26,10 +26,10 @@ mock.module('./components/AccountCustomizationModal', () => ({
 
 // Stub ConfirmDeleteDialog so we can inspect its props without full Radix Dialog setup
 mock.module('@/components/ui/confirm-delete-dialog', () => ({
-  ConfirmDeleteDialog: ({ open, title, confirmText }: { open: boolean; title: string; confirmText: string }) =>
+  ConfirmDeleteDialog: ({ open, title, confirmText, description }: { open: boolean; title: string; confirmText: string; description: unknown }) =>
     open ? (
       <div data-testid="confirm-delete-dialog" data-title={title} data-confirm-text={confirmText}>
-        Confirm Delete
+        <div data-testid="dialog-description">{description}</div>
       </div>
     ) : null,
 }))
@@ -310,6 +310,50 @@ describe('AccountsPage', () => {
       fireEvent.click(screen.getByText('Delete'))
 
       expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-confirm-text', 'Chase Checking')
+    })
+
+    it('shows transaction-preserved and balance-removed messages in description', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByText('Delete'))
+
+      const desc = screen.getByTestId('dialog-description')
+      expect(desc.textContent).toContain('transactions will be preserved')
+      expect(desc.textContent).toContain('Balance history will be removed')
+    })
+
+    it('shows institution removal message when account is the last for its linked_item_id', () => {
+      // Only one account → last for item-1
+      renderAccountsPage()
+      fireEvent.click(screen.getByText('Delete'))
+
+      const desc = screen.getByTestId('dialog-description')
+      expect(desc.textContent).toContain('bank connection to')
+      expect(desc.textContent).toContain('Chase')
+    })
+
+    it('does NOT show institution removal message when other accounts share the same linked_item_id', () => {
+      const secondAccount = {
+        ...mockAccount,
+        id: 'acc-2',
+        name: 'Chase Savings',
+        linked_item_id: 'item-1', // same linked_item_id
+      }
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [mockAccount, secondAccount] },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      })
+
+      renderAccountsPage()
+
+      // Click delete on the first card
+      const deleteButtons = screen.getAllByText('Delete')
+      fireEvent.click(deleteButtons[0])
+
+      const desc = screen.getByTestId('dialog-description')
+      expect(desc.textContent).not.toContain('bank connection')
     })
   })
 })
