@@ -85,13 +85,15 @@ func (s *userAccountService) MatchOrCreate(
 			}
 		}
 
-		// Un-hide if previously hidden (re-link after account deletion)
+		// Un-hide if previously hidden (re-link after account deletion).
+		// Only update in-memory state on success to keep DB and caller in sync.
 		if existing.IsHidden {
 			if err := s.repo.UpdateHidden(ctx, existing.ID, false); err != nil {
-				// Non-fatal: log and continue
-				_ = err // TODO: add logger to userAccountService
+				// Non-fatal: log and continue (TODO: add logger to userAccountService)
+				_ = err
+			} else {
+				existing.IsHidden = false
 			}
-			existing.IsHidden = false
 		}
 
 		// Return existing account (customizations preserved)

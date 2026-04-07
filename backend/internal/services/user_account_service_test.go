@@ -244,7 +244,7 @@ func TestUserAccountService_MatchOrCreate_PreservesCustomizations(t *testing.T) 
 	institutionID := "ins_bofa"
 	mask := "1234"
 
-	// Existing account with all customizations set
+	// Existing account with all customizations set (not hidden — testing customization preservation only)
 	existingUA := &domain.UserAccount{
 		ID:              "ua-existing",
 		UserID:          userID,
@@ -256,20 +256,18 @@ func TestUserAccountService_MatchOrCreate_PreservesCustomizations(t *testing.T) 
 		CustomIcon:      userAccountStrPtr("bank"),
 		CustomEmoji:     userAccountStrPtr("💰"),
 		DisplayOrder:    userAccountIntPtr(5),
-		IsHidden:        true, // User hid this account
+		IsHidden:        false,
 		PrimaryType:     userAccountStrPtr("depository"),
 		PrimarySubtype:  userAccountStrPtr("checking"),
 	}
 
 	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
-	// Type matches, no update needed
-	// Account was hidden (deleted), so UpdateHidden is called to un-hide on re-link
-	mockRepo.On("UpdateHidden", ctx, existingUA.ID, false).Return(nil)
+	// Type matches, not hidden — no extra repo calls expected
 
 	// Execute - re-link with same account info
 	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, "New Plaid Name", "depository", "checking")
 
-	// Assert - all customizations preserved, IsHidden cleared on re-link
+	// Assert - all customizations preserved, hidden flag unchanged
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, "My Custom Name", *result.Nickname)
@@ -277,8 +275,9 @@ func TestUserAccountService_MatchOrCreate_PreservesCustomizations(t *testing.T) 
 	assert.Equal(t, "bank", *result.CustomIcon)
 	assert.Equal(t, "💰", *result.CustomEmoji)
 	assert.Equal(t, 5, *result.DisplayOrder)
-	assert.False(t, result.IsHidden, "re-link should un-hide a previously deleted account")
+	assert.False(t, result.IsHidden)
 	mockRepo.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "UpdateHidden")
 }
 
 // TestUserAccountService_MatchOrCreate_UnhidesHiddenUserAccount tests that when a matching
@@ -355,6 +354,41 @@ func TestUserAccountService_MatchOrCreate_DoesNotCallUpdateHiddenWhenNotHidden(t
 	assert.False(t, result.IsHidden)
 	mockRepo.AssertExpectations(t)
 	mockRepo.AssertNotCalled(t, "UpdateHidden", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestUserAccountService_MatchOrCreate_UpdateHiddenError_StillReturnsAccountHidden tests
+// that when UpdateHidden fails during re-link, MatchOrCreate still returns the account
+// without error, but IsHidden remains true (in-memory consistent with DB state).
+func TestUserAccountService_MatchOrCreate_UpdateHiddenError_StillReturnsAccountHidden(t *testing.T) {
+	mockRepo := new(MockUserAccountRepository)
+	service := NewUserAccountService(mockRepo)
+
+	ctx := context.Background()
+	userID := "user-123"
+	institutionID := "ins_bofa"
+	mask := "1234"
+
+	existingUA := &domain.UserAccount{
+		ID:             "ua-existing",
+		UserID:         userID,
+		InstitutionID:  institutionID,
+		Mask:           &mask,
+		PrimaryType:    userAccountStrPtr("depository"),
+		PrimarySubtype: userAccountStrPtr("checking"),
+		IsHidden:       true,
+	}
+
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
+	mockRepo.On("UpdateHidden", ctx, existingUA.ID, false).Return(assert.AnError)
+
+	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, "BoA Checking", "depository", "checking")
+
+	// No error propagated — UpdateHidden failure is non-fatal
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	// IsHidden remains true (DB and memory stay in sync — update failed)
+	assert.True(t, result.IsHidden, "IsHidden should stay true when UpdateHidden fails")
+	mockRepo.AssertExpectations(t)
 }
 
 // =============================================================================
