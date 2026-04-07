@@ -4,7 +4,6 @@ package services
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
@@ -70,7 +69,7 @@ func (s *transferSuggestionService) AcceptSuggestion(
 
 	// 3. Check if already processed (optimistic guard — the DB has the authoritative guard via AND status='pending')
 	if suggestion.Status != domain.SuggestionStatusPending {
-		return nil, fmt.Errorf("suggestion already processed with status: %s", suggestion.Status)
+		return nil, domain.ErrTransferSuggestionAlreadyActioned
 	}
 
 	// 4. Update status to accepted (the DB-level AND status='pending' guard handles races)
@@ -117,7 +116,7 @@ func (s *transferSuggestionService) RejectSuggestion(
 
 	// 3. Check if already processed (optimistic guard — the DB has the authoritative guard via AND status='pending')
 	if suggestion.Status != domain.SuggestionStatusPending {
-		return nil, fmt.Errorf("suggestion already processed with status: %s", suggestion.Status)
+		return nil, domain.ErrTransferSuggestionAlreadyActioned
 	}
 
 	// 4. Update status to rejected (the DB-level AND status='pending' guard handles races)

@@ -38,8 +38,10 @@ type GetTransferSuggestionsOutput struct {
 // AcceptTransferSuggestionInput is the input for accepting a transfer suggestion.
 type AcceptTransferSuggestionInput struct {
 	inputs.AuthenticatedInput
-	ID    string  `path:"id" doc:"Transfer suggestion UUID"`
-	Notes *string `json:"notes,omitempty" doc:"Optional notes for accepting the suggestion"`
+	ID   string `path:"id" doc:"Transfer suggestion UUID"`
+	Body struct {
+		Notes *string `json:"notes,omitempty" doc:"Optional notes for accepting the suggestion"`
+	}
 }
 
 // AcceptTransferSuggestionOutput is the response for accepting a transfer suggestion.
@@ -53,8 +55,10 @@ type AcceptTransferSuggestionOutput struct {
 // RejectTransferSuggestionInput is the input for rejecting a transfer suggestion.
 type RejectTransferSuggestionInput struct {
 	inputs.AuthenticatedInput
-	ID    string  `path:"id" doc:"Transfer suggestion UUID"`
-	Notes *string `json:"notes,omitempty" doc:"Optional notes for rejecting the suggestion"`
+	ID   string `path:"id" doc:"Transfer suggestion UUID"`
+	Body struct {
+		Notes *string `json:"notes,omitempty" doc:"Optional notes for rejecting the suggestion"`
+	}
 }
 
 // RejectTransferSuggestionOutput is the response for rejecting a transfer suggestion.
@@ -85,7 +89,7 @@ func (h *TransferSuggestionHandler) GetTransferSuggestions(ctx context.Context, 
 
 // AcceptTransferSuggestion handles PATCH /api/v1/transfer-suggestions/{id}/accept.
 func (h *TransferSuggestionHandler) AcceptTransferSuggestion(ctx context.Context, input *AcceptTransferSuggestionInput) (*AcceptTransferSuggestionOutput, error) {
-	suggestion, err := h.service.AcceptSuggestion(ctx, input.UserID, input.ID, input.Notes)
+	suggestion, err := h.service.AcceptSuggestion(ctx, input.UserID, input.ID, input.Body.Notes)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
@@ -98,7 +102,7 @@ func (h *TransferSuggestionHandler) AcceptTransferSuggestion(ctx context.Context
 
 // RejectTransferSuggestion handles PATCH /api/v1/transfer-suggestions/{id}/reject.
 func (h *TransferSuggestionHandler) RejectTransferSuggestion(ctx context.Context, input *RejectTransferSuggestionInput) (*RejectTransferSuggestionOutput, error) {
-	suggestion, err := h.service.RejectSuggestion(ctx, input.UserID, input.ID, input.Notes)
+	suggestion, err := h.service.RejectSuggestion(ctx, input.UserID, input.ID, input.Body.Notes)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}

@@ -28,6 +28,8 @@ Multi-region support planned for Phase 7+.
  * OpenAPI spec version: 1.0.0
  */
 
+export * from "./acceptTransferSuggestionInputBody";
+export * from "./acceptTransferSuggestionOutputBody";
 export * from "./account";
 export * from "./accountBalanceDetail";
 export * from "./accountOrder";
@@ -119,6 +121,7 @@ export * from "./incomeSource";
 export * from "./linkTokenResponse";
 export * from "./listAdminPaddleWebhooksParams";
 export * from "./listAdminUsersParams";
+export * from "./markAllNotificationsReadOutputBody";
 export * from "./markNotificationReadOutputBody";
 export * from "./netWorthCategoryBalance";
 export * from "./netWorthCategoryBalanceByType";
@@ -145,6 +148,8 @@ export * from "./queueMetrics";
 export * from "./regionResponse";
 export * from "./regionsResponseBody";
 export * from "./regionsResponseBodyRegions";
+export * from "./rejectTransferSuggestionInputBody";
+export * from "./rejectTransferSuggestionOutputBody";
 export * from "./reorderAccountsOutputBody";
 export * from "./reorderAccountsRequest";
 export * from "./requestDeletionResponseBody";
@@ -181,6 +186,7 @@ export * from "./toggleAutomationRuleInputBody";
 export * from "./toggleCategorizationRuleRequest";
 export * from "./transaction";
 export * from "./transactionListResponse";
+export * from "./transferSuggestion";
 export * from "./triggerAutomationRuleInputBody";
 export * from "./triggerAutomationRuleInputBodyTriggerData";
 export * from "./triggerConfig";

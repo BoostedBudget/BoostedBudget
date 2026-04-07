@@ -34,10 +34,12 @@ export interface Notification {
   created_at: string;
   email_sent_at?: string;
   id: string;
+  interaction_pattern: string;
   message: string;
   read: boolean;
   sent_email: boolean;
   title: string;
+  transfer_suggestion_id?: string;
   type: string;
   updated_at: string;
   user_id: string;

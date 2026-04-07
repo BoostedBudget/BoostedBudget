@@ -75,5 +75,10 @@ func (n *Notification) Validate() error {
 		return errors.New("invalid interaction_pattern")
 	}
 
+	// Cross-field invariants
+	if n.InteractionPattern == "accept_reject" && n.TransferSuggestionID == nil {
+		return errors.New("accept_reject notifications require transfer_suggestion_id")
+	}
+
 	return nil
 }
