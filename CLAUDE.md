@@ -39,6 +39,11 @@ make generate-all           # Both
 make migrate-up/down/status
 make -C backend migrate-create NAME=add_table
 ./scripts/test-migrations.sh  # 5 test suites (idempotency, perf, data, schema, rollback)
+
+# Performance
+make lighthouse             # Lighthouse CI audit (local, builds frontend first)
+make check-bundle-size      # Bundle size check against .size-limit.json budgets
+make perf-check             # Both lighthouse + bundle size
 ```
 
 ## Architecture
@@ -135,6 +140,20 @@ skip this step even when changes seem straightforward.
 - [ ] ALL tests pass (backend + frontend + e2e + lint)
 - [ ] Codex review completed (second opinion on changes)
 - [ ] PR body includes `Closes #N` to auto-close the issue
+
+### Codex Secondary Planning (MANDATORY for brainstorming/design)
+When performing brainstorming, design, or planning work (e.g., `superpowers:brainstorming`,
+`superpowers:writing-plans`, `/smart-plan`), ALWAYS launch a `codex:codex-rescue` agent
+in the background to get a secondary perspective on the design decisions. This applies to:
+- Architecture/design proposals during brainstorming
+- Trade-off analysis between approaches
+- Spec reviews before finalizing
+- Implementation plan reviews before execution
+
+The Codex agent should be given the full context of the design and asked to critically
+evaluate risks, blind spots, and alternatives. Its findings should be incorporated into
+the final spec/plan before proceeding to implementation. Do not skip this step — a second
+set of eyes catches assumptions that a single planning pass misses.
 
 ### Task Tracking (MANDATORY)
 **When formulating a plan, ALWAYS use TaskCreate to track TODOs:**
