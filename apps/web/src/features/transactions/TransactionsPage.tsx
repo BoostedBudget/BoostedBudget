@@ -309,16 +309,24 @@ export function TransactionsPage() {
 
   return (
     <main className="p-8 max-w-[1200px] mx-auto max-sm:p-4">
-      <div className="flex justify-between items-center gap-4 mb-8 max-sm:flex-col max-sm:items-start">
+      <div
+        data-testid="transactions-page-header"
+        className="mb-8 flex flex-col items-center gap-4 text-center"
+      >
         <h1 className="text-foreground text-3xl font-semibold m-0">Transactions</h1>
-        <input
-          type="search"
-          placeholder="Search transactions..."
-          value={filters.search ?? ''}
-          onChange={handleSearchChange}
-          className="px-4 py-3 text-base border border-input rounded-md min-w-[300px] bg-background text-foreground transition-colors focus:outline-none focus:border-ring focus:ring-2 focus:ring-ring/10 max-sm:w-full max-sm:min-w-0"
-          aria-label="Search transactions"
-        />
+        <div
+          data-testid="transactions-page-search"
+          className="flex w-full justify-center"
+        >
+          <input
+            type="search"
+            placeholder="Search transactions..."
+            value={filters.search ?? ''}
+            onChange={handleSearchChange}
+            className="w-full max-w-xl px-4 py-3 text-base border border-input rounded-md bg-background text-foreground transition-colors focus:outline-none focus:border-ring focus:ring-2 focus:ring-ring/10"
+            aria-label="Search transactions"
+          />
+        </div>
       </div>
 
       {/* Filter Panel - Issue #529 */}

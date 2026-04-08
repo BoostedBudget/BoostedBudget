@@ -298,13 +298,19 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
   // Rules list
   return (
     <div className="max-w-[800px] mx-auto py-8 px-4">
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-baseline gap-3">
+      <div
+        data-testid="auto-categorization-page-header"
+        className="mb-6 flex flex-col items-center gap-4 text-center"
+      >
+        <div className="flex flex-col items-center gap-1">
           <h1 className="m-0 text-2xl font-semibold text-foreground">Auto-Categorization Rules</h1>
           <span className="text-sm text-muted-foreground">{rules.length} rules</span>
         </div>
         {/* Issue #584: View toggle and actions */}
-        <div className="flex items-center gap-3">
+        <div
+          data-testid="auto-categorization-page-actions"
+          className="flex flex-wrap items-center justify-center gap-3"
+        >
           <ListViewToggle
             view={view}
             onChange={handleViewChange}
