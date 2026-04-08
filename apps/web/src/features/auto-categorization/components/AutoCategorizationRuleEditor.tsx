@@ -21,7 +21,6 @@ import { CONDITION_TYPE_LABELS } from '../types'
 import { SearchableSelect } from '../../../shared/components/SearchableSelect'
 import type { Account } from '../../accounts/types'
 import { formatPlaidCategory } from '../utils/categoryUtils'
-import './AutoCategorizationRuleEditor.css'
 
 // Account types available for selection
 const ACCOUNT_TYPES = [
@@ -418,6 +417,10 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
   // Render the appropriate input for a condition based on its type
   const renderConditionValueInput = (condition: RuleCondition, index: number) => {
     const inputType = getInputTypeForCondition(condition.type)
+    const inputCls = 'flex-1 min-w-[100px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
+    const numberInputCls = 'max-w-[120px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
+    const dateInputCls = 'max-w-[150px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
+    const selectCls = 'flex-shrink-0 px-3 py-2 text-sm border border-input rounded bg-background text-foreground cursor-pointer min-w-[150px] focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70 disabled:cursor-not-allowed'
 
     switch (inputType) {
       case 'number':
@@ -425,7 +428,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
           <input
             type="number"
             step="0.01"
-            className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--number"
+            className={numberInputCls}
             value={condition.value === '' ? '' : String(condition.value)}
             onChange={(e) => {
               const val = e.target.value === '' ? '' : parseFloat(e.target.value)
@@ -441,11 +444,11 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       case 'amount_range': {
         const rangeValue = (condition.value as AmountRangeValue) || { min: undefined, max: undefined }
         return (
-          <div className="auto-categorization-rule-editor__range-inputs">
+          <div className="flex items-center gap-2 flex-1">
             <input
               type="number"
               step="0.01"
-              className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--number"
+              className={numberInputCls}
               value={rangeValue.min ?? ''}
               onChange={(e) => updateAmountRangeValue(index, 'min', e.target.value)}
               onBlur={() => validateSingleCondition(index, conditions[index])}
@@ -453,11 +456,11 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
               placeholder="$0.00"
               aria-label="Minimum amount"
             />
-            <span className="auto-categorization-rule-editor__range-separator">to</span>
+            <span className="text-sm text-muted-foreground">to</span>
             <input
               type="number"
               step="0.01"
-              className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--number"
+              className={numberInputCls}
               value={rangeValue.max ?? ''}
               onChange={(e) => updateAmountRangeValue(index, 'max', e.target.value)}
               onBlur={() => validateSingleCondition(index, conditions[index])}
@@ -472,20 +475,20 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       case 'date_range': {
         const dateValue = (condition.value as DateRangeValue) || { start: '', end: '' }
         return (
-          <div className="auto-categorization-rule-editor__range-inputs">
+          <div className="flex items-center gap-2 flex-1">
             <input
               type="date"
-              className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--date"
+              className={dateInputCls}
               value={dateValue.start || ''}
               onChange={(e) => updateDateRangeValue(index, 'start', e.target.value)}
               onBlur={() => validateSingleCondition(index, conditions[index])}
               disabled={saving}
               aria-label="Start date"
             />
-            <span className="auto-categorization-rule-editor__range-separator">to</span>
+            <span className="text-sm text-muted-foreground">to</span>
             <input
               type="date"
-              className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--date"
+              className={dateInputCls}
               value={dateValue.end || ''}
               onChange={(e) => updateDateRangeValue(index, 'end', e.target.value)}
               onBlur={() => validateSingleCondition(index, conditions[index])}
@@ -536,15 +539,16 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       case 'account_type_select': {
         const selectedTypes = (Array.isArray(condition.value) ? condition.value : []) as string[]
         return (
-          <div className="auto-categorization-rule-editor__checkbox-group">
-            <span className="auto-categorization-rule-editor__match-label">Match ANY of:</span>
+          <div className="flex flex-wrap gap-3 p-2 bg-muted rounded flex-1 min-w-[200px]">
+            <span className="w-full text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Match ANY of:</span>
             {ACCOUNT_TYPES.map((type) => (
-              <label key={type.value} className="auto-categorization-rule-editor__checkbox-label">
+              <label key={type.value} className="flex items-center gap-1.5 text-[0.8125rem] text-foreground cursor-pointer whitespace-nowrap">
                 <input
                   type="checkbox"
                   checked={selectedTypes.includes(type.value)}
                   onChange={() => toggleAccountType(index, type.value)}
                   disabled={saving}
+                  className="cursor-pointer"
                 />
                 {type.label}
               </label>
@@ -556,7 +560,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       case 'payment_channel_select':
         return (
           <select
-            className="auto-categorization-rule-editor__select"
+            className={selectCls}
             value={String(condition.value || '')}
             onChange={(e) => updateCondition(index, { value: e.target.value })}
             disabled={saving}
@@ -575,7 +579,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         return (
           <input
             type="text"
-            className="auto-categorization-rule-editor__input"
+            className={inputCls}
             value={String(condition.value)}
             onChange={(e) => updateCondition(index, { value: e.target.value })}
             onBlur={() => validateSingleCondition(index, conditions[index])}
@@ -587,38 +591,44 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
     }
   }
 
+  const inputClass = 'w-full px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
+  const selectClass = 'px-3 py-2 text-sm border border-input rounded bg-background text-foreground cursor-pointer min-w-[150px] focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70 disabled:cursor-not-allowed'
+  const labelClass = 'block mb-1.5 text-[0.8125rem] font-medium text-muted-foreground'
+  const errorClass = 'block mt-1 text-xs text-destructive'
+  const btnBaseClass = 'px-5 py-2 text-sm font-medium border border-transparent rounded cursor-pointer transition-colors disabled:opacity-60 disabled:cursor-not-allowed'
+
   return (
-    <form className="auto-categorization-rule-editor" onSubmit={handleSubmit}>
-      <h2 className="auto-categorization-rule-editor__title">
+    <form className="bg-card border border-border rounded-lg p-6 max-w-[600px]" onSubmit={handleSubmit}>
+      <h2 className="m-0 mb-6 text-xl font-semibold text-foreground">
         {mode === 'create' ? 'Create Rule' : 'Edit Rule'}
       </h2>
 
       {/* Basic Info */}
-      <div className="auto-categorization-rule-editor__section">
-        <div className="auto-categorization-rule-editor__field">
-          <label htmlFor="rule-name" className="auto-categorization-rule-editor__label">
+      <div className="mb-6 pb-6 border-b border-border">
+        <div className="mb-4">
+          <label htmlFor="rule-name" className={labelClass}>
             Rule Name
           </label>
           <input
             id="rule-name"
             type="text"
-            className="auto-categorization-rule-editor__input"
+            className={inputClass}
             value={name}
             onChange={(e) => setName(e.target.value)}
             disabled={saving}
             placeholder="e.g., Coffee Shops"
           />
-          {errors.name && <span className="auto-categorization-rule-editor__error">{errors.name}</span>}
+          {errors.name && <span className={errorClass}>{errors.name}</span>}
         </div>
 
-        <div className="auto-categorization-rule-editor__field">
-          <label htmlFor="rule-description" className="auto-categorization-rule-editor__label">
+        <div className="mb-4">
+          <label htmlFor="rule-description" className={labelClass}>
             Description
           </label>
           <input
             id="rule-description"
             type="text"
-            className="auto-categorization-rule-editor__input"
+            className={inputClass}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             disabled={saving}
@@ -626,14 +636,14 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
           />
         </div>
 
-        <div className="auto-categorization-rule-editor__field auto-categorization-rule-editor__field--small">
-          <label htmlFor="rule-priority" className="auto-categorization-rule-editor__label">
+        <div className="mb-4 max-w-[120px]">
+          <label htmlFor="rule-priority" className={labelClass}>
             Priority
           </label>
           <input
             id="rule-priority"
             type="number"
-            className="auto-categorization-rule-editor__input"
+            className={inputClass}
             value={priority}
             onChange={(e) => setPriority(parseInt(e.target.value, 10) || 0)}
             disabled={saving}
@@ -644,14 +654,14 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       </div>
 
       {/* Conditions */}
-      <div className="auto-categorization-rule-editor__section">
-        <div className="auto-categorization-rule-editor__section-header">
-          <h3 className="auto-categorization-rule-editor__section-title">Conditions</h3>
+      <div className="mb-6 pb-6 border-b border-border">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="m-0 text-[0.9375rem] font-semibold text-foreground">Conditions</h3>
           {conditions.length > 1 && (
-            <div className="auto-categorization-rule-editor__logic-toggle">
+            <div className="flex border border-border rounded overflow-hidden">
               <button
                 type="button"
-                className={`auto-categorization-rule-editor__logic-btn ${conditionLogic === 'AND' ? 'active' : ''}`}
+                className={`px-3 py-1 text-xs font-semibold border-none cursor-pointer transition-colors disabled:opacity-70 disabled:cursor-not-allowed ${conditionLogic === 'AND' ? 'active bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted'}`}
                 onClick={() => setConditionLogic('AND')}
                 disabled={saving}
               >
@@ -659,7 +669,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
               </button>
               <button
                 type="button"
-                className={`auto-categorization-rule-editor__logic-btn ${conditionLogic === 'OR' ? 'active' : ''}`}
+                className={`px-3 py-1 text-xs font-semibold border-none cursor-pointer transition-colors disabled:opacity-70 disabled:cursor-not-allowed ${conditionLogic === 'OR' ? 'active bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted'}`}
                 onClick={() => setConditionLogic('OR')}
                 disabled={saving}
               >
@@ -670,20 +680,20 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         </div>
 
         {errors.conditions && (
-          <span className="auto-categorization-rule-editor__error">{errors.conditions}</span>
+          <span className={errorClass}>{errors.conditions}</span>
         )}
 
-        <div className="auto-categorization-rule-editor__conditions">
+        <div className="flex flex-col gap-3 mb-3">
           {conditions.map((condition, index) => (
-            <div key={index} className="auto-categorization-rule-editor__condition-wrapper">
-              <div className={`auto-categorization-rule-editor__condition ${conditionErrors[index] ? 'auto-categorization-rule-editor__condition--error' : ''}`}>
-                <label htmlFor={`condition-type-${index}`} className="visually-hidden">
+            <div key={index} className="flex flex-col gap-1">
+              <div className={`flex items-start gap-2 flex-wrap ${conditionErrors[index] ? 'border-l-2 border-destructive pl-2 -ml-2' : ''}`}>
+                <label htmlFor={`condition-type-${index}`} className="sr-only">
                   Condition type
                 </label>
                 <select
                   id={`condition-type-${index}`}
                   aria-label="Condition type"
-                  className="auto-categorization-rule-editor__select"
+                  className={selectClass}
                   value={condition.type}
                   onChange={(e) => updateCondition(index, { type: e.target.value as ConditionType })}
                   disabled={saving}
@@ -697,7 +707,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
                 {renderConditionValueInput(condition, index)}
                 <button
                   type="button"
-                  className="auto-categorization-rule-editor__remove-btn"
+                  className="px-2 py-1 text-xl leading-none border-none bg-transparent text-destructive cursor-pointer opacity-70 hover:opacity-100 transition-opacity disabled:cursor-not-allowed"
                   onClick={() => removeCondition(index)}
                   disabled={saving}
                   aria-label="Remove condition"
@@ -706,7 +716,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
                 </button>
               </div>
               {conditionErrors[index] && (
-                <span className="auto-categorization-rule-editor__condition-error">
+                <span className="text-xs text-destructive pl-2">
                   {conditionErrors[index]}
                 </span>
               )}
@@ -716,7 +726,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
 
         <button
           type="button"
-          className="auto-categorization-rule-editor__add-btn"
+          className="px-3 py-1.5 text-[0.8125rem] font-medium border border-dashed border-border rounded bg-transparent text-muted-foreground cursor-pointer hover:border-primary hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           onClick={addCondition}
           disabled={saving}
         >
@@ -725,12 +735,12 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       </div>
 
       {/* Target Category */}
-      <div className="auto-categorization-rule-editor__section">
-        <h3 className="auto-categorization-rule-editor__section-title">Actions</h3>
-        {errors.target && <span className="auto-categorization-rule-editor__error">{errors.target}</span>}
+      <div className="mb-6 pb-6 border-b border-border last:border-b-0 last:pb-0">
+        <h3 className="m-0 mb-4 text-[0.9375rem] font-semibold text-foreground">Actions</h3>
+        {errors.target && <span className={errorClass}>{errors.target}</span>}
 
-        <div className="auto-categorization-rule-editor__field">
-          <label htmlFor="target-category" className="auto-categorization-rule-editor__label">
+        <div className="mb-4">
+          <label htmlFor="target-category" className={labelClass}>
             Target Category
           </label>
           {/* Issue #402: Combined custom + Plaid categories in a flat, sorted list */}
@@ -747,15 +757,15 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         </div>
 
         {/* Tags */}
-        <div className="auto-categorization-rule-editor__field">
-          <label className="auto-categorization-rule-editor__label">Target Tags</label>
-          <div className="auto-categorization-rule-editor__tags">
+        <div className="mb-4">
+          <label className={labelClass}>Target Tags</label>
+          <div className="flex flex-wrap gap-1.5 mb-2">
             {targetTags.map((tag) => (
-              <span key={tag} className="auto-categorization-rule-editor__tag">
+              <span key={tag} className="inline-flex items-center gap-1 px-2 py-1 text-[0.8125rem] bg-info/10 text-info rounded">
                 {tag}
                 <button
                   type="button"
-                  className="auto-categorization-rule-editor__tag-remove"
+                  className="p-0 text-base leading-none border-none bg-transparent text-current cursor-pointer opacity-70 hover:opacity-100"
                   onClick={() => removeTag(tag)}
                   disabled={saving}
                   aria-label={`Remove tag ${tag}`}
@@ -765,7 +775,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
               </span>
             ))}
           </div>
-          <div className="auto-categorization-rule-editor__tag-input-row">
+          <div className="flex gap-2">
             {tags.length > 0 ? (
               <SearchableSelect
                 options={tags
@@ -785,7 +795,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
               <>
                 <input
                   type="text"
-                  className="auto-categorization-rule-editor__input"
+                  className={`${inputClass} flex-1`}
                   value={newTag}
                   onChange={(e) => setNewTag(e.target.value)}
                   onKeyDown={(e) => {
@@ -799,7 +809,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
                 />
                 <button
                   type="button"
-                  className="auto-categorization-rule-editor__add-btn"
+                  className="px-3 py-1.5 text-[0.8125rem] font-medium border border-dashed border-border rounded bg-transparent text-muted-foreground cursor-pointer hover:border-primary hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   onClick={addTag}
                   disabled={saving || !newTag.trim()}
                 >
@@ -812,10 +822,10 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
 
         {/* Tag behavior */}
         {targetTags.length > 0 && (
-          <div className="auto-categorization-rule-editor__field">
-            <label className="auto-categorization-rule-editor__label">Tag Behavior</label>
-            <div className="auto-categorization-rule-editor__radio-group">
-              <label className="auto-categorization-rule-editor__radio">
+          <div className="mb-4">
+            <label className={labelClass}>Tag Behavior</label>
+            <div className="flex flex-col gap-2">
+              <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
                 <input
                   type="radio"
                   name="tag-behavior"
@@ -823,10 +833,11 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
                   checked={tagBehavior === 'add'}
                   onChange={() => setTagBehavior('add')}
                   disabled={saving}
+                  className="cursor-pointer"
                 />
                 Add to existing tags
               </label>
-              <label className="auto-categorization-rule-editor__radio">
+              <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
                 <input
                   type="radio"
                   name="tag-behavior"
@@ -834,6 +845,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
                   checked={tagBehavior === 'replace'}
                   onChange={() => setTagBehavior('replace')}
                   disabled={saving}
+                  className="cursor-pointer"
                 />
                 Replace existing tags
               </label>
@@ -842,11 +854,11 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         )}
       </div>
 
-      {/* Actions */}
-      <div className="auto-categorization-rule-editor__footer">
+      {/* Footer Actions */}
+      <div className="flex justify-end gap-3 mt-6 pt-6 border-t border-border">
         <button
           type="button"
-          className="auto-categorization-rule-editor__btn auto-categorization-rule-editor__btn--cancel"
+          className={`${btnBaseClass} bg-background border-border text-foreground hover:bg-muted`}
           onClick={onCancel}
           disabled={saving}
         >
@@ -854,7 +866,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         </button>
         <button
           type="submit"
-          className="auto-categorization-rule-editor__btn auto-categorization-rule-editor__btn--save"
+          className={`${btnBaseClass} bg-primary text-primary-foreground hover:bg-primary/90`}
           disabled={saving}
         >
           {saving ? 'Saving...' : 'Save'}

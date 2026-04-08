@@ -7,7 +7,6 @@ import {
   COOKIE_CONSENT_VERSION,
   COOKIE_CONSENT_EXPIRES_DAYS,
 } from './types';
-import './CookieConsent.css';
 
 interface CookieConsentProps {
   onConsentChange?: (consents: CookieConsentSettings) => void;
@@ -94,12 +93,22 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
     return null;
   }
 
+  const btnPrimary = 'px-6 py-3 rounded-md text-base font-medium cursor-pointer border-none bg-primary text-primary-foreground hover:bg-primary/90 transition-all focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2'
+  const btnSecondary = 'px-6 py-3 rounded-md text-base font-medium cursor-pointer border-none bg-muted text-foreground hover:bg-accent transition-all focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2'
+  const btnLink = 'px-4 py-3 rounded-md text-base font-medium cursor-pointer border-none bg-transparent text-primary underline hover:no-underline focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2'
+
   return (
-    <div className="cookie-consent-overlay" role="dialog" aria-label="Cookie Consent">
-      <div className="cookie-consent-banner">
-        <div className="cookie-consent-header">
-          <h2>🍪 Cookie Preferences</h2>
-          <p className="cookie-consent-description">
+    <div
+      className="fixed bottom-0 left-0 right-0 z-[9999] bg-black/50 backdrop-blur-sm animate-in fade-in"
+      role="dialog"
+      aria-label="Cookie Consent"
+    >
+      <div className="bg-card border-t-[3px] border-primary shadow-[0_-4px_12px_rgba(0,0,0,0.15)] p-6 max-w-[800px] mx-auto animate-in slide-in-from-bottom">
+        <div>
+          <h2 className="m-0 mb-2 text-2xl text-foreground flex items-center gap-2">
+            🍪 Cookie Preferences
+          </h2>
+          <p className="m-0 mb-6 text-muted-foreground leading-relaxed text-[0.95rem]">
             We use cookies to enhance your experience and analyze site usage.
             You can customize your preferences below.
           </p>
@@ -107,23 +116,23 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
 
         {!showDetails ? (
           // Simple view - Quick Accept/Reject
-          <div className="cookie-consent-actions">
+          <div className="flex gap-4 flex-wrap justify-center my-6 mb-4 max-sm:flex-col">
             <button
-              className="btn btn-primary"
+              className={btnPrimary}
               onClick={handleAcceptAll}
               aria-label="Accept all cookies"
             >
               Accept All
             </button>
             <button
-              className="btn btn-secondary"
+              className={btnSecondary}
               onClick={handleNecessaryOnly}
               aria-label="Accept only necessary cookies"
             >
               Necessary Only
             </button>
             <button
-              className="btn btn-link"
+              className={btnLink}
               onClick={() => setShowDetails(true)}
               aria-label="Customize cookie preferences"
             >
@@ -132,42 +141,44 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
           </div>
         ) : (
           // Detailed view - Granular controls
-          <div className="cookie-consent-details">
-            <div className="cookie-consent-options">
-              <div className="cookie-option">
-                <div className="cookie-option-header">
-                  <label htmlFor="consent-necessary">
-                    <strong>Necessary Cookies</strong>
-                    <span className="required-badge">Required</span>
+          <div className="mt-4">
+            <div className="my-4 flex flex-col gap-6">
+              <div className="p-4 bg-muted rounded-lg border border-border">
+                <div className="flex justify-between items-center mb-2 max-sm:flex-col max-sm:items-start max-sm:gap-2">
+                  <label htmlFor="consent-necessary" className="flex items-center gap-2 cursor-pointer flex-1">
+                    <strong className="text-foreground">Necessary Cookies</strong>
+                    <span className="bg-success text-success-foreground px-2 py-1 rounded text-xs font-bold uppercase">Required</span>
                   </label>
                   <input
                     type="checkbox"
                     id="consent-necessary"
                     checked={true}
                     disabled={true}
+                    className="w-5 h-5 cursor-not-allowed opacity-60 accent-primary"
                     aria-label="Necessary cookies (required)"
                   />
                 </div>
-                <p className="cookie-option-description">
+                <p className="m-0 text-sm text-muted-foreground leading-relaxed">
                   Essential for the website to function. These cookies enable core
                   functionality such as security, authentication, and account management.
                 </p>
               </div>
 
-              <div className="cookie-option">
-                <div className="cookie-option-header">
-                  <label htmlFor="consent-analytics">
-                    <strong>Analytics Cookies</strong>
+              <div className="p-4 bg-muted rounded-lg border border-border">
+                <div className="flex justify-between items-center mb-2 max-sm:flex-col max-sm:items-start max-sm:gap-2">
+                  <label htmlFor="consent-analytics" className="flex items-center gap-2 cursor-pointer flex-1">
+                    <strong className="text-foreground">Analytics Cookies</strong>
                   </label>
                   <input
                     type="checkbox"
                     id="consent-analytics"
                     checked={customConsents.analytics}
                     onChange={() => handleToggleConsent('analytics')}
+                    className="w-5 h-5 cursor-pointer accent-primary"
                     aria-label="Analytics cookies"
                   />
                 </div>
-                <p className="cookie-option-description">
+                <p className="m-0 text-sm text-muted-foreground leading-relaxed">
                   Help us understand how visitors interact with our website by collecting
                   and reporting information anonymously via PostHog.
                 </p>
@@ -175,16 +186,16 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
 
             </div>
 
-            <div className="cookie-consent-actions">
+            <div className="flex gap-4 flex-wrap justify-center my-6 mb-4 max-sm:flex-col">
               <button
-                className="btn btn-primary"
+                className={btnPrimary}
                 onClick={handleSavePreferences}
                 aria-label="Save cookie preferences"
               >
                 Save Preferences
               </button>
               <button
-                className="btn btn-link"
+                className={btnLink}
                 onClick={() => setShowDetails(false)}
                 aria-label="Go back to simple view"
               >
@@ -194,13 +205,13 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
           </div>
         )}
 
-        <p className="cookie-consent-footer">
+        <p className="mt-4 mb-0 text-[0.85rem] text-muted-foreground text-center pt-4 border-t border-border">
           By using BoostedBudget, you agree to our use of cookies.{' '}
-          <a href="/legal/privacy-policy" target="_blank" rel="noopener noreferrer">
+          <a href="/legal/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-primary underline hover:no-underline">
             Privacy Policy
           </a>{' '}
           |{' '}
-          <a href="/legal/cookie-policy" target="_blank" rel="noopener noreferrer">
+          <a href="/legal/cookie-policy" target="_blank" rel="noopener noreferrer" className="text-primary underline hover:no-underline">
             Cookie Policy
           </a>
         </p>

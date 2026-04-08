@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import './SearchableSelect.css'
 
 export interface SearchableSelectOption {
   value: string
@@ -169,7 +168,7 @@ export function SearchableSelect({
   return (
     <div
       ref={containerRef}
-      className={`searchable-select ${className}`.trim()}
+      className={`searchable-select relative inline-block w-full ${className}`.trim()}
     >
       <input
         ref={inputRef}
@@ -182,7 +181,7 @@ export function SearchableSelect({
         aria-activedescendant={
           isOpen && highlightedIndex >= 0 ? optionId(highlightedIndex) : undefined
         }
-        className="searchable-select__input"
+        className="w-full px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70 disabled:cursor-not-allowed placeholder:text-muted-foreground"
         placeholder={placeholder}
         value={inputValue}
         onChange={handleInputChange}
@@ -196,14 +195,14 @@ export function SearchableSelect({
         <ul
           ref={listboxRef}
           role="listbox"
-          className="searchable-select__dropdown"
+          className="absolute top-full left-0 right-0 mt-1 p-0 m-0 list-none bg-card border border-border rounded shadow-lg max-h-60 overflow-y-auto z-[100]"
         >
           {allowClear && (
             <li
               role="option"
               aria-selected={value === null}
-              className={`searchable-select__option searchable-select__option--clear ${
-                value === null ? 'searchable-select__option--selected' : ''
+              className={`flex flex-col gap-0.5 px-3 py-2 cursor-pointer transition-colors text-muted-foreground italic border-b border-border ${
+                value === null ? 'font-medium text-primary' : 'hover:bg-muted'
               }`}
               onClick={() => handleSelect(null)}
             >
@@ -212,7 +211,7 @@ export function SearchableSelect({
           )}
 
           {filteredOptions.length === 0 ? (
-            <li className="searchable-select__no-results">No results found</li>
+            <li className="px-3 py-3 text-center text-muted-foreground text-sm italic">No results found</li>
           ) : (
             filteredOptions.map((option, index) => (
               <li
@@ -220,18 +219,18 @@ export function SearchableSelect({
                 id={optionId(index)}
                 role="option"
                 aria-selected={option.value === value}
-                className={`searchable-select__option ${
+                className={`flex flex-col gap-0.5 px-3 py-2 cursor-pointer transition-colors ${
                   index === highlightedIndex
-                    ? 'searchable-select__option--highlighted'
-                    : ''
+                    ? 'searchable-select__option--highlighted bg-accent'
+                    : 'hover:bg-muted'
                 } ${
-                  option.value === value ? 'searchable-select__option--selected' : ''
+                  option.value === value ? 'font-medium' : ''
                 }`}
                 onClick={() => handleSelect(option.value)}
               >
-                <span className="searchable-select__option-label">{option.label}</span>
+                <span className={`text-sm whitespace-nowrap overflow-hidden text-ellipsis ${option.value === value ? 'text-primary' : 'text-foreground'}`}>{option.label}</span>
                 {option.sublabel && (
-                  <span className="searchable-select__option-sublabel">
+                  <span className="text-xs text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis">
                     {option.sublabel}
                   </span>
                 )}
