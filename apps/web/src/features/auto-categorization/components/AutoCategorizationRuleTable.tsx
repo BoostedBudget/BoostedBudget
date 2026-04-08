@@ -13,7 +13,6 @@ import {
   type FilterOption,
   type RangeValue,
 } from '@/shared/components/ColumnFilterDropdown'
-import './AutoCategorizationRuleTable.css'
 
 export type SortColumn = 'name' | 'status' | 'priority' | 'matches' | 'category'
 export type SortDirection = 'asc' | 'desc'
@@ -156,10 +155,10 @@ export function AutoCategorizationRuleTable({
         type="button"
         onClick={() => handleSort(column)}
         aria-sort={ariaSort}
-        className="autocat-table__sort-btn"
+        className="inline-flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 font-[inherit] text-inherit"
       >
         {label}
-        <span className="autocat-table__sort-icon">
+        <span className="inline-flex h-4 w-4 items-center [&_svg]:h-3.5 [&_svg]:w-3.5">
           {isActive && sortDirection === 'asc' && (
             <ChevronUp aria-hidden="true" />
           )}
