@@ -99,7 +99,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
 
   return (
     <div
-      className="fixed bottom-0 left-0 right-0 z-[9999] bg-black/50 backdrop-blur-sm animate-in fade-in"
+      className="cookie-consent-banner fixed bottom-0 left-0 right-0 z-[9999] bg-black/50 backdrop-blur-sm animate-in fade-in"
       role="dialog"
       aria-label="Cookie Consent"
     >
