@@ -6,7 +6,6 @@
  * TDD GREEN: Implementation to pass all tests.
  */
 
-import './BudgetProgressBar.css';
 
 export interface BudgetProgressBarProps {
   /** Amount spent from the budget */
@@ -94,23 +93,24 @@ export function BudgetProgressBar({
   // Cap the visual width at 100% but show actual percentage in text
   const visualWidth = Math.min(percent, 100);
 
-  const classNames = [
-    'budget-progress',
-    `budget-progress--${size}`,
-    `budget-progress--${status}`,
-  ].join(' ');
+  const barHeightClass = size === 'small' ? 'h-2' : size === 'large' ? 'h-4' : 'h-3'
+  const textSizeClass = size === 'small' ? 'text-xs' : size === 'large' ? 'text-base' : 'text-sm'
+
+  const spentColorClass = status === 'danger' ? 'text-destructive' : status === 'warning' ? 'text-warning' : 'text-success'
+  const fillColorClass = status === 'danger' ? 'bg-destructive' : status === 'warning' ? 'bg-warning' : 'bg-success'
+  const percentColorClass = status === 'danger' ? 'text-destructive' : 'text-muted-foreground'
 
   return (
-    <div className={classNames}>
+    <div className={`flex flex-col gap-2 w-full budget-progress--${size} budget-progress--${status}`}>
       {showAmounts && (
-        <div className="budget-progress__amounts">
-          <span className="budget-progress__spent">{formatCurrency(spent, currencyCode)}</span>
-          <span className="budget-progress__total">of {formatCurrency(total, currencyCode)}</span>
+        <div className={`flex justify-between items-center ${textSizeClass}`}>
+          <span className={`font-semibold ${spentColorClass}`}>{formatCurrency(spent, currencyCode)}</span>
+          <span className="text-muted-foreground">of {formatCurrency(total, currencyCode)}</span>
         </div>
       )}
 
       <div
-        className="budget-progress__bar"
+        className={`w-full bg-muted rounded-full overflow-hidden ${barHeightClass}`}
         role="progressbar"
         aria-valuenow={percent}
         aria-valuemin={0}
@@ -118,12 +118,12 @@ export function BudgetProgressBar({
         aria-label={label}
       >
         <div
-          className="budget-progress__fill"
+          className={`h-full rounded-full transition-[width] duration-300 ease-in-out ${fillColorClass}`}
           style={{ width: `${visualWidth}%` }}
         />
       </div>
 
-      <div className="budget-progress__percentage">{percent}%</div>
+      <div className={`text-right font-semibold ${textSizeClass} ${percentColorClass}`}>{percent}%</div>
     </div>
   );
 }

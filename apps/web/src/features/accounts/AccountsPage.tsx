@@ -28,7 +28,6 @@ import { useTierLimits } from '../subscription/hooks/useTierLimits'
 import { useAccountCustomization } from './hooks/useAccountCustomization'
 import { useAccountFilters } from './hooks/useAccountFilters'
 import type { Account, UpdateAccountRequest } from './types'
-import './AccountsPage.css'
 
 // Get initial view from localStorage
 function getInitialView(): ListView {
@@ -328,18 +327,21 @@ export function AccountsPage() {
 
   if (loading || tiersLoading) {
     return (
-      <div className="accounts-page responsive">
-        <div className="loading">Loading your accounts...</div>
+      <div className="p-8 max-w-[1200px] mx-auto">
+        <div className="text-center py-12 px-4">Loading your accounts...</div>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="accounts-page responsive">
-        <div className="error-state">
-          <p className="error-message">{error}</p>
-          <button onClick={() => refetchAccounts()} className="btn-retry">
+      <div className="p-8 max-w-[1200px] mx-auto">
+        <div className="text-center py-12 px-4">
+          <p className="text-destructive mb-4 text-lg">{error}</p>
+          <button
+            onClick={() => refetchAccounts()}
+            className="px-6 py-3 text-base bg-primary text-primary-foreground border-none rounded cursor-pointer hover:bg-primary/90 transition-colors"
+          >
             Retry
           </button>
         </div>
@@ -348,14 +350,14 @@ export function AccountsPage() {
   }
 
   return (
-    <div className="accounts-page responsive">
-      <div className="accounts-header">
-        <h1>My Accounts</h1>
-        <div className="accounts-header__actions">
+    <div className="p-8 max-w-[1200px] mx-auto max-sm:p-4">
+      <div className="flex justify-between items-center mb-8 max-sm:flex-col max-sm:items-start max-sm:gap-4">
+        <h1 className="m-0 text-3xl text-foreground">My Accounts</h1>
+        <div className="flex items-center gap-3 max-sm:w-full max-sm:flex-wrap">
           {/* Issue #307: Show hidden toggle */}
           {hiddenCount > 0 && (
             <button
-              className="accounts-header__toggle"
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded border cursor-pointer transition-colors focus:outline-none focus:ring-2 focus:ring-primary/50 ${showHidden ? 'bg-info/10 border-primary text-primary' : 'bg-muted text-foreground border-border hover:bg-accent'}`}
               onClick={() => setShowHidden(!showHidden)}
               aria-pressed={showHidden}
             >
@@ -405,11 +407,11 @@ export function AccountsPage() {
           className="mt-8"
         />
       ) : (
-        <div className="accounts-list">
-          <p className="accounts-count">
+        <div>
+          <p className="text-base text-muted-foreground mb-4">
             {accountCountDisplay}
             {hiddenCount > 0 && !showHidden && (
-              <span className="accounts-count__hidden"> ({hiddenCount} hidden)</span>
+              <span className="text-muted-foreground italic"> ({hiddenCount} hidden)</span>
             )}
           </p>
 
@@ -434,7 +436,7 @@ export function AccountsPage() {
               onBalanceRangeChange={setBalanceRange}
             />
           ) : (
-            <div className="accounts-grid">
+            <div className="grid gap-6 max-sm:grid-cols-1" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
               {displayedAccounts.map((account) => (
                 <AccountCard
                   key={account.id}

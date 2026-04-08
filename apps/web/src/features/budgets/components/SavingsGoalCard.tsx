@@ -8,7 +8,6 @@
 
 import { computeSavingsProgress, computeSavingsRemaining } from '../types';
 import type { SavingsGoal } from '../types';
-import './SavingsGoalCard.css';
 
 export interface SavingsGoalCardProps {
   /** The savings goal to display */
@@ -78,59 +77,59 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsG
   const visualWidth = Math.min(progress, 100);
 
   return (
-    <div className="savings-goal-card">
-      <div className="savings-goal-card__header">
-        <div className="savings-goal-card__title-row">
-          <h3 className="savings-goal-card__name">{goal.name}</h3>
-          {goal.is_completed && <span className="savings-goal-card__badge">Completed</span>}
+    <div className="bg-card border border-border rounded-xl p-6 flex flex-col gap-4 transition-shadow hover:shadow-md">
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-2">
+          <h3 className="m-0 text-lg font-semibold text-foreground">{goal.name}</h3>
+          {goal.is_completed && <span className="bg-success/10 text-success text-xs font-medium px-2 py-0.5 rounded-full">Completed</span>}
         </div>
         {goal.description && (
-          <p className="savings-goal-card__description">{goal.description}</p>
+          <p className="m-0 text-sm text-muted-foreground">{goal.description}</p>
         )}
       </div>
 
-      <div className="savings-goal-card__amounts">
-        <span className="savings-goal-card__current">
+      <div className="flex items-baseline gap-1">
+        <span className="text-2xl font-bold text-primary">
           {formatCurrency(goal.current_amount, goal.currency_code)}
         </span>
-        <span className="savings-goal-card__separator">/</span>
-        <span className="savings-goal-card__target">
+        <span className="text-base text-muted-foreground">/</span>
+        <span className="text-base text-muted-foreground">
           {formatCurrency(goal.target_amount, goal.currency_code)}
         </span>
       </div>
 
-      <div className="savings-goal-card__progress">
+      <div className="flex items-center gap-3">
         <div
-          className="savings-goal-card__progress-bar"
+          className="flex-1 h-3 bg-muted rounded-full overflow-hidden"
           role="progressbar"
           aria-valuenow={progress}
           aria-valuemin={0}
           aria-valuemax={100}
         >
           <div
-            className="savings-goal-card__progress-fill"
+            className="h-full bg-gradient-to-r from-primary to-primary/80 rounded-full transition-[width] duration-300 ease-in-out"
             style={{ width: `${visualWidth}%` }}
           />
         </div>
-        <span className="savings-goal-card__percentage">{progress}%</span>
+        <span className="text-sm font-semibold text-muted-foreground min-w-[3rem] text-right">{progress}%</span>
       </div>
 
-      <div className="savings-goal-card__footer">
-        <span className="savings-goal-card__remaining">
+      <div className="flex justify-between items-center text-sm text-muted-foreground">
+        <span className="font-medium">
           {formatCurrency(remaining, goal.currency_code)} to go
         </span>
         {goal.deadline && (
-          <span className="savings-goal-card__deadline">
+          <span className="savings-goal-card__deadline text-xs">
             Due: {formatDate(goal.deadline)}
           </span>
         )}
       </div>
 
       {(onEdit || onDelete || onAddFunds) && (
-        <div className="savings-goal-card__actions">
+        <div className="flex gap-2 mt-2 pt-4 border-t border-border">
           {onAddFunds && !goal.is_completed && (
             <button
-              className="savings-goal-card__btn savings-goal-card__btn--primary"
+              className="px-4 py-2 text-sm font-medium bg-primary text-primary-foreground border border-primary rounded-md cursor-pointer hover:bg-primary/90 transition-colors"
               onClick={handleAddFunds}
               aria-label="Add funds"
             >
@@ -139,7 +138,7 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsG
           )}
           {onEdit && (
             <button
-              className="savings-goal-card__btn savings-goal-card__btn--edit"
+              className="px-4 py-2 text-sm font-medium text-primary border border-primary rounded-md cursor-pointer bg-transparent hover:bg-primary/10 transition-colors"
               onClick={handleEdit}
               aria-label="Edit goal"
             >
@@ -148,7 +147,7 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsG
           )}
           {onDelete && (
             <button
-              className="savings-goal-card__btn savings-goal-card__btn--delete"
+              className="px-4 py-2 text-sm font-medium text-destructive border border-destructive rounded-md cursor-pointer bg-transparent hover:bg-destructive hover:text-destructive-foreground transition-colors"
               onClick={handleDelete}
               aria-label="Delete goal"
             >
