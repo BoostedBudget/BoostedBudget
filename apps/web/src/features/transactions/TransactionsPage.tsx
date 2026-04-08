@@ -18,7 +18,6 @@ import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
-import './TransactionsPage.css'
 
 /**
  * Transactions Page
@@ -282,8 +281,8 @@ export function TransactionsPage() {
   // Loading state
   if (loading && !data) {
     return (
-      <main className="transactions-page">
-        <div className="loading">Loading your transactions...</div>
+      <main className="p-8 max-w-[1200px] mx-auto">
+        <div className="text-center py-12 px-4">Loading your transactions...</div>
       </main>
     )
   }
@@ -291,10 +290,13 @@ export function TransactionsPage() {
   // Error state
   if (error) {
     return (
-      <main className="transactions-page">
-        <div className="error-state">
-          <p className="error-message">Failed to load transactions. Please try again.</p>
-          <button onClick={refetch} className="btn-retry">
+      <main className="p-8 max-w-[1200px] mx-auto">
+        <div className="text-center py-12 px-4">
+          <p className="text-destructive mb-4 text-lg">Failed to load transactions. Please try again.</p>
+          <button
+            onClick={refetch}
+            className="px-6 py-3 text-base bg-primary text-primary-foreground border-none rounded cursor-pointer hover:opacity-90 transition-opacity"
+          >
             Retry
           </button>
         </div>
@@ -306,15 +308,15 @@ export function TransactionsPage() {
   const isEmpty = transactions.length === 0
 
   return (
-    <main className="transactions-page">
-      <div className="transactions-header">
-        <h1>Transactions</h1>
+    <main className="p-8 max-w-[1200px] mx-auto max-sm:p-4">
+      <div className="flex justify-between items-center gap-4 mb-8 max-sm:flex-col max-sm:items-start">
+        <h1 className="text-foreground text-3xl font-semibold m-0">Transactions</h1>
         <input
           type="search"
           placeholder="Search transactions..."
           value={filters.search ?? ''}
           onChange={handleSearchChange}
-          className="search-input"
+          className="px-4 py-3 text-base border border-input rounded-md min-w-[300px] bg-background text-foreground transition-colors focus:outline-none focus:border-ring focus:ring-2 focus:ring-ring/10 max-sm:w-full max-sm:min-w-0"
           aria-label="Search transactions"
         />
       </div>
@@ -359,8 +361,8 @@ export function TransactionsPage() {
         />
       ) : (
         <>
-          <div className="transactions-info">
-            <p className="transactions-count">
+          <div className="mb-4">
+            <p className="text-base text-muted-foreground m-0">
               {hasActiveFilters ? (
                 <>
                   Showing {transactions.length} of {totalCount}{' '}
@@ -375,7 +377,7 @@ export function TransactionsPage() {
           </div>
 
           {/* Issue #584: Transaction table view */}
-          <div className="transactions-table-container">
+          <div className="min-h-[200px] overflow-x-auto">
             <TransactionTable
               transactions={transactions}
               accountsMap={accountsMap}
@@ -399,14 +401,22 @@ export function TransactionsPage() {
           </div>
 
           {(hasMore || currentPage > 0) && (
-            <div className="pagination-controls">
+            <div className="flex justify-center gap-4 mt-8 pt-8 border-t border-border max-sm:flex-col">
               {currentPage > 0 && (
-                <button onClick={previousPage} className="btn-pagination" disabled={loading}>
+                <button
+                  onClick={previousPage}
+                  className="px-6 py-3 text-base bg-primary text-primary-foreground border-none rounded cursor-pointer hover:opacity-90 transition-opacity disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed max-sm:w-full"
+                  disabled={loading}
+                >
                   Previous
                 </button>
               )}
               {hasMore && (
-                <button onClick={nextPage} className="btn-pagination" disabled={loading}>
+                <button
+                  onClick={nextPage}
+                  className="px-6 py-3 text-base bg-primary text-primary-foreground border-none rounded cursor-pointer hover:opacity-90 transition-opacity disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed max-sm:w-full"
+                  disabled={loading}
+                >
                   Next
                 </button>
               )}
