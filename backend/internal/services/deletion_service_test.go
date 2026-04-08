@@ -157,6 +157,10 @@ func (m *MockProfileRepositoryForDeletion) GetUsersWithExpiredRetention(ctx cont
 	return nil, nil
 }
 
+func (m *MockProfileRepositoryForDeletion) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	return nil, nil
+}
+
 // MockEmailService for testing
 type MockEmailService struct {
 	mock.Mock
