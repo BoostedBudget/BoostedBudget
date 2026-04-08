@@ -13,7 +13,6 @@ import {
   type FilterOption,
   type RangeValue,
 } from '@/shared/components/ColumnFilterDropdown'
-import './BudgetTable.css'
 
 export type SortColumn = 'name' | 'period' | 'amount' | 'progress' | 'remaining'
 export type SortDirection = 'asc' | 'desc'
@@ -140,10 +139,10 @@ export function BudgetTable({
         type="button"
         onClick={() => handleSort(column)}
         aria-sort={ariaSort}
-        className="budget-table__sort-btn"
+        className="inline-flex items-center gap-1 bg-none border-none p-0 font-[inherit] color-inherit cursor-pointer hover:text-foreground"
       >
         {label}
-        <span className="budget-table__sort-icon">
+        <span className="inline-flex items-center w-4 h-4 [&_svg]:w-3.5 [&_svg]:h-3.5">
           {isActive && sortDirection === 'asc' && (
             <ChevronUp aria-hidden="true" />
           )}

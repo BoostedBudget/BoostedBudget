@@ -9,6 +9,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { cn } from '@/lib/utils';
 import { XIcon } from 'lucide-react';
 import {
   Dialog,
@@ -23,7 +24,6 @@ import { useGetUserTags } from '@boostedbudget/api-client/endpoints/tags/tags';
 import type { UserTag } from '@/features/tags/types';
 import type { Budget, BudgetPeriod, CreateBudgetRequest, IncomeSource } from '../types';
 import { IncomeSourceConfig } from './income';
-import './CreateBudgetDialog.css';
 
 export interface CreateBudgetDialogProps {
   isOpen: boolean;
@@ -239,9 +239,10 @@ export function CreateBudgetDialog({
                   name="name"
                   value={formData.name}
                   onChange={handleInputChange}
-                  className={`create-budget-dialog__input ${
-                    errors.name ? 'create-budget-dialog__input--error' : ''
-                  }`}
+                  className={cn(
+                    'w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground',
+                    errors.name && 'border-destructive focus:border-destructive focus:ring-destructive/10'
+                  )}
                   placeholder="e.g., Monthly Budget"
                 />
                 {errors.name && (
@@ -265,7 +266,7 @@ export function CreateBudgetDialog({
                   value={formData.description}
                   onChange={handleInputChange}
                   rows={2}
-                  className="create-budget-dialog__input"
+                  className="w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground"
                   placeholder="What is this budget for?"
                 />
               </div>
@@ -283,7 +284,7 @@ export function CreateBudgetDialog({
                   name="period"
                   value={formData.period}
                   onChange={handleInputChange}
-                  className="create-budget-dialog__input"
+                  className="w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground"
                 >
                   {PERIOD_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -313,9 +314,10 @@ export function CreateBudgetDialog({
                     onChange={handleInputChange}
                     min="0"
                     step="0.01"
-                    className={`create-budget-dialog__input pl-7 ${
-                      errors.amount ? 'create-budget-dialog__input--error' : ''
-                    }`}
+                    className={cn(
+                      'w-full py-[0.625rem] px-3 mt-1 pl-7 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground',
+                      errors.amount && 'border-destructive focus:border-destructive focus:ring-destructive/10'
+                    )}
                     placeholder="0.00"
                   />
                 </div>
@@ -340,7 +342,7 @@ export function CreateBudgetDialog({
                   name="start_date"
                   value={formData.start_date}
                   onChange={handleInputChange}
-                  className="create-budget-dialog__input"
+                  className="w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground"
                 />
               </div>
 
@@ -360,9 +362,10 @@ export function CreateBudgetDialog({
                     value={formData.end_date}
                     onChange={handleInputChange}
                     min={formData.start_date}
-                    className={`create-budget-dialog__input ${
-                      errors.end_date ? 'create-budget-dialog__input--error' : ''
-                    }`}
+                    className={cn(
+                      'w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground',
+                      errors.end_date && 'border-destructive focus:border-destructive focus:ring-destructive/10'
+                    )}
                   />
                   {errors.end_date && (
                     <p className="mt-1 text-sm text-red-600 dark:text-red-400">

@@ -163,3 +163,75 @@
     font-size: 1.3rem;
   }
 }
+
+/* Dark mode */
+.dark .privacy-policy {
+  background-color: var(--background);
+}
+
+.dark .privacy-policy-container {
+  background: var(--card);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.dark .privacy-policy h1 {
+  color: var(--foreground);
+}
+
+.dark .last-updated {
+  color: var(--muted-foreground);
+}
+
+.dark .privacy-policy h2 {
+  color: var(--foreground);
+}
+
+.dark .privacy-policy h3 {
+  color: var(--foreground);
+}
+
+.dark .privacy-policy p {
+  color: var(--muted-foreground);
+}
+
+.dark .privacy-policy li {
+  color: var(--muted-foreground);
+}
+
+.dark .privacy-policy li strong {
+  color: var(--foreground);
+}
+
+.dark .privacy-policy strong {
+  color: var(--foreground);
+}
+
+.dark .privacy-policy hr {
+  border-top-color: var(--border);
+}
+
+.dark .important-note {
+  background-color: rgba(234, 179, 8, 0.1);
+  border-left-color: rgba(234, 179, 8, 0.6);
+}
+
+.dark .important-note strong {
+  color: #fbbf24;
+}
+
+.dark .privacy-summary {
+  background-color: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+.dark .privacy-summary h2 {
+  color: #60a5fa;
+}
+
+.dark .contact-cta {
+  border-top-color: rgba(59, 130, 246, 0.3);
+}
+
+.dark .contact-cta strong {
+  color: #60a5fa;
+}

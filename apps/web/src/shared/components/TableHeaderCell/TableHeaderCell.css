@@ -57,25 +57,6 @@
   margin-left: 0.25rem;
 }
 
-/* Dark mode support */
-@media (prefers-color-scheme: dark) {
-  .table-header-cell__label {
-    color: var(--color-text-secondary-dark, #9ca3af);
-  }
-
-  .table-header-cell__sort-btn {
-    color: var(--color-text-secondary-dark, #9ca3af);
-  }
-
-  .table-header-cell__sort-btn:hover {
-    color: var(--color-text-primary-dark, #f9fafb);
-  }
-
-  .table-header-cell__sort-btn[aria-sort] {
-    color: var(--color-primary-light, #60a5fa);
-  }
-}
-
 /* .dark class support */
 .dark .table-header-cell__label {
   color: var(--color-text-secondary-dark, #9ca3af);

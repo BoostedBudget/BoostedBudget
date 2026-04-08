@@ -130,3 +130,21 @@
   font-size: 0.75rem;
   font-weight: 700;
 }
+
+/* Dark mode */
+.dark .budget-overview-widget__title,
+.dark .budget-overview-widget__amount,
+.dark .budget-overview-widget__stat-value,
+.dark .budget-overview-widget__empty-title {
+  color: var(--foreground);
+}
+
+.dark .budget-overview-widget__period {
+  color: var(--muted-foreground);
+  background: var(--muted);
+}
+
+.dark .budget-overview-widget__stat-label,
+.dark .budget-overview-widget__empty-text {
+  color: var(--muted-foreground);
+}

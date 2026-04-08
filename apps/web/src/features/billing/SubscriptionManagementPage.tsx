@@ -230,9 +230,9 @@ export function SubscriptionManagementPage() {
           />
         )}
 
-        <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow-sm space-y-2">
-          <p className="text-sm text-gray-600 dark:text-gray-400">Your plan will automatically activate after your trial ends.</p>
-          <p className="text-sm text-gray-600 dark:text-gray-400">You'll be charged {subscription.currency} {actualAmount}/{billingPeriod} starting on {trialEndDate}.</p>
+        <div className="rounded-lg bg-card p-6 shadow-sm space-y-2">
+          <p className="text-sm text-muted-foreground">Your plan will automatically activate after your trial ends.</p>
+          <p className="text-sm text-muted-foreground">You'll be charged {subscription.currency} {actualAmount}/{billingPeriod} starting on {trialEndDate}.</p>
         </div>
 
         <div className="space-y-3">

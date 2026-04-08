@@ -154,3 +154,40 @@
   white-space: nowrap;
   border: 0;
 }
+
+/* Dark mode */
+.dark .unallocated-card {
+  background: var(--card);
+  border-color: var(--border);
+}
+
+.dark .unallocated-card--neutral {
+  background: color-mix(in srgb, var(--success) 10%, var(--card));
+}
+
+.dark .unallocated-card--warning {
+  background: color-mix(in srgb, var(--destructive) 10%, var(--card));
+}
+
+.dark .unallocated-card__title,
+.dark .unallocated-card__percentage,
+.dark .unallocated-card__description {
+  color: var(--muted-foreground);
+}
+
+.dark .unallocated-card__amount,
+.dark .unallocated-card__status {
+  color: var(--foreground);
+}
+
+.dark .unallocated-card--warning .unallocated-card__amount {
+  color: var(--destructive);
+}
+
+.dark .unallocated-card--warning .unallocated-card__description {
+  color: var(--destructive);
+}
+
+.dark .unallocated-card__btn--secondary:hover {
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+}

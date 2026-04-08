@@ -32,7 +32,6 @@ import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
 import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { computeBudgetMetrics, type Budget, type BudgetWithMetrics, type SavingsGoal } from '../types'
-import './BudgetsPage.css'
 
 // Issue #462, #521: Use single state for mutual exclusion - only one dialog can be open at a time
 type ActiveDialog = 'budget' | 'goal' | 'delete-budget' | 'delete-goal' | null
@@ -240,8 +239,8 @@ export function BudgetsPage() {
 
   if (loading) {
     return (
-      <div className="budgets-page">
-        <div className="budgets-page__loading">
+      <div className="p-6 max-w-[1200px] mx-auto">
+        <div className="flex flex-col items-center justify-center h-[300px] gap-4 text-muted-foreground">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
           <p>Loading budgets...</p>
         </div>
@@ -251,9 +250,9 @@ export function BudgetsPage() {
 
   if (error) {
     return (
-      <div className="budgets-page">
-        <div className="budgets-page__error">
-          <span className="budgets-page__error-icon">!</span>
+      <div className="p-6 max-w-[1200px] mx-auto">
+        <div className="flex items-center justify-center h-[200px] gap-2 text-destructive">
+          <span className="flex items-center justify-center w-6 h-6 bg-destructive text-white rounded-full text-xs font-bold">!</span>
           <span>Error loading budgets: {error.message}</span>
         </div>
       </div>
@@ -266,9 +265,9 @@ export function BudgetsPage() {
   const completedGoals = goals.filter((g) => g.is_completed)
 
   return (
-    <div className="budgets-page">
-      <header className="budgets-page__header">
-        <h1>Budgets</h1>
+    <div className="p-6 max-w-[1200px] mx-auto">
+      <header className="mb-8 flex items-center justify-between">
+        <h1 className="m-0 text-[1.75rem] font-bold text-foreground">Budgets</h1>
         <ListViewToggle
           view={view}
           onChange={setView}
@@ -276,15 +275,15 @@ export function BudgetsPage() {
         />
       </header>
 
-      <section className="budgets-page__section">
-        <div className="budgets-page__section-header">
-          <h2>Active Budgets</h2>
+      <section className="mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="m-0 text-xl font-semibold text-foreground">Active Budgets</h2>
           {activeBudgets.length > 0 && (
             <ReadOnlyGuard>
               <button
                 type="button"
                 onClick={openBudgetDialog}
-                className="budgets-page__create-button"
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary bg-primary/10 border border-primary rounded-lg cursor-pointer transition-all hover:bg-primary hover:text-primary-foreground"
                 aria-label="Create budget"
               >
                 <PlusIcon className="h-5 w-5" />
@@ -323,7 +322,7 @@ export function BudgetsPage() {
             onProgressRangeChange={setProgressRange}
           />
         ) : (
-          <div className="budgets-page__grid">
+          <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
             {activeBudgets.map((budget) => (
               <BudgetCard key={budget.id} budget={budget} onDelete={handleDeleteBudgetClick} />
             ))}
@@ -332,8 +331,8 @@ export function BudgetsPage() {
       </section>
 
       {inactiveBudgets.length > 0 && (
-        <section className="budgets-page__section">
-          <h2>Past Budgets</h2>
+        <section className="mb-8">
+          <h2 className="mb-4 text-xl font-semibold text-foreground">Past Budgets</h2>
           {view === 'table' ? (
             <BudgetTable
               budgets={filterAndSortBudgets(inactiveBudgets)}
@@ -350,7 +349,7 @@ export function BudgetsPage() {
               onProgressRangeChange={setProgressRange}
             />
           ) : (
-            <div className="budgets-page__grid">
+            <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
               {inactiveBudgets.map((budget) => (
                 <BudgetCard key={budget.id} budget={budget} onDelete={handleDeleteBudgetClick} />
               ))}
@@ -359,15 +358,15 @@ export function BudgetsPage() {
         </section>
       )}
 
-      <section className="budgets-page__section">
-        <div className="budgets-page__section-header">
-          <h2>Savings Goals</h2>
+      <section className="mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="m-0 text-xl font-semibold text-foreground">Savings Goals</h2>
           {(activeGoals.length > 0 || completedGoals.length > 0) && (
             <ReadOnlyGuard>
               <button
                 type="button"
                 onClick={openGoalDialog}
-                className="budgets-page__create-button"
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary bg-primary/10 border border-primary rounded-lg cursor-pointer transition-all hover:bg-primary hover:text-primary-foreground"
                 aria-label="Create savings goal"
               >
                 <PlusIcon className="h-5 w-5" />
@@ -393,7 +392,7 @@ export function BudgetsPage() {
         ) : (
           <>
             {activeGoals.length > 0 && (
-              <div className="budgets-page__grid">
+              <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
                 {activeGoals.map((goal) => (
                   <SavingsGoalCard key={goal.id} goal={goal} onDelete={handleDeleteGoalClick} />
                 ))}
@@ -401,8 +400,8 @@ export function BudgetsPage() {
             )}
             {completedGoals.length > 0 && (
               <>
-                <h3>Completed Goals</h3>
-                <div className="budgets-page__grid">
+                <h3 className="mt-6 mb-4 text-base font-semibold text-muted-foreground">Completed Goals</h3>
+                <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
                   {completedGoals.map((goal) => (
                     <SavingsGoalCard key={goal.id} goal={goal} onDelete={handleDeleteGoalClick} />
                   ))}

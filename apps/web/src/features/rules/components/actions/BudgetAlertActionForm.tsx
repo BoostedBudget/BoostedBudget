@@ -10,7 +10,6 @@ import { useCallback, useMemo } from 'react'
 import { useBudgets } from '../../../budgets/hooks/useBudgets'
 import type { AlertAction, NotificationChannel, ThresholdType } from '../../types'
 import { formatCategoryPath } from '../../../budgets/types'
-import './BudgetAlertActionForm.css'
 
 export interface BudgetAlertActionFormProps {
   /** Current action configuration */
@@ -146,10 +145,10 @@ export function BudgetAlertActionForm({
   )
 
   return (
-    <div className={`budget-alert-form ${className}`.trim()}>
+    <div className={`flex flex-col gap-5 ${className}`.trim()}>
       {/* Budget Selection */}
-      <div className="budget-alert-form__field">
-        <label htmlFor="budget-select" className="budget-alert-form__label">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="budget-select" className="text-sm font-medium text-gray-700 dark:text-gray-300">
           Budget
         </label>
         <select
@@ -157,7 +156,7 @@ export function BudgetAlertActionForm({
           value={action.budget_id ?? ''}
           onChange={handleBudgetChange}
           disabled={disabled || loading}
-          className="budget-alert-form__select"
+          className="cursor-pointer rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
         >
           <option value="">Select a budget...</option>
           {budgets.map((budget) => (
@@ -170,8 +169,8 @@ export function BudgetAlertActionForm({
 
       {/* Category Selection (only show when budget selected) */}
       {action.budget_id && (
-        <div className="budget-alert-form__field">
-          <label htmlFor="category-select" className="budget-alert-form__label">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="category-select" className="text-sm font-medium text-gray-700 dark:text-gray-300">
             Category
           </label>
           <select
@@ -179,7 +178,7 @@ export function BudgetAlertActionForm({
             value={action.category_id ?? ''}
             onChange={handleCategoryChange}
             disabled={disabled}
-            className="budget-alert-form__select"
+            className="cursor-pointer rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
           >
             <option value="">All Categories</option>
             {categories.map((category) => (
@@ -192,9 +191,9 @@ export function BudgetAlertActionForm({
       )}
 
       {/* Threshold Configuration */}
-      <div className="budget-alert-form__row">
-        <div className="budget-alert-form__field">
-          <label htmlFor="threshold-type" className="budget-alert-form__label">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="threshold-type" className="text-sm font-medium text-gray-700 dark:text-gray-300">
             Threshold Type
           </label>
           <select
@@ -202,7 +201,7 @@ export function BudgetAlertActionForm({
             value={action.threshold_type}
             onChange={handleThresholdTypeChange}
             disabled={disabled}
-            className="budget-alert-form__select"
+            className="cursor-pointer rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
           >
             {THRESHOLD_TYPES.map((type) => (
               <option key={type.value} value={type.value}>
@@ -212,13 +211,13 @@ export function BudgetAlertActionForm({
           </select>
         </div>
 
-        <div className="budget-alert-form__field">
-          <label htmlFor="threshold-value" className="budget-alert-form__label">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="threshold-value" className="text-sm font-medium text-gray-700 dark:text-gray-300">
             Threshold Value
           </label>
-          <div className="budget-alert-form__input-group">
+          <div className="flex items-center overflow-hidden rounded-lg border border-gray-300 bg-white focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10 dark:border-gray-600 dark:bg-gray-900">
             {action.threshold_type === 'amount' && (
-              <span className="budget-alert-form__prefix">$</span>
+              <span className="bg-gray-100 px-3 py-2.5 text-sm font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">$</span>
             )}
             <input
               id="threshold-value"
@@ -228,38 +227,38 @@ export function BudgetAlertActionForm({
               disabled={disabled}
               min={0}
               max={action.threshold_type === 'percentage' ? 100 : undefined}
-              className="budget-alert-form__input"
+              className="min-w-0 flex-1 border-none bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
             />
             {action.threshold_type === 'percentage' && (
-              <span className="budget-alert-form__suffix">%</span>
+              <span className="bg-gray-100 px-3 py-2.5 text-sm font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">%</span>
             )}
           </div>
         </div>
       </div>
 
       {/* Notification Channels */}
-      <fieldset className="budget-alert-form__fieldset" aria-label="Notification Channels">
-        <legend className="budget-alert-form__legend">Notification Channels</legend>
-        <div className="budget-alert-form__channels">
+      <fieldset className="m-0 border-none p-0" aria-label="Notification Channels">
+        <legend className="mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Notification Channels</legend>
+        <div className="flex flex-wrap gap-4">
           {NOTIFICATION_CHANNELS.map((channel) => (
-            <label key={channel.value} className="budget-alert-form__checkbox-label">
+            <label key={channel.value} className="flex cursor-pointer items-center gap-2">
               <input
                 type="checkbox"
                 checked={action.notification_channels.includes(channel.value)}
                 onChange={() => handleChannelToggle(channel.value)}
                 disabled={disabled}
-                className="budget-alert-form__checkbox"
+                className="h-[1.125rem] w-[1.125rem] cursor-pointer accent-blue-600 disabled:cursor-not-allowed"
                 aria-label={channel.label}
               />
-              <span className="budget-alert-form__checkbox-text">{channel.label}</span>
+              <span className="text-sm text-gray-700 dark:text-gray-300">{channel.label}</span>
             </label>
           ))}
         </div>
       </fieldset>
 
       {/* Title Template */}
-      <div className="budget-alert-form__field">
-        <label htmlFor="title-template" className="budget-alert-form__label">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="title-template" className="text-sm font-medium text-gray-700 dark:text-gray-300">
           Title Template
         </label>
         <input
@@ -269,13 +268,13 @@ export function BudgetAlertActionForm({
           onChange={handleTitleChange}
           disabled={disabled}
           placeholder={DEFAULT_TITLE_TEMPLATE}
-          className="budget-alert-form__input"
+          className="rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
         />
       </div>
 
       {/* Message Template */}
-      <div className="budget-alert-form__field">
-        <label htmlFor="message-template" className="budget-alert-form__label">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="message-template" className="text-sm font-medium text-gray-700 dark:text-gray-300">
           Message Template
         </label>
         <textarea
@@ -285,18 +284,18 @@ export function BudgetAlertActionForm({
           disabled={disabled}
           placeholder={DEFAULT_MESSAGE_TEMPLATE}
           rows={3}
-          className="budget-alert-form__textarea"
+          className="min-h-[80px] resize-y rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 font-[inherit] text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
         />
       </div>
 
       {/* Available Placeholders */}
-      <div className="budget-alert-form__placeholders">
-        <span className="budget-alert-form__placeholders-label">Available Placeholders:</span>
-        <div className="budget-alert-form__placeholder-list">
+      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800">
+        <span className="mb-2 block text-xs font-semibold text-gray-600 dark:text-gray-400">Available Placeholders:</span>
+        <div className="flex flex-wrap gap-1.5">
           {AVAILABLE_PLACEHOLDERS.map((placeholder) => (
             <span
               key={placeholder.name}
-              className="budget-alert-form__placeholder"
+              className="cursor-help rounded bg-blue-100 px-2 py-1 font-mono text-xs text-blue-800 dark:bg-blue-900 dark:text-blue-300"
               title={placeholder.description}
             >
               {placeholder.name}

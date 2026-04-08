@@ -113,10 +113,10 @@ function DashboardContent() {
   // Loading state
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-          <p className="mt-4 text-gray-600 dark:text-gray-400">Loading dashboard...</p>
+          <p className="mt-4 text-muted-foreground">Loading dashboard...</p>
         </div>
       </div>
     )
@@ -125,13 +125,13 @@ function DashboardContent() {
   // Error state
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 max-w-md text-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="bg-card rounded-lg shadow-lg p-8 max-w-md text-center">
           <div className="text-red-600 text-5xl mb-4">⚠️</div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+          <h2 className="text-xl font-semibold text-foreground mb-2">
             Failed to Load Dashboard
           </h2>
-          <p className="text-gray-600 dark:text-gray-400 mb-6">{error}</p>
+          <p className="text-muted-foreground mb-6">{error}</p>
           <Button
             onClick={() => window.location.reload()}
           >
@@ -143,13 +143,13 @@ function DashboardContent() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 py-8">
+    <div className="min-h-screen bg-background py-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
-            <p className="mt-2 text-gray-600 dark:text-gray-400">
+            <h1 className="text-3xl font-bold text-foreground">Dashboard</h1>
+            <p className="mt-2 text-muted-foreground">
               {isEditing ? 'Drag widgets to reorder, resize from corners' : 'Track your balance and cash flow'}
             </p>
             {/* Onboarding hint - Issue #412: only show after first bank connected */}
@@ -168,7 +168,7 @@ function DashboardContent() {
 
           <div className="flex items-center gap-3">
             {saving && (
-              <span className="text-sm text-gray-500 dark:text-gray-400 flex items-center gap-1">
+              <span className="text-sm text-muted-foreground flex items-center gap-1">
                 <ArrowPathIcon className="h-4 w-4 animate-spin" />
                 Saving...
               </span>

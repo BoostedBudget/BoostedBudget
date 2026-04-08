@@ -143,3 +143,38 @@
   color: #9ca3af;
   border-color: #374151;
 }
+
+/* Dark mode — Tailwind v4 class-based (.dark on <html>) */
+.dark .allocation-breakdown {
+  background-color: var(--card);
+  border-color: var(--border);
+}
+
+.dark .allocation-breakdown__label {
+  color: var(--card-foreground);
+}
+
+.dark .allocation-breakdown__percentage {
+  color: var(--muted-foreground);
+}
+
+.dark .allocation-breakdown__warning {
+  background-color: rgba(239, 68, 68, 0.15);
+}
+
+.dark .allocation-breakdown__bar {
+  background-color: var(--muted);
+}
+
+.dark .allocation-breakdown__legend-name {
+  color: var(--card-foreground);
+}
+
+.dark .allocation-breakdown__legend-amount {
+  color: var(--muted-foreground);
+}
+
+.dark .allocation-breakdown__total {
+  color: var(--muted-foreground);
+  border-color: var(--border);
+}
