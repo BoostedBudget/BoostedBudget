@@ -8,6 +8,7 @@
  */
 
 import { useState, useCallback } from 'react';
+import { cn } from '@/lib/utils';
 import { XIcon } from 'lucide-react';
 import {
   Dialog,
@@ -200,11 +201,10 @@ export function CreateSavingsGoalDialog({
                 key={template.id}
                 type="button"
                 onClick={() => handleTemplateSelect(template)}
-                className={`create-goal-dialog__template ${
-                  selectedTemplate === template.id
-                    ? 'create-goal-dialog__template--selected'
-                    : ''
-                }`}
+                className={cn(
+                  'py-2 px-3 border border-border rounded-lg bg-muted text-muted-foreground cursor-pointer transition-all text-center hover:border-primary hover:bg-card',
+                  selectedTemplate === template.id && 'border-primary bg-primary/10 text-primary'
+                )}
               >
                 <span className="text-sm font-medium">{template.name}</span>
               </button>
@@ -227,9 +227,10 @@ export function CreateSavingsGoalDialog({
               name="name"
               value={formData.name}
               onChange={handleInputChange}
-              className={`create-goal-dialog__input ${
-                errors.name ? 'create-goal-dialog__input--error' : ''
-              }`}
+              className={cn(
+                'w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground',
+                errors.name && 'border-destructive focus:border-destructive focus:ring-destructive/10'
+              )}
               placeholder="e.g., Vacation Fund"
             />
             {errors.name && (
@@ -253,7 +254,7 @@ export function CreateSavingsGoalDialog({
               value={formData.description}
               onChange={handleInputChange}
               rows={2}
-              className="create-goal-dialog__input"
+              className="w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground"
               placeholder="What are you saving for?"
             />
           </div>
@@ -278,9 +279,10 @@ export function CreateSavingsGoalDialog({
                 onChange={handleInputChange}
                 min="0"
                 step="0.01"
-                className={`create-goal-dialog__input pl-7 ${
-                  errors.target_amount ? 'create-goal-dialog__input--error' : ''
-                }`}
+                className={cn(
+                  'w-full py-[0.625rem] px-3 mt-1 pl-7 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground',
+                  errors.target_amount && 'border-destructive focus:border-destructive focus:ring-destructive/10'
+                )}
                 placeholder="0.00"
               />
             </div>
@@ -304,9 +306,10 @@ export function CreateSavingsGoalDialog({
               name="account_id"
               value={formData.account_id}
               onChange={handleInputChange}
-              className={`create-goal-dialog__input ${
-                errors.account_id ? 'create-goal-dialog__input--error' : ''
-              }`}
+              className={cn(
+                'w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground',
+                errors.account_id && 'border-destructive focus:border-destructive focus:ring-destructive/10'
+              )}
               disabled={accountsLoading}
             >
               <option value="">
@@ -346,7 +349,7 @@ export function CreateSavingsGoalDialog({
               name="deadline"
               value={formData.deadline}
               onChange={handleInputChange}
-              className="create-goal-dialog__input"
+              className="w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground"
               min={new Date().toISOString().split('T')[0]}
             />
           </div>

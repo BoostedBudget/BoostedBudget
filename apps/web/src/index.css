@@ -218,3 +218,13 @@ body {
     @apply bg-background text-foreground;
   }
 }
+
+/* GridStack.js resize handle overrides (cannot be expressed as Tailwind utilities on library DOM) */
+.grid-stack-item > .ui-resizable-handle {
+  z-index: 10;
+}
+
+.dark .grid-stack-item > .ui-resizable-se::after {
+  border-right-color: theme(colors.border);
+  border-bottom-color: theme(colors.border);
+}

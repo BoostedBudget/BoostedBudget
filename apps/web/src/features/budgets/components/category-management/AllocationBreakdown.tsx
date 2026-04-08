@@ -6,9 +6,9 @@
  */
 
 import { useMemo } from 'react';
+import { cn } from '@/lib/utils';
 import type { BudgetCategory } from '../../types';
 import { formatCategoryPath } from '../../types';
-import './AllocationBreakdown.css';
 
 export interface AllocationBreakdownProps {
   /** Budget categories with their allocations */
@@ -104,7 +104,7 @@ export function AllocationBreakdown({
   }, [categories, totalIncome, unallocated, isOverAllocated]);
 
   return (
-    <div className="allocation-breakdown">
+    <div className="bg-muted border border-border rounded-lg p-4 flex flex-col gap-3">
       {/* Screen reader live region (Phase 4 Accessibility) */}
       <div
         role="status"
@@ -120,23 +120,23 @@ export function AllocationBreakdown({
       </div>
 
       {/* Header with summary */}
-      <div className="allocation-breakdown__header">
-        <span className="allocation-breakdown__label">Allocation Overview</span>
-        <span className="allocation-breakdown__percentage">
+      <div className="flex justify-between items-center">
+        <span className="text-sm font-semibold text-foreground">Allocation Overview</span>
+        <span className="text-sm font-medium text-muted-foreground">
           {percentAllocated}% Allocated
         </span>
       </div>
 
       {/* Over-allocation warning */}
       {isOverAllocated && (
-        <div className="allocation-breakdown__warning">
+        <div className="text-[0.8125rem] text-destructive bg-destructive/10 py-2 px-3 rounded-md font-medium">
           Over-allocated by {formatCurrency(Math.abs(unallocated))}
         </div>
       )}
 
       {/* Segmented progress bar */}
       <div
-        className="allocation-breakdown__bar"
+        className="flex h-4 rounded-full overflow-hidden bg-border"
         role="img"
         aria-label="Budget allocation breakdown"
       >
@@ -144,9 +144,10 @@ export function AllocationBreakdown({
           <div
             key={segment.id}
             data-testid={`segment-${segment.id}`}
-            className={`allocation-breakdown__segment ${
-              segment.isUnallocated ? 'allocation-breakdown__segment--unallocated' : ''
-            }`}
+            className={cn(
+              'h-full min-w-[2px] transition-[width] duration-300',
+              segment.isUnallocated && 'opacity-50'
+            )}
             style={{
               width: `${segment.percent}%`,
               backgroundColor: segment.color,
@@ -157,7 +158,7 @@ export function AllocationBreakdown({
         {segments.length === 0 && totalIncome === 0 && (
           <div
             data-testid="segment-unallocated"
-            className="allocation-breakdown__segment allocation-breakdown__segment--empty"
+            className="h-full min-w-[2px] opacity-30"
             style={{ width: '100%', backgroundColor: 'var(--color-border)' }}
             aria-label="No income set"
           />
@@ -165,29 +166,29 @@ export function AllocationBreakdown({
       </div>
 
       {/* Legend */}
-      <div className="allocation-breakdown__legend">
+      <div className="flex flex-wrap gap-y-3 gap-x-6 mt-1">
         {categories.map((cat, index) => (
-          <div key={cat.id} className="allocation-breakdown__legend-item">
+          <div key={cat.id} className="flex items-center gap-2 text-[0.8125rem]">
             <span
-              className="allocation-breakdown__legend-dot"
+              className="w-3 h-3 rounded-full shrink-0"
               style={{ backgroundColor: getCategoryColor(index) }}
             />
-            <span className="allocation-breakdown__legend-name">
+            <span className="text-foreground whitespace-nowrap overflow-hidden text-ellipsis max-w-[150px]">
               {formatCategoryPath(cat.category)}
             </span>
-            <span className="allocation-breakdown__legend-amount">
+            <span className="text-muted-foreground font-medium whitespace-nowrap">
               {formatCurrency(cat.allocated_amount)}
             </span>
           </div>
         ))}
         {unallocated > 0 && !isOverAllocated && (
-          <div className="allocation-breakdown__legend-item">
+          <div className="flex items-center gap-2 text-[0.8125rem]">
             <span
-              className="allocation-breakdown__legend-dot"
+              className="w-3 h-3 rounded-full shrink-0"
               style={{ backgroundColor: 'var(--color-border)' }}
             />
-            <span className="allocation-breakdown__legend-name">Unallocated</span>
-            <span className="allocation-breakdown__legend-amount">
+            <span className="text-foreground whitespace-nowrap">Unallocated</span>
+            <span className="text-muted-foreground font-medium whitespace-nowrap">
               {formatCurrency(unallocated)}
             </span>
           </div>
@@ -195,7 +196,7 @@ export function AllocationBreakdown({
       </div>
 
       {/* Total summary (Phase 5: Updated terminology and display) */}
-      <div className="allocation-breakdown__total">
+      <div className="text-[0.8125rem] text-muted-foreground pt-2 border-t border-border">
         <div className="allocation-breakdown__summary">
           <span className="allocation-breakdown__total-label">
             Total Budget: {formatCurrency(totalIncome)}

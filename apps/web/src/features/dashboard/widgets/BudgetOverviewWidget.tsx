@@ -13,7 +13,6 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { registerWidget } from './registry';
 import type { WidgetProps } from '../types';
-import './BudgetOverviewWidget.css';
 
 /**
  * Format currency amount
@@ -44,8 +43,8 @@ function BudgetOverviewWidget(_props: WidgetProps) {
 
   if (error && !hasNoBudget) {
     return (
-      <div className="budget-overview-widget__error">
-        <span className="budget-overview-widget__error-icon">!</span>
+      <div className="flex items-center justify-center h-full gap-2 text-destructive text-sm">
+        <span className="flex items-center justify-center w-6 h-6 bg-destructive text-white rounded-full text-xs font-bold">!</span>
         <span>Error loading budget</span>
       </div>
     );
@@ -72,13 +71,13 @@ function BudgetOverviewWidget(_props: WidgetProps) {
   const remaining = metrics?.remaining_amount ?? 0;
 
   return (
-    <div className="budget-overview-widget">
-      <div className="budget-overview-widget__header">
-        <h3 className="budget-overview-widget__title">{budget.name}</h3>
-        <span className="budget-overview-widget__period">{budget.period}</span>
+    <div className="flex flex-col gap-4 h-full p-2">
+      <div className="flex justify-between items-center">
+        <h3 className="m-0 text-base font-semibold text-foreground">{budget.name}</h3>
+        <span className="text-xs capitalize text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{budget.period}</span>
       </div>
 
-      <div className="budget-overview-widget__amount">
+      <div className="text-2xl font-bold text-foreground">
         {formatCurrency(budget.amount, budget.currency_code)}
       </div>
 
@@ -89,16 +88,16 @@ function BudgetOverviewWidget(_props: WidgetProps) {
         size="medium"
       />
 
-      <div className="budget-overview-widget__footer">
-        <div className="budget-overview-widget__stat">
-          <span className="budget-overview-widget__stat-label">Remaining</span>
-          <span className="budget-overview-widget__stat-value">
+      <div className="flex justify-between mt-auto">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs text-muted-foreground">Remaining</span>
+          <span className="text-sm font-semibold text-foreground">
             {formatCurrency(remaining, budget.currency_code)}
           </span>
         </div>
-        <div className="budget-overview-widget__stat">
-          <span className="budget-overview-widget__stat-label">Categories</span>
-          <span className="budget-overview-widget__stat-value">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs text-muted-foreground">Categories</span>
+          <span className="text-sm font-semibold text-foreground">
             {budget.categories?.length ?? 0}
           </span>
         </div>
