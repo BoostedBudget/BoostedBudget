@@ -95,7 +95,7 @@ export function AllocationBreakdown({
         name: 'Unallocated',
         amount: unallocated,
         percent,
-        color: '#d1d5db', // gray
+        color: 'var(--color-border)', // adapts to dark mode
         isUnallocated: true,
       });
     }
@@ -158,7 +158,7 @@ export function AllocationBreakdown({
           <div
             data-testid="segment-unallocated"
             className="allocation-breakdown__segment allocation-breakdown__segment--empty"
-            style={{ width: '100%', backgroundColor: '#d1d5db' }}
+            style={{ width: '100%', backgroundColor: 'var(--color-border)' }}
             aria-label="No income set"
           />
         )}
@@ -184,7 +184,7 @@ export function AllocationBreakdown({
           <div className="allocation-breakdown__legend-item">
             <span
               className="allocation-breakdown__legend-dot"
-              style={{ backgroundColor: '#d1d5db' }}
+              style={{ backgroundColor: 'var(--color-border)' }}
             />
             <span className="allocation-breakdown__legend-name">Unallocated</span>
             <span className="allocation-breakdown__legend-amount">

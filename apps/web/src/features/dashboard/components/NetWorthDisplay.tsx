@@ -47,10 +47,10 @@ export function NetWorthDisplay({ summary, history, showSparkline }: NetWorthDis
             {changeIsPositive ? '↑' : '↓'}
           </span>
           <span>{formatCurrency(summary.period_comparison.net_worth_change)}</span>
-          <span className="text-gray-500">
+          <span className="text-muted-foreground">
             ({formatPercent(summary.period_comparison.net_worth_change_percent)})
           </span>
-          <span className="text-gray-400 text-xs">vs last month</span>
+          <span className="text-muted-foreground text-xs">vs last month</span>
         </div>
       )}
 
@@ -62,15 +62,15 @@ export function NetWorthDisplay({ summary, history, showSparkline }: NetWorthDis
       )}
 
       {/* Assets & Liabilities Breakdown */}
-      <div className="mt-auto pt-3 space-y-2 border-t border-gray-100 dark:border-gray-700">
+      <div className="mt-auto pt-3 space-y-2 border-t border-border">
         <div className="flex justify-between text-sm">
-          <span className="text-gray-600 dark:text-gray-400">Assets</span>
+          <span className="text-muted-foreground">Assets</span>
           <span className="text-green-600 dark:text-green-400 font-medium">
             {formatCurrency(summary.total_assets)}
           </span>
         </div>
         <div className="flex justify-between text-sm">
-          <span className="text-gray-600 dark:text-gray-400">Liabilities</span>
+          <span className="text-muted-foreground">Liabilities</span>
           <span className="text-red-600 dark:text-red-400 font-medium">
             {formatCurrency(summary.total_liabilities)}
           </span>

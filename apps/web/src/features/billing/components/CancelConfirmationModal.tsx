@@ -156,7 +156,7 @@ export function CancelConfirmationModal({
                   value={confirmText}
                   onChange={(e) => setConfirmText(e.target.value)}
                   placeholder="Type CANCEL to confirm"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                   aria-label="Type CANCEL to confirm cancellation"
                   aria-required="true"
                   autoComplete="off"
