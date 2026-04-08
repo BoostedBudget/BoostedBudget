@@ -520,6 +520,14 @@ func (m *MockUserRepository) GetUsersWithExpiredRetention(ctx context.Context) (
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
+func (m *MockUserRepository) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	args := m.Called(ctx, email)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
 // TestAccountService_LinkAccounts_Success tests successful account linking flow
 func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	// Given: All dependencies mocked with successful responses

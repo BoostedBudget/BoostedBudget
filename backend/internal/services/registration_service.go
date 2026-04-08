@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 
 	"github.com/jackc/pgx/v5"
@@ -169,6 +170,16 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 			return nil, fmt.Errorf("failed to get existing user: %w", err)
 		}
 		return user, nil
+	}
+
+	// #1001: Fallback — blind-index lookup misses rows that were created before encryption
+	// was deployed (they have NULL clerk_user_id_blind_idx). Check by plaintext email to
+	// prevent creating a duplicate account for the same person.
+	existingUser, _ := s.profileRepo.GetUserByEmail(ctx, email)
+	if existingUser != nil {
+		slog.WarnContext(ctx, "found unmigrated pre-encryption user via email fallback — skipping duplicate creation",
+			"clerk_user_id", clerkUserID)
+		return existingUser, nil
 	}
 
 	// New user - create user, identity, and privacy settings
