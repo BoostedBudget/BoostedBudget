@@ -170,6 +170,22 @@ func (m *MockProfileRepository) GetUsersWithExpiredRetention(ctx context.Context
 	return nil, nil
 }
 
+func (m *MockProfileRepository) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	// If no expectation registered, return safe default (no pre-encryption user found).
+	// This avoids needing to add GetUserByEmail mocks to all tests that don't care about
+	// the encryption fallback path (#1001).
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "GetUserByEmail" {
+			args := m.Called(ctx, email)
+			if args.Get(0) == nil {
+				return nil, args.Error(1)
+			}
+			return args.Get(0).(*domain.User), args.Error(1)
+		}
+	}
+	return nil, repository.ErrUserNotFound
+}
+
 // TestGetProfile_ExistingUser tests retrieving an existing user
 // NOTE: After PR #197, GetProfile now receives internal user UUID, not Clerk ID
 func TestGetProfile_ExistingUser(t *testing.T) {

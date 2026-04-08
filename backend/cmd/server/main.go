@@ -267,6 +267,14 @@ func main() {
 			os.Exit(1)
 		}
 
+		// #1001: Safety-net backfill — encrypt any rows that were created before encryption
+		// was deployed (they have NULL blind indexes and are invisible to blind-index lookups).
+		// Runs synchronously before serving traffic. Idempotent — skips already-encrypted rows.
+		if err := database.BackfillEncryption(context.Background(), db, fieldEncryptor); err != nil {
+			appLogger.Error("Encryption backfill failed — exiting to prevent duplicate accounts", "error", err)
+			os.Exit(1)
+		}
+
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db, fieldEncryptor)
 		privacyRepo := repository.NewPrivacyRepository(db)

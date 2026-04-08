@@ -761,3 +761,112 @@ func TestGetUsersWithActivePaddleSubscriptions_ExcludesInactive(t *testing.T) {
 	assert.Empty(t, users)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// #1001: GetUserByEmail — dual lookup (blind index OR plaintext) for encryption migration safety
+
+const getUserByEmailQuery = `SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at, retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at FROM users WHERE (email_blind_idx = $1 OR LOWER(email) = $2) AND is_deleted = FALSE`
+
+// TestGetUserByEmail_FoundByBlindIndex verifies lookup finds an encrypted row via blind index
+func TestGetUserByEmail_FoundByBlindIndex(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	email := "user@example.com"
+	userID := uuid.New().String()
+	now := time.Now()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "clerk_user_id", "email", "email_verified",
+		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
+		"trial_started_at", "trial_ends_at", "had_trial",
+		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
+		"deletion_requested_at", "deletion_scheduled_at",
+		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
+		"retention_started_at", "retention_expires_at", "retention_notice_30d_sent_at", "retention_notice_7d_sent_at",
+	}).AddRow(
+		userID, "clerk_abc", "ENC$TENC[user@example.com]", true, // full encrypted form: ENC$ prefix + test-encrypted value
+		"premium", "trial", nil, nil,
+		nil, nil, true,
+		nil, nil, "iad", true, false,
+		nil, nil,
+		now, now, nil,
+		nil, nil,
+		nil, nil, nil, nil,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(getUserByEmailQuery)).
+		WithArgs(pgxmock.AnyArg(), "user@example.com").
+		WillReturnRows(rows)
+
+	user, err := repo.GetUserByEmail(ctx, email)
+
+	require.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.Equal(t, userID, user.ID)
+	assert.Equal(t, "user@example.com", user.Email) // DecryptString passthrough
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetUserByEmail_FoundPlaintext verifies lookup finds a pre-encryption plaintext row via LOWER(email)
+func TestGetUserByEmail_FoundPlaintext(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	email := "User@Example.com" // mixed case — should be lowercased
+	userID := uuid.New().String()
+	now := time.Now()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "clerk_user_id", "email", "email_verified",
+		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
+		"trial_started_at", "trial_ends_at", "had_trial",
+		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
+		"deletion_requested_at", "deletion_scheduled_at",
+		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
+		"retention_started_at", "retention_expires_at", "retention_notice_30d_sent_at", "retention_notice_7d_sent_at",
+	}).AddRow(
+		userID, "clerk_old", "user@example.com", true, // plaintext email in DB (pre-encryption)
+		"premium", "active", nil, nil,
+		nil, nil, false,
+		nil, nil, "iad", true, false,
+		nil, nil,
+		now, now, nil,
+		nil, nil,
+		nil, nil, nil, nil,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(getUserByEmailQuery)).
+		WithArgs(pgxmock.AnyArg(), "user@example.com"). // normalized to lowercase
+		WillReturnRows(rows)
+
+	user, err := repo.GetUserByEmail(ctx, email)
+
+	require.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.Equal(t, userID, user.ID)
+	assert.Equal(t, "user@example.com", user.Email)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetUserByEmail_NotFound verifies ErrUserNotFound is returned when no match
+func TestGetUserByEmail_NotFound(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	email := "nobody@example.com"
+
+	mock.ExpectQuery(regexp.QuoteMeta(getUserByEmailQuery)).
+		WithArgs(pgxmock.AnyArg(), "nobody@example.com").
+		WillReturnError(pgx.ErrNoRows)
+
+	user, err := repo.GetUserByEmail(ctx, email)
+
+	assert.Nil(t, user)
+	assert.ErrorIs(t, err, ErrUserNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
