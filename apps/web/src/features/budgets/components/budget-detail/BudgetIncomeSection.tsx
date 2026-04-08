@@ -10,7 +10,6 @@
 
 import { useState } from 'react';
 import type { IncomeSource } from '../../types';
-import './BudgetIncomeSection.css';
 
 export interface BudgetIncomeSectionProps {
   /** Expected total income for the budget period */
@@ -111,54 +110,60 @@ export function BudgetIncomeSection({
 
   return (
     <section
-      className="income-section"
+      className="bg-card border border-border rounded-xl p-6"
       role="region"
       aria-labelledby="income-section-title"
     >
-      <div className="income-section__header">
-        <h3 id="income-section-title" className="income-section__title">
+      <div className="flex items-center gap-2 mb-4">
+        <h3 id="income-section-title" className="m-0 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Income
         </h3>
       </div>
 
-      <div className="income-section__summary">
-        <div className="income-section__stat">
-          <span className="income-section__label">Expected</span>
-          <span className="income-section__amount">
+      <div className="flex flex-wrap gap-6 mb-4">
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Expected</span>
+          <span className="text-xl font-semibold text-foreground">
             {formatCurrency(expectedIncome, currencyCode)}
           </span>
         </div>
 
-        <div className="income-section__stat">
-          <span className="income-section__label">Actual</span>
-          <span className="income-section__amount">
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Actual</span>
+          <span className="text-xl font-semibold text-foreground">
             {formatCurrency(actualIncome, currencyCode)}
           </span>
         </div>
 
-        <div className={`income-section__stat income-section__difference income-section__difference--${differenceType}`}>
-          <span className="income-section__label">Difference</span>
-          <span className="income-section__amount">
-            {formatDifference(difference, currencyCode)}
-          </span>
-          <span className="sr-only">
-            {differenceType === 'surplus' && 'surplus'}
-            {differenceType === 'shortfall' && 'shortfall'}
-            {differenceType === 'neutral' && 'on target'}
-          </span>
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Difference</span>
+          <div className="flex items-center gap-1">
+            <span className={`text-xl font-semibold ${
+              differenceType === 'surplus' ? 'text-success' :
+              differenceType === 'shortfall' ? 'text-destructive' :
+              'text-muted-foreground'
+            }`}>
+              {formatDifference(difference, currencyCode)}
+            </span>
+            <span className="sr-only">
+              {differenceType === 'surplus' && 'surplus'}
+              {differenceType === 'shortfall' && 'shortfall'}
+              {differenceType === 'neutral' && 'on target'}
+            </span>
+          </div>
         </div>
       </div>
 
-      <div className="income-section__progress-container">
-        <div className="income-section__progress-header">
-          <span className="income-section__progress-text">Income received</span>
-          <span className="income-section__progress-percentage">{percentage}%</span>
+      <div className="mb-5">
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-sm text-muted-foreground">Income received</span>
+          <span className="text-sm font-semibold text-foreground">{percentage}%</span>
         </div>
-        <div className="income-section__progress-bar">
+        <div className="h-2 bg-muted rounded-full overflow-hidden">
           <div
-            className={`income-section__progress-fill ${
-              percentage >= 100 ? 'income-section__progress-fill--complete' : ''
-            } ${percentage > 100 ? 'income-section__progress-fill--over' : ''}`}
+            className={`h-full rounded-full transition-[width] duration-300 ${
+              percentage >= 100 ? 'bg-green-600' : 'bg-primary'
+            }`}
             style={{ width: `${progressWidth}%` }}
             role="progressbar"
             aria-valuenow={cappedPercentage}
@@ -173,15 +178,13 @@ export function BudgetIncomeSection({
         <>
           <button
             type="button"
-            className="income-section__sources-toggle"
+            className="flex items-center gap-2 py-2 w-full bg-none border-none border-t border-border cursor-pointer text-muted-foreground text-sm font-medium text-left transition-colors duration-200 hover:text-primary focus:outline-2 focus:outline-primary focus:outline-offset-2"
             onClick={toggleExpanded}
             aria-expanded={isExpanded}
             aria-controls="income-sources-list"
           >
             <svg
-              className={`income-section__toggle-icon ${
-                isExpanded ? 'income-section__toggle-icon--expanded' : ''
-              }`}
+              className={`w-4 h-4 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -197,11 +200,9 @@ export function BudgetIncomeSection({
 
           <div
             id="income-sources-list"
-            className={`income-section__sources ${
-              !isExpanded ? 'income-section__sources--collapsed' : ''
-            }`}
+            className={`pt-3 ${!isExpanded ? 'hidden' : ''}`}
           >
-            <ul className="income-section__sources-list">
+            <ul className="list-none m-0 p-0 flex flex-col gap-3">
               {incomeSources.map((source, index) => {
                 const sourceKey = source.description || `source-${index}`;
                 const status = sourceStatuses[source.description || ''];
@@ -209,32 +210,32 @@ export function BudgetIncomeSection({
                 const expectedAmount = source.type === 'manual' ? parseFloat(source.value || '0') : 0;
 
                 return (
-                  <li key={sourceKey} className="income-section__source-item">
-                    <div className="income-section__source-info">
-                      <span className="income-section__source-name">
+                  <li key={sourceKey} className="flex justify-between items-center p-3 bg-muted rounded-lg">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-sm font-medium text-foreground">
                         {source.description || getSourceTypeLabel(source.type)}
                       </span>
-                      <span className="income-section__source-type">
+                      <span className="text-xs text-muted-foreground">
                         {source.type === 'plaid_category' && 'Auto-tracked'}
                         {source.type === 'tag' && `Tag: ${source.value}`}
                         {source.type === 'manual' && 'Manual'}
                       </span>
                     </div>
-                    <div className="income-section__source-status">
+                    <div className="flex items-center gap-2">
                       {source.type === 'manual' && expectedAmount > 0 && (
-                        <span className="income-section__source-expected">
+                        <span className="text-sm text-muted-foreground">
                           {formatCurrency(expectedAmount, currencyCode)} expected
                         </span>
                       )}
                       {status === 'partial' && actualAmount !== undefined && (
-                        <span className="income-section__source-actual">
+                        <span className="text-sm font-medium text-foreground">
                           {formatCurrency(actualAmount, currencyCode)}
                         </span>
                       )}
                       {status === 'received' && (
                         <svg
                           data-testid="income-source-received"
-                          className="income-section__source-icon income-section__source-icon--received"
+                          className="w-5 h-5 text-success"
                           viewBox="0 0 24 24"
                           fill="none"
                           stroke="currentColor"
