@@ -39,6 +39,7 @@ import { NotFoundPage } from './features/not-found/NotFoundPage'
 import { Toaster } from 'sonner'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useEffect, Suspense } from 'react'
+import { useTheme } from './shared/theme'
 import { posthog } from './shared/lib/posthog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
 import './App.css'
@@ -47,6 +48,7 @@ import './App.css'
 function App() {
   const { isSignedIn: isAuthenticated } = useAuth()
   const location = useLocation()
+  const { resolvedTheme } = useTheme()
   const [, setConsentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
 
   usePostHogIdentify()
@@ -332,7 +334,7 @@ function App() {
       <AppFooter />
 
       <CookieConsent onConsentChange={handleConsentChange} />
-      <Toaster position="bottom-right" richColors />
+      <Toaster position="bottom-right" richColors theme={resolvedTheme} />
     </div>
   )
 }
