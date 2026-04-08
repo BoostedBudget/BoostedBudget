@@ -29,6 +29,11 @@ type ProfileRepository interface {
 	// GetUserByPaddleSubscriptionID retrieves a user by their Paddle subscription ID
 	GetUserByPaddleSubscriptionID(ctx context.Context, subscriptionID string) (*domain.User, error)
 
+	// GetUserByEmail retrieves a user by email, checking both the blind index (encrypted rows)
+	// and plaintext LOWER(email) (pre-encryption rows). Use this as a fallback when the
+	// clerk_user_id blind index lookup fails for unmigrated rows (#1001).
+	GetUserByEmail(ctx context.Context, email string) (*domain.User, error)
+
 	// CreateUser creates a new user in the database
 	CreateUser(ctx context.Context, user *domain.User) error
 
@@ -252,6 +257,17 @@ func (r *profileRepository) GetUserByID(ctx context.Context, id string) (*domain
 func (r *profileRepository) GetUserByPaddleSubscriptionID(ctx context.Context, subscriptionID string) (*domain.User, error) {
 	blindIdx := r.enc.BlindIndex(subscriptionID)
 	return r.queryUser(ctx, userSelectQuery+" WHERE paddle_subscription_id_blind_idx = $1 AND is_deleted = FALSE", blindIdx)
+}
+
+// GetUserByEmail retrieves a user by email using a dual lookup:
+// 1. By blind index (for encrypted rows post-migration)
+// 2. By LOWER(email) plaintext (for unmigrated rows from before encryption)
+// This prevents duplicate accounts when encrypt-migrate hasn't been run yet (#1001).
+func (r *profileRepository) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	return r.queryUser(ctx,
+		userSelectQuery+" WHERE (email_blind_idx = $1 OR LOWER(email) = $2) AND is_deleted = FALSE",
+		r.enc.BlindIndex(normalized), normalized)
 }
 
 // CreateUser creates a new user in the database

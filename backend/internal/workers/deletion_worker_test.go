@@ -145,6 +145,10 @@ func (m *MockProfileRepoForWorker) GetUsersWithExpiredRetention(ctx context.Cont
 	return nil, nil
 }
 
+func (m *MockProfileRepoForWorker) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	return nil, nil
+}
+
 // TestWorker_FindsScheduledUsers tests that worker finds users scheduled for deletion
 func TestWorker_FindsScheduledUsers(t *testing.T) {
 	ctx := context.Background()
