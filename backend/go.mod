@@ -2,8 +2,6 @@ module github.com/maxnussbaum/BoostedBudget
 
 go 1.26.2
 
-toolchain go1.26.2
-
 require (
 	github.com/PaddleHQ/paddle-go-sdk/v4 v4.2.0
 	github.com/clerk/clerk-sdk-go/v2 v2.5.1
