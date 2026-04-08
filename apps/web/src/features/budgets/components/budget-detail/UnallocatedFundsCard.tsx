@@ -80,7 +80,6 @@ export function UnallocatedFundsCard({
   const displayAmount = Math.abs(unallocatedAmount);
   const hasActions = (onCreateSavingsGoal || onAllocateToCategory) && status === 'positive';
 
-  const cardBase = 'bg-card border border-border rounded-xl p-6'
   const cardVariant =
     status === 'neutral'
       ? 'unallocated-card--neutral border-l-4 border-l-green-600'
@@ -95,7 +94,7 @@ export function UnallocatedFundsCard({
 
   return (
     <section
-      className={`${cardBase} ${cardVariant}`}
+      className={`bg-card border border-border rounded-xl p-6 ${cardVariant}`}
       role="region"
       aria-labelledby="unallocated-card-title"
     >

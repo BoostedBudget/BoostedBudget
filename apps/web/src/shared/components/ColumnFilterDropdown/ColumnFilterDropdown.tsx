@@ -159,7 +159,7 @@ export function ColumnFilterDropdown({
   return (
     <div
       ref={containerRef}
-      className={`relative inline-block ${className}`.trim()}
+      className={`relative inline-block ${className}`}
     >
       <button
         type="button"
@@ -168,14 +168,11 @@ export function ColumnFilterDropdown({
         aria-label={ariaLabel}
         aria-expanded={isOpen}
         aria-haspopup="listbox"
-        className={[
-          'flex items-center justify-center w-6 h-6 p-1 border-none rounded cursor-pointer',
-          'bg-transparent transition-colors duration-150',
-          'disabled:opacity-50 disabled:cursor-not-allowed',
+        className={`flex items-center justify-center w-6 h-6 p-1 border-none rounded cursor-pointer bg-transparent transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
           isActive
             ? 'column-filter__trigger--active text-primary bg-primary/10 hover:bg-primary/20 hover:text-primary'
-            : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-        ].join(' ')}
+            : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+        }`}
       >
         <Filter className="w-4 h-4" aria-hidden="true" />
       </button>
@@ -228,12 +225,11 @@ export function ColumnFilterDropdown({
                   <button
                     type="button"
                     onClick={handleClearAll}
-                    className={[
-                      'flex items-center w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100',
+                    className={`flex items-center w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
                       value.length === 0
                         ? 'bg-primary/10 text-primary'
-                        : 'bg-transparent text-foreground hover:bg-muted',
-                    ].join(' ')}
+                        : 'bg-transparent text-foreground hover:bg-muted'
+                    }`}
                   >
                     All
                   </button>
@@ -246,12 +242,11 @@ export function ColumnFilterDropdown({
                     return (
                       <label
                         key={option.value}
-                        className={[
-                          'flex items-center gap-2 w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100',
+                        className={`flex items-center gap-2 w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
                           isSelected
                             ? 'bg-primary/10 text-primary'
-                            : 'bg-transparent text-foreground hover:bg-muted',
-                        ].join(' ')}
+                            : 'bg-transparent text-foreground hover:bg-muted'
+                        }`}
                       >
                         <input
                           type="checkbox"
@@ -277,12 +272,11 @@ export function ColumnFilterDropdown({
                       key={option.value}
                       type="button"
                       onClick={() => handleSelectOption(option.value)}
-                      className={[
-                        'flex items-center w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100',
+                      className={`flex items-center w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
                         isSelected
                           ? 'column-filter__option--selected bg-primary/10 text-primary hover:bg-primary/20'
-                          : 'bg-transparent text-foreground hover:bg-muted',
-                      ].join(' ')}
+                          : 'bg-transparent text-foreground hover:bg-muted'
+                      }`}
                     >
                       {option.label}
                       {isSelected && (

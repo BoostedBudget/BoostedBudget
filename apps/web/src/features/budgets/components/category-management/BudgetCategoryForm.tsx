@@ -283,19 +283,19 @@ export function BudgetCategoryForm({
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="budget-category-form w-full max-w-md p-6 bg-white dark:bg-gray-900 rounded-2xl"
+        className="budget-category-form w-full max-w-md p-6 bg-card rounded-2xl"
         onInteractOutside={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => e.preventDefault()}
         showCloseButton={false}
       >
         <DialogHeader className="flex flex-row items-center justify-between mb-6">
-          <DialogTitle className="text-xl font-semibold text-gray-900 dark:text-white">
+          <DialogTitle className="text-xl font-semibold text-foreground">
             {dialogTitle}
           </DialogTitle>
           <button
             type="button"
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            className="text-muted-foreground hover:text-foreground"
           >
             <XIcon className="h-6 w-6" />
           </button>
@@ -306,7 +306,7 @@ export function BudgetCategoryForm({
           <div>
             <label
               htmlFor="category"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+              className="block text-sm font-medium text-foreground"
             >
               Category
             </label>
@@ -335,12 +335,12 @@ export function BudgetCategoryForm({
           <div>
             <label
               htmlFor="amount"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+              className="block text-sm font-medium text-foreground"
             >
               Amount
             </label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
                 $
               </span>
               <input
@@ -371,7 +371,7 @@ export function BudgetCategoryForm({
           {/* Tags Field - shown based on match_logic */}
           {showTagPicker && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              <label className="block text-sm font-medium text-foreground mb-2">
                 Tags
               </label>
               <div className="flex flex-wrap gap-2">
@@ -446,7 +446,7 @@ export function BudgetCategoryForm({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              className="px-4 py-2 text-sm font-medium text-foreground bg-muted rounded-lg hover:bg-muted/80 transition-colors"
             >
               Cancel
             </button>

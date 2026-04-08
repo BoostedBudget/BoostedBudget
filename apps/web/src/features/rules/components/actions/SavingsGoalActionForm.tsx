@@ -150,7 +150,7 @@ export function SavingsGoalActionForm({
     <div className={`flex flex-col gap-5 ${className}`.trim()}>
       {/* Goal Selection */}
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="savings-goal" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+        <label htmlFor="savings-goal" className="text-sm font-medium text-foreground">
           Savings Goal
         </label>
         <select
@@ -158,7 +158,7 @@ export function SavingsGoalActionForm({
           value={action.savings_goal_id}
           onChange={handleGoalChange}
           disabled={disabled || isLoading}
-          className="cursor-pointer rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <option value="">Select a savings goal...</option>
           {goalsList.map((goal) => (
@@ -178,7 +178,7 @@ export function SavingsGoalActionForm({
 
       {/* From Account */}
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="from-account" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+        <label htmlFor="from-account" className="text-sm font-medium text-foreground">
           From Account
         </label>
         <select
@@ -186,7 +186,7 @@ export function SavingsGoalActionForm({
           value={action.from_account_id}
           onChange={handleFromAccountChange}
           disabled={disabled || isLoading}
-          className="cursor-pointer rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <option value="">Select an account...</option>
           {accountsList.map((account: { id: string; name: string }) => (
@@ -199,7 +199,7 @@ export function SavingsGoalActionForm({
 
       {/* Amount Type */}
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="amount-type" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+        <label htmlFor="amount-type" className="text-sm font-medium text-foreground">
           Amount Type
         </label>
         <select
@@ -207,7 +207,7 @@ export function SavingsGoalActionForm({
           value={action.amount_type}
           onChange={handleAmountTypeChange}
           disabled={disabled}
-          className="cursor-pointer rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {AMOUNT_TYPES.map((type) => (
             <option key={type.value} value={type.value}>
@@ -216,18 +216,18 @@ export function SavingsGoalActionForm({
           ))}
         </select>
         {currentDescription && (
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{currentDescription}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{currentDescription}</p>
         )}
       </div>
 
       {/* Amount Input (for fixed type) */}
       {action.amount_type === 'fixed' && (
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="amount" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <label htmlFor="amount" className="text-sm font-medium text-foreground">
             Amount
           </label>
-          <div className="flex items-center overflow-hidden rounded-lg border border-gray-300 bg-white focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10 dark:border-gray-600 dark:bg-gray-900">
-            <span className="bg-gray-100 px-3 py-2.5 text-sm font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">$</span>
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+            <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
             <input
               id="amount"
               type="number"
@@ -244,10 +244,10 @@ export function SavingsGoalActionForm({
       {/* Percentage Input (for percentage type) */}
       {action.amount_type === 'percentage' && (
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="percentage" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <label htmlFor="percentage" className="text-sm font-medium text-foreground">
             Percentage
           </label>
-          <div className="flex items-center overflow-hidden rounded-lg border border-gray-300 bg-white focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10 dark:border-gray-600 dark:bg-gray-900">
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
             <input
               id="percentage"
               type="number"
@@ -258,7 +258,7 @@ export function SavingsGoalActionForm({
               max={100}
               className="min-w-0 flex-1 border-none bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
             />
-            <span className="bg-gray-100 px-3 py-2.5 text-sm font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">%</span>
+            <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">%</span>
           </div>
         </div>
       )}
@@ -266,11 +266,11 @@ export function SavingsGoalActionForm({
       {/* Threshold Input (for remaining type) */}
       {action.amount_type === 'remaining' && (
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="minimum-balance" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <label htmlFor="minimum-balance" className="text-sm font-medium text-foreground">
             Minimum Balance
           </label>
-          <div className="flex items-center overflow-hidden rounded-lg border border-gray-300 bg-white focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10 dark:border-gray-600 dark:bg-gray-900">
-            <span className="bg-gray-100 px-3 py-2.5 text-sm font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">$</span>
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+            <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
             <input
               id="minimum-balance"
               type="number"
@@ -281,7 +281,7 @@ export function SavingsGoalActionForm({
               className="min-w-0 flex-1 border-none bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
             />
           </div>
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          <p className="mt-1 text-xs text-muted-foreground">
             Transfer all funds above this minimum balance to the savings goal
           </p>
         </div>

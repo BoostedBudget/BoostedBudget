@@ -196,20 +196,20 @@ export function CreateBudgetDialog({
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="create-budget-dialog w-full max-w-lg p-6 bg-white dark:bg-gray-900 rounded-2xl"
+        className="create-budget-dialog w-full max-w-lg p-6 bg-card rounded-2xl"
         // Issue #460: Prevent click-outside-to-close to avoid accidental data loss
         onInteractOutside={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => e.preventDefault()}
         showCloseButton={false}
       >
         <DialogHeader className="flex flex-row items-center justify-between mb-6">
-          <DialogTitle className="text-xl font-semibold text-gray-900 dark:text-white">
+          <DialogTitle className="text-xl font-semibold text-foreground">
             Create Budget
           </DialogTitle>
           <button
             type="button"
             onClick={onCancel}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            className="text-muted-foreground hover:text-foreground"
           >
             <XIcon className="h-6 w-6" />
           </button>
@@ -229,7 +229,7 @@ export function CreateBudgetDialog({
               <div>
                 <label
                   htmlFor="name"
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                  className="block text-sm font-medium text-foreground"
                 >
                   Name
                 </label>
@@ -256,7 +256,7 @@ export function CreateBudgetDialog({
               <div>
                 <label
                   htmlFor="description"
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                  className="block text-sm font-medium text-foreground"
                 >
                   Description
                 </label>
@@ -275,7 +275,7 @@ export function CreateBudgetDialog({
               <div>
                 <label
                   htmlFor="period"
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                  className="block text-sm font-medium text-foreground"
                 >
                   Period
                 </label>
@@ -298,12 +298,12 @@ export function CreateBudgetDialog({
               <div>
                 <label
                   htmlFor="amount"
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                  className="block text-sm font-medium text-foreground"
                 >
                   Amount
                 </label>
                 <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
                     $
                   </span>
                   <input
@@ -332,7 +332,7 @@ export function CreateBudgetDialog({
               <div>
                 <label
                   htmlFor="start_date"
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                  className="block text-sm font-medium text-foreground"
                 >
                   Start Date
                 </label>
@@ -351,7 +351,7 @@ export function CreateBudgetDialog({
                 <div>
                   <label
                     htmlFor="end_date"
-                    className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    className="block text-sm font-medium text-foreground"
                   >
                     End Date
                   </label>
@@ -378,7 +378,7 @@ export function CreateBudgetDialog({
 
             {/* Issue #496: Income Tab */}
             <TabsContent value="income" className="space-y-4">
-              <p className="text-sm text-gray-600 dark:text-gray-400">
+              <p className="text-sm text-muted-foreground">
                 Configure income sources to track expected vs actual income for this budget.
               </p>
               <IncomeSourceConfig
@@ -390,7 +390,7 @@ export function CreateBudgetDialog({
                 showTotal
               />
               {/* Issue #496: Track actual income checkbox */}
-              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+              <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
                 <input
                   type="checkbox"
                   checked={formData.track_actual_income}
@@ -398,7 +398,7 @@ export function CreateBudgetDialog({
                     setFormData((prev) => ({ ...prev, track_actual_income: e.target.checked }))
                   }
                   disabled={isSubmitting}
-                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                  className="h-4 w-4 rounded border-border bg-background text-blue-600 focus:ring-blue-500"
                 />
                 Track actual income vs expected
               </label>
@@ -417,7 +417,7 @@ export function CreateBudgetDialog({
             <button
               type="button"
               onClick={onCancel}
-              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              className="px-4 py-2 text-sm font-medium text-foreground bg-muted rounded-lg hover:bg-muted/80 transition-colors"
             >
               Cancel
             </button>

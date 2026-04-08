@@ -43,11 +43,11 @@ export class FeatureErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       return (
         <div className="flex flex-col items-center justify-center p-8 text-center space-y-4">
-          <p className="text-gray-600 dark:text-gray-400">
+          <p className="text-muted-foreground">
             We couldn't load your {this.props.featureName}.
           </p>
           {this.state.errorId && (
-            <p className="text-xs text-gray-400">Error ID: {this.state.errorId}</p>
+            <p className="text-xs text-muted-foreground">Error ID: {this.state.errorId}</p>
           )}
           <Button variant="outline" onClick={this.handleReset}>
             Try again

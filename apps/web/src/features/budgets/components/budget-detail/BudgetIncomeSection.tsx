@@ -139,9 +139,11 @@ export function BudgetIncomeSection({
           <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Difference</span>
           <div className="flex items-center gap-1">
             <span className={`text-xl font-semibold ${
-              differenceType === 'surplus' ? 'income-section__difference--surplus text-success' :
-              differenceType === 'shortfall' ? 'income-section__difference--shortfall text-destructive' :
-              'income-section__difference--neutral text-muted-foreground'
+              differenceType === 'surplus'
+                ? 'income-section__difference--surplus text-success'
+                : differenceType === 'shortfall'
+                  ? 'income-section__difference--shortfall text-destructive'
+                  : 'income-section__difference--neutral text-muted-foreground'
             }`}>
               {formatDifference(difference, currencyCode)}
             </span>
