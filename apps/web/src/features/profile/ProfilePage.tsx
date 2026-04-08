@@ -73,14 +73,14 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
   const regionDisplay = getRegionWithFlag(user.primary_region)
 
   return (
-    <div className="max-w-4xl mx-auto px-4 sm:px-8 py-8">
+    <div className="profile-page responsive max-w-4xl mx-auto px-4 sm:px-8 py-8">
       <h1 className="text-3xl font-bold text-foreground mb-6">My Profile</h1>
 
       <div className="flex gap-2 mb-8 border-b-2 border-border">
         <button
           className={`bg-transparent border-none border-b-[3px] px-6 py-3 text-base font-medium cursor-pointer transition-all duration-200 -mb-[2px] ${
             activeTab === 'profile'
-              ? 'text-primary border-b-primary font-semibold'
+              ? 'active text-primary border-b-primary font-semibold'
               : 'text-muted-foreground border-b-transparent hover:text-foreground hover:bg-muted'
           }`}
           onClick={() => setActiveTab('profile')}
@@ -90,7 +90,7 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
         <button
           className={`bg-transparent border-none border-b-[3px] px-6 py-3 text-base font-medium cursor-pointer transition-all duration-200 -mb-[2px] ${
             activeTab === 'privacy'
-              ? 'text-primary border-b-primary font-semibold'
+              ? 'active text-primary border-b-primary font-semibold'
               : 'text-muted-foreground border-b-transparent hover:text-foreground hover:bg-muted'
           }`}
           onClick={() => setActiveTab('privacy')}

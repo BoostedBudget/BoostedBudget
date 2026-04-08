@@ -111,7 +111,7 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardP
 
   return (
     <div
-      className={`relative flex flex-col rounded-2xl p-8 transition-all duration-300 border-2 bg-card hover:shadow-lg ${
+      className={`pricing-card${isHousehold5 ? ' featured' : ''} relative flex flex-col rounded-2xl p-8 transition-all duration-300 border-2 bg-card hover:shadow-lg ${
         isCurrentTier
           ? 'border-primary bg-gradient-to-b from-card to-primary/5'
           : isHousehold5
