@@ -1,14 +1,6 @@
-import { createContext, useCallback, useEffect, useMemo, useState } from 'react'
-
-export type Theme = 'light' | 'dark' | 'system'
-
-export interface ThemeContextValue {
-  theme: Theme
-  resolvedTheme: 'light' | 'dark'
-  setTheme: (theme: Theme) => void
-}
-
-export const ThemeContext = createContext<ThemeContextValue | undefined>(undefined)
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ThemeContext } from './ThemeContext'
+import type { Theme } from './ThemeContext'
 
 const STORAGE_KEY = 'bb-theme'
 

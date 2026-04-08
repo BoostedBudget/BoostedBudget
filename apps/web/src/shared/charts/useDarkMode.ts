@@ -19,9 +19,6 @@ export function useDarkMode(): boolean {
 
     observer.observe(root, { attributes: true, attributeFilter: ['class'] })
 
-    // Sync in case class changed between render and effect
-    setIsDark(root.classList.contains('dark'))
-
     return () => observer.disconnect()
   }, [])
 
