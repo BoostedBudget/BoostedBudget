@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Header } from './Header'
 import { mockUseAuth, mockUseUser, mockUseClerk } from '@/test/mocks/clerk'
 
@@ -36,12 +37,18 @@ const setupAuthenticatedMocks = (user = mockClerkUser) => {
   })
 }
 
-const renderHeader = (props?: object) =>
-  render(
-    <BrowserRouter>
-      <Header {...props} />
-    </BrowserRouter>
+const renderHeader = (props?: object) => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  })
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <Header {...props} />
+      </BrowserRouter>
+    </QueryClientProvider>
   )
+}
 
 describe('Header', () => {
   beforeEach(() => {

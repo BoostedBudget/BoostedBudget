@@ -985,6 +985,16 @@ func main() {
 		operations.RegisterNotificationRoutes(humaAPI, humaNotificationHandler)
 		appLogger.Info("Huma notification routes registered")
 
+		// Register Huma transfer suggestion routes (Issue #952: Notification Center)
+		transferSuggestionSvc := services.NewTransferSuggestionService(transferSuggestionRepo)
+		transferSuggestionSvc.SetAnalytics(phClient)
+		humaTransferSuggestionHandler := operations.NewTransferSuggestionHandler(transferSuggestionSvc)
+		operations.RegisterTransferSuggestionRoutes(humaAPI, humaTransferSuggestionHandler)
+		appLogger.Info("Huma transfer suggestion routes registered")
+
+		// Wire notification repo to rule execution service for suggestion notifications (Issue #952)
+		ruleExecutionService.SetNotificationRepo(notificationRepo)
+
 		// Register Huma dashboard routes (Issue #559: Huma migration)
 		humaDashboardHandler := operations.NewDashboardHandler(dashboardService)
 		operations.RegisterDashboardRoutes(humaAPI, humaDashboardHandler)

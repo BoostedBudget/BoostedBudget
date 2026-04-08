@@ -48,6 +48,10 @@ EXCLUDE_PATTERNS=(
     # ToggleGroup component test needs real implementation but TimeframeSelector/DateRangePicker
     # tests mock @/components/ui/toggle-group globally, polluting it in the full suite (#953)
     "src/components/ui/toggle-group.test.tsx"
+    # setSystemTime pollution: date mocks from other test files leak into these, causing
+    # date mismatch failures in the full suite (#952)
+    "src/features/dashboard/components/TimeframeSelector.test.tsx"
+    "src/features/transactions/components/TransactionCard.test.tsx"
 )
 
 echo "Running regular tests (excluding real-implementation tests)..."

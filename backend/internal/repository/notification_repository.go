@@ -37,4 +37,8 @@ type NotificationRepository interface {
 	// Used by email worker to send pending email notifications
 	// Returns notifications ordered by created_at ASC (oldest first, FIFO)
 	GetUnsentEmails(ctx context.Context, limit int) ([]domain.Notification, error)
+
+	// MarkAllAsRead marks all unread notifications as read for a user.
+	// Returns the number of notifications marked as read.
+	MarkAllAsRead(ctx context.Context, userID string) (int64, error)
 }

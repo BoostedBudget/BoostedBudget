@@ -64,6 +64,14 @@ export const ANALYTICS_EVENTS = {
 
   // Admin
   ADMIN_PAGE_VIEWED: 'admin_page_viewed',
+
+  // Notifications (#952)
+  NOTIFICATION_DRAWER_OPENED: 'notification_drawer_opened',
+  NOTIFICATION_READ: 'notification_read',
+  NOTIFICATION_ALL_READ: 'notification_all_read',
+  NOTIFICATION_ACTION_CLICKED: 'notification_action_clicked',
+  TRANSFER_SUGGESTION_ACCEPTED: 'transfer_suggestion_accepted',
+  TRANSFER_SUGGESTION_REJECTED: 'transfer_suggestion_rejected',
 } as const
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[keyof typeof ANALYTICS_EVENTS]
