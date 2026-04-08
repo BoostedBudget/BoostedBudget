@@ -18,7 +18,6 @@ import {
   type FilterOption,
   type RangeValue,
 } from '@/shared/components/ColumnFilterDropdown'
-import './TransactionTable.css'
 
 export type TransactionSortColumn = 'date' | 'merchant' | 'amount' | 'category'
 export type SortDirection = 'asc' | 'desc'
@@ -194,10 +193,10 @@ export function TransactionTable({
         type="button"
         onClick={() => handleSort(column)}
         aria-sort={ariaSort}
-        className="transaction-table__sort-btn"
+        className="inline-flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 font-[inherit] text-inherit"
       >
         {label}
-        <span className="transaction-table__sort-icon">
+        <span className="inline-flex h-4 w-4 items-center [&_svg]:h-3.5 [&_svg]:w-3.5">
           {isActive && sortDirection === 'asc' && (
             <ChevronUp aria-hidden="true" />
           )}
@@ -211,7 +210,7 @@ export function TransactionTable({
 
   if (transactions.length === 0) {
     return (
-      <div className={`transaction-table__empty ${className}`.trim()}>
+      <div className={`text-center rounded-lg border border-dashed border-gray-300 bg-white px-6 py-12 text-gray-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400 ${className}`.trim()}>
         <p>No transactions found.</p>
       </div>
     )
@@ -219,18 +218,18 @@ export function TransactionTable({
 
   return (
     <table
-      className={`transaction-table ${loading ? 'transaction-table--loading' : ''} ${className}`.trim()}
+      className={`w-full border-collapse overflow-visible rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800 ${loading ? 'pointer-events-none opacity-60' : ''} ${className}`.trim()}
     >
       <thead>
-        <tr className="transaction-table__header-row">
-          <th className="transaction-table__th">
+        <tr className="bg-gray-50 dark:bg-gray-900">
+          <th className="border-b border-gray-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-gray-600 dark:border-gray-700 dark:text-gray-400">
             {renderSortableHeader('Date', 'date')}
           </th>
-          <th className="transaction-table__th">
+          <th className="border-b border-gray-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-gray-600 dark:border-gray-700 dark:text-gray-400">
             {renderSortableHeader('Description', 'merchant')}
           </th>
-          <th className="transaction-table__th">
-            <div className="transaction-table__header-content">
+          <th className="border-b border-gray-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-gray-600 dark:border-gray-700 dark:text-gray-400">
+            <div className="flex items-center gap-1">
               <span>Account</span>
               {accountOptions && onAccountFilterChange && (
                 <ColumnFilterDropdown
@@ -245,8 +244,8 @@ export function TransactionTable({
               )}
             </div>
           </th>
-          <th className="transaction-table__th">
-            <div className="transaction-table__header-content">
+          <th className="border-b border-gray-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-gray-600 dark:border-gray-700 dark:text-gray-400">
+            <div className="flex items-center gap-1">
               {renderSortableHeader('Category', 'category')}
               {categoryOptions && onCategoryFilterChange && (
                 <ColumnFilterDropdown
@@ -261,8 +260,8 @@ export function TransactionTable({
               )}
             </div>
           </th>
-          <th className="transaction-table__th transaction-table__th--amount">
-            <div className="transaction-table__header-content">
+          <th className="border-b border-gray-200 px-4 py-3 text-right text-xs font-semibold uppercase tracking-[0.05em] text-gray-600 dark:border-gray-700 dark:text-gray-400">
+            <div className="flex items-center gap-1">
               {renderSortableHeader('Amount', 'amount')}
               {onAmountRangeChange && (
                 <ColumnFilterDropdown
@@ -275,7 +274,7 @@ export function TransactionTable({
             </div>
           </th>
           {hasActions && (
-            <th className="transaction-table__th transaction-table__th--actions">
+            <th className="w-24 border-b border-gray-200 px-4 py-3 text-right text-xs font-semibold uppercase tracking-[0.05em] text-gray-600 max-md:w-16 dark:border-gray-700 dark:text-gray-400">
               Actions
             </th>
           )}
@@ -301,60 +300,67 @@ export function TransactionTable({
           return (
             <tr
               key={transaction.id}
-              className={`transaction-table__row ${onRowClick ? 'transaction-table__row--clickable' : ''} ${transaction.pending ? 'transaction-table__row--pending' : ''}`}
+              className={[
+                'transition-colors duration-150',
+                onRowClick ? 'transaction-table__row--clickable cursor-pointer' : '',
+                transaction.pending
+                  ? 'bg-yellow-50 hover:bg-yellow-100 dark:bg-yellow-900 dark:hover:bg-yellow-800'
+                  : 'hover:bg-gray-50 dark:hover:bg-gray-700/50',
+              ].filter(Boolean).join(' ')}
               onClick={onRowClick ? () => onRowClick(transaction) : undefined}
             >
-              <td className="transaction-table__td transaction-table__td--date">
+              <td className="whitespace-nowrap border-b border-gray-200 px-4 py-3.5 text-sm align-middle text-gray-600 max-md:px-3 max-md:py-2.5 dark:border-gray-700 dark:text-gray-400">
                 {displayDate}
               </td>
-              <td className="transaction-table__td transaction-table__td--description">
-                <div className="transaction-table__name">{displayName}</div>
+              <td className="min-w-[200px] border-b border-gray-200 px-4 py-3.5 text-sm align-middle max-md:min-w-[150px] max-md:px-3 max-md:py-2.5 dark:border-gray-700">
+                <div className="font-medium text-gray-900 dark:text-gray-100">{displayName}</div>
                 {transaction.tags && transaction.tags.length > 0 && (
-                  <div className="transaction-table__tags">
+                  <div className="mt-1 flex flex-wrap gap-1">
                     {transaction.tags.map((tag) => (
-                      <span key={tag} className="transaction-table__tag">
+                      <span key={tag} className="inline-flex items-center rounded bg-blue-50 px-1.5 py-0.5 text-[0.625rem] font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300">
                         {tag}
                       </span>
                     ))}
                   </div>
                 )}
               </td>
-              <td className="transaction-table__td transaction-table__td--account">
+              <td className="border-b border-gray-200 px-4 py-3.5 text-sm align-middle max-md:px-3 max-md:py-2.5 dark:border-gray-700">
                 <span
-                  className="transaction-table__account-badge"
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-gray-800 dark:text-gray-900"
                   style={{ backgroundColor: accountBackgroundColor }}
                 >
                   {account?.custom_emoji && <span>{account.custom_emoji}</span>}
                   {accountDisplayName}
                 </span>
               </td>
-              <td className="transaction-table__td transaction-table__td--category">
-                <span className="transaction-table__category">
+              <td className="border-b border-gray-200 px-4 py-3.5 text-sm align-middle max-md:px-3 max-md:py-2.5 dark:border-gray-700 dark:text-gray-300">
+                <span className="inline-flex items-center gap-1.5">
                   <span
-                    className="transaction-table__category-dot"
+                    className="h-2 w-2 shrink-0 rounded-full"
                     style={{ backgroundColor: categoryColor }}
                   />
                   {categoryLabel}
                 </span>
               </td>
-              <td className="transaction-table__td transaction-table__td--amount">
-                <div className="transaction-table__amount-container">
+              <td className="border-b border-gray-200 px-4 py-3.5 text-right align-middle max-md:px-3 max-md:py-2.5 dark:border-gray-700">
+                <div className="flex flex-col items-end gap-1">
                   <span
-                    className={`transaction-table__amount ${
+                    className={[
+                      'font-semibold tabular-nums',
                       transaction.amount > 0
-                        ? 'transaction-table__amount--credit'
+                        ? 'transaction-table__amount--credit text-green-600 dark:text-green-400'
                         : transaction.amount < 0
-                          ? 'transaction-table__amount--debit'
-                          : ''
-                    }`}
+                          ? 'transaction-table__amount--debit text-red-600 dark:text-red-400'
+                          : 'text-gray-700 dark:text-gray-300',
+                    ].filter(Boolean).join(' ')}
                     data-ph-mask
                   >
                     {amountFormatted}
                   </span>
                   {transaction.pending && (
-                    <span className="transaction-table__pending-badge">
+                    <span className="inline-flex items-center gap-1 rounded bg-yellow-100 px-1.5 py-0.5 text-[0.625rem] font-medium text-yellow-800 dark:bg-yellow-800 dark:text-yellow-200">
                       <Clock
-                        className="transaction-table__pending-icon"
+                        className="h-2.5 w-2.5"
                         aria-hidden="true"
                       />
                       Pending
@@ -364,17 +370,17 @@ export function TransactionTable({
               </td>
               {hasActions && (
                 <td
-                  className="transaction-table__td transaction-table__td--actions"
+                  className="border-b border-gray-200 px-4 py-3.5 text-right align-middle max-md:px-3 max-md:py-2.5 dark:border-gray-700"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <div className="transaction-table__actions">
+                  <div className="flex items-center justify-end gap-2">
                     {onEdit && (
                       <ReadOnlyGuard message="Resubscribe to edit transactions">
                         <button
                           type="button"
                           onClick={() => onEdit(transaction)}
                           disabled={loading}
-                          className="transaction-table__action-btn"
+                          className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-gray-500 transition-colors duration-150 hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4 dark:hover:bg-gray-700 dark:hover:text-gray-300"
                           aria-label="Edit transaction"
                           title="Edit transaction"
                         >
@@ -388,7 +394,7 @@ export function TransactionTable({
                           type="button"
                           onClick={() => onCategorize(transaction)}
                           disabled={loading}
-                          className="transaction-table__action-btn"
+                          className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-gray-500 transition-colors duration-150 hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4 dark:hover:bg-gray-700 dark:hover:text-gray-300"
                           aria-label="Categorize transaction"
                           title="Categorize transaction"
                         >
