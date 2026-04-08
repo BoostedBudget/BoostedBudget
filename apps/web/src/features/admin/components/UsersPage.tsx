@@ -21,11 +21,11 @@ import {
   Clock,
   Edit2,
 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { useUserFilters } from '../hooks/useUserFilters'
 import { useRegions } from '../../../shared/hooks/useRegions'
 import { UserDetailModal } from './UserDetailModal'
 import { SubscriptionOverrideModal } from './SubscriptionOverrideModal'
-import './UsersPage.css'
 
 const TIER_OPTIONS = [
   { value: '', label: 'All Tiers' },
@@ -45,12 +45,26 @@ const TIER_DISPLAY: Record<string, string> = {
 }
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
-  active: <CheckCircle2 size={13} className="users-page__status-icon--active" />,
-  trial: <Clock size={13} className="users-page__status-icon--trial" />,
-  trialing: <Clock size={13} className="users-page__status-icon--trial" />,
-  inactive: <AlertCircle size={13} className="users-page__status-icon--inactive" />,
-  cancelled: <AlertCircle size={13} className="users-page__status-icon--inactive" />,
-  past_due: <AlertCircle size={13} className="users-page__status-icon--past-due" />,
+  active: <CheckCircle2 size={13} className="text-success" />,
+  trial: <Clock size={13} className="text-info" />,
+  trialing: <Clock size={13} className="text-info" />,
+  inactive: <AlertCircle size={13} className="text-muted-foreground" />,
+  cancelled: <AlertCircle size={13} className="text-muted-foreground" />,
+  past_due: <AlertCircle size={13} className="text-destructive" />,
+}
+
+const tierBadgeClass = (tier: string): string => {
+  if (tier === 'premium') return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300'
+  if (tier === 'trial') return 'bg-info/10 text-info'
+  if (tier.startsWith('household_')) return 'bg-success/10 text-success'
+  return 'bg-muted text-muted-foreground'
+}
+
+const statusBadgeClass = (status: string): string => {
+  if (status === 'active') return 'bg-success/10 text-success'
+  if (status === 'trial' || status === 'trialing') return 'bg-info/10 text-info'
+  if (status === 'past_due') return 'bg-destructive/10 text-destructive'
+  return 'bg-muted text-muted-foreground'
 }
 
 interface OverrideStatus {
@@ -72,6 +86,13 @@ function getOverrideStatus(
 
   const daysLeft = Math.ceil((expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
   return { label: `Expires in ${daysLeft}d`, variant: 'expiring' }
+}
+
+const overrideStatusClass = (variant: string): string => {
+  if (variant === 'permanent') return 'bg-success/10 text-success'
+  if (variant === 'expiring') return 'bg-info/10 text-info'
+  if (variant === 'expired') return 'bg-warning/10 text-warning'
+  return 'text-muted-foreground'
 }
 
 const formatDate = (dateString: string | undefined | null): string => {
@@ -117,29 +138,35 @@ export function UsersPage() {
   const isEmpty = !isLoading && users.length === 0
 
   return (
-    <div className="users-page">
+    <div className="flex flex-col gap-6 p-6 min-h-full">
       {/* Header */}
-      <header className="users-page__header">
-        <div className="users-page__header-inner">
-          <h1 className="users-page__title">
+      <header className="border-b border-border pb-4">
+        <div className="flex flex-col gap-1.5">
+          <h1 className="text-2xl font-bold text-foreground flex items-center gap-2.5 m-0">
             Users
             {totalCount > 0 && (
-              <span className="users-page__count">{totalCount} users</span>
+              <span className="text-sm font-medium text-muted-foreground bg-muted border border-border rounded-full px-2.5 py-0.5">
+                {totalCount} users
+              </span>
             )}
           </h1>
-          <p className="users-page__subtitle">
+          <p className="text-sm text-muted-foreground m-0">
             View and manage users. Click a row to see details, or use Override to set a manual subscription tier.
           </p>
         </div>
       </header>
 
       {/* Filters */}
-      <div className="users-page__filters">
-        <div className="users-page__search-wrapper">
-          <Search size={16} className="users-page__search-icon" aria-hidden="true" />
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-[360px]">
+          <Search
+            size={16}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+            aria-hidden="true"
+          />
           <input
             type="text"
-            className="users-page__search-input"
+            className="w-full pl-9 pr-3 py-2 border border-border rounded-md bg-background text-foreground text-sm font-[inherit] transition-colors focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
             placeholder="Search by email..."
             value={filters.search}
             onChange={(e) => setSearch(e.target.value)}
@@ -148,7 +175,7 @@ export function UsersPage() {
         </div>
 
         <select
-          className="users-page__tier-select"
+          className="px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm font-[inherit] cursor-pointer transition-colors focus:outline-none focus:border-primary"
           value={filters.tier}
           onChange={(e) => setTier(e.target.value)}
           aria-label="Filter by tier"
@@ -163,36 +190,36 @@ export function UsersPage() {
 
       {/* Content */}
       {isLoading ? (
-        <div className="users-page__loading" role="status">
-          <div className="users-page__loading-spinner" />
+        <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground" role="status">
+          <div className="w-8 h-8 border-[3px] border-border border-t-primary rounded-full animate-spin" />
           <span>Loading users...</span>
         </div>
       ) : error ? (
-        <div className="users-page__error">
-          <AlertCircle size={20} className="users-page__error-icon" />
+        <div className="flex items-center gap-3 py-16 text-destructive justify-center">
+          <AlertCircle size={20} className="shrink-0" />
           <span>Failed to load users. Please try again.</span>
         </div>
       ) : isEmpty ? (
-        <div className="users-page__empty">
-          <Users className="users-page__empty-icon" aria-hidden="true" />
+        <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
+          <Users className="opacity-30 w-9 h-9" aria-hidden="true" />
           <span>No users found{hasActiveFilters ? '. Try adjusting your filters.' : '.'}</span>
         </div>
       ) : (
         <>
-          <div className="users-page__table-wrapper">
-            <table className="users-page__table">
+          <div className="overflow-x-auto border border-border rounded-[0.625rem] bg-card">
+            <table className="w-full border-collapse text-sm">
               <thead>
-                <tr>
-                  <th>Email</th>
-                  <th>Tier</th>
-                  <th>Status</th>
-                  <th>Override Status</th>
-                  <th>Region</th>
-                  <th>Last Login</th>
-                  <th className="users-page__numeric">Accounts</th>
-                  <th className="users-page__numeric">Rules</th>
-                  <th className="users-page__numeric">Referrals</th>
-                  <th className="users-page__th--action">Action</th>
+                <tr className="border-b border-border bg-muted">
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Email</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Tier</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Status</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Override Status</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Region</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Last Login</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Accounts</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Rules</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Referrals</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -203,44 +230,48 @@ export function UsersPage() {
                   return (
                     <tr
                       key={user.id}
-                      className="users-page__row--clickable"
+                      className="border-b border-border last:border-b-0 hover:bg-muted/50 cursor-pointer transition-colors duration-100"
                       onClick={() => setSelectedUserId(user.id)}
                     >
-                      <td className="users-page__email-cell">
-                        {user.email}
-                        {user.is_admin && (
-                          <Shield className="users-page__admin-icon" size={14} aria-label="Administrator" />
-                        )}
+                      <td className="px-4 py-3 text-foreground align-middle">
+                        <div className="flex items-center gap-1.5 font-medium">
+                          {user.email}
+                          {user.is_admin && (
+                            <Shield className="text-amber-500 shrink-0" size={14} aria-label="Administrator" />
+                          )}
+                        </div>
                       </td>
-                      <td>
-                        <span className={`users-page__tier-badge users-page__tier-badge--${effectiveTier}`}>
+                      <td className="px-4 py-3 text-foreground align-middle">
+                        <span className={cn('inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize', tierBadgeClass(effectiveTier))}>
                           {TIER_DISPLAY[effectiveTier] ?? effectiveTier}
                         </span>
                       </td>
-                      <td>
-                        <span className={`users-page__status-badge users-page__status-badge--${user.subscription_status}`}>
+                      <td className="px-4 py-3 text-foreground align-middle">
+                        <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium capitalize', statusBadgeClass(user.subscription_status))}>
                           {STATUS_ICON[user.subscription_status]}
                           {user.subscription_status}
                         </span>
                       </td>
-                      <td>
+                      <td className="px-4 py-3 text-foreground align-middle">
                         {overrideStatus ? (
-                          <span className={`users-page__override-status users-page__override-status--${overrideStatus.variant}`}>
+                          <span className={cn('inline-block px-2 py-0.5 rounded text-xs font-medium', overrideStatusClass(overrideStatus.variant))}>
                             {overrideStatus.label}
                           </span>
                         ) : (
-                          <span className="users-page__override-status--none">—</span>
+                          <span className="text-muted-foreground text-sm">—</span>
                         )}
                       </td>
-                      <td className="users-page__region">{getRegionWithFlag(user.primary_region)}</td>
-                      <td>{formatDate(user.last_login_at)}</td>
-                      <td className="users-page__numeric">{user.linked_accounts_count}</td>
-                      <td className="users-page__numeric">{user.automation_rules_count}</td>
-                      <td className="users-page__numeric">{user.referrals_count}</td>
-                      <td className="users-page__action-cell">
+                      <td className="px-4 py-3 text-foreground align-middle font-mono text-[0.8125rem] text-muted-foreground">
+                        {getRegionWithFlag(user.primary_region)}
+                      </td>
+                      <td className="px-4 py-3 text-foreground align-middle">{formatDate(user.last_login_at)}</td>
+                      <td className="px-4 py-3 text-foreground align-middle text-center tabular-nums">{user.linked_accounts_count}</td>
+                      <td className="px-4 py-3 text-foreground align-middle text-center tabular-nums">{user.automation_rules_count}</td>
+                      <td className="px-4 py-3 text-foreground align-middle text-center tabular-nums">{user.referrals_count}</td>
+                      <td className="px-4 py-3 text-foreground align-middle text-center">
                         <button
                           type="button"
-                          className="users-page__override-btn"
+                          className="inline-flex items-center gap-1 px-3 py-1.5 border border-border rounded-md bg-background text-foreground text-[0.8125rem] font-medium cursor-pointer font-[inherit] transition-colors hover:bg-primary hover:border-primary hover:text-primary-foreground"
                           onClick={(e) => {
                             e.stopPropagation()
                             setOverrideUser({ id: user.id, email: user.email })
@@ -260,14 +291,14 @@ export function UsersPage() {
 
           {/* Pagination */}
           {totalPages > 1 && (
-            <div className="users-page__pagination">
-              <span className="users-page__page-info">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <span className="text-sm text-muted-foreground">
                 Page {currentPage} of {totalPages}
               </span>
-              <div className="users-page__page-controls">
+              <div className="flex gap-2">
                 <button
                   type="button"
-                  className="users-page__page-btn"
+                  className="inline-flex items-center gap-1 px-3.5 py-1.5 border border-border rounded-md bg-background text-foreground text-sm font-medium cursor-pointer font-[inherit] transition-colors hover:bg-muted disabled:opacity-45 disabled:cursor-not-allowed"
                   onClick={() => setPage(currentPage - 1)}
                   disabled={currentPage <= 1}
                   aria-label="Previous page"
@@ -277,7 +308,7 @@ export function UsersPage() {
                 </button>
                 <button
                   type="button"
-                  className="users-page__page-btn"
+                  className="inline-flex items-center gap-1 px-3.5 py-1.5 border border-border rounded-md bg-background text-foreground text-sm font-medium cursor-pointer font-[inherit] transition-colors hover:bg-muted disabled:opacity-45 disabled:cursor-not-allowed"
                   onClick={() => setPage(currentPage + 1)}
                   disabled={!hasMore}
                   aria-label="Next page"
