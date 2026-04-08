@@ -180,7 +180,7 @@ export function AutoCategorizationRuleTable({
   // Only show empty state if no data AND no active filters
   if (rules.length === 0 && !hasActiveFilters) {
     return (
-      <div className={`autocat-table__empty ${className}`.trim()}>
+      <div className={`text-center rounded-lg border border-dashed border-gray-300 bg-white px-6 py-12 text-gray-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400 ${className}`.trim()}>
         <p>No rules found. Create your first auto-categorization rule to get started.</p>
       </div>
     )
@@ -188,15 +188,15 @@ export function AutoCategorizationRuleTable({
 
   return (
     <table
-      className={`autocat-table ${loading ? 'autocat-table--loading' : ''} ${className}`.trim()}
+      className={`w-full border-collapse overflow-visible rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800 ${loading ? 'pointer-events-none opacity-60' : ''} ${className}`.trim()}
     >
       <thead>
-        <tr className="autocat-table__header-row">
-          <th className="autocat-table__th">
+        <tr className="bg-gray-50 dark:bg-gray-900">
+          <th className="border-b border-gray-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-gray-600 dark:border-gray-700 dark:text-gray-400">
             {renderSortableHeader('Name', 'name')}
           </th>
-          <th className="autocat-table__th">
-            <div className="autocat-table__header-content">
+          <th className="border-b border-gray-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-gray-600 dark:border-gray-700 dark:text-gray-400">
+            <div className="flex items-center gap-1">
               {renderSortableHeader('Status', 'status')}
               {statusOptions && onStatusFilterChange && (
                 <ColumnFilterDropdown
@@ -210,8 +210,8 @@ export function AutoCategorizationRuleTable({
               )}
             </div>
           </th>
-          <th className="autocat-table__th">
-            <div className="autocat-table__header-content">
+          <th className="border-b border-gray-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-gray-600 dark:border-gray-700 dark:text-gray-400">
+            <div className="flex items-center gap-1">
               {renderSortableHeader('Priority', 'priority')}
               {onPriorityRangeChange && (
                 <ColumnFilterDropdown
@@ -223,9 +223,9 @@ export function AutoCategorizationRuleTable({
               )}
             </div>
           </th>
-          <th className="autocat-table__th">Conditions</th>
-          <th className="autocat-table__th">
-            <div className="autocat-table__header-content">
+          <th className="border-b border-gray-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-gray-600 dark:border-gray-700 dark:text-gray-400">Conditions</th>
+          <th className="border-b border-gray-200 px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-gray-600 dark:border-gray-700 dark:text-gray-400">
+            <div className="flex items-center gap-1">
               {renderSortableHeader('Category', 'category')}
               {categoryOptions && onCategoryFilterChange && (
                 <ColumnFilterDropdown
@@ -240,11 +240,11 @@ export function AutoCategorizationRuleTable({
               )}
             </div>
           </th>
-          <th className="autocat-table__th autocat-table__th--matches">
+          <th className="border-b border-gray-200 px-4 py-3 text-right text-xs font-semibold uppercase tracking-[0.05em] text-gray-600 dark:border-gray-700 dark:text-gray-400">
             {renderSortableHeader('Matches', 'matches')}
           </th>
           {hasActions && (
-            <th className="autocat-table__th autocat-table__th--actions">
+            <th className="w-32 border-b border-gray-200 px-4 py-3 text-right text-xs font-semibold uppercase tracking-[0.05em] text-gray-600 max-md:w-24 dark:border-gray-700 dark:text-gray-400">
               Actions
             </th>
           )}
@@ -252,8 +252,11 @@ export function AutoCategorizationRuleTable({
       </thead>
       <tbody>
         {rules.length === 0 ? (
-          <tr className="autocat-table__empty-row">
-            <td colSpan={hasActions ? 7 : 6}>
+          <tr>
+            <td
+              colSpan={hasActions ? 7 : 6}
+              className="px-4 py-12 text-center italic text-gray-500 dark:text-gray-400"
+            >
               No rules match your filters. Try adjusting your criteria.
             </td>
           </tr>
@@ -268,42 +271,52 @@ export function AutoCategorizationRuleTable({
           return (
             <tr
               key={rule.id}
-              className={`autocat-table__row ${onRowClick ? 'autocat-table__row--clickable' : ''}`}
+              className={`transition-colors duration-150 hover:bg-gray-50 dark:hover:bg-gray-700/50 ${onRowClick ? 'autocat-table__row--clickable cursor-pointer' : ''}`}
               onClick={onRowClick ? () => onRowClick(rule) : undefined}
             >
-              <td className="autocat-table__td autocat-table__td--name">
-                <div className="autocat-table__name-cell">
-                  <span className="autocat-table__name">{rule.name}</span>
+              <td className="min-w-[180px] border-b border-gray-200 px-4 py-3.5 text-sm align-middle text-gray-700 max-md:min-w-[150px] max-md:px-3 max-md:py-2.5 dark:border-gray-700 dark:text-gray-300">
+                <div className="flex flex-col gap-1">
+                  <span className="font-medium text-gray-900 dark:text-gray-100">{rule.name}</span>
                   {rule.description && (
-                    <span className="autocat-table__description">
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
                       {rule.description}
                     </span>
                   )}
                   <span
-                    className={`autocat-table__source autocat-table__source--${rule.source}`}
+                    className={[
+                      'mt-1 inline-flex w-fit items-center rounded px-1.5 py-0.5 text-[0.625rem] font-medium',
+                      rule.source === 'manual' ? 'bg-blue-50 text-blue-700 dark:bg-blue-900 dark:text-blue-300' : '',
+                      rule.source === 'ai' ? 'bg-purple-50 text-purple-700 dark:bg-purple-900 dark:text-purple-300' : '',
+                      rule.source === 'template' ? 'bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300' : '',
+                    ].filter(Boolean).join(' ')}
                   >
                     {sourceLabel}
                   </span>
                 </div>
               </td>
-              <td className="autocat-table__td">
+              <td className="border-b border-gray-200 px-4 py-3.5 text-sm align-middle max-md:px-3 max-md:py-2.5 dark:border-gray-700">
                 <span
-                  className={`autocat-table__status ${rule.enabled ? 'autocat-table__status--enabled' : 'autocat-table__status--disabled'}`}
+                  className={[
+                    'inline-flex items-center rounded-md px-2 py-1 text-xs font-medium',
+                    rule.enabled
+                      ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300'
+                      : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400',
+                  ].join(' ')}
                 >
                   {rule.enabled ? 'Enabled' : 'Disabled'}
                 </span>
               </td>
-              <td className="autocat-table__td autocat-table__td--priority">
+              <td className="border-b border-gray-200 px-4 py-3.5 text-center text-sm align-middle tabular-nums max-md:px-3 max-md:py-2.5 dark:border-gray-700 dark:text-gray-300">
                 {rule.priority}
               </td>
-              <td className="autocat-table__td">{conditionsText}</td>
-              <td className="autocat-table__td autocat-table__td--category">
-                <div className="autocat-table__category-cell">
-                  <span className="autocat-table__category">{categoryLabel}</span>
+              <td className="border-b border-gray-200 px-4 py-3.5 text-sm align-middle text-gray-700 max-md:px-3 max-md:py-2.5 dark:border-gray-700 dark:text-gray-300">{conditionsText}</td>
+              <td className="min-w-[150px] border-b border-gray-200 px-4 py-3.5 text-sm align-middle text-gray-700 max-md:px-3 max-md:py-2.5 dark:border-gray-700 dark:text-gray-300">
+                <div className="flex flex-col gap-1">
+                  <span className="font-medium">{categoryLabel}</span>
                   {rule.target_tags && rule.target_tags.length > 0 && (
-                    <div className="autocat-table__tags">
+                    <div className="flex flex-wrap gap-1">
                       {rule.target_tags.map((tag) => (
-                        <span key={tag} className="autocat-table__tag">
+                        <span key={tag} className="inline-flex items-center rounded bg-blue-50 px-1.5 py-0.5 text-[0.625rem] font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300">
                           {tag}
                         </span>
                       ))}
@@ -311,15 +324,15 @@ export function AutoCategorizationRuleTable({
                   )}
                 </div>
               </td>
-              <td className="autocat-table__td autocat-table__td--matches">
+              <td className="border-b border-gray-200 px-4 py-3.5 text-right text-sm align-middle tabular-nums max-md:px-3 max-md:py-2.5 dark:border-gray-700 dark:text-gray-300">
                 {rule.match_count}
               </td>
               {hasActions && (
                 <td
-                  className="autocat-table__td autocat-table__td--actions"
+                  className="border-b border-gray-200 px-4 py-3.5 text-right align-middle max-md:px-3 max-md:py-2.5 dark:border-gray-700"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <div className="autocat-table__actions">
+                  <div className="flex items-center justify-end gap-2">
                     {onToggle && (
                       <button
                         type="button"
@@ -327,13 +340,21 @@ export function AutoCategorizationRuleTable({
                         aria-checked={rule.enabled}
                         onClick={() => handleToggle(rule)}
                         disabled={loading}
-                        className={`autocat-table__toggle ${rule.enabled ? 'autocat-table__toggle--on' : ''}`}
-                        aria-label={
-                          rule.enabled ? 'Disable rule' : 'Enable rule'
-                        }
+                        className={[
+                          'relative h-5 w-10 cursor-pointer rounded-full border-none p-0 transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-50',
+                          rule.enabled
+                            ? 'bg-green-500 dark:bg-green-600'
+                            : 'bg-gray-300 dark:bg-gray-600',
+                        ].join(' ')}
+                        aria-label={rule.enabled ? 'Disable rule' : 'Enable rule'}
                         title={rule.enabled ? 'Disable rule' : 'Enable rule'}
                       >
-                        <span className="autocat-table__toggle-slider" />
+                        <span
+                          className={[
+                            'absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform duration-200',
+                            rule.enabled ? 'left-0.5 translate-x-5' : 'left-0.5',
+                          ].join(' ')}
+                        />
                       </button>
                     )}
                     {onEdit && (
@@ -341,7 +362,7 @@ export function AutoCategorizationRuleTable({
                         type="button"
                         onClick={() => onEdit(rule)}
                         disabled={loading}
-                        className="autocat-table__action-btn"
+                        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-gray-500 transition-colors duration-150 hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4 dark:hover:bg-gray-700 dark:hover:text-gray-300"
                         aria-label="Edit rule"
                         title="Edit rule"
                       >
@@ -353,7 +374,7 @@ export function AutoCategorizationRuleTable({
                         type="button"
                         onClick={() => onDelete(rule)}
                         disabled={loading}
-                        className="autocat-table__action-btn autocat-table__action-btn--danger"
+                        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-gray-500 transition-colors duration-150 hover:bg-red-100 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4 dark:hover:bg-red-900 dark:hover:text-red-400"
                         aria-label="Delete rule"
                         title="Delete rule"
                       >
