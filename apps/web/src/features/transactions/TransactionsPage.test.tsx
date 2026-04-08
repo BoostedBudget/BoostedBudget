@@ -437,6 +437,18 @@ describe('TransactionsPage', () => {
 
       expect(container.querySelector('main')).toBeInTheDocument()
     })
+
+    it('should center the transactions header and search row', async () => {
+      const Wrapper = createWrapper()
+      render(<TransactionsPage />, { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
+      })
+
+      expect(screen.getByTestId('transactions-page-header')).toHaveClass('items-center', 'text-center')
+      expect(screen.getByTestId('transactions-page-search')).toHaveClass('justify-center')
+    })
   })
 
   describe('Transaction Editing', () => {
