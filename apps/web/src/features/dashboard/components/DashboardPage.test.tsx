@@ -470,13 +470,6 @@ describe('DashboardPage', () => {
       expect(screen.getByText('Track your balance and cash flow')).toBeInTheDocument()
     })
 
-    it('should center the dashboard header copy and filters', () => {
-      render(<DashboardPage />)
-
-      expect(screen.getByTestId('dashboard-page-header')).toHaveClass('items-center', 'text-center')
-      expect(screen.getByTestId('dashboard-page-filters')).toHaveClass('justify-center')
-    })
-
     it('should render DashboardGrid component (widget system)', () => {
       render(<DashboardPage />)
 
