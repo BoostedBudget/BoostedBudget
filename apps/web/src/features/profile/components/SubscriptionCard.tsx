@@ -2,7 +2,6 @@ import { Link } from 'react-router-dom'
 import { Award, Check } from 'lucide-react'
 import { useSubscriptionTiers } from '../../subscription/hooks/useSubscriptionTiers'
 import type { SubscriptionTier } from '../../subscription/types'
-import './SubscriptionCard.css'
 
 interface SubscriptionCardProps {
   tier: string // User's subscription_tier from API
@@ -49,7 +48,7 @@ export function SubscriptionCard({ tier, status, trialDaysRemaining }: Subscript
   // Handle loading state
   if (loading || !tier || !status) {
     return (
-      <div className="subscription-card loading">
+      <div className="border-2 border-border rounded-xl p-6 my-4 bg-card flex justify-center items-center min-h-[200px] text-muted-foreground">
         <p>Loading subscription details...</p>
       </div>
     )
@@ -58,7 +57,7 @@ export function SubscriptionCard({ tier, status, trialDaysRemaining }: Subscript
   // Handle error state
   if (error) {
     return (
-      <div className="subscription-card error">
+      <div className="border-2 border-border rounded-xl p-6 my-4 bg-card flex justify-center items-center min-h-[200px] text-destructive">
         <p>Error loading subscription: {error.message}</p>
       </div>
     )
@@ -70,7 +69,7 @@ export function SubscriptionCard({ tier, status, trialDaysRemaining }: Subscript
   // Handle invalid tier (shouldn't happen, but safety check)
   if (!tierInfo) {
     return (
-      <div className="subscription-card error">
+      <div className="border-2 border-border rounded-xl p-6 my-4 bg-card flex justify-center items-center min-h-[200px] text-destructive">
         <p>Invalid subscription tier</p>
       </div>
     )
@@ -80,42 +79,56 @@ export function SubscriptionCard({ tier, status, trialDaysRemaining }: Subscript
   const displayPrice = formatPrice(tierInfo.pricing.price_monthly)
   const features = buildFeatureList(tierInfo)
 
+  const isPremiumTier = ['premium', 'household_2', 'household_3', 'household_4', 'household_5'].includes(tier)
+
   return (
-    <div className={`subscription-card tier-${tier}`}>
-      <div className="subscription-header">
-        <div className="tier-info">
-          <Award className="tier-icon" aria-hidden="true" />
-          <h3 className="tier-name">{displayName}</h3>
+    <div className={`border-2 rounded-xl p-6 my-4 ${isPremiumTier ? 'border-primary bg-gradient-to-br from-card to-primary/5' : 'border-border bg-card'}`}>
+      <div className="flex justify-between items-start mb-6 flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <Award className="w-8 h-8 text-primary" aria-hidden="true" />
+          <h3 className="text-2xl m-0 font-bold text-foreground">{displayName}</h3>
         </div>
-        <div className="tier-pricing">
-          <span className="tier-price">{displayPrice}</span>
+        <div className="flex items-baseline gap-1">
+          <span className="text-2xl font-bold text-foreground">{displayPrice}</span>
           {tierInfo.pricing.price_monthly > 0 && (
-            <span className="price-period">/month</span>
+            <span className="text-sm text-muted-foreground font-normal">/month</span>
           )}
         </div>
-        <span className={`status-badge status-${status}`}>
+        <span className={`px-3.5 py-1.5 rounded-full text-xs font-semibold capitalize tracking-wide ${
+          status === 'active' ? 'bg-success/10 text-success' :
+          status === 'inactive' ? 'bg-destructive/10 text-destructive' :
+          status === 'cancelled' ? 'bg-muted text-muted-foreground' :
+          status === 'trial' ? 'bg-info/10 text-info' :
+          'bg-muted text-muted-foreground'
+        }`}>
           {status === 'trial' && trialDaysRemaining !== undefined
             ? `Trial — ${trialDaysRemaining} day${trialDaysRemaining === 1 ? '' : 's'} remaining`
             : status}
         </span>
       </div>
 
-      <div className="subscription-features">
-        <ul>
+      <div className="mb-6">
+        <ul className="list-none p-0 m-0 grid gap-2">
           {features.map((feature, index) => (
-            <li key={index}>
-              <Check className="feature-check" aria-hidden="true" />
+            <li key={index} className="flex items-center gap-2 py-2 text-foreground text-[0.9375rem]">
+              <Check className="w-4 h-4 text-success shrink-0" aria-hidden="true" />
               <span>{feature}</span>
             </li>
           ))}
         </ul>
       </div>
 
-      <div className="subscription-actions">
-        <Link to="/billing/manage" className="btn-manage">
+      <div className="flex flex-col gap-3">
+        <Link
+          to="/billing/manage"
+          className="w-full py-3.5 border border-border rounded-lg text-base font-semibold cursor-pointer text-center bg-muted text-foreground hover:bg-accent hover:border-muted-foreground transition-all duration-200 no-underline block"
+        >
           Manage Subscription
         </Link>
-        <Link to="/pricing" className="compare-plans-link">
+        <Link
+          to="/pricing"
+          className="block text-center text-primary text-sm font-medium no-underline px-2 py-2 rounded hover:bg-primary/10 transition-all duration-200"
+        >
           Compare Plans →
         </Link>
       </div>
