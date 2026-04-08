@@ -171,20 +171,20 @@ export function CreateSavingsGoalDialog({
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="create-goal-dialog w-full max-w-lg p-6 bg-white dark:bg-gray-900 rounded-2xl"
+        className="create-goal-dialog w-full max-w-lg p-6 bg-card rounded-2xl"
         // Issue #460: Prevent click-outside-to-close to avoid accidental data loss
         onInteractOutside={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => e.preventDefault()}
         showCloseButton={false}
       >
         <DialogHeader className="flex flex-row items-center justify-between mb-6">
-          <DialogTitle className="text-xl font-semibold text-gray-900 dark:text-white">
+          <DialogTitle className="text-xl font-semibold text-foreground">
             Create Savings Goal
           </DialogTitle>
           <button
             type="button"
             onClick={onCancel}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            className="text-muted-foreground hover:text-foreground"
           >
             <XIcon className="h-6 w-6" />
           </button>
@@ -192,7 +192,7 @@ export function CreateSavingsGoalDialog({
 
         {/* Template Selection */}
         <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+          <label className="block text-sm font-medium text-foreground mb-2">
             Choose a template (optional)
           </label>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -217,7 +217,7 @@ export function CreateSavingsGoalDialog({
           <div>
             <label
               htmlFor="name"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+              className="block text-sm font-medium text-foreground"
             >
               Name
             </label>
@@ -244,7 +244,7 @@ export function CreateSavingsGoalDialog({
           <div>
             <label
               htmlFor="description"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+              className="block text-sm font-medium text-foreground"
             >
               Description
             </label>
@@ -263,12 +263,12 @@ export function CreateSavingsGoalDialog({
           <div>
             <label
               htmlFor="target_amount"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+              className="block text-sm font-medium text-foreground"
             >
               Target Amount
             </label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
                 $
               </span>
               <input
@@ -297,7 +297,7 @@ export function CreateSavingsGoalDialog({
           <div>
             <label
               htmlFor="account_id"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+              className="block text-sm font-medium text-foreground"
             >
               Account
             </label>
@@ -339,7 +339,7 @@ export function CreateSavingsGoalDialog({
           <div>
             <label
               htmlFor="deadline"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+              className="block text-sm font-medium text-foreground"
             >
               Deadline (optional)
             </label>
@@ -366,7 +366,7 @@ export function CreateSavingsGoalDialog({
             <button
               type="button"
               onClick={onCancel}
-              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              className="px-4 py-2 text-sm font-medium text-foreground bg-muted rounded-lg hover:bg-muted/80 transition-colors"
             >
               Cancel
             </button>

@@ -31,8 +31,6 @@ export function BalanceOverview({ summary }: BalanceOverviewProps) {
 
   const hasComparison = period_comparison !== undefined && period_comparison !== null
   const isPositiveChange = hasComparison && period_comparison.change_amount >= 0
-  const changeColor = isPositiveChange ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
-  const changeIcon = isPositiveChange ? '↑' : '↓'
 
   return (
     <div className="h-full flex flex-col">
@@ -47,8 +45,8 @@ export function BalanceOverview({ summary }: BalanceOverviewProps) {
 
       {hasComparison && (
         <div className="flex items-center space-x-2">
-          <span className={`text-sm font-semibold ${changeColor}`}>
-            {changeIcon}{' '}
+          <span className={`text-sm font-semibold ${isPositiveChange ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+            {isPositiveChange ? '↑' : '↓'}{' '}
             {new Intl.NumberFormat('en-US', {
               style: 'currency',
               currency: 'USD',

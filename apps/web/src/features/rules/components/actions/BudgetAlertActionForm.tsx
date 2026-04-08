@@ -148,7 +148,7 @@ export function BudgetAlertActionForm({
     <div className={`flex flex-col gap-5 ${className}`.trim()}>
       {/* Budget Selection */}
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="budget-select" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+        <label htmlFor="budget-select" className="text-sm font-medium text-foreground">
           Budget
         </label>
         <select
@@ -156,7 +156,7 @@ export function BudgetAlertActionForm({
           value={action.budget_id ?? ''}
           onChange={handleBudgetChange}
           disabled={disabled || loading}
-          className="cursor-pointer rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <option value="">Select a budget...</option>
           {budgets.map((budget) => (
@@ -170,7 +170,7 @@ export function BudgetAlertActionForm({
       {/* Category Selection (only show when budget selected) */}
       {action.budget_id && (
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="category-select" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <label htmlFor="category-select" className="text-sm font-medium text-foreground">
             Category
           </label>
           <select
@@ -178,7 +178,7 @@ export function BudgetAlertActionForm({
             value={action.category_id ?? ''}
             onChange={handleCategoryChange}
             disabled={disabled}
-            className="cursor-pointer rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+            className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <option value="">All Categories</option>
             {categories.map((category) => (
@@ -193,7 +193,7 @@ export function BudgetAlertActionForm({
       {/* Threshold Configuration */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="threshold-type" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <label htmlFor="threshold-type" className="text-sm font-medium text-foreground">
             Threshold Type
           </label>
           <select
@@ -201,7 +201,7 @@ export function BudgetAlertActionForm({
             value={action.threshold_type}
             onChange={handleThresholdTypeChange}
             disabled={disabled}
-            className="cursor-pointer rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+            className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {THRESHOLD_TYPES.map((type) => (
               <option key={type.value} value={type.value}>
@@ -212,12 +212,12 @@ export function BudgetAlertActionForm({
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="threshold-value" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <label htmlFor="threshold-value" className="text-sm font-medium text-foreground">
             Threshold Value
           </label>
-          <div className="flex items-center overflow-hidden rounded-lg border border-gray-300 bg-white focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10 dark:border-gray-600 dark:bg-gray-900">
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
             {action.threshold_type === 'amount' && (
-              <span className="bg-gray-100 px-3 py-2.5 text-sm font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">$</span>
+              <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
             )}
             <input
               id="threshold-value"
@@ -230,7 +230,7 @@ export function BudgetAlertActionForm({
               className="min-w-0 flex-1 border-none bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
             />
             {action.threshold_type === 'percentage' && (
-              <span className="bg-gray-100 px-3 py-2.5 text-sm font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">%</span>
+              <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">%</span>
             )}
           </div>
         </div>
@@ -238,7 +238,7 @@ export function BudgetAlertActionForm({
 
       {/* Notification Channels */}
       <fieldset className="m-0 border-none p-0" aria-label="Notification Channels">
-        <legend className="mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Notification Channels</legend>
+        <legend className="mb-2 text-sm font-medium text-foreground">Notification Channels</legend>
         <div className="flex flex-wrap gap-4">
           {NOTIFICATION_CHANNELS.map((channel) => (
             <label key={channel.value} className="flex cursor-pointer items-center gap-2">
@@ -250,7 +250,7 @@ export function BudgetAlertActionForm({
                 className="h-[1.125rem] w-[1.125rem] cursor-pointer accent-blue-600 disabled:cursor-not-allowed"
                 aria-label={channel.label}
               />
-              <span className="text-sm text-gray-700 dark:text-gray-300">{channel.label}</span>
+              <span className="text-sm text-foreground">{channel.label}</span>
             </label>
           ))}
         </div>
@@ -258,7 +258,7 @@ export function BudgetAlertActionForm({
 
       {/* Title Template */}
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="title-template" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+        <label htmlFor="title-template" className="text-sm font-medium text-foreground">
           Title Template
         </label>
         <input
@@ -268,13 +268,13 @@ export function BudgetAlertActionForm({
           onChange={handleTitleChange}
           disabled={disabled}
           placeholder={DEFAULT_TITLE_TEMPLATE}
-          className="rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+          className="rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
         />
       </div>
 
       {/* Message Template */}
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="message-template" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+        <label htmlFor="message-template" className="text-sm font-medium text-foreground">
           Message Template
         </label>
         <textarea
@@ -284,13 +284,13 @@ export function BudgetAlertActionForm({
           disabled={disabled}
           placeholder={DEFAULT_MESSAGE_TEMPLATE}
           rows={3}
-          className="min-h-[80px] resize-y rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 font-[inherit] text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+          className="min-h-[80px] resize-y rounded-lg border border-border bg-card px-3.5 py-2.5 font-[inherit] text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
         />
       </div>
 
       {/* Available Placeholders */}
-      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800">
-        <span className="mb-2 block text-xs font-semibold text-gray-600 dark:text-gray-400">Available Placeholders:</span>
+      <div className="rounded-lg border border-border bg-muted p-3">
+        <span className="mb-2 block text-xs font-semibold text-muted-foreground">Available Placeholders:</span>
         <div className="flex flex-wrap gap-1.5">
           {AVAILABLE_PLACEHOLDERS.map((placeholder) => (
             <span

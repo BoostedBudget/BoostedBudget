@@ -38,7 +38,9 @@ export function WidgetWrapper({
 
   return (
     <div
-      className={`h-full bg-card rounded-lg shadow border border-border overflow-hidden flex flex-col ${isEditing ? 'outline outline-2 outline-blue-400 -outline-offset-2' : ''}`}
+      className={`h-full bg-card rounded-lg shadow border border-border overflow-hidden flex flex-col ${
+        isEditing ? 'outline outline-2 outline-blue-400 -outline-offset-2' : ''
+      }`}
     >
       {/* Header with title and actions */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/50 flex-shrink-0">
