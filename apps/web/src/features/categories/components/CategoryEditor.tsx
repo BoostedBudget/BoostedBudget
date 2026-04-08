@@ -124,8 +124,7 @@ export function CategoryEditor({
               }}
             >
               <span
-                className="w-3 h-3 rounded-full shrink-0"
-                style={{ backgroundColor: '#9CA3AF' }}
+                className="w-3 h-3 rounded-full shrink-0 bg-muted-foreground"
               />
               Uncategorized
             </li>
