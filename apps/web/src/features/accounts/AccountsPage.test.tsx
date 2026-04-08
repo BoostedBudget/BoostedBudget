@@ -248,13 +248,6 @@ describe('AccountsPage', () => {
       expect(screen.getByTestId('account-card')).toBeInTheDocument()
     })
 
-    it('centers the accounts page header and actions', () => {
-      renderAccountsPage()
-
-      expect(screen.getByTestId('accounts-page-header')).toHaveClass('items-center', 'text-center')
-      expect(screen.getByTestId('accounts-page-actions')).toHaveClass('justify-center')
-    })
-
     it('does not show Monthly Sync Limits card', () => {
       renderAccountsPage()
       expect(screen.queryByText('Monthly Sync Limits')).not.toBeInTheDocument()

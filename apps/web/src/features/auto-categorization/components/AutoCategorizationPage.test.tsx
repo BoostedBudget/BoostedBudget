@@ -191,14 +191,6 @@ describe('AutoCategorizationPage', () => {
       renderWithProviders(<AutoCategorizationPage categories={mockCategories} />)
       expect(screen.getByText(/2 rules/i)).toBeInTheDocument()
     })
-
-    it('should center the auto-categorization header and actions', () => {
-      configureQuery({ data: [mockRule1, mockRule2] })
-      renderWithProviders(<AutoCategorizationPage categories={mockCategories} />)
-
-      expect(screen.getByTestId('auto-categorization-page-header')).toHaveClass('items-center', 'text-center')
-      expect(screen.getByTestId('auto-categorization-page-actions')).toHaveClass('justify-center')
-    })
   })
 
   describe('Create rule', () => {

@@ -351,15 +351,9 @@ export function AccountsPage() {
 
   return (
     <div className="p-8 max-w-[1200px] mx-auto max-sm:p-4">
-      <div
-        data-testid="accounts-page-header"
-        className="mb-8 flex flex-col items-center gap-4 text-center"
-      >
+      <div className="flex justify-between items-center mb-8 max-sm:flex-col max-sm:items-start max-sm:gap-4">
         <h1 className="m-0 text-3xl text-foreground">My Accounts</h1>
-        <div
-          data-testid="accounts-page-actions"
-          className="flex w-full flex-wrap items-center justify-center gap-3"
-        >
+        <div className="flex items-center gap-3 max-sm:w-full max-sm:flex-wrap">
           {/* Issue #307: Show hidden toggle */}
           {hiddenCount > 0 && (
             <button
@@ -414,7 +408,7 @@ export function AccountsPage() {
         />
       ) : (
         <div>
-          <p className="text-base text-muted-foreground mb-4 text-center">
+          <p className="text-base text-muted-foreground mb-4">
             {accountCountDisplay}
             {hiddenCount > 0 && !showHidden && (
               <span className="text-muted-foreground italic"> ({hiddenCount} hidden)</span>

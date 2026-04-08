@@ -146,13 +146,10 @@ function DashboardContent() {
     <div className="min-h-screen bg-background py-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
-        <div className="mb-8 flex flex-col items-center gap-4">
-          <div
-            data-testid="dashboard-page-header"
-            className="flex flex-col items-center gap-2 text-center"
-          >
+        <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
             <h1 className="text-3xl font-bold text-foreground">Dashboard</h1>
-            <p className="text-muted-foreground">
+            <p className="mt-2 text-muted-foreground">
               {isEditing ? 'Drag widgets to reorder, resize from corners' : 'Track your balance and cash flow'}
             </p>
             {/* Onboarding hint - Issue #412: only show after first bank connected */}
@@ -161,7 +158,7 @@ function DashboardContent() {
                 variant="info"
                 dismissible
                 onDismiss={dismissHint}
-                className="mt-2 max-w-2xl py-2 text-left"
+                className="mt-2 py-2"
               >
                 <LightbulbIcon className="h-4 w-4" />
                 <span>Tip: Click "Edit" to customize your dashboard layout</span>
@@ -169,7 +166,7 @@ function DashboardContent() {
             )}
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-3">
+          <div className="flex items-center gap-3">
             {saving && (
               <span className="text-sm text-muted-foreground flex items-center gap-1">
                 <ArrowPathIcon className="h-4 w-4 animate-spin" />
@@ -233,10 +230,7 @@ function DashboardContent() {
         )}
 
         {/* Filters Row - Issue #414: Moved from sidebar to header */}
-        <div
-          data-testid="dashboard-page-filters"
-          className="mb-6 flex flex-wrap items-center justify-center gap-4"
-        >
+        <div className="mb-6 flex flex-wrap items-start gap-4">
           <TimeframeSelector onRangeChange={handleTimeframeChange} />
           {accountTypes && (
             <AccountTypeFilter
