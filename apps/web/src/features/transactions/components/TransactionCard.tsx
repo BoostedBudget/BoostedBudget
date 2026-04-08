@@ -254,9 +254,9 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
           <div className="text-base font-semibold text-foreground mb-1 overflow-hidden text-ellipsis whitespace-nowrap">{displayName}</div>
           {/* Issue #531: Account badge */}
           {account && (
-            <div className="mt-0.5">
+            <div className="transaction-card__account mt-0.5">
               <span
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-white"
+                className="transaction-card__account-badge inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-white"
                 style={{ backgroundColor: accountBackgroundColor }}
               >
                 {account.custom_emoji && <span>{account.custom_emoji}</span>}
@@ -264,23 +264,23 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
               </span>
             </div>
           )}
-          <div className="flex gap-3 text-sm text-muted-foreground mt-1">
+          <div className="transaction-card__meta flex gap-3 text-sm text-muted-foreground mt-1">
             <TransactionBudgetBadge match={budgetMatch} />
-            <span className="inline-flex items-center gap-1">
+            <span className="transaction-card__category inline-flex items-center gap-1">
               {/* Issue #531: Category color dot */}
               <span
-                className="w-2 h-2 rounded-full shrink-0 mr-1"
+                className="transaction-card__category-dot w-2 h-2 rounded-full shrink-0 mr-1"
                 style={{ backgroundColor: categoryColor }}
               />
               {showUncategorizedWarning && (
-                <span className="text-xs leading-none" title="Uncategorized">⚠️</span>
+                <span className="transaction-card__uncategorized-warning text-xs leading-none" title="Uncategorized">⚠️</span>
               )}
               {categoryLabel}
             </span>
             <span>{displayDate}</span>
           </div>
           {tags && tags.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-1.5" data-testid="transaction-tags">
+            <div className="transaction-card__tags flex flex-wrap gap-1 mt-1.5" data-testid="transaction-tags">
               {tags.map((tag) => (
                 <span key={tag} className="inline-block text-[11px] font-medium text-foreground bg-muted px-2 py-0.5 rounded-full whitespace-nowrap">
                   {tag}
@@ -302,7 +302,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
           {/* Issue #531: Enhanced pending badge */}
           {pending && (
             <div
-              className="inline-flex items-center gap-1 text-xs font-semibold text-yellow-700 dark:text-yellow-300 bg-yellow-100 dark:bg-yellow-800 px-2 py-0.5 rounded-full uppercase tracking-wide"
+              className="transaction-card__pending-badge inline-flex items-center gap-1 text-xs font-semibold text-yellow-700 dark:text-yellow-300 bg-yellow-100 dark:bg-yellow-800 px-2 py-0.5 rounded-full uppercase tracking-wide"
               title="This transaction is still pending and may be updated by your bank"
             >
               <Clock className="w-3 h-3" data-testid="pending-icon" />
@@ -312,7 +312,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
         </div>
         {/* Issue #531: Quick action buttons */}
         {(onEdit || onCategorize) && (
-          <div className="hidden absolute right-4 top-1/2 -translate-y-1/2 gap-1 group-hover:flex [article:hover_&]:flex [article:focus-within_&]:flex">
+          <div className="transaction-card__quick-actions hidden absolute right-4 top-1/2 -translate-y-1/2 gap-1 group-hover:flex [article:hover_&]:flex [article:focus-within_&]:flex">
             {onEdit && (
               <ReadOnlyGuard message="Resubscribe to edit transactions">
                 <button
