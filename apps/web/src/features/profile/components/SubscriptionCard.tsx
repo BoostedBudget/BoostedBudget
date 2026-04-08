@@ -82,7 +82,7 @@ export function SubscriptionCard({ tier, status, trialDaysRemaining }: Subscript
   const isPremiumTier = ['premium', 'household_2', 'household_3', 'household_4', 'household_5'].includes(tier)
 
   return (
-    <div className={`border-2 rounded-xl p-6 my-4 ${isPremiumTier ? 'border-primary bg-gradient-to-br from-card to-primary/5' : 'border-border bg-card'}`}>
+    <div className={`subscription-card tier-${tier} border-2 rounded-xl p-6 my-4 ${isPremiumTier ? 'border-primary bg-gradient-to-br from-card to-primary/5' : 'border-border bg-card'}`}>
       <div className="flex justify-between items-start mb-6 flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <Award className="w-8 h-8 text-primary" aria-hidden="true" />
