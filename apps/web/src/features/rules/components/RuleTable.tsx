@@ -171,7 +171,7 @@ export function RuleTable({
     <table
       className={cn(
         'w-full border-collapse overflow-hidden rounded-lg border border-border bg-card',
-        loading && 'pointer-events-none opacity-60',
+        loading && 'rule-table--loading pointer-events-none opacity-60',
         className
       )}
     >
@@ -222,7 +222,7 @@ export function RuleTable({
               key={rule.id}
               className={cn(
                 'transition-colors duration-150',
-                onRowClick && 'cursor-pointer',
+                onRowClick && 'rule-table__row--clickable cursor-pointer',
                 isSelected
                   ? 'bg-blue-50 hover:bg-blue-100 dark:bg-blue-900 dark:hover:bg-blue-800'
                   : 'hover:bg-muted/30'

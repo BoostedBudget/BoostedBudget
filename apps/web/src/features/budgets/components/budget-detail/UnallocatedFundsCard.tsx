@@ -83,10 +83,10 @@ export function UnallocatedFundsCard({
   const cardBase = 'bg-card border border-border rounded-xl p-6'
   const cardVariant =
     status === 'neutral'
-      ? 'border-l-4 border-l-green-600'
+      ? 'unallocated-card--neutral border-l-4 border-l-green-600'
       : status === 'warning'
-        ? 'border-l-4 border-l-red-500 bg-destructive/5'
-        : 'border-l-4 border-l-primary'
+        ? 'unallocated-card--warning border-l-4 border-l-red-500 bg-destructive/5'
+        : 'unallocated-card--positive border-l-4 border-l-primary'
 
   const iconColor =
     status === 'neutral' ? 'text-green-600' :

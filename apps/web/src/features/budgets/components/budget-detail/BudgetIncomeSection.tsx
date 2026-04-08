@@ -122,7 +122,7 @@ export function BudgetIncomeSection({
 
       <div className="flex flex-wrap gap-6 mb-4">
         <div className="flex flex-col gap-1">
-          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Expected</span>
+          <span className="income-section__label text-xs font-medium uppercase tracking-wide text-muted-foreground">Expected</span>
           <span className="text-xl font-semibold text-foreground">
             {formatCurrency(expectedIncome, currencyCode)}
           </span>
@@ -139,9 +139,9 @@ export function BudgetIncomeSection({
           <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Difference</span>
           <div className="flex items-center gap-1">
             <span className={`text-xl font-semibold ${
-              differenceType === 'surplus' ? 'text-success' :
-              differenceType === 'shortfall' ? 'text-destructive' :
-              'text-muted-foreground'
+              differenceType === 'surplus' ? 'income-section__difference--surplus text-success' :
+              differenceType === 'shortfall' ? 'income-section__difference--shortfall text-destructive' :
+              'income-section__difference--neutral text-muted-foreground'
             }`}>
               {formatDifference(difference, currencyCode)}
             </span>
@@ -200,7 +200,7 @@ export function BudgetIncomeSection({
 
           <div
             id="income-sources-list"
-            className={`pt-3 ${!isExpanded ? 'hidden' : ''}`}
+            className={`income-section__sources pt-3 ${!isExpanded ? 'income-section__sources--collapsed hidden' : ''}`}
           >
             <ul className="list-none m-0 p-0 flex flex-col gap-3">
               {incomeSources.map((source, index) => {

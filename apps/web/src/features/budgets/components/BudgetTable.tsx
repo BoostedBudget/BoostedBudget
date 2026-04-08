@@ -171,7 +171,7 @@ export function BudgetTable({
 
   return (
     <table
-      className={`w-full border-collapse bg-card rounded-lg overflow-visible border border-border ${loading ? 'opacity-60 pointer-events-none' : ''} ${className}`.trim()}
+      className={`w-full border-collapse bg-card rounded-lg overflow-visible border border-border ${loading ? 'budget-table--loading opacity-60 pointer-events-none' : ''} ${className}`.trim()}
     >
       <thead>
         <tr className="bg-muted">
@@ -235,7 +235,7 @@ export function BudgetTable({
           return (
             <tr
               key={budget.id}
-              className={`transition-colors duration-150 hover:bg-muted/50 ${onRowClick ? 'cursor-pointer' : ''} ${!budget.is_active ? 'opacity-60' : ''}`}
+              className={`transition-colors duration-150 hover:bg-muted/50 ${onRowClick ? 'budget-table__row--clickable cursor-pointer' : ''} ${!budget.is_active ? 'opacity-60' : ''}`}
               onClick={onRowClick ? () => onRowClick(budget) : undefined}
             >
               <td className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle min-w-[200px] max-sm:min-w-[150px]">
@@ -283,8 +283,8 @@ export function BudgetTable({
                 <span
                   className={`font-semibold tabular-nums ${
                     budget.remaining_amount < 0
-                      ? 'text-red-600 dark:text-red-400'
-                      : 'text-green-600 dark:text-green-400'
+                      ? 'budget-table__remaining--negative text-red-600 dark:text-red-400'
+                      : 'budget-table__remaining--positive text-green-600 dark:text-green-400'
                   }`}
                 >
                   {formatCurrency(budget.remaining_amount)}
