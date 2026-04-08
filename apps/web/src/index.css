@@ -78,6 +78,7 @@
   --color-primary-700: var(--info);
 
   /* Absolute gray scale values — used in .dark {} selectors across CSS files */
+  --color-gray-50: oklch(0.985 0 0);
   --color-gray-100: oklch(0.97 0 0);
   --color-gray-200: oklch(0.922 0 0);
   --color-gray-300: oklch(0.869 0 0);
@@ -85,6 +86,7 @@
   --color-gray-500: oklch(0.556 0 0);
   --color-gray-600: oklch(0.453 0 0);
   --color-gray-700: oklch(0.371 0 0);
+  --color-gray-750: oklch(0.320 0 0);
   --color-gray-800: oklch(0.269 0 0);
   --color-gray-900: oklch(0.145 0 0);
 

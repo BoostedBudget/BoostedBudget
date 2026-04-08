@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ThemeContext } from './ThemeContext'
 import type { Theme } from './ThemeContext'
 
@@ -23,18 +23,9 @@ interface ThemeProviderProps {
 
 export function ThemeProvider({ children, defaultTheme = 'system' }: ThemeProviderProps) {
   const [theme, setThemeState] = useState<Theme>(() => getStoredTheme() ?? defaultTheme)
-  const [systemTheme, setSystemTheme] = useState<'light' | 'dark'>(getSystemTheme)
+  const [systemTheme, setSystemTheme] = useState<'light' | 'dark'>(getSystemTheme())
 
   const resolvedTheme = theme === 'system' ? systemTheme : theme
-
-  const applyTheme = useCallback((resolved: 'light' | 'dark') => {
-    const root = document.documentElement
-    if (resolved === 'dark') {
-      root.classList.add('dark')
-    } else {
-      root.classList.remove('dark')
-    }
-  }, [])
 
   const setTheme = useCallback((newTheme: Theme) => {
     setThemeState(newTheme)
@@ -42,8 +33,13 @@ export function ThemeProvider({ children, defaultTheme = 'system' }: ThemeProvid
   }, [])
 
   useEffect(() => {
-    applyTheme(resolvedTheme)
-  }, [resolvedTheme, applyTheme])
+    const root = document.documentElement
+    if (resolvedTheme === 'dark') {
+      root.classList.add('dark')
+    } else {
+      root.classList.remove('dark')
+    }
+  }, [resolvedTheme])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
@@ -52,10 +48,5 @@ export function ThemeProvider({ children, defaultTheme = 'system' }: ThemeProvid
     return () => mediaQuery.removeEventListener('change', handler)
   }, [])
 
-  const value = useMemo(
-    () => ({ theme, resolvedTheme, setTheme }),
-    [theme, resolvedTheme, setTheme],
-  )
-
-  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
+  return <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme }}>{children}</ThemeContext.Provider>
 }
