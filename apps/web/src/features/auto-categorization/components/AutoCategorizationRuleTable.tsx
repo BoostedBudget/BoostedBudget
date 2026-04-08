@@ -188,7 +188,7 @@ export function AutoCategorizationRuleTable({
 
   return (
     <table
-      className={`w-full border-collapse overflow-visible rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800 ${loading ? 'pointer-events-none opacity-60' : ''} ${className}`.trim()}
+      className={`w-full border-collapse overflow-visible rounded-lg border border-border bg-card ${loading ? 'autocat-table--loading pointer-events-none opacity-60' : ''} ${className}`.trim()}
     >
       <thead>
         <tr className="bg-gray-50 dark:bg-gray-900">

@@ -259,7 +259,7 @@ describe('WidgetWrapper', () => {
       )
 
       const wrapper = container.firstChild as HTMLElement
-      expect(wrapper).toHaveClass('h-full', 'bg-white', 'rounded-lg', 'shadow')
+      expect(wrapper).toHaveClass('h-full', 'bg-card', 'rounded-lg', 'shadow')
       expect(wrapper).not.toHaveClass('absolute', 'inset-0')
     })
 
@@ -294,10 +294,8 @@ describe('WidgetWrapper', () => {
 
       const wrapper = container.firstChild as HTMLElement
       expect(wrapper).toHaveClass(
-        'dark:bg-gray-800',
         'border',
-        'border-gray-200',
-        'dark:border-gray-700'
+        'border-border'
       )
     })
   })
@@ -367,7 +365,7 @@ describe('WidgetWrapper', () => {
       const wrapper = container.firstChild as HTMLElement
       expect(wrapper).toHaveClass(
         'h-full',
-        'bg-white',
+        'bg-card',
         'rounded-lg',
         'outline',
         'outline-blue-400'

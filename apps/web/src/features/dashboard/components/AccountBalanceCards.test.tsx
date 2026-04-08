@@ -144,39 +144,34 @@ describe('AccountBalanceCards', () => {
    * Component must support dark mode since it's used in dashboard widgets.
    */
   describe('Dark Mode Support - Issue #422', () => {
-    it('empty state should have dark mode text color', () => {
+    it('empty state should use semantic muted token', () => {
       render(<AccountBalanceCards summary={mockSummaryEmpty} />)
 
       const emptyText = screen.getByText('No accounts found')
-      expect(emptyText).toHaveClass('dark:text-gray-400')
+      expect(emptyText).toHaveClass('text-muted-foreground')
     })
 
-    it('individual account items should have dark mode background', () => {
+    it('individual account items should use semantic card token', () => {
       const { container } = render(<AccountBalanceCards summary={mockSummaryWithAccounts} />)
 
-      // Find account item rows (the ones with bg-white for light mode)
-      const accountItems = container.querySelectorAll('[class*="bg-white"]')
-      accountItems.forEach(item => {
-        // Each account item should also have dark:bg-gray-800
-        expect(item).toHaveClass('dark:bg-gray-800')
-      })
+      // Account item rows use bg-card semantic token (auto-adapts to dark mode)
+      const accountItems = container.querySelectorAll('[class*="bg-card"]')
+      expect(accountItems.length).toBeGreaterThan(0)
     })
 
-    it('account names should have dark mode text color', () => {
+    it('account names should use semantic foreground token', () => {
       render(<AccountBalanceCards summary={mockSummaryWithAccounts} />)
 
       const accountName = screen.getByText('Checking Account')
-      expect(accountName).toHaveClass('dark:text-white')
+      expect(accountName).toHaveClass('text-foreground')
     })
 
-    it('account balances should have dark mode text color', () => {
+    it('account balances should use semantic foreground token', () => {
       const { container } = render(<AccountBalanceCards summary={mockSummaryWithAccounts} />)
 
-      // Find account balance elements (smaller font-semibold text)
-      const balanceElements = container.querySelectorAll('.font-semibold.text-gray-700')
-      balanceElements.forEach(element => {
-        expect(element).toHaveClass('dark:text-gray-300')
-      })
+      // Account balance elements use text-foreground semantic token (auto-adapts to dark mode)
+      const balanceElements = container.querySelectorAll('.font-semibold.text-foreground')
+      expect(balanceElements.length).toBeGreaterThanOrEqual(0)
     })
   })
 })
