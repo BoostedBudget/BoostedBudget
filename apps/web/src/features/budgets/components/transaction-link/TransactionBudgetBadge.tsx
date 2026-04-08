@@ -56,11 +56,11 @@ export function TransactionBudgetBadge({ match }: TransactionBudgetBadgeProps) {
   return (
     <Link
       to={`/budgets/${category.budget_id}`}
-      className="inline-flex items-center gap-1 px-2 py-0.5 text-[0.6875rem] font-medium text-primary bg-primary/10 border border-primary/20 rounded no-underline whitespace-nowrap max-w-[120px] overflow-hidden text-ellipsis shrink-0 transition-colors duration-150 hover:bg-primary/20 hover:border-primary/40 focus:outline-none focus:ring-2 focus:ring-ring focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      className="transaction-budget-badge inline-flex items-center gap-1 px-2 py-0.5 text-[0.6875rem] font-medium text-primary bg-primary/10 border border-primary/20 rounded no-underline whitespace-nowrap max-w-[120px] overflow-hidden text-ellipsis shrink-0 transition-colors duration-150 hover:bg-primary/20 hover:border-primary/40 focus:outline-none focus:ring-2 focus:ring-ring focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       title={tooltip}
       aria-label={`Budget: ${displayName} (${tooltip})`}
     >
-      <Icon className="w-3 h-3 shrink-0" aria-hidden="true" />
+      <Icon className="transaction-budget-badge__icon w-3 h-3 shrink-0" aria-hidden="true" />
       <span className="overflow-hidden text-ellipsis">{displayName}</span>
     </Link>
   )

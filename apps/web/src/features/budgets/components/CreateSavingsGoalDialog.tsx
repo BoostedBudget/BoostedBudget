@@ -203,7 +203,7 @@ export function CreateSavingsGoalDialog({
                 onClick={() => handleTemplateSelect(template)}
                 className={cn(
                   'py-2 px-3 border border-border rounded-lg bg-muted text-muted-foreground cursor-pointer transition-all text-center hover:border-primary hover:bg-card',
-                  selectedTemplate === template.id && 'border-primary bg-primary/10 text-primary'
+                  selectedTemplate === template.id && 'selected border-primary bg-primary/10 text-primary'
                 )}
               >
                 <span className="text-sm font-medium">{template.name}</span>

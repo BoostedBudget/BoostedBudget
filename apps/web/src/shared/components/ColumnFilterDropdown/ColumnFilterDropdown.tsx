@@ -173,7 +173,7 @@ export function ColumnFilterDropdown({
           'bg-transparent transition-colors duration-150',
           'disabled:opacity-50 disabled:cursor-not-allowed',
           isActive
-            ? 'text-primary bg-primary/10 hover:bg-primary/20 hover:text-primary'
+            ? 'column-filter__trigger--active text-primary bg-primary/10 hover:bg-primary/20 hover:text-primary'
             : 'text-muted-foreground hover:bg-muted hover:text-foreground',
         ].join(' ')}
       >
@@ -280,7 +280,7 @@ export function ColumnFilterDropdown({
                       className={[
                         'flex items-center w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100',
                         isSelected
-                          ? 'bg-primary/10 text-primary hover:bg-primary/20'
+                          ? 'column-filter__option--selected bg-primary/10 text-primary hover:bg-primary/20'
                           : 'bg-transparent text-foreground hover:bg-muted',
                       ].join(' ')}
                     >
