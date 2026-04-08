@@ -38,12 +38,11 @@ export function ThemeSelector() {
               data-active={isActive}
               aria-pressed={isActive}
               onClick={() => handleThemeChange(value)}
-              className={[
-                'flex flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium transition-colors',
+              className={`flex flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium transition-colors ${
                 isActive
                   ? 'border-primary bg-primary/5 text-foreground'
-                  : 'border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground',
-              ].join(' ')}
+                  : 'border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground'
+              }`}
             >
               {icon}
               {label}

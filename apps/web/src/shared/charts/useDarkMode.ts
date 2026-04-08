@@ -9,12 +9,8 @@ export function useDarkMode(): boolean {
   useEffect(() => {
     const root = document.documentElement
 
-    const observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        if (mutation.attributeName === 'class') {
-          setIsDark(root.classList.contains('dark'))
-        }
-      }
+    const observer = new MutationObserver(() => {
+      setIsDark(root.classList.contains('dark'))
     })
 
     observer.observe(root, { attributes: true, attributeFilter: ['class'] })
