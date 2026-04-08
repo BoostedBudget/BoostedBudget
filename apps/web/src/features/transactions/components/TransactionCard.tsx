@@ -5,7 +5,7 @@ import { TransactionBudgetBadge } from '../../budgets/components/transaction-lin
 import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetMatcher'
 import { getCategoryColor } from '@/lib/category-colors'
 import { ArrowUpRight, ArrowDownRight, Clock, Pencil, Tag } from 'lucide-react'
-import './TransactionCard.css'
+import { cn } from '@/lib/utils'
 
 interface TransactionCardProps {
   transaction: Transaction
@@ -208,10 +208,10 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
 
   // Determine amount styling
   const amountClass = amount > 0
-    ? 'transaction-card__amount credit text-green-600'
+    ? 'text-success'
     : amount < 0
-      ? 'transaction-card__amount debit text-red-600'
-      : 'transaction-card__amount'
+      ? 'text-destructive'
+      : 'text-foreground'
 
   const ariaLabel = `${displayName}, ${amountFormatted}, ${displayDate}${pending ? ', pending' : ''}`
 
@@ -235,7 +235,11 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
 
   return (
     <article
-      className={`transaction-card${pending ? ' pending' : ''}${onEdit ? ' clickable' : ''}`}
+      className={cn(
+        'relative bg-card border border-border rounded-lg p-4 mb-3 transition-shadow',
+        pending && 'bg-yellow-50 dark:bg-yellow-950 border-yellow-300 dark:border-yellow-700',
+        onEdit && 'cursor-pointer hover:shadow-md focus:outline-2 focus:outline-ring focus:outline-offset-2 active:scale-[0.99]'
+      )}
       data-transaction-id={id}
       data-pending={pending}
       data-original-category={original_category || undefined}
@@ -245,14 +249,14 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
       role={onEdit ? 'button' : undefined}
       tabIndex={onEdit ? 0 : undefined}
     >
-      <div className="transaction-card__header">
-        <div className="transaction-card__info">
-          <div className="transaction-card__name">{displayName}</div>
+      <div className="flex justify-between items-start gap-4">
+        <div className="flex-1 min-w-0">
+          <div className="text-base font-semibold text-foreground mb-1 overflow-hidden text-ellipsis whitespace-nowrap">{displayName}</div>
           {/* Issue #531: Account badge */}
           {account && (
-            <div className="transaction-card__account">
+            <div className="mt-0.5">
               <span
-                className="transaction-card__account-badge"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-white"
                 style={{ backgroundColor: accountBackgroundColor }}
               >
                 {account.custom_emoji && <span>{account.custom_emoji}</span>}
@@ -260,76 +264,76 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
               </span>
             </div>
           )}
-          <div className="transaction-card__meta">
+          <div className="flex gap-3 text-sm text-muted-foreground mt-1">
             <TransactionBudgetBadge match={budgetMatch} />
-            <span className="transaction-card__category">
+            <span className="inline-flex items-center gap-1">
               {/* Issue #531: Category color dot */}
               <span
-                className="transaction-card__category-dot"
+                className="w-2 h-2 rounded-full shrink-0 mr-1"
                 style={{ backgroundColor: categoryColor }}
               />
               {showUncategorizedWarning && (
-                <span className="transaction-card__uncategorized-warning" title="Uncategorized">⚠️</span>
+                <span className="text-xs leading-none" title="Uncategorized">⚠️</span>
               )}
               {categoryLabel}
             </span>
-            <span className="transaction-card__date">{displayDate}</span>
+            <span>{displayDate}</span>
           </div>
           {tags && tags.length > 0 && (
-            <div className="transaction-card__tags" data-testid="transaction-tags">
+            <div className="flex flex-wrap gap-1 mt-1.5" data-testid="transaction-tags">
               {tags.map((tag) => (
-                <span key={tag} className="transaction-card__tag">
+                <span key={tag} className="inline-block text-[11px] font-medium text-foreground bg-muted px-2 py-0.5 rounded-full whitespace-nowrap">
                   {tag}
                 </span>
               ))}
             </div>
           )}
         </div>
-        <div className="transaction-card__amount-container">
-          <div className={amountClass} data-ph-mask>
+        <div className="flex flex-col items-end gap-1">
+          <div className={cn('text-lg font-bold whitespace-nowrap inline-flex items-center', amountClass)} data-ph-mask>
             {/* Issue #531: Income/Expense arrows */}
             {amount > 0 ? (
-              <ArrowUpRight className="transaction-card__amount-arrow" data-testid="income-arrow" />
+              <ArrowUpRight className="w-4 h-4 mr-0.5 inline-block align-middle" data-testid="income-arrow" />
             ) : amount < 0 ? (
-              <ArrowDownRight className="transaction-card__amount-arrow" data-testid="expense-arrow" />
+              <ArrowDownRight className="w-4 h-4 mr-0.5 inline-block align-middle" data-testid="expense-arrow" />
             ) : null}
             {amountFormatted}
           </div>
           {/* Issue #531: Enhanced pending badge */}
           {pending && (
             <div
-              className="transaction-card__pending-badge"
+              className="inline-flex items-center gap-1 text-xs font-semibold text-yellow-700 dark:text-yellow-300 bg-yellow-100 dark:bg-yellow-800 px-2 py-0.5 rounded-full uppercase tracking-wide"
               title="This transaction is still pending and may be updated by your bank"
             >
-              <Clock className="transaction-card__pending-icon" data-testid="pending-icon" />
+              <Clock className="w-3 h-3" data-testid="pending-icon" />
               Pending
             </div>
           )}
         </div>
         {/* Issue #531: Quick action buttons */}
         {(onEdit || onCategorize) && (
-          <div className="transaction-card__quick-actions">
+          <div className="hidden absolute right-4 top-1/2 -translate-y-1/2 gap-1 group-hover:flex [article:hover_&]:flex [article:focus-within_&]:flex">
             {onEdit && (
               <ReadOnlyGuard message="Resubscribe to edit transactions">
                 <button
-                  className="transaction-card__action-btn"
+                  className="inline-flex items-center justify-center w-7 h-7 border border-border rounded-md bg-card text-muted-foreground cursor-pointer transition-all hover:bg-muted hover:text-foreground hover:border-input focus:outline-2 focus:outline-ring focus:outline-offset-2"
                   onClick={handleEditClick}
                   aria-label="Edit transaction"
                   type="button"
                 >
-                  <Pencil className="transaction-card__action-icon" />
+                  <Pencil className="w-3.5 h-3.5" />
                 </button>
               </ReadOnlyGuard>
             )}
             {onCategorize && (
               <ReadOnlyGuard message="Resubscribe to categorize transactions">
                 <button
-                  className="transaction-card__action-btn"
+                  className="inline-flex items-center justify-center w-7 h-7 border border-border rounded-md bg-card text-muted-foreground cursor-pointer transition-all hover:bg-muted hover:text-foreground hover:border-input focus:outline-2 focus:outline-ring focus:outline-offset-2"
                   onClick={handleCategorizeClick}
                   aria-label="Categorize transaction"
                   type="button"
                 >
-                  <Tag className="transaction-card__action-icon" />
+                  <Tag className="w-3.5 h-3.5" />
                 </button>
               </ReadOnlyGuard>
             )}
