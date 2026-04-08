@@ -42,8 +42,6 @@ import { useEffect, Suspense } from 'react'
 import { useTheme } from './shared/theme'
 import { posthog } from './shared/lib/posthog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
-import './App.css'
-
 
 function App() {
   const { isSignedIn: isAuthenticated } = useAuth()
@@ -144,7 +142,7 @@ function App() {
   }
 
   return (
-    <div className={`app ${isLandingPage ? 'app--landing' : ''}`}>
+    <div className={`w-full${isLandingPage ? ' landing-page' : ''}`}>
       {!isLandingPage && <Header />}
 
       {isLandingPage ? (
@@ -152,7 +150,7 @@ function App() {
           <Route path="/" element={<LandingPage />} />
         </Routes>
       ) : (
-        <main className="app-main">
+        <main className="flex flex-col gap-8 mb-12 pt-4">
           <Routes>
             <Route
               path="/"
