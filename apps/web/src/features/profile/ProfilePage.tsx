@@ -1,5 +1,6 @@
 import { Mail, CheckCircle2, Globe, Shield, Copy } from 'lucide-react'
 import { SubscriptionCard } from './components/SubscriptionCard'
+import { ThemeSelector } from './components/ThemeSelector'
 import { ProfileForm } from './ProfileForm'
 import { PrivacySettings } from './PrivacySettings'
 import { useProfile } from './hooks/useProfile'
@@ -150,6 +151,14 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
               status={user.subscription_status}
               trialDaysRemaining={user.trial_days_remaining}
             />
+          </section>
+
+          <section className="profile-section">
+            <div className="bg-card border border-border rounded-lg p-6">
+              <h2 className="text-base font-semibold text-foreground mb-1">Appearance</h2>
+              <p className="text-sm text-muted-foreground mb-4">Choose how BoostedBudget looks to you.</p>
+              <ThemeSelector />
+            </div>
           </section>
 
           <ProfileForm user={user} onProfileUpdate={handleProfileUpdate} />
