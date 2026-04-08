@@ -59,6 +59,8 @@ export function MilestoneIndicator({
             <div
               key={milestone}
               data-testid={`milestone-marker-${milestone}`}
+              data-reached={isReached || undefined}
+              data-next={isNext || undefined}
               className={cn(
                 'absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-[10px] h-[10px] rounded-full border-2 transition-all duration-300 z-10',
                 isReached
