@@ -33,6 +33,10 @@ const (
 	EventRuleTriggered              = "rule_triggered"
 	EventAutoCategorizationExecuted = "auto_categorization_executed"
 
+	// Transfer suggestion events
+	TransferSuggestionAccepted = "transfer_suggestion_accepted"
+	TransferSuggestionRejected = "transfer_suggestion_rejected"
+
 	// Job events
 	EventDeadLetterCreated = "dead_letter_created"
 )

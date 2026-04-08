@@ -55,8 +55,9 @@ func (r *notificationRepository) Create(ctx context.Context, notification *domai
 	query := `
 		INSERT INTO notifications
 		(id, user_id, type, title, message, action_url, action_label,
-		 read, sent_email, email_sent_at, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		 read, sent_email, email_sent_at, interaction_pattern, transfer_suggestion_id,
+		 created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 
 	_, err = r.db.Exec(ctx, query,
@@ -70,6 +71,8 @@ func (r *notificationRepository) Create(ctx context.Context, notification *domai
 		notification.Read,
 		notification.SentEmail,
 		notification.EmailSentAt,
+		notification.InteractionPattern,
+		notification.TransferSuggestionID,
 		notification.CreatedAt,
 		notification.UpdatedAt,
 	)
@@ -106,7 +109,9 @@ func (r *notificationRepository) Update(ctx context.Context, notification *domai
 		    read = $7,
 		    sent_email = $8,
 		    email_sent_at = $9,
-		    updated_at = $10
+		    interaction_pattern = $10,
+		    transfer_suggestion_id = $11,
+		    updated_at = $12
 		WHERE id = $1
 	`
 
@@ -120,6 +125,8 @@ func (r *notificationRepository) Update(ctx context.Context, notification *domai
 		notification.Read,
 		notification.SentEmail,
 		notification.EmailSentAt,
+		notification.InteractionPattern,
+		notification.TransferSuggestionID,
 		notification.UpdatedAt,
 	)
 
@@ -149,7 +156,8 @@ func (r *notificationRepository) decryptNotification(n *domain.Notification) err
 func (r *notificationRepository) GetByUserID(ctx context.Context, userID string, limit int) ([]domain.Notification, error) {
 	query := `
 		SELECT id, user_id, type, title, message, action_url, action_label,
-		       read, sent_email, email_sent_at, created_at, updated_at
+		       read, sent_email, email_sent_at, interaction_pattern, transfer_suggestion_id,
+		       created_at, updated_at
 		FROM notifications
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -176,6 +184,8 @@ func (r *notificationRepository) GetByUserID(ctx context.Context, userID string,
 			&n.Read,
 			&n.SentEmail,
 			&n.EmailSentAt,
+			&n.InteractionPattern,
+			&n.TransferSuggestionID,
 			&n.CreatedAt,
 			&n.UpdatedAt,
 		)
@@ -258,7 +268,8 @@ func (r *notificationRepository) GetUnreadCount(ctx context.Context, userID stri
 func (r *notificationRepository) GetUnsentEmails(ctx context.Context, limit int) ([]domain.Notification, error) {
 	query := `
 		SELECT id, user_id, type, title, message, action_url, action_label,
-		       read, sent_email, email_sent_at, created_at, updated_at
+		       read, sent_email, email_sent_at, interaction_pattern, transfer_suggestion_id,
+		       created_at, updated_at
 		FROM notifications
 		WHERE sent_email = false
 		ORDER BY created_at ASC
@@ -285,6 +296,8 @@ func (r *notificationRepository) GetUnsentEmails(ctx context.Context, limit int)
 			&n.Read,
 			&n.SentEmail,
 			&n.EmailSentAt,
+			&n.InteractionPattern,
+			&n.TransferSuggestionID,
 			&n.CreatedAt,
 			&n.UpdatedAt,
 		)
@@ -307,6 +320,22 @@ func (r *notificationRepository) GetUnsentEmails(ctx context.Context, limit int)
 	}
 
 	return notifications, nil
+}
+
+// MarkAllAsRead marks all unread notifications as read for a user.
+// Returns the number of notifications marked as read.
+func (r *notificationRepository) MarkAllAsRead(ctx context.Context, userID string) (int64, error) {
+	query := `
+		UPDATE notifications
+		SET read = true,
+		    updated_at = $2
+		WHERE user_id = $1 AND read = false
+	`
+	ct, err := r.db.Exec(ctx, query, userID, time.Now())
+	if err != nil {
+		return 0, fmt.Errorf("failed to mark all notifications as read: %w", err)
+	}
+	return ct.RowsAffected(), nil
 }
 
 // Compile-time check to ensure notificationRepository implements NotificationRepository

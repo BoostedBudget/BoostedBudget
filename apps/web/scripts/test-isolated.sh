@@ -42,6 +42,10 @@ TEST_FILES=(
     # ToggleGroup component test needs real module, but TimeframeSelector/DateRangePicker
     # tests mock @/components/ui/toggle-group globally in the regular suite (#953)
     "src/components/ui/toggle-group.test.tsx"
+    # setSystemTime pollution: Bun's setSystemTime leaks across test files in the full suite.
+    # These tests pass individually but fail when other date-mocking tests run first (#952)
+    "src/features/dashboard/components/TimeframeSelector.test.tsx"
+    "src/features/transactions/components/TransactionCard.test.tsx"
 )
 
 # Build test command

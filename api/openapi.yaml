@@ -1,5 +1,37 @@
 components:
   schemas:
+    AcceptTransferSuggestionInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AcceptTransferSuggestionInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        notes:
+          description: Optional notes for accepting the suggestion
+          type: string
+      type: object
+    AcceptTransferSuggestionOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AcceptTransferSuggestionOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          type: string
+        suggestion:
+          $ref: "#/components/schemas/TransferSuggestion"
+      required:
+        - message
+        - suggestion
+      type: object
     Account:
       additionalProperties: false
       properties:
@@ -1943,6 +1975,25 @@ components:
         - expiration
         - request_id
       type: object
+    MarkAllNotificationsReadOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/MarkAllNotificationsReadOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        count:
+          format: int64
+          type: integer
+        message:
+          type: string
+      required:
+        - message
+        - count
+      type: object
     MarkNotificationReadOutputBody:
       additionalProperties: false
       properties:
@@ -2105,6 +2156,8 @@ components:
           type: string
         id:
           type: string
+        interaction_pattern:
+          type: string
         message:
           type: string
         read:
@@ -2112,6 +2165,8 @@ components:
         sent_email:
           type: boolean
         title:
+          type: string
+        transfer_suggestion_id:
           type: string
         type:
           type: string
@@ -2128,6 +2183,7 @@ components:
         - message
         - read
         - sent_email
+        - interaction_pattern
         - created_at
         - updated_at
       type: object
@@ -2554,6 +2610,38 @@ components:
         - regions
         - default_region
         - server_region
+      type: object
+    RejectTransferSuggestionInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RejectTransferSuggestionInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        notes:
+          description: Optional notes for rejecting the suggestion
+          type: string
+      type: object
+    RejectTransferSuggestionOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RejectTransferSuggestionOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          type: string
+        suggestion:
+          $ref: "#/components/schemas/TransferSuggestion"
+      required:
+        - message
+        - suggestion
       type: object
     ReorderAccountsOutputBody:
       additionalProperties: false
@@ -3365,6 +3453,56 @@ components:
         - limit
         - offset
         - has_more
+      type: object
+    TransferSuggestion:
+      additionalProperties: false
+      properties:
+        amount:
+          format: double
+          type: number
+        created_at:
+          format: date-time
+          type: string
+        currency_code:
+          type: string
+        expires_at:
+          format: date-time
+          type: string
+        from_account_id:
+          type: string
+        id:
+          type: string
+        reason:
+          type: string
+        rule_execution_id:
+          type: string
+        rule_id:
+          type: string
+        source:
+          type: string
+        status:
+          type: string
+        to_account_id:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        user_action_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+        user_notes:
+          type: string
+      required:
+        - id
+        - user_id
+        - amount
+        - currency_code
+        - source
+        - status
+        - created_at
+        - updated_at
       type: object
     TriggerAutomationRuleInputBody:
       additionalProperties: false
@@ -6331,6 +6469,28 @@ paths:
       summary: Get user notifications
       tags:
         - Notifications
+  /api/v1/notifications/read-all:
+    patch:
+      description: Marks all unread notifications as read for the authenticated user.
+      operationId: markAllNotificationsAsRead
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarkAllNotificationsReadOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Mark all notifications as read
+      tags:
+        - Notifications
   /api/v1/notifications/unread/count:
     get:
       description: Returns the count of unread notifications for the authenticated user.
@@ -7571,6 +7731,104 @@ paths:
       summary: Update transaction tags
       tags:
         - Transactions
+  /api/v1/transfer-suggestions:
+    get:
+      description: Returns all pending transfer suggestions for the authenticated user.
+      operationId: getTransferSuggestions
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/TransferSuggestion"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get pending transfer suggestions
+      tags:
+        - TransferSuggestions
+  /api/v1/transfer-suggestions/{id}/accept:
+    patch:
+      description: Marks a pending transfer suggestion as accepted. Returns 404 if not found, 409 if already actioned.
+      operationId: acceptTransferSuggestion
+      parameters:
+        - description: Transfer suggestion UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Transfer suggestion UUID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcceptTransferSuggestionInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcceptTransferSuggestionOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Accept a transfer suggestion
+      tags:
+        - TransferSuggestions
+  /api/v1/transfer-suggestions/{id}/reject:
+    patch:
+      description: Marks a pending transfer suggestion as rejected. Returns 404 if not found, 409 if already actioned.
+      operationId: rejectTransferSuggestion
+      parameters:
+        - description: Transfer suggestion UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Transfer suggestion UUID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectTransferSuggestionInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RejectTransferSuggestionOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Reject a transfer suggestion
+      tags:
+        - TransferSuggestions
   /api/v1/user-accounts:
     get:
       description: Returns all stable user accounts for the authenticated user. These survive Plaid re-links and provide consistent references for querying transactions.

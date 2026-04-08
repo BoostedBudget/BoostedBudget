@@ -675,8 +675,9 @@ type RuleExecutionsResponse struct {
 
 // Automation rule-related errors.
 var (
-	ErrAutomationRuleNotFound      = errors.New("automation rule not found")
-	ErrAutomationRuleAlreadyExists = errors.New("automation rule with this name already exists")
-	ErrTransferSuggestionNotFound  = errors.New("transfer suggestion not found")
-	ErrRuleExecutionNotFound       = errors.New("rule execution not found")
+	ErrAutomationRuleNotFound          = errors.New("automation rule not found")
+	ErrAutomationRuleAlreadyExists     = errors.New("automation rule with this name already exists")
+	ErrTransferSuggestionNotFound      = errors.New("transfer suggestion not found")
+	ErrTransferSuggestionAlreadyActioned = errors.New("transfer suggestion has already been accepted or rejected")
+	ErrRuleExecutionNotFound           = errors.New("rule execution not found")
 )
