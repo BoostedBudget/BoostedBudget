@@ -13,7 +13,6 @@ import { PlusIcon } from 'lucide-react';
 import type { IncomeSource, IncomeSourceType } from '../../types';
 import type { UserTag } from '@/features/tags/types';
 import { formatPlaidCategory } from '@/features/auto-categorization/utils/categoryUtils';
-import './IncomeSourcePicker.css';
 
 export interface IncomeSourcePickerProps {
   /** Available Plaid categories for selection */
@@ -121,16 +120,21 @@ export function IncomeSourcePicker({
     setManualDescription('');
   }, [sourceType, selectedCategory, selectedTag, manualAmount, manualDescription, isAddEnabled, onAdd]);
 
+  const selectCls =
+    'px-3 py-2 text-sm bg-card border border-input rounded-md text-foreground cursor-pointer transition-colors duration-150 focus:outline-none focus:border-ring focus:ring-2 focus:ring-ring disabled:bg-muted disabled:cursor-not-allowed disabled:opacity-60';
+  const inputCls =
+    'px-3 py-2 text-sm bg-card border border-input rounded-md text-foreground transition-colors duration-150 focus:outline-none focus:border-ring focus:ring-2 focus:ring-ring disabled:bg-muted disabled:cursor-not-allowed disabled:opacity-60';
+
   return (
-    <div className="income-source-picker">
+    <div className="flex flex-col gap-3 p-4 bg-muted border border-border rounded-lg">
       {/* Type Selector */}
-      <div className="income-source-picker__field">
-        <label htmlFor="source-type" className="income-source-picker__label">
+      <div className="flex flex-col gap-1">
+        <label htmlFor="source-type" className="text-xs font-medium text-muted-foreground">
           Source Type
         </label>
         <select
           id="source-type"
-          className="income-source-picker__select"
+          className={selectCls}
           value={sourceType}
           onChange={handleTypeChange}
           disabled={disabled}
@@ -146,13 +150,13 @@ export function IncomeSourcePicker({
 
       {/* Category Picker */}
       {sourceType === 'plaid_category' && (
-        <div className="income-source-picker__field">
-          <label htmlFor="category-select" className="income-source-picker__label">
+        <div className="flex flex-col gap-1">
+          <label htmlFor="category-select" className="text-xs font-medium text-muted-foreground">
             Category
           </label>
           <select
             id="category-select"
-            className="income-source-picker__select"
+            className={selectCls}
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
             disabled={disabled}
@@ -170,13 +174,13 @@ export function IncomeSourcePicker({
 
       {/* Tag Picker */}
       {sourceType === 'tag' && (
-        <div className="income-source-picker__field">
-          <label htmlFor="tag-select" className="income-source-picker__label">
+        <div className="flex flex-col gap-1">
+          <label htmlFor="tag-select" className="text-xs font-medium text-muted-foreground">
             Tag
           </label>
           <select
             id="tag-select"
-            className="income-source-picker__select"
+            className={selectCls}
             value={selectedTag}
             onChange={(e) => setSelectedTag(e.target.value)}
             disabled={disabled}
@@ -195,16 +199,16 @@ export function IncomeSourcePicker({
       {/* Manual Entry */}
       {sourceType === 'manual' && (
         <>
-          <div className="income-source-picker__field">
-            <label htmlFor="manual-amount" className="income-source-picker__label">
+          <div className="flex flex-col gap-1">
+            <label htmlFor="manual-amount" className="text-xs font-medium text-muted-foreground">
               Amount
             </label>
-            <div className="income-source-picker__amount-wrapper">
-              <span className="income-source-picker__currency">$</span>
+            <div className="relative flex items-center">
+              <span className="absolute left-3 text-muted-foreground pointer-events-none">$</span>
               <input
                 type="number"
                 id="manual-amount"
-                className="income-source-picker__input income-source-picker__input--amount"
+                className={`${inputCls} pl-6 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`}
                 value={manualAmount}
                 onChange={(e) => setManualAmount(e.target.value)}
                 min="0"
@@ -215,14 +219,14 @@ export function IncomeSourcePicker({
               />
             </div>
           </div>
-          <div className="income-source-picker__field">
-            <label htmlFor="manual-description" className="income-source-picker__label">
+          <div className="flex flex-col gap-1">
+            <label htmlFor="manual-description" className="text-xs font-medium text-muted-foreground">
               Description (optional)
             </label>
             <input
               type="text"
               id="manual-description"
-              className="income-source-picker__input"
+              className={inputCls}
               value={manualDescription}
               onChange={(e) => setManualDescription(e.target.value)}
               placeholder="e.g., Monthly salary"
@@ -236,12 +240,12 @@ export function IncomeSourcePicker({
       {/* Add Button */}
       <button
         type="button"
-        className="income-source-picker__add-button"
+        className="flex items-center justify-center gap-1.5 px-4 py-2 mt-1 text-sm font-medium text-primary-foreground bg-primary border-none rounded-md cursor-pointer transition-colors duration-150 hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
         onClick={handleAdd}
         disabled={!isAddEnabled}
         aria-label="Add income source"
       >
-        <PlusIcon className="income-source-picker__add-icon" />
+        <PlusIcon className="w-4 h-4" />
         Add
       </button>
     </div>

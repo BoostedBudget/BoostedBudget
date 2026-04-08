@@ -80,3 +80,27 @@
 :global(.dark) .milestone-indicator__label {
   color: var(--color-text-secondary-dark, #9ca3af);
 }
+
+/* Dark mode — proper token overrides (cascade over undefined vars above) */
+.dark .milestone-indicator__marker {
+  background-color: var(--muted);
+  border-color: var(--border);
+}
+
+.dark .milestone-indicator__marker--reached {
+  background-color: var(--success);
+  border-color: var(--success);
+}
+
+.dark .milestone-indicator__marker--next {
+  background-color: var(--card);
+  border-color: var(--primary);
+}
+
+.dark .milestone-indicator__label {
+  color: var(--muted-foreground);
+}
+
+.dark .milestone-indicator__marker--reached .milestone-indicator__label {
+  color: var(--success);
+}

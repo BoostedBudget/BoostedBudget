@@ -79,18 +79,18 @@
 }
 
 /* Dark mode support */
-:global(.dark) .category-match-config {
-  border-color: #374151;
+.dark .category-match-config {
+  border-color: var(--border);
 }
 
-:global(.dark) .category-match-config__legend {
-  color: #f9fafb;
+.dark .category-match-config__legend {
+  color: var(--foreground);
 }
 
-:global(.dark) .category-match-config__label {
-  color: #f9fafb;
+.dark .category-match-config__label {
+  color: var(--foreground);
 }
 
-:global(.dark) .category-match-config__description {
-  color: #9ca3af;
+.dark .category-match-config__description {
+  color: var(--muted-foreground);
 }

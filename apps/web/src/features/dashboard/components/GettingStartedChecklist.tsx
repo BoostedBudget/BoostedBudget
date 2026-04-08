@@ -23,13 +23,13 @@ export function GettingStartedChecklist({
   const progressPercent = Math.round((completedCount / totalSteps) * 100)
 
   return (
-    <div className="rounded-xl border border-blue-200 bg-white shadow-sm dark:border-blue-900 dark:bg-gray-800">
+    <div className="rounded-xl border border-blue-200 bg-card shadow-sm dark:border-blue-900">
       <div className="flex items-start justify-between px-5 pt-4 pb-2">
         <div className="flex-1 min-w-0">
-          <h2 className="text-base font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-base font-semibold text-foreground">
             Getting Started
           </h2>
-          <p className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">
+          <p className="mt-0.5 text-sm text-muted-foreground">
             {completedCount} of {totalSteps} complete
           </p>
           <div
@@ -38,7 +38,7 @@ export function GettingStartedChecklist({
             aria-valuenow={completedCount}
             aria-valuemin={0}
             aria-valuemax={totalSteps}
-            className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700"
+            className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted"
           >
             <div
               className="h-full rounded-full bg-blue-500 transition-all duration-500"
@@ -51,7 +51,7 @@ export function GettingStartedChecklist({
           size="sm"
           aria-label="Dismiss getting started checklist"
           onClick={onDismiss}
-          className="ml-3 h-7 w-7 shrink-0 rounded-full p-0 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
+          className="ml-3 h-7 w-7 shrink-0 rounded-full p-0 text-muted-foreground hover:text-foreground"
         >
           <X className="h-3.5 w-3.5" aria-hidden="true" />
         </Button>
@@ -61,15 +61,15 @@ export function GettingStartedChecklist({
         {isCelebrating ? (
           <div role="status" aria-live="polite" className="flex flex-col items-center justify-center py-4 text-center">
             <PartyPopper className="mb-2 h-8 w-8 text-emerald-500" aria-hidden="true" />
-            <p className="text-sm font-medium text-gray-900 dark:text-white">
+            <p className="text-sm font-medium text-foreground">
               You're all set!
             </p>
-            <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+            <p className="mt-0.5 text-xs text-muted-foreground">
               Your financial workspace is ready to go.
             </p>
           </div>
         ) : (
-          <ul role="list" className="mt-1 divide-y divide-gray-100 dark:divide-gray-700">
+          <ul role="list" className="mt-1 divide-y divide-border">
             {steps.map((step) => (
               <li
                 key={step.id}
@@ -84,25 +84,25 @@ export function GettingStartedChecklist({
                   />
                 ) : (
                   <Circle
-                    className="h-4.5 w-4.5 shrink-0 text-gray-300 dark:text-gray-600"
+                    className="h-4.5 w-4.5 shrink-0 text-muted-foreground"
                     aria-label="Incomplete"
                   />
                 )}
 
                 <div className="flex-1 min-w-0">
                   {step.complete ? (
-                    <span className="text-sm text-gray-500 line-through dark:text-gray-400">
+                    <span className="text-sm text-muted-foreground line-through">
                       {step.label}
                     </span>
                   ) : (
                     <Link
                       to={step.href}
                       onClick={() => onStepClick?.(step.id)}
-                      className="group flex items-center justify-between gap-1 text-sm font-medium text-gray-800 hover:text-blue-600 dark:text-gray-200 dark:hover:text-blue-400"
+                      className="group flex items-center justify-between gap-1 text-sm font-medium text-foreground hover:text-blue-600 dark:hover:text-blue-400"
                     >
                       <span>{step.label}</span>
                       <ChevronRight
-                        className="h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform group-hover:translate-x-0.5 dark:text-gray-500"
+                        className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5"
                         aria-hidden="true"
                       />
                     </Link>

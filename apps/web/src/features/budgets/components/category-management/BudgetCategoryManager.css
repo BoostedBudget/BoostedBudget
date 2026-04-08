@@ -86,15 +86,15 @@
 }
 
 /* Dark mode support */
-:global(.dark) .budget-category-manager__title {
-  color: #f9fafb;
+.dark .budget-category-manager__title {
+  color: var(--foreground);
 }
 
-:global(.dark) .budget-category-manager__empty {
-  background-color: #1f2937;
-  border-color: #374151;
+.dark .budget-category-manager__empty {
+  background-color: var(--muted);
+  border-color: var(--border);
 }
 
-:global(.dark) .budget-category-manager__empty-text {
-  color: #9ca3af;
+.dark .budget-category-manager__empty-text {
+  color: var(--muted-foreground);
 }

@@ -31,18 +31,18 @@ export function BalanceOverview({ summary }: BalanceOverviewProps) {
 
   const hasComparison = period_comparison !== undefined && period_comparison !== null
   const isPositiveChange = hasComparison && period_comparison.change_amount >= 0
-  const changeColor = isPositiveChange ? 'text-green-600' : 'text-red-600'
+  const changeColor = isPositiveChange ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
   const changeIcon = isPositiveChange ? '↑' : '↓'
 
   return (
     <div className="h-full flex flex-col">
       <div className="mb-2">
-        <h2 className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Balance</h2>
-        <p className="text-xs text-gray-500 dark:text-gray-500">as of {formattedDate}</p>
+        <h2 className="text-sm font-medium text-muted-foreground">Total Balance</h2>
+        <p className="text-xs text-muted-foreground">as of {formattedDate}</p>
       </div>
 
       <div className="mb-4 flex-1 flex items-center">
-        <p className="text-4xl font-bold text-gray-900 dark:text-white">{formattedBalance}</p>
+        <p className="text-4xl font-bold text-foreground">{formattedBalance}</p>
       </div>
 
       {hasComparison && (
@@ -55,15 +55,15 @@ export function BalanceOverview({ summary }: BalanceOverviewProps) {
               signDisplay: 'never',
             }).format(Math.abs(period_comparison.change_amount))}
           </span>
-          <span className="text-sm text-gray-600 dark:text-gray-400">
+          <span className="text-sm text-muted-foreground">
             ({period_comparison.change_percent.toFixed(2)}%)
           </span>
-          <span className="text-sm text-gray-500 dark:text-gray-500">vs 30 days ago</span>
+          <span className="text-sm text-muted-foreground">vs 30 days ago</span>
         </div>
       )}
 
       {!hasComparison && (
-        <p className="text-sm text-gray-500 dark:text-gray-400">
+        <p className="text-sm text-muted-foreground">
           No historical data for comparison
         </p>
       )}

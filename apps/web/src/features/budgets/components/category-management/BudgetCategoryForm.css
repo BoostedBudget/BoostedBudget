@@ -72,23 +72,23 @@
 }
 
 /* Dark mode support */
-:global(.dark) .budget-category-form__input {
-  background-color: #1f2937;
-  border-color: #374151;
-  color: #f9fafb;
+.dark .budget-category-form__input {
+  background-color: var(--card);
+  border-color: var(--input);
+  color: var(--foreground);
 }
 
-:global(.dark) .budget-category-form__input:disabled {
-  background-color: #374151;
-  color: #9ca3af;
+.dark .budget-category-form__input:disabled {
+  background-color: var(--muted);
+  color: var(--muted-foreground);
 }
 
-:global(.dark) .budget-category-form__tag {
-  background-color: #374151;
-  border-color: #4b5563;
-  color: #d1d5db;
+.dark .budget-category-form__tag {
+  background-color: var(--muted);
+  border-color: var(--border);
+  color: var(--muted-foreground);
 }
 
-:global(.dark) .budget-category-form__tag:hover:not(:disabled) {
-  background-color: #4b5563;
+.dark .budget-category-form__tag:hover:not(:disabled) {
+  background-color: var(--input);
 }

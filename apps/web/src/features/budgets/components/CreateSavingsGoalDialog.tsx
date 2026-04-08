@@ -21,7 +21,6 @@ import { GOAL_TEMPLATES, calculateDeadlineFromTemplate } from '../goalTemplates'
 import type { GoalTemplate } from '../goalTemplates';
 import type { Account } from '../../accounts/types';
 import type { SavingsGoal, CreateSavingsGoalRequest } from '../types';
-import './CreateSavingsGoalDialog.css';
 
 export interface CreateSavingsGoalDialogProps {
   isOpen: boolean;

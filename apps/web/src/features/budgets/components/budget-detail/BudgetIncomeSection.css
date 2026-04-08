@@ -244,3 +244,57 @@
 .income-section__sources--collapsed {
   display: none;
 }
+
+/* Dark mode */
+.dark .income-section {
+  background: var(--card);
+  border-color: var(--border);
+}
+
+.dark .income-section__title,
+.dark .income-section__label,
+.dark .income-section__progress-text,
+.dark .income-section__source-type,
+.dark .income-section__source-expected,
+.dark .income-section__sources-toggle {
+  color: var(--muted-foreground);
+}
+
+.dark .income-section__amount,
+.dark .income-section__progress-percentage,
+.dark .income-section__source-name,
+.dark .income-section__source-actual {
+  color: var(--foreground);
+}
+
+.dark .income-section__difference--surplus .income-section__amount {
+  color: var(--success);
+}
+
+.dark .income-section__difference--shortfall .income-section__amount {
+  color: var(--destructive);
+}
+
+.dark .income-section__difference--neutral .income-section__amount {
+  color: var(--muted-foreground);
+}
+
+.dark .income-section__progress-bar {
+  background: var(--muted);
+}
+
+.dark .income-section__sources-toggle {
+  border-top-color: var(--border);
+}
+
+.dark .income-section__sources-toggle:hover {
+  color: var(--primary);
+}
+
+.dark .income-section__source-item {
+  background: var(--muted);
+}
+
+.dark .income-section__source-icon--pending {
+  color: var(--muted-foreground);
+}

@@ -17,11 +17,11 @@ import {
   Trash2,
   Play,
 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import type { AutomationRule } from '@boostedbudget/api-client/models'
 import { formatRelativeTime } from '@/shared/dates'
 import { RULE_TYPE_LABELS } from '../constants'
 import type { RuleType } from '../types'
-import './RuleCard.css'
 
 export interface RuleCardProps {
   /** The rule to display */
@@ -92,15 +92,19 @@ export function RuleCard({
 
   return (
     <article
-      className={`rule-card ${compact ? 'rule-card--compact' : ''} ${className}`.trim()}
+      className={cn(
+        'flex flex-col gap-4 rounded-xl border border-border bg-card p-5 transition-shadow hover:shadow-md',
+        compact && 'gap-3 p-4',
+        className
+      )}
     >
-      <div className="rule-card__header">
-        <div className="rule-card__icon-wrapper">
-          <Icon className="rule-card__icon" aria-hidden="true" />
+      <div className="flex items-center gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 dark:bg-blue-900">
+          <Icon className="h-5 w-5 text-blue-600 dark:text-blue-400" aria-hidden="true" />
         </div>
-        <div className="rule-card__title-section">
-          <h3 className="rule-card__name">{rule.name}</h3>
-          <span className="rule-card__type-label">{label}</span>
+        <div className="min-w-0 flex-1">
+          <h3 className="truncate text-base font-semibold text-foreground">{rule.name}</h3>
+          <span className="text-xs text-muted-foreground">{label}</span>
         </div>
         {onToggle && (
           <button
@@ -109,64 +113,77 @@ export function RuleCard({
             aria-checked={rule.enabled}
             onClick={handleToggle}
             disabled={loading}
-            className={`rule-card__toggle ${rule.enabled ? 'rule-card__toggle--on' : ''}`}
+            className={cn(
+              'relative h-6 w-11 shrink-0 cursor-pointer rounded-full border-none transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+              rule.enabled
+                ? 'bg-green-500 dark:bg-green-600'
+                : 'bg-muted-foreground/30 dark:bg-muted-foreground/20'
+            )}
             aria-label={rule.enabled ? 'Disable rule' : 'Enable rule'}
           >
-            <span className="rule-card__toggle-slider" />
+            <span
+              className={cn(
+                'absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white transition-transform',
+                rule.enabled && 'translate-x-5'
+              )}
+            />
           </button>
         )}
       </div>
 
       {!compact && rule.description && (
-        <p className="rule-card__description">{rule.description}</p>
+        <p className="text-sm leading-relaxed text-muted-foreground">{rule.description}</p>
       )}
 
-      <div className="rule-card__meta">
-        <div className="rule-card__badges">
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap gap-2">
           <span
-            className={`rule-card__status ${rule.enabled ? 'rule-card__status--enabled' : 'rule-card__status--disabled'}`}
+            className={cn(
+              'inline-flex items-center rounded-md px-2 py-1 text-xs font-medium',
+              rule.enabled
+                ? 'bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300'
+                : 'bg-muted text-muted-foreground'
+            )}
           >
             {rule.enabled ? 'Enabled' : 'Disabled'}
           </span>
-          <span className="rule-card__trigger-badge">
+          <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300">
             {triggerType === 'schedule' ? (
               <>
-                <Calendar className="rule-card__badge-icon" aria-hidden="true" />
+                <Calendar className="h-3 w-3" aria-hidden="true" />
                 Scheduled
               </>
             ) : (
               <>
-                <Zap className="rule-card__badge-icon" aria-hidden="true" />
+                <Zap className="h-3 w-3" aria-hidden="true" />
                 Event
               </>
             )}
           </span>
         </div>
 
-        <div className="rule-card__stats">
-          <span className="rule-card__execution-count">
-            {rule.execution_count} executions
-          </span>
-          <span className="rule-card__last-run">{lastRunText}</span>
+        <div className="flex gap-4 text-xs text-muted-foreground">
+          <span className="inline-flex items-center">{rule.execution_count} executions</span>
+          <span className="inline-flex items-center">{lastRunText}</span>
         </div>
 
         {showPriority && (
-          <span className="rule-card__priority">Priority: {rule.priority}</span>
+          <span className="text-xs text-muted-foreground">Priority: {rule.priority}</span>
         )}
       </div>
 
       {(onEdit || onDelete || onTest) && (
-        <div className="rule-card__actions">
+        <div className="flex gap-2 border-t border-border pt-3">
           {onTest && (
             <button
               type="button"
               onClick={() => onTest(rule)}
               disabled={loading}
-              className="rule-card__action-btn rule-card__action-btn--test"
+              className="inline-flex items-center gap-1.5 rounded-md bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-900 dark:text-blue-300 dark:hover:bg-blue-800"
               aria-label="Backtest rule"
               title="See what this rule would have done with your recent data"
             >
-              <Play className="rule-card__action-icon" aria-hidden="true" />
+              <Play className="h-4 w-4" aria-hidden="true" />
               Backtest
             </button>
           )}
@@ -175,10 +192,10 @@ export function RuleCard({
               type="button"
               onClick={() => onEdit(rule)}
               disabled={loading}
-              className="rule-card__action-btn"
+              className="inline-flex items-center gap-1.5 rounded-md bg-muted px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/80 disabled:cursor-not-allowed disabled:opacity-50"
               aria-label="Edit rule"
             >
-              <Edit className="rule-card__action-icon" aria-hidden="true" />
+              <Edit className="h-4 w-4" aria-hidden="true" />
               Edit
             </button>
           )}
@@ -187,10 +204,10 @@ export function RuleCard({
               type="button"
               onClick={() => onDelete(rule)}
               disabled={loading}
-              className="rule-card__action-btn rule-card__action-btn--danger"
+              className="inline-flex items-center gap-1.5 rounded-md bg-muted px-3 py-2 text-sm font-medium text-destructive transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-900"
               aria-label="Delete rule"
             >
-              <Trash2 className="rule-card__action-icon" aria-hidden="true" />
+              <Trash2 className="h-4 w-4" aria-hidden="true" />
               Delete
             </button>
           )}

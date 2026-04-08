@@ -7,7 +7,6 @@
 
 import { useBudgetTransactions } from '../../hooks/useBudgetTransactions';
 import { TransactionCard } from '../../../transactions/components/TransactionCard';
-import './BudgetTransactionList.css';
 
 interface BudgetTransactionListProps {
   budgetId: string;
@@ -41,8 +40,11 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
   // Loading state
   if (loading) {
     return (
-      <div className="budget-transaction-list budget-transaction-list--loading" role="status">
-        <span className="budget-transaction-list__spinner" aria-hidden="true" />
+      <div className="flex items-center justify-center gap-2 p-8 text-muted-foreground" role="status">
+        <span
+          className="w-4 h-4 rounded-full border-2 border-border border-t-primary animate-spin"
+          aria-hidden="true"
+        />
         <span>Loading transactions...</span>
       </div>
     );
@@ -51,12 +53,12 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
   // Error state
   if (error) {
     return (
-      <div className="budget-transaction-list budget-transaction-list--error">
-        <p className="budget-transaction-list__error-message">
+      <div className="p-6 text-center">
+        <p className="m-0 mb-4 text-destructive">
           {error.message || 'Failed to load transactions'}
         </p>
         <button
-          className="budget-transaction-list__retry-button"
+          className="px-4 py-2 text-sm font-medium text-destructive bg-transparent border border-destructive rounded-md cursor-pointer transition-colors duration-150 hover:bg-destructive hover:text-background"
           onClick={refetch}
           type="button"
         >
@@ -69,28 +71,28 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
   // Empty state
   if (transactions.length === 0) {
     return (
-      <div className="budget-transaction-list budget-transaction-list--empty">
+      <div className="p-8 text-center text-muted-foreground">
         <p>No transactions found for this category.</p>
       </div>
     );
   }
 
   return (
-    <div className="budget-transaction-list">
+    <div className="w-full">
       {/* Header */}
-      <div className="budget-transaction-list__header">
-        <h3 className="budget-transaction-list__title">
+      <div className="flex justify-between items-center py-3 border-b border-border mb-2">
+        <h3 className="m-0 text-sm font-semibold text-foreground">
           Transactions ({totalCount})
         </h3>
-        <span className="budget-transaction-list__total">
+        <span className="text-sm font-medium text-muted-foreground">
           Total: {formatCurrency(totalAmount)}
         </span>
       </div>
 
       {/* Transaction list */}
-      <ul className="budget-transaction-list__items" role="list">
+      <ul className="list-none m-0 p-0" role="list">
         {transactions.map((transaction) => (
-          <li key={transaction.id} className="budget-transaction-list__item">
+          <li key={transaction.id} className="border-b border-border last:border-b-0">
             <TransactionCard transaction={transaction} />
           </li>
         ))}
@@ -98,9 +100,9 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
 
       {/* Load more button */}
       {hasMore && (
-        <div className="budget-transaction-list__footer">
+        <div className="flex justify-center py-4">
           <button
-            className="budget-transaction-list__load-more"
+            className="px-6 py-2 text-sm font-medium text-primary bg-transparent border border-primary rounded-md cursor-pointer transition-colors duration-150 hover:bg-primary hover:text-primary-foreground disabled:opacity-60 disabled:cursor-not-allowed"
             onClick={loadMore}
             disabled={loadingMore}
             type="button"
