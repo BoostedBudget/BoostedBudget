@@ -79,7 +79,7 @@ export function TransactionCategoryFilter({
 
   return (
     <div className="flex flex-col gap-1 relative" ref={dropdownRef}>
-      <label className="text-sm font-medium text-gray-700">Categories</label>
+      <label className="text-sm font-medium text-foreground">Categories</label>
 
       {/* Dropdown trigger */}
       <button
@@ -88,49 +88,49 @@ export function TransactionCategoryFilter({
         disabled={disabled || loading}
         className={`
           flex items-center justify-between w-full px-3 py-2 text-sm
-          border border-gray-300 rounded-lg bg-white
-          focus:ring-2 focus:ring-blue-500 focus:border-blue-500
-          ${disabled || loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-gray-50'}
+          border border-input rounded-lg bg-card
+          focus:ring-2 focus:ring-ring focus:border-ring
+          ${disabled || loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-accent'}
         `}
         aria-expanded={isOpen}
         aria-haspopup="listbox"
       >
-        <span className={selectedCategories.length === 0 ? 'text-gray-500' : 'text-gray-900'}>
+        <span className={selectedCategories.length === 0 ? 'text-muted-foreground' : 'text-foreground'}>
           {loading ? 'Loading categories...' : getDisplayText()}
         </span>
         <ChevronDownIcon
-          className={`w-4 h-4 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+          className={`w-4 h-4 text-muted-foreground transition-transform ${isOpen ? 'rotate-180' : ''}`}
         />
       </button>
 
       {/* Dropdown menu */}
       {isOpen && !loading && (
-        <div className="absolute left-0 z-10 mt-1 min-w-full max-w-xs max-h-72 bg-white border border-gray-200 rounded-lg shadow-lg top-full">
+        <div className="absolute left-0 z-10 mt-1 min-w-full max-w-xs max-h-72 bg-card border border-border rounded-lg shadow-lg top-full">
           {/* Search input */}
-          <div className="p-2 border-b border-gray-100">
+          <div className="p-2 border-b border-border/50">
             <input
               ref={searchInputRef}
               type="text"
               placeholder="Search categories..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full px-3 py-1.5 text-sm border border-input rounded-md bg-background text-foreground focus:ring-1 focus:ring-ring focus:border-ring"
             />
           </div>
 
           {/* Select All / Clear All */}
-          <div className="flex justify-between p-2 border-b border-gray-100">
+          <div className="flex justify-between p-2 border-b border-border/50">
             <button
               type="button"
               onClick={handleSelectAll}
-              className="text-xs text-blue-600 hover:text-blue-800"
+              className="text-xs text-primary hover:opacity-80"
             >
               Select All
             </button>
             <button
               type="button"
               onClick={handleClearAll}
-              className="text-xs text-gray-500 hover:text-gray-700"
+              className="text-xs text-muted-foreground hover:text-foreground"
             >
               Clear All
             </button>
@@ -139,7 +139,7 @@ export function TransactionCategoryFilter({
           {/* Category list */}
           <div className="max-h-48 overflow-auto">
             {filteredCategories.length === 0 ? (
-              <div className="p-3 text-sm text-gray-500 text-center">
+              <div className="p-3 text-sm text-muted-foreground text-center">
                 {searchTerm ? 'No matching categories' : 'No categories available'}
               </div>
             ) : (
@@ -154,18 +154,18 @@ export function TransactionCategoryFilter({
                       onClick={() => handleToggle(category)}
                       className={`
                         flex items-center gap-2 px-3 py-2 cursor-pointer
-                        ${isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}
+                        ${isSelected ? 'bg-primary/10' : 'hover:bg-accent'}
                       `}
                     >
                       <div
                         className={`
                           w-4 h-4 flex items-center justify-center rounded border
-                          ${isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300'}
+                          ${isSelected ? 'bg-primary border-primary' : 'border-input'}
                         `}
                       >
                         {isSelected && <CheckIcon className="w-3 h-3 text-white" />}
                       </div>
-                      <span className="text-sm text-gray-900 truncate">{category}</span>
+                      <span className="text-sm text-foreground truncate">{category}</span>
                     </li>
                   )
                 })}

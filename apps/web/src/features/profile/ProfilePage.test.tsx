@@ -12,6 +12,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { ThemeProvider } from '@/shared/theme'
 import { ProfilePage } from './ProfilePage'
 import type { User } from './types'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
@@ -41,18 +42,20 @@ import { mockToastSuccess, mockToastError } from '@/test/mocks/sonner'
 // Test wrapper with React Router and QueryClient
 function renderWithProviders(ui: React.ReactElement, { initialUrl = '/profile' } = {}) {
   return render(
-    <QueryClientProvider client={new QueryClient({
-      defaultOptions: {
-        queries: { retry: false, gcTime: 0 },
-        mutations: { retry: false },
-      },
-    })}>
-      <MemoryRouter initialEntries={[initialUrl]}>
-        <Routes>
-          <Route path="/profile" element={ui} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>
+    <ThemeProvider defaultTheme="system">
+      <QueryClientProvider client={new QueryClient({
+        defaultOptions: {
+          queries: { retry: false, gcTime: 0 },
+          mutations: { retry: false },
+        },
+      })}>
+        <MemoryRouter initialEntries={[initialUrl]}>
+          <Routes>
+            <Route path="/profile" element={ui} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    </ThemeProvider>
   )
 }
 
@@ -443,18 +446,20 @@ describe('ProfilePage', () => {
 
       // Rerender to reflect the pending state
       rerender(
-        <QueryClientProvider client={new QueryClient({
-          defaultOptions: {
-            queries: { retry: false, gcTime: 0 },
-            mutations: { retry: false },
-          },
-        })}>
-          <MemoryRouter initialEntries={['/profile']}>
-            <Routes>
-              <Route path="/profile" element={<ProfilePage />} />
-            </Routes>
-          </MemoryRouter>
-        </QueryClientProvider>
+        <ThemeProvider defaultTheme="system">
+          <QueryClientProvider client={new QueryClient({
+            defaultOptions: {
+              queries: { retry: false, gcTime: 0 },
+              mutations: { retry: false },
+            },
+          })}>
+            <MemoryRouter initialEntries={['/profile']}>
+              <Routes>
+                <Route path="/profile" element={<ProfilePage />} />
+              </Routes>
+            </MemoryRouter>
+          </QueryClientProvider>
+        </ThemeProvider>
       )
 
       await waitFor(() => {

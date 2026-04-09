@@ -1,12 +1,24 @@
-import './PrivacyPolicy.css'
 import { Link } from 'react-router-dom'
 
 export function PrivacyPolicy() {
   return (
-    <div className="privacy-policy">
-      <div className="privacy-policy-container">
-        <h1>Privacy Policy</h1>
-        <p className="last-updated">Last Updated: April 4, 2026</p>
+    <div className="min-h-screen bg-muted py-8 px-4 sm:px-2">
+      <div className="max-w-[900px] mx-auto bg-card px-12 py-12 rounded-lg shadow-[0_2px_8px_rgba(0,0,0,0.1)] sm:px-6 sm:py-8 xs:px-4 xs:py-6
+        [&_h2]:text-foreground [&_h2]:text-[1.75rem] [&_h2]:mt-8 [&_h2]:mb-4 [&_h2]:border-l-4 [&_h2]:border-primary [&_h2]:pl-4
+        [&_h3]:text-foreground [&_h3]:text-xl [&_h3]:mt-6 [&_h3]:mb-3
+        [&_h4]:text-foreground [&_h4]:text-base [&_h4]:mt-4 [&_h4]:mb-2 [&_h4]:font-semibold
+        [&_p]:leading-[1.7] [&_p]:text-foreground [&_p]:mb-4
+        [&_ul]:list-disc [&_ul]:ml-8 [&_ul]:mb-4
+        [&_li]:leading-[1.7] [&_li]:text-foreground [&_li]:mb-2
+        [&_li_strong]:text-foreground
+        [&_strong]:text-foreground [&_strong]:font-semibold
+        [&_hr]:border-none [&_hr]:border-t-2 [&_hr]:border-border [&_hr]:my-12
+        [&_section]:mb-10
+        sm:[&_h2]:text-2xl sm:[&_h3]:text-[1.15rem] sm:[&_ul]:ml-6">
+        <h1 className="text-foreground text-4xl mb-2 border-b-[3px] border-primary pb-4 sm:text-[2rem] xs:text-[1.75rem]">
+          Privacy Policy
+        </h1>
+        <p className="text-muted-foreground italic mb-8 text-[0.95rem]">Last Updated: April 4, 2026</p>
 
         <section>
           <h2>1. Introduction</h2>
@@ -59,7 +71,7 @@ export function PrivacyPolicy() {
             <li><strong>Security:</strong> Detect fraud, prevent abuse, ensure platform security</li>
             <li><strong>Compliance:</strong> Meet legal obligations, respond to lawful requests</li>
           </ul>
-          <p className="important-note">
+          <p className="bg-warning/10 border-l-4 border-warning rounded px-4 py-4 my-6 [&_strong]:text-foreground">
             <strong>Important:</strong> BoostedBudget provides financial suggestions and automation only.
             We do not move money on your behalf. All automation rules create suggestions that you review and execute manually.
           </p>
@@ -385,7 +397,9 @@ export function PrivacyPolicy() {
 
         <hr />
 
-        <div className="privacy-summary">
+        <div className="bg-info/10 border-2 border-info rounded-lg p-8 mt-8
+          [&_h2]:border-none [&_h2]:mt-0 [&_h2]:text-primary [&_h2]:pl-0
+          [&_p]:mb-4">
           <h2>Summary</h2>
           <p>
             BoostedBudget is committed to protecting your privacy and providing transparency about how we
@@ -393,7 +407,7 @@ export function PrivacyPolicy() {
             Your data is securely stored in the United States with plans for multi-region expansion. You have
             full control over your privacy settings, cookie preferences, and can request data export or deletion at any time.
           </p>
-          <p className="contact-cta">
+          <p className="text-[1.1rem] text-center mt-6 pt-4 border-t border-info/30 [&_strong]:text-primary">
             <strong>Questions?</strong> Contact us at privacy@boostedbudget.com
           </p>
         </div>

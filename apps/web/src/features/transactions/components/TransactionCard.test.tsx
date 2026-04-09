@@ -405,7 +405,8 @@ describe('TransactionCard', () => {
       expect(
         amountElement.classList.contains('debit') ||
         amountElement.classList.contains('negative') ||
-        amountElement.classList.contains('text-red-600')
+        amountElement.classList.contains('text-red-600') ||
+        amountElement.classList.contains('text-destructive')
       ).toBe(true)
     })
 
@@ -419,7 +420,8 @@ describe('TransactionCard', () => {
       expect(
         amountElement.classList.contains('credit') ||
         amountElement.classList.contains('positive') ||
-        amountElement.classList.contains('text-green-600')
+        amountElement.classList.contains('text-green-600') ||
+        amountElement.classList.contains('text-success')
       ).toBe(true)
     })
   })

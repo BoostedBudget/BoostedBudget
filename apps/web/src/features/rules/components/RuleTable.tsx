@@ -15,11 +15,11 @@ import {
   ChevronDown,
   Play,
 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import type { AutomationRule } from '@boostedbudget/api-client/models'
 import { formatRelativeTime } from '@/shared/dates'
 import { RULE_TYPE_LABELS } from '../constants'
 import type { RuleType } from '../types'
-import './RuleTable.css'
 
 export type SortColumn = 'name' | 'type' | 'status' | 'trigger' | 'lastRun'
 export type SortDirection = 'asc' | 'desc'
@@ -144,10 +144,10 @@ export function RuleTable({
         type="button"
         onClick={() => handleSort(column)}
         aria-sort={ariaSort}
-        className="rule-table__sort-btn"
+        className="inline-flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 font-[inherit] text-inherit hover:text-foreground"
       >
         {label}
-        <span className="rule-table__sort-icon">
+        <span className="inline-flex h-4 w-4 items-center [&>svg]:h-3.5 [&>svg]:w-3.5">
           {isActive && sortDirection === 'asc' && (
             <ChevronUp aria-hidden="true" />
           )}
@@ -161,7 +161,7 @@ export function RuleTable({
 
   if (rules.length === 0) {
     return (
-      <div className={`rule-table__empty ${className}`.trim()}>
+      <div className={cn('rounded-lg border border-dashed border-border bg-card px-6 py-12 text-center text-muted-foreground', className)}>
         <p>No rules found. Create your first automation rule to get started.</p>
       </div>
     )
@@ -169,37 +169,44 @@ export function RuleTable({
 
   return (
     <table
-      className={`rule-table ${loading ? 'rule-table--loading' : ''} ${className}`.trim()}
+      className={cn(
+        'w-full border-collapse overflow-hidden rounded-lg border border-border bg-card',
+        loading && 'rule-table--loading pointer-events-none opacity-60',
+        className
+      )}
     >
       <thead>
-        <tr className="rule-table__header-row">
+        <tr className="bg-muted/50 dark:bg-muted/20">
           {selectable && (
-            <th className="rule-table__th rule-table__th--checkbox">
+            <th className="w-12 border-b border-border px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               <input
                 type="checkbox"
                 checked={allSelected}
                 onChange={handleSelectAll}
                 aria-label="Select all rules"
+                className="h-4 w-4 cursor-pointer accent-primary"
               />
             </th>
           )}
-          <th className="rule-table__th">
+          <th className="border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {renderSortableHeader('Name', 'name')}
           </th>
-          <th className="rule-table__th">
+          <th className="border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {renderSortableHeader('Type', 'type')}
           </th>
-          <th className="rule-table__th">
+          <th className="border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {renderSortableHeader('Status', 'status')}
           </th>
-          <th className="rule-table__th">
+          <th className="border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {renderSortableHeader('Trigger', 'trigger')}
           </th>
-          <th className="rule-table__th">
+          <th className="border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {renderSortableHeader('Last Run', 'lastRun')}
           </th>
           {hasActions && (
-            <th className="rule-table__th rule-table__th--actions">Actions</th>
+            <th className="w-40 border-b border-border px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Actions
+            </th>
           )}
         </tr>
       </thead>
@@ -213,12 +220,18 @@ export function RuleTable({
           return (
             <tr
               key={rule.id}
-              className={`rule-table__row ${onRowClick ? 'rule-table__row--clickable' : ''} ${isSelected ? 'rule-table__row--selected' : ''}`}
+              className={cn(
+                'transition-colors duration-150',
+                onRowClick && 'rule-table__row--clickable cursor-pointer',
+                isSelected
+                  ? 'bg-blue-50 hover:bg-blue-100 dark:bg-blue-900 dark:hover:bg-blue-800'
+                  : 'hover:bg-muted/30'
+              )}
               onClick={onRowClick ? () => onRowClick(rule) : undefined}
             >
               {selectable && (
                 <td
-                  className="rule-table__td rule-table__td--checkbox"
+                  className="border-b border-border px-4 py-3.5 text-center align-middle text-sm text-foreground/80"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <input
@@ -226,61 +239,61 @@ export function RuleTable({
                     checked={isSelected}
                     onChange={() => handleSelectRow(rule.id)}
                     aria-label={`Select ${rule.name}`}
+                    className="h-4 w-4 cursor-pointer accent-primary"
                   />
                 </td>
               )}
-              <td className="rule-table__td rule-table__td--name">
-                <span className="rule-table__name">{rule.name}</span>
-                {rule.description && (
-                  <span className="rule-table__description">
-                    {rule.description}
-                  </span>
-                )}
+              <td className="border-b border-border px-4 py-3.5 align-middle text-sm text-foreground/80">
+                <div className="flex flex-col gap-1">
+                  <span className="font-medium text-foreground">{rule.name}</span>
+                  {rule.description && (
+                    <span className="text-xs text-muted-foreground">{rule.description}</span>
+                  )}
+                </div>
               </td>
-              <td className="rule-table__td">{typeLabel}</td>
-              <td className="rule-table__td">
+              <td className="border-b border-border px-4 py-3.5 align-middle text-sm text-foreground/80">{typeLabel}</td>
+              <td className="border-b border-border px-4 py-3.5 align-middle text-sm text-foreground/80">
                 <span
-                  className={`rule-table__status ${rule.enabled ? 'rule-table__status--enabled' : 'rule-table__status--disabled'}`}
+                  className={cn(
+                    'inline-flex items-center rounded-md px-2 py-1 text-xs font-medium',
+                    rule.enabled
+                      ? 'bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300'
+                      : 'bg-muted text-muted-foreground'
+                  )}
                 >
                   {rule.enabled ? 'Enabled' : 'Disabled'}
                 </span>
               </td>
-              <td className="rule-table__td">
-                <span className="rule-table__trigger">
+              <td className="border-b border-border px-4 py-3.5 align-middle text-sm text-foreground/80">
+                <span className="inline-flex items-center gap-1.5">
                   {triggerType === 'schedule' ? (
                     <>
-                      <Calendar
-                        className="rule-table__trigger-icon"
-                        aria-hidden="true"
-                      />
+                      <Calendar className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
                       Scheduled
                     </>
                   ) : (
                     <>
-                      <Zap
-                        className="rule-table__trigger-icon"
-                        aria-hidden="true"
-                      />
+                      <Zap className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
                       Event
                     </>
                   )}
                 </span>
               </td>
-              <td className="rule-table__td">
+              <td className="border-b border-border px-4 py-3.5 align-middle text-sm text-foreground/80">
                 {rule.last_executed_at ? (
                   <span title={new Date(rule.last_executed_at).toLocaleString()}>
                     Last run {formatRelativeTime(rule.last_executed_at)}
                   </span>
                 ) : (
-                  <span className="rule-table__never">Never</span>
+                  <span className="italic text-muted-foreground">Never</span>
                 )}
               </td>
               {hasActions && (
                 <td
-                  className="rule-table__td rule-table__td--actions"
+                  className="border-b border-border px-4 py-3.5 text-right align-middle text-sm text-foreground/80"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <div className="rule-table__actions">
+                  <div className="flex items-center justify-end gap-2">
                     {onToggle && (
                       <button
                         type="button"
@@ -288,13 +301,21 @@ export function RuleTable({
                         aria-checked={rule.enabled}
                         onClick={() => handleToggle(rule)}
                         disabled={loading}
-                        className={`rule-table__toggle ${rule.enabled ? 'rule-table__toggle--on' : ''}`}
-                        aria-label={
-                          rule.enabled ? 'Disable rule' : 'Enable rule'
-                        }
+                        className={cn(
+                          'relative h-5 w-9 shrink-0 cursor-pointer rounded-full border-none transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                          rule.enabled
+                            ? 'bg-green-500 dark:bg-green-600'
+                            : 'bg-muted-foreground/30 dark:bg-muted-foreground/20'
+                        )}
+                        aria-label={rule.enabled ? 'Disable rule' : 'Enable rule'}
                         title={rule.enabled ? 'Disable rule' : 'Enable rule'}
                       >
-                        <span className="rule-table__toggle-slider" />
+                        <span
+                          className={cn(
+                            'absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform',
+                            rule.enabled && 'translate-x-4'
+                          )}
+                        />
                       </button>
                     )}
                     {onTest && (
@@ -302,7 +323,7 @@ export function RuleTable({
                         type="button"
                         onClick={() => onTest(rule)}
                         disabled={loading}
-                        className="rule-table__action-btn"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:h-4 [&>svg]:w-4"
                         aria-label="Backtest rule"
                         title="Backtest - See what this rule would have done with your recent data"
                       >
@@ -314,7 +335,7 @@ export function RuleTable({
                         type="button"
                         onClick={() => onEdit(rule)}
                         disabled={loading}
-                        className="rule-table__action-btn"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:h-4 [&>svg]:w-4"
                         aria-label="Edit rule"
                         title="Edit rule"
                       >
@@ -326,7 +347,7 @@ export function RuleTable({
                         type="button"
                         onClick={() => onDelete(rule)}
                         disabled={loading}
-                        className="rule-table__action-btn rule-table__action-btn--danger"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-red-50 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-900 dark:hover:text-red-400 [&>svg]:h-4 [&>svg]:w-4"
                         aria-label="Delete rule"
                         title="Delete rule"
                       >

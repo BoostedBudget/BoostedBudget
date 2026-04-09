@@ -13,7 +13,6 @@ import {
   type FilterOption,
   type RangeValue,
 } from '@/shared/components/ColumnFilterDropdown'
-import './BudgetTable.css'
 
 export type SortColumn = 'name' | 'period' | 'amount' | 'progress' | 'remaining'
 export type SortDirection = 'asc' | 'desc'
@@ -140,10 +139,10 @@ export function BudgetTable({
         type="button"
         onClick={() => handleSort(column)}
         aria-sort={ariaSort}
-        className="budget-table__sort-btn"
+        className="inline-flex items-center gap-1 bg-none border-none p-0 font-[inherit] color-inherit cursor-pointer hover:text-foreground"
       >
         {label}
-        <span className="budget-table__sort-icon">
+        <span className="inline-flex items-center w-4 h-4 [&_svg]:w-3.5 [&_svg]:h-3.5">
           {isActive && sortDirection === 'asc' && (
             <ChevronUp aria-hidden="true" />
           )}
@@ -164,7 +163,7 @@ export function BudgetTable({
   // Only show empty state if no data AND no active filters
   if (budgets.length === 0 && !hasActiveFilters) {
     return (
-      <div className={`budget-table__empty ${className}`.trim()}>
+      <div className={`text-center py-12 px-6 text-muted-foreground bg-card border border-dashed border-border rounded-lg ${className}`.trim()}>
         <p>No budgets found. Create a budget to get started.</p>
       </div>
     )
@@ -172,15 +171,15 @@ export function BudgetTable({
 
   return (
     <table
-      className={`budget-table ${loading ? 'budget-table--loading' : ''} ${className}`.trim()}
+      className={`w-full border-collapse bg-card rounded-lg overflow-visible border border-border ${loading ? 'budget-table--loading opacity-60 pointer-events-none' : ''} ${className}`.trim()}
     >
       <thead>
-        <tr className="budget-table__header-row">
-          <th className="budget-table__th">
+        <tr className="bg-muted">
+          <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground border-b border-border">
             {renderSortableHeader('Name', 'name')}
           </th>
-          <th className="budget-table__th">
-            <div className="budget-table__header-content">
+          <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground border-b border-border">
+            <div className="flex items-center gap-1">
               {renderSortableHeader('Period', 'period')}
               {periodOptions && onPeriodFilterChange && (
                 <ColumnFilterDropdown
@@ -194,11 +193,11 @@ export function BudgetTable({
               )}
             </div>
           </th>
-          <th className="budget-table__th budget-table__th--amount">
+          <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground border-b border-border">
             {renderSortableHeader('Amount', 'amount')}
           </th>
-          <th className="budget-table__th budget-table__th--progress">
-            <div className="budget-table__header-content">
+          <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground border-b border-border min-w-[140px]">
+            <div className="flex items-center gap-1">
               {renderSortableHeader('Progress', 'progress')}
               {onProgressRangeChange && (
                 <ColumnFilterDropdown
@@ -210,12 +209,12 @@ export function BudgetTable({
               )}
             </div>
           </th>
-          <th className="budget-table__th budget-table__th--remaining">
+          <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground border-b border-border">
             {renderSortableHeader('Remaining', 'remaining')}
           </th>
-          <th className="budget-table__th">Categories</th>
+          <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground border-b border-border">Categories</th>
           {hasActions && (
-            <th className="budget-table__th budget-table__th--actions">
+            <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground border-b border-border w-24">
               Actions
             </th>
           )}
@@ -223,8 +222,8 @@ export function BudgetTable({
       </thead>
       <tbody>
         {budgets.length === 0 ? (
-          <tr className="budget-table__empty-row">
-            <td colSpan={hasActions ? 7 : 6}>
+          <tr>
+            <td colSpan={hasActions ? 7 : 6} className="py-12 px-4 text-center text-muted-foreground italic">
               No budgets match your filters. Try adjusting your criteria.
             </td>
           </tr>
@@ -236,78 +235,76 @@ export function BudgetTable({
           return (
             <tr
               key={budget.id}
-              className={`budget-table__row ${onRowClick ? 'budget-table__row--clickable' : ''} ${!budget.is_active ? 'budget-table__row--inactive' : ''}`}
+              className={`transition-colors duration-150 hover:bg-muted/50 ${onRowClick ? 'budget-table__row--clickable cursor-pointer' : ''} ${!budget.is_active ? 'opacity-60' : ''}`}
               onClick={onRowClick ? () => onRowClick(budget) : undefined}
             >
-              <td className="budget-table__td budget-table__td--name">
-                <div className="budget-table__name-cell">
-                  <span className="budget-table__name">{budget.name}</span>
+              <td className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle min-w-[200px] max-sm:min-w-[150px]">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-foreground">{budget.name}</span>
                   <span
-                    className={`budget-table__status-badge ${
+                    className={`inline-flex items-center px-2 py-0.5 text-[0.625rem] font-medium rounded-full uppercase tracking-wide ${
                       budget.is_active
-                        ? 'budget-table__status-badge--active'
-                        : 'budget-table__status-badge--inactive'
+                        ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300'
+                        : 'bg-muted text-muted-foreground'
                     }`}
                   >
                     {budget.is_active ? 'Active' : 'Inactive'}
                   </span>
                 </div>
               </td>
-              <td className="budget-table__td">{getPeriodLabel(budget.period)}</td>
-              <td className="budget-table__td budget-table__td--amount">
+              <td className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle">{getPeriodLabel(budget.period)}</td>
+              <td className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle text-right font-medium tabular-nums">
                 {formatCurrency(budget.amount)}
               </td>
-              <td className="budget-table__td budget-table__td--progress">
-                <div className="budget-table__progress-cell">
+              <td className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle min-w-[140px]">
+                <div className="flex items-center gap-3 max-sm:flex-col max-sm:items-start max-sm:gap-1">
                   <div
-                    className="budget-table__progress-bar"
+                    className="flex-1 h-2 bg-muted rounded-full overflow-hidden"
                     role="progressbar"
                     aria-valuenow={percentUsed}
                     aria-valuemin={0}
                     aria-valuemax={100}
                   >
                     <div
-                      className={`budget-table__progress-fill ${
-                        isOverBudget ? 'budget-table__progress-fill--over' : ''
-                      }`}
+                      className={`h-full rounded-full transition-[width] duration-300 ${isOverBudget ? 'bg-red-500' : 'bg-blue-500'}`}
                       style={{ width: `${Math.min(percentUsed, 100)}%` }}
                     />
                   </div>
                   <span
-                    className={`budget-table__progress-text ${
-                      isOverBudget ? 'budget-table__progress-text--over' : ''
+                    className={`min-w-12 text-right text-xs font-medium max-sm:min-w-0 max-sm:text-left ${
+                      isOverBudget ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'
                     }`}
                   >
                     {percentUsed}%
                   </span>
                 </div>
               </td>
-              <td className="budget-table__td budget-table__td--remaining">
+              <td className="px-4 py-3.5 text-sm border-b border-border align-middle text-right">
                 <span
-                  className={`budget-table__remaining ${
+                  className={`font-semibold tabular-nums ${
                     budget.remaining_amount < 0
-                      ? 'budget-table__remaining--negative'
-                      : 'budget-table__remaining--positive'
+                      ? 'budget-table__remaining--negative text-red-600 dark:text-red-400'
+                      : 'budget-table__remaining--positive text-green-600 dark:text-green-400'
                   }`}
                 >
                   {formatCurrency(budget.remaining_amount)}
                 </span>
               </td>
-              <td className="budget-table__td budget-table__td--categories">
+              <td className="px-4 py-3.5 text-sm text-muted-foreground border-b border-border align-middle text-center">
                 {categoryCount}
               </td>
               {hasActions && (
                 <td
-                  className="budget-table__td budget-table__td--actions"
+                  className="px-4 py-3.5 text-sm border-b border-border align-middle text-right"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <div className="budget-table__actions">
+                  <div className="flex items-center justify-end gap-2">
                     {onManage && (
                       <button
                         type="button"
                         onClick={() => onManage(budget)}
                         disabled={loading}
-                        className="budget-table__action-btn"
+                        className="inline-flex items-center justify-center w-8 h-8 p-0 bg-transparent border-none rounded-md text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-muted hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed [&_svg]:w-4 [&_svg]:h-4"
                         aria-label="Manage budget"
                         title="Manage budget"
                       >
@@ -319,7 +316,7 @@ export function BudgetTable({
                         type="button"
                         onClick={() => onDelete(budget.id)}
                         disabled={loading}
-                        className="budget-table__action-btn budget-table__action-btn--danger"
+                        className="inline-flex items-center justify-center w-8 h-8 p-0 bg-transparent border-none rounded-md text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-red-100 dark:hover:bg-red-900/30 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50 disabled:cursor-not-allowed [&_svg]:w-4 [&_svg]:h-4"
                         aria-label="Delete budget"
                         title="Delete budget"
                       >

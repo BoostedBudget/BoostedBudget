@@ -62,7 +62,7 @@ export function DeleteBudgetDialog({
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="w-full max-w-md p-6 bg-white dark:bg-gray-900 rounded-2xl"
+        className="w-full max-w-md p-6 bg-card rounded-2xl"
         showCloseButton={false}
       >
         <DialogHeader>
@@ -71,10 +71,10 @@ export function DeleteBudgetDialog({
               <AlertTriangle className="h-6 w-6 text-red-600 dark:text-red-400" />
             </div>
             <div>
-              <DialogTitle className="text-lg font-semibold text-gray-900 dark:text-white">
+              <DialogTitle className="text-lg font-semibold text-foreground">
                 Delete Budget
               </DialogTitle>
-              <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+              <p className="mt-2 text-sm text-muted-foreground">
                 Are you sure you want to delete "{budgetName}"? This budget and
                 its {categoryText} will be permanently deleted. This action
                 cannot be undone.
@@ -84,7 +84,7 @@ export function DeleteBudgetDialog({
         </DialogHeader>
 
         <div className="mt-4">
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+          <label className="block text-sm font-medium text-foreground mb-2">
             To confirm deletion, type "{budgetName}" below:
           </label>
           <input
@@ -94,9 +94,9 @@ export function DeleteBudgetDialog({
             disabled={isDeleting}
             placeholder="Type name to confirm"
             aria-label="Confirmation input"
-            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg
-                       bg-white dark:bg-gray-800 text-gray-900 dark:text-white
-                       placeholder-gray-400 dark:placeholder-gray-500
+            className="w-full px-3 py-2 text-sm border border-border rounded-lg
+                       bg-background text-foreground
+                       placeholder:text-muted-foreground
                        focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent
                        disabled:opacity-50 disabled:cursor-not-allowed"
           />
@@ -106,7 +106,7 @@ export function DeleteBudgetDialog({
           <button
             onClick={() => handleOpenChange(false)}
             disabled={isDeleting}
-            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-4 py-2 text-sm font-medium text-foreground bg-muted rounded-lg hover:bg-muted/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Cancel
           </button>

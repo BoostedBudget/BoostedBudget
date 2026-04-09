@@ -8,10 +8,6 @@
   line-height: 1.5;
   font-weight: 400;
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -55,6 +51,48 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  --skeleton: oklch(0.905 0 0);
+
+  /* Legacy CSS variable compatibility aliases — used by budget/rules/dashboard CSS files.
+     Semantic aliases adapt automatically when .dark overrides the base tokens. */
+  --color-text: var(--foreground);
+  --color-text-primary: var(--foreground);
+  --color-text-secondary: var(--muted-foreground);
+  --color-text-tertiary: var(--muted-foreground);
+  --color-bg-primary: var(--background);
+  --color-bg-secondary: var(--muted);
+  --color-bg-card: var(--card);
+  --color-border: var(--border);
+  --color-border-light: var(--border);
+  --color-success: var(--success);
+  --color-success-bg-light: color-mix(in oklch, var(--success) 12%, transparent);
+  --color-danger: var(--destructive);
+  --color-danger-bg-light: color-mix(in oklch, var(--destructive) 12%, transparent);
+  --color-warning: var(--warning);
+  --color-primary: var(--info);
+  --color-primary-50: color-mix(in oklch, var(--info) 10%, transparent);
+  --color-primary-100: color-mix(in oklch, var(--info) 20%, transparent);
+  --color-primary-200: color-mix(in oklch, var(--info) 30%, transparent);
+  --color-primary-300: color-mix(in oklch, var(--info) 40%, transparent);
+  --color-primary-500: var(--info);
+  --color-primary-700: var(--info);
+
+  /* Absolute gray scale values — used in .dark {} selectors across CSS files */
+  --color-gray-50: oklch(0.985 0 0);
+  --color-gray-100: oklch(0.97 0 0);
+  --color-gray-200: oklch(0.922 0 0);
+  --color-gray-300: oklch(0.869 0 0);
+  --color-gray-400: oklch(0.708 0 0);
+  --color-gray-500: oklch(0.556 0 0);
+  --color-gray-600: oklch(0.453 0 0);
+  --color-gray-700: oklch(0.371 0 0);
+  --color-gray-750: oklch(0.320 0 0);
+  --color-gray-800: oklch(0.269 0 0);
+  --color-gray-900: oklch(0.145 0 0);
+
+  /* Absolute blue values — used in .dark {} selectors for rule icons */
+  --color-blue-400: oklch(0.6 0.165 253.226);
+  --color-blue-900: oklch(0.231 0.07 253.226);
 }
 
 * {
@@ -126,9 +164,11 @@ body {
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-skeleton: var(--skeleton);
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
@@ -167,6 +207,7 @@ body {
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --skeleton: oklch(0.371 0 0);
 }
 
 @layer base {
@@ -176,4 +217,14 @@ body {
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* GridStack.js resize handle overrides (cannot be expressed as Tailwind utilities on library DOM) */
+.grid-stack-item > .ui-resizable-handle {
+  z-index: 10;
+}
+
+.dark .grid-stack-item > .ui-resizable-se::after {
+  border-right-color: theme(colors.border);
+  border-bottom-color: theme(colors.border);
 }

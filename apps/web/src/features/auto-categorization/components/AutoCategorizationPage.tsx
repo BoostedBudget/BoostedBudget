@@ -22,7 +22,6 @@ import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import type { CategorizationRule, CreateRuleRequest, UpdateRuleRequest } from '../types'
 import type { Account } from '../../accounts/types'
 import type { UserTag } from '../../tags/types'
-import './AutoCategorizationPage.css'
 
 export interface AutoCategorizationPageProps {
   categories: string[][]
@@ -233,9 +232,9 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
   // Loading state
   if (loading) {
     return (
-      <div className="auto-categorization-page">
-        <div className="auto-categorization-page__loading">
-          <div className="auto-categorization-page__spinner" />
+      <div className="max-w-[800px] mx-auto py-8 px-4">
+        <div className="flex flex-col items-center justify-center py-16 px-8 text-center text-muted-foreground">
+          <div className="w-10 h-10 border-[3px] border-border border-t-primary rounded-full animate-spin mb-4" />
           <p>Loading rules...</p>
         </div>
       </div>
@@ -245,12 +244,12 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
   // Error state
   if (error) {
     return (
-      <div className="auto-categorization-page">
-        <div className="auto-categorization-page__error">
-          <p className="auto-categorization-page__error-message">{error}</p>
+      <div className="max-w-[800px] mx-auto py-8 px-4">
+        <div className="flex flex-col items-center py-12 px-8 text-center bg-destructive/10 rounded-lg">
+          <p className="m-0 mb-4 text-destructive">{error}</p>
           <button
             type="button"
-            className="auto-categorization-page__btn auto-categorization-page__btn--retry"
+            className="px-4 py-2 text-sm font-medium text-foreground bg-background border border-border rounded-md cursor-pointer hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={refresh}
           >
             Retry
@@ -263,7 +262,7 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
   // Editor mode
   if (editorMode) {
     return (
-      <div className="auto-categorization-page">
+      <div className="max-w-[800px] mx-auto py-8 px-4">
         <AutoCategorizationRuleEditor
           mode={editorMode}
           rule={editingRule ?? undefined}
@@ -281,7 +280,7 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
   // Empty state
   if (rules.length === 0) {
     return (
-      <div className="auto-categorization-page">
+      <div className="max-w-[800px] mx-auto py-8 px-4">
         <EmptyState
           icon={<Tags />}
           title="No rules yet"
@@ -298,14 +297,14 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
 
   // Rules list
   return (
-    <div className="auto-categorization-page">
-      <div className="auto-categorization-page__header">
-        <div className="auto-categorization-page__title-row">
-          <h1 className="auto-categorization-page__title">Auto-Categorization Rules</h1>
-          <span className="auto-categorization-page__count">{rules.length} rules</span>
+    <div className="max-w-[800px] mx-auto py-8 px-4">
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-baseline gap-3">
+          <h1 className="m-0 text-2xl font-semibold text-foreground">Auto-Categorization Rules</h1>
+          <span className="text-sm text-muted-foreground">{rules.length} rules</span>
         </div>
         {/* Issue #584: View toggle and actions */}
-        <div className="auto-categorization-page__actions">
+        <div className="flex items-center gap-3">
           <ListViewToggle
             view={view}
             onChange={handleViewChange}
@@ -313,7 +312,7 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
           />
           <button
             type="button"
-            className="auto-categorization-page__btn auto-categorization-page__btn--primary"
+            className="px-4 py-2 text-sm font-medium bg-primary text-primary-foreground border border-transparent rounded-md cursor-pointer hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={handleCreateClick}
             disabled={isAtLimit}
           >
@@ -323,21 +322,21 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
       </div>
 
       {showTierWarning && (
-        <div className="auto-categorization-page__tier-warning">
-          <p>
+        <div className="flex items-center justify-between gap-4 px-4 py-3 mb-4 bg-warning/10 border border-warning/30 rounded-md">
+          <p className="m-0 text-sm text-warning-foreground">
             <strong>Rule limit reached.</strong> You&apos;ve reached the maximum of{' '}
             {maxRules} rule{maxRules !== 1 ? 's' : ''} for the free tier.
           </p>
-          <a href="/settings/subscription" className="auto-categorization-page__upgrade-link">
+          <a href="/settings/subscription" className="flex-shrink-0 text-sm font-medium text-primary hover:underline">
             Upgrade for more rules
           </a>
         </div>
       )}
 
       {/* Issue #584: Conditional cards/table rendering */}
-      <div className="auto-categorization-page__content">
+      <div className="mt-4">
         {view === 'cards' ? (
-          <div className="auto-categorization-page__list">
+          <div className="flex flex-col gap-0">
             {rules.map((rule) => (
               <AutoCategorizationRuleCard
                 key={rule.id}

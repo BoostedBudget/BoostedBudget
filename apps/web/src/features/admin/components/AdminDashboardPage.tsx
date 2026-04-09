@@ -7,7 +7,6 @@ import { SummaryCard } from './SummaryCard'
 import { QuickActionLink } from './QuickActionLink'
 import { EnvironmentBadge } from './EnvironmentBadge'
 import { ADMIN_ROUTES } from '../constants'
-import './AdminDashboardPage.css'
 
 export function AdminDashboardPage() {
   const { environment } = useEnvironment()
@@ -18,13 +17,13 @@ export function AdminDashboardPage() {
   }, [trackEvent])
 
   return (
-    <div className="admin-dashboard">
-      <div className="admin-dashboard__header">
-        <h1 className="admin-dashboard__title">Admin Dashboard</h1>
+    <div className="max-w-[1200px]">
+      <div className="flex items-center justify-between mb-8 max-sm:flex-col max-sm:items-start max-sm:gap-3">
+        <h1 className="text-[1.75rem] font-bold text-foreground m-0 max-sm:text-2xl">Admin Dashboard</h1>
         <EnvironmentBadge environment={environment} />
       </div>
 
-      <div className="admin-dashboard__cards">
+      <div className="grid gap-6 mb-8 [grid-template-columns:repeat(auto-fit,minmax(240px,1fr))] max-sm:[grid-template-columns:1fr]">
         <SummaryCard
           title="Total Users"
           value="--"
@@ -51,9 +50,9 @@ export function AdminDashboardPage() {
         />
       </div>
 
-      <section className="admin-dashboard__section">
-        <h2 className="admin-dashboard__section-title">Quick Actions</h2>
-        <div className="admin-dashboard__actions">
+      <section className="bg-card border border-border rounded-lg p-6 mb-6">
+        <h2 className="text-lg font-semibold text-foreground m-0 mb-4">Quick Actions</h2>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))] max-sm:[grid-template-columns:1fr]">
           <QuickActionLink
             to={ADMIN_ROUTES.USERS}
             label="Manage Users"
