@@ -22,66 +22,66 @@ type mockPaddleSDK struct {
 
 func (m *mockPaddleSDK) CreateCustomer(ctx context.Context, req *paddle.CreateCustomerRequest) (*paddle.Customer, error) {
 	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	if customer, ok := args.Get(0).(*paddle.Customer); ok {
+		return customer, args.Error(1)
 	}
-	return args.Get(0).(*paddle.Customer), args.Error(1)
+	return nil, args.Error(1)
 }
 
 func (m *mockPaddleSDK) ListCustomersByEmail(ctx context.Context, email string) ([]*paddle.Customer, error) {
 	args := m.Called(ctx, email)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	if customers, ok := args.Get(0).([]*paddle.Customer); ok {
+		return customers, args.Error(1)
 	}
-	return args.Get(0).([]*paddle.Customer), args.Error(1)
+	return nil, args.Error(1)
 }
 
 func (m *mockPaddleSDK) GetCustomer(ctx context.Context, req *paddle.GetCustomerRequest) (*paddle.Customer, error) {
 	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	if customer, ok := args.Get(0).(*paddle.Customer); ok {
+		return customer, args.Error(1)
 	}
-	return args.Get(0).(*paddle.Customer), args.Error(1)
+	return nil, args.Error(1)
 }
 
 func (m *mockPaddleSDK) CreateTransaction(ctx context.Context, req *paddle.CreateTransactionRequest) (*paddle.Transaction, error) {
 	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	if transaction, ok := args.Get(0).(*paddle.Transaction); ok {
+		return transaction, args.Error(1)
 	}
-	return args.Get(0).(*paddle.Transaction), args.Error(1)
+	return nil, args.Error(1)
 }
 
 func (m *mockPaddleSDK) GetSubscription(ctx context.Context, req *paddle.GetSubscriptionRequest) (*paddle.Subscription, error) {
 	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	if subscription, ok := args.Get(0).(*paddle.Subscription); ok {
+		return subscription, args.Error(1)
 	}
-	return args.Get(0).(*paddle.Subscription), args.Error(1)
+	return nil, args.Error(1)
 }
 
 func (m *mockPaddleSDK) UpdateSubscription(ctx context.Context, req *paddle.UpdateSubscriptionRequest) (*paddle.Subscription, error) {
 	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	if subscription, ok := args.Get(0).(*paddle.Subscription); ok {
+		return subscription, args.Error(1)
 	}
-	return args.Get(0).(*paddle.Subscription), args.Error(1)
+	return nil, args.Error(1)
 }
 
 func (m *mockPaddleSDK) CancelSubscription(ctx context.Context, req *paddle.CancelSubscriptionRequest) (*paddle.Subscription, error) {
 	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	if subscription, ok := args.Get(0).(*paddle.Subscription); ok {
+		return subscription, args.Error(1)
 	}
-	return args.Get(0).(*paddle.Subscription), args.Error(1)
+	return nil, args.Error(1)
 }
 
 func (m *mockPaddleSDK) PreviewSubscriptionUpdate(ctx context.Context, req *paddle.PreviewSubscriptionUpdateRequest) (*paddle.SubscriptionPreview, error) {
 	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	if preview, ok := args.Get(0).(*paddle.SubscriptionPreview); ok {
+		return preview, args.Error(1)
 	}
-	return args.Get(0).(*paddle.SubscriptionPreview), args.Error(1)
+	return nil, args.Error(1)
 }
 
 // setupPaddleServiceWithMock creates a PaddleService with a mock SDK
@@ -98,9 +98,10 @@ func setupPaddleServiceWithMock(t *testing.T) (*paddleService, *mockPaddleSDK) {
 	}))
 
 	service := &paddleService{
-		client: mockSDK,
-		config: cfg,
-		logger: logger,
+		client:    mockSDK,
+		rawClient: nil, // Mock tests don't use this; real tests use GetClient()
+		config:    cfg,
+		logger:    logger,
 	}
 
 	return service, mockSDK
@@ -165,6 +166,23 @@ func TestEnsureCustomer_ReturnsErrorWhenConflictLookupIsAmbiguous(t *testing.T) 
 			{ID: "ctm_one", Email: "test@example.com"},
 			{ID: "ctm_two", Email: "test@example.com"},
 		}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.Contains(t, err.Error(), "expected exactly 1 Paddle customer")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ReturnsErrorWhenNoCustomersFound(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{}, nil)
 
 	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
 

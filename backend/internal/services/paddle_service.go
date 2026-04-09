@@ -227,10 +227,6 @@ func (s *paddleService) CreateCustomer(ctx context.Context, userID, email string
 	customer, err := s.client.CreateCustomer(ctx, req)
 	if err != nil {
 		if errors.Is(err, paddle.ErrCustomerAlreadyExists) {
-			s.logger.Warn("Paddle customer already exists",
-				"user_id", userID,
-				"email", email,
-			)
 			return "", fmt.Errorf("failed to create Paddle customer: %w", err)
 		}
 
@@ -274,7 +270,7 @@ func (s *paddleService) EnsureCustomer(ctx context.Context, userID, email string
 		return "", fmt.Errorf("expected exactly 1 Paddle customer for email %s, got %d", email, len(customers))
 	}
 
-	if customers[0] == nil || customers[0].ID == "" {
+	if customers[0].ID == "" {
 		return "", fmt.Errorf("existing Paddle customer for email %s is missing an ID", email)
 	}
 
@@ -399,34 +395,14 @@ func (s *paddleService) UpdateSubscription(
 		return nil, fmt.Errorf("failed to fetch current subscription: %w", err)
 	}
 
-	var prorationMode paddle.ProrationBillingMode
-	switch prorationBillingMode {
-	case "prorated_immediately":
-		prorationMode = paddle.ProrationBillingModeProratedImmediately
-	case "full_immediately":
-		prorationMode = paddle.ProrationBillingModeFullImmediately
-	case "full_next_billing_period":
-		prorationMode = paddle.ProrationBillingModeFullNextBillingPeriod
-	default:
-		prorationMode = paddle.ProrationBillingModeProratedImmediately
-	}
+	prorationMode := parseProrationMode(prorationBillingMode)
 
 	patchedProrationMode := paddle.NewPatchField(prorationMode)
 
-	var updatedItems []paddle.UpdateSubscriptionItems
-	var catalogItem *paddle.SubscriptionUpdateItemFromCatalog
-	if len(currentSub.Items) > 0 {
-		catalogItem = &paddle.SubscriptionUpdateItemFromCatalog{
-			PriceID:  newPriceID,
-			Quantity: currentSub.Items[0].Quantity,
-		}
-	} else {
-		catalogItem = &paddle.SubscriptionUpdateItemFromCatalog{
-			PriceID:  newPriceID,
-			Quantity: 1,
-		}
+	catalogItem := buildCatalogItem(newPriceID, currentSub)
+	updatedItems := []paddle.UpdateSubscriptionItems{
+		*paddle.NewUpdateSubscriptionItemsSubscriptionUpdateItemFromCatalog(catalogItem),
 	}
-	updatedItems = append(updatedItems, *paddle.NewUpdateSubscriptionItemsSubscriptionUpdateItemFromCatalog(catalogItem))
 
 	patchedItems := paddle.NewPatchField(updatedItems)
 
@@ -498,20 +474,10 @@ func (s *paddleService) PreviewUpdate(
 		return "", "", "", fmt.Errorf("failed to fetch current subscription: %w", err)
 	}
 
-	var updatedItems []paddle.PreviewSubscriptionUpdateItems
-	var catalogItem *paddle.SubscriptionUpdateItemFromCatalog
-	if len(currentSub.Items) > 0 {
-		catalogItem = &paddle.SubscriptionUpdateItemFromCatalog{
-			PriceID:  newPriceID,
-			Quantity: currentSub.Items[0].Quantity,
-		}
-	} else {
-		catalogItem = &paddle.SubscriptionUpdateItemFromCatalog{
-			PriceID:  newPriceID,
-			Quantity: 1,
-		}
+	catalogItem := buildCatalogItem(newPriceID, currentSub)
+	updatedItems := []paddle.PreviewSubscriptionUpdateItems{
+		*paddle.NewPreviewSubscriptionUpdateItemsSubscriptionUpdateItemFromCatalog(catalogItem),
 	}
-	updatedItems = append(updatedItems, *paddle.NewPreviewSubscriptionUpdateItemsSubscriptionUpdateItemFromCatalog(catalogItem))
 
 	patchedItems := paddle.NewPatchField(updatedItems)
 	prorationMode := paddle.ProrationBillingModeProratedImmediately
@@ -550,6 +516,33 @@ func (s *paddleService) PreviewUpdate(
 	)
 
 	return prorationAmt, curr, nextCharge, nil
+}
+
+// buildCatalogItem constructs a subscription catalog item, defaulting quantity to 1 if no items exist.
+func buildCatalogItem(priceID string, currentSub *paddle.Subscription) *paddle.SubscriptionUpdateItemFromCatalog {
+	quantity := 1
+	if len(currentSub.Items) > 0 {
+		quantity = currentSub.Items[0].Quantity
+	}
+	return &paddle.SubscriptionUpdateItemFromCatalog{
+		PriceID:  priceID,
+		Quantity: quantity,
+	}
+}
+
+// parseProrationMode converts a string to the corresponding ProrationBillingMode enum.
+// Defaults to ProratedImmediately for unknown values.
+func parseProrationMode(mode string) paddle.ProrationBillingMode {
+	switch mode {
+	case "prorated_immediately":
+		return paddle.ProrationBillingModeProratedImmediately
+	case "full_immediately":
+		return paddle.ProrationBillingModeFullImmediately
+	case "full_next_billing_period":
+		return paddle.ProrationBillingModeFullNextBillingPeriod
+	default:
+		return paddle.ProrationBillingModeProratedImmediately
+	}
 }
 
 // GetBillingPortalURL generates a URL for the Paddle billing portal session.
