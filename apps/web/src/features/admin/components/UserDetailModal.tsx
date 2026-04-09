@@ -17,7 +17,6 @@ import { Button } from '@/components/ui/button'
 import { Loader2, User, Calendar, MapPin, CreditCard, Link2, Zap, Receipt, PiggyBank, Shield } from 'lucide-react'
 import type { AdminUserDetail } from '@boostedbudget/api-client/models'
 import { useRegions } from '../../../shared/hooks/useRegions'
-import './UserDetailModal.css'
 
 export interface UserDetailModalProps {
   /** User detail data */
@@ -62,20 +61,20 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <DialogContent className="user-detail-modal" aria-describedby="user-detail-description">
+      <DialogContent className="max-w-[600px]" aria-describedby="user-detail-description">
         {loading ? (
-          <div className="user-detail-modal__loading">
-            <Loader2 className="user-detail-modal__spinner" />
+          <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+            <Loader2 className="w-8 h-8 mb-4 animate-spin" />
             <span>Loading user details...</span>
           </div>
         ) : user ? (
           <>
             <DialogHeader>
-              <DialogTitle className="user-detail-modal__title">
-                <User className="user-detail-modal__title-icon" />
+              <DialogTitle className="flex items-center gap-2">
+                <User className="w-5 h-5 text-primary" />
                 {user.email}
                 {user.is_admin && (
-                  <span className="user-detail-modal__admin-badge">
+                  <span className="inline-flex items-center gap-1 ml-2 px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 rounded-full">
                     <Shield size={14} />
                     Admin
                   </span>
@@ -86,81 +85,85 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
               </DialogDescription>
             </DialogHeader>
 
-            <div className="user-detail-modal__content">
+            <div className="flex flex-col gap-6 my-4">
               {/* Profile Section */}
-              <section className="user-detail-modal__section">
-                <h3 className="user-detail-modal__section-title">Profile</h3>
-                <div className="user-detail-modal__grid">
-                  <div className="user-detail-modal__field">
-                    <CreditCard className="user-detail-modal__field-icon" size={16} />
-                    <div className="user-detail-modal__field-content">
-                      <span className="user-detail-modal__field-label">Subscription</span>
-                      <span className="user-detail-modal__field-value">
+              <section className="flex flex-col gap-3">
+                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider m-0 pb-2 border-b border-border">
+                  Profile
+                </h3>
+                <div className="grid grid-cols-2 gap-4 max-[480px]:grid-cols-1">
+                  <div className="flex items-start gap-2">
+                    <CreditCard className="text-muted-foreground/60 mt-0.5 shrink-0" size={16} />
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-xs text-muted-foreground/60">Subscription</span>
+                      <span className="text-sm text-foreground">
                         {TIER_DISPLAY_MAP[user.subscription_tier] ?? user.subscription_tier} ({user.subscription_status})
                       </span>
                     </div>
                   </div>
 
-                  <div className="user-detail-modal__field">
-                    <MapPin className="user-detail-modal__field-icon" size={16} />
-                    <div className="user-detail-modal__field-content">
-                      <span className="user-detail-modal__field-label">Region</span>
-                      <span className="user-detail-modal__field-value">{getRegionWithFlag(user.primary_region)}</span>
+                  <div className="flex items-start gap-2">
+                    <MapPin className="text-muted-foreground/60 mt-0.5 shrink-0" size={16} />
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-xs text-muted-foreground/60">Region</span>
+                      <span className="text-sm text-foreground">{getRegionWithFlag(user.primary_region)}</span>
                     </div>
                   </div>
 
-                  <div className="user-detail-modal__field">
-                    <Calendar className="user-detail-modal__field-icon" size={16} />
-                    <div className="user-detail-modal__field-content">
-                      <span className="user-detail-modal__field-label">Created</span>
-                      <span className="user-detail-modal__field-value">{formatDate(user.created_at)}</span>
+                  <div className="flex items-start gap-2">
+                    <Calendar className="text-muted-foreground/60 mt-0.5 shrink-0" size={16} />
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-xs text-muted-foreground/60">Created</span>
+                      <span className="text-sm text-foreground">{formatDate(user.created_at)}</span>
                     </div>
                   </div>
 
-                  <div className="user-detail-modal__field">
-                    <Calendar className="user-detail-modal__field-icon" size={16} />
-                    <div className="user-detail-modal__field-content">
-                      <span className="user-detail-modal__field-label">Last Login</span>
-                      <span className="user-detail-modal__field-value">{formatDate(user.last_login_at)}</span>
+                  <div className="flex items-start gap-2">
+                    <Calendar className="text-muted-foreground/60 mt-0.5 shrink-0" size={16} />
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-xs text-muted-foreground/60">Last Login</span>
+                      <span className="text-sm text-foreground">{formatDate(user.last_login_at)}</span>
                     </div>
                   </div>
                 </div>
               </section>
 
               {/* Statistics Section */}
-              <section className="user-detail-modal__section">
-                <h3 className="user-detail-modal__section-title">Statistics</h3>
-                <div className="user-detail-modal__stats">
-                  <div className="user-detail-modal__stat">
-                    <Link2 className="user-detail-modal__stat-icon" size={20} />
-                    <span className="user-detail-modal__stat-value">
+              <section className="flex flex-col gap-3">
+                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider m-0 pb-2 border-b border-border">
+                  Statistics
+                </h3>
+                <div className="grid grid-cols-2 gap-4 min-[480px]:grid-cols-4">
+                  <div className="flex flex-col items-center p-4 bg-muted rounded-lg text-center">
+                    <Link2 className="text-primary mb-2" size={20} />
+                    <span className="text-xl font-semibold text-foreground tabular-nums">
                       {formatNumber(user.linked_accounts_count)}
                     </span>
-                    <span className="user-detail-modal__stat-label">Linked Accounts</span>
+                    <span className="text-xs text-muted-foreground mt-1">Linked Accounts</span>
                   </div>
 
-                  <div className="user-detail-modal__stat">
-                    <Zap className="user-detail-modal__stat-icon" size={20} />
-                    <span className="user-detail-modal__stat-value">
+                  <div className="flex flex-col items-center p-4 bg-muted rounded-lg text-center">
+                    <Zap className="text-primary mb-2" size={20} />
+                    <span className="text-xl font-semibold text-foreground tabular-nums">
                       {formatNumber(user.automation_rules_count)}
                     </span>
-                    <span className="user-detail-modal__stat-label">Automation Rules</span>
+                    <span className="text-xs text-muted-foreground mt-1">Automation Rules</span>
                   </div>
 
-                  <div className="user-detail-modal__stat">
-                    <Receipt className="user-detail-modal__stat-icon" size={20} />
-                    <span className="user-detail-modal__stat-value">
+                  <div className="flex flex-col items-center p-4 bg-muted rounded-lg text-center">
+                    <Receipt className="text-primary mb-2" size={20} />
+                    <span className="text-xl font-semibold text-foreground tabular-nums">
                       {formatNumber(user.transactions_count)}
                     </span>
-                    <span className="user-detail-modal__stat-label">Transactions</span>
+                    <span className="text-xs text-muted-foreground mt-1">Transactions</span>
                   </div>
 
-                  <div className="user-detail-modal__stat">
-                    <PiggyBank className="user-detail-modal__stat-icon" size={20} />
-                    <span className="user-detail-modal__stat-value">
+                  <div className="flex flex-col items-center p-4 bg-muted rounded-lg text-center">
+                    <PiggyBank className="text-primary mb-2" size={20} />
+                    <span className="text-xl font-semibold text-foreground tabular-nums">
                       {formatNumber(user.budgets_count)}
                     </span>
-                    <span className="user-detail-modal__stat-label">Budgets</span>
+                    <span className="text-xs text-muted-foreground mt-1">Budgets</span>
                   </div>
                 </div>
               </section>
@@ -173,7 +176,7 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
             </DialogFooter>
           </>
         ) : (
-          <div className="user-detail-modal__empty">
+          <div className="flex items-center justify-center py-12 text-muted-foreground">
             <span>No user data available</span>
           </div>
         )}

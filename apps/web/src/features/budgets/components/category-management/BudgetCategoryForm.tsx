@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { XIcon, Loader2Icon } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import {
   Dialog,
   DialogContent,
@@ -21,7 +22,6 @@ import { DEFAULT_MATCH_LOGIC } from '@boostedbudget/shared-types/matching';
 import type { UserTag } from '@/features/tags/types';
 import { CategoryMatchConfig } from './CategoryMatchConfig';
 import { usePreviewCategories } from '../../hooks/usePreviewCategories';
-import './BudgetCategoryForm.css';
 
 export interface BudgetCategoryFormProps {
   /** Whether the dialog is open */
@@ -275,22 +275,27 @@ export function BudgetCategoryForm({
   const dialogTitle = mode === 'create' ? 'Add Category' : 'Edit Category';
   const submitButtonText = mode === 'create' ? 'Add' : 'Save';
 
+  // Shared input classes
+  const inputBase =
+    'w-full py-2.5 px-3 text-sm border border-input rounded-lg bg-card text-foreground transition-[border-color,box-shadow] duration-150 focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-ring/15 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed';
+  const inputError = 'border-destructive focus:ring-destructive/15';
+
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="budget-category-form w-full max-w-md p-6 bg-white dark:bg-gray-900 rounded-2xl"
+        className="budget-category-form w-full max-w-md p-6 bg-card rounded-2xl"
         onInteractOutside={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => e.preventDefault()}
         showCloseButton={false}
       >
         <DialogHeader className="flex flex-row items-center justify-between mb-6">
-          <DialogTitle className="text-xl font-semibold text-gray-900 dark:text-white">
+          <DialogTitle className="text-xl font-semibold text-foreground">
             {dialogTitle}
           </DialogTitle>
           <button
             type="button"
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            className="text-muted-foreground hover:text-foreground"
           >
             <XIcon className="h-6 w-6" />
           </button>
@@ -301,7 +306,7 @@ export function BudgetCategoryForm({
           <div>
             <label
               htmlFor="category"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+              className="block text-sm font-medium text-foreground"
             >
               Category
             </label>
@@ -310,9 +315,7 @@ export function BudgetCategoryForm({
               value={formData.category.join(' > ')}
               onChange={handleCategoryChange}
               disabled={mode === 'edit'}
-              className={`budget-category-form__input ${
-                errors.category ? 'budget-category-form__input--error' : ''
-              }`}
+              className={cn(inputBase, errors.category && inputError)}
             >
               <option value="">Select a category...</option>
               {categoryOptions.map((option) => (
@@ -332,12 +335,12 @@ export function BudgetCategoryForm({
           <div>
             <label
               htmlFor="amount"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+              className="block text-sm font-medium text-foreground"
             >
               Amount
             </label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
                 $
               </span>
               <input
@@ -347,9 +350,7 @@ export function BudgetCategoryForm({
                 onChange={handleAmountChange}
                 min="0"
                 step="0.01"
-                className={`budget-category-form__input pl-7 ${
-                  errors.allocated_amount ? 'budget-category-form__input--error' : ''
-                }`}
+                className={cn(inputBase, 'pl-7', errors.allocated_amount && inputError)}
                 placeholder="0.00"
               />
             </div>
@@ -370,30 +371,34 @@ export function BudgetCategoryForm({
           {/* Tags Field - shown based on match_logic */}
           {showTagPicker && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              <label className="block text-sm font-medium text-foreground mb-2">
                 Tags
               </label>
-              <div className="budget-category-form__tags">
-                {availableTags.map((tag) => (
-                  <button
-                    key={tag.id}
-                    type="button"
-                    onClick={() => handleTagToggle(tag.name)}
-                    disabled={isSubmitting}
-                    className={`budget-category-form__tag ${
-                      formData.tags.includes(tag.name)
-                        ? 'budget-category-form__tag--selected'
-                        : ''
-                    }`}
-                    style={
-                      formData.tags.includes(tag.name)
-                        ? { backgroundColor: tag.color ?? undefined, borderColor: tag.color ?? undefined }
-                        : undefined
-                    }
-                  >
-                    {tag.name}
-                  </button>
-                ))}
+              <div className="flex flex-wrap gap-2">
+                {availableTags.map((tag) => {
+                  const isSelected = formData.tags.includes(tag.name);
+                  return (
+                    <button
+                      key={tag.id}
+                      type="button"
+                      onClick={() => handleTagToggle(tag.name)}
+                      disabled={isSubmitting}
+                      className={cn(
+                        'budget-category-form__tag py-1.5 px-3 text-[0.8125rem] font-medium rounded-full cursor-pointer transition-all duration-150 border disabled:opacity-50 disabled:cursor-not-allowed',
+                        isSelected
+                          ? 'budget-category-form__tag--selected text-white border-transparent hover:enabled:opacity-90'
+                          : 'text-muted-foreground bg-muted border-border hover:enabled:bg-accent'
+                      )}
+                      style={
+                        isSelected
+                          ? { backgroundColor: tag.color ?? undefined, borderColor: tag.color ?? undefined }
+                          : undefined
+                      }
+                    >
+                      {tag.name}
+                    </button>
+                  );
+                })}
               </div>
               {errors.tags && (
                 <p className="mt-1 text-sm text-red-600 dark:text-red-400">
@@ -441,7 +446,7 @@ export function BudgetCategoryForm({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              className="px-4 py-2 text-sm font-medium text-foreground bg-muted rounded-lg hover:bg-muted/80 transition-colors"
             >
               Cancel
             </button>

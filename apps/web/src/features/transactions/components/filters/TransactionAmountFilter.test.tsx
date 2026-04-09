@@ -130,7 +130,7 @@ describe('TransactionAmountFilter', () => {
       />
     )
 
-    expect(screen.getByRole('button', { name: '$100+' })).toHaveClass('bg-blue-600')
+    expect(screen.getByRole('button', { name: '$100+' })).toHaveClass('bg-primary')
   })
 
   it('should clear shortcut when clicking active one', async () => {

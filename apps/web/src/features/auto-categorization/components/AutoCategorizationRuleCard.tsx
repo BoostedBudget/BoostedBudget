@@ -8,7 +8,6 @@
 import { useState } from 'react'
 import type { CategorizationRule } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
-import './AutoCategorizationRuleCard.css'
 
 export interface AutoCategorizationRuleCardProps {
   rule: CategorizationRule
@@ -73,32 +72,32 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
   }
 
   return (
-    <div className={`auto-categorization-rule-card ${!rule.enabled ? 'auto-categorization-rule-card--disabled' : ''}`}>
-      <div className="auto-categorization-rule-card__header">
-        <div className="auto-categorization-rule-card__title-row">
-          <h3 className="auto-categorization-rule-card__name">{rule.name}</h3>
-          <span className={`auto-categorization-rule-card__status ${rule.enabled ? 'auto-categorization-rule-card__status--enabled' : 'auto-categorization-rule-card__status--disabled'}`}>
+    <div className={`bg-card border border-border rounded-lg p-4 mb-4 transition-shadow hover:shadow-md ${!rule.enabled ? 'opacity-70 bg-muted' : ''}`}>
+      <div className="mb-4">
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <h3 className="m-0 text-lg font-semibold text-foreground">{rule.name}</h3>
+          <span className={`text-xs font-medium px-2 py-1 rounded uppercase tracking-wide ${rule.enabled ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'}`}>
             {rule.enabled ? 'Active' : 'Disabled'}
           </span>
         </div>
         {rule.description && (
-          <p className="auto-categorization-rule-card__description">{rule.description}</p>
+          <p className="mt-2 text-sm text-muted-foreground">{rule.description}</p>
         )}
       </div>
 
-      <div className="auto-categorization-rule-card__content">
+      <div className="mb-4">
         {/* Conditions */}
-        <div className="auto-categorization-rule-card__section">
-          <h4 className="auto-categorization-rule-card__section-title">
+        <div className="mb-3">
+          <h4 className="m-0 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
             Conditions ({rule.condition_logic})
           </h4>
-          <ul className="auto-categorization-rule-card__conditions">
+          <ul className="list-none m-0 p-0 flex flex-wrap gap-2">
             {rule.conditions.map((condition, index) => (
-              <li key={index} className="auto-categorization-rule-card__condition">
-                <span className="auto-categorization-rule-card__condition-type">
+              <li key={index} className="flex items-center gap-1 bg-muted px-2 py-1 rounded text-[0.8125rem]">
+                <span className="text-muted-foreground">
                   {CONDITION_TYPE_LABELS[condition.type] || condition.type}
                 </span>
-                <span className="auto-categorization-rule-card__condition-value">
+                <span className="text-foreground font-medium">
                   {formatConditionValue(condition.value)}
                 </span>
               </li>
@@ -107,25 +106,25 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
         </div>
 
         {/* Actions */}
-        <div className="auto-categorization-rule-card__section">
-          <h4 className="auto-categorization-rule-card__section-title">Actions</h4>
-          <div className="auto-categorization-rule-card__actions-list">
+        <div className="mb-3">
+          <h4 className="m-0 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Actions</h4>
+          <div className="flex flex-col gap-2">
             {rule.target_category && rule.target_category.length > 0 && (
-              <div className="auto-categorization-rule-card__action">
-                <span className="auto-categorization-rule-card__action-label">Set category:</span>
-                <span className="auto-categorization-rule-card__action-value">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-muted-foreground">Set category:</span>
+                <span className="text-foreground font-medium flex flex-wrap gap-1">
                   {rule.target_category.join(' > ')}
                 </span>
               </div>
             )}
             {rule.target_tags && rule.target_tags.length > 0 && (
-              <div className="auto-categorization-rule-card__action">
-                <span className="auto-categorization-rule-card__action-label">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-muted-foreground">
                   {rule.tag_behavior === 'replace' ? 'Replace tags:' : 'Add tags:'}
                 </span>
-                <span className="auto-categorization-rule-card__action-value">
+                <span className="text-foreground font-medium flex flex-wrap gap-1">
                   {rule.target_tags.map((tag) => (
-                    <span key={tag} className="auto-categorization-rule-card__tag">{tag}</span>
+                    <span key={tag} className="bg-info/10 text-info px-1.5 py-0.5 rounded text-xs font-medium">{tag}</span>
                   ))}
                 </span>
               </div>
@@ -134,29 +133,29 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
         </div>
 
         {/* Stats */}
-        <div className="auto-categorization-rule-card__stats">
-          <span className="auto-categorization-rule-card__stat">
+        <div className="flex flex-wrap gap-4 pt-3 border-t border-border">
+          <span className="text-xs text-muted-foreground">
             Matched: {rule.match_count}
           </span>
-          <span className="auto-categorization-rule-card__stat">
+          <span className="text-xs text-muted-foreground">
             Overridden: {rule.override_count}
           </span>
           {rule.last_matched_at && (
-            <span className="auto-categorization-rule-card__stat">
+            <span className="text-xs text-muted-foreground">
               Last match: {new Date(rule.last_matched_at).toLocaleDateString()}
             </span>
           )}
         </div>
       </div>
 
-      <div className="auto-categorization-rule-card__footer">
-        <div className="auto-categorization-rule-card__priority">
+      <div className="flex items-center justify-between pt-4 border-t border-border">
+        <div className="text-xs text-muted-foreground">
           Priority: {rule.priority}
         </div>
-        <div className="auto-categorization-rule-card__buttons">
+        <div className="flex gap-2">
           <button
             type="button"
-            className="auto-categorization-rule-card__button auto-categorization-rule-card__button--toggle"
+            className="px-3 py-1.5 text-[0.8125rem] font-medium bg-background border border-border text-foreground rounded cursor-pointer hover:bg-muted transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
             onClick={handleToggle}
             disabled={toggling}
           >
@@ -164,14 +163,14 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
           </button>
           <button
             type="button"
-            className="auto-categorization-rule-card__button auto-categorization-rule-card__button--edit"
+            className="px-3 py-1.5 text-[0.8125rem] font-medium bg-primary text-primary-foreground rounded cursor-pointer hover:bg-primary/90 transition-colors"
             onClick={onEdit}
           >
             Edit
           </button>
           <button
             type="button"
-            className="auto-categorization-rule-card__button auto-categorization-rule-card__button--delete"
+            className="px-3 py-1.5 text-[0.8125rem] font-medium text-destructive border border-destructive rounded cursor-pointer hover:bg-destructive hover:text-destructive-foreground transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
             onClick={handleDeleteClick}
             disabled={deleting}
           >
@@ -182,13 +181,13 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
 
       {/* Delete confirmation dialog */}
       {showDeleteConfirm && (
-        <div className="auto-categorization-rule-card__confirm-overlay">
-          <div className="auto-categorization-rule-card__confirm-dialog">
-            <p>Are you sure you want to delete "{rule.name}"?</p>
-            <div className="auto-categorization-rule-card__confirm-buttons">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]">
+          <div className="bg-card p-6 rounded-lg max-w-[400px] w-[90%] shadow-xl">
+            <p className="m-0 mb-4 text-[0.9375rem] text-foreground">Are you sure you want to delete "{rule.name}"?</p>
+            <div className="flex justify-end gap-2">
               <button
                 type="button"
-                className="auto-categorization-rule-card__button auto-categorization-rule-card__button--cancel"
+                className="px-3 py-1.5 text-[0.8125rem] font-medium bg-background border border-border text-foreground rounded cursor-pointer hover:bg-muted transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 onClick={handleDeleteCancel}
                 disabled={deleting}
               >
@@ -196,7 +195,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
               </button>
               <button
                 type="button"
-                className="auto-categorization-rule-card__button auto-categorization-rule-card__button--confirm-delete"
+                className="px-3 py-1.5 text-[0.8125rem] font-medium bg-destructive text-destructive-foreground rounded cursor-pointer hover:bg-destructive/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 onClick={handleDeleteConfirm}
                 disabled={deleting}
               >

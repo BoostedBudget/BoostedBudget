@@ -13,7 +13,6 @@ import {
   type FilterOption,
   type RangeValue,
 } from '@/shared/components/ColumnFilterDropdown'
-import './AccountTable.css'
 
 export type SortColumn = 'institution' | 'name' | 'type' | 'balance'
 export type SortDirection = 'asc' | 'desc'
@@ -188,10 +187,10 @@ export function AccountTable({
         type="button"
         onClick={() => handleSort(column)}
         aria-sort={ariaSort}
-        className="account-table__sort-btn"
+        className="inline-flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 font-[inherit] text-inherit"
       >
         {label}
-        <span className="account-table__sort-icon">
+        <span className="inline-flex h-4 w-4 items-center [&_svg]:h-3.5 [&_svg]:w-3.5">
           {isActive && sortDirection === 'asc' && (
             <ChevronUp aria-hidden="true" />
           )}
@@ -213,7 +212,7 @@ export function AccountTable({
   // Only show empty state if no data AND no active filters
   if (accounts.length === 0 && !hasActiveFilters) {
     return (
-      <div className={`account-table__empty ${className}`.trim()}>
+      <div className={`text-center rounded-lg border border-dashed border-border bg-card px-6 py-12 text-muted-foreground ${className}`.trim()}>
         <p>No accounts found. Connect a bank account to get started.</p>
       </div>
     )
@@ -221,12 +220,12 @@ export function AccountTable({
 
   return (
     <table
-      className={`account-table ${loading ? 'account-table--loading' : ''} ${className}`.trim()}
+      className={`w-full border-collapse overflow-visible rounded-lg border border-border bg-card ${loading ? 'account-table--loading pointer-events-none opacity-60' : ''} ${className}`.trim()}
     >
       <thead>
-        <tr className="account-table__header-row">
-          <th className="account-table__th">
-            <div className="account-table__header-content">
+        <tr className="bg-muted/50">
+          <th className="border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">
+            <div className="flex items-center gap-1">
               {renderSortableHeader('Institution', 'institution')}
               {institutionOptions && onInstitutionFilterChange && (
                 <ColumnFilterDropdown
@@ -241,11 +240,11 @@ export function AccountTable({
               )}
             </div>
           </th>
-          <th className="account-table__th">
+          <th className="border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">
             {renderSortableHeader('Account', 'name')}
           </th>
-          <th className="account-table__th">
-            <div className="account-table__header-content">
+          <th className="border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">
+            <div className="flex items-center gap-1">
               {renderSortableHeader('Type', 'type')}
               {typeOptions && onTypeFilterChange && (
                 <ColumnFilterDropdown
@@ -259,9 +258,9 @@ export function AccountTable({
               )}
             </div>
           </th>
-          <th className="account-table__th">Acct #</th>
-          <th className="account-table__th account-table__th--balance">
-            <div className="account-table__header-content">
+          <th className="border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">Acct #</th>
+          <th className="border-b border-border px-4 py-3 text-right text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">
+            <div className="flex items-center gap-1">
               {renderSortableHeader('Balance', 'balance')}
               {onBalanceRangeChange && (
                 <ColumnFilterDropdown
@@ -274,7 +273,7 @@ export function AccountTable({
             </div>
           </th>
           {hasActions && (
-            <th className="account-table__th account-table__th--actions">
+            <th className="w-24 border-b border-border px-4 py-3 text-right text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground max-md:w-16">
               Actions
             </th>
           )}
@@ -282,8 +281,11 @@ export function AccountTable({
       </thead>
       <tbody>
         {accounts.length === 0 ? (
-          <tr className="account-table__empty-row">
-            <td colSpan={hasActions ? 6 : 5}>
+          <tr>
+            <td
+              colSpan={hasActions ? 6 : 5}
+              className="px-4 py-12 text-center italic text-muted-foreground"
+            >
               No accounts match your filters. Try adjusting your criteria.
             </td>
           </tr>
@@ -299,23 +301,30 @@ export function AccountTable({
           return (
             <tr
               key={account.id}
-              className={`account-table__row ${onRowClick ? 'account-table__row--clickable' : ''} ${account.is_hidden ? 'account-table__row--hidden' : ''} ${isDisconnected ? 'account-table__row--disconnected' : ''}`}
+              className={[
+                'transition-colors duration-150',
+                onRowClick ? 'account-table__row--clickable cursor-pointer' : '',
+                account.is_hidden ? 'opacity-60' : '',
+                isDisconnected
+                  ? 'bg-amber-50/30 hover:bg-amber-50/50 dark:bg-[rgba(69,26,3,0.3)] dark:hover:bg-[rgba(69,26,3,0.5)]'
+                  : 'hover:bg-muted/50',
+              ].filter(Boolean).join(' ')}
               onClick={onRowClick ? () => onRowClick(account) : undefined}
             >
-              <td className="account-table__td account-table__td--institution">
-                <span className="account-table__institution">
+              <td className="min-w-[120px] border-b border-border px-4 py-3.5 text-sm align-middle text-foreground max-md:min-w-[100px] max-md:px-3 max-md:py-2.5">
+                <span className="font-medium text-foreground">
                   {account.institution_name || 'Unknown'}
                 </span>
               </td>
-              <td className="account-table__td account-table__td--name">
-                <div className="account-table__name-cell">
+              <td className="min-w-[180px] border-b border-border px-4 py-3.5 text-sm align-middle text-foreground max-md:min-w-[150px] max-md:px-3 max-md:py-2.5">
+                <div className="flex items-center gap-2">
                   {account.custom_emoji && (
-                    <span className="account-table__emoji">
+                    <span className="text-lg">
                       {account.custom_emoji}
                     </span>
                   )}
                   <span
-                    className="account-table__name"
+                    className="font-medium text-foreground"
                     style={
                       account.custom_color
                         ? { color: account.custom_color }
@@ -326,29 +335,32 @@ export function AccountTable({
                   </span>
                   {/* Issue #679, #680: Disconnected badge */}
                   {isDisconnected && (
-                    <span className="account-table__disconnected-badge" title="Account disconnected - resubscribe to reconnect">
-                      <Unplug className="account-table__disconnected-icon" aria-hidden="true" />
+                    <span
+                      className="ml-2 inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[0.625rem] font-medium text-amber-700 dark:bg-[#451a03] dark:text-yellow-300"
+                      title="Account disconnected - resubscribe to reconnect"
+                    >
+                      <Unplug className="h-2.5 w-2.5" aria-hidden="true" />
                       Disconnected
                     </span>
                   )}
                   {account.is_hidden && (
-                    <span className="account-table__hidden-badge">
-                      <EyeOff className="account-table__hidden-icon" aria-hidden="true" />
+                    <span className="ml-2 inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[0.625rem] font-medium text-muted-foreground">
+                      <EyeOff className="h-2.5 w-2.5" aria-hidden="true" />
                       Hidden
                     </span>
                   )}
                 </div>
               </td>
-              <td className="account-table__td">{typeLabel}</td>
-              <td className="account-table__td account-table__td--mask" data-ph-mask>
+              <td className="border-b border-border px-4 py-3.5 text-sm align-middle text-foreground max-md:px-3 max-md:py-2.5">{typeLabel}</td>
+              <td className="border-b border-border px-4 py-3.5 text-sm align-middle tabular-nums text-muted-foreground max-md:px-3 max-md:py-2.5" data-ph-mask>
                 {account.mask ? `••••${account.mask}` : '—'}
               </td>
-              <td className="account-table__td account-table__td--balance">
+              <td className="border-b border-border px-4 py-3.5 text-right text-sm align-middle max-md:px-3 max-md:py-2.5">
                 <span
-                  className={`account-table__balance ${
+                  className={`font-semibold tabular-nums ${
                     isNegativeBalance
-                      ? 'account-table__balance--negative'
-                      : 'account-table__balance--positive'
+                      ? 'account-table__balance--negative text-red-600 dark:text-red-400'
+                      : 'account-table__balance--positive text-foreground'
                   }`}
                   data-ph-mask
                 >
@@ -357,16 +369,16 @@ export function AccountTable({
               </td>
               {hasActions && (
                 <td
-                  className="account-table__td account-table__td--actions"
+                  className="border-b border-border px-4 py-3.5 text-right align-middle max-md:px-3 max-md:py-2.5"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <div className="account-table__actions">
+                  <div className="flex items-center justify-end gap-2">
                     {onEdit && (
                       <button
                         type="button"
                         onClick={() => onEdit(account)}
                         disabled={loading}
-                        className="account-table__action-btn"
+                        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
                         aria-label="Edit account"
                         title="Edit account"
                       >
@@ -378,7 +390,7 @@ export function AccountTable({
                         type="button"
                         onClick={() => onDelete(account)}
                         disabled={loading}
-                        className="account-table__action-btn account-table__action-btn--danger"
+                        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors duration-150 hover:bg-red-100 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4 dark:hover:bg-red-900 dark:hover:text-red-400"
                         aria-label="Delete account"
                         title="Delete account"
                       >

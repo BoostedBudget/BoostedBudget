@@ -166,7 +166,7 @@ describe('CategoryEditor', () => {
 
       await waitFor(() => {
         const selectedOption = screen.getByRole('option', { name: 'Food & Dining' })
-        expect(selectedOption).toHaveClass('selected')
+        expect(selectedOption).toHaveClass('bg-primary/5')
       })
     })
   })

@@ -8,7 +8,6 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Filter, Check, X } from 'lucide-react'
-import './ColumnFilterDropdown.css'
 
 export interface FilterOption {
   value: string
@@ -160,7 +159,7 @@ export function ColumnFilterDropdown({
   return (
     <div
       ref={containerRef}
-      className={`column-filter ${className}`.trim()}
+      className={`relative inline-block ${className}`}
     >
       <button
         type="button"
@@ -169,24 +168,31 @@ export function ColumnFilterDropdown({
         aria-label={ariaLabel}
         aria-expanded={isOpen}
         aria-haspopup="listbox"
-        className={`column-filter__trigger ${isActive ? 'column-filter__trigger--active' : ''}`}
+        className={`flex items-center justify-center w-6 h-6 p-1 border-none rounded cursor-pointer bg-transparent transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
+          isActive
+            ? 'column-filter__trigger--active text-primary bg-primary/10 hover:bg-primary/20 hover:text-primary'
+            : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+        }`}
       >
-        <Filter className="column-filter__icon" aria-hidden="true" />
+        <Filter className="w-4 h-4" aria-hidden="true" />
       </button>
 
       {isOpen && (
-        <div className="column-filter__dropdown" role="listbox">
+        <div
+          className="absolute top-full left-0 z-50 min-w-[180px] max-w-[280px] mt-1 py-2 bg-card border border-border rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.15)]"
+          role="listbox"
+        >
           {type === 'select' ? (
             <>
               {/* Search input for searchable multi-select */}
               {searchable && multiSelect && (
-                <div className="column-filter__search">
+                <div className="px-2 pb-2 border-b border-border">
                   <input
                     type="text"
                     placeholder="Search..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="column-filter__search-input"
+                    className="w-full px-2.5 py-1.5 text-sm border border-border rounded bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
                     autoFocus
                   />
                 </div>
@@ -194,18 +200,18 @@ export function ColumnFilterDropdown({
 
               {/* Multi-select actions */}
               {multiSelect && (
-                <div className="column-filter__actions">
+                <div className="flex gap-2 px-2 py-2 border-b border-border">
                   <button
                     type="button"
                     onClick={handleSelectAll}
-                    className="column-filter__action-btn"
+                    className="flex-1 px-2 py-1 text-xs font-medium border-none rounded bg-muted text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-border"
                   >
                     Select All
                   </button>
                   <button
                     type="button"
                     onClick={handleClearAll}
-                    className="column-filter__action-btn"
+                    className="flex-1 px-2 py-1 text-xs font-medium border-none rounded bg-muted text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-border"
                   >
                     Clear
                   </button>
@@ -213,13 +219,17 @@ export function ColumnFilterDropdown({
               )}
 
               {/* Options list */}
-              <div className="column-filter__options">
+              <div className="max-h-60 overflow-y-auto">
                 {/* "All" option for single select */}
                 {!multiSelect && (
                   <button
                     type="button"
                     onClick={handleClearAll}
-                    className={`column-filter__option ${value.length === 0 ? 'column-filter__option--selected' : ''}`}
+                    className={`flex items-center w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
+                      value.length === 0
+                        ? 'bg-primary/10 text-primary'
+                        : 'bg-transparent text-foreground hover:bg-muted'
+                    }`}
                   >
                     All
                   </button>
@@ -232,20 +242,24 @@ export function ColumnFilterDropdown({
                     return (
                       <label
                         key={option.value}
-                        className={`column-filter__option column-filter__option--checkbox ${isSelected ? 'column-filter__option--selected' : ''}`}
+                        className={`flex items-center gap-2 w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
+                          isSelected
+                            ? 'bg-primary/10 text-primary'
+                            : 'bg-transparent text-foreground hover:bg-muted'
+                        }`}
                       >
                         <input
                           type="checkbox"
                           checked={isSelected}
                           onChange={() => handleSelectOption(option.value)}
-                          className="column-filter__checkbox"
+                          className="w-4 h-4 m-0 cursor-pointer"
                         />
-                        <span className="column-filter__option-label">
+                        <span className="flex-1">
                           {option.label}
                         </span>
                         {isSelected && (
                           <Check
-                            className="column-filter__check-icon"
+                            className="w-3.5 h-3.5 ml-auto text-primary"
                             aria-hidden="true"
                           />
                         )}
@@ -258,12 +272,16 @@ export function ColumnFilterDropdown({
                       key={option.value}
                       type="button"
                       onClick={() => handleSelectOption(option.value)}
-                      className={`column-filter__option ${isSelected ? 'column-filter__option--selected' : ''}`}
+                      className={`flex items-center w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
+                        isSelected
+                          ? 'column-filter__option--selected bg-primary/10 text-primary hover:bg-primary/20'
+                          : 'bg-transparent text-foreground hover:bg-muted'
+                      }`}
                     >
                       {option.label}
                       {isSelected && (
                         <Check
-                          className="column-filter__check-icon"
+                          className="w-3.5 h-3.5 ml-auto text-primary"
                           aria-hidden="true"
                         />
                       )}
@@ -272,7 +290,7 @@ export function ColumnFilterDropdown({
                 })}
 
                 {filteredOptions.length === 0 && (
-                  <div className="column-filter__no-results">
+                  <div className="px-4 py-4 text-sm text-muted-foreground text-center">
                     No matching options
                   </div>
                 )}
@@ -280,10 +298,10 @@ export function ColumnFilterDropdown({
             </>
           ) : (
             /* Range filter mode */
-            <div className="column-filter__range">
-              <div className="column-filter__range-inputs">
-                <div className="column-filter__range-field">
-                  <label htmlFor="filter-min" className="column-filter__range-label">
+            <div className="p-3">
+              <div className="flex items-end gap-2 mb-3">
+                <div className="flex-1">
+                  <label htmlFor="filter-min" className="block mb-1 text-xs font-medium text-muted-foreground">
                     Min
                   </label>
                   <input
@@ -292,12 +310,12 @@ export function ColumnFilterDropdown({
                     value={localMin}
                     onChange={(e) => setLocalMin(e.target.value)}
                     placeholder="0"
-                    className="column-filter__range-input"
+                    className="w-full px-2 py-1.5 text-sm border border-border rounded bg-card text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
                   />
                 </div>
-                <div className="column-filter__range-separator">-</div>
-                <div className="column-filter__range-field">
-                  <label htmlFor="filter-max" className="column-filter__range-label">
+                <div className="pb-2 text-muted-foreground">-</div>
+                <div className="flex-1">
+                  <label htmlFor="filter-max" className="block mb-1 text-xs font-medium text-muted-foreground">
                     Max
                   </label>
                   <input
@@ -306,27 +324,27 @@ export function ColumnFilterDropdown({
                     value={localMax}
                     onChange={(e) => setLocalMax(e.target.value)}
                     placeholder="999"
-                    className="column-filter__range-input"
+                    className="w-full px-2 py-1.5 text-sm border border-border rounded bg-card text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
                   />
                 </div>
               </div>
-              <div className="column-filter__range-actions">
+              <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={handleClearRange}
-                  className="column-filter__action-btn column-filter__action-btn--secondary"
+                  className="flex-1 px-2 py-1 text-xs font-medium border border-border rounded bg-transparent text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-muted"
                   aria-label="Clear"
                 >
-                  <X className="column-filter__btn-icon" aria-hidden="true" />
+                  <X className="w-3 h-3 mr-1 align-middle inline" aria-hidden="true" />
                   Clear
                 </button>
                 <button
                   type="button"
                   onClick={handleApplyRange}
-                  className="column-filter__action-btn column-filter__action-btn--primary"
+                  className="flex-1 px-2 py-1 text-xs font-medium border-none rounded bg-primary text-white cursor-pointer transition-colors duration-150 hover:bg-primary/90"
                   aria-label="Apply"
                 >
-                  <Check className="column-filter__btn-icon" aria-hidden="true" />
+                  <Check className="w-3 h-3 mr-1 align-middle inline" aria-hidden="true" />
                   Apply
                 </button>
               </div>

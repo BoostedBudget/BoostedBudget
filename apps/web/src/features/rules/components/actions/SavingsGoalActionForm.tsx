@@ -10,7 +10,6 @@ import { useCallback, useMemo } from 'react'
 import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import { useGetSavingsGoals } from '@boostedbudget/api-client/endpoints/savings-goals/savings-goals'
 import type { SavingsGoalAction } from '../../types'
-import './SavingsGoalActionForm.css'
 
 export interface SavingsGoalActionFormProps {
   /** Current action configuration */
@@ -148,10 +147,10 @@ export function SavingsGoalActionForm({
   const isLoading = loadingAccounts || loadingGoals
 
   return (
-    <div className={`savings-goal-form ${className}`.trim()}>
+    <div className={`flex flex-col gap-5 ${className}`.trim()}>
       {/* Goal Selection */}
-      <div className="savings-goal-form__field">
-        <label htmlFor="savings-goal" className="savings-goal-form__label">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="savings-goal" className="text-sm font-medium text-foreground">
           Savings Goal
         </label>
         <select
@@ -159,7 +158,7 @@ export function SavingsGoalActionForm({
           value={action.savings_goal_id}
           onChange={handleGoalChange}
           disabled={disabled || isLoading}
-          className="savings-goal-form__select"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <option value="">Select a savings goal...</option>
           {goalsList.map((goal) => (
@@ -169,7 +168,7 @@ export function SavingsGoalActionForm({
           ))}
         </select>
         {selectedGoal && (
-          <p className="savings-goal-form__progress">
+          <p className="mt-1 text-xs font-medium text-green-600 dark:text-green-400">
             {formatCurrency(selectedGoal.current_amount)} of{' '}
             {formatCurrency(selectedGoal.target_amount)} saved (
             {Math.round((selectedGoal.current_amount / selectedGoal.target_amount) * 100)}%)
@@ -178,8 +177,8 @@ export function SavingsGoalActionForm({
       </div>
 
       {/* From Account */}
-      <div className="savings-goal-form__field">
-        <label htmlFor="from-account" className="savings-goal-form__label">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="from-account" className="text-sm font-medium text-foreground">
           From Account
         </label>
         <select
@@ -187,7 +186,7 @@ export function SavingsGoalActionForm({
           value={action.from_account_id}
           onChange={handleFromAccountChange}
           disabled={disabled || isLoading}
-          className="savings-goal-form__select"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <option value="">Select an account...</option>
           {accountsList.map((account: { id: string; name: string }) => (
@@ -199,8 +198,8 @@ export function SavingsGoalActionForm({
       </div>
 
       {/* Amount Type */}
-      <div className="savings-goal-form__field">
-        <label htmlFor="amount-type" className="savings-goal-form__label">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="amount-type" className="text-sm font-medium text-foreground">
           Amount Type
         </label>
         <select
@@ -208,7 +207,7 @@ export function SavingsGoalActionForm({
           value={action.amount_type}
           onChange={handleAmountTypeChange}
           disabled={disabled}
-          className="savings-goal-form__select"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {AMOUNT_TYPES.map((type) => (
             <option key={type.value} value={type.value}>
@@ -217,18 +216,18 @@ export function SavingsGoalActionForm({
           ))}
         </select>
         {currentDescription && (
-          <p className="savings-goal-form__description">{currentDescription}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{currentDescription}</p>
         )}
       </div>
 
       {/* Amount Input (for fixed type) */}
       {action.amount_type === 'fixed' && (
-        <div className="savings-goal-form__field">
-          <label htmlFor="amount" className="savings-goal-form__label">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="amount" className="text-sm font-medium text-foreground">
             Amount
           </label>
-          <div className="savings-goal-form__input-group">
-            <span className="savings-goal-form__prefix">$</span>
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+            <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
             <input
               id="amount"
               type="number"
@@ -236,7 +235,7 @@ export function SavingsGoalActionForm({
               onChange={handleAmountChange}
               disabled={disabled}
               min={0}
-              className="savings-goal-form__input"
+              className="min-w-0 flex-1 border-none bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
             />
           </div>
         </div>
@@ -244,11 +243,11 @@ export function SavingsGoalActionForm({
 
       {/* Percentage Input (for percentage type) */}
       {action.amount_type === 'percentage' && (
-        <div className="savings-goal-form__field">
-          <label htmlFor="percentage" className="savings-goal-form__label">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="percentage" className="text-sm font-medium text-foreground">
             Percentage
           </label>
-          <div className="savings-goal-form__input-group">
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
             <input
               id="percentage"
               type="number"
@@ -257,21 +256,21 @@ export function SavingsGoalActionForm({
               disabled={disabled}
               min={0}
               max={100}
-              className="savings-goal-form__input"
+              className="min-w-0 flex-1 border-none bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
             />
-            <span className="savings-goal-form__suffix">%</span>
+            <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">%</span>
           </div>
         </div>
       )}
 
       {/* Threshold Input (for remaining type) */}
       {action.amount_type === 'remaining' && (
-        <div className="savings-goal-form__field">
-          <label htmlFor="minimum-balance" className="savings-goal-form__label">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="minimum-balance" className="text-sm font-medium text-foreground">
             Minimum Balance
           </label>
-          <div className="savings-goal-form__input-group">
-            <span className="savings-goal-form__prefix">$</span>
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+            <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
             <input
               id="minimum-balance"
               type="number"
@@ -279,10 +278,10 @@ export function SavingsGoalActionForm({
               onChange={handleThresholdChange}
               disabled={disabled}
               min={0}
-              className="savings-goal-form__input"
+              className="min-w-0 flex-1 border-none bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
             />
           </div>
-          <p className="savings-goal-form__description">
+          <p className="mt-1 text-xs text-muted-foreground">
             Transfer all funds above this minimum balance to the savings goal
           </p>
         </div>

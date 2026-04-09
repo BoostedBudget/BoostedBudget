@@ -8,8 +8,8 @@
 
 import { useState, useCallback, useMemo } from 'react'
 import { Clock, ChevronDown, ChevronUp } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { CRON_PRESETS, COMMON_TIMEZONES, type CronPreset } from '../constants'
-import './CronBuilder.css'
 
 export interface CronBuilderProps {
   /** Current cron expression */
@@ -177,12 +177,12 @@ export function CronBuilder({
   }, [showCustom, cron])
 
   return (
-    <div className={`cron-builder ${className}`.trim()}>
+    <div className={cn('flex flex-col gap-4', className)}>
       {/* Presets */}
       <div
         role="group"
         aria-label="Schedule presets"
-        className="cron-builder__presets"
+        className="flex flex-wrap gap-2"
       >
         {CRON_PRESETS.map((preset) => (
           <button
@@ -191,9 +191,12 @@ export function CronBuilder({
             onClick={() => handlePresetClick(preset)}
             aria-pressed={activePreset?.cron === preset.cron}
             disabled={disabled}
-            className={`cron-builder__preset ${
-              activePreset?.cron === preset.cron ? 'cron-builder__preset--active' : ''
-            }`}
+            className={cn(
+              'inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-all focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50',
+              activePreset?.cron === preset.cron
+                ? 'border-primary bg-blue-50 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
+                : 'border-border bg-card text-foreground hover:border-primary hover:text-primary dark:hover:border-blue-400 dark:hover:text-blue-400'
+            )}
             title={preset.description}
           >
             {preset.label}
@@ -203,17 +206,17 @@ export function CronBuilder({
           type="button"
           onClick={toggleCustom}
           disabled={disabled}
-          className="cron-builder__preset cron-builder__preset--custom"
+          className="ml-auto inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-dashed border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-all hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
           aria-expanded={showCustom}
         >
           {showCustom ? (
             <>
-              <ChevronUp className="cron-builder__icon" aria-hidden="true" />
+              <ChevronUp className="h-4 w-4 shrink-0" aria-hidden="true" />
               <span>Hide custom</span>
             </>
           ) : (
             <>
-              <ChevronDown className="cron-builder__icon" aria-hidden="true" />
+              <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" />
               <span>Custom</span>
             </>
           )}
@@ -222,8 +225,8 @@ export function CronBuilder({
 
       {/* Custom cron input */}
       {showCustom && (
-        <div className="cron-builder__custom">
-          <label htmlFor="cron-expression" className="cron-builder__label">
+        <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-muted/30 p-4 dark:bg-muted/20">
+          <label htmlFor="cron-expression" className="text-sm font-medium text-foreground">
             Cron expression
           </label>
           <input
@@ -234,16 +237,17 @@ export function CronBuilder({
             onBlur={handleCustomBlur}
             disabled={disabled}
             placeholder="* * * * *"
-            className={`cron-builder__input ${
-              !isValid ? 'cron-builder__input--error' : ''
-            }`}
+            className={cn(
+              'rounded-md border bg-background px-3 py-2 font-mono text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+              !isValid ? 'border-destructive focus:border-destructive focus:ring-destructive/30' : 'border-input'
+            )}
             aria-describedby="cron-format cron-error"
           />
-          <p id="cron-format" className="cron-builder__hint">
+          <p id="cron-format" className="text-xs text-muted-foreground">
             Format: minute hour day-of-month month day-of-week
           </p>
           {!isValid && (
-            <p id="cron-error" className="cron-builder__error" role="alert">
+            <p id="cron-error" className="text-xs text-destructive" role="alert">
               Invalid cron expression
             </p>
           )}
@@ -251,14 +255,14 @@ export function CronBuilder({
       )}
 
       {/* Description */}
-      <div className="cron-builder__description">
-        <Clock className="cron-builder__icon" aria-hidden="true" />
+      <div className="flex items-center gap-2 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+        <Clock className="h-4 w-4 shrink-0" aria-hidden="true" />
         <span>{description}</span>
       </div>
 
       {/* Timezone selector */}
-      <div className="cron-builder__timezone">
-        <label htmlFor="cron-timezone" className="cron-builder__label">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="cron-timezone" className="text-sm font-medium text-foreground">
           Timezone
         </label>
         <select
@@ -266,7 +270,7 @@ export function CronBuilder({
           value={timezone}
           onChange={handleTimezoneChange}
           disabled={disabled}
-          className="cron-builder__select"
+          className="cursor-pointer rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-card"
         >
           {COMMON_TIMEZONES.map((tz) => (
             <option key={tz.value} value={tz.value}>

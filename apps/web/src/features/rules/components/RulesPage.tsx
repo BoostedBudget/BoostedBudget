@@ -28,7 +28,6 @@ import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { RuleCard } from './RuleCard'
 import { RuleTable } from './RuleTable'
-import './RulesPage.css'
 
 interface DeleteConfirmState {
   isOpen: boolean
@@ -169,9 +168,9 @@ export function RulesPage() {
   // Loading state
   if (isLoading) {
     return (
-      <div className="rules-page">
-        <div className="rules-page__loading">
-          <Loader2 className="rules-page__spinner" />
+      <div className="mx-auto max-w-[1200px] p-6">
+        <div className="flex flex-col items-center justify-center px-6 py-16 text-center text-muted-foreground">
+          <Loader2 className="mb-4 h-8 w-8 animate-spin" />
           <p>Loading automation rules...</p>
         </div>
       </div>
@@ -181,15 +180,15 @@ export function RulesPage() {
   // Error state
   if (error) {
     return (
-      <div className="rules-page">
-        <div className="rules-page__error">
-          <AlertCircle className="rules-page__error-icon" />
-          <h2>Error loading rules</h2>
-          <p>There was a problem loading your automation rules.</p>
+      <div className="mx-auto max-w-[1200px] p-6">
+        <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
+          <AlertCircle className="mb-4 h-12 w-12 text-destructive" />
+          <h2 className="mb-2 text-xl font-semibold text-foreground">Error loading rules</h2>
+          <p className="mb-6 text-muted-foreground">There was a problem loading your automation rules.</p>
           <button
             type="button"
             onClick={() => refetch()}
-            className="rules-page__retry-btn"
+            className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900 dark:text-blue-300 dark:hover:bg-blue-800"
             aria-label="Retry loading rules"
           >
             Retry
@@ -202,9 +201,9 @@ export function RulesPage() {
   // Empty state
   if (rules.length === 0) {
     return (
-      <div className="rules-page">
-        <header className="rules-page__header">
-          <h1 className="rules-page__title">Automation Rules</h1>
+      <div className="mx-auto max-w-[1200px] p-6">
+        <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <h1 className="text-2xl font-semibold text-foreground">Automation Rules</h1>
         </header>
         <EmptyState
           icon={<Zap />}
@@ -224,16 +223,16 @@ export function RulesPage() {
   }
 
   return (
-    <div className="rules-page">
-      <header className="rules-page__header">
-        <div className="rules-page__title-row">
-          <h1 className="rules-page__title">Automation Rules</h1>
-          <span className="rules-page__tier-display">
+    <div className="mx-auto max-w-[1200px] p-6">
+      <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-4">
+          <h1 className="text-2xl font-semibold text-foreground">Automation Rules</h1>
+          <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300">
             {rules.length} {rules.length === 1 ? 'rule' : 'rules'}
           </span>
         </div>
 
-        <div className="rules-page__actions">
+        <div className="flex items-center gap-4">
           <ListViewToggle
             view={view}
             onChange={handleViewChange}
@@ -243,7 +242,7 @@ export function RulesPage() {
             <button
               type="button"
               onClick={handleCreateRule}
-              className="rules-page__create-btn"
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:h-4 [&>svg]:w-4"
               aria-label="Create new rule"
             >
               <Plus aria-hidden="true" />
@@ -253,9 +252,9 @@ export function RulesPage() {
         </div>
       </header>
 
-      <div className="rules-page__content">
+      <div className="min-h-[200px]">
         {view === 'cards' ? (
-          <div className="rules-page__cards-grid">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {rules.map((rule) => (
               <RuleCard
                 key={rule.id}
@@ -283,36 +282,36 @@ export function RulesPage() {
       {/* Delete Confirmation Dialog */}
       {deleteConfirm.isOpen && (
         <div
-          className="rules-page__dialog-overlay"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
           onClick={handleDeleteCancel}
           role="presentation"
         >
           <div
-            className="rules-page__dialog"
+            className="w-[90%] max-w-[400px] rounded-xl bg-card p-6 shadow-xl"
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="delete-dialog-title"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 id="delete-dialog-title" className="rules-page__dialog-title">
+            <h2 id="delete-dialog-title" className="mb-3 text-lg font-semibold text-foreground">
               Delete Rule
             </h2>
-            <p className="rules-page__dialog-message">
+            <p className="mb-6 text-sm leading-relaxed text-muted-foreground">
               Are you sure you want to delete "{deleteConfirm.rule?.name}"? This
               action cannot be undone.
             </p>
-            <div className="rules-page__dialog-actions">
+            <div className="flex justify-end gap-3">
               <button
                 type="button"
                 onClick={handleDeleteCancel}
-                className="rules-page__dialog-btn rules-page__dialog-btn--cancel"
+                className="rounded-md bg-muted px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/80"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={handleDeleteConfirm}
-                className="rules-page__dialog-btn rules-page__dialog-btn--confirm"
+                className="rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition-colors hover:bg-destructive/90"
                 aria-label="Confirm delete"
               >
                 Confirm

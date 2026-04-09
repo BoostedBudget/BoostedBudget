@@ -11,7 +11,6 @@ import {
   useUpdateTransactionTags,
   useUpdateTransactionCategory,
 } from '@boostedbudget/api-client/endpoints/transactions/transactions'
-import './TransactionEditor.css'
 
 interface TransactionEditorProps {
   transaction: Transaction
@@ -122,18 +121,21 @@ export function TransactionEditor({
   const displayName = transaction.merchant_name || transaction.name
 
   return (
-    <div className="transaction-editor-overlay" onClick={onClose}>
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1000]"
+      onClick={onClose}
+    >
       <div
-        className="transaction-editor-modal"
+        className="bg-card rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-labelledby="transaction-editor-title"
       >
-        <div className="transaction-editor__header">
-          <h2 id="transaction-editor-title">Edit Transaction</h2>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <h2 id="transaction-editor-title" className="m-0 text-lg font-semibold text-foreground">Edit Transaction</h2>
           <button
             type="button"
-            className="transaction-editor__close"
+            className="flex items-center justify-center w-8 h-8 p-0 border-none bg-transparent text-muted-foreground cursor-pointer text-2xl leading-none rounded hover:bg-muted hover:text-foreground transition-colors"
             onClick={onClose}
             aria-label="Close"
           >
@@ -141,9 +143,9 @@ export function TransactionEditor({
           </button>
         </div>
 
-        <div className="transaction-editor__transaction-info">
-          <div className="transaction-editor__name">{displayName}</div>
-          <div className="transaction-editor__amount" data-ph-mask>
+        <div className="flex items-center justify-between px-6 py-4 bg-muted">
+          <div className="text-sm font-medium text-foreground">{displayName}</div>
+          <div className="text-base font-semibold text-foreground" data-ph-mask>
             {new Intl.NumberFormat('en-US', {
               style: 'currency',
               currency: 'USD',
@@ -153,13 +155,13 @@ export function TransactionEditor({
         </div>
 
         {error && (
-          <div className="transaction-editor__error" role="alert">
+          <div className="mx-6 my-0 px-3 py-3 bg-destructive/10 text-destructive rounded-md text-sm" role="alert">
             {error}
           </div>
         )}
 
-        <div className="transaction-editor__section">
-          <label className="transaction-editor__label">Tags</label>
+        <div className="px-6 py-4 border-b border-border/50">
+          <label className="block mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Tags</label>
           <TagEditor
             selectedTags={tags}
             availableTags={availableTags}
@@ -169,8 +171,8 @@ export function TransactionEditor({
           />
         </div>
 
-        <div className="transaction-editor__section">
-          <label className="transaction-editor__label">Category</label>
+        <div className="px-6 py-4 border-b border-border/50">
+          <label className="block mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Category</label>
           <CategoryEditor
             selectedCategory={category}
             availableCategories={availableCategories}
@@ -181,7 +183,7 @@ export function TransactionEditor({
           {transaction.original_category && (
             <button
               type="button"
-              className="transaction-editor__reset-category"
+              className="mt-2 px-2 py-1 border border-input rounded bg-muted text-muted-foreground text-xs cursor-pointer hover:bg-accent hover:border-border transition-all disabled:cursor-not-allowed disabled:opacity-50"
               onClick={() => setCategory(parseCategory(transaction.original_category))}
               disabled={isSaving}
               aria-label={`Reset to original: ${getOriginalCategoryName(transaction.original_category)}`}
@@ -191,10 +193,10 @@ export function TransactionEditor({
           )}
         </div>
 
-        <div className="transaction-editor__actions">
+        <div className="flex justify-end gap-3 px-6 py-4">
           <button
             type="button"
-            className="transaction-editor__cancel"
+            className="px-4 py-2 border border-input rounded-md bg-card text-foreground text-sm font-medium cursor-pointer hover:bg-muted transition-all disabled:cursor-not-allowed disabled:opacity-50"
             onClick={onClose}
             disabled={isSaving}
           >
@@ -203,7 +205,7 @@ export function TransactionEditor({
           <ReadOnlyGuard message="Resubscribe to edit transactions">
             <button
               type="button"
-              className="transaction-editor__save"
+              className="px-4 py-2 border-none rounded-md bg-primary text-primary-foreground text-sm font-medium cursor-pointer hover:opacity-90 transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
               onClick={handleSave}
               disabled={isSaving || !hasChanges}
             >

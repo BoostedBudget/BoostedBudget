@@ -8,13 +8,13 @@
 
 import { useCallback } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import {
   CONDITION_FIELD_OPTIONS,
   CONDITION_OPERATOR_LABELS,
   type ConditionFieldOption,
 } from '../constants'
 import type { RuleCondition, ConditionLogic, ConditionOperator } from '../types'
-import './ConditionBuilder.css'
 
 export interface ConditionBuilderProps {
   /** Current conditions */
@@ -60,6 +60,9 @@ interface ConditionRowProps {
   onRemove: (index: number) => void
   disabled?: boolean
 }
+
+const selectClass = 'rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
+const inputClass = 'rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
 
 function ConditionRow({ condition, index, onChange, onRemove, disabled }: ConditionRowProps) {
   const operators = getOperatorsForField(condition.field)
@@ -114,10 +117,10 @@ function ConditionRow({ condition, index, onChange, onRemove, disabled }: Condit
   )
 
   return (
-    <div className="condition-builder__row">
+    <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-3 rounded-lg border border-border bg-card p-4 max-md:grid-cols-[1fr_1fr] [&_.condition-value]:max-md:col-span-2">
       {/* Field selector */}
-      <div className="condition-builder__field">
-        <label htmlFor={`condition-field-${index}`} className="condition-builder__label">
+      <div className="flex flex-col gap-1">
+        <label htmlFor={`condition-field-${index}`} className="text-xs font-medium text-muted-foreground">
           Field
         </label>
         <select
@@ -125,7 +128,7 @@ function ConditionRow({ condition, index, onChange, onRemove, disabled }: Condit
           value={condition.field}
           onChange={handleFieldChange}
           disabled={disabled}
-          className="condition-builder__select"
+          className={selectClass}
         >
           {Object.entries(groupedFields).map(([category, fields]) => (
             <optgroup key={category} label={category}>
@@ -140,8 +143,8 @@ function ConditionRow({ condition, index, onChange, onRemove, disabled }: Condit
       </div>
 
       {/* Operator selector */}
-      <div className="condition-builder__operator">
-        <label htmlFor={`condition-operator-${index}`} className="condition-builder__label">
+      <div className="flex flex-col gap-1">
+        <label htmlFor={`condition-operator-${index}`} className="text-xs font-medium text-muted-foreground">
           Operator
         </label>
         <select
@@ -149,7 +152,7 @@ function ConditionRow({ condition, index, onChange, onRemove, disabled }: Condit
           value={condition.operator}
           onChange={handleOperatorChange}
           disabled={disabled}
-          className="condition-builder__select"
+          className={selectClass}
         >
           {operators.map((op) => (
             <option key={op} value={op}>
@@ -160,8 +163,8 @@ function ConditionRow({ condition, index, onChange, onRemove, disabled }: Condit
       </div>
 
       {/* Value input */}
-      <div className="condition-builder__value">
-        <label htmlFor={`condition-value-${index}`} className="condition-builder__label">
+      <div className="condition-value flex flex-col gap-1">
+        <label htmlFor={`condition-value-${index}`} className="text-xs font-medium text-muted-foreground">
           Value
         </label>
         <input
@@ -170,7 +173,7 @@ function ConditionRow({ condition, index, onChange, onRemove, disabled }: Condit
           value={condition.value as string | number}
           onChange={handleValueChange}
           disabled={disabled}
-          className="condition-builder__input"
+          className={inputClass}
           placeholder={valueType === 'number' ? '0' : 'Enter value...'}
         />
       </div>
@@ -180,11 +183,11 @@ function ConditionRow({ condition, index, onChange, onRemove, disabled }: Condit
         type="button"
         onClick={() => onRemove(index)}
         disabled={disabled}
-        className="condition-builder__remove"
+        className="flex h-9 w-9 items-center justify-center self-end rounded-md border-none bg-transparent text-muted-foreground transition-all hover:bg-red-50 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-900 dark:hover:text-red-400"
         aria-label="Remove condition"
         title="Remove condition"
       >
-        <Trash2 className="condition-builder__icon" aria-hidden="true" />
+        <Trash2 className="h-4 w-4" aria-hidden="true" />
       </button>
     </div>
   )
@@ -248,20 +251,23 @@ export function ConditionBuilder({
   )
 
   return (
-    <div className={`condition-builder ${className}`.trim()}>
+    <div className={cn('flex flex-col gap-4', className)}>
       {/* Logic toggle (only show when multiple conditions) */}
       {conditions.length > 1 && (
-        <div className="condition-builder__logic">
-          <span className="condition-builder__logic-label">Match</span>
-          <div className="condition-builder__logic-toggle">
+        <div className="flex items-center gap-2 rounded-lg bg-muted px-4 py-3 dark:bg-muted/50">
+          <span className="text-sm text-muted-foreground">Match</span>
+          <div className="flex overflow-hidden rounded-md border border-border">
             <button
               type="button"
               onClick={() => handleLogicChange('AND')}
               aria-pressed={logic === 'AND'}
               disabled={disabled}
-              className={`condition-builder__logic-btn ${
-                logic === 'AND' ? 'condition-builder__logic-btn--active' : ''
-              }`}
+              className={cn(
+                'border-none px-3 py-1.5 text-xs font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-50',
+                logic === 'AND'
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  : 'bg-card text-muted-foreground hover:bg-muted dark:bg-muted/30 dark:hover:bg-muted/50'
+              )}
             >
               AND
             </button>
@@ -270,24 +276,27 @@ export function ConditionBuilder({
               onClick={() => handleLogicChange('OR')}
               aria-pressed={logic === 'OR'}
               disabled={disabled}
-              className={`condition-builder__logic-btn ${
-                logic === 'OR' ? 'condition-builder__logic-btn--active' : ''
-              }`}
+              className={cn(
+                'border-none px-3 py-1.5 text-xs font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-50',
+                logic === 'OR'
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  : 'bg-card text-muted-foreground hover:bg-muted dark:bg-muted/30 dark:hover:bg-muted/50'
+              )}
             >
               OR
             </button>
           </div>
-          <span className="condition-builder__logic-label">conditions</span>
+          <span className="text-sm text-muted-foreground">conditions</span>
         </div>
       )}
 
       {/* Conditions list */}
       {conditions.length === 0 ? (
-        <div className="condition-builder__empty">
-          <p>No conditions added yet. This rule will run unconditionally.</p>
+        <div className="rounded-lg border-2 border-dashed border-border p-6 text-center">
+          <p className="text-sm text-muted-foreground">No conditions added yet. This rule will run unconditionally.</p>
         </div>
       ) : (
-        <div className="condition-builder__list">
+        <div className="flex flex-col gap-3">
           {conditions.map((condition, index) => (
             <ConditionRow
               key={index}
@@ -306,9 +315,9 @@ export function ConditionBuilder({
         type="button"
         onClick={handleAdd}
         disabled={disabled}
-        className="condition-builder__add"
+        className="inline-flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border bg-transparent px-4 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:border-primary hover:bg-blue-50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-blue-900 dark:hover:text-blue-400"
       >
-        <Plus className="condition-builder__icon" aria-hidden="true" />
+        <Plus className="h-4 w-4" aria-hidden="true" />
         Add condition
       </button>
     </div>

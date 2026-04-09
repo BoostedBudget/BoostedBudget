@@ -8,7 +8,6 @@
  * TDD GREEN: Implementation to pass all tests.
  */
 
-import './UnallocatedFundsCard.css';
 
 export interface UnallocatedFundsCardProps {
   /** Amount of unallocated funds (can be negative if over-allocated) */
@@ -81,16 +80,28 @@ export function UnallocatedFundsCard({
   const displayAmount = Math.abs(unallocatedAmount);
   const hasActions = (onCreateSavingsGoal || onAllocateToCategory) && status === 'positive';
 
+  const cardVariant =
+    status === 'neutral'
+      ? 'unallocated-card--neutral border-l-4 border-l-green-600'
+      : status === 'warning'
+        ? 'unallocated-card--warning border-l-4 border-l-red-500 bg-destructive/5'
+        : 'unallocated-card--positive border-l-4 border-l-primary'
+
+  const iconColor =
+    status === 'neutral' ? 'text-green-600' :
+    status === 'warning' ? 'text-destructive' :
+    'text-primary'
+
   return (
     <section
-      className={`unallocated-card unallocated-card--${status}`}
+      className={`bg-card border border-border rounded-xl p-6 ${cardVariant}`}
       role="region"
       aria-labelledby="unallocated-card-title"
     >
-      <div className="unallocated-card__header">
+      <div className="flex items-center gap-2 mb-3">
         <svg
           data-testid="unallocated-icon"
-          className="unallocated-card__icon"
+          className={`w-5 h-5 ${iconColor}`}
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
@@ -115,17 +126,17 @@ export function UnallocatedFundsCard({
             </>
           )}
         </svg>
-        <h3 id="unallocated-card-title" className="unallocated-card__title">
+        <h3 id="unallocated-card-title" className="m-0 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Unallocated Funds
         </h3>
       </div>
 
-      <div className="unallocated-card__content">
+      <div className="flex flex-col gap-2">
         {status === 'neutral' ? (
-          <div className="unallocated-card__status">
+          <div className="flex items-center gap-2 text-foreground">
             <svg
               data-testid="allocation-complete-icon"
-              className="unallocated-card__status-icon"
+              className="w-5 h-5 text-success"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -140,11 +151,11 @@ export function UnallocatedFundsCard({
           </div>
         ) : (
           <>
-            <div className="unallocated-card__amount-row">
-              <span className="unallocated-card__amount">
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className={`text-2xl font-bold ${status === 'warning' ? 'text-destructive' : 'text-foreground'}`}>
                 {formatCurrency(displayAmount, currencyCode)}
               </span>
-              <span className="unallocated-card__percentage">
+              <span className="text-sm font-medium text-muted-foreground">
                 ({percentage}% of income)
                 <span className="sr-only">
                   {status === 'positive'
@@ -153,7 +164,7 @@ export function UnallocatedFundsCard({
                 </span>
               </span>
             </div>
-            <p className="unallocated-card__description">
+            <p className={`m-0 text-sm ${status === 'warning' ? 'text-destructive' : 'text-muted-foreground'}`}>
               {status === 'positive'
                 ? 'Not assigned to any spending category'
                 : 'Over-allocated - categories exceed income'}
@@ -163,11 +174,11 @@ export function UnallocatedFundsCard({
       </div>
 
       {hasActions && (
-        <div className="unallocated-card__actions">
+        <div className="flex gap-3 mt-4 flex-wrap">
           {onCreateSavingsGoal && (
             <button
               type="button"
-              className="unallocated-card__btn unallocated-card__btn--primary"
+              className="px-4 py-2 text-sm font-medium rounded-md cursor-pointer transition-colors duration-200 bg-primary text-primary-foreground border border-primary hover:bg-primary/90"
               onClick={onCreateSavingsGoal}
             >
               Create Savings Goal
@@ -176,7 +187,7 @@ export function UnallocatedFundsCard({
           {onAllocateToCategory && (
             <button
               type="button"
-              className="unallocated-card__btn unallocated-card__btn--secondary"
+              className="px-4 py-2 text-sm font-medium rounded-md cursor-pointer transition-colors duration-200 bg-transparent text-primary border border-primary hover:bg-primary/10"
               onClick={onAllocateToCategory}
             >
               Allocate to Category

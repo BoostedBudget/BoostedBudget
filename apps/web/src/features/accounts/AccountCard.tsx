@@ -2,7 +2,6 @@ import { Pencil, EyeOff, GripVertical, Unplug } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AccountIconDisplay } from './components/AccountIconDisplay'
 import type { Account, AccountIcon } from './types'
-import './AccountCard.css'
 
 interface AccountCardProps {
   account: Account
@@ -91,57 +90,57 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
   return (
     <div
       className={cn(
-        'account-card',
-        isDragging && 'account-card--dragging',
-        is_hidden && 'account-card--hidden',
-        isDisconnected && 'account-card--disconnected'
+        'bg-card rounded-lg shadow-sm p-6 transition-shadow hover:shadow-md',
+        isDragging && 'shadow-xl scale-[1.02] opacity-90 cursor-grabbing',
+        is_hidden && 'opacity-60',
+        isDisconnected && 'opacity-80 border border-dashed border-warning'
       )}
       style={custom_color ? { borderLeftColor: custom_color, borderLeftWidth: '4px', borderLeftStyle: 'solid' } : undefined}
     >
-      <div className="account-card__header">
+      <div className="flex items-center gap-3 mb-4 pb-3 border-b border-border">
         {/* Drag handle */}
         {dragHandleProps && (
-          <div className="account-card__drag-handle" {...dragHandleProps}>
+          <div className="cursor-grab p-1 rounded hover:bg-black/5 transition-colors" {...dragHandleProps}>
             <GripVertical className="h-5 w-5 text-muted-foreground" />
           </div>
         )}
 
-        <div className="account-card__institution">
+        <div className="font-semibold text-sm text-muted-foreground uppercase tracking-wide flex-1">
           {institution_name || 'Unknown Bank'}
         </div>
 
-        <div className="account-card__header-right">
+        <div className="flex items-center gap-3">
           {/* Issue #679, #680: Disconnected badge when subscription expires */}
           {isDisconnected && (
-            <span className="account-card__badge account-card__badge--disconnected" title="Account disconnected - resubscribe to reconnect">
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-warning/20 text-warning" title="Account disconnected - resubscribe to reconnect">
               <Unplug className="h-3 w-3" />
               <span>Disconnected</span>
             </span>
           )}
           {is_hidden && (
-            <span className="account-card__badge account-card__badge--hidden" title="Hidden account">
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-muted text-muted-foreground" title="Hidden account">
               <EyeOff className="h-3 w-3" />
               <span>Hidden</span>
             </span>
           )}
           {mask && (
-            <div className="account-card__mask" data-ph-mask>
+            <div className="font-mono text-sm text-muted-foreground" data-ph-mask>
               ****{mask}
             </div>
           )}
         </div>
       </div>
 
-      <div className="account-card__body">
-        <div className="account-card__name-row">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
           {/* Icon or Emoji */}
           {custom_emoji ? (
-            <span className="account-card__emoji" aria-label="Custom emoji">
+            <span className="text-xl leading-none" aria-label="Custom emoji">
               {custom_emoji}
             </span>
           ) : custom_icon ? (
             <span
-              className="account-card__icon"
+              className="flex items-center justify-center"
               style={custom_color ? { color: custom_color } : undefined}
             >
               <AccountIconDisplay icon={custom_icon as AccountIcon} className="h-5 w-5" />
@@ -149,32 +148,32 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
           ) : null}
 
           <h3
-            className="account-card__name"
+            className="text-xl font-semibold text-foreground m-0"
             style={custom_color ? { color: custom_color } : undefined}
           >
             {displayName}
           </h3>
         </div>
 
-        <p className="account-card__type">{typeLabel}</p>
+        <p className="text-sm text-muted-foreground m-0">{typeLabel}</p>
 
-        <div className="account-card__balances">
-          <div className="balance-item">
-            <span className="balance-label">Current Balance</span>
-            <span className="balance-amount" data-ph-mask>{currentBalanceFormatted}</span>
+        <div className="mt-4 flex flex-col gap-3">
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-muted-foreground">Current Balance</span>
+            <span className="text-lg font-semibold text-primary" data-ph-mask>{currentBalanceFormatted}</span>
           </div>
           {available_balance !== undefined && available_balance !== current_balance && (
-            <div className="balance-item">
-              <span className="balance-label">Available Balance</span>
-              <span className="balance-amount" data-ph-mask>{availableBalanceFormatted}</span>
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-muted-foreground">Available Balance</span>
+              <span className="text-lg font-semibold text-primary" data-ph-mask>{availableBalanceFormatted}</span>
             </div>
           )}
         </div>
 
-        <div className="account-card__actions">
+        <div className="flex gap-3 mt-4 pt-4 border-t border-border">
           {onEdit && (
             <button
-              className="account-card__edit-btn"
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-muted text-foreground border border-border rounded-md text-sm font-medium cursor-pointer hover:bg-accent transition-colors focus:outline-none focus:ring-2 focus:ring-primary/50"
               onClick={handleEdit}
               title="Customize this account"
               aria-label="Edit account"
@@ -185,7 +184,7 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
           )}
           {onDelete && (
             <button
-              className="account-card__delete-btn"
+              className="px-4 py-2 bg-destructive/10 text-destructive border border-destructive/30 rounded-md text-sm font-medium cursor-pointer hover:bg-destructive/20 transition-colors focus:outline-none focus:ring-2 focus:ring-destructive/50"
               onClick={handleDelete}
               title="Delete this account"
             >

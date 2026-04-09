@@ -83,10 +83,12 @@ describe('EmptyState', () => {
   })
 
   describe('Dark mode classes', () => {
-    it('contains dark mode class tokens on root element', () => {
+    it('uses semantic token classes that auto-adapt to dark mode', () => {
       const { container } = render(<EmptyState icon={TestIcon} title="No data" />)
       const el = container.firstChild as HTMLElement
-      expect(el.className).toContain('dark:')
+      // Semantic tokens (bg-muted, border-border, text-muted-foreground) adapt to dark mode
+      // via CSS custom properties — no explicit dark: prefix needed
+      expect(el.className).toMatch(/bg-muted|border-border|text-muted/)
     })
   })
 })

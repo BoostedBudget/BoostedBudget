@@ -55,6 +55,7 @@ export const ANALYTICS_EVENTS = {
   // Profile
   PRIVACY_SETTINGS_CHANGED: 'privacy_settings_changed',
   PROFILE_UPDATED: 'profile_updated',
+  THEME_CHANGED: 'theme_changed',
 
   // Reports
   REPORTS_VIEWED: 'reports_viewed',

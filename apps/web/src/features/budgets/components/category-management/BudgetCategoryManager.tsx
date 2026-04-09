@@ -25,7 +25,6 @@ import type { UserTag } from '@/features/tags/types';
 import { BudgetCategoryCard } from './BudgetCategoryCard';
 import { BudgetCategoryForm } from './BudgetCategoryForm';
 import { AllocationBreakdown } from './AllocationBreakdown';
-import './BudgetCategoryManager.css';
 
 export interface BudgetCategoryManagerProps {
   /** Budget ID for API calls */
@@ -198,17 +197,17 @@ export function BudgetCategoryManager({
   const hasCategories = categories.length > 0;
 
   return (
-    <div className="budget-category-manager">
+    <div className="flex flex-col gap-6">
       {/* Header with add button */}
-      <div className="budget-category-manager__header">
-        <h2 className="budget-category-manager__title">Budget Categories</h2>
+      <div className="flex justify-between items-center gap-4">
+        <h2 className="text-lg font-semibold text-foreground m-0">Budget Categories</h2>
         <button
           type="button"
           onClick={handleOpenAddForm}
           disabled={disabled}
-          className="budget-category-manager__add-btn"
+          className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-primary border-none rounded-lg cursor-pointer transition-colors duration-150 hover:enabled:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <PlusIcon className="budget-category-manager__add-icon" />
+          <PlusIcon className="w-4 h-4" />
           Add Category
         </button>
       </div>
@@ -224,7 +223,7 @@ export function BudgetCategoryManager({
 
       {/* Categories list or empty state */}
       {hasCategories ? (
-        <div className="budget-category-manager__list" role="list">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3" role="list">
           {categories.map((category, index) => (
             <div
               key={category.id}
@@ -234,7 +233,6 @@ export function BudgetCategoryManager({
               ref={(el) => {
                 categoryRefs.current[index] = el;
               }}
-              className="budget-category-manager__list-item"
             >
               <BudgetCategoryCard
                 category={category}
@@ -246,8 +244,8 @@ export function BudgetCategoryManager({
           ))}
         </div>
       ) : (
-        <div className="budget-category-manager__empty">
-          <p className="budget-category-manager__empty-text">
+        <div className="p-8 text-center bg-muted border border-dashed border-border rounded-lg">
+          <p className="text-sm text-muted-foreground m-0">
             No categories yet. Add a category to start tracking your budget allocations.
           </p>
         </div>
@@ -282,7 +280,7 @@ export function BudgetCategoryManager({
               type="button"
               onClick={handleCloseDeleteDialog}
               disabled={isDeleting}
-              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              className="px-4 py-2 text-sm font-medium text-foreground bg-muted rounded-lg hover:bg-muted/80 transition-colors"
             >
               Cancel
             </button>

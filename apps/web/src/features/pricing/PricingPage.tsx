@@ -7,7 +7,6 @@ import type { TierName, SubscriptionTier } from '../subscription/types'
 import { PaddleCheckoutButton } from '../billing/components/PaddleCheckoutButton'
 import { usePaddleEvents } from '../billing/hooks/usePaddleEvents'
 import { useGetCurrentSubscription } from '@boostedbudget/api-client/endpoints/subscription/subscription'
-import './PricingPage.css'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 
@@ -60,9 +59,12 @@ function buildFeatureList(
 
 function TrialBanner({ daysRemaining }: { daysRemaining: number }) {
   return (
-    <div className="trial-banner" role="status">
-      <div className="trial-banner__content">
-        <p className="trial-banner__message">
+    <div
+      className="flex items-center bg-info/10 border border-blue-400 border-l-4 border-l-info rounded-lg px-6 py-4 mb-8"
+      role="status"
+    >
+      <div className="flex-1">
+        <p className="text-[0.9375rem] text-info m-0 leading-relaxed">
           You're on a free trial &mdash; <strong>{daysRemaining} day{daysRemaining === 1 ? '' : 's'} remaining</strong>
         </p>
       </div>
@@ -72,11 +74,14 @@ function TrialBanner({ daysRemaining }: { daysRemaining: number }) {
 
 function FrozenAccountBanner() {
   return (
-    <div className="frozen-account-banner" role="alert">
-      <AlertTriangle className="frozen-account-banner__icon" aria-hidden="true" />
-      <div className="frozen-account-banner__content">
-        <h2 className="frozen-account-banner__title">Your subscription has expired</h2>
-        <p className="frozen-account-banner__message">
+    <div
+      className="flex items-start gap-4 bg-gradient-to-r from-warning/20 to-warning/30 border border-warning border-l-4 border-l-warning rounded-lg px-6 py-5 mb-8"
+      role="alert"
+    >
+      <AlertTriangle className="shrink-0 w-6 h-6 text-warning mt-0.5" aria-hidden="true" />
+      <div className="flex-1">
+        <h2 className="text-base font-semibold text-warning m-0 mb-1.5">Your subscription has expired</h2>
+        <p className="text-[0.9375rem] text-warning/90 m-0 leading-relaxed">
           Subscribe to continue using BoostedBudget. Your data is safe and will be
           available once you resubscribe.
         </p>
@@ -106,50 +111,77 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardP
 
   return (
     <div
-      className={`pricing-card ${isCurrentTier ? 'current' : ''} ${isHousehold5 ? 'featured' : ''}`}
+      className={`pricing-card${isHousehold5 ? ' featured' : ''} relative flex flex-col rounded-2xl p-8 transition-all duration-300 border-2 bg-card hover:shadow-lg ${
+        isCurrentTier
+          ? 'border-primary bg-gradient-to-b from-card to-primary/5'
+          : isHousehold5
+            ? 'border-warning bg-gradient-to-b from-card to-warning/5 hover:border-warning/80'
+            : 'border-border hover:border-muted-foreground'
+      }`}
     >
-      {isCurrentTier && <div className="current-badge">Current Plan</div>}
+      {isCurrentTier && (
+        <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-xs font-semibold uppercase tracking-wide whitespace-nowrap bg-primary text-primary-foreground">
+          Current Plan
+        </div>
+      )}
       {isHousehold5 && !isCurrentTier && (
-        <div className="featured-badge">Best Value</div>
+        <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-xs font-semibold uppercase tracking-wide whitespace-nowrap bg-warning text-white">
+          Best Value
+        </div>
       )}
 
-      <div className="pricing-card-header">
-        <TierIcon className="pricing-tier-icon" aria-hidden="true" />
-        <h2 className="pricing-tier-name">{tierData.display_name}</h2>
-        <p className="pricing-tier-description">{tierData.description}</p>
+      <div className="text-center mb-6">
+        <TierIcon
+          className={`w-10 h-10 mb-3 mx-auto ${
+            isCurrentTier ? 'text-primary' : isHousehold5 ? 'text-warning' : 'text-muted-foreground'
+          }`}
+          aria-hidden="true"
+        />
+        <h2 className="text-2xl font-bold text-foreground m-0 mb-2">{tierData.display_name}</h2>
+        <p className="text-sm text-muted-foreground m-0 leading-snug">{tierData.description}</p>
       </div>
 
-      <div className="pricing-card-price">
+      <div className="text-center mb-6 pb-6 border-b border-muted">
         {billingPeriod === 'yearly' && currentPrice > 0 && (
-          <span className="savings-badge">Save {savingsPercent}%</span>
+          <span className="inline-block bg-success text-white text-xs font-semibold px-3 py-1 rounded-full mb-2 animate-[fadeSlideIn_0.3s_ease_forwards]">
+            Save {savingsPercent}%
+          </span>
         )}
-        <span className="price-amount">{formatPrice(currentPrice)}</span>
-        {currentPrice > 0 && (
-          <span className="price-period">/{billingPeriod === 'monthly' ? 'month' : 'year'}</span>
-        )}
+        <div>
+          <span className="text-4xl font-bold text-foreground">{formatPrice(currentPrice)}</span>
+          {currentPrice > 0 && (
+            <span className="text-base text-muted-foreground font-normal">/{billingPeriod === 'monthly' ? 'month' : 'year'}</span>
+          )}
+        </div>
         {billingPeriod === 'yearly' && currentPrice > 0 && (
-          <span className="price-equivalent">
+          <span className="block text-sm text-muted-foreground mt-1">
             ${(tierData.pricing.price_yearly / 12).toFixed(2)}/mo, billed annually
           </span>
         )}
       </div>
 
-      <ul className="pricing-features">
+      <ul className="list-none p-0 m-0 mb-6 flex-grow">
         {features.map((item) => (
-          <li key={item.feature} className={item.included ? 'included' : 'excluded'}>
+          <li
+            key={item.feature}
+            className={`flex items-center gap-3 py-2 text-[0.9375rem] ${item.included ? 'text-foreground' : 'text-muted-foreground'}`}
+          >
             {item.included ? (
-              <Check className="feature-icon included" aria-hidden="true" />
+              <Check className="w-4 h-4 text-success shrink-0" aria-hidden="true" />
             ) : (
-              <X className="feature-icon excluded" aria-hidden="true" />
+              <X className="w-4 h-4 text-border shrink-0" aria-hidden="true" />
             )}
             <span>{item.feature}</span>
           </li>
         ))}
       </ul>
 
-      <div className="pricing-card-action">
+      <div className="mt-auto">
         {isCurrentTier ? (
-          <button className="btn-current" disabled>
+          <button
+            className="w-full py-3.5 border-none rounded-lg text-base font-semibold cursor-default bg-primary/10 text-primary"
+            disabled
+          >
             Current Plan
           </button>
         ) : (
@@ -189,8 +221,8 @@ export function PricingPage() {
 
   if (loading) {
     return (
-      <div className="pricing-page">
-        <div className="pricing-loading">Loading pricing plans...</div>
+      <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8">
+        <div className="text-center py-16 px-8 text-muted-foreground">Loading pricing plans...</div>
       </div>
     )
   }
@@ -198,10 +230,13 @@ export function PricingPage() {
   // Defensive check for malformed API response
   if (error || !tiers || !tiers.tiers) {
     return (
-      <div className="pricing-page">
-        <div className="pricing-error">
+      <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8">
+        <div className="text-center py-16 px-8 text-destructive">
           <p>Failed to load pricing plans.</p>
-          <button onClick={refetch} className="btn-retry">
+          <button
+            onClick={refetch}
+            className="mt-4 bg-primary text-primary-foreground border-none px-6 py-3 rounded-md text-base cursor-pointer hover:opacity-90 transition-opacity"
+          >
             Try Again
           </button>
         </div>
@@ -213,20 +248,28 @@ export function PricingPage() {
   const tierOrder: TierName[] = ['premium', 'household_2', 'household_3', 'household_4', 'household_5']
 
   return (
-    <div className="pricing-page">
+    <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8">
       {isFrozen && <FrozenAccountBanner />}
       {isTrialUser && currentSubscription?.trial_days_remaining !== undefined && (
         <TrialBanner daysRemaining={currentSubscription.trial_days_remaining} />
       )}
 
-      <div className="pricing-header">
-        <h1>Choose Your Plan</h1>
-        <p>Select the plan that best fits your financial goals</p>
+      <div className="text-center mb-12">
+        <h1 className="text-4xl font-bold text-foreground mb-2">Choose Your Plan</h1>
+        <p className="text-lg text-muted-foreground">Select the plan that best fits your financial goals</p>
       </div>
 
-      <div className="billing-toggle" role="radiogroup" aria-label="Billing period">
+      <div
+        className="flex justify-center mb-8 relative bg-muted rounded-3xl p-1 w-fit mx-auto"
+        role="radiogroup"
+        aria-label="Billing period"
+      >
         <button
-          className={`billing-toggle__option ${billingPeriod === 'monthly' ? 'active' : ''}`}
+          className={`relative z-10 border-none px-6 py-2.5 text-[0.9375rem] font-medium rounded-2xl cursor-pointer transition-all duration-300 ${
+            billingPeriod === 'monthly'
+              ? 'text-foreground bg-card shadow-sm'
+              : 'text-muted-foreground bg-transparent hover:text-foreground'
+          }`}
           onClick={() => setBillingPeriod('monthly')}
           aria-checked={billingPeriod === 'monthly'}
           role="radio"
@@ -234,7 +277,11 @@ export function PricingPage() {
           Monthly
         </button>
         <button
-          className={`billing-toggle__option ${billingPeriod === 'yearly' ? 'active' : ''}`}
+          className={`relative z-10 border-none px-6 py-2.5 text-[0.9375rem] font-medium rounded-2xl cursor-pointer transition-all duration-300 ${
+            billingPeriod === 'yearly'
+              ? 'text-foreground bg-card shadow-sm'
+              : 'text-muted-foreground bg-transparent hover:text-foreground'
+          }`}
           onClick={() => setBillingPeriod('yearly')}
           aria-checked={billingPeriod === 'yearly'}
           role="radio"
@@ -245,7 +292,7 @@ export function PricingPage() {
         </button>
       </div>
 
-      <div className="pricing-grid">
+      <div className="grid grid-cols-1 sm:grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-6 mb-16">
         {tierOrder.map((tierKey) => {
           const tierData = tiers.tiers[tierKey]
           if (!tierData) return null
@@ -261,33 +308,33 @@ export function PricingPage() {
         })}
       </div>
 
-      <div className="pricing-faq">
-        <h2>Frequently Asked Questions</h2>
-        <div className="faq-grid">
-          <div className="faq-item">
-            <h3>Can I change plans anytime?</h3>
-            <p>
+      <div className="mt-16 pt-12 border-t border-border">
+        <h2 className="text-center text-3xl font-bold text-foreground mb-8">Frequently Asked Questions</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-8">
+          <div className="bg-muted/50 rounded-xl p-6">
+            <h3 className="text-base font-semibold text-foreground m-0 mb-3">Can I change plans anytime?</h3>
+            <p className="text-[0.9375rem] text-muted-foreground m-0 leading-relaxed">
               Yes! You can upgrade or downgrade your plan at any time. Changes
               take effect immediately.
             </p>
           </div>
-          <div className="faq-item">
-            <h3>What payment methods do you accept?</h3>
-            <p>
+          <div className="bg-muted/50 rounded-xl p-6">
+            <h3 className="text-base font-semibold text-foreground m-0 mb-3">What payment methods do you accept?</h3>
+            <p className="text-[0.9375rem] text-muted-foreground m-0 leading-relaxed">
               We accept all major credit cards through our secure payment
               processor, Paddle.
             </p>
           </div>
-          <div className="faq-item">
-            <h3>Is there a free trial?</h3>
-            <p>
+          <div className="bg-muted/50 rounded-xl p-6">
+            <h3 className="text-base font-semibold text-foreground m-0 mb-3">Is there a free trial?</h3>
+            <p className="text-[0.9375rem] text-muted-foreground m-0 leading-relaxed">
               Yes! Premium plans come with a 60-day free trial. No credit card
               required to start.
             </p>
           </div>
-          <div className="faq-item">
-            <h3>Can I cancel anytime?</h3>
-            <p>
+          <div className="bg-muted/50 rounded-xl p-6">
+            <h3 className="text-base font-semibold text-foreground m-0 mb-3">Can I cancel anytime?</h3>
+            <p className="text-[0.9375rem] text-muted-foreground m-0 leading-relaxed">
               Absolutely. You can cancel your subscription at any time with no
               penalty.
             </p>
