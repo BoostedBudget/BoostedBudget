@@ -108,7 +108,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
           <h2 className="m-0 mb-2 text-2xl text-foreground flex items-center gap-2">
             🍪 Cookie Preferences
           </h2>
-          <p className="m-0 mb-6 text-muted-foreground leading-relaxed text-[0.95rem]">
+          <p className="cookie-consent-description m-0 mb-6 text-muted-foreground leading-relaxed text-[0.95rem]">
             We use cookies to enhance your experience and analyze site usage.
             You can customize your preferences below.
           </p>
