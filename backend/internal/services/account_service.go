@@ -365,6 +365,12 @@ func (s *accountService) LinkAccounts(
 	// Step 4c: Issue #1010 — Cross-user fingerprint ownership check.
 	// Uses server-provided institution_id (trusted) for fallback fingerprint.
 	plaidItem := accountsResp.GetItem()
+	if serverInstID := plaidItem.GetInstitutionId(); serverInstID != "" && serverInstID != institutionID {
+		s.logger.Warn("institution_id mismatch: client vs server",
+			"client_institution_id", institutionID,
+			"server_institution_id", serverInstID,
+		)
+	}
 	if s.enc != nil {
 		institutionIDFromPlaid := plaidItem.GetInstitutionId()
 		for _, plaidAccount := range plaidAccounts {
@@ -377,12 +383,12 @@ func (s *accountService) LinkAccounts(
 			}
 
 			// Check fallback fingerprint (always)
-			mask := ""
+			mask := "__NO_MASK__"
 			if m, ok := plaidAccount.GetMaskOk(); ok && m != nil {
 				mask = *m
 			}
 			accountType := string(plaidAccount.GetType())
-			subtype := ""
+			subtype := "__NO_SUBTYPE__"
 			if st, ok := plaidAccount.GetSubtypeOk(); ok && st != nil {
 				subtype = string(*st)
 			}
@@ -457,6 +463,7 @@ func (s *accountService) LinkAccounts(
 		// Mark old linked_item as 'replaced' with replaced_by_id pointing to new item
 		now := time.Now()
 		existingLinkedItem.Status = domain.LinkedItemStatusReplaced
+		existingLinkedItem.StatusChangedAt = &now // Issue #1010: TTL clock for fingerprint release
 		existingLinkedItem.ReplacedAt = &now
 		existingLinkedItem.ReplacedByID = &linkedItem.ID
 		if err := s.linkedItemRepo.Update(ctx, existingLinkedItem); err != nil {
@@ -522,11 +529,11 @@ func (s *accountService) LinkAccounts(
 
 		// Issue #1010: Compute fingerprint blind indices for storage
 		if s.enc != nil {
-			mask := ""
+			mask := "__NO_MASK__"
 			if account.Mask != nil {
 				mask = *account.Mask
 			}
-			subtype := ""
+			subtype := "__NO_SUBTYPE__"
 			if account.Subtype != nil {
 				subtype = *account.Subtype
 			}

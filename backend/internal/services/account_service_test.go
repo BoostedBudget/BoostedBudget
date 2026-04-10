@@ -3947,3 +3947,87 @@ func TestLinkAccounts_FingerprintCheck_RaceConditionHandled(t *testing.T) {
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockPlaidSvc.AssertExpectations(t)
 }
+
+// TestLinkAccounts_FingerprintCheck_NilMaskAndSubtypeUseSentinels verifies that when
+// a Plaid account has no mask and no subtype, the fallback fingerprint blind index
+// uses the sentinel values "__NO_MASK__" and "__NO_SUBTYPE__" instead of empty strings.
+//
+// Issue #1010: Cross-user Plaid item uniqueness — sentinel values for nil fields
+func TestLinkAccounts_FingerprintCheck_NilMaskAndSubtypeUseSentinels(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_test"
+	institutionName := "Test Bank"
+	publicToken := "public-sandbox-sentinel"
+	accessToken := "access-sandbox-sentinel"
+	plaidItemID := "plaid-item-sentinel"
+	newItemID := uuid.New().String()
+
+	enc := newTestFieldEncryptor(t)
+	// Sentinel values used when mask and subtype are absent from the Plaid response
+	expectedFallbackBlind := enc.BlindIndex("fb:" + institutionID + "\x00" + "__NO_MASK__" + "\x00" + "depository" + "\x00" + "__NO_SUBTYPE__")
+
+	// Account with no mask and no subtype
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id": "plaid-acct-sentinel-1",
+			"balances":   map[string]interface{}{"available": 100.0, "current": 100.0, "iso_currency_code": "USD"},
+			// mask intentionally omitted — nil
+			"name": "Checking",
+			// subtype intentionally omitted — nil
+			"type": "depository",
+		},
+	}
+	_, plaidClient := newTestPlaidServer(t, accessToken, plaidItemID, plaidAccounts)
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
+
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, repository.ErrLinkedItemNotFound)
+
+	// The fallback fingerprint must use sentinels — this is the key assertion
+	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedFallbackBlind, userID).
+		Return(nil, nil)
+
+	mockLinkedItemRepo.On("Create", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
+		return item.UserID == userID && item.Status == domain.LinkedItemStatusActive
+	})).Run(func(args mock.Arguments) {
+		args.Get(1).(*domain.LinkedItem).ID = newItemID
+	}).Return(nil)
+
+	mockAccountRepo.On("CreateBatch", ctx, mock.MatchedBy(func(accounts []domain.Account) bool {
+		return len(accounts) == 1
+	})).Return(nil)
+
+	svc := NewAccountService(
+		mockPlaidSvc,
+		newTestSubscriptionService(t),
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+		WithEncryptor(enc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	result, err := svc.LinkAccounts(ctx, userID, publicToken, institutionID, institutionName)
+
+	require.NoError(t, err, "nil mask/subtype should succeed using sentinel values")
+	require.NotNil(t, result)
+
+	// AssertExpectations verifies CheckFingerprintOwnership was called with the sentinel-based blind
+	mockAccountRepo.AssertExpectations(t)
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockPlaidSvc.AssertExpectations(t)
+}
