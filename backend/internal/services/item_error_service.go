@@ -165,6 +165,7 @@ func (s *itemErrorService) HandleLoginRequired(
 	// 3. Update LinkedItem status to "login_required" (critical - return error if fails)
 	now := time.Now()
 	linkedItem.Status = "login_required"
+	linkedItem.StatusChangedAt = &now // Issue #1010: track status change time
 	linkedItem.ErrorCode = &errorCode
 	linkedItem.ErrorMessage = &errorMessage
 	linkedItem.LastErrorAt = &now
@@ -213,6 +214,7 @@ func (s *itemErrorService) HandleError(
 	// 1. Update LinkedItem status to "error" (critical - return error if fails)
 	now := time.Now()
 	linkedItem.Status = "error"
+	linkedItem.StatusChangedAt = &now // Issue #1010: track status change time
 	linkedItem.ErrorCode = &errorCode
 	linkedItem.ErrorMessage = &errorMessage
 	linkedItem.LastErrorAt = &now
@@ -263,6 +265,7 @@ func (s *itemErrorService) HandlePendingExpiration(
 	// 3. Update LinkedItem status to "pending_expiration" (critical)
 	now := time.Now()
 	linkedItem.Status = "pending_expiration"
+	linkedItem.StatusChangedAt = &now // Issue #1010: track status change time
 	linkedItem.ErrorCode = &errorCode
 	linkedItem.ErrorMessage = &errorMessage
 	linkedItem.LastErrorAt = &now
@@ -317,6 +320,7 @@ func (s *itemErrorService) HandlePermissionRevoked(
 	// 3. Update LinkedItem status to "revoked" (critical)
 	now := time.Now()
 	linkedItem.Status = "revoked"
+	linkedItem.StatusChangedAt = &now // Issue #1010: TTL clock for fingerprint release
 	linkedItem.ErrorCode = &errorCode
 	linkedItem.ErrorMessage = &errorMessage
 	linkedItem.LastErrorAt = &now
