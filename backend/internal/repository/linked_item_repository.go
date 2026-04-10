@@ -125,7 +125,8 @@ const linkedItemSelectCols = `id, user_id, item_id, access_token_encrypted,
        status, error_code, error_message, last_error_at, retry_count, next_retry_at,
        replaced_at, replaced_by_id,
        created_at, updated_at,
-       investments_last_synced_date, liabilities_last_synced_at`
+       investments_last_synced_date, liabilities_last_synced_at,
+       status_changed_at`
 
 // NewLinkedItemRepository creates a new LinkedItemRepository instance
 func NewLinkedItemRepository(db DB, enc *appcrypto.FieldEncryptor) LinkedItemRepository {
@@ -233,6 +234,7 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 	now := time.Now()
 	item.CreatedAt = now
 	item.UpdatedAt = now
+	item.StatusChangedAt = &now // Issue #1010: track when status was set
 
 	// Encrypt PII fields and compute blind indexes before writing
 	itemIDBlind, institutionIDBlind, err := r.encryptLinkedItemPIIFields(item)
@@ -242,8 +244,8 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 
 	query := `
 		INSERT INTO linked_items
-		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at, item_id_blind_idx, institution_id_blind_idx)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at, item_id_blind_idx, institution_id_blind_idx, status_changed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`
 
 	_, err = r.db.Exec(ctx, query,
@@ -258,6 +260,7 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 		item.UpdatedAt,
 		itemIDBlind,
 		institutionIDBlind,
+		item.StatusChangedAt,
 	)
 
 	if err != nil {
@@ -301,6 +304,7 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 		&item.UpdatedAt,
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
+		&item.StatusChangedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -353,6 +357,7 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 			&item.UpdatedAt,
 			&item.InvestmentsLastSyncedDate,
 			&item.LiabilitiesLastSyncedAt,
+			&item.StatusChangedAt,
 		)
 		if err != nil {
 			return nil, err
@@ -401,6 +406,7 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 		&item.UpdatedAt,
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
+		&item.StatusChangedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -485,7 +491,8 @@ func (r *linkedItemRepository) Update(ctx context.Context, item *domain.LinkedIt
 		    next_retry_at = $13,
 		    replaced_at = $14,
 		    replaced_by_id = $15,
-		    updated_at = $16
+		    updated_at = $16,
+		    status_changed_at = $17
 		WHERE id = $1
 	`
 
@@ -506,6 +513,7 @@ func (r *linkedItemRepository) Update(ctx context.Context, item *domain.LinkedIt
 		item.ReplacedAt,
 		item.ReplacedByID,
 		item.UpdatedAt,
+		item.StatusChangedAt,
 	)
 	if err != nil {
 		return err
@@ -569,6 +577,7 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 		&item.UpdatedAt,
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
+		&item.StatusChangedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -656,6 +665,7 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 		&item.UpdatedAt,
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
+		&item.StatusChangedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -704,6 +714,7 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 		&item.UpdatedAt,
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
+		&item.StatusChangedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -795,6 +806,7 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 			&item.UpdatedAt,
 			&item.InvestmentsLastSyncedDate,
 			&item.LiabilitiesLastSyncedAt,
+			&item.StatusChangedAt,
 		)
 		if err != nil {
 			return nil, err
@@ -864,6 +876,7 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 			&item.UpdatedAt,
 			&item.InvestmentsLastSyncedDate,
 			&item.LiabilitiesLastSyncedAt,
+			&item.StatusChangedAt,
 		)
 		if err != nil {
 			return nil, err
@@ -935,7 +948,8 @@ func (r *linkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context,
 	query := `
 		UPDATE linked_items
 		SET status = 'disconnected',
-		    updated_at = $1
+		    updated_at = $1,
+		    status_changed_at = $1
 		WHERE user_id = $2
 		  AND status NOT IN ('disconnected', 'replaced')
 	`
@@ -979,6 +993,7 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 			&item.UpdatedAt,
 			&item.InvestmentsLastSyncedDate,
 			&item.LiabilitiesLastSyncedAt,
+			&item.StatusChangedAt,
 		)
 		if err != nil {
 			return nil, err
