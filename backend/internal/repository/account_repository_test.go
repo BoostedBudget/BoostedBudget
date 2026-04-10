@@ -3,14 +3,13 @@ package repository
 import (
 	"context"
 	"errors"
-	
 	"regexp"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -247,7 +246,7 @@ func TestAccountRepository_GetByUserID(t *testing.T) {
 		       current_balance, available_balance, currency_code,
 		       created_at, updated_at
 		FROM accounts
-		WHERE user_id = $1
+		WHERE user_id = $1 AND status != 'expired'
 		ORDER BY created_at ASC
 	`)).WithArgs(userID).WillReturnRows(rows)
 
@@ -389,7 +388,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 		       a.created_at, a.updated_at, l.institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1
+		WHERE a.user_id = $1 AND a.status != 'expired'
 		ORDER BY a.created_at ASC
 	`
 
@@ -445,7 +444,7 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 		       a.created_at, a.updated_at, l.institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1
+		WHERE a.user_id = $1 AND a.status != 'expired'
 		ORDER BY a.created_at ASC
 	`
 
@@ -460,6 +459,53 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, accounts) // Nil slices behave identically to empty slices in Go
 
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired verifies that expired
+// accounts are not returned from listing queries (Issue #1010).
+func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	bal := 500.00
+
+	// Only the active account is returned — the expired one is filtered out by the query
+	rows := pgxmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"created_at", "updated_at", "institution_name",
+	}).AddRow(
+		uuid.New().String(), uuid.New().String(), userID, "plaid-acc-active",
+		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
+		&bal, &bal, "USD",
+		time.Now(), time.Now(), "Chase",
+	)
+	// Note: expired account not in rows — DB filters it via WHERE a.status != 'expired'
+
+	expectedQuery := `
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       a.current_balance, a.available_balance, a.currency_code,
+		       a.created_at, a.updated_at, l.institution_name
+		FROM accounts a
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		WHERE a.user_id = $1 AND a.status != 'expired'
+		ORDER BY a.created_at ASC
+	`
+
+	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	accounts, err := repo.GetAccountsWithInstitution(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Len(t, accounts, 1)
+	assert.Equal(t, "Active Checking", accounts[0].Name)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -902,7 +948,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.is_hidden = FALSE ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
+		WHERE a.user_id = $1 AND a.status != 'expired' AND a.is_hidden = FALSE ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -975,7 +1021,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
+		WHERE a.user_id = $1 AND a.status != 'expired' ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
