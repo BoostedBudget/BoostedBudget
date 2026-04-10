@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
@@ -350,6 +352,21 @@ func (m *MockAccountRepository) UpdateStatus(ctx context.Context, accountID, use
 func (m *MockAccountRepository) CountActiveByLinkedItemID(ctx context.Context, linkedItemID string) (int, error) {
 	args := m.Called(ctx, linkedItemID)
 	return args.Int(0), args.Error(1)
+}
+
+// Issue #1010: Cross-user fingerprint ownership check
+func (m *MockAccountRepository) CheckFingerprintOwnership(ctx context.Context, fingerprintBlindIdx, excludeUserID string) (*repository.FingerprintOwnership, error) {
+	args := m.Called(ctx, fingerprintBlindIdx, excludeUserID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*repository.FingerprintOwnership), args.Error(1)
+}
+
+// Issue #1010: Expire accounts by fingerprint to release uniqueness constraint
+func (m *MockAccountRepository) ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) error {
+	args := m.Called(ctx, fingerprintBlindIdx)
+	return args.Error(0)
 }
 
 type MockUserRepository struct {
@@ -3467,5 +3484,466 @@ func TestLinkAccounts_Integration_DisconnectedRelink_ErrorPropagates(t *testing.
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockAccountRepo.AssertExpectations(t)
 	mockUserRepo.AssertExpectations(t)
+	mockPlaidSvc.AssertExpectations(t)
+}
+
+// ============================================================================
+// Issue #1010: Cross-user Plaid item uniqueness — fingerprint ownership tests
+// ============================================================================
+
+// noopEncryptionSvc is an identity encryption service used for testing.
+// BlindIndex will still produce real HMAC-SHA256 values using the test key.
+type noopEncryptionSvc struct{}
+
+func (n *noopEncryptionSvc) Encrypt(plaintext string) (string, error) {
+	return "NOOP_" + plaintext, nil
+}
+
+func (n *noopEncryptionSvc) Decrypt(ciphertext string) (string, error) {
+	return strings.TrimPrefix(ciphertext, "NOOP_"), nil
+}
+
+func newTestFieldEncryptor(t *testing.T) *appcrypto.FieldEncryptor {
+	t.Helper()
+	svc := &noopEncryptionSvc{}
+	key := []byte("12345678901234567890123456789012") // 32 bytes
+	enc, err := appcrypto.NewFieldEncryptor(svc, key)
+	require.NoError(t, err)
+	return enc
+}
+
+// newTestPlaidServerWithPersistentID creates a mock Plaid server that returns
+// persistent_account_id in account objects. It extends newTestPlaidServer.
+func newTestPlaidServerWithPersistentID(t *testing.T, accessToken, plaidItemID string, accounts []map[string]interface{}) (*httptest.Server, *plaid.APIClient) {
+	return newTestPlaidServer(t, accessToken, plaidItemID, accounts)
+}
+
+// TestLinkAccounts_FingerprintCheck_BlocksAnotherUserActiveItem verifies that
+// LinkAccounts returns ErrAccountOwnedByAnotherUser when a Plaid account's
+// persistent fingerprint is already owned by a different user (active item).
+//
+// Issue #1010: Cross-user Plaid item uniqueness
+func TestLinkAccounts_FingerprintCheck_BlocksAnotherUserActiveItem(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	otherUserID := uuid.New().String()
+	institutionID := "ins_test" // must match mock server item.institution_id
+	institutionName := "Test Bank"
+	publicToken := "public-sandbox-fingerprint-block"
+	accessToken := "access-sandbox-fingerprint-block"
+	plaidItemID := "plaid-item-fingerprint-block"
+	persistentAccountID := "persistent-acct-block-test"
+
+	enc := newTestFieldEncryptor(t)
+	expectedPersistentBlind := enc.BlindIndex("pid:" + persistentAccountID)
+
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id":           "plaid-acct-block-1",
+			"persistent_account_id": persistentAccountID,
+			"balances":             map[string]interface{}{"available": 100.0, "current": 110.0, "iso_currency_code": "USD"},
+			"mask":                 "1234",
+			"name":                 "Checking",
+			"subtype":              "checking",
+			"type":                 "depository",
+		},
+	}
+	_, plaidClient := newTestPlaidServerWithPersistentID(t, accessToken, plaidItemID, plaidAccounts)
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
+
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, repository.ErrLinkedItemNotFound)
+
+	// Persistent fingerprint is owned by another user with an active item
+	otherItemID := uuid.New().String()
+	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedPersistentBlind, userID).
+		Return(&repository.FingerprintOwnership{
+			UserID:       otherUserID,
+			LinkedItemID: otherItemID,
+			ItemStatus:   domain.LinkedItemStatusActive,
+		}, nil)
+
+	svc := NewAccountService(
+		mockPlaidSvc,
+		newTestSubscriptionService(t),
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+		WithEncryptor(enc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	result, err := svc.LinkAccounts(ctx, userID, publicToken, institutionID, institutionName)
+
+	require.Error(t, err, "should block when another user's active item owns the fingerprint")
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, repository.ErrAccountOwnedByAnotherUser)
+
+	mockAccountRepo.AssertNotCalled(t, "CreateBatch", mock.Anything, mock.Anything)
+	mockLinkedItemRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+
+	mockAccountRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
+	mockPlaidSvc.AssertExpectations(t)
+}
+
+// TestLinkAccounts_FingerprintCheck_BlocksTTLNotExpired verifies that a fingerprint
+// owned by another user with a disconnected item < 90 days ago blocks the link.
+//
+// Issue #1010: Cross-user Plaid item uniqueness
+func TestLinkAccounts_FingerprintCheck_BlocksTTLNotExpired(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	otherUserID := uuid.New().String()
+	institutionID := "ins_test"
+	institutionName := "Test Bank"
+	publicToken := "public-sandbox-fingerprint-ttl"
+	accessToken := "access-sandbox-fingerprint-ttl"
+	plaidItemID := "plaid-item-fingerprint-ttl"
+	persistentAccountID := "persistent-acct-ttl-test"
+
+	enc := newTestFieldEncryptor(t)
+	expectedPersistentBlind := enc.BlindIndex("pid:" + persistentAccountID)
+
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id":           "plaid-acct-ttl-1",
+			"persistent_account_id": persistentAccountID,
+			"balances":             map[string]interface{}{"available": 100.0, "current": 110.0, "iso_currency_code": "USD"},
+			"mask":                 "5678",
+			"name":                 "Savings",
+			"subtype":              "savings",
+			"type":                 "depository",
+		},
+	}
+	_, plaidClient := newTestPlaidServerWithPersistentID(t, accessToken, plaidItemID, plaidAccounts)
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
+
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, repository.ErrLinkedItemNotFound)
+
+	// Disconnected 30 days ago — within 90-day TTL, should still block
+	statusChangedAt := time.Now().Add(-30 * 24 * time.Hour)
+	otherItemID := uuid.New().String()
+	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedPersistentBlind, userID).
+		Return(&repository.FingerprintOwnership{
+			UserID:          otherUserID,
+			LinkedItemID:    otherItemID,
+			ItemStatus:      domain.LinkedItemStatusDisconnected,
+			StatusChangedAt: &statusChangedAt,
+		}, nil)
+
+	svc := NewAccountService(
+		mockPlaidSvc,
+		newTestSubscriptionService(t),
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+		WithEncryptor(enc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	result, err := svc.LinkAccounts(ctx, userID, publicToken, institutionID, institutionName)
+
+	require.Error(t, err, "should block when another user disconnected < 90 days ago")
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, repository.ErrAccountOwnedByAnotherUser)
+
+	mockAccountRepo.AssertNotCalled(t, "CreateBatch", mock.Anything, mock.Anything)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestLinkAccounts_FingerprintCheck_AllowsAfterTTLExpiry verifies that a fingerprint
+// owned by another user with a disconnected item >= 90 days ago releases and allows link.
+//
+// Issue #1010: Cross-user Plaid item uniqueness
+func TestLinkAccounts_FingerprintCheck_AllowsAfterTTLExpiry(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	otherUserID := uuid.New().String()
+	institutionID := "ins_test"
+	institutionName := "Test Bank"
+	publicToken := "public-sandbox-fingerprint-expired"
+	accessToken := "access-sandbox-fingerprint-expired"
+	plaidItemID := "plaid-item-fingerprint-expired"
+	newItemID := uuid.New().String()
+	persistentAccountID := "persistent-acct-expired-test"
+	mask := "9012"
+
+	enc := newTestFieldEncryptor(t)
+	expectedPersistentBlind := enc.BlindIndex("pid:" + persistentAccountID)
+	// Fallback fingerprint (institution_id comes from the Plaid item response: "ins_test")
+	expectedFallbackBlind := enc.BlindIndex("fb:" + institutionID + "\x00" + mask + "\x00" + "depository" + "\x00" + "checking")
+
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id":           "plaid-acct-expired-1",
+			"persistent_account_id": persistentAccountID,
+			"balances":             map[string]interface{}{"available": 100.0, "current": 110.0, "iso_currency_code": "USD"},
+			"mask":                 mask,
+			"name":                 "Checking",
+			"subtype":              "checking",
+			"type":                 "depository",
+		},
+	}
+	_, plaidClient := newTestPlaidServerWithPersistentID(t, accessToken, plaidItemID, plaidAccounts)
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
+
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, repository.ErrLinkedItemNotFound)
+
+	// Disconnected 91 days ago — TTL expired, should release and allow
+	statusChangedAt := time.Now().Add(-91 * 24 * time.Hour)
+	otherItemID := uuid.New().String()
+	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedPersistentBlind, userID).
+		Return(&repository.FingerprintOwnership{
+			UserID:          otherUserID,
+			LinkedItemID:    otherItemID,
+			ItemStatus:      domain.LinkedItemStatusDisconnected,
+			StatusChangedAt: &statusChangedAt,
+		}, nil)
+
+	// Persistent fingerprint expired → release it
+	mockAccountRepo.On("ExpireAccountsByFingerprint", ctx, expectedPersistentBlind).Return(nil)
+
+	// Fallback fingerprint not owned by anyone
+	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedFallbackBlind, userID).
+		Return(nil, nil)
+
+	// Proceed with normal link flow
+	mockLinkedItemRepo.On("Create", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
+		return item.UserID == userID && item.Status == domain.LinkedItemStatusActive
+	})).Run(func(args mock.Arguments) {
+		args.Get(1).(*domain.LinkedItem).ID = newItemID
+	}).Return(nil)
+
+	mockAccountRepo.On("CreateBatch", ctx, mock.MatchedBy(func(accounts []domain.Account) bool {
+		return len(accounts) == 1 && accounts[0].UserID == userID
+	})).Return(nil)
+
+	svc := NewAccountService(
+		mockPlaidSvc,
+		newTestSubscriptionService(t),
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+		WithEncryptor(enc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	result, err := svc.LinkAccounts(ctx, userID, publicToken, institutionID, institutionName)
+
+	require.NoError(t, err, "should succeed when TTL has expired")
+	require.NotNil(t, result)
+
+	mockAccountRepo.AssertExpectations(t)
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
+	mockPlaidSvc.AssertExpectations(t)
+}
+
+// TestLinkAccounts_FingerprintCheck_AllowsSameUser verifies that linking an account
+// with a fingerprint owned by the same user (re-link) is allowed.
+//
+// Issue #1010: Cross-user Plaid item uniqueness
+func TestLinkAccounts_FingerprintCheck_AllowsSameUser(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_test"
+	institutionName := "Test Bank"
+	publicToken := "public-sandbox-fingerprint-sameuser"
+	accessToken := "access-sandbox-fingerprint-sameuser"
+	plaidItemID := "plaid-item-fingerprint-sameuser"
+	newItemID := uuid.New().String()
+	mask := "3456"
+
+	enc := newTestFieldEncryptor(t)
+	// No persistent_account_id — only fallback fingerprint
+	expectedFallbackBlind := enc.BlindIndex("fb:" + institutionID + "\x00" + mask + "\x00" + "depository" + "\x00" + "savings")
+
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id": "plaid-acct-sameuser-1",
+			// No persistent_account_id
+			"balances": map[string]interface{}{"available": 500.0, "current": 500.0, "iso_currency_code": "USD"},
+			"mask":     mask,
+			"name":     "Savings",
+			"subtype":  "savings",
+			"type":     "depository",
+		},
+	}
+	_, plaidClient := newTestPlaidServer(t, accessToken, plaidItemID, plaidAccounts)
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
+
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, repository.ErrLinkedItemNotFound)
+
+	// Fallback fingerprint — no other user owns it (same-user re-link means excludeUserID filters it out)
+	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedFallbackBlind, userID).
+		Return(nil, nil)
+
+	// Proceed with normal link
+	mockLinkedItemRepo.On("Create", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
+		return item.UserID == userID && item.Status == domain.LinkedItemStatusActive
+	})).Run(func(args mock.Arguments) {
+		args.Get(1).(*domain.LinkedItem).ID = newItemID
+	}).Return(nil)
+
+	mockAccountRepo.On("CreateBatch", ctx, mock.MatchedBy(func(accounts []domain.Account) bool {
+		return len(accounts) == 1
+	})).Return(nil)
+
+	svc := NewAccountService(
+		mockPlaidSvc,
+		newTestSubscriptionService(t),
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+		WithEncryptor(enc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	result, err := svc.LinkAccounts(ctx, userID, publicToken, institutionID, institutionName)
+
+	require.NoError(t, err, "same-user re-link should succeed")
+	require.NotNil(t, result)
+
+	mockAccountRepo.AssertExpectations(t)
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockPlaidSvc.AssertExpectations(t)
+}
+
+// TestLinkAccounts_FingerprintCheck_RaceConditionHandled verifies that when a DB
+// UNIQUE constraint violation occurs on CreateBatch (race condition where two users
+// simultaneously link the same account), ErrAccountOwnedByAnotherUser is returned.
+//
+// Issue #1010: Cross-user Plaid item uniqueness
+func TestLinkAccounts_FingerprintCheck_RaceConditionHandled(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_test"
+	institutionName := "Test Bank"
+	publicToken := "public-sandbox-fingerprint-race"
+	accessToken := "access-sandbox-fingerprint-race"
+	plaidItemID := "plaid-item-fingerprint-race"
+	newItemID := uuid.New().String()
+	mask := "7890"
+
+	enc := newTestFieldEncryptor(t)
+	expectedFallbackBlind := enc.BlindIndex("fb:" + institutionID + "\x00" + mask + "\x00" + "depository" + "\x00" + "checking")
+
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id": "plaid-acct-race-1",
+			"balances":   map[string]interface{}{"available": 100.0, "current": 100.0, "iso_currency_code": "USD"},
+			"mask":       mask,
+			"name":       "Checking",
+			"subtype":    "checking",
+			"type":       "depository",
+		},
+	}
+	_, plaidClient := newTestPlaidServer(t, accessToken, plaidItemID, plaidAccounts)
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
+
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, repository.ErrLinkedItemNotFound)
+
+	// App-level check passes (no ownership found — race: other user hasn't committed yet)
+	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedFallbackBlind, userID).
+		Return(nil, nil)
+
+	// Linked item creates successfully
+	mockLinkedItemRepo.On("Create", ctx, mock.Anything).
+		Run(func(args mock.Arguments) {
+			args.Get(1).(*domain.LinkedItem).ID = newItemID
+		}).Return(nil)
+
+	// CreateBatch hits UNIQUE constraint violation (race condition)
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything).
+		Return(repository.ErrAccountOwnedByAnotherUser)
+
+	svc := NewAccountService(
+		mockPlaidSvc,
+		newTestSubscriptionService(t),
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+		WithEncryptor(enc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	result, err := svc.LinkAccounts(ctx, userID, publicToken, institutionID, institutionName)
+
+	require.Error(t, err, "race condition should return ErrAccountOwnedByAnotherUser")
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, repository.ErrAccountOwnedByAnotherUser)
+
+	mockAccountRepo.AssertExpectations(t)
+	mockLinkedItemRepo.AssertExpectations(t)
 	mockPlaidSvc.AssertExpectations(t)
 }
