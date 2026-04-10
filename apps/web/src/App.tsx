@@ -34,7 +34,7 @@ import { BudgetsPage, BudgetDetailPage } from './features/budgets'
 import { RulesPage, RuleBuilder } from './features/rules'
 import { SpendingReportsPage } from './features/reports'
 import { LandingPage } from './features/landing'
-import { AdminRoute, AdminLayout, AdminDashboardPage, UsersPage, HealthDashboardPage, WebhooksPage } from './features/admin'
+import { AdminRoute, AdminLayout, AdminDashboardPage, UsersPage, HealthDashboardPage, WebhooksPage, DeadLetterPage } from './features/admin'
 import { NotFoundPage } from './features/not-found/NotFoundPage'
 import { Toaster } from 'sonner'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -323,6 +323,7 @@ function App() {
               <Route path="users" element={<UsersPage />} />
               <Route path="health" element={<HealthDashboardPage />} />
               <Route path="webhooks" element={<WebhooksPage />} />
+              <Route path="dead-letter" element={<DeadLetterPage />} />
             </Route>
             <Route path="*" element={<NotFoundPage />} />
           </Routes>

@@ -37,6 +37,7 @@ type AdminHandler struct {
 	subService            *services.SubscriptionService
 	paddleTransactionRepo repository.PaddleTransactionRepository
 	paddleWebhookRepo     repository.PaddleWebhookRepository
+	deadLetterService     services.DeadLetterService
 	jobQueue              queue.JobQueue
 	config                *config.Config
 }
@@ -80,6 +81,12 @@ func (h *AdminHandler) WithPaddleWebhookRepo(repo repository.PaddleWebhookReposi
 // WithJobQueue sets the JobQueue on the handler (builder pattern).
 func (h *AdminHandler) WithJobQueue(q queue.JobQueue) *AdminHandler {
 	h.jobQueue = q
+	return h
+}
+
+// WithDeadLetterService sets the DeadLetterService on the handler (builder pattern).
+func (h *AdminHandler) WithDeadLetterService(svc services.DeadLetterService) *AdminHandler {
+	h.deadLetterService = svc
 	return h
 }
 
@@ -509,4 +516,7 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 
 	// --- Admin Paddle Webhooks Routes (Issue #762) ---
 	RegisterAdminPaddleWebhooksOperations(api, handler)
+
+	// --- Admin Dead Letter Queue Routes (Issue #633) ---
+	RegisterAdminDeadLetterOperations(api, handler)
 }

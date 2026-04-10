@@ -229,6 +229,9 @@ func main() {
 	// Issue #930: Declare retention cleanup check worker
 	var retentionCleanupCheckWorker *jobs.RetentionCleanupCheckWorker
 
+	// Issue #633: Declare DLQ cleanup check worker
+	var dlqCleanupCheckWorker *jobs.DLQCleanupCheckWorker
+
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
 	var ruleSchedulerManager *workers.RuleSchedulerManager
 
@@ -447,6 +450,14 @@ func main() {
 				Logger:          appLogger,
 			})
 			appLogger.Info("Retention cleanup check worker created (River)")
+
+			// Issue #633: Create DLQ cleanup worker
+			dlqCleanupCheckWorker = jobs.NewDLQCleanupCheckWorker(jobs.DLQCleanupCheckWorkerDeps{
+				Repo:          deadLetterJobRepo,
+				RetentionDays: cfg.DLQRetentionDays,
+				Logger:        appLogger,
+			})
+			appLogger.Info("DLQ cleanup check worker created (River)")
 		} else {
 			appLogger.Warn("Deletion services disabled (requires DELETION_TOKEN_SECRET)")
 		}
@@ -744,6 +755,22 @@ func main() {
 					appLogger.Info("Retention cleanup check periodic job configured (daily)")
 				}
 
+				// Issue #633: DLQ cleanup check (daily) — deletes old dead letter entries
+				if dlqCleanupCheckWorker != nil {
+					periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+						river.PeriodicInterval(24*time.Hour),
+						func() (river.JobArgs, *river.InsertOpts) {
+							return jobs.DLQCleanupCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+							}
+						},
+						&river.PeriodicJobOpts{RunOnStart: false},
+					))
+					appLogger.Info("DLQ cleanup check periodic job configured (daily)")
+				}
+
 				if len(periodicJobs) > 0 {
 					riverConfig.PeriodicJobs = periodicJobs
 				}
@@ -857,6 +884,12 @@ func main() {
 					appLogger.Info("Retention cleanup check worker registered with River")
 				}
 
+				// Issue #633: Register DLQ cleanup check worker
+				if dlqCleanupCheckWorker != nil {
+					river.AddWorker(riverWorkers, dlqCleanupCheckWorker)
+					appLogger.Info("DLQ cleanup check worker registered with River")
+				}
+
 				// Issue #45, #46: Register Paddle subscription webhook worker
 				if subscriptionWebhookWorker != nil {
 					river.AddWorker(riverWorkers, subscriptionWebhookWorker)
@@ -963,6 +996,9 @@ func main() {
 			cfg.PlaidEnv,
 		)
 
+		// Issue #633: Dead letter queue admin service
+		deadLetterService := services.NewDeadLetterService(deadLetterJobRepo, jobQueue)
+
 		// Apply Huma Admin middleware for admin routes (Issue #309)
 		humaAdminMiddleware := humamiddleware.NewAdminMiddleware(cfg, adminService)
 		humaAPI.UseMiddleware(humaAdminMiddleware)
@@ -1066,7 +1102,8 @@ func main() {
 			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
 				WithPaddleTransactionRepo(paddleTransactionRepo).
 				WithPaddleWebhookRepo(paddleWebhookRepo).
-				WithJobQueue(jobQueue)
+				WithJobQueue(jobQueue).
+				WithDeadLetterService(deadLetterService)
 			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
 			appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)")
 		}

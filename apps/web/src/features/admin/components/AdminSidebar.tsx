@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Users, CreditCard, Activity, Webhook } from 'lucide-react'
+import { LayoutDashboard, Users, CreditCard, Activity, Webhook, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ADMIN_SIDEBAR_ITEMS } from '../constants'
 
@@ -9,6 +9,7 @@ const iconMap: Record<string, React.ComponentType<{ size?: number }>> = {
   CreditCard,
   Activity,
   Webhook,
+  AlertTriangle,
 }
 
 export function AdminSidebar() {
