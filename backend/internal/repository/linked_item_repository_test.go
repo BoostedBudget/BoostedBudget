@@ -45,8 +45,8 @@ func TestLinkedItemRepository_Create(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO linked_items
-		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at, item_id_blind_idx, institution_id_blind_idx)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at, item_id_blind_idx, institution_id_blind_idx, status_changed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`)).WithArgs(
 		linkedItem.ID,
 		linkedItem.UserID,
@@ -59,6 +59,7 @@ func TestLinkedItemRepository_Create(t *testing.T) {
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(), // item_id_blind_idx
 		pgxmock.AnyArg(), // institution_id_blind_idx
+		pgxmock.AnyArg(), // status_changed_at
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Execute
@@ -88,6 +89,7 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
+		"status_changed_at",
 	}).
 		AddRow(
 			uuid.New().String(), userID, "item-1", "encrypted-token-1",
@@ -95,7 +97,7 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 			"active", nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
-			nil, nil,
+			nil, nil, nil,
 		).
 		AddRow(
 			uuid.New().String(), userID, "item-2", "encrypted-token-2",
@@ -103,7 +105,7 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 			"active", nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
-			nil, nil,
+			nil, nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id").
@@ -140,13 +142,14 @@ func TestLinkedItemRepository_GetByItemID(t *testing.T) {
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
+		"status_changed_at",
 	}).AddRow(
 		linkedItemID, userID, itemID, "encrypted-token",
 		"ins_123", "Chase", "plaid", nil, nil,
 		"active", nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		nil, nil,
+		nil, nil, nil,
 	)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE item_id_blind_idx").
@@ -273,13 +276,14 @@ func TestLinkedItemRepository_GetByIDAndUser_Success(t *testing.T) {
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
+		"status_changed_at",
 	}).AddRow(
 		itemID, userID, "plaid-item-123", "encrypted-token",
 		"ins_chase", "Chase", "plaid", nil, nil,
 		"active", nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		nil, nil,
+		nil, nil, nil,
 	)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE id.*AND user_id").
@@ -437,6 +441,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Active(t *testing.T) {
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
+		"status_changed_at",
 	}).
 		AddRow(
 			itemID, userID, "item-1", "encrypted-token",
@@ -444,7 +449,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Active(t *testing.T) {
 			"active", nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
-			nil, nil,
+			nil, nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status").
@@ -479,6 +484,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_NotFound(t *testing.T) {
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
+		"status_changed_at",
 	})
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status").
@@ -514,6 +520,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Replaced(t *testing.T) {
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
+		"status_changed_at",
 	}).
 		AddRow(
 			itemID, userID, "item-old", "encrypted-token",
@@ -521,7 +528,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Replaced(t *testing.T) {
 			"replaced", nil, nil, nil, 0, nil,
 			&replacedAt, &replacedByID,
 			now, now,
-			nil, nil,
+			nil, nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status").
@@ -582,6 +589,7 @@ func TestLinkedItemRepository_Update_WithSoftDeleteFields(t *testing.T) {
 			pgxmock.AnyArg(), // replaced_at
 			pgxmock.AnyArg(), // replaced_by_id
 			pgxmock.AnyArg(), // updated_at
+			pgxmock.AnyArg(), // status_changed_at
 		).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
@@ -617,13 +625,14 @@ func TestLinkedItemRepository_GetByUserAndInstitution_MultipleDisconnected_Retur
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
+		"status_changed_at",
 	}).AddRow(
 		mostRecentItemID, userID, "item-recent", "encrypted-token",
 		institutionID, "Chase", "plaid", nil, nil,
 		"disconnected", nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		nil, nil,
+		nil, nil, nil,
 	)
 
 	// The regex must include ORDER BY created_at DESC to verify the fix is in place.
@@ -658,13 +667,14 @@ func TestLinkedItemRepository_GetByUserAndInstitution_SingleDisconnected_Returns
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
+		"status_changed_at",
 	}).AddRow(
 		itemID, userID, "item-disconnected", "encrypted-token",
 		institutionID, "Bank of America", "plaid", nil, nil,
 		"disconnected", nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		nil, nil,
+		nil, nil, nil,
 	)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status.*ORDER BY created_at DESC").
@@ -697,6 +707,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_NoMatch_ReturnsNotFound(t 
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
+		"status_changed_at",
 	})
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status.*ORDER BY created_at DESC").
@@ -735,13 +746,14 @@ func TestLinkedItemRepository_GetByItemID_ReturnsInvestmentsLastSyncedDate(t *te
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
+		"status_changed_at",
 	}).AddRow(
 		linkedItemID, userID, itemID, "encrypted-token",
 		"ins_123", "Chase", "plaid", nil, nil,
 		"active", nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		&syncDate, nil,
+		&syncDate, nil, nil,
 	)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE item_id_blind_idx").
@@ -774,6 +786,7 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
+		"status_changed_at",
 	}).
 		AddRow(
 			uuid.New().String(), userID, "item-1", "encrypted-token-1",
@@ -781,7 +794,7 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 			"active", nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
-			nil, nil,
+			nil, nil, nil,
 		).
 		AddRow(
 			uuid.New().String(), userID, "item-2", "encrypted-token-2",
@@ -789,7 +802,7 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 			"replaced", nil, nil, nil, 0, nil,
 			&now, nil,
 			now, now,
-			nil, nil,
+			nil, nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id").

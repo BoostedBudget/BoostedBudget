@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -159,7 +160,8 @@ type accountService struct {
 	userRepo        repository.ProfileRepository
 	userAccountSvc  UserAccountService // Issue #171: For re-link user_account matching
 	db              *pgxpool.Pool
-	jobQueue        queue.JobQueue // Issue #658: For auto-sync after linking (can be nil)
+	jobQueue        queue.JobQueue          // Issue #658: For auto-sync after linking (can be nil)
+	enc             *appcrypto.FieldEncryptor // Issue #1010: For fingerprint computation (can be nil)
 	logger          *slog.Logger
 }
 
@@ -185,6 +187,68 @@ func WithUserAccountService(uaSvc UserAccountService) AccountServiceOption {
 	return func(s *accountService) {
 		s.userAccountSvc = uaSvc
 	}
+}
+
+// WithEncryptor sets the FieldEncryptor for fingerprint computation (Issue #1010).
+// When set, LinkAccounts will compute and check cross-user fingerprints.
+func WithEncryptor(enc *appcrypto.FieldEncryptor) AccountServiceOption {
+	return func(s *accountService) {
+		s.enc = enc
+	}
+}
+
+// computePersistentBlind computes the blind index for a persistent_account_id fingerprint.
+// Uses namespaced prefix "pid:" to prevent cross-namespace collisions.
+func computePersistentBlind(persistentAccountID string, enc *appcrypto.FieldEncryptor) string {
+	return enc.BlindIndex("pid:" + persistentAccountID)
+}
+
+// computeFallbackBlind computes the blind index for an institution|mask|type|subtype fingerprint.
+// Uses namespaced prefix "fb:" and null-byte delimiters to prevent hash collisions.
+func computeFallbackBlind(institutionID, mask, accountType, subtype string, enc *appcrypto.FieldEncryptor) string {
+	return enc.BlindIndex("fb:" + institutionID + "\x00" + mask + "\x00" + accountType + "\x00" + subtype)
+}
+
+// shouldReleaseFingerprint returns true when a disconnected/revoked item's 90-day TTL has elapsed.
+// Active items are never released.
+func shouldReleaseFingerprint(ownership *repository.FingerprintOwnership) bool {
+	if ownership.ItemStatus == domain.LinkedItemStatusActive {
+		return false
+	}
+	if ownership.ItemStatus != domain.LinkedItemStatusDisconnected &&
+		ownership.ItemStatus != domain.LinkedItemStatusRevoked {
+		return false
+	}
+	if ownership.StatusChangedAt == nil {
+		return false
+	}
+	return time.Since(*ownership.StatusChangedAt) >= 90*24*time.Hour
+}
+
+// checkFingerprintOwnership checks whether a blind index is owned by another user.
+// Returns ErrAccountOwnedByAnotherUser if blocked, nil if allowed.
+// If TTL has expired, it releases the fingerprint by expiring the old accounts first.
+func (s *accountService) checkFingerprintOwnership(ctx context.Context, blindIdx, userID string) error {
+	ownership, err := s.accountRepo.CheckFingerprintOwnership(ctx, blindIdx, userID)
+	if err != nil {
+		return fmt.Errorf("fingerprint ownership check failed: %w", err)
+	}
+	if ownership == nil {
+		return nil // no other user owns it
+	}
+	if shouldReleaseFingerprint(ownership) {
+		s.logger.Info("releasing expired fingerprint",
+			"blind_idx_prefix", blindIdx[:8],
+			"other_item_id", ownership.LinkedItemID,
+			"status_changed_at", ownership.StatusChangedAt,
+		)
+		if err := s.accountRepo.ExpireAccountsByFingerprint(ctx, blindIdx); err != nil {
+			return fmt.Errorf("failed to expire accounts by fingerprint: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("%w: account fingerprint already claimed by another user (item_id=%s, status=%s)",
+		repository.ErrAccountOwnedByAnotherUser, ownership.LinkedItemID, ownership.ItemStatus)
 }
 
 // NewAccountService creates a new AccountService instance
@@ -298,6 +362,43 @@ func (s *accountService) LinkAccounts(
 		return nil, fmt.Errorf("%w: the institution returned no accounts to link - please ensure you select accounts during the connection process", ErrNoAccountsAvailable)
 	}
 
+	// Step 4c: Issue #1010 — Cross-user fingerprint ownership check.
+	// Uses server-provided institution_id (trusted) for fallback fingerprint.
+	plaidItem := accountsResp.GetItem()
+	if serverInstID := plaidItem.GetInstitutionId(); serverInstID != "" && serverInstID != institutionID {
+		s.logger.Warn("institution_id mismatch: client vs server",
+			"client_institution_id", institutionID,
+			"server_institution_id", serverInstID,
+		)
+	}
+	if s.enc != nil {
+		institutionIDFromPlaid := plaidItem.GetInstitutionId()
+		for _, plaidAccount := range plaidAccounts {
+			// Check persistent fingerprint (when available)
+			if persistentID, ok := plaidAccount.GetPersistentAccountIdOk(); ok && persistentID != nil && *persistentID != "" {
+				persistentBlind := computePersistentBlind(*persistentID, s.enc)
+				if err := s.checkFingerprintOwnership(ctx, persistentBlind, user.ID); err != nil {
+					return nil, err
+				}
+			}
+
+			// Check fallback fingerprint (always)
+			mask := "__NO_MASK__"
+			if m, ok := plaidAccount.GetMaskOk(); ok && m != nil {
+				mask = *m
+			}
+			accountType := string(plaidAccount.GetType())
+			subtype := "__NO_SUBTYPE__"
+			if st, ok := plaidAccount.GetSubtypeOk(); ok && st != nil {
+				subtype = string(*st)
+			}
+			fallbackBlind := computeFallbackBlind(institutionIDFromPlaid, mask, accountType, subtype, s.enc)
+			if err := s.checkFingerprintOwnership(ctx, fallbackBlind, user.ID); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// Step 5: Verify combined count doesn't exceed limit
 	// Skip this check for unlimited tiers (limit=-1)
 	newTotalCount := currentAccountCount + len(plaidAccounts)
@@ -362,6 +463,7 @@ func (s *accountService) LinkAccounts(
 		// Mark old linked_item as 'replaced' with replaced_by_id pointing to new item
 		now := time.Now()
 		existingLinkedItem.Status = domain.LinkedItemStatusReplaced
+		existingLinkedItem.StatusChangedAt = &now // Issue #1010: TTL clock for fingerprint release
 		existingLinkedItem.ReplacedAt = &now
 		existingLinkedItem.ReplacedByID = &linkedItem.ID
 		if err := s.linkedItemRepo.Update(ctx, existingLinkedItem); err != nil {
@@ -392,6 +494,7 @@ func (s *accountService) LinkAccounts(
 	}
 
 	// Step 9b: Convert Plaid accounts to domain accounts with user_account_id
+	institutionIDFromPlaid := plaidItem.GetInstitutionId()
 	accounts := make([]domain.Account, len(plaidAccounts))
 	for i, plaidAccount := range plaidAccounts {
 		account := convertPlaidAccount(plaidAccount, linkedItem.ID, user.ID)
@@ -422,6 +525,24 @@ func (s *accountService) LinkAccounts(
 			} else {
 				account.UserAccountID = &userAccount.ID
 			}
+		}
+
+		// Issue #1010: Compute fingerprint blind indices for storage
+		if s.enc != nil {
+			mask := "__NO_MASK__"
+			if account.Mask != nil {
+				mask = *account.Mask
+			}
+			subtype := "__NO_SUBTYPE__"
+			if account.Subtype != nil {
+				subtype = *account.Subtype
+			}
+			if account.PersistentAccountID != nil {
+				blind := computePersistentBlind(*account.PersistentAccountID, s.enc)
+				account.PersistentAccountIDBlindIdx = &blind
+			}
+			fallbackBlind := computeFallbackBlind(institutionIDFromPlaid, mask, account.Type, subtype, s.enc)
+			account.FallbackFingerprintBlindIdx = &fallbackBlind
 		}
 
 		accounts[i] = account
@@ -467,6 +588,11 @@ func convertPlaidAccount(plaidAccount plaid.AccountBase, linkedItemID, userID st
 
 	if mask, ok := plaidAccount.GetMaskOk(); ok && mask != nil {
 		account.Mask = mask
+	}
+
+	// Issue #1010: Extract persistent_account_id for cross-user uniqueness fingerprinting
+	if persistentID, ok := plaidAccount.GetPersistentAccountIdOk(); ok && persistentID != nil && *persistentID != "" {
+		account.PersistentAccountID = persistentID
 	}
 
 	// Balance information
