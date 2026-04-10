@@ -65,6 +65,9 @@ export const ANALYTICS_EVENTS = {
 
   // Admin
   ADMIN_PAGE_VIEWED: 'admin_page_viewed',
+  ADMIN_DLQ_RETRY: 'admin_dlq_retry',
+  ADMIN_DLQ_DELETE: 'admin_dlq_delete',
+  ADMIN_DLQ_BULK_DELETE: 'admin_dlq_bulk_delete',
 
   // Notifications (#952)
   NOTIFICATION_DRAWER_OPENED: 'notification_drawer_opened',
