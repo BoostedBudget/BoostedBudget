@@ -523,6 +523,7 @@ func main() {
 					accountRepo,
 					profileRepo,
 					db,
+					services.WithEncryptor(fieldEncryptor), // Issue #1010: Cross-user fingerprint checks
 				)
 
 				// plaidHandler migrated to Huma - Issue #559
