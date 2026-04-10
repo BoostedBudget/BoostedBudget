@@ -17,7 +17,18 @@ var (
 	ErrAccountNotFound = errors.New("account not found")
 	// ErrDuplicateAccount is returned when attempting to create an account that already exists
 	ErrDuplicateAccount = errors.New("account already exists for this user")
+	// ErrAccountOwnedByAnotherUser is returned when a fingerprint is already held by a different user (Issue #1010)
+	ErrAccountOwnedByAnotherUser = errors.New("one or more accounts are already linked by another user")
 )
+
+// FingerprintOwnership holds information about who owns a fingerprint and the state of their linked item.
+// Used during cross-user uniqueness check in LinkAccounts (Issue #1010).
+type FingerprintOwnership struct {
+	UserID          string
+	LinkedItemID    string
+	ItemStatus      domain.LinkedItemStatus
+	StatusChangedAt *time.Time
+}
 
 // AccountRepository defines the interface for account data access
 type AccountRepository interface {
@@ -91,6 +102,18 @@ type AccountRepository interface {
 	//
 	// Returns ErrAccountNotFound if account doesn't exist or user doesn't own it.
 	UpdateStatus(ctx context.Context, accountID, userID string, status domain.AccountStatus, replacedByID *string) error
+
+	// CheckFingerprintOwnership checks if a fingerprint blind index is already held by a different user.
+	// Returns ownership info (user, linked item, item status) if another user owns the fingerprint.
+	// Returns nil, nil if the fingerprint is unclaimed or only claimed by the requesting user.
+	// Issue #1010: Enforce Plaid item uniqueness across all users.
+	CheckFingerprintOwnership(ctx context.Context, fingerprintBlindIdx, excludeUserID string) (*FingerprintOwnership, error)
+
+	// ExpireAccountsByFingerprint marks all active accounts matching a fingerprint as 'expired'.
+	// This releases the partial UNIQUE index constraint so a new user can link the same account.
+	// Called when the 90-day TTL expires for a disconnected/revoked item.
+	// Issue #1010: Enforce Plaid item uniqueness across all users.
+	ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) error
 }
 
 // accountRepository implements AccountRepository using PostgreSQL
@@ -195,8 +218,9 @@ func (r *accountRepository) Create(ctx context.Context, account *domain.Account)
 		INSERT INTO accounts
 		(id, linked_item_id, user_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
 		 type, subtype, mask, current_balance, available_balance, currency_code,
+		 persistent_account_id_blind_idx, fallback_fingerprint_blind_idx,
 		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`
 
 	_, err := r.db.Exec(ctx, query,
@@ -213,15 +237,21 @@ func (r *accountRepository) Create(ctx context.Context, account *domain.Account)
 		account.CurrentBalance,
 		account.AvailableBalance,
 		account.CurrencyCode,
+		account.PersistentAccountIDBlindIdx,
+		account.FallbackFingerprintBlindIdx,
 		account.CreatedAt,
 		account.UpdatedAt,
 	)
 
 	if err != nil {
 		// Check for unique constraint violations
-		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			if strings.Contains(err.Error(), "unique_user_account") || strings.Contains(err.Error(), "unique_accounts_plaid_id_blind") {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "duplicate key") || strings.Contains(errMsg, "unique constraint") {
+			if strings.Contains(errMsg, "unique_user_account") || strings.Contains(errMsg, "unique_accounts_plaid_id_blind") {
 				return ErrDuplicateAccount
+			}
+			if strings.Contains(errMsg, "unique_persistent_account_id_active") || strings.Contains(errMsg, "unique_fallback_fingerprint_active") {
+				return ErrAccountOwnedByAnotherUser
 			}
 		}
 		return err
@@ -247,8 +277,9 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 		INSERT INTO accounts
 		(id, linked_item_id, user_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
 		 type, subtype, mask, current_balance, available_balance, currency_code,
+		 persistent_account_id_blind_idx, fallback_fingerprint_blind_idx,
 		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`
 
 	now := time.Now()
@@ -286,15 +317,21 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 			account.CurrentBalance,
 			account.AvailableBalance,
 			account.CurrencyCode,
+			account.PersistentAccountIDBlindIdx,
+			account.FallbackFingerprintBlindIdx,
 			account.CreatedAt,
 			account.UpdatedAt,
 		)
 
 		if err != nil {
 			// Check for unique constraint violations
-			if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-				if strings.Contains(err.Error(), "unique_user_account") || strings.Contains(err.Error(), "unique_accounts_plaid_id_blind") {
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "duplicate key") || strings.Contains(errMsg, "unique constraint") {
+				if strings.Contains(errMsg, "unique_user_account") || strings.Contains(errMsg, "unique_accounts_plaid_id_blind") {
 					return ErrDuplicateAccount
+				}
+				if strings.Contains(errMsg, "unique_persistent_account_id_active") || strings.Contains(errMsg, "unique_fallback_fingerprint_active") {
+					return ErrAccountOwnedByAnotherUser
 				}
 			}
 			return err
@@ -466,12 +503,14 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 	return accounts, nil
 }
 
-// CountByUserID counts the total number of accounts for a user
+// CountByUserID counts the total number of accounts for a user.
+// Excludes accounts with status='expired' (Issue #1010: TTL-released fingerprints).
 func (r *accountRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
 	query := `
 		SELECT COUNT(*)
 		FROM accounts
 		WHERE user_id = $1
+		AND status != 'expired'
 	`
 
 	var count int
@@ -802,4 +841,49 @@ func (r *accountRepository) UpdateStatus(ctx context.Context, accountID, userID 
 		return ErrAccountNotFound
 	}
 	return nil
+}
+
+// CheckFingerprintOwnership checks if a fingerprint blind index is already held by a different user.
+// Returns ownership info if another active account (owned by a different user) matches the fingerprint.
+// Returns nil, nil if the fingerprint is unclaimed or only claimed by the requesting user.
+// Issue #1010: Enforce Plaid item uniqueness across all users.
+func (r *accountRepository) CheckFingerprintOwnership(ctx context.Context, fingerprintBlindIdx, excludeUserID string) (*FingerprintOwnership, error) {
+	query := `
+		SELECT a.user_id, a.linked_item_id, li.status, li.status_changed_at
+		FROM accounts a
+		JOIN linked_items li ON a.linked_item_id = li.id
+		WHERE (a.persistent_account_id_blind_idx = $1 OR a.fallback_fingerprint_blind_idx = $1)
+		  AND a.status = 'active'
+		  AND a.user_id != $2
+		LIMIT 1
+	`
+
+	var ownership FingerprintOwnership
+	err := r.db.QueryRow(ctx, query, fingerprintBlindIdx, excludeUserID).Scan(
+		&ownership.UserID,
+		&ownership.LinkedItemID,
+		&ownership.ItemStatus,
+		&ownership.StatusChangedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &ownership, nil
+}
+
+// ExpireAccountsByFingerprint marks all active accounts matching a fingerprint as 'expired'.
+// This releases the partial UNIQUE index constraint so a new user can link the same account.
+// Issue #1010: Enforce Plaid item uniqueness across all users.
+func (r *accountRepository) ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) error {
+	query := `
+		UPDATE accounts
+		SET status = 'expired', updated_at = NOW()
+		WHERE (persistent_account_id_blind_idx = $1 OR fallback_fingerprint_blind_idx = $1)
+		  AND status = 'active'
+	`
+	_, err := r.db.Exec(ctx, query, fingerprintBlindIdx)
+	return err
 }

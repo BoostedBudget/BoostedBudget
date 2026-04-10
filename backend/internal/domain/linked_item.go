@@ -68,6 +68,9 @@ type LinkedItem struct {
 	// NULL means never synced.
 	LiabilitiesLastSyncedAt *time.Time `json:"liabilities_last_synced_at,omitempty" db:"liabilities_last_synced_at"`
 
+	// Status change tracking (Issue #1010: TTL clock for fingerprint release after 90 days)
+	StatusChangedAt *time.Time `json:"status_changed_at,omitempty" db:"status_changed_at"`
+
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }

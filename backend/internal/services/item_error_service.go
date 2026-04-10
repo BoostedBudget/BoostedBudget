@@ -317,6 +317,7 @@ func (s *itemErrorService) HandlePermissionRevoked(
 	// 3. Update LinkedItem status to "revoked" (critical)
 	now := time.Now()
 	linkedItem.Status = "revoked"
+	linkedItem.StatusChangedAt = &now // Issue #1010: TTL clock for fingerprint release
 	linkedItem.ErrorCode = &errorCode
 	linkedItem.ErrorMessage = &errorMessage
 	linkedItem.LastErrorAt = &now

@@ -122,6 +122,8 @@ func MapError(err error) error {
 		return huma.Error409Conflict("User account already exists")
 	case errors.Is(err, repository.ErrPaddleWebhookDuplicate):
 		return huma.Error409Conflict("Paddle webhook event already processed")
+	case errors.Is(err, repository.ErrAccountOwnedByAnotherUser):
+		return huma.Error409Conflict("This bank account is already linked by another user. Each physical account may only be connected to one BoostedBudget account at a time.")
 
 	// ================================
 	// 403 Forbidden - Tier limits exceeded
