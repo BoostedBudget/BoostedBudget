@@ -313,7 +313,12 @@ func main() {
 		auditLogger := &mockAuditLogger{}
 
 		// Create services
-		profileService := services.NewProfileService(profileRepo)
+		profileService := services.NewProfileService(services.NewProfileServiceDeps{
+			Repo:         profileRepo,
+			IdentityRepo: identityRepo,
+			DB:           db,
+			JobQueue:     nil, // Set after jobQueue is created via SetJobQueue
+		})
 		privacyService := services.NewPrivacyService(privacyRepo)
 		transactionService := services.NewTransactionService(transactionRepo)
 		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
@@ -923,6 +928,9 @@ func main() {
 					}
 					plaidSyncWorker.SetJobQueue(jobQueue)
 					appLogger.Info("Plaid sync worker connected to job queue for follow-up jobs")
+
+					profileService.SetJobQueue(jobQueue)
+					appLogger.Info("Profile service connected to job queue for email propagation")
 
 					// Issue #668: Wire up job queue to cleanup check worker
 					if itemCleanupCheckWorker != nil {
