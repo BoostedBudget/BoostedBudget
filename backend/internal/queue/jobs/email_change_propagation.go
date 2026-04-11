@@ -82,8 +82,8 @@ func (w *EmailChangePropagationWorker) Work(ctx context.Context, job *river.Job[
 		return fmt.Errorf("email propagation: Clerk update failed for user %s: %w", args.UserID, err)
 	}
 
-	// Propagate to Paddle only if user has a Paddle customer record.
-	if user.PaddleCustomerID != nil && *user.PaddleCustomerID != "" {
+	// Propagate to Paddle only if service configured and user has a Paddle customer record.
+	if w.paddleService != nil && user.PaddleCustomerID != nil && *user.PaddleCustomerID != "" {
 		if err := w.paddleService.UpdateCustomerEmail(ctx, *user.PaddleCustomerID, user.Email); err != nil {
 			return fmt.Errorf("email propagation: Paddle update failed for user %s: %w", args.UserID, err)
 		}

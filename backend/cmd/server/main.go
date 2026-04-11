@@ -232,6 +232,9 @@ func main() {
 	// Issue #633: Declare DLQ cleanup check worker
 	var dlqCleanupCheckWorker *jobs.DLQCleanupCheckWorker
 
+	// Issue #1007: Declare email change propagation worker
+	var emailChangePropagationWorker *jobs.EmailChangePropagationWorker
+
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
 	var ruleSchedulerManager *workers.RuleSchedulerManager
 
@@ -844,6 +847,15 @@ func main() {
 				})
 				appLogger.Info("Item cleanup worker created")
 
+				// Issue #1007: Create EmailChangePropagationWorker for async email propagation to Clerk + Paddle
+				emailChangePropagationWorker = jobs.NewEmailChangePropagationWorker(jobs.EmailChangePropagationWorkerDeps{
+					ProfileRepo:   profileRepo,
+					ClerkService:  services.NewClerkService(cfg.ClerkSecretKey),
+					PaddleService: paddleService, // nil if Paddle not configured — worker nil-checks before calling
+					Logger:        appLogger,
+				})
+				appLogger.Info("Email change propagation worker created")
+
 				// Create River workers and register all workers
 				riverWorkers := river.NewWorkers()
 				river.AddWorker(riverWorkers, webhookProcessingWorker)
@@ -907,6 +919,10 @@ func main() {
 				appLogger.Info("Investment holdings sync worker registered with River")
 				river.AddWorker(riverWorkers, investmentTransactionsSyncWorker)
 				appLogger.Info("Investment transactions sync worker registered with River")
+
+				// Issue #1007: Register email change propagation worker
+				river.AddWorker(riverWorkers, emailChangePropagationWorker)
+				appLogger.Info("Email change propagation worker registered with River")
 
 				// Create River client
 				riverClient, err := riverqueue.NewClient(db, riverWorkers, riverConfig)
