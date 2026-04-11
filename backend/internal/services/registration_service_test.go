@@ -52,6 +52,11 @@ func (m *MockUserIdentityRepository) UpdateLastUsed(ctx context.Context, clerkUs
 	return args.Error(0)
 }
 
+func (m *MockUserIdentityRepository) UpdatePrimaryIdentityEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	args := m.Called(ctx, tx, userID, plainEmail)
+	return args.Error(0)
+}
+
 func (m *MockUserIdentityRepository) SetPrimary(ctx context.Context, identityID string) error {
 	args := m.Called(ctx, identityID)
 	return args.Error(0)
