@@ -315,6 +315,10 @@ func main() {
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
 
+		// Clerk Backend API service — used by deletion service and email propagation worker
+		clerkService := services.NewClerkService(cfg.ClerkSecretKey)
+		appLogger.Info("Clerk Backend API service initialized")
+
 		// Create services
 		profileService := services.NewProfileService(services.NewProfileServiceDeps{
 			Repo:         profileRepo,
@@ -408,10 +412,6 @@ func main() {
 
 		// Create deletion services (if token secret configured)
 		if cfg.DeletionTokenSecret != "" {
-			// Initialize Clerk Backend API service
-			clerkService := services.NewClerkService(cfg.ClerkSecretKey)
-			appLogger.Info("Clerk Backend API service initialized")
-
 			// Initialize Deletion service (reuses auditLogger and emailService created earlier)
 			// Issue #668: plaidCleanupSvc is nil here - will be wired later after plaidService is created
 			// Uses assignment (=) not declaration (:=) to assign to outer-scoped deletionService variable
@@ -850,7 +850,7 @@ func main() {
 				// Issue #1007: Create EmailChangePropagationWorker for async email propagation to Clerk + Paddle
 				emailChangePropagationWorker = jobs.NewEmailChangePropagationWorker(jobs.EmailChangePropagationWorkerDeps{
 					ProfileRepo:   profileRepo,
-					ClerkService:  services.NewClerkService(cfg.ClerkSecretKey),
+					ClerkService:  clerkService,
 					PaddleService: paddleService, // nil if Paddle not configured — worker nil-checks before calling
 					Logger:        appLogger,
 				})
@@ -921,8 +921,10 @@ func main() {
 				appLogger.Info("Investment transactions sync worker registered with River")
 
 				// Issue #1007: Register email change propagation worker
-				river.AddWorker(riverWorkers, emailChangePropagationWorker)
-				appLogger.Info("Email change propagation worker registered with River")
+				if emailChangePropagationWorker != nil {
+					river.AddWorker(riverWorkers, emailChangePropagationWorker)
+					appLogger.Info("Email change propagation worker registered with River")
+				}
 
 				// Create River client
 				riverClient, err := riverqueue.NewClient(db, riverWorkers, riverConfig)
