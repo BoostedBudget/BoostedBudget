@@ -46,6 +46,11 @@ type UserIdentityRepository interface {
 	// Called during login to track when each identity was last used
 	// Returns ErrIdentityNotFound if the identity doesn't exist
 	UpdateLastUsed(ctx context.Context, clerkUserID string) error
+
+	// UpdatePrimaryIdentityEmailTx updates the email and resets email_verified=false on the
+	// primary identity (is_primary=true) for the given user, within an existing transaction.
+	// If the user has no primary identity, the update is a no-op (no error).
+	UpdatePrimaryIdentityEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error
 }
 
 // userIdentityRepository implements UserIdentityRepository using PostgreSQL
@@ -314,6 +319,28 @@ func (r *userIdentityRepository) CreateTx(ctx context.Context, tx pgx.Tx, identi
 	}
 
 	return nil
+}
+
+// UpdatePrimaryIdentityEmailTx updates the email and resets email_verified=false on the
+// primary identity for the given user, within an existing transaction.
+// 0 rows affected is a no-op (not an error).
+func (r *userIdentityRepository) UpdatePrimaryIdentityEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	encryptedEmail, err := r.enc.EncryptString(plainEmail)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt identity email: %w", err)
+	}
+	now := time.Now()
+
+	query := `
+		UPDATE user_identities
+		SET email = $1,
+		    email_verified = false,
+		    updated_at = $2
+		WHERE user_id = $3
+		  AND is_primary = true
+	`
+	_, err = tx.Exec(ctx, query, encryptedEmail, now, userID)
+	return err
 }
 
 // UpdateLastUsed updates the last_used_at and updated_at timestamps for an identity
