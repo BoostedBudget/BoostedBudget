@@ -191,6 +191,22 @@ components:
       required:
         - types
       type: object
+    AddDLQNotesRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AddDLQNotesRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        notes:
+          description: Admin notes for this dead letter job
+          type: string
+      required:
+        - notes
+      type: object
     AdminCreateOverrideInputBody:
       additionalProperties: false
       properties:
@@ -1551,6 +1567,136 @@ components:
         - connections
         - latency_ms
       type: object
+    DeadLetterBulkDeleteRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DeadLetterBulkDeleteRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        end_date:
+          type: string
+        kind:
+          type: string
+        retried:
+          type: boolean
+        start_date:
+          type: string
+        user_id:
+          type: string
+      type: object
+    DeadLetterBulkDeleteResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DeadLetterBulkDeleteResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        deleted:
+          format: int64
+          type: integer
+      required:
+        - deleted
+      type: object
+    DeadLetterJob:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DeadLetterJob.json
+          format: uri
+          readOnly: true
+          type: string
+        args: {}
+        created_at:
+          format: date-time
+          type: string
+        errors: {}
+        failed_at:
+          format: date-time
+          type: string
+        id:
+          format: int64
+          type: integer
+        kind:
+          type: string
+        max_attempts:
+          format: int64
+          type: integer
+        notes:
+          type: string
+        notified:
+          type: boolean
+        original_job_id:
+          format: int64
+          type: integer
+        queue:
+          type: string
+        retried_at:
+          format: date-time
+          type: string
+        retry_job_id:
+          format: int64
+          type: integer
+        user_id:
+          type: string
+      required:
+        - id
+        - original_job_id
+        - kind
+        - queue
+        - args
+        - errors
+        - max_attempts
+        - created_at
+        - failed_at
+        - notified
+      type: object
+    DeadLetterJobListResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DeadLetterJobListResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        has_more:
+          type: boolean
+        jobs:
+          items:
+            $ref: "#/components/schemas/DeadLetterJob"
+          type:
+            - array
+            - "null"
+        page:
+          format: int64
+          type: integer
+        page_size:
+          format: int64
+          type: integer
+        total:
+          format: int64
+          type: integer
+        total_pages:
+          format: int64
+          type: integer
+      required:
+        - jobs
+        - total
+        - page
+        - page_size
+        - total_pages
+        - has_more
+      type: object
     DeadLetterMetrics:
       additionalProperties: false
       properties:
@@ -1563,6 +1709,65 @@ components:
       required:
         - count
         - oldest_job_age_hours
+      type: object
+    DeadLetterRetryResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DeadLetterRetryResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        dead_letter_id:
+          format: int64
+          type: integer
+        message:
+          type: string
+        new_job_id:
+          format: int64
+          type: integer
+        success:
+          type: boolean
+      required:
+        - success
+        - message
+        - dead_letter_id
+      type: object
+    DeadLetterStatsResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DeadLetterStatsResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        by_kind:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        last_24_hours:
+          format: int64
+          type: integer
+        retried:
+          format: int64
+          type: integer
+        total:
+          format: int64
+          type: integer
+        unnotified:
+          format: int64
+          type: integer
+      required:
+        - total
+        - unnotified
+        - retried
+        - last_24_hours
+        - by_kind
       type: object
     ErrorDetail:
       additionalProperties: false
@@ -4580,6 +4785,266 @@ paths:
       security:
         - clerk: []
       summary: Check if current user is admin
+      tags:
+        - Admin
+  /api/v1/admin/dead-letter-jobs:
+    get:
+      operationId: listAdminDeadLetterJobs
+      parameters:
+        - explode: false
+          in: query
+          name: page
+          schema:
+            default: 1
+            format: int64
+            minimum: 1
+            type: integer
+        - explode: false
+          in: query
+          name: page_size
+          schema:
+            default: 20
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+        - description: Filter by job kind
+          explode: false
+          in: query
+          name: kind
+          schema:
+            description: Filter by job kind
+            type: string
+        - description: Filter by user ID extracted from args
+          explode: false
+          in: query
+          name: user_id
+          schema:
+            description: Filter by user ID extracted from args
+            type: string
+        - description: "Filter by retried status: 'true', 'false', or empty for all"
+          explode: false
+          in: query
+          name: retried
+          schema:
+            description: "Filter by retried status: 'true', 'false', or empty for all"
+            type: string
+        - description: ISO 8601 start date filter
+          explode: false
+          in: query
+          name: start_date
+          schema:
+            description: ISO 8601 start date filter
+            type: string
+        - description: ISO 8601 end date filter
+          explode: false
+          in: query
+          name: end_date
+          schema:
+            description: ISO 8601 end date filter
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadLetterJobListResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List dead letter jobs (admin)
+      tags:
+        - Admin
+  /api/v1/admin/dead-letter-jobs/bulk-delete:
+    post:
+      operationId: bulkDeleteAdminDeadLetterJobs
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeadLetterBulkDeleteRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadLetterBulkDeleteResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Bulk delete dead letter jobs (admin)
+      tags:
+        - Admin
+  /api/v1/admin/dead-letter-jobs/stats:
+    get:
+      operationId: getAdminDeadLetterJobStats
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadLetterStatsResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get dead letter job statistics (admin)
+      tags:
+        - Admin
+  /api/v1/admin/dead-letter-jobs/{id}:
+    delete:
+      operationId: deleteAdminDeadLetterJob
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: int64
+            type: integer
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Delete a dead letter job (admin)
+      tags:
+        - Admin
+    get:
+      operationId: getAdminDeadLetterJobDetail
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadLetterJob"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get dead letter job detail (admin)
+      tags:
+        - Admin
+  /api/v1/admin/dead-letter-jobs/{id}/args:
+    get:
+      operationId: getAdminDeadLetterJobArgs
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties: {}
+                type: object
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get raw (unredacted) job args (admin)
+      tags:
+        - Admin
+  /api/v1/admin/dead-letter-jobs/{id}/notes:
+    post:
+      operationId: addAdminDeadLetterJobNotes
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: int64
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddDLQNotesRequest"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Add admin notes to a dead letter job (admin)
+      tags:
+        - Admin
+  /api/v1/admin/dead-letter-jobs/{id}/retry:
+    post:
+      operationId: retryAdminDeadLetterJob
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadLetterRetryResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Retry a dead letter job (admin)
       tags:
         - Admin
   /api/v1/admin/payments/failures:

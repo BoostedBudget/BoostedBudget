@@ -4,19 +4,21 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
 // DeadLetterJobRepository handles persistence of dead letter jobs.
 type DeadLetterJobRepository struct {
-	db *pgxpool.Pool
+	db DB
 }
 
 // NewDeadLetterJobRepository creates a new dead letter job repository.
-func NewDeadLetterJobRepository(db *pgxpool.Pool) *DeadLetterJobRepository {
+func NewDeadLetterJobRepository(db DB) *DeadLetterJobRepository {
 	return &DeadLetterJobRepository{db: db}
 }
 
@@ -72,6 +74,150 @@ func (r *DeadLetterJobRepository) GetByID(ctx context.Context, id int64) (*domai
 		return nil, err
 	}
 	return job, nil
+}
+
+// ListAll returns a paginated list of dead letter jobs with optional filters.
+// Returns the jobs, total count, and any error.
+func (r *DeadLetterJobRepository) ListAll(ctx context.Context, filters domain.DeadLetterJobFilters, limit, offset int) ([]*domain.DeadLetterJob, int, error) {
+	where, args := buildDLQWhereClause(filters)
+
+	listQuery := fmt.Sprintf(`
+		SELECT id, original_job_id, kind, queue, args, errors, max_attempts,
+		       created_at, failed_at, user_id, notified, retried_at, retry_job_id, notes
+		FROM dead_letter_jobs
+		%s
+		ORDER BY failed_at DESC
+		LIMIT %d OFFSET %d`, where, limit, offset)
+
+	rows, err := r.db.Query(ctx, listQuery, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var jobs []*domain.DeadLetterJob
+	for rows.Next() {
+		job := &domain.DeadLetterJob{}
+		if err := rows.Scan(
+			&job.ID, &job.OriginalJobID, &job.Kind, &job.Queue,
+			&job.Args, &job.Errors, &job.MaxAttempts,
+			&job.CreatedAt, &job.FailedAt, &job.UserID, &job.Notified,
+			&job.RetriedAt, &job.RetryJobID, &job.Notes,
+		); err != nil {
+			return nil, 0, err
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM dead_letter_jobs %s`, where)
+	var total int
+	if err := r.db.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	return jobs, total, nil
+}
+
+// buildDLQWhereClause constructs a WHERE clause and args slice from DLQ filters.
+func buildDLQWhereClause(filters domain.DeadLetterJobFilters) (string, []interface{}) {
+	var conditions []string
+	var args []interface{}
+	argIdx := 1
+
+	if filters.Kind != nil {
+		conditions = append(conditions, fmt.Sprintf("kind = $%d", argIdx))
+		args = append(args, *filters.Kind)
+		argIdx++
+	}
+	if filters.UserID != nil {
+		conditions = append(conditions, fmt.Sprintf("user_id = $%d", argIdx))
+		args = append(args, *filters.UserID)
+		argIdx++
+	}
+	if filters.StartDate != nil {
+		conditions = append(conditions, fmt.Sprintf("failed_at >= $%d", argIdx))
+		args = append(args, *filters.StartDate)
+		argIdx++
+	}
+	if filters.EndDate != nil {
+		conditions = append(conditions, fmt.Sprintf("failed_at <= $%d", argIdx))
+		args = append(args, *filters.EndDate)
+		argIdx++
+	}
+	if filters.Retried != nil {
+		if *filters.Retried {
+			conditions = append(conditions, "retried_at IS NOT NULL")
+		} else {
+			conditions = append(conditions, "retried_at IS NULL")
+		}
+	}
+
+	if len(conditions) == 0 {
+		return "", args
+	}
+	return "WHERE " + strings.Join(conditions, " AND "), args
+}
+
+// DeleteByID permanently deletes a single dead letter job by ID.
+func (r *DeadLetterJobRepository) DeleteByID(ctx context.Context, id int64) error {
+	query := `DELETE FROM dead_letter_jobs WHERE id = $1`
+	_, err := r.db.Exec(ctx, query, id)
+	return err
+}
+
+// DeleteOlderThan deletes dead letter jobs older than the given time.
+// If skipWithNotes is true, jobs that have admin notes are preserved.
+// Returns the number of deleted rows.
+func (r *DeadLetterJobRepository) DeleteOlderThan(ctx context.Context, before time.Time, skipWithNotes bool) (int64, error) {
+	var query string
+	if skipWithNotes {
+		query = `DELETE FROM dead_letter_jobs WHERE failed_at < $1 AND notes IS NULL`
+	} else {
+		query = `DELETE FROM dead_letter_jobs WHERE failed_at < $1`
+	}
+
+	result, err := r.db.Exec(ctx, query, before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+// DeleteByFilters bulk-deletes dead letter jobs matching the given filters.
+// Returns the number of deleted rows.
+func (r *DeadLetterJobRepository) DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error) {
+	where, args := buildDLQWhereClause(filters)
+	query := fmt.Sprintf(`DELETE FROM dead_letter_jobs %s`, where)
+
+	result, err := r.db.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+// AtomicMarkRetried atomically claims a DLQ job for retry using a compare-and-set.
+// Returns true if the claim succeeded (retried_at was NULL), false if already retried.
+// This prevents double-retry race conditions at the database level.
+func (r *DeadLetterJobRepository) AtomicMarkRetried(ctx context.Context, id int64, retryJobID int64) (bool, error) {
+	query := `
+		UPDATE dead_letter_jobs
+		SET retried_at = $1, retry_job_id = $2
+		WHERE id = $3 AND retried_at IS NULL
+		RETURNING id`
+
+	var returnedID int64
+	err := r.db.QueryRow(ctx, query, time.Now(), retryJobID, id).Scan(&returnedID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // ListUnnotified returns dead letter jobs where users haven't been notified yet.
@@ -254,6 +400,13 @@ type DeadLetterStats struct {
 	Unnotified  int64 `json:"unnotified"`
 	Retried     int64 `json:"retried"`
 	Last24Hours int64 `json:"last_24_hours"`
+}
+
+// CleanupOldJobs deletes dead letter entries older than retentionDays, skipping entries with notes.
+// This is a convenience wrapper around DeleteOlderThan used by the DLQ cleanup worker.
+func (r *DeadLetterJobRepository) CleanupOldJobs(ctx context.Context, retentionDays int) (int64, error) {
+	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	return r.DeleteOlderThan(ctx, cutoff, true)
 }
 
 // UserIDExtractor extracts user ID from job args for different job types.

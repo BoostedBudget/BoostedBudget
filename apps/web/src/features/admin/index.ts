@@ -40,6 +40,8 @@ export { HealthDashboardPage } from './components/HealthDashboardPage'
 export { SubscriptionOverrideModal } from './components/SubscriptionOverrideModal'
 export { WebhooksPage } from './components/WebhooksPage'
 export { WebhookDetailModal } from './components/WebhookDetailModal'
+export { DeadLetterPage } from './components/DeadLetterPage'
+export { DeadLetterDetailModal } from './components/DeadLetterDetailModal'
 
 // Hooks for user management (Issue #644)
 export { useUserFilters } from './hooks/useUserFilters'
@@ -52,3 +54,7 @@ export type { AdminSubscriptionDetailOutputBody } from './hooks/useAdminSubscrip
 // Hooks for webhook management (Issue #747)
 export { useWebhookFilters } from './hooks/useWebhookFilters'
 export type { UseWebhookFiltersResult, WebhookFilters } from './hooks/useWebhookFilters'
+
+// Hooks for DLQ management (Issue #633)
+export { useDeadLetterFilters } from './hooks/useDeadLetterFilters'
+export type { UseDeadLetterFiltersResult, DeadLetterFilters } from './hooks/useDeadLetterFilters'
