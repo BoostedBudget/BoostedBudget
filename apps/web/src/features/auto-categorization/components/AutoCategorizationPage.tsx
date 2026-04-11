@@ -10,6 +10,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { Tags } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { useAutoCategorizationRules } from '../hooks/useAutoCategorizationRules'
 import { useRuleFilters } from '../hooks/useRuleFilters'
 import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
@@ -62,6 +63,9 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
   const [editorMode, setEditorMode] = useState<EditorMode>(null)
   const [editingRule, setEditingRule] = useState<CategorizationRule | null>(null)
   const [view, setView] = useState<ListView>(getInitialView)
+  // Issue #960: Table view delete confirmation (cards view uses AutoCategorizationRuleCard's built-in dialog)
+  const [tableDeleteTarget, setTableDeleteTarget] = useState<CategorizationRule | null>(null)
+  const [tableDeleting, setTableDeleting] = useState(false)
 
   // Issue #590: Sorting state
   const [sortColumn, setSortColumn] = useState<RuleSortColumn | undefined>(undefined)
@@ -352,7 +356,7 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
             rules={filteredAndSortedRules}
             onToggle={handleTableToggle}
             onEdit={handleEditClick}
-            onDelete={(rule) => handleDelete(rule.id)}
+            onDelete={(rule) => setTableDeleteTarget(rule)}
             loading={loading}
             sortable
             sortColumn={sortColumn}
@@ -370,6 +374,26 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
           />
         )}
       </div>
+
+      {/* Issue #960: Table view delete confirmation */}
+      <ConfirmationDialog
+        open={tableDeleteTarget !== null}
+        onOpenChange={(open) => !open && !tableDeleting && setTableDeleteTarget(null)}
+        onConfirm={async () => {
+          if (!tableDeleteTarget) return
+          setTableDeleting(true)
+          try {
+            await handleDelete(tableDeleteTarget.id)
+            setTableDeleteTarget(null)
+          } finally {
+            setTableDeleting(false)
+          }
+        }}
+        title="Delete Rule"
+        description={tableDeleteTarget ? `Are you sure you want to delete "${tableDeleteTarget.name}"? This action cannot be undone.` : ''}
+        variant="destructive"
+        loading={tableDeleting}
+      />
     </div>
   )
 }

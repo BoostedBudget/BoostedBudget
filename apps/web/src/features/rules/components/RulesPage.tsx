@@ -13,6 +13,7 @@ import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, Loader2, Plus, Zap } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { Button } from '@/components/ui/button'
 import {
   useGetAutomationRules,
@@ -28,11 +29,6 @@ import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { RuleCard } from './RuleCard'
 import { RuleTable } from './RuleTable'
-
-interface DeleteConfirmState {
-  isOpen: boolean
-  rule: AutomationRule | null
-}
 
 /**
  * RulesPage displays the list of automation rules with card/table toggle.
@@ -56,10 +52,7 @@ export function RulesPage() {
   }
 
   const [view, setView] = useState<ListView>(getInitialView)
-  const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState>({
-    isOpen: false,
-    rule: null,
-  })
+  const [deleteConfirm, setDeleteConfirm] = useState<AutomationRule | null>(null)
 
   // Fetch rules
   const {
@@ -132,26 +125,26 @@ export function RulesPage() {
   )
 
   const handleDeleteClick = useCallback((rule: AutomationRule) => {
-    setDeleteConfirm({ isOpen: true, rule })
+    setDeleteConfirm(rule)
   }, [])
 
   const handleDeleteConfirm = useCallback(() => {
-    if (deleteConfirm.rule) {
+    if (deleteConfirm) {
       deleteMutation.mutate(
-        { id: deleteConfirm.rule.id },
+        { id: deleteConfirm.id },
         {
           onSuccess: () => {
             trackEvent(ANALYTICS_EVENTS.RULE_DELETED)
-            setDeleteConfirm({ isOpen: false, rule: null })
+            setDeleteConfirm(null)
             refetch()
           },
         }
       )
     }
-  }, [deleteConfirm.rule, deleteMutation, trackEvent, refetch])
+  }, [deleteConfirm, deleteMutation, trackEvent, refetch])
 
   const handleDeleteCancel = useCallback(() => {
-    setDeleteConfirm({ isOpen: false, rule: null })
+    setDeleteConfirm(null)
   }, [])
 
   const handleViewChange = useCallback((newView: ListView) => {
@@ -279,47 +272,16 @@ export function RulesPage() {
         )}
       </div>
 
-      {/* Delete Confirmation Dialog */}
-      {deleteConfirm.isOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          onClick={handleDeleteCancel}
-          role="presentation"
-        >
-          <div
-            className="w-[90%] max-w-[400px] rounded-xl bg-card p-6 shadow-xl"
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="delete-dialog-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="delete-dialog-title" className="mb-3 text-lg font-semibold text-foreground">
-              Delete Rule
-            </h2>
-            <p className="mb-6 text-sm leading-relaxed text-muted-foreground">
-              Are you sure you want to delete "{deleteConfirm.rule?.name}"? This
-              action cannot be undone.
-            </p>
-            <div className="flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={handleDeleteCancel}
-                className="rounded-md bg-muted px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/80"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleDeleteConfirm}
-                className="rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition-colors hover:bg-destructive/90"
-                aria-label="Confirm delete"
-              >
-                Confirm
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Delete Confirmation Dialog — Issue #960 */}
+      <ConfirmationDialog
+        open={deleteConfirm !== null}
+        onOpenChange={(open) => !open && handleDeleteCancel()}
+        onConfirm={handleDeleteConfirm}
+        title="Delete Rule"
+        description={deleteConfirm ? `Are you sure you want to delete "${deleteConfirm.name}"? This action cannot be undone.` : ''}
+        variant="destructive"
+        loading={deleteMutation.isPending}
+      />
     </div>
   )
 }

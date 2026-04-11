@@ -1,12 +1,11 @@
 import { useCallback, useMemo, useState } from 'react'
-import React from 'react'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { useQueryClient } from '@tanstack/react-query'
 import { Eye, EyeOff, Landmark } from 'lucide-react'
 import { toast } from 'sonner'
 import { EmptyState } from '@/components/ui/empty-state'
-import { ConfirmDeleteDialog } from '@/components/ui/confirm-delete-dialog'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { PlaidLinkButton } from './PlaidLinkButton'
 import { AccountCard } from './AccountCard'
 import { AccountTable, type SortColumn as AccountSortColumn, type SortDirection } from './components/AccountTable'
@@ -459,8 +458,8 @@ export function AccountsPage() {
         isSaving={isUpdating}
       />
 
-      {/* Issue #978: Delete confirmation dialog */}
-      <ConfirmDeleteDialog
+      {/* Issue #960: Delete confirmation dialog */}
+      <ConfirmationDialog
         open={accountToDelete !== null}
         onOpenChange={(open) => { if (!open) setAccountToDelete(null) }}
         onConfirm={() => accountToDelete && handleDeleteAccount(accountToDelete)}

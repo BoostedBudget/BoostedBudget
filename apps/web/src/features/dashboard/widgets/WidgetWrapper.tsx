@@ -15,7 +15,7 @@
 import { useState } from 'react'
 import { XMarkIcon } from '@heroicons/react/24/outline'
 import { getWidget } from './registry'
-import { RemoveWidgetDialog } from './RemoveWidgetDialog'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import type { WidgetType } from '../types'
 import { ReadOnlyGuard } from '@/auth'
 
@@ -67,15 +67,18 @@ export function WidgetWrapper({
       {/* Widget content - min-h-0 enables flex shrinking below content size (Issue #410) */}
       <div className="flex-1 min-h-0 overflow-auto p-4">{children}</div>
 
-      {/* Remove confirmation dialog - Issue #412 */}
-      <RemoveWidgetDialog
-        isOpen={showRemoveDialog}
-        widgetTitle={definition?.title || widgetType}
+      {/* Remove confirmation dialog - Issue #412, #960 */}
+      <ConfirmationDialog
+        open={showRemoveDialog}
+        onOpenChange={setShowRemoveDialog}
         onConfirm={() => {
           setShowRemoveDialog(false)
           onRemove()
         }}
-        onCancel={() => setShowRemoveDialog(false)}
+        title="Remove Widget"
+        description={`Are you sure you want to remove "${definition?.title || widgetType}" from your dashboard? You can add it back anytime from the widget catalog.`}
+        variant="warning"
+        confirmButtonText="Remove"
       />
     </div>
   )
