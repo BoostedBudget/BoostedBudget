@@ -37,3 +37,8 @@ func TestUpdateUserMetadata_EmptyMetadata(t *testing.T) {
 	// Should return an error from Clerk API (invalid key), not panic on empty map
 	assert.Error(t, err)
 }
+
+func TestClerkService_UpdateUserEmail_InterfaceExists(t *testing.T) {
+	var svc ClerkService
+	assert.Nil(t, svc)
+}

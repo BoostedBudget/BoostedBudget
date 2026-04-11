@@ -196,6 +196,11 @@ func (m *MockClerkService) UpdateUserMetadata(ctx context.Context, clerkUserID s
 	return args.Error(0)
 }
 
+func (m *MockClerkService) UpdateUserEmail(ctx context.Context, clerkUserID, newEmail string) error {
+	args := m.Called(ctx, clerkUserID, newEmail)
+	return args.Error(0)
+}
+
 // MockAuditLogger for testing
 type MockAuditLogger struct {
 	mock.Mock

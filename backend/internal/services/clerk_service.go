@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/clerk/clerk-sdk-go/v2"
+	"github.com/clerk/clerk-sdk-go/v2/emailaddress"
 	"github.com/clerk/clerk-sdk-go/v2/user"
 )
 
@@ -21,6 +22,12 @@ type ClerkService interface {
 	// Merges the provided metadata with existing public metadata.
 	// Returns nil if update succeeds or user doesn't exist.
 	UpdateUserMetadata(ctx context.Context, clerkUserID string, metadata map[string]interface{}) error
+
+	// UpdateUserEmail adds a new unverified email address to the Clerk user (non-primary).
+	// Clerk will send a verification email to the new address.
+	// The old email remains primary until the user verifies the new one.
+	// Returns nil if the Clerk user doesn't exist (404 — idempotent).
+	UpdateUserEmail(ctx context.Context, clerkUserID, newEmail string) error
 }
 
 // clerkService implements ClerkService using the official Clerk Go SDK.
@@ -83,6 +90,27 @@ func (s *clerkService) UpdateUserMetadata(ctx context.Context, clerkUserID strin
 			return nil
 		}
 		return fmt.Errorf("failed to update Clerk user metadata: %w", err)
+	}
+	return nil
+}
+
+// UpdateUserEmail adds a new unverified email address to the Clerk user (non-primary).
+// Clerk will send a verification email to the new address.
+// The old email remains primary until the user verifies the new one.
+func (s *clerkService) UpdateUserEmail(ctx context.Context, clerkUserID, newEmail string) error {
+	primary := false
+	verified := false
+	_, err := emailaddress.Create(ctx, &emailaddress.CreateParams{
+		UserID:       clerk.String(clerkUserID),
+		EmailAddress: clerk.String(newEmail),
+		Primary:      &primary,
+		Verified:     &verified,
+	})
+	if err != nil {
+		if isClerkNotFoundError(err) {
+			return nil // User deleted in Clerk — no-op
+		}
+		return fmt.Errorf("failed to add email address in Clerk: %w", err)
 	}
 	return nil
 }
