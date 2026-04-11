@@ -870,3 +870,67 @@ func TestGetUserByEmail_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUserNotFound)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestProfileRepository_UpdateUserEmailTx_Success verifies that UpdateUserEmailTx updates
+// the email, email_blind_idx, and resets email_verified to false within a transaction.
+func TestProfileRepository_UpdateUserEmailTx_Success(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	newEmail := "newemail@example.com"
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET email = $1, email_blind_idx = $2, email_verified = false, updated_at = $3 WHERE id = $4`)).
+		WithArgs(
+			pgxmock.AnyArg(), // email (encrypted)
+			pgxmock.AnyArg(), // email_blind_idx
+			pgxmock.AnyArg(), // updated_at
+			userID,
+		).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	tx, err := mock.Begin(ctx)
+	require.NoError(t, err)
+
+	err = repo.UpdateUserEmailTx(ctx, tx, userID, newEmail)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestProfileRepository_UpdateUserEmailTx_DuplicateEmail verifies that UpdateUserEmailTx
+// returns ErrDuplicateEmail when the new email collides with an existing user's email.
+func TestProfileRepository_UpdateUserEmailTx_DuplicateEmail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	existingEmail := "existing@example.com"
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET email = $1, email_blind_idx = $2, email_verified = false, updated_at = $3 WHERE id = $4`)).
+		WithArgs(
+			pgxmock.AnyArg(), // email (encrypted)
+			pgxmock.AnyArg(), // email_blind_idx
+			pgxmock.AnyArg(), // updated_at
+			userID,
+		).
+		WillReturnError(errors.New("pq: duplicate key value violates unique constraint \"unique_users_email_blind\""))
+
+	tx, err := mock.Begin(ctx)
+	require.NoError(t, err)
+
+	err = repo.UpdateUserEmailTx(ctx, tx, userID, existingEmail)
+
+	assert.ErrorIs(t, err, ErrDuplicateEmail)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
