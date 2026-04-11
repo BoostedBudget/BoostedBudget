@@ -24,8 +24,7 @@ import { BudgetTable, type SortColumn as BudgetSortColumn, type SortDirection } 
 import { SavingsGoalCard } from './SavingsGoalCard'
 import { CreateBudgetDialog } from './CreateBudgetDialog'
 import { CreateSavingsGoalDialog } from './CreateSavingsGoalDialog'
-import { DeleteBudgetDialog } from './DeleteBudgetDialog'
-import { DeleteSavingsGoalDialog } from './DeleteSavingsGoalDialog'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
 import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
@@ -35,6 +34,19 @@ import { computeBudgetMetrics, type Budget, type BudgetWithMetrics, type Savings
 
 // Issue #462, #521: Use single state for mutual exclusion - only one dialog can be open at a time
 type ActiveDialog = 'budget' | 'goal' | 'delete-budget' | 'delete-goal' | null
+
+function formatCurrency(amount: number, currencyCode: string): string {
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currencyCode,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount)
+  } catch {
+    return `${currencyCode} ${amount.toFixed(2)}`
+  }
+}
 
 // Issue #584: Get initial view from localStorage
 function getInitialView(): ListView {
@@ -424,24 +436,37 @@ export function BudgetsPage() {
         onGoalCreated={handleGoalCreated}
       />
 
-      {/* Deletion Dialogs (Issue #521) */}
-      <DeleteBudgetDialog
-        isOpen={activeDialog === 'delete-budget'}
-        budgetName={deletingBudget?.name ?? ''}
-        categoryCount={deletingBudget?.categories?.length ?? 0}
+      {/* Deletion Dialogs (Issue #521, #960) */}
+      <ConfirmationDialog
+        open={activeDialog === 'delete-budget'}
+        onOpenChange={(open) => !open && closeDialog()}
         onConfirm={handleConfirmDeleteBudget}
-        onCancel={closeDialog}
-        isDeleting={isDeleting}
+        title="Delete Budget"
+        description={deletingBudget ? (
+          <>
+            Are you sure you want to delete &ldquo;{deletingBudget.name}&rdquo;? This budget and its{' '}
+            {deletingBudget.categories?.length === 1 ? '1 category' : `${deletingBudget.categories?.length ?? 0} categories`}{' '}
+            will be permanently deleted. This action cannot be undone.
+          </>
+        ) : ''}
+        confirmText={deletingBudget?.name ?? ''}
+        loading={isDeleting}
       />
-      <DeleteSavingsGoalDialog
-        isOpen={activeDialog === 'delete-goal'}
-        goalName={deletingGoal?.name ?? ''}
-        currentAmount={deletingGoal?.current_amount ?? 0}
-        targetAmount={deletingGoal?.target_amount ?? 0}
-        currencyCode={deletingGoal?.currency_code ?? 'USD'}
+      <ConfirmationDialog
+        open={activeDialog === 'delete-goal'}
+        onOpenChange={(open) => !open && closeDialog()}
         onConfirm={handleConfirmDeleteGoal}
-        onCancel={closeDialog}
-        isDeleting={isDeleting}
+        title="Delete Savings Goal"
+        description={deletingGoal ? (
+          <>
+            Are you sure you want to delete &ldquo;{deletingGoal.name}&rdquo;? Progress of{' '}
+            {formatCurrency(deletingGoal.current_amount, deletingGoal.currency_code)} toward{' '}
+            {formatCurrency(deletingGoal.target_amount, deletingGoal.currency_code)} will be permanently deleted.
+            This action cannot be undone.
+          </>
+        ) : ''}
+        confirmText={deletingGoal?.name ?? ''}
+        loading={isDeleting}
       />
     </div>
   );

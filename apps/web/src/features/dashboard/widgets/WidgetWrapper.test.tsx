@@ -105,7 +105,7 @@ describe('WidgetWrapper', () => {
 
       fireEvent.click(screen.getByLabelText('Remove widget'))
 
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
       expect(mockOnRemove).not.toHaveBeenCalled()
     })
 

@@ -55,38 +55,8 @@ mock.module('./SavingsGoalCard', () => ({
   ),
 }))
 
-mock.module('./DeleteBudgetDialog', () => ({
-  DeleteBudgetDialog: ({
-    isOpen,
-    budgetName,
-    categoryCount,
-    onConfirm,
-    onCancel,
-    isDeleting,
-  }: {
-    isOpen: boolean
-    budgetName: string
-    categoryCount: number
-    onConfirm: () => void
-    onCancel: () => void
-    isDeleting: boolean
-  }) => {
-    if (!isOpen) return null
-    return (
-      <div data-testid="delete-budget-dialog">
-        <span>Delete {budgetName}</span>
-        <span>{categoryCount} categories</span>
-        <button onClick={onCancel}>Cancel Delete Budget</button>
-        <button onClick={onConfirm} disabled={isDeleting}>
-          {isDeleting ? 'Deleting Budget...' : 'Confirm Delete Budget'}
-        </button>
-      </div>
-    )
-  },
-}))
-
-// Issue #575: DO NOT mock DeleteSavingsGoalDialog - it causes pollution to
-// DeleteSavingsGoalDialog.test.tsx via Bun's global mock.module() persistence.
+// Issue #960: Both DeleteBudgetDialog and DeleteSavingsGoalDialog replaced by
+// ConfirmationDialog — using the real component in tests (no mock needed).
 
 // Issue #575: DO NOT mock CreateBudgetDialog - it causes pollution to
 // CreateBudgetDialog.test.tsx via Bun's global mock.module() persistence.
@@ -582,15 +552,14 @@ describe('BudgetsPage', () => {
     })
   })
 
-  describe('Delete Budget (Issue #521)', () => {
+  describe('Delete Budget (Issue #521, #960)', () => {
     it('opens delete budget dialog when delete button clicked', async () => {
       const user = userEvent.setup()
       setupMocks({ budgets: [mockActiveBudget] })
       render(<BudgetsPage />)
-      const deleteButton = screen.getByTestId('delete-budget-budget-1')
-      await user.click(deleteButton)
-      expect(screen.getByTestId('delete-budget-dialog')).toBeInTheDocument()
-      expect(screen.getByText('Delete Monthly Budget')).toBeInTheDocument()
+      await user.click(screen.getByTestId('delete-budget-budget-1'))
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /delete budget/i })).toBeInTheDocument()
     })
 
     it('closes delete budget dialog on cancel', async () => {
@@ -598,12 +567,12 @@ describe('BudgetsPage', () => {
       setupMocks({ budgets: [mockActiveBudget] })
       render(<BudgetsPage />)
       await user.click(screen.getByTestId('delete-budget-budget-1'))
-      expect(screen.getByTestId('delete-budget-dialog')).toBeInTheDocument()
-      await user.click(screen.getByText('Cancel Delete Budget'))
-      expect(screen.queryByTestId('delete-budget-dialog')).not.toBeInTheDocument()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: /^cancel$/i }))
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
-    it('calls deleteBudget when confirm clicked', async () => {
+    it('calls deleteBudget when confirm clicked after typing budget name', async () => {
       const user = userEvent.setup()
       const localMockDeleteBudget = mock(() => Promise.resolve())
       mockUseBudgets.mockReturnValue({
@@ -621,7 +590,8 @@ describe('BudgetsPage', () => {
       })
       render(<BudgetsPage />)
       await user.click(screen.getByTestId('delete-budget-budget-1'))
-      await user.click(screen.getByText('Confirm Delete Budget'))
+      await user.type(screen.getByRole('textbox'), 'Monthly Budget')
+      await user.click(screen.getByRole('button', { name: /^delete$/i }))
       expect(localMockDeleteBudget).toHaveBeenCalledWith('budget-1')
     })
 
@@ -643,21 +613,20 @@ describe('BudgetsPage', () => {
       })
       render(<BudgetsPage />)
       await user.click(screen.getByTestId('delete-budget-budget-2'))
-      expect(screen.getByText('Delete Past Budget')).toBeInTheDocument()
-      await user.click(screen.getByText('Confirm Delete Budget'))
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+      await user.type(screen.getByRole('textbox'), 'Past Budget')
+      await user.click(screen.getByRole('button', { name: /^delete$/i }))
       expect(localMockDeleteBudget).toHaveBeenCalledWith('budget-2')
     })
   })
 
-  describe('Delete Savings Goal (Issue #521)', () => {
+  describe('Delete Savings Goal (Issue #521, #960)', () => {
     it('opens delete goal dialog when delete button clicked', async () => {
       const user = userEvent.setup()
       setupMocks({ goals: [mockActiveGoal] })
       render(<BudgetsPage />)
-      const deleteButton = screen.getByTestId('delete-goal-goal-1')
-      await user.click(deleteButton)
-      // Real DeleteSavingsGoalDialog renders a dialog with heading
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      await user.click(screen.getByTestId('delete-goal-goal-1'))
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
       expect(screen.getByRole('heading', { name: /delete savings goal/i })).toBeInTheDocument()
     })
 
@@ -666,10 +635,9 @@ describe('BudgetsPage', () => {
       setupMocks({ goals: [mockActiveGoal] })
       render(<BudgetsPage />)
       await user.click(screen.getByTestId('delete-goal-goal-1'))
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
-      // Real dialog has a Cancel button
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
       await user.click(screen.getByRole('button', { name: /^cancel$/i }))
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     it('calls deleteGoal when confirm clicked after typing goal name', async () => {
@@ -689,9 +657,7 @@ describe('BudgetsPage', () => {
       })
       render(<BudgetsPage />)
       await user.click(screen.getByTestId('delete-goal-goal-1'))
-      // Real dialog requires typing goal name to enable Delete button
-      const confirmInput = screen.getByLabelText(/confirmation input/i)
-      await user.type(confirmInput, 'Vacation Fund')
+      await user.type(screen.getByRole('textbox'), 'Vacation Fund')
       await user.click(screen.getByRole('button', { name: /^delete$/i }))
       expect(localMockDeleteGoal).toHaveBeenCalledWith('goal-1')
     })
@@ -714,9 +680,7 @@ describe('BudgetsPage', () => {
       render(<BudgetsPage />)
       await user.click(screen.getByTestId('delete-goal-goal-2'))
       expect(screen.getByRole('heading', { name: /delete savings goal/i })).toBeInTheDocument()
-      // Type goal name to enable Delete button
-      const confirmInput = screen.getByLabelText(/confirmation input/i)
-      await user.type(confirmInput, 'Emergency Fund')
+      await user.type(screen.getByRole('textbox'), 'Emergency Fund')
       await user.click(screen.getByRole('button', { name: /^delete$/i }))
       expect(localMockDeleteGoal).toHaveBeenCalledWith('goal-2')
     })

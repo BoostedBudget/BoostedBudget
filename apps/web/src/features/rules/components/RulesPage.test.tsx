@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'bun:test'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
 import type { AutomationRule } from '@boostedbudget/api-client/models'
@@ -333,10 +333,10 @@ describe('RulesPage', () => {
     fireEvent.click(deleteButtons[0])
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /confirm/i })).toBeInTheDocument()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     })
 
-    const confirmButton = screen.getByRole('button', { name: /confirm/i })
+    const confirmButton = within(screen.getByRole('alertdialog')).getByRole('button', { name: /delete/i })
     fireEvent.click(confirmButton)
     expect(mockDeleteAutomationRuleMutate).toHaveBeenCalled()
   })
