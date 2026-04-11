@@ -899,6 +899,19 @@ func TestRegisterUser_PlaintextEmailFallback_PreventsaDuplicate(t *testing.T) {
 	mockProfileRepo.AssertExpectations(t)
 }
 
+// TestRegisterUser_RejectsInvalidEmail_NetMail tests that "user@" (incomplete domain) is rejected
+func TestRegisterUser_RejectsInvalidEmail_NetMail(t *testing.T) {
+	mockProfileRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockPrivacyRepo := new(MockPrivacyRepository)
+
+	svc := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, nil)
+
+	_, err := svc.RegisterUser(context.Background(), "user_abc", "user@", false)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid email format")
+}
+
 func TestRegisterUser_PlaintextEmailFallback_NewUserIfNotFound(t *testing.T) {
 	ctx := context.Background()
 	clerkUserID := "user_newclerk123"
