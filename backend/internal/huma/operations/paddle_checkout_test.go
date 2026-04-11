@@ -169,6 +169,11 @@ func (m *mockProfileRepo) GetUsersWithExpiredRetention(ctx context.Context) ([]*
 	return nil, nil
 }
 
+func (m *mockProfileRepo) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	args := m.Called(ctx, tx, userID, plainEmail)
+	return args.Error(0)
+}
+
 // setupTestCheckoutHandler creates a handler with mock dependencies
 func setupTestCheckoutHandler(t *testing.T) (*PaddleCheckoutHandler, *mockPaddleCheckoutService, *mockProfileRepo) {
 	t.Helper()

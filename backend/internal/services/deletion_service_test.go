@@ -161,6 +161,11 @@ func (m *MockProfileRepositoryForDeletion) GetUserByEmail(ctx context.Context, e
 	return nil, nil
 }
 
+func (m *MockProfileRepositoryForDeletion) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	args := m.Called(ctx, tx, userID, plainEmail)
+	return args.Error(0)
+}
+
 // MockEmailService for testing
 type MockEmailService struct {
 	mock.Mock

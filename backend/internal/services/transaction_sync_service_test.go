@@ -1872,6 +1872,10 @@ func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention30dNotice(ctx co
 func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) { return nil, nil }
 func (m *mockProfileRepoForCursorTests) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) { return nil, nil }
 func (m *mockProfileRepoForCursorTests) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) { return nil, nil }
+func (m *mockProfileRepoForCursorTests) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	args := m.Called(ctx, tx, userID, plainEmail)
+	return args.Error(0)
+}
 
 // ============================================================================
 // CURSOR PERSISTENCE TESTS (Critical)
