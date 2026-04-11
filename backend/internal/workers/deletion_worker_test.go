@@ -149,6 +149,11 @@ func (m *MockProfileRepoForWorker) GetUserByEmail(ctx context.Context, email str
 	return nil, nil
 }
 
+func (m *MockProfileRepoForWorker) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	args := m.Called(ctx, tx, userID, plainEmail)
+	return args.Error(0)
+}
+
 // TestWorker_FindsScheduledUsers tests that worker finds users scheduled for deletion
 func TestWorker_FindsScheduledUsers(t *testing.T) {
 	ctx := context.Background()

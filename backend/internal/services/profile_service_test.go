@@ -186,6 +186,11 @@ func (m *MockProfileRepository) GetUserByEmail(ctx context.Context, email string
 	return nil, repository.ErrUserNotFound
 }
 
+func (m *MockProfileRepository) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	args := m.Called(ctx, tx, userID, plainEmail)
+	return args.Error(0)
+}
+
 // TestGetProfile_ExistingUser tests retrieving an existing user
 // NOTE: After PR #197, GetProfile now receives internal user UUID, not Clerk ID
 func TestGetProfile_ExistingUser(t *testing.T) {
