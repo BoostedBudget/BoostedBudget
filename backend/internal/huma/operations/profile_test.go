@@ -10,6 +10,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
@@ -36,6 +37,8 @@ func (m *mockProfileService) UpdateProfile(ctx context.Context, userID string, r
 	}
 	return m.user, nil
 }
+
+func (m *mockProfileService) SetJobQueue(jq queue.JobQueue) {}
 
 // Helper function to create test user
 func createTestUser() *domain.User {
