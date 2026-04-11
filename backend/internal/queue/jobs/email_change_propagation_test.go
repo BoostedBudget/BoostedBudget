@@ -111,6 +111,37 @@ func TestEmailChangePropagationWorker_NoPaddleCustomer(t *testing.T) {
 	mockPaddle.AssertNotCalled(t, "UpdateCustomerEmail")
 }
 
+func TestEmailChangePropagationWorker_NilPaddleService(t *testing.T) {
+	userID := uuid.New().String()
+	paddleCustomerID := "cus_abc123"
+	mockRepo := new(MockEmailPropagationProfileRepo)
+	mockClerk := new(MockEmailPropagationClerkService)
+
+	worker := NewEmailChangePropagationWorker(EmailChangePropagationWorkerDeps{
+		ProfileRepo:   mockRepo,
+		ClerkService:  mockClerk,
+		PaddleService: nil, // explicitly nil — no Paddle configured
+	})
+
+	user := &domain.User{
+		ID:               userID,
+		ClerkUserID:      "user_clerk123",
+		Email:            "new@example.com",
+		PaddleCustomerID: &paddleCustomerID,
+	}
+
+	mockRepo.On("GetUserByID", mock.Anything, userID).Return(user, nil)
+	mockClerk.On("UpdateUserEmail", mock.Anything, "user_clerk123", "new@example.com").Return(nil)
+
+	err := worker.Work(context.Background(), makeEmailPropJob(userID, "user_clerk123"))
+	assert.NoError(t, err)
+	// Clerk was called
+	mockClerk.AssertCalled(t, "UpdateUserEmail", mock.Anything, "user_clerk123", "new@example.com")
+	// Paddle was NOT called (service is nil — verified by no mock setup and AssertExpectations)
+	mockRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+}
+
 func TestEmailChangePropagationWorker_ClerkFailure_ReturnsError(t *testing.T) {
 	userID := uuid.New().String()
 	mockRepo := new(MockEmailPropagationProfileRepo)

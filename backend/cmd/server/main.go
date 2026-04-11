@@ -921,10 +921,8 @@ func main() {
 				appLogger.Info("Investment transactions sync worker registered with River")
 
 				// Issue #1007: Register email change propagation worker
-				if emailChangePropagationWorker != nil {
-					river.AddWorker(riverWorkers, emailChangePropagationWorker)
-					appLogger.Info("Email change propagation worker registered with River")
-				}
+				river.AddWorker(riverWorkers, emailChangePropagationWorker)
+				appLogger.Info("Email change propagation worker registered with River")
 
 				// Create River client
 				riverClient, err := riverqueue.NewClient(db, riverWorkers, riverConfig)
