@@ -10,6 +10,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -192,4 +193,27 @@ func TestProfileResponseJSON(t *testing.T) {
 	var errorResp map[string]interface{}
 	err := json.Unmarshal(resp.Body.Bytes(), &errorResp)
 	require.NoError(t, err, "Error response should be valid JSON")
+}
+
+// TestUpdateProfile_DuplicateEmail_Returns409 tests that a duplicate email error returns HTTP 409.
+func TestUpdateProfile_DuplicateEmail_Returns409(t *testing.T) {
+	mockService := &mockProfileService{
+		updateErr: repository.ErrDuplicateEmail,
+	}
+
+	handler := NewProfileHandler(mockService)
+
+	newEmail := "taken@example.com"
+	input := &UpdateProfileInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body = domain.UpdateProfileRequest{
+		Email: &newEmail,
+	}
+
+	output, err := handler.UpdateProfile(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assertHTTPStatus(t, err, http.StatusConflict)
 }
