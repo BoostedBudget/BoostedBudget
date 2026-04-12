@@ -31,10 +31,7 @@ type ClerkService interface {
 }
 
 // clerkService implements ClerkService using the official Clerk Go SDK.
-type clerkService struct {
-	// secretKey is stored for potential future use (e.g., creating new clients)
-	secretKey string
-}
+type clerkService struct{}
 
 // NewClerkService creates a new ClerkService instance.
 // The secretKey must be set for all Clerk API operations.
@@ -42,13 +39,9 @@ type clerkService struct {
 // Parameters:
 //   - secretKey: The Clerk secret key (sk_test_... or sk_live_...)
 func NewClerkService(secretKey string) ClerkService {
-	// Initialize Clerk SDK with secret key
-	// This sets the key globally for all Clerk SDK operations
+	// Initialize Clerk SDK with secret key globally
 	clerk.SetKey(secretKey)
-
-	return &clerkService{
-		secretKey: secretKey,
-	}
+	return &clerkService{}
 }
 
 // DeleteUser deletes a user from Clerk using the Backend API.

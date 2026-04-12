@@ -174,7 +174,7 @@ describe('ProfileForm', () => {
 
       await waitFor(() => {
         expect(mockUpdateUserProfileMutate).toHaveBeenCalledWith(
-          { data: { email: 'test@example.com', primary_region: 'ewr' } },
+          { data: { primary_region: 'ewr' } },
           expect.any(Object)
         )
       })

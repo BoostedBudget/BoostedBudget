@@ -64,6 +64,29 @@ func NewUserIdentityRepository(db DB, enc *appcrypto.FieldEncryptor) UserIdentit
 	return &userIdentityRepository{db: db, enc: enc}
 }
 
+// decryptIdentity decrypts sensitive fields in an identity record
+func (r *userIdentityRepository) decryptIdentity(identity *domain.UserIdentity) error {
+	decryptedClerkUserID, err := r.enc.DecryptString(identity.ClerkUserID)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
+	}
+	identity.ClerkUserID = decryptedClerkUserID
+
+	decryptedEmail, err := r.enc.DecryptString(identity.Email)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt email: %w", err)
+	}
+	identity.Email = decryptedEmail
+
+	decryptedProviderUserID, err := r.enc.DecryptString(identity.ProviderUserID)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt provider_user_id: %w", err)
+	}
+	identity.ProviderUserID = decryptedProviderUserID
+
+	return nil
+}
+
 // GetByClerkID retrieves an identity by Clerk user ID
 func (r *userIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID string) (*domain.UserIdentity, error) {
 	blindIdx := r.enc.BlindIndex(clerkUserID)
@@ -97,23 +120,9 @@ func (r *userIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID s
 		return nil, err
 	}
 
-	decryptedClerkUserID, err := r.enc.DecryptString(identity.ClerkUserID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
+	if err := r.decryptIdentity(&identity); err != nil {
+		return nil, err
 	}
-	identity.ClerkUserID = decryptedClerkUserID
-
-	decryptedEmail, err := r.enc.DecryptString(identity.Email)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt email: %w", err)
-	}
-	identity.Email = decryptedEmail
-
-	decryptedProviderUserID, err := r.enc.DecryptString(identity.ProviderUserID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt provider_user_id: %w", err)
-	}
-	identity.ProviderUserID = decryptedProviderUserID
 
 	return &identity, nil
 }
@@ -157,23 +166,9 @@ func (r *userIdentityRepository) GetByUserID(ctx context.Context, userID string)
 			return nil, err
 		}
 
-		decryptedClerkUserID, err := r.enc.DecryptString(identity.ClerkUserID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
+		if err := r.decryptIdentity(&identity); err != nil {
+			return nil, err
 		}
-		identity.ClerkUserID = decryptedClerkUserID
-
-		decryptedEmail, err := r.enc.DecryptString(identity.Email)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt email: %w", err)
-		}
-		identity.Email = decryptedEmail
-
-		decryptedProviderUserID, err := r.enc.DecryptString(identity.ProviderUserID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt provider_user_id: %w", err)
-		}
-		identity.ProviderUserID = decryptedProviderUserID
 
 		identities = append(identities, &identity)
 	}
@@ -240,8 +235,12 @@ func (r *userIdentityRepository) Create(ctx context.Context, identity *domain.Us
 		clerkUserIDBlindIdx,
 	)
 
+	return r.handleCreateError(err)
+}
+
+// handleCreateError checks if an error is a unique constraint violation for clerk_user_id
+func (r *userIdentityRepository) handleCreateError(err error) error {
 	if err != nil {
-		// Check for unique constraint violations
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			if strings.Contains(err.Error(), "clerk_user_id") {
 				return ErrDuplicateIdentity
@@ -249,7 +248,6 @@ func (r *userIdentityRepository) Create(ctx context.Context, identity *domain.Us
 		}
 		return err
 	}
-
 	return nil
 }
 
@@ -308,17 +306,7 @@ func (r *userIdentityRepository) CreateTx(ctx context.Context, tx pgx.Tx, identi
 		clerkUserIDBlindIdx,
 	)
 
-	if err != nil {
-		// Check for unique constraint violations
-		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			if strings.Contains(err.Error(), "clerk_user_id") {
-				return ErrDuplicateIdentity
-			}
-		}
-		return err
-	}
-
-	return nil
+	return r.handleCreateError(err)
 }
 
 // UpdatePrimaryIdentityEmailTx updates the email and resets email_verified=false on the
