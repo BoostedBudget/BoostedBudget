@@ -397,7 +397,9 @@ describe('ProfilePage', () => {
       await user.click(saveButton)
 
       await waitFor(() => {
-        expect(mockToastSuccess).toHaveBeenCalledWith('Profile updated successfully!')
+        expect(mockToastSuccess).toHaveBeenCalledWith(
+          'Profile updated. Check your inbox to verify your new email address.',
+        )
       })
     })
 
