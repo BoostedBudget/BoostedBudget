@@ -98,7 +98,6 @@ func (w *EmailChangePropagationWorker) Work(ctx context.Context, job *river.Job[
 
 	if w.analytics != nil {
 		w.analytics.Capture(args.UserID, phclient.EventEmailChanged, map[string]interface{}{
-			"email":                user.Email,
 			"propagated_to_clerk":  true,
 			"propagated_to_paddle": w.paddleService != nil && user.PaddleCustomerID != nil && *user.PaddleCustomerID != "",
 		})
