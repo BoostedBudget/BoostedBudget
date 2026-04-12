@@ -14,6 +14,7 @@ import {
   setMockUpdateUserProfileIsPending,
 } from '@/test/mocks/profile-api'
 import { mockToastSuccess, mockToastError } from '@/test/mocks/sonner'
+import { mockPosthogIdentify } from '@/test/mocks/posthog'
 
 describe('ProfileForm', () => {
   const mockUser: User = {
@@ -35,6 +36,7 @@ describe('ProfileForm', () => {
     mockUpdateUserProfileMutate.mockClear()
     mockToastSuccess.mockClear()
     mockToastError.mockClear()
+    mockPosthogIdentify.mockClear()
     setMockUpdateUserProfileIsPending(false)
   })
 
@@ -142,6 +144,10 @@ describe('ProfileForm', () => {
         )
         expect(mockToastSuccess).toHaveBeenCalledWith(
           'Profile updated. Check your inbox to verify your new email address.',
+        )
+        expect(mockPosthogIdentify).toHaveBeenCalledWith(
+          mockUser.id,
+          { email: 'updated@example.com' },
         )
       })
     })
