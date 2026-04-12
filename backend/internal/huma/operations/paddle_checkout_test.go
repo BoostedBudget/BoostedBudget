@@ -77,6 +77,11 @@ func (m *mockPaddleCheckoutService) GetBillingPortalURL(ctx context.Context, cus
 	return args.String(0), args.Error(1)
 }
 
+func (m *mockPaddleCheckoutService) UpdateCustomerEmail(ctx context.Context, customerID, email string) error {
+	args := m.Called(ctx, customerID, email)
+	return args.Error(0)
+}
+
 func (m *mockPaddleCheckoutService) GetClient() *paddle.SDK {
 	return nil
 }

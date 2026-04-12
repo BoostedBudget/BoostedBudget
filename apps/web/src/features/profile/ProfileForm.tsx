@@ -57,12 +57,12 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
   async function performSave() {
     const updateData: UpdateProfileRequest = {}
     const emailChanging = email !== user.email
+    const regionChanging = primaryRegion !== user.primary_region
 
     if (emailChanging) {
       updateData.email = email
     }
-    if (primaryRegion !== user.primary_region) {
-      updateData.email = email
+    if (regionChanging) {
       updateData.primary_region = primaryRegion
     }
 
