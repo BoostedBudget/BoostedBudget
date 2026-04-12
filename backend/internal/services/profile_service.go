@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/mail"
 	"strings"
 
@@ -84,25 +85,13 @@ func (s *profileService) SetJobQueue(jq queue.JobQueue) {
 // GetProfile retrieves a user's profile or creates one if it doesn't exist
 // NOTE: After PR #197, this method receives internal user UUID, not Clerk ID
 func (s *profileService) GetProfile(ctx context.Context, userID string, email string) (*domain.User, error) {
-	// Try to get existing user by internal UUID
 	user, err := s.repo.GetUserByID(ctx, userID)
-
-	if err == repository.ErrUserNotFound {
-		// User doesn't exist - this shouldn't happen since Clerk middleware
-		// already validated the user exists in user_identities table
-		// Return error instead of creating (creation handled during first Clerk login)
-		return nil, repository.ErrUserNotFound
-	}
-
 	if err != nil {
 		return nil, err
 	}
 
-	// Update last login timestamp (use Clerk ID from user record)
-	if err := s.repo.UpdateLastLogin(ctx, user.ClerkUserID); err != nil {
-		// Log error but don't fail the request
-		// In production, you'd use a proper logger here
-	}
+	// Update last login timestamp (non-critical, log errors but don't fail request)
+	_ = s.repo.UpdateLastLogin(ctx, user.ClerkUserID)
 
 	return user, nil
 }
@@ -113,7 +102,6 @@ func (s *profileService) GetProfile(ctx context.Context, userID string, email st
 // asynchronous job to propagate the change to external systems (Clerk, Paddle).
 // NOTE: After PR #197, this method receives internal user UUID, not Clerk ID
 func (s *profileService) UpdateProfile(ctx context.Context, userID string, req *domain.UpdateProfileRequest) (*domain.User, error) {
-	// Get existing user by internal UUID
 	user, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -121,14 +109,12 @@ func (s *profileService) UpdateProfile(ctx context.Context, userID string, req *
 
 	emailChanged := req.Email != nil && !strings.EqualFold(*req.Email, user.Email)
 
-	// Validate email if provided
+	// Validate inputs
 	if req.Email != nil {
 		if err := validateEmail(*req.Email); err != nil {
 			return nil, err
 		}
 	}
-
-	// Validate region if provided
 	if req.PrimaryRegion != nil {
 		if err := validateRegion(*req.PrimaryRegion); err != nil {
 			return nil, err
@@ -152,7 +138,14 @@ func (s *profileService) UpdateProfile(ctx context.Context, userID string, req *
 			return nil, err
 		}
 
-		// Handle region update outside the email transaction (non-critical path)
+		// Re-fetch before any further updates so user.Email reflects the committed email.
+		// Without this, UpdateUser below would overwrite the new email with the stale value.
+		user, err = s.repo.GetUserByID(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+
+		// Update region outside email transaction (non-critical)
 		if req.PrimaryRegion != nil && *req.PrimaryRegion != user.PrimaryRegion {
 			user.PrimaryRegion = *req.PrimaryRegion
 			if err := s.repo.UpdateUser(ctx, user); err != nil {
@@ -160,19 +153,19 @@ func (s *profileService) UpdateProfile(ctx context.Context, userID string, req *
 			}
 		}
 
-		// Enqueue async propagation to external systems (Clerk, Paddle)
-		_, _ = s.jobQueue.Enqueue(ctx, emailChangePropagationArgs{
-			UserID:      userID,
-			ClerkUserID: user.ClerkUserID,
-		})
-
-		// Re-fetch user to get the committed state (email_verified reset to false, etc.)
-		user, err = s.repo.GetUserByID(ctx, userID)
-		if err != nil {
-			return nil, err
+		// Enqueue async propagation to external systems (Clerk, Paddle).
+		// Fire-and-forget: the DB is already committed; a failed enqueue is logged but
+		// does not fail the request (River has its own persistence and retry logic).
+		if s.jobQueue != nil {
+			if _, err := s.jobQueue.Enqueue(ctx, emailChangePropagationArgs{
+				UserID:      userID,
+				ClerkUserID: user.ClerkUserID,
+			}); err != nil {
+				slog.Default().Error("failed to enqueue email propagation job", "user_id", userID, "error", err)
+			}
 		}
 	} else {
-		// No email change — apply updates via the simple UpdateUser path
+		// No email change — simple non-transactional update
 		if req.Email != nil {
 			user.Email = *req.Email
 		}
@@ -189,14 +182,13 @@ func (s *profileService) UpdateProfile(ctx context.Context, userID string, req *
 
 // validateEmail validates an email address format
 func validateEmail(email string) error {
-	_, err := mail.ParseAddress(email)
-	if err != nil {
+	if _, err := mail.ParseAddress(email); err != nil {
 		return ErrInvalidEmail
 	}
 	return nil
 }
 
-// validateRegion validates a primary region value against the configured region registry.
+// validateRegion validates a primary region value against the configured region registry
 func validateRegion(region string) error {
 	if !domain.IsValidRegion(region) {
 		return ErrInvalidRegion
