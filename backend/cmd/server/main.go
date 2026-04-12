@@ -855,6 +855,7 @@ func main() {
 					Logger:        appLogger,
 				})
 				appLogger.Info("Email change propagation worker created")
+				emailChangePropagationWorker.SetAnalytics(phClient)
 
 				// Create River workers and register all workers
 				riverWorkers := river.NewWorkers()

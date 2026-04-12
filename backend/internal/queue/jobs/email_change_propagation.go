@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/riverqueue/river"
 )
 
@@ -42,6 +43,7 @@ type EmailChangePropagationWorker struct {
 	profileRepo   EmailPropagationProfileRepo
 	clerkService  EmailPropagationClerkService
 	paddleService EmailPropagationPaddleService
+	analytics     phclient.Analytics // Optional PostHog analytics client
 	logger        *slog.Logger
 }
 
@@ -67,6 +69,11 @@ func NewEmailChangePropagationWorker(deps EmailChangePropagationWorkerDeps) *Ema
 	}
 }
 
+// SetAnalytics injects the analytics client for capturing email change events.
+func (w *EmailChangePropagationWorker) SetAnalytics(a phclient.Analytics) {
+	w.analytics = a
+}
+
 // Work processes the email change propagation job.
 func (w *EmailChangePropagationWorker) Work(ctx context.Context, job *river.Job[EmailChangePropagationArgs]) error {
 	args := job.Args
@@ -87,6 +94,14 @@ func (w *EmailChangePropagationWorker) Work(ctx context.Context, job *river.Job[
 		if err := w.paddleService.UpdateCustomerEmail(ctx, *user.PaddleCustomerID, user.Email); err != nil {
 			return fmt.Errorf("email propagation: Paddle update failed for user %s: %w", args.UserID, err)
 		}
+	}
+
+	if w.analytics != nil {
+		w.analytics.Capture(args.UserID, phclient.EventEmailChanged, map[string]interface{}{
+			"email":                user.Email,
+			"propagated_to_clerk":  true,
+			"propagated_to_paddle": w.paddleService != nil && user.PaddleCustomerID != nil && *user.PaddleCustomerID != "",
+		})
 	}
 
 	w.logger.Info("email_change_propagation: completed", "user_id", args.UserID)
