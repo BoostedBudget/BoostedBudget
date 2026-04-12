@@ -213,10 +213,10 @@ func TestEmailChangePropagationWorker_FiresAnalyticsEvent(t *testing.T) {
 	mockClerk.On("UpdateUserEmail", mock.Anything, "user_clerk123", "new@example.com").Return(nil)
 	mockPaddle.On("UpdateCustomerEmail", mock.Anything, paddleCustomerID, "new@example.com").Return(nil)
 	mockAnalytics.On("Capture", userID, phclient.EventEmailChanged, mock.MatchedBy(func(props map[string]interface{}) bool {
-		email, _ := props["email"].(string)
 		propagatedToClerk, _ := props["propagated_to_clerk"].(bool)
 		propagatedToPaddle, _ := props["propagated_to_paddle"].(bool)
-		return email == "new@example.com" && propagatedToClerk && propagatedToPaddle
+		_, hasEmail := props["email"]
+		return propagatedToClerk && propagatedToPaddle && !hasEmail
 	})).Return()
 
 	err := worker.Work(context.Background(), makeEmailPropJob(userID, "user_clerk123"))
