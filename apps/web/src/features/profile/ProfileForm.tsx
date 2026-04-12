@@ -78,11 +78,7 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
               'Profile updated. Check your inbox to verify your new email address.',
             )
             // Re-identify in PostHog with new email to prevent analytics identity split
-            try {
-              posthog.identify(updatedUser.id, { email: updatedUser.email })
-            } catch {
-              // PostHog not available — ignore
-            }
+            posthog.identify(updatedUser.id, { email: updatedUser.email })
           } else {
             toast.success('Profile updated successfully!')
           }

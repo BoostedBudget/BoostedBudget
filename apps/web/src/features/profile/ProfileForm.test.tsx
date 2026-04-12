@@ -198,6 +198,20 @@ describe('ProfileForm', () => {
       })
     })
 
+    it('should show duplicate-email error when server returns 409', async () => {
+      configureMutateError(new Error('409 Conflict: email already in use'))
+
+      const user = userEvent.setup({ delay: null })
+      render(<ProfileForm user={mockUser} />)
+
+      await updateEmailField(user, 'taken@example.com')
+      await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+      await waitFor(() => {
+        expect(mockToastError).toHaveBeenCalledWith('That email address is already in use.')
+      })
+    })
+
     it('should disable form while submitting', async () => {
       mockUpdateUserProfileMutate.mockImplementation(() => {
         setMockUpdateUserProfileIsPending(true)
