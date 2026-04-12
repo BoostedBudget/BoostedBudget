@@ -89,6 +89,8 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
         },
         onError: (err) => {
           console.error('Failed to update profile:', err)
+          // TODO: Replace with typed status check (e.g., err?.status === 409) once
+          // the API client exposes structured HTTP errors (currently embeds status in message string)
           const message =
             err?.message?.includes('409') || err?.message?.includes('already in use')
               ? 'That email address is already in use.'
