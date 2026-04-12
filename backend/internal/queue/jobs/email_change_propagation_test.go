@@ -7,11 +7,30 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
+
+type MockAnalytics struct {
+	mock.Mock
+}
+
+func (m *MockAnalytics) Capture(distinctID, event string, properties map[string]interface{}) {
+	m.Called(distinctID, event, properties)
+}
+
+func (m *MockAnalytics) Identify(distinctID string, properties map[string]interface{}) {
+	m.Called(distinctID, properties)
+}
+
+func (m *MockAnalytics) Close() {
+	m.Called()
+}
+
+var _ phclient.Analytics = (*MockAnalytics)(nil)
 
 type MockEmailPropagationProfileRepo struct {
 	mock.Mock
@@ -166,4 +185,72 @@ func TestEmailChangePropagationWorker_ClerkFailure_ReturnsError(t *testing.T) {
 
 	err := worker.Work(context.Background(), makeEmailPropJob(userID, "user_clerk123"))
 	assert.Error(t, err)
+}
+
+func TestEmailChangePropagationWorker_FiresAnalyticsEvent(t *testing.T) {
+	userID := uuid.New().String()
+	paddleCustomerID := "ctm_analytics123"
+	mockRepo := new(MockEmailPropagationProfileRepo)
+	mockClerk := new(MockEmailPropagationClerkService)
+	mockPaddle := new(MockEmailPropagationPaddleService)
+	mockAnalytics := new(MockAnalytics)
+
+	worker := NewEmailChangePropagationWorker(EmailChangePropagationWorkerDeps{
+		ProfileRepo:   mockRepo,
+		ClerkService:  mockClerk,
+		PaddleService: mockPaddle,
+	})
+	worker.SetAnalytics(mockAnalytics)
+
+	user := &domain.User{
+		ID:               userID,
+		ClerkUserID:      "user_clerk123",
+		Email:            "new@example.com",
+		PaddleCustomerID: &paddleCustomerID,
+	}
+
+	mockRepo.On("GetUserByID", mock.Anything, userID).Return(user, nil)
+	mockClerk.On("UpdateUserEmail", mock.Anything, "user_clerk123", "new@example.com").Return(nil)
+	mockPaddle.On("UpdateCustomerEmail", mock.Anything, paddleCustomerID, "new@example.com").Return(nil)
+	mockAnalytics.On("Capture", userID, phclient.EventEmailChanged, mock.MatchedBy(func(props map[string]interface{}) bool {
+		email, _ := props["email"].(string)
+		propagatedToClerk, _ := props["propagated_to_clerk"].(bool)
+		propagatedToPaddle, _ := props["propagated_to_paddle"].(bool)
+		return email == "new@example.com" && propagatedToClerk && propagatedToPaddle
+	})).Return()
+
+	err := worker.Work(context.Background(), makeEmailPropJob(userID, "user_clerk123"))
+	assert.NoError(t, err)
+	mockAnalytics.AssertExpectations(t)
+}
+
+func TestEmailChangePropagationWorker_NilAnalytics_NoPanic(t *testing.T) {
+	userID := uuid.New().String()
+	paddleCustomerID := "ctm_nopanic123"
+	mockRepo := new(MockEmailPropagationProfileRepo)
+	mockClerk := new(MockEmailPropagationClerkService)
+	mockPaddle := new(MockEmailPropagationPaddleService)
+
+	// No SetAnalytics call — analytics remains nil
+	worker := NewEmailChangePropagationWorker(EmailChangePropagationWorkerDeps{
+		ProfileRepo:   mockRepo,
+		ClerkService:  mockClerk,
+		PaddleService: mockPaddle,
+	})
+
+	user := &domain.User{
+		ID:               userID,
+		ClerkUserID:      "user_clerk123",
+		Email:            "new@example.com",
+		PaddleCustomerID: &paddleCustomerID,
+	}
+
+	mockRepo.On("GetUserByID", mock.Anything, userID).Return(user, nil)
+	mockClerk.On("UpdateUserEmail", mock.Anything, "user_clerk123", "new@example.com").Return(nil)
+	mockPaddle.On("UpdateCustomerEmail", mock.Anything, paddleCustomerID, "new@example.com").Return(nil)
+
+	assert.NotPanics(t, func() {
+		err := worker.Work(context.Background(), makeEmailPropJob(userID, "user_clerk123"))
+		assert.NoError(t, err)
+	})
 }
