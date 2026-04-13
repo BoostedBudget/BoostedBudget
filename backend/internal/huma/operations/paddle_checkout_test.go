@@ -77,6 +77,11 @@ func (m *mockPaddleCheckoutService) GetBillingPortalURL(ctx context.Context, cus
 	return args.String(0), args.Error(1)
 }
 
+func (m *mockPaddleCheckoutService) UpdateCustomerEmail(ctx context.Context, customerID, email string) error {
+	args := m.Called(ctx, customerID, email)
+	return args.Error(0)
+}
+
 func (m *mockPaddleCheckoutService) GetClient() *paddle.SDK {
 	return nil
 }
@@ -167,6 +172,11 @@ func (m *mockProfileRepo) GetUsersNeedingRetention7dNotice(ctx context.Context) 
 }
 func (m *mockProfileRepo) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
+}
+
+func (m *mockProfileRepo) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	args := m.Called(ctx, tx, userID, plainEmail)
+	return args.Error(0)
 }
 
 // setupTestCheckoutHandler creates a handler with mock dependencies

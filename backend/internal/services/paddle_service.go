@@ -82,6 +82,9 @@ type PaddleService interface {
 	// Allows users to manage payment methods and view billing history.
 	GetBillingPortalURL(ctx context.Context, customerID string) (string, error)
 
+	// UpdateCustomerEmail updates the email address of an existing Paddle customer.
+	UpdateCustomerEmail(ctx context.Context, customerID, email string) error
+
 	// GetClient returns the underlying Paddle SDK.
 	// Useful for operations not covered by this service interface.
 	GetClient() *paddle.SDK
@@ -91,6 +94,7 @@ type paddleClient interface {
 	CreateCustomer(ctx context.Context, req *paddle.CreateCustomerRequest) (*paddle.Customer, error)
 	ListCustomersByEmail(ctx context.Context, email string) ([]*paddle.Customer, error)
 	GetCustomer(ctx context.Context, req *paddle.GetCustomerRequest) (*paddle.Customer, error)
+	UpdateCustomer(ctx context.Context, req *paddle.UpdateCustomerRequest) (*paddle.Customer, error)
 	CreateTransaction(ctx context.Context, req *paddle.CreateTransactionRequest) (*paddle.Transaction, error)
 	GetSubscription(ctx context.Context, req *paddle.GetSubscriptionRequest) (*paddle.Subscription, error)
 	UpdateSubscription(ctx context.Context, req *paddle.UpdateSubscriptionRequest) (*paddle.Subscription, error)
@@ -127,6 +131,10 @@ func (c *paddleSDKClient) ListCustomersByEmail(ctx context.Context, email string
 
 func (c *paddleSDKClient) GetCustomer(ctx context.Context, req *paddle.GetCustomerRequest) (*paddle.Customer, error) {
 	return c.sdk.GetCustomer(ctx, req)
+}
+
+func (c *paddleSDKClient) UpdateCustomer(ctx context.Context, req *paddle.UpdateCustomerRequest) (*paddle.Customer, error) {
+	return c.sdk.UpdateCustomer(ctx, req)
 }
 
 func (c *paddleSDKClient) CreateTransaction(ctx context.Context, req *paddle.CreateTransactionRequest) (*paddle.Transaction, error) {
@@ -543,6 +551,18 @@ func parseProrationMode(mode string) paddle.ProrationBillingMode {
 	default:
 		return paddle.ProrationBillingModeProratedImmediately
 	}
+}
+
+// UpdateCustomerEmail updates the email address of an existing Paddle customer.
+func (s *paddleService) UpdateCustomerEmail(ctx context.Context, customerID, email string) error {
+	_, err := s.client.UpdateCustomer(ctx, &paddle.UpdateCustomerRequest{
+		CustomerID: customerID,
+		Email:      paddle.NewPatchField(email),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update Paddle customer email: %w", err)
+	}
+	return nil
 }
 
 // GetBillingPortalURL generates a URL for the Paddle billing portal session.

@@ -232,6 +232,16 @@ func main() {
 	// Issue #633: Declare DLQ cleanup check worker
 	var dlqCleanupCheckWorker *jobs.DLQCleanupCheckWorker
 
+	// Issue #1007: Declare email change propagation worker.
+	// NOTE: This worker is only created+registered when Plaid is configured because River
+	// is initialized inside the Plaid block (River was first introduced for Plaid webhooks).
+	// When Plaid is not configured, emailChangePropagationWorker remains nil, the River job
+	// queue is never started, and profileService.SetJobQueue is never called — so email changes
+	// are committed to the DB but silently not propagated to Clerk/Paddle.
+	// The nil-guard in profileService.UpdateProfile prevents panics in this case.
+	// TODO: Decouple River initialization from Plaid config — see Issue #1015.
+	var emailChangePropagationWorker *jobs.EmailChangePropagationWorker
+
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
 	var ruleSchedulerManager *workers.RuleSchedulerManager
 
@@ -312,8 +322,17 @@ func main() {
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
 
+		// Clerk Backend API service — used by deletion service and email propagation worker
+		clerkService := services.NewClerkService(cfg.ClerkSecretKey)
+		appLogger.Info("Clerk Backend API service initialized")
+
 		// Create services
-		profileService := services.NewProfileService(profileRepo)
+		profileService := services.NewProfileService(services.NewProfileServiceDeps{
+			Repo:         profileRepo,
+			IdentityRepo: identityRepo,
+			DB:           db,
+			JobQueue:     nil, // Set after jobQueue is created via SetJobQueue
+		})
 		privacyService := services.NewPrivacyService(privacyRepo)
 		transactionService := services.NewTransactionService(transactionRepo)
 		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
@@ -400,10 +419,6 @@ func main() {
 
 		// Create deletion services (if token secret configured)
 		if cfg.DeletionTokenSecret != "" {
-			// Initialize Clerk Backend API service
-			clerkService := services.NewClerkService(cfg.ClerkSecretKey)
-			appLogger.Info("Clerk Backend API service initialized")
-
 			// Initialize Deletion service (reuses auditLogger and emailService created earlier)
 			// Issue #668: plaidCleanupSvc is nil here - will be wired later after plaidService is created
 			// Uses assignment (=) not declaration (:=) to assign to outer-scoped deletionService variable
@@ -839,6 +854,16 @@ func main() {
 				})
 				appLogger.Info("Item cleanup worker created")
 
+				// Issue #1007: Create EmailChangePropagationWorker for async email propagation to Clerk + Paddle
+				emailChangePropagationWorker = jobs.NewEmailChangePropagationWorker(jobs.EmailChangePropagationWorkerDeps{
+					ProfileRepo:   profileRepo,
+					ClerkService:  clerkService,
+					PaddleService: paddleService, // nil if Paddle not configured — worker nil-checks before calling
+					Logger:        appLogger,
+				})
+				appLogger.Info("Email change propagation worker created")
+				emailChangePropagationWorker.SetAnalytics(phClient)
+
 				// Create River workers and register all workers
 				riverWorkers := river.NewWorkers()
 				river.AddWorker(riverWorkers, webhookProcessingWorker)
@@ -903,6 +928,10 @@ func main() {
 				river.AddWorker(riverWorkers, investmentTransactionsSyncWorker)
 				appLogger.Info("Investment transactions sync worker registered with River")
 
+				// Issue #1007: Register email change propagation worker
+				river.AddWorker(riverWorkers, emailChangePropagationWorker)
+				appLogger.Info("Email change propagation worker registered with River")
+
 				// Create River client
 				riverClient, err := riverqueue.NewClient(db, riverWorkers, riverConfig)
 				if err != nil {
@@ -923,6 +952,9 @@ func main() {
 					}
 					plaidSyncWorker.SetJobQueue(jobQueue)
 					appLogger.Info("Plaid sync worker connected to job queue for follow-up jobs")
+
+					profileService.SetJobQueue(jobQueue)
+					appLogger.Info("Profile service connected to job queue for email propagation")
 
 					// Issue #668: Wire up job queue to cleanup check worker
 					if itemCleanupCheckWorker != nil {
