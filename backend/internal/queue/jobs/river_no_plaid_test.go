@@ -41,6 +41,10 @@ func TestNonPlaidWorkersRegisterWithoutPlaid(t *testing.T) {
 		river.AddWorker(workers, NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{}))
 	}, "RetentionCleanupCheckWorker registration should not panic")
 
+	assert.NotPanics(t, func() {
+		river.AddWorker(workers, NewRuleEvaluationWorker(RuleEvaluationWorkerDeps{}))
+	}, "RuleEvaluationWorker registration should not panic")
+
 	// Plaid-specific workers are nil when Plaid is not configured.
 	// Verify the nil-guard pattern (same as main.go post-refactor) does not panic.
 	// Declaring and nil-checking demonstrates correct pattern.
