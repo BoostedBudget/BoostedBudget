@@ -97,6 +97,11 @@ func (m *mockClerkService) UpdateUserMetadata(ctx context.Context, clerkUserID s
 	return args.Error(0)
 }
 
+func (m *mockClerkService) UpdateUserEmail(ctx context.Context, clerkUserID, newEmail string) error {
+	args := m.Called(ctx, clerkUserID, newEmail)
+	return args.Error(0)
+}
+
 // mockNotificationRepository is a mock for SubscriptionNotificationRepository
 type mockNotificationRepository struct {
 	mock.Mock

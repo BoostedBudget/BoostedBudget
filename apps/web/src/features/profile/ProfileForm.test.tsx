@@ -14,6 +14,7 @@ import {
   setMockUpdateUserProfileIsPending,
 } from '@/test/mocks/profile-api'
 import { mockToastSuccess, mockToastError } from '@/test/mocks/sonner'
+import { mockPosthogIdentify } from '@/test/mocks/posthog'
 
 describe('ProfileForm', () => {
   const mockUser: User = {
@@ -35,6 +36,7 @@ describe('ProfileForm', () => {
     mockUpdateUserProfileMutate.mockClear()
     mockToastSuccess.mockClear()
     mockToastError.mockClear()
+    mockPosthogIdentify.mockClear()
     setMockUpdateUserProfileIsPending(false)
   })
 
@@ -140,7 +142,13 @@ describe('ProfileForm', () => {
           { data: { email: 'updated@example.com' } },
           expect.any(Object)
         )
-        expect(mockToastSuccess).toHaveBeenCalledWith('Profile updated successfully!')
+        expect(mockToastSuccess).toHaveBeenCalledWith(
+          'Profile updated. Check your inbox to verify your new email address.',
+        )
+        expect(mockPosthogIdentify).toHaveBeenCalledWith(
+          mockUser.id,
+          { email: 'updated@example.com' },
+        )
       })
     })
 
@@ -166,7 +174,7 @@ describe('ProfileForm', () => {
 
       await waitFor(() => {
         expect(mockUpdateUserProfileMutate).toHaveBeenCalledWith(
-          { data: { email: 'test@example.com', primary_region: 'ewr' } },
+          { data: { primary_region: 'ewr' } },
           expect.any(Object)
         )
       })
@@ -193,6 +201,20 @@ describe('ProfileForm', () => {
 
       await waitFor(() => {
         expect(mockToastError).toHaveBeenCalledWith('Failed to update profile. Please try again.')
+      })
+    })
+
+    it('should show duplicate-email error when server returns 409', async () => {
+      configureMutateError(new Error('409 Conflict: email already in use'))
+
+      const user = userEvent.setup({ delay: null })
+      render(<ProfileForm user={mockUser} />)
+
+      await updateEmailField(user, 'taken@example.com')
+      await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+      await waitFor(() => {
+        expect(mockToastError).toHaveBeenCalledWith('That email address is already in use.')
       })
     })
 
@@ -230,6 +252,20 @@ describe('ProfileForm', () => {
       await waitFor(() => {
         expect(onProfileUpdate).toHaveBeenCalledWith(updatedUser)
       })
+    })
+  })
+
+  describe('Email verification', () => {
+    it('should show verification notice when email is not verified', () => {
+      const unverifiedUser = { ...mockUser, email_verified: false }
+      render(<ProfileForm user={unverifiedUser} />)
+      expect(screen.getByText(/verify your email/i)).toBeInTheDocument()
+      expect(screen.getByText(/continue signing in with your previous email/i)).toBeInTheDocument()
+    })
+
+    it('should not show verification notice when email is verified', () => {
+      render(<ProfileForm user={mockUser} />)
+      expect(screen.queryByText(/verify your email/i)).not.toBeInTheDocument()
     })
   })
 

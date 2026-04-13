@@ -161,6 +161,11 @@ func (m *MockProfileRepositoryForDeletion) GetUserByEmail(ctx context.Context, e
 	return nil, nil
 }
 
+func (m *MockProfileRepositoryForDeletion) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	args := m.Called(ctx, tx, userID, plainEmail)
+	return args.Error(0)
+}
+
 // MockEmailService for testing
 type MockEmailService struct {
 	mock.Mock
@@ -188,6 +193,11 @@ func (m *MockClerkService) DeleteUser(ctx context.Context, clerkUserID string) e
 
 func (m *MockClerkService) UpdateUserMetadata(ctx context.Context, clerkUserID string, metadata map[string]interface{}) error {
 	args := m.Called(ctx, clerkUserID, metadata)
+	return args.Error(0)
+}
+
+func (m *MockClerkService) UpdateUserEmail(ctx context.Context, clerkUserID, newEmail string) error {
+	args := m.Called(ctx, clerkUserID, newEmail)
 	return args.Error(0)
 }
 
