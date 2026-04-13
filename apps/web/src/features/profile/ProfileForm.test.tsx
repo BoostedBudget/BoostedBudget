@@ -260,6 +260,7 @@ describe('ProfileForm', () => {
       const unverifiedUser = { ...mockUser, email_verified: false }
       render(<ProfileForm user={unverifiedUser} />)
       expect(screen.getByText(/verify your email/i)).toBeInTheDocument()
+      expect(screen.getByText(/continue signing in with your previous email/i)).toBeInTheDocument()
     })
 
     it('should not show verification notice when email is verified', () => {
