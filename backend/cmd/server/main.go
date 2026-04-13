@@ -232,7 +232,14 @@ func main() {
 	// Issue #633: Declare DLQ cleanup check worker
 	var dlqCleanupCheckWorker *jobs.DLQCleanupCheckWorker
 
-	// Issue #1007: Declare email change propagation worker
+	// Issue #1007: Declare email change propagation worker.
+	// NOTE: This worker is only created+registered when Plaid is configured because River
+	// is initialized inside the Plaid block (River was first introduced for Plaid webhooks).
+	// When Plaid is not configured, emailChangePropagationWorker remains nil, the River job
+	// queue is never started, and profileService.SetJobQueue is never called — so email changes
+	// are committed to the DB but silently not propagated to Clerk/Paddle.
+	// The nil-guard in profileService.UpdateProfile prevents panics in this case.
+	// TODO: Decouple River initialization from Plaid config — see Issue #1015.
 	var emailChangePropagationWorker *jobs.EmailChangePropagationWorker
 
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
