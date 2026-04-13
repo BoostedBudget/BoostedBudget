@@ -236,6 +236,9 @@ func main() {
 	// Issue #1015: Created unconditionally (before Plaid block); registered with River after.
 	var emailChangePropagationWorker *jobs.EmailChangePropagationWorker
 
+	// Issue #1015: Declare rule evaluation worker (non-Plaid)
+	var ruleEvaluationWorker *jobs.RuleEvaluationWorker
+
 	// Issue #1015: Declare Plaid-dependent workers at outer scope so they can be nil-checked
 	// during River registration (which now occurs after the Plaid block).
 	var webhookProcessingWorker *jobs.WebhookProcessingWorker
@@ -580,6 +583,13 @@ func main() {
 		appLogger.Info("Email change propagation worker created (River)")
 		emailChangePropagationWorker.SetAnalytics(phClient)
 
+		// Issue #1015: Create rule evaluation worker (depends only on ruleExecutionService, no Plaid dependency)
+		ruleEvaluationWorker = jobs.NewRuleEvaluationWorker(jobs.RuleEvaluationWorkerDeps{
+			RuleExecutionService: ruleExecutionService,
+			Logger:               appLogger,
+		})
+		appLogger.Info("Rule evaluation worker created (River)")
+
 		// Create Plaid service and account linking (if configured)
 		// plaidHandler migrated to Huma (see humaPlaidHandler) - Issue #559
 		// var plaidHandler *handlers.PlaidHandler
@@ -921,6 +931,10 @@ func main() {
 			if subscriptionWebhookWorker != nil {
 				river.AddWorker(riverWorkers, subscriptionWebhookWorker)
 				appLogger.Info("Paddle subscription webhook worker registered with River")
+			}
+			if ruleEvaluationWorker != nil {
+				river.AddWorker(riverWorkers, ruleEvaluationWorker)
+				appLogger.Info("Rule evaluation worker registered with River")
 			}
 
 			// Plaid-specific workers (nil when Plaid not configured)
