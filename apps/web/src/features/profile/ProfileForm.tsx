@@ -132,6 +132,7 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
                 {user.email}
               </span>{' '}
               and click the verification link to confirm your email address.
+              You&apos;ll continue signing in with your previous email until the new one is verified.
             </p>
           </div>
         </div>
