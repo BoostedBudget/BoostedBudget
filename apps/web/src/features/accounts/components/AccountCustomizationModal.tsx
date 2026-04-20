@@ -260,7 +260,7 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
           setShowHideConfirm(false)
         }}
         title="Hide Account?"
-        description="This account will be excluded from dashboards, rules, and reports."
+        description="This account will be hidden from your default view."
         variant="warning"
         confirmButtonText="Hide Account"
       />
