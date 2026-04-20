@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import { Eye, EyeOff, Loader2 } from 'lucide-react'
@@ -44,6 +45,7 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
   const [customIcon, setCustomIcon] = useState<AccountIcon | null>((account.custom_icon as AccountIcon) || null)
   const [customEmoji, setCustomEmoji] = useState<string | null>(account.custom_emoji || null)
   const [isHidden, setIsHidden] = useState(account.is_hidden || false)
+  const [showHideConfirm, setShowHideConfirm] = useState(false)
   const [activeTab, setActiveTab] = useState<'icon' | 'emoji'>(account.custom_emoji ? 'emoji' : 'icon')
 
   // Build display name for preview
@@ -208,7 +210,13 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
             type="button"
             role="switch"
             aria-checked={isHidden}
-            onClick={() => setIsHidden(!isHidden)}
+            onClick={() => {
+              if (!isHidden) {
+                setShowHideConfirm(true)
+              } else {
+                setIsHidden(false)
+              }
+            }}
             className={cn(
               'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
               isHidden ? 'bg-primary' : 'bg-input'
@@ -242,6 +250,20 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
           Save Changes
         </Button>
       </DialogFooter>
+
+      {/* Hide Account Confirmation — Issue #542 */}
+      <ConfirmationDialog
+        open={showHideConfirm}
+        onOpenChange={(open) => !open && setShowHideConfirm(false)}
+        onConfirm={() => {
+          setIsHidden(true)
+          setShowHideConfirm(false)
+        }}
+        title="Hide Account?"
+        description="This account will be excluded from dashboards, rules, and reports."
+        variant="warning"
+        confirmButtonText="Hide Account"
+      />
     </>
   )
 }
