@@ -26,8 +26,8 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
   const [email, setEmail] = useState(user.email)
   const [primaryRegion, setPrimaryRegion] = useState(user.primary_region)
 
-  const hasChanges = email !== user.email || primaryRegion !== user.primary_region
   const hasRegionChange = primaryRegion !== user.primary_region
+  const hasChanges = email !== user.email || hasRegionChange
 
   function getRegionDisplay(code: string): string {
     return regions?.[code]?.display_name ?? code
