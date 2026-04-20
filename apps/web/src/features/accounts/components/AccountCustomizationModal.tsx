@@ -302,10 +302,6 @@ export function AccountCustomizationModal({
   onSave,
   isSaving = false,
 }: AccountCustomizationModalProps) {
-  const handleCancel = useCallback(() => {
-    onOpenChange(false)
-  }, [onOpenChange])
-
   const handleSave = useCallback(async (account: Account, changes: Partial<UpdateAccountRequest>) => {
     await onSave(account, changes)
     onOpenChange(false)
@@ -319,7 +315,7 @@ export function AccountCustomizationModal({
             key={account.id}
             account={account}
             onSave={handleSave}
-            onCancel={handleCancel}
+            onCancel={() => onOpenChange(false)}
             isSaving={isSaving}
           />
         )}
