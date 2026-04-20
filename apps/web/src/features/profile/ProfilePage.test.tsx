@@ -369,7 +369,7 @@ describe('ProfilePage', () => {
 
       await waitFor(() => {
         expect(mockUpdateUserProfileMutate).toHaveBeenCalledWith(
-          { data: { email: 'test@example.com', primary_region: 'ewr' } },
+          { data: { primary_region: 'ewr' } },
           expect.any(Object)
         )
       })
@@ -397,7 +397,9 @@ describe('ProfilePage', () => {
       await user.click(saveButton)
 
       await waitFor(() => {
-        expect(mockToastSuccess).toHaveBeenCalledWith('Profile updated successfully!')
+        expect(mockToastSuccess).toHaveBeenCalledWith(
+          'Profile updated. Check your inbox to verify your new email address.',
+        )
       })
     })
 

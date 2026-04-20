@@ -44,6 +44,14 @@ func (m *mockPaddleSDK) GetCustomer(ctx context.Context, req *paddle.GetCustomer
 	return nil, args.Error(1)
 }
 
+func (m *mockPaddleSDK) UpdateCustomer(ctx context.Context, req *paddle.UpdateCustomerRequest) (*paddle.Customer, error) {
+	args := m.Called(ctx, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*paddle.Customer), args.Error(1)
+}
+
 func (m *mockPaddleSDK) CreateTransaction(ctx context.Context, req *paddle.CreateTransactionRequest) (*paddle.Transaction, error) {
 	args := m.Called(ctx, req)
 	if transaction, ok := args.Get(0).(*paddle.Transaction); ok {
@@ -586,6 +594,32 @@ func TestUpdateSubscription_ProrationModes(t *testing.T) {
 	}
 }
 
+func TestPaddleService_UpdateCustomerEmail_Success(t *testing.T) {
+	mockSDK := new(mockPaddleSDK)
+	svc := &paddleService{client: mockSDK}
+
+	mockSDK.On("UpdateCustomer", mock.Anything, &paddle.UpdateCustomerRequest{
+		CustomerID: "ctm_abc123",
+		Email:      paddle.NewPatchField("new@example.com"),
+	}).Return(&paddle.Customer{ID: "ctm_abc123"}, nil)
+
+	err := svc.UpdateCustomerEmail(context.Background(), "ctm_abc123", "new@example.com")
+	assert.NoError(t, err)
+	mockSDK.AssertExpectations(t)
+}
+
+func TestPaddleService_UpdateCustomerEmail_Error(t *testing.T) {
+	mockSDK := new(mockPaddleSDK)
+	svc := &paddleService{client: mockSDK}
+
+	mockSDK.On("UpdateCustomer", mock.Anything, mock.Anything).
+		Return(nil, errors.New("paddle api error"))
+
+	err := svc.UpdateCustomerEmail(context.Background(), "ctm_abc123", "new@example.com")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to update Paddle customer email")
+}
+
 // Documentation test: Verify that all public methods are present
 
 func TestPaddleService_ImplementsInterface(t *testing.T) {
@@ -612,6 +646,7 @@ func TestPaddleService_ImplementsInterface(t *testing.T) {
 	_ = func() { _, _ = service.UpdateSubscription(ctx, "s", "p", "prorated") }
 	_ = func() { _ = service.CancelSubscription(ctx, "s") }
 	_ = func() { _, _, _, _ = service.PreviewUpdate(ctx, "s", "p") }
+	_ = func() { _ = service.UpdateCustomerEmail(ctx, "c", "e@e.com") }
 	_ = func() { _ = service.GetClient() }
 }
 

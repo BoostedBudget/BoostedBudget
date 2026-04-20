@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
+	"net/mail"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -18,9 +18,6 @@ import (
 type TxBeginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
-
-// Email validation regex (basic RFC 5322 compliant)
-var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 
 // TrialGranter defines the interface for granting trials to users
 // Issue #679: Used to auto-grant trial during registration
@@ -152,7 +149,7 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 	}
 
 	// Validate email format
-	if !emailRegex.MatchString(email) {
+	if _, err := mail.ParseAddress(email); err != nil {
 		return nil, fmt.Errorf("invalid email format: %s", email)
 	}
 
