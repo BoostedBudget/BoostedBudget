@@ -338,7 +338,9 @@ describe('RulesPage', () => {
 
     const confirmButton = within(screen.getByRole('alertdialog')).getByRole('button', { name: /delete/i })
     fireEvent.click(confirmButton)
-    expect(mockDeleteAutomationRuleMutate).toHaveBeenCalled()
+    await waitFor(() => {
+      expect(mockDeleteAutomationRuleMutate).toHaveBeenCalled()
+    })
   })
 
   it('should have accessible page heading', async () => {

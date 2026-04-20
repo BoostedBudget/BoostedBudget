@@ -24,12 +24,19 @@ mock.module('./components/AccountCustomizationModal', () => ({
   AccountCustomizationModal: () => null,
 }))
 
-// Stub ConfirmationDialog so we can inspect its props without full Radix Dialog setup
 mock.module('@/components/ui/confirmation-dialog', () => ({
-  ConfirmationDialog: ({ open, title, confirmText, description }: { open: boolean; title: string; confirmText: string; description: unknown }) =>
+  ConfirmationDialog: ({
+    open, title, confirmText, confirmButtonText, variant, description, onConfirm,
+  }: {
+    open: boolean; title: string; confirmText?: string; confirmButtonText?: string;
+    variant?: string; description: unknown; onConfirm?: () => void
+  }) =>
     open ? (
-      <div data-testid="confirm-delete-dialog" data-title={title} data-confirm-text={confirmText}>
+      <div role="alertdialog" data-testid="confirm-delete-dialog" data-title={title} data-confirm-text={confirmText}>
         <div data-testid="dialog-description">{description}</div>
+        <button onClick={onConfirm}>
+          {confirmButtonText ?? (variant === 'destructive' ? 'Delete' : 'Confirm')}
+        </button>
       </div>
     ) : null,
 }))
