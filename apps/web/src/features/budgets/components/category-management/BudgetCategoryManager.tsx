@@ -8,13 +8,7 @@
 
 import { useState, useCallback, useMemo, useRef } from 'react';
 import { PlusIcon } from 'lucide-react';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import type {
   BudgetCategory,
   CreateBudgetCategoryRequest,
@@ -264,37 +258,16 @@ export function BudgetCategoryManager({
         availableTags={availableTags}
       />
 
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialog.isOpen} onOpenChange={(open) => !open && handleCloseDeleteDialog()}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Confirm Delete</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to delete the category "
-              {deleteDialog.category ? formatCategoryPath(deleteDialog.category.category) : ''}"?
-              This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-3 mt-4">
-            <button
-              type="button"
-              onClick={handleCloseDeleteDialog}
-              disabled={isDeleting}
-              className="px-4 py-2 text-sm font-medium text-foreground bg-muted rounded-lg hover:bg-muted/80 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleConfirmDelete}
-              disabled={isDeleting}
-              className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {isDeleting ? 'Deleting...' : 'Delete'}
-            </button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Delete Confirmation Dialog — Issue #960 */}
+      <ConfirmationDialog
+        open={deleteDialog.isOpen}
+        onOpenChange={(open) => !open && handleCloseDeleteDialog()}
+        onConfirm={handleConfirmDelete}
+        title="Delete Category"
+        description={deleteDialog.category ? `Are you sure you want to delete the category "${formatCategoryPath(deleteDialog.category.category)}"? This action cannot be undone.` : ''}
+        variant="destructive"
+        loading={isDeleting}
+      />
     </div>
   );
 }

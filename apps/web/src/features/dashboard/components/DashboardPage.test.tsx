@@ -1,8 +1,3 @@
-/**
- * DashboardPage Component Tests
- * Issue #575: Migrated to bun:test with centralized mocks
- */
-
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 import type {
   BalanceSummary,
@@ -38,9 +33,6 @@ import {
 // Local mock for useTrackEvent — avoids posthog module resolution ordering issues in full suite
 const mockTrackEvent = mock(() => {})
 
-// Issue #575: Register wrapper hook mocks inline (not globally preloaded)
-// This must be BEFORE importing the component
-// Note: We use spread args to capture arguments for test assertions
 mock.module('@/shared/hooks/useTrackEvent', () => ({
   useTrackEvent: () => mockTrackEvent,
 }))
@@ -95,13 +87,7 @@ mock.module('./GettingStartedChecklist', () => ({
   ),
 }))
 
-// Issue #575: Use REAL AccountTypeFilter and TimeframeSelector components
-// They have data-testid attributes for test queries.
-// We don't mock them to prevent pollution of their standalone tests.
-// The real components work with the mocked hook data (mockUseDashboardData).
-
-// NOW import testing utilities and component AFTER mocks
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DashboardPage } from './DashboardPage'
 
@@ -735,6 +721,71 @@ describe('DashboardPage', () => {
         ANALYTICS_EVENTS.GETTING_STARTED_STEP_CLICKED,
         { step_id: 'connect-bank' }
       )
+    })
+  })
+
+  describe('Edit Mode - Reset Layout', () => {
+    beforeEach(() => {
+      mockUseDashboardContext.mockReturnValue({
+        ...defaultContextValue,
+        isEditing: true,
+      })
+    })
+
+    it('clicking Reset opens ConfirmationDialog without calling resetToDefault', async () => {
+      const user = userEvent.setup()
+      render(<DashboardPage />)
+
+      await user.click(screen.getByRole('button', { name: /^reset$/i }))
+
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+      expect(screen.getByText('Reset Dashboard Layout')).toBeInTheDocument()
+      expect(mockResetToDefault).not.toHaveBeenCalled()
+    })
+
+    it('clicking Cancel in reset dialog does not call resetToDefault', async () => {
+      const user = userEvent.setup()
+      render(<DashboardPage />)
+
+      await user.click(screen.getByRole('button', { name: /^reset$/i }))
+      const dialog = screen.getByRole('alertdialog')
+      const { getByRole: getByRoleInDialog } = within(dialog)
+      await user.click(getByRoleInDialog('button', { name: /cancel/i }))
+
+      expect(dialog).not.toBeInTheDocument()
+      expect(mockResetToDefault).not.toHaveBeenCalled()
+    })
+
+    it('clicking Confirm in reset dialog calls resetToDefault and exits edit mode', async () => {
+      const user = userEvent.setup()
+      mockResetToDefault.mockResolvedValue(true)
+      render(<DashboardPage />)
+
+      await user.click(screen.getByRole('button', { name: /^reset$/i }))
+      const dialog = screen.getByRole('alertdialog')
+      const { getByRole: getByRoleInDialog } = within(dialog)
+      await user.click(getByRoleInDialog('button', { name: /^reset$/i }))
+
+      await waitFor(() => {
+        expect(mockResetToDefault).toHaveBeenCalledTimes(1)
+        expect(mockSetIsEditing).toHaveBeenCalledWith(false)
+      })
+    })
+
+    it('keeps dialog open and does not exit edit mode when reset fails', async () => {
+      const user = userEvent.setup()
+      mockResetToDefault.mockResolvedValue(false)
+      render(<DashboardPage />)
+
+      await user.click(screen.getByRole('button', { name: /^reset$/i }))
+      const { getByRole: getByRoleInDialog } = within(screen.getByRole('alertdialog'))
+      await user.click(getByRoleInDialog('button', { name: /^reset$/i }))
+
+      await waitFor(() => {
+        expect(mockResetToDefault).toHaveBeenCalledTimes(1)
+      })
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+      expect(mockSetIsEditing).not.toHaveBeenCalledWith(false)
     })
   })
 

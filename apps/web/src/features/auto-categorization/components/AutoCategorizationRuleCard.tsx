@@ -8,6 +8,7 @@
 import { useState } from 'react'
 import type { CategorizationRule } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 
 export interface AutoCategorizationRuleCardProps {
   rule: CategorizationRule
@@ -53,22 +54,14 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
     }
   }
 
-  const handleDeleteClick = () => {
-    setShowDeleteConfirm(true)
-  }
-
   const handleDeleteConfirm = async () => {
     setDeleting(true)
     try {
       await onDelete()
+      setShowDeleteConfirm(false)
     } finally {
       setDeleting(false)
-      setShowDeleteConfirm(false)
     }
-  }
-
-  const handleDeleteCancel = () => {
-    setShowDeleteConfirm(false)
   }
 
   return (
@@ -171,7 +164,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
           <button
             type="button"
             className="px-3 py-1.5 text-[0.8125rem] font-medium text-destructive border border-destructive rounded cursor-pointer hover:bg-destructive hover:text-destructive-foreground transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-            onClick={handleDeleteClick}
+            onClick={() => setShowDeleteConfirm(true)}
             disabled={deleting}
           >
             Delete
@@ -179,32 +172,16 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
         </div>
       </div>
 
-      {/* Delete confirmation dialog */}
-      {showDeleteConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]">
-          <div className="bg-card p-6 rounded-lg max-w-[400px] w-[90%] shadow-xl">
-            <p className="m-0 mb-4 text-[0.9375rem] text-foreground">Are you sure you want to delete "{rule.name}"?</p>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                className="px-3 py-1.5 text-[0.8125rem] font-medium bg-background border border-border text-foreground rounded cursor-pointer hover:bg-muted transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                onClick={handleDeleteCancel}
-                disabled={deleting}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="px-3 py-1.5 text-[0.8125rem] font-medium bg-destructive text-destructive-foreground rounded cursor-pointer hover:bg-destructive/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                onClick={handleDeleteConfirm}
-                disabled={deleting}
-              >
-                {deleting ? 'Deleting...' : 'Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Delete confirmation dialog — Issue #960 */}
+      <ConfirmationDialog
+        open={showDeleteConfirm}
+        onOpenChange={(open) => !open && !deleting && setShowDeleteConfirm(false)}
+        onConfirm={handleDeleteConfirm}
+        title="Delete Rule"
+        description={`Are you sure you want to delete "${rule.name}"?`}
+        variant="destructive"
+        loading={deleting}
+      />
     </div>
   )
 }

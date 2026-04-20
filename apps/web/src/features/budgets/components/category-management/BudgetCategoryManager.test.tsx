@@ -193,7 +193,7 @@ describe('BudgetCategoryManager', () => {
     await user.click(screen.getByRole('button', { name: /^Delete Food and Drink > Restaurants$/i }))
 
     await waitFor(() => {
-      expect(screen.getByText(/confirm.*delete/i)).toBeInTheDocument()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     })
   })
 
@@ -219,7 +219,7 @@ describe('BudgetCategoryManager', () => {
     await user.click(screen.getByRole('button', { name: /cancel/i }))
 
     await waitFor(() => {
-      expect(screen.queryByText(/confirm.*delete/i)).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     expect(mockOnDeleteCategory).not.toHaveBeenCalled()
@@ -342,7 +342,7 @@ describe('BudgetCategoryManager', () => {
     await user.keyboard('{Delete}')
 
     await waitFor(() => {
-      expect(screen.getByText(/confirm.*delete/i)).toBeInTheDocument()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     })
   })
 

@@ -7,6 +7,7 @@ import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import type { PrivacySettings as PrivacySettingsType, UpdatePrivacySettingsRequest } from './types'
 import { DeleteAccountSection } from '../deletion/components/DeleteAccountSection'
+import { ConfirmationDialog } from '../../components/ui/confirmation-dialog'
 
 interface PrivacySettingsProps {
   onSettingsChange?: (settings: PrivacySettingsType) => void
@@ -15,6 +16,7 @@ interface PrivacySettingsProps {
 export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [showCriticalConfirm, setShowCriticalConfirm] = useState(false)
   const trackEvent = useTrackEvent()
 
   // Use generated query hook for loading settings
@@ -49,13 +51,9 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
     setSuccessMessage(null)
   }
 
-  async function handleSave() {
-    if (!settings) return
-
-    // Build update request with only changed fields
+  function buildUpdates(): UpdatePrivacySettingsRequest {
     const updates: UpdatePrivacySettingsRequest = {}
-
-    // Compare formState with original settings
+    if (!settings) return updates
     if (formState.gdpr_necessary_consent !== undefined && formState.gdpr_necessary_consent !== settings.gdpr_necessary_consent) {
       updates.gdpr_necessary_consent = formState.gdpr_necessary_consent
     }
@@ -74,32 +72,43 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
     if (formState.data_sharing_enabled !== undefined && formState.data_sharing_enabled !== settings.data_sharing_enabled) {
       updates.data_sharing_enabled = formState.data_sharing_enabled
     }
+    return updates
+  }
 
-    // If no changes, don't make the request
+  async function performSave() {
+    const updates = buildUpdates()
     if (Object.keys(updates).length === 0) {
       setSuccessMessage('No changes to save')
       return
     }
-
     try {
       setSaveError(null)
       setSuccessMessage(null)
-
       const updatedSettings = await updateMutation.mutateAsync({ data: updates })
-
-      // Clear modifications since they're now saved
       setModifications({})
+      await refetch()
       setSuccessMessage('Settings saved successfully!')
-
-      // Track privacy settings change
       trackEvent(ANALYTICS_EVENTS.PRIVACY_SETTINGS_CHANGED)
-
-      // Notify parent component
       onSettingsChange?.(updatedSettings as PrivacySettingsType)
     } catch (err) {
       console.error('Failed to save privacy settings:', err)
       setSaveError('Failed to save privacy settings. Please try again.')
     }
+  }
+
+  function handleSave() {
+    if (!settings) return
+    const updates = buildUpdates()
+    if (Object.keys(updates).length === 0) {
+      setSuccessMessage('No changes to save')
+      return
+    }
+    // Issue #960: Warn before disabling security alerts
+    if (updates.security_alerts_enabled === false) {
+      setShowCriticalConfirm(true)
+      return
+    }
+    performSave()
   }
 
   // Derive submitting state from mutation
@@ -277,6 +286,21 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
 
       {/* Account Deletion Section - Issue #18 */}
       <DeleteAccountSection />
+
+      {/* Security alerts disable confirmation — Issue #960 */}
+      <ConfirmationDialog
+        open={showCriticalConfirm}
+        onOpenChange={(open) => !open && setShowCriticalConfirm(false)}
+        onConfirm={() => {
+          setShowCriticalConfirm(false)
+          performSave()
+        }}
+        title="Disable Security Alerts?"
+        description="You are about to disable security alerts. This means you won't receive notifications about unusual account activity or security issues."
+        variant="warning"
+        confirmButtonText="Confirm"
+        loading={submitting}
+      />
     </div>
   )
 }

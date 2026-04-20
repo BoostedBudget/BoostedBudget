@@ -1,10 +1,6 @@
-/**
- * DeadLetterPage Component Tests
- * Issue #633: Dead Letter Queue Admin UI
- */
-
-import { describe, it, expect, beforeEach } from 'bun:test'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
+import { render, screen, fireEvent, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
 import {
@@ -328,6 +324,98 @@ describe('DeadLetterPage', () => {
     fireEvent.change(screen.getByLabelText(/filter by user id/i), { target: { value: 'user_abc' } })
 
     expect(screen.getByRole('button', { name: /delete all matching/i })).toBeInTheDocument()
+  })
+
+  it('bulk delete button opens ConfirmationDialog', async () => {
+    const user = userEvent.setup()
+    mockUseListAdminDeadLetterJobs.mockReturnValue({
+      data: mockListResponse,
+      isLoading: false,
+      error: null,
+    })
+    mockUseGetAdminDeadLetterJobStats.mockReturnValue({ data: mockStatsResponse, isLoading: false, error: null })
+    mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+
+    render(<DeadLetterPage />, { wrapper: createWrapper() })
+
+    fireEvent.change(screen.getByLabelText(/filter by user id/i), { target: { value: 'user_abc' } })
+    await user.click(screen.getByRole('button', { name: /delete all matching/i }))
+
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /confirm delete all/i })).not.toBeInTheDocument()
+  })
+
+  it('bulk delete Cancel does not call mutation', async () => {
+    const user = userEvent.setup()
+    const bulkMutate = mock(() => {})
+    mockUseListAdminDeadLetterJobs.mockReturnValue({ data: mockListResponse, isLoading: false, error: null })
+    mockUseGetAdminDeadLetterJobStats.mockReturnValue({ data: undefined, isLoading: false, error: null })
+    mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({ mutate: bulkMutate, isPending: false })
+
+    render(<DeadLetterPage />, { wrapper: createWrapper() })
+
+    fireEvent.change(screen.getByLabelText(/filter by user id/i), { target: { value: 'user_abc' } })
+    await user.click(screen.getByRole('button', { name: /delete all matching/i }))
+    const dialog = screen.getByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: /cancel/i }))
+
+    expect(bulkMutate).not.toHaveBeenCalled()
+  })
+
+  it('bulk delete Confirm calls mutation', async () => {
+    const user = userEvent.setup()
+    const bulkMutate = mock(() => {})
+    mockUseListAdminDeadLetterJobs.mockReturnValue({ data: mockListResponse, isLoading: false, error: null })
+    mockUseGetAdminDeadLetterJobStats.mockReturnValue({ data: undefined, isLoading: false, error: null })
+    mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({ mutate: bulkMutate, isPending: false })
+
+    render(<DeadLetterPage />, { wrapper: createWrapper() })
+
+    fireEvent.change(screen.getByLabelText(/filter by user id/i), { target: { value: 'user_abc' } })
+    await user.click(screen.getByRole('button', { name: /delete all matching/i }))
+    const dialog = screen.getByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: /^delete$/i }))
+
+    expect(bulkMutate).toHaveBeenCalledTimes(1)
+  })
+
+  it('per-row delete button opens ConfirmationDialog', async () => {
+    const user = userEvent.setup()
+    mockUseListAdminDeadLetterJobs.mockReturnValue({ data: mockListResponse, isLoading: false, error: null })
+    mockUseGetAdminDeadLetterJobStats.mockReturnValue({ data: undefined, isLoading: false, error: null })
+    mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+
+    render(<DeadLetterPage />, { wrapper: createWrapper() })
+
+    await user.click(screen.getByRole('button', { name: /delete job 1/i }))
+
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+  })
+
+  it('per-row delete Confirm calls mutation with correct id', async () => {
+    const user = userEvent.setup()
+    const deleteMutate = mock(() => {})
+    mockUseListAdminDeadLetterJobs.mockReturnValue({ data: mockListResponse, isLoading: false, error: null })
+    mockUseGetAdminDeadLetterJobStats.mockReturnValue({ data: undefined, isLoading: false, error: null })
+    mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: deleteMutate, isPending: false })
+    mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+
+    render(<DeadLetterPage />, { wrapper: createWrapper() })
+
+    await user.click(screen.getByRole('button', { name: /delete job 1/i }))
+    const dialog = screen.getByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: /^delete$/i }))
+
+    expect(deleteMutate).toHaveBeenCalledWith({ id: 1 }, expect.any(Object))
   })
 
   it('shows date filter inputs', () => {

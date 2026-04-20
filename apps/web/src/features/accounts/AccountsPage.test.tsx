@@ -24,12 +24,19 @@ mock.module('./components/AccountCustomizationModal', () => ({
   AccountCustomizationModal: () => null,
 }))
 
-// Stub ConfirmDeleteDialog so we can inspect its props without full Radix Dialog setup
-mock.module('@/components/ui/confirm-delete-dialog', () => ({
-  ConfirmDeleteDialog: ({ open, title, confirmText, description }: { open: boolean; title: string; confirmText: string; description: unknown }) =>
+mock.module('@/components/ui/confirmation-dialog', () => ({
+  ConfirmationDialog: ({
+    open, title, confirmText, confirmButtonText, variant, description, onConfirm,
+  }: {
+    open: boolean; title: string; confirmText?: string; confirmButtonText?: string;
+    variant?: string; description: unknown; onConfirm?: () => void
+  }) =>
     open ? (
-      <div data-testid="confirm-delete-dialog" data-title={title} data-confirm-text={confirmText}>
+      <div role="alertdialog" data-testid="confirm-delete-dialog" data-title={title} data-confirm-text={confirmText}>
         <div data-testid="dialog-description">{description}</div>
+        <button onClick={onConfirm}>
+          {confirmButtonText ?? (variant === 'destructive' ? 'Delete' : 'Confirm')}
+        </button>
       </div>
     ) : null,
 }))
@@ -283,12 +290,12 @@ describe('AccountsPage', () => {
       })
     })
 
-    it('does not show ConfirmDeleteDialog initially', () => {
+    it('does not show ConfirmationDialog initially', () => {
       renderAccountsPage()
       expect(screen.queryByTestId('confirm-delete-dialog')).not.toBeInTheDocument()
     })
 
-    it('shows ConfirmDeleteDialog when account delete is triggered from card', () => {
+    it('shows ConfirmationDialog when account delete is triggered from card', () => {
       renderAccountsPage()
 
       fireEvent.click(screen.getByText('Delete'))
@@ -296,7 +303,7 @@ describe('AccountsPage', () => {
       expect(screen.getByTestId('confirm-delete-dialog')).toBeInTheDocument()
     })
 
-    it('passes correct title to ConfirmDeleteDialog', () => {
+    it('passes correct title to ConfirmationDialog', () => {
       renderAccountsPage()
 
       fireEvent.click(screen.getByText('Delete'))
@@ -304,7 +311,7 @@ describe('AccountsPage', () => {
       expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-title', 'Delete Account')
     })
 
-    it('passes account name as confirmText to ConfirmDeleteDialog', () => {
+    it('passes account name as confirmText to ConfirmationDialog', () => {
       renderAccountsPage()
 
       fireEvent.click(screen.getByText('Delete'))
