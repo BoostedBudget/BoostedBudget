@@ -115,6 +115,10 @@ type ProfileRepository interface {
 
 	// DeleteUserCascade performs application-level cascade deletion of all user data
 	DeleteUserCascade(ctx context.Context, userID string) error
+
+	// UpdateUserEmailTx updates a user's email, blind index, and resets email_verified=false
+	// within an existing transaction. Returns ErrDuplicateEmail if the email is already in use.
+	UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error
 }
 
 // profileRepository implements ProfileRepository using PostgreSQL
@@ -460,6 +464,34 @@ func (r *profileRepository) UpdateUser(ctx context.Context, user *domain.User) e
 		return r.checkDuplicateError(err)
 	}
 
+	if ct.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// UpdateUserEmailTx updates a user's email, blind index, and resets email_verified=false
+// within an existing transaction. Returns ErrDuplicateEmail if the email is already in use.
+func (r *profileRepository) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	encryptedEmail, err := r.enc.EncryptString(plainEmail)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt email: %w", err)
+	}
+	emailBlindIdx := r.enc.BlindIndex(strings.ToLower(strings.TrimSpace(plainEmail)))
+	now := time.Now()
+
+	query := `
+		UPDATE users
+		SET email = $1,
+		    email_blind_idx = $2,
+		    email_verified = false,
+		    updated_at = $3
+		WHERE id = $4
+	`
+	ct, err := tx.Exec(ctx, query, encryptedEmail, emailBlindIdx, now, userID)
+	if err != nil {
+		return r.checkDuplicateError(err)
+	}
 	if ct.RowsAffected() == 0 {
 		return ErrUserNotFound
 	}

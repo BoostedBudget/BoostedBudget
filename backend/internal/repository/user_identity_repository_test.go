@@ -291,3 +291,68 @@ func TestUpdateLastUsed_NotFound(t *testing.T) {
 	assert.Equal(t, ErrIdentityNotFound, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestUserIdentityRepository_UpdatePrimaryIdentityEmailTx_Success tests successful email update
+// on the primary identity within an existing transaction.
+func TestUserIdentityRepository_UpdatePrimaryIdentityEmailTx_Success(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	mock, repo := setupMockIdentityDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	plainEmail := "newemail@example.com"
+
+	mock.ExpectBegin()
+	tx, err := mock.Begin(ctx)
+	require.NoError(t, err)
+
+	mock.ExpectExec(`UPDATE user_identities SET email = \$1, email_verified = false, updated_at = \$2 WHERE user_id = \$3 AND is_primary = true`).
+		WithArgs(
+			pgxmock.AnyArg(), // encrypted email
+			pgxmock.AnyArg(), // updated_at
+			userID,
+		).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err = repo.UpdatePrimaryIdentityEmailTx(ctx, tx, userID, plainEmail)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUserIdentityRepository_UpdatePrimaryIdentityEmailTx_NoIdentity tests that 0 rows affected
+// is treated as a no-op (not an error) when the user has no primary identity.
+func TestUserIdentityRepository_UpdatePrimaryIdentityEmailTx_NoIdentity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	mock, repo := setupMockIdentityDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	plainEmail := "newemail@example.com"
+
+	mock.ExpectBegin()
+	tx, err := mock.Begin(ctx)
+	require.NoError(t, err)
+
+	mock.ExpectExec(`UPDATE user_identities SET email = \$1, email_verified = false, updated_at = \$2 WHERE user_id = \$3 AND is_primary = true`).
+		WithArgs(
+			pgxmock.AnyArg(), // encrypted email
+			pgxmock.AnyArg(), // updated_at
+			userID,
+		).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err = repo.UpdatePrimaryIdentityEmailTx(ctx, tx, userID, plainEmail)
+
+	// 0 rows affected is a no-op — no error expected
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

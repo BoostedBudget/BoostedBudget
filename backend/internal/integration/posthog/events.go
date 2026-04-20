@@ -28,6 +28,7 @@ const (
 	EventUserDeleted        = "user_deleted"
 	EventDeletionRequested  = "deletion_requested"
 	EventDeletionCancelled  = "deletion_cancelled"
+	EventEmailChanged       = "email_changed"
 
 	// Rule and automation events
 	EventRuleTriggered              = "rule_triggered"

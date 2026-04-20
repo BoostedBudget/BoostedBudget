@@ -46,6 +46,11 @@ type UserIdentityRepository interface {
 	// Called during login to track when each identity was last used
 	// Returns ErrIdentityNotFound if the identity doesn't exist
 	UpdateLastUsed(ctx context.Context, clerkUserID string) error
+
+	// UpdatePrimaryIdentityEmailTx updates the email and resets email_verified=false on the
+	// primary identity (is_primary=true) for the given user, within an existing transaction.
+	// If the user has no primary identity, the update is a no-op (no error).
+	UpdatePrimaryIdentityEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error
 }
 
 // userIdentityRepository implements UserIdentityRepository using PostgreSQL
@@ -57,6 +62,29 @@ type userIdentityRepository struct {
 // NewUserIdentityRepository creates a new UserIdentityRepository instance
 func NewUserIdentityRepository(db DB, enc *appcrypto.FieldEncryptor) UserIdentityRepository {
 	return &userIdentityRepository{db: db, enc: enc}
+}
+
+// decryptIdentity decrypts sensitive fields in an identity record
+func (r *userIdentityRepository) decryptIdentity(identity *domain.UserIdentity) error {
+	decryptedClerkUserID, err := r.enc.DecryptString(identity.ClerkUserID)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
+	}
+	identity.ClerkUserID = decryptedClerkUserID
+
+	decryptedEmail, err := r.enc.DecryptString(identity.Email)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt email: %w", err)
+	}
+	identity.Email = decryptedEmail
+
+	decryptedProviderUserID, err := r.enc.DecryptString(identity.ProviderUserID)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt provider_user_id: %w", err)
+	}
+	identity.ProviderUserID = decryptedProviderUserID
+
+	return nil
 }
 
 // GetByClerkID retrieves an identity by Clerk user ID
@@ -92,23 +120,9 @@ func (r *userIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID s
 		return nil, err
 	}
 
-	decryptedClerkUserID, err := r.enc.DecryptString(identity.ClerkUserID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
+	if err := r.decryptIdentity(&identity); err != nil {
+		return nil, err
 	}
-	identity.ClerkUserID = decryptedClerkUserID
-
-	decryptedEmail, err := r.enc.DecryptString(identity.Email)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt email: %w", err)
-	}
-	identity.Email = decryptedEmail
-
-	decryptedProviderUserID, err := r.enc.DecryptString(identity.ProviderUserID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt provider_user_id: %w", err)
-	}
-	identity.ProviderUserID = decryptedProviderUserID
 
 	return &identity, nil
 }
@@ -152,23 +166,9 @@ func (r *userIdentityRepository) GetByUserID(ctx context.Context, userID string)
 			return nil, err
 		}
 
-		decryptedClerkUserID, err := r.enc.DecryptString(identity.ClerkUserID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
+		if err := r.decryptIdentity(&identity); err != nil {
+			return nil, err
 		}
-		identity.ClerkUserID = decryptedClerkUserID
-
-		decryptedEmail, err := r.enc.DecryptString(identity.Email)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt email: %w", err)
-		}
-		identity.Email = decryptedEmail
-
-		decryptedProviderUserID, err := r.enc.DecryptString(identity.ProviderUserID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt provider_user_id: %w", err)
-		}
-		identity.ProviderUserID = decryptedProviderUserID
 
 		identities = append(identities, &identity)
 	}
@@ -235,8 +235,12 @@ func (r *userIdentityRepository) Create(ctx context.Context, identity *domain.Us
 		clerkUserIDBlindIdx,
 	)
 
+	return r.handleCreateError(err)
+}
+
+// handleCreateError checks if an error is a unique constraint violation for clerk_user_id
+func (r *userIdentityRepository) handleCreateError(err error) error {
 	if err != nil {
-		// Check for unique constraint violations
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			if strings.Contains(err.Error(), "clerk_user_id") {
 				return ErrDuplicateIdentity
@@ -244,7 +248,6 @@ func (r *userIdentityRepository) Create(ctx context.Context, identity *domain.Us
 		}
 		return err
 	}
-
 	return nil
 }
 
@@ -303,17 +306,29 @@ func (r *userIdentityRepository) CreateTx(ctx context.Context, tx pgx.Tx, identi
 		clerkUserIDBlindIdx,
 	)
 
-	if err != nil {
-		// Check for unique constraint violations
-		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			if strings.Contains(err.Error(), "clerk_user_id") {
-				return ErrDuplicateIdentity
-			}
-		}
-		return err
-	}
+	return r.handleCreateError(err)
+}
 
-	return nil
+// UpdatePrimaryIdentityEmailTx updates the email and resets email_verified=false on the
+// primary identity for the given user, within an existing transaction.
+// 0 rows affected is a no-op (not an error).
+func (r *userIdentityRepository) UpdatePrimaryIdentityEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	encryptedEmail, err := r.enc.EncryptString(plainEmail)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt identity email: %w", err)
+	}
+	now := time.Now()
+
+	query := `
+		UPDATE user_identities
+		SET email = $1,
+		    email_verified = false,
+		    updated_at = $2
+		WHERE user_id = $3
+		  AND is_primary = true
+	`
+	_, err = tx.Exec(ctx, query, encryptedEmail, now, userID)
+	return err
 }
 
 // UpdateLastUsed updates the last_used_at and updated_at timestamps for an identity

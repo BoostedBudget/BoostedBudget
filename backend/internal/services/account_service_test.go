@@ -545,6 +545,11 @@ func (m *MockUserRepository) GetUserByEmail(ctx context.Context, email string) (
 	return args.Get(0).(*domain.User), args.Error(1)
 }
 
+func (m *MockUserRepository) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	args := m.Called(ctx, tx, userID, plainEmail)
+	return args.Error(0)
+}
+
 // TestAccountService_LinkAccounts_Success tests successful account linking flow
 func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	// Given: All dependencies mocked with successful responses

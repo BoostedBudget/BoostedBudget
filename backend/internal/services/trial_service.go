@@ -74,6 +74,14 @@ func (s *TrialService) SetRetentionMonths(months int) {
 	}
 }
 
+// SetPlaidCleanup injects the Plaid cleanup dependency after construction.
+// Issue #1015: Allows TrialService to be created before PlaidCleanupService is available,
+// enabling River initialization to run independently of Plaid configuration.
+// ExpireTrial already nil-guards plaidCleanup before calling it.
+func (s *TrialService) SetPlaidCleanup(svc PlaidCleanupForTrial) {
+	s.plaidCleanup = svc
+}
+
 // GrantTrial grants a trial to a user
 // Sets subscription_status='trial', subscription_tier='premium',
 // trial_started_at=now, trial_ends_at=now+60days, had_trial=true
