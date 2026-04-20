@@ -1,10 +1,3 @@
-/**
- * DeadLetterPage Component
- * Issue #633: Dead Letter Queue Admin UI
- *
- * Admin page for viewing, filtering, retrying, and deleting failed jobs in the Dead Letter Queue.
- */
-
 import { useState, useEffect } from 'react'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
@@ -18,6 +11,7 @@ import {
 } from '@boostedbudget/api-client/endpoints/admin/admin'
 import { SummaryCard } from '@/features/admin'
 import { cn } from '@/lib/utils'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { useDeadLetterFilters } from '../hooks/useDeadLetterFilters'
 import { DeadLetterDetailModal } from './DeadLetterDetailModal'
 
@@ -89,8 +83,7 @@ export function DeadLetterPage() {
     })
   }
 
-  const handleDeleteConfirm = (jobId: number, e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handleDeleteConfirm = (jobId: number) => {
     deleteMutation.mutate({ id: jobId }, {
       onSuccess: () => {
         trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_DELETE, { job_id: jobId })
@@ -118,7 +111,6 @@ export function DeadLetterPage() {
 
   return (
     <div className="flex flex-col gap-6 p-6 min-h-full">
-      {/* Header */}
       <header className="flex items-start justify-between flex-wrap gap-4 border-b border-border pb-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground flex items-center gap-2.5 m-0">
@@ -146,7 +138,6 @@ export function DeadLetterPage() {
         </div>
       </header>
 
-      {/* Stats Cards */}
       {statsData && (
         <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
           <SummaryCard
@@ -176,7 +167,6 @@ export function DeadLetterPage() {
         </div>
       )}
 
-      {/* By-kind breakdown */}
       {statsData?.by_kind && Object.keys(statsData.by_kind).length > 0 && (
         <div className="flex flex-wrap gap-2">
           {Object.entries(statsData.by_kind).map(([kind, count]) => (
@@ -196,7 +186,6 @@ export function DeadLetterPage() {
         </div>
       )}
 
-      {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">
         <select
           className={selectInputClass}
@@ -260,45 +249,19 @@ export function DeadLetterPage() {
         )}
       </div>
 
-      {/* Bulk delete (when filters active) */}
       {hasActiveFilters && !isEmpty && (
         <div className="flex items-center gap-3">
-          {confirmBulkDelete ? (
-            <>
-              <span className="text-sm text-destructive font-medium">
-                Delete all matching jobs? This cannot be undone.
-              </span>
-              <button
-                type="button"
-                className="inline-flex items-center px-3.5 py-2 border border-destructive rounded-md bg-destructive text-destructive-foreground text-sm font-medium cursor-pointer transition-colors hover:bg-destructive/90 disabled:opacity-45 disabled:cursor-not-allowed"
-                onClick={handleBulkDelete}
-                disabled={bulkDeleteMutation.isPending}
-                aria-label="Confirm delete all matching jobs"
-              >
-                {bulkDeleteMutation.isPending ? 'Deleting...' : 'Confirm Delete All'}
-              </button>
-              <button
-                type="button"
-                className={buttonClass}
-                onClick={() => setConfirmBulkDelete(false)}
-              >
-                Cancel
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className={cn(buttonClass, 'gap-1.5 border-destructive/50 text-destructive hover:bg-destructive/10')}
-              onClick={() => setConfirmBulkDelete(true)}
-              aria-label="Delete all matching jobs"
-            >
-              Delete All Matching
-            </button>
-          )}
+          <button
+            type="button"
+            className={cn(buttonClass, 'gap-1.5 border-destructive/50 text-destructive hover:bg-destructive/10')}
+            onClick={() => setConfirmBulkDelete(true)}
+            aria-label="Delete all matching jobs"
+          >
+            Delete All Matching
+          </button>
         </div>
       )}
 
-      {/* Content */}
       {isLoading ? (
         <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground" role="status">
           Loading dead letter jobs...
@@ -378,37 +341,15 @@ export function DeadLetterPage() {
                         >
                           Retry
                         </button>
-                        {confirmDeleteJobId === job.id ? (
-                          <>
-                            <button
-                              type="button"
-                              className="inline-flex items-center px-2.5 py-1.5 border border-destructive rounded-md bg-destructive text-destructive-foreground text-[0.8125rem] font-medium cursor-pointer transition-colors hover:bg-destructive/90 disabled:opacity-45 disabled:cursor-not-allowed"
-                              onClick={(e) => handleDeleteConfirm(job.id, e)}
-                              disabled={deleteMutation.isPending}
-                              aria-label={`Confirm delete job ${job.id}`}
-                            >
-                              Confirm
-                            </button>
-                            <button
-                              type="button"
-                              className="inline-flex items-center px-2.5 py-1.5 border border-border rounded-md bg-background text-foreground text-[0.8125rem] font-medium cursor-pointer transition-colors hover:bg-muted"
-                              onClick={(e) => { e.stopPropagation(); setConfirmDeleteJobId(null) }}
-                              aria-label="Cancel delete"
-                            >
-                              ✕
-                            </button>
-                          </>
-                        ) : (
-                          <button
-                            type="button"
-                            className="inline-flex items-center px-2.5 py-1.5 border border-destructive/30 rounded-md bg-background text-destructive text-[0.8125rem] font-medium cursor-pointer transition-colors hover:bg-destructive/10 disabled:opacity-45 disabled:cursor-not-allowed"
-                            onClick={(e) => { e.stopPropagation(); setConfirmDeleteJobId(job.id) }}
-                            disabled={deleteMutation.isPending}
-                            aria-label={`Delete job ${job.id}`}
-                          >
-                            Delete
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          className="inline-flex items-center px-2.5 py-1.5 border border-destructive/30 rounded-md bg-background text-destructive text-[0.8125rem] font-medium cursor-pointer transition-colors hover:bg-destructive/10 disabled:opacity-45 disabled:cursor-not-allowed"
+                          onClick={(e) => { e.stopPropagation(); setConfirmDeleteJobId(job.id) }}
+                          disabled={deleteMutation.isPending}
+                          aria-label={`Delete job ${job.id}`}
+                        >
+                          Delete
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -450,6 +391,26 @@ export function DeadLetterPage() {
       <DeadLetterDetailModal
         jobId={selectedJobId}
         onClose={() => setSelectedJobId(null)}
+      />
+
+      <ConfirmationDialog
+        open={confirmBulkDelete}
+        onOpenChange={setConfirmBulkDelete}
+        onConfirm={handleBulkDelete}
+        title="Delete All Matching Jobs"
+        description="This will permanently delete all jobs matching the current filters. This action cannot be undone."
+        variant="destructive"
+        loading={bulkDeleteMutation.isPending}
+      />
+
+      <ConfirmationDialog
+        open={confirmDeleteJobId !== null}
+        onOpenChange={(open) => !open && setConfirmDeleteJobId(null)}
+        onConfirm={() => { if (confirmDeleteJobId !== null) handleDeleteConfirm(confirmDeleteJobId) }}
+        title="Delete Job"
+        description={confirmDeleteJobId !== null ? `Delete job #${confirmDeleteJobId}? This action cannot be undone.` : ''}
+        variant="destructive"
+        loading={deleteMutation.isPending}
       />
     </div>
   )

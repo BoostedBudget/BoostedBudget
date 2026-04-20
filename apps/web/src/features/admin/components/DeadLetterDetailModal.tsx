@@ -1,13 +1,7 @@
-/**
- * DeadLetterDetailModal Component
- * Issue #633: Dead Letter Queue Admin UI
- *
- * Modal displaying DLQ job details: metadata, errors, args (masked/reveal), notes, and actions.
- */
-
 import { useState } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
@@ -81,27 +75,30 @@ export function DeadLetterDetailModal({ jobId, onClose, onDeleted }: DeadLetterD
     )
   }
 
+  const closeModal = () => {
+    setShowRawArgs(false)
+    setIsEditingNotes(false)
+    setConfirmDelete(false)
+    onClose()
+  }
+
   const handleDelete = () => {
     if (!jobId) return
     deleteMutation.mutate({ id: jobId }, {
       onSuccess: () => {
         trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_DELETE, { job_id: jobId })
         onDeleted?.()
-        onClose()
+        closeModal()
       },
     })
   }
 
   const handleOpen = (open: boolean) => {
-    if (!open) {
-      setShowRawArgs(false)
-      setIsEditingNotes(false)
-      setConfirmDelete(false)
-      onClose()
-    }
+    if (!open) closeModal()
   }
 
   return (
+    <>
     <Dialog open={!!jobId} onOpenChange={handleOpen}>
       <DialogContent className="max-w-[720px] max-h-[85vh] overflow-y-auto">
         {isLoading ? (
@@ -120,7 +117,6 @@ export function DeadLetterDetailModal({ jobId, onClose, onDeleted }: DeadLetterD
             </DialogHeader>
 
             <div className="flex flex-col gap-3.5 my-4">
-              {/* Metadata */}
               <div className="flex items-start gap-2">
                 <span className={fieldClass}>ID:</span>
                 <span className={valueClass}>{job.id}</span>
@@ -169,7 +165,6 @@ export function DeadLetterDetailModal({ jobId, onClose, onDeleted }: DeadLetterD
                 </div>
               )}
 
-              {/* Errors */}
               <div className="flex flex-col gap-2 mt-2">
                 <span className={fieldClass}>Errors:</span>
                 <pre className={cn(preClass, 'text-destructive')} data-ph-mask>
@@ -177,7 +172,6 @@ export function DeadLetterDetailModal({ jobId, onClose, onDeleted }: DeadLetterD
                 </pre>
               </div>
 
-              {/* Args (masked by default, reveal on demand) */}
               <div className="flex flex-col gap-2 mt-2">
                 <div className="flex items-center justify-between">
                   <span className={fieldClass}>Args:</span>
@@ -209,7 +203,6 @@ export function DeadLetterDetailModal({ jobId, onClose, onDeleted }: DeadLetterD
                 )}
               </div>
 
-              {/* Notes */}
               <div className="flex flex-col gap-2 mt-2">
                 <div className="flex items-center justify-between">
                   <span className={fieldClass}>Notes:</span>
@@ -261,54 +254,41 @@ export function DeadLetterDetailModal({ jobId, onClose, onDeleted }: DeadLetterD
             </div>
 
             <DialogFooter className="flex-wrap gap-2">
-              {confirmDelete ? (
-                <>
-                  <span className="text-sm text-destructive self-center">Delete this job?</span>
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={handleDelete}
-                    disabled={deleteMutation.isPending}
-                  >
-                    {deleteMutation.isPending ? 'Deleting...' : 'Confirm Delete'}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setConfirmDelete(false)}
-                    disabled={deleteMutation.isPending}
-                  >
-                    Cancel
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleRetry}
-                    disabled={!!job.retried_at || retryMutation.isPending}
-                    title={job.retried_at ? `Retried at ${new Date(job.retried_at).toLocaleString()}` : undefined}
-                  >
-                    {retryMutation.isPending ? 'Retrying...' : job.retried_at ? 'Already Retried' : 'Retry'}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
-                    onClick={() => setConfirmDelete(true)}
-                  >
-                    Delete
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={onClose}>
-                    Close
-                  </Button>
-                </>
-              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRetry}
+                disabled={!!job.retried_at || retryMutation.isPending}
+                title={job.retried_at ? `Retried at ${new Date(job.retried_at).toLocaleString()}` : undefined}
+              >
+                {retryMutation.isPending ? 'Retrying...' : job.retried_at ? 'Already Retried' : 'Retry'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
+                onClick={() => setConfirmDelete(true)}
+              >
+                Delete
+              </Button>
+              <Button variant="outline" size="sm" onClick={closeModal}>
+                Close
+              </Button>
             </DialogFooter>
           </>
         ) : null}
       </DialogContent>
     </Dialog>
+
+    <ConfirmationDialog
+      open={confirmDelete}
+      onOpenChange={setConfirmDelete}
+      onConfirm={handleDelete}
+      title="Delete Job"
+      description={job ? `Delete job #${job.id} (${job.kind})? This action cannot be undone.` : ''}
+      variant="destructive"
+      loading={deleteMutation.isPending}
+    />
+    </>
   )
 }

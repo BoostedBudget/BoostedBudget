@@ -1,10 +1,5 @@
-/**
- * DeadLetterDetailModal Component Tests
- * Issue #633: Dead Letter Queue Admin UI
- */
-
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   mockUseGetAdminDeadLetterJobDetail,
@@ -169,13 +164,35 @@ describe('DeadLetterDetailModal', () => {
 
     render(<DeadLetterDetailModal jobId={1} onClose={() => {}} />, { wrapper: createWrapper() })
 
-    // Click Delete button to show confirmation
+    // Click Delete button in the modal footer to open ConfirmationDialog
     fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
-    expect(screen.getByRole('button', { name: /confirm delete/i })).toBeInTheDocument()
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
 
-    // Confirm
-    fireEvent.click(screen.getByRole('button', { name: /confirm delete/i }))
+    // Confirm deletion in the alertdialog
+    const dialog = screen.getByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: /^delete$/i }))
     expect(deleteMutateMock).toHaveBeenCalledWith({ id: 1 }, expect.any(Object))
+  })
+
+  it('closes confirmation dialog after successful delete', () => {
+    let capturedOnSuccess: (() => void) | undefined
+    const deleteMutateMock = mock((_args: unknown, opts: { onSuccess?: () => void }) => {
+      capturedOnSuccess = opts?.onSuccess
+    })
+    mockUseGetAdminDeadLetterJobDetail.mockReturnValue({ data: mockJob, isLoading: false, error: null })
+    mockUseGetAdminDeadLetterJobArgs.mockReturnValue({ data: undefined, isLoading: false, error: null, refetch: mock(() => Promise.resolve()) })
+    mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    mockUseAddAdminDeadLetterJobNotes.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: deleteMutateMock, isPending: false })
+
+    render(<DeadLetterDetailModal jobId={1} onClose={() => {}} />, { wrapper: createWrapper() })
+
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: /^delete$/i }))
+
+    act(() => { capturedOnSuccess?.() })
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
   it('notes editing flow shows textarea', () => {
