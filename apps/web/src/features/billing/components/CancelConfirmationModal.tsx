@@ -155,6 +155,12 @@ export function CancelConfirmationModal({
                   type="text"
                   value={confirmText}
                   onChange={(e) => setConfirmText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && confirmText === 'CANCEL') {
+                      e.preventDefault()
+                      handleConfirm()
+                    }
+                  }}
                   placeholder="Type CANCEL to confirm"
                   className="w-full px-3 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                   aria-label="Type CANCEL to confirm cancellation"

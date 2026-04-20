@@ -5,6 +5,7 @@ import { PlusIcon, PencilIcon, ArrowPathIcon } from '@heroicons/react/24/outline
 import { LightbulbIcon } from 'lucide-react'
 import { Alert } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { DashboardProvider, useDashboardContext } from '../context/DashboardContext'
 import { useDashboardLayout } from '../hooks/useDashboardLayout'
 import { useDashboardOnboarding } from '../hooks/useDashboardOnboarding'
@@ -21,21 +22,6 @@ import type { WidgetType } from '../types'
 // Import widgets to register them
 import '../widgets'
 
-/**
- * DashboardPage - Main dashboard view with customizable widget system
- *
- * Features:
- * - Drag-and-drop widget reordering
- * - Widget resizing
- * - Add/remove widgets from catalog
- * - Layout persistence to backend
- * - Cash flow analysis widgets (Issue #354)
- * - Timeframe and account type filtering
- * - Responsive grid layout
- *
- * Issue #354: Cash Flow Analysis + Customizable Dashboard
- */
-
 function DashboardContent() {
   const { getToken } = useAuth()
   const { filters, setFilters, isEditing, setIsEditing, hasAccounts } = useDashboardContext()
@@ -45,7 +31,6 @@ function DashboardContent() {
     trackEvent(ANALYTICS_EVENTS.DASHBOARD_VIEWED)
   }, [trackEvent])
 
-  // Issue #470: Pass getAccessToken for authenticated save on beforeunload
   const { layout, loading, error, saving, updateLayout, addWidget, removeWidget, resetToDefault, saveNow } = useDashboardLayout({
     getAccessToken: async () => {
       try {
@@ -59,6 +44,7 @@ function DashboardContent() {
   const { showHint, dismissHint } = useDashboardOnboarding()
   const gettingStarted = useGettingStarted()
   const [catalogOpen, setCatalogOpen] = useState(false)
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
 
   useEffect(() => {
     if (gettingStarted.shouldShow && !gettingStarted.isLoading) {
@@ -88,13 +74,14 @@ function DashboardContent() {
     trackEvent(ANALYTICS_EVENTS.TIMEFRAME_CHANGED, { startDate, endDate })
   }, [setFilters, trackEvent])
 
-  const handleResetLayout = useCallback(async () => {
-    await resetToDefault()
-    setIsEditing(false)
+  const handleResetConfirm = useCallback(async () => {
+    const success = await resetToDefault()
+    if (success) {
+      setResetConfirmOpen(false)
+      setIsEditing(false)
+    }
   }, [resetToDefault, setIsEditing])
 
-  // Issue #470: Save pending changes immediately when exiting edit mode
-  // This ensures changes are persisted before the user can navigate away
   const handleExitEditMode = useCallback(async () => {
     await saveNow()
     setIsEditing(false)
@@ -152,7 +139,6 @@ function DashboardContent() {
             <p className="mt-2 text-muted-foreground">
               {isEditing ? 'Drag widgets to reorder, resize from corners' : 'Track your balance and cash flow'}
             </p>
-            {/* Onboarding hint - Issue #412: only show after first bank connected */}
             {showHint && !isEditing && hasAccounts && (
               <Alert
                 variant="info"
@@ -187,7 +173,7 @@ function DashboardContent() {
                 </ReadOnlyGuard>
                 <ReadOnlyGuard message="Resubscribe to customize your dashboard">
                   <Button
-                    onClick={handleResetLayout}
+                    onClick={() => setResetConfirmOpen(true)}
                     variant="outline"
                     className="gap-1.5"
                   >
@@ -198,7 +184,6 @@ function DashboardContent() {
               </>
             )}
 
-            {/* Issue #470: Use handleExitEditMode to save on Done click */}
             <ReadOnlyGuard message="Resubscribe to customize your dashboard">
               <Button
                 onClick={() => (isEditing ? handleExitEditMode() : setIsEditing(true))}
@@ -212,7 +197,6 @@ function DashboardContent() {
           </div>
         </div>
 
-        {/* Getting Started checklist for new users - Issue #848 */}
         {gettingStarted.shouldShow && !gettingStarted.isLoading && (
           <div className="mb-6">
             <GettingStartedChecklist
@@ -229,7 +213,6 @@ function DashboardContent() {
           </div>
         )}
 
-        {/* Filters Row - Issue #414: Moved from sidebar to header */}
         <div className="mb-6 flex flex-wrap items-start gap-4">
           <TimeframeSelector onRangeChange={handleTimeframeChange} />
           {accountTypes && (
@@ -256,6 +239,17 @@ function DashboardContent() {
         onClose={() => setCatalogOpen(false)}
         onAddWidget={handleAddWidget}
         existingWidgetTypes={layout.widgets.map(w => w.type)}
+      />
+
+      <ConfirmationDialog
+        open={resetConfirmOpen}
+        onOpenChange={setResetConfirmOpen}
+        onConfirm={handleResetConfirm}
+        title="Reset Dashboard Layout"
+        description="This will restore all widgets and positions to their defaults. Your current layout will be lost."
+        variant="warning"
+        confirmButtonText="Reset"
+        loading={saving}
       />
     </div>
   )

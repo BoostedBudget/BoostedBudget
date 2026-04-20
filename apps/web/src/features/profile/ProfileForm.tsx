@@ -4,14 +4,7 @@ import { useUpdateUserProfile } from '@boostedbudget/api-client/endpoints/profil
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { useRegions } from '../../shared/hooks/useRegions'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../../components/ui/dialog'
+import { ConfirmationDialog } from '../../components/ui/confirmation-dialog'
 import { Button } from '../../components/ui/button'
 import { AlertCircle } from 'lucide-react'
 import { posthog } from '../../shared/lib/posthog'
@@ -33,8 +26,8 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
   const [email, setEmail] = useState(user.email)
   const [primaryRegion, setPrimaryRegion] = useState(user.primary_region)
 
-  const hasChanges = email !== user.email || primaryRegion !== user.primary_region
   const hasRegionChange = primaryRegion !== user.primary_region
+  const hasChanges = email !== user.email || hasRegionChange
 
   function getRegionDisplay(code: string): string {
     return regions?.[code]?.display_name ?? code
@@ -201,30 +194,24 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
         </Button>
       </form>
 
-      <Dialog open={showRegionConfirm} onOpenChange={setShowRegionConfirm}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Change Data Region?</DialogTitle>
-            <DialogDescription>
-              You&apos;re changing your data region from{' '}
-              <strong>{getRegionDisplay(user.primary_region)}</strong> to{' '}
-              <strong>{getRegionDisplay(primaryRegion)}</strong>.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowRegionConfirm(false)}
-              disabled={submitting}
-            >
-              Cancel
-            </Button>
-            <Button onClick={() => performSave()} disabled={submitting}>
-              {submitting ? 'Saving...' : 'Confirm Change'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Region Change Confirmation Dialog — Issue #960 */}
+      <ConfirmationDialog
+        open={showRegionConfirm}
+        onOpenChange={(open) => !open && setShowRegionConfirm(false)}
+        onConfirm={() => performSave()}
+        title="Change Data Region?"
+        description={
+          <>
+            You&apos;re changing your data region from{' '}
+            <strong>{getRegionDisplay(user.primary_region)}</strong> to{' '}
+            <strong>{getRegionDisplay(primaryRegion)}</strong>.
+          </>
+        }
+        variant="info"
+        confirmButtonText="Confirm Change"
+        loading={submitting}
+      />
+
     </section>
   )
 }
