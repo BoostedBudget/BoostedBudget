@@ -244,7 +244,10 @@ describe('AutoCategorizationRuleCard', () => {
       // While deleting, the confirm button should be disabled
       expect(confirmButton).toBeDisabled()
 
-      resolveDelete!()
+      // Wrap promise resolution in act() to ensure React processes the state update
+      await act(async () => {
+        resolveDelete!()
+      })
       await waitFor(() => {
         // Dialog closes after delete completes
         expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
