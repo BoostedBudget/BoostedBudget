@@ -39,6 +39,8 @@ func (m *MockDeletionServiceForWorker) SetPlaidCleanupService(svc services.Plaid
 	m.Called(svc)
 }
 
+func (m *MockDeletionServiceForWorker) SetPaddleCleanupService(svc services.PaddleDeletionCleaner) {}
+
 func (m *MockDeletionServiceForWorker) SetAnalytics(a phclient.Analytics) {
 	m.Called(a)
 }

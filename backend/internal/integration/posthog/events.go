@@ -22,6 +22,8 @@ const (
 	EventSubscriptionCancelled  = "subscription_cancelled"
 	EventPaymentSucceeded       = "payment_succeeded"
 	EventPaymentFailed          = "payment_failed"
+	// Issue #1006: Paddle cleanup failure during account deletion
+	EventPaddleCleanupFailed    = "paddle_cleanup_failed"
 
 	// User lifecycle events
 	EventUserRegistered     = "user_registered"

@@ -712,3 +712,151 @@ func TestGetBillingPortalURL_PaddleAPIError(t *testing.T) {
 	// 2. Returns wrapped error with context
 	// 3. Logs error appropriately
 }
+
+// TestCancelSubscriptionImmediately_Success verifies the subscription is cancelled
+// with EffectiveFromImmediately (not next billing period). Issue #1006.
+func TestCancelSubscriptionImmediately_Success(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_01abc123"
+
+	cancelledSub := &paddle.Subscription{
+		ID:     subscriptionID,
+		Status: paddle.SubscriptionStatusCanceled,
+	}
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID &&
+			req.EffectiveFrom != nil &&
+			*req.EffectiveFrom == paddle.EffectiveFromImmediately
+	})).Return(cancelledSub, nil)
+
+	err := svc.CancelSubscriptionImmediately(ctx, subscriptionID)
+
+	assert.NoError(t, err)
+	mockSDK.AssertExpectations(t)
+}
+
+// TestCancelSubscriptionImmediately_SDKError verifies errors are propagated.
+func TestCancelSubscriptionImmediately_SDKError(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_01abc123"
+
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID
+	})).Return(nil, errors.New("paddle API error"))
+
+	err := svc.CancelSubscriptionImmediately(ctx, subscriptionID)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to cancel Paddle subscription immediately")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestCancelSubscriptionImmediately_AlreadyCancelled verifies already-cancelled
+// subscriptions are treated as success (Paddle returns the sub with no error).
+func TestCancelSubscriptionImmediately_AlreadyCancelled(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_01abc123"
+
+	alreadyCancelledSub := &paddle.Subscription{
+		ID:     subscriptionID,
+		Status: paddle.SubscriptionStatusCanceled,
+	}
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID
+	})).Return(alreadyCancelledSub, nil)
+
+	err := svc.CancelSubscriptionImmediately(ctx, subscriptionID)
+
+	assert.NoError(t, err)
+}
+
+// TestCancelSubscriptionImmediately_AlreadyCancelled_ErrorForm verifies that when Paddle
+// returns ErrSubscriptionIsCanceledActionInvalid, the method treats it as success (idempotent).
+// Issue #1006: Paddle returns this error when cancelling an already-cancelled subscription.
+func TestCancelSubscriptionImmediately_AlreadyCancelled_ErrorForm(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_01abc123"
+
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID
+	})).Return(nil, paddle.ErrSubscriptionIsCanceledActionInvalid)
+
+	err := svc.CancelSubscriptionImmediately(ctx, subscriptionID)
+	assert.NoError(t, err, "already-cancelled error must be treated as success")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestArchiveAndAnonymizeCustomer_Success verifies the SDK is called with both Email
+// and Status fields set (single PATCH for GDPR PII erasure). Issue #1006.
+func TestArchiveAndAnonymizeCustomer_Success(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	customerID := "ctm_01abc123"
+	anonymizedEmail := "deleted_user-123@deleted.local"
+
+	var capturedReq *paddle.UpdateCustomerRequest
+	mockSDK.On("UpdateCustomer", ctx, mock.MatchedBy(func(req *paddle.UpdateCustomerRequest) bool {
+		capturedReq = req
+		return req.CustomerID == customerID
+	})).Return(&paddle.Customer{ID: customerID, Status: paddle.StatusArchived}, nil)
+
+	err := svc.ArchiveAndAnonymizeCustomer(ctx, customerID, anonymizedEmail)
+	assert.NoError(t, err)
+	require.NotNil(t, capturedReq)
+	assert.NotNil(t, capturedReq.Email, "Email field must be set")
+	assert.NotNil(t, capturedReq.Status, "Status field must be set")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestArchiveAndAnonymizeCustomer_SDKError verifies errors are propagated.
+func TestArchiveAndAnonymizeCustomer_SDKError(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	customerID := "ctm_01abc123"
+
+	mockSDK.On("UpdateCustomer", ctx, mock.MatchedBy(func(req *paddle.UpdateCustomerRequest) bool {
+		return req.CustomerID == customerID
+	})).Return(nil, errors.New("paddle API error"))
+
+	err := svc.ArchiveAndAnonymizeCustomer(ctx, customerID, "deleted_user-123@deleted.local")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to archive and anonymize Paddle customer")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestArchiveAndAnonymizeCustomer_AlreadyArchived verifies that an already-archived
+// customer (Paddle returns success with archived status) is treated as success (idempotent).
+func TestArchiveAndAnonymizeCustomer_AlreadyArchived(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	customerID := "ctm_01abc123"
+
+	mockSDK.On("UpdateCustomer", ctx, mock.MatchedBy(func(req *paddle.UpdateCustomerRequest) bool {
+		return req.CustomerID == customerID
+	})).Return(&paddle.Customer{ID: customerID, Status: paddle.StatusArchived}, nil)
+
+	err := svc.ArchiveAndAnonymizeCustomer(ctx, customerID, "deleted_user-123@deleted.local")
+	assert.NoError(t, err)
+	mockSDK.AssertExpectations(t)
+}
+
+// TestArchiveAndAnonymizeCustomer_AlreadyArchived_ErrorForm verifies that when Paddle
+// returns ErrEntityArchived, the method treats it as success (idempotent).
+// Issue #1006: Paddle returns this error when archiving an already-archived customer.
+func TestArchiveAndAnonymizeCustomer_AlreadyArchived_ErrorForm(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	customerID := "ctm_01abc123"
+
+	mockSDK.On("UpdateCustomer", ctx, mock.MatchedBy(func(req *paddle.UpdateCustomerRequest) bool {
+		return req.CustomerID == customerID
+	})).Return(nil, paddle.ErrEntityArchived)
+
+	err := svc.ArchiveAndAnonymizeCustomer(ctx, customerID, "deleted_user-123@deleted.local")
+	assert.NoError(t, err, "already-archived error must be treated as success")
+	mockSDK.AssertExpectations(t)
+}
