@@ -712,3 +712,63 @@ func TestGetBillingPortalURL_PaddleAPIError(t *testing.T) {
 	// 2. Returns wrapped error with context
 	// 3. Logs error appropriately
 }
+
+// TestCancelSubscriptionImmediately_Success verifies the subscription is cancelled
+// with EffectiveFromImmediately (not next billing period). Issue #1006.
+func TestCancelSubscriptionImmediately_Success(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_01abc123"
+
+	cancelledSub := &paddle.Subscription{
+		ID:     subscriptionID,
+		Status: paddle.SubscriptionStatusCanceled,
+	}
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID &&
+			req.EffectiveFrom != nil &&
+			*req.EffectiveFrom == paddle.EffectiveFromImmediately
+	})).Return(cancelledSub, nil)
+
+	err := svc.CancelSubscriptionImmediately(ctx, subscriptionID)
+
+	assert.NoError(t, err)
+	mockSDK.AssertExpectations(t)
+}
+
+// TestCancelSubscriptionImmediately_SDKError verifies errors are propagated.
+func TestCancelSubscriptionImmediately_SDKError(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_01abc123"
+
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID
+	})).Return(nil, errors.New("paddle API error"))
+
+	err := svc.CancelSubscriptionImmediately(ctx, subscriptionID)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to cancel Paddle subscription immediately")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestCancelSubscriptionImmediately_AlreadyCancelled verifies already-cancelled
+// subscriptions are treated as success (Paddle returns the sub with no error).
+func TestCancelSubscriptionImmediately_AlreadyCancelled(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_01abc123"
+
+	alreadyCancelledSub := &paddle.Subscription{
+		ID:     subscriptionID,
+		Status: paddle.SubscriptionStatusCanceled,
+	}
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID
+	})).Return(alreadyCancelledSub, nil)
+
+	err := svc.CancelSubscriptionImmediately(ctx, subscriptionID)
+
+	assert.NoError(t, err)
+}
