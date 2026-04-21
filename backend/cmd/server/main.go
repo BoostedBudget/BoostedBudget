@@ -536,6 +536,13 @@ func main() {
 			appLogger.Warn("Paddle services disabled (PADDLE_API_KEY not configured)")
 		}
 
+		// Issue #1006: Wire PaddleService into DeletionService for billing cleanup on deletion.
+		// Must run after Paddle init so paddleService is available.
+		if paddleService != nil && deletionService != nil {
+			deletionService.SetPaddleCleanupService(paddleService)
+			appLogger.Info("Paddle cleanup service wired to deletion service")
+		}
+
 		// Issue #1015: Create non-Plaid workers unconditionally (decoupled from Plaid config).
 		// These workers previously lived inside the Plaid block but have no Plaid dependency.
 		// Placement: after Paddle init (paddleService available), before Plaid init.
