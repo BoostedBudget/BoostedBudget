@@ -71,6 +71,12 @@ type PaddleService interface {
 	// CancelSubscription cancels a subscription at the end of current billing period.
 	CancelSubscription(ctx context.Context, subscriptionID string) error
 
+	// CancelSubscriptionImmediately cancels a subscription effective immediately.
+	// Used during account deletion — no end-of-period grace.
+	// Idempotent: already-cancelled subscriptions are treated as success.
+	// Issue #1006: Paddle cleanup during account deletion
+	CancelSubscriptionImmediately(ctx context.Context, subscriptionID string) error
+
 	// PreviewUpdate calculates proration for a subscription tier change.
 	// Shows what the customer will be charged/credited immediately.
 	PreviewUpdate(
@@ -460,6 +466,36 @@ func (s *paddleService) CancelSubscription(ctx context.Context, subscriptionID s
 	}
 
 	s.logger.Info("Paddle subscription canceled successfully",
+		"subscription_id", subscriptionID,
+		"status", canceledSub.Status,
+	)
+
+	return nil
+}
+
+// CancelSubscriptionImmediately cancels a subscription effective immediately.
+// Issue #1006: Used during account deletion to stop billing with no grace period.
+func (s *paddleService) CancelSubscriptionImmediately(ctx context.Context, subscriptionID string) error {
+	s.logger.Info("canceling Paddle subscription immediately",
+		"subscription_id", subscriptionID,
+	)
+
+	effectiveFrom := paddle.EffectiveFromImmediately
+	req := &paddle.CancelSubscriptionRequest{
+		SubscriptionID: subscriptionID,
+		EffectiveFrom:  &effectiveFrom,
+	}
+
+	canceledSub, err := s.client.CancelSubscription(ctx, req)
+	if err != nil {
+		s.logger.Error("failed to cancel Paddle subscription immediately",
+			"subscription_id", subscriptionID,
+			"error", err,
+		)
+		return fmt.Errorf("failed to cancel Paddle subscription immediately: %w", err)
+	}
+
+	s.logger.Info("Paddle subscription cancelled immediately",
 		"subscription_id", subscriptionID,
 		"status", canceledSub.Status,
 	)
