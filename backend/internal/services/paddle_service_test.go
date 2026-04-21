@@ -773,6 +773,23 @@ func TestCancelSubscriptionImmediately_AlreadyCancelled(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestCancelSubscriptionImmediately_AlreadyCancelled_ErrorForm verifies that when Paddle
+// returns ErrSubscriptionIsCanceledActionInvalid, the method treats it as success (idempotent).
+// Issue #1006: Paddle returns this error when cancelling an already-cancelled subscription.
+func TestCancelSubscriptionImmediately_AlreadyCancelled_ErrorForm(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_01abc123"
+
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID
+	})).Return(nil, paddle.ErrSubscriptionIsCanceledActionInvalid)
+
+	err := svc.CancelSubscriptionImmediately(ctx, subscriptionID)
+	assert.NoError(t, err, "already-cancelled error must be treated as success")
+	mockSDK.AssertExpectations(t)
+}
+
 // TestArchiveAndAnonymizeCustomer_Success verifies the SDK is called with both Email
 // and Status fields set (single PATCH for GDPR PII erasure). Issue #1006.
 func TestArchiveAndAnonymizeCustomer_Success(t *testing.T) {
@@ -824,5 +841,22 @@ func TestArchiveAndAnonymizeCustomer_AlreadyArchived(t *testing.T) {
 
 	err := svc.ArchiveAndAnonymizeCustomer(ctx, customerID, "deleted_user-123@deleted.local")
 	assert.NoError(t, err)
+	mockSDK.AssertExpectations(t)
+}
+
+// TestArchiveAndAnonymizeCustomer_AlreadyArchived_ErrorForm verifies that when Paddle
+// returns ErrEntityArchived, the method treats it as success (idempotent).
+// Issue #1006: Paddle returns this error when archiving an already-archived customer.
+func TestArchiveAndAnonymizeCustomer_AlreadyArchived_ErrorForm(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	customerID := "ctm_01abc123"
+
+	mockSDK.On("UpdateCustomer", ctx, mock.MatchedBy(func(req *paddle.UpdateCustomerRequest) bool {
+		return req.CustomerID == customerID
+	})).Return(nil, paddle.ErrEntityArchived)
+
+	err := svc.ArchiveAndAnonymizeCustomer(ctx, customerID, "deleted_user-123@deleted.local")
+	assert.NoError(t, err, "already-archived error must be treated as success")
 	mockSDK.AssertExpectations(t)
 }
