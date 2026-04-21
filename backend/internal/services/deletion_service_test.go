@@ -669,3 +669,359 @@ func TestSetPlaidCleanupService(t *testing.T) {
 	// Verify the cleanup service was called (proving the setter worked)
 	mockPlaidCleanup.AssertCalled(t, "RemoveAllUserItems", ctx, user.ID)
 }
+
+// MockPaddleDeletionCleaner is a mock for PaddleDeletionCleaner.
+// Only 2 methods needed for DeletionService — narrowed interface. Issue #1006.
+type MockPaddleDeletionCleaner struct {
+	mock.Mock
+}
+
+func (m *MockPaddleDeletionCleaner) CancelSubscriptionImmediately(ctx context.Context, subscriptionID string) error {
+	return m.Called(ctx, subscriptionID).Error(0)
+}
+
+func (m *MockPaddleDeletionCleaner) ArchiveAndAnonymizeCustomer(ctx context.Context, customerID, anonymizedEmail string) error {
+	return m.Called(ctx, customerID, anonymizedEmail).Error(0)
+}
+
+// buildUserWithPaddle creates a test user with Paddle IDs set.
+// Returns user, subscriptionID, customerID for convenience.
+func buildUserWithPaddle(subscriptionStatus string) (*domain.User, string, string) {
+	paddleSubID := "sub_01abc123"
+	paddleCustID := "ctm_01abc123"
+	return &domain.User{
+		ID:                   "user-123",
+		ClerkUserID:          "user_123",
+		Email:                "test@example.com",
+		IsDeleted:            false,
+		SubscriptionStatus:   subscriptionStatus,
+		PaddleSubscriptionID: &paddleSubID,
+		PaddleCustomerID:     &paddleCustID,
+	}, paddleSubID, paddleCustID
+}
+
+const expectedAnonymizedEmail = "deleted_user-123@deleted.local"
+
+// TestExecuteDeletion_ActiveSubscription_CancelsImmediately verifies that an active
+// subscription is cancelled immediately and customer is archived. Issue #1006.
+func TestExecuteDeletion_ActiveSubscription_CancelsImmediately(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPaddle := new(MockPaddleDeletionCleaner)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetPaddleCleanupService(mockPaddle)
+
+	user, paddleSubID, paddleCustID := buildUserWithPaddle("active")
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(nil)
+	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+	assert.NoError(t, err)
+	mockPaddle.AssertCalled(t, "CancelSubscriptionImmediately", ctx, paddleSubID)
+	mockPaddle.AssertCalled(t, "ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail)
+}
+
+// TestExecuteDeletion_TrialSubscription_CancelsImmediately verifies trial subscriptions
+// are cancelled immediately. Issue #1006.
+func TestExecuteDeletion_TrialSubscription_CancelsImmediately(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPaddle := new(MockPaddleDeletionCleaner)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetPaddleCleanupService(mockPaddle)
+
+	user, paddleSubID, paddleCustID := buildUserWithPaddle("trial")
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(nil)
+	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+	assert.NoError(t, err)
+	mockPaddle.AssertCalled(t, "CancelSubscriptionImmediately", ctx, paddleSubID)
+}
+
+// TestExecuteDeletion_TrialingSubscription_CancelsImmediately verifies Paddle-trialing
+// subscriptions are cancelled immediately. Issue #1006.
+func TestExecuteDeletion_TrialingSubscription_CancelsImmediately(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPaddle := new(MockPaddleDeletionCleaner)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetPaddleCleanupService(mockPaddle)
+
+	user, paddleSubID, paddleCustID := buildUserWithPaddle("trialing")
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(nil)
+	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+	assert.NoError(t, err)
+	mockPaddle.AssertCalled(t, "CancelSubscriptionImmediately", ctx, paddleSubID)
+}
+
+// TestExecuteDeletion_PastDueSubscription_CancelsImmediately verifies past_due subscriptions
+// are cancelled immediately (billing is still active). Issue #1006.
+func TestExecuteDeletion_PastDueSubscription_CancelsImmediately(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPaddle := new(MockPaddleDeletionCleaner)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetPaddleCleanupService(mockPaddle)
+
+	user, paddleSubID, paddleCustID := buildUserWithPaddle("past_due")
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(nil)
+	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+	assert.NoError(t, err)
+	mockPaddle.AssertCalled(t, "CancelSubscriptionImmediately", ctx, paddleSubID)
+}
+
+// TestExecuteDeletion_CancelledSubscription_DoesNotCancelAgain verifies that a cancelled
+// subscription does NOT trigger another cancel call, but customer is still archived. Issue #1006.
+func TestExecuteDeletion_CancelledSubscription_DoesNotCancelAgain(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPaddle := new(MockPaddleDeletionCleaner)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetPaddleCleanupService(mockPaddle)
+
+	user, _, paddleCustID := buildUserWithPaddle("cancelled")
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	// CancelSubscriptionImmediately must NOT be called
+	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+	assert.NoError(t, err)
+	mockPaddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
+	mockPaddle.AssertCalled(t, "ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail)
+}
+
+// TestExecuteDeletion_InactiveSubscription_DoesNotCancel verifies that an inactive
+// subscription (no subscription ID) does not trigger a cancel call. Issue #1006.
+func TestExecuteDeletion_InactiveSubscription_DoesNotCancel(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPaddle := new(MockPaddleDeletionCleaner)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetPaddleCleanupService(mockPaddle)
+
+	// inactive: no subscription ID (only customer ID)
+	paddleCustID := "ctm_01abc123"
+	user := &domain.User{
+		ID:                   "user-123",
+		ClerkUserID:          "user_123",
+		Email:                "test@example.com",
+		IsDeleted:            false,
+		SubscriptionStatus:   "inactive",
+		PaddleSubscriptionID: nil,
+		PaddleCustomerID:     &paddleCustID,
+	}
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+	assert.NoError(t, err)
+	mockPaddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
+}
+
+// TestExecuteDeletion_NoPaddleCustomerID_SkipsArchive verifies that when no customer ID
+// is set, ArchiveAndAnonymizeCustomer is not called. Issue #1006.
+func TestExecuteDeletion_NoPaddleCustomerID_SkipsArchive(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPaddle := new(MockPaddleDeletionCleaner)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetPaddleCleanupService(mockPaddle)
+
+	// No customer ID set — user never completed checkout
+	user := &domain.User{
+		ID:                   "user-123",
+		ClerkUserID:          "user_123",
+		Email:                "test@example.com",
+		IsDeleted:            false,
+		SubscriptionStatus:   "trial",
+		PaddleSubscriptionID: nil,
+		PaddleCustomerID:     nil,
+	}
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+	assert.NoError(t, err)
+	mockPaddle.AssertNotCalled(t, "ArchiveAndAnonymizeCustomer", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestExecuteDeletion_PaddleCancelFails_DeletionContinues verifies that a Paddle cancel
+// failure is non-critical — deletion still completes. Issue #1006.
+func TestExecuteDeletion_PaddleCancelFails_DeletionContinues(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPaddle := new(MockPaddleDeletionCleaner)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetPaddleCleanupService(mockPaddle)
+
+	user, paddleSubID, paddleCustID := buildUserWithPaddle("active")
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(errors.New("Paddle API timeout"))
+	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+	// Must succeed despite Paddle cancel failure
+	assert.NoError(t, err)
+	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
+}
+
+// TestExecuteDeletion_PaddleArchiveFails_DeletionContinues verifies that a Paddle archive
+// failure is non-critical — deletion still completes. Issue #1006.
+func TestExecuteDeletion_PaddleArchiveFails_DeletionContinues(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPaddle := new(MockPaddleDeletionCleaner)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetPaddleCleanupService(mockPaddle)
+
+	user, paddleSubID, paddleCustID := buildUserWithPaddle("active")
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(nil)
+	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(errors.New("Paddle API timeout"))
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+	// Must succeed despite Paddle archive failure
+	assert.NoError(t, err)
+	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
+}
+
+// TestSetPaddleCleanupService_WiresCorrectly verifies that SetPaddleCleanupService wires
+// the mock so it's invoked during ExecuteDeletion. Issue #1006.
+func TestSetPaddleCleanupService_WiresCorrectly(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPaddle := new(MockPaddleDeletionCleaner)
+
+	// Create with nil paddleCleanupSvc, wire via setter
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetPaddleCleanupService(mockPaddle)
+
+	user, paddleSubID, paddleCustID := buildUserWithPaddle("active")
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(nil)
+	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+	assert.NoError(t, err)
+	// Both mock methods called proves setter worked
+	mockPaddle.AssertExpectations(t)
+}
+
+// TestExecuteDeletion_PaddleRunsBeforePlaidAndDB verifies the execution order:
+// Paddle cleanup → Plaid cleanup → DB cascade. Issue #1006.
+func TestExecuteDeletion_PaddleRunsBeforePlaidAndDB(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPaddle := new(MockPaddleDeletionCleaner)
+	mockPlaid := new(MockPlaidItemCleanupService)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, mockPlaid, 30, "test-secret-key")
+	service.SetPaddleCleanupService(mockPaddle)
+
+	user, paddleSubID, paddleCustID := buildUserWithPaddle("active")
+	callOrder := []string{}
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(nil).Run(func(args mock.Arguments) {
+		callOrder = append(callOrder, "CancelSubscription")
+	})
+	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil).Run(func(args mock.Arguments) {
+		callOrder = append(callOrder, "ArchiveCustomer")
+	})
+	mockPlaid.On("RemoveAllUserItems", ctx, user.ID).Return(nil).Run(func(args mock.Arguments) {
+		callOrder = append(callOrder, "RemoveAllUserItems")
+	})
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil).Run(func(args mock.Arguments) {
+		callOrder = append(callOrder, "DeleteUserCascade")
+	})
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+	assert.NoError(t, err)
+	assert.Equal(t,
+		[]string{"CancelSubscription", "ArchiveCustomer", "RemoveAllUserItems", "DeleteUserCascade"},
+		callOrder,
+		"Execution order must be: Paddle cancel, Paddle archive, Plaid remove, DB cascade",
+	)
+}
