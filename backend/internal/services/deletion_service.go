@@ -181,36 +181,7 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 
 	// Issue #1006: Paddle cleanup before Plaid and DB deletion (Paddle IDs must be readable)
 	if s.paddleCleanupSvc != nil {
-		anonymizedEmail := fmt.Sprintf("deleted_%s@deleted.local", userID)
-
-		if user.PaddleSubscriptionID != nil {
-			status := domain.SubscriptionStatus(user.SubscriptionStatus)
-			if status.IsActiveSubscription() || status == domain.SubscriptionStatusPastDue {
-				if err := s.paddleCleanupSvc.CancelSubscriptionImmediately(ctx, *user.PaddleSubscriptionID); err != nil {
-					slog.Default().Warn("failed to cancel Paddle subscription during deletion",
-						"user_id", userID,
-						"subscription_id", *user.PaddleSubscriptionID,
-						"error", err,
-					)
-					if s.analytics != nil {
-						s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "cancel_subscription"})
-					}
-				}
-			}
-		}
-
-		if user.PaddleCustomerID != nil {
-			if err := s.paddleCleanupSvc.ArchiveAndAnonymizeCustomer(ctx, *user.PaddleCustomerID, anonymizedEmail); err != nil {
-				slog.Default().Warn("failed to archive Paddle customer during deletion",
-					"user_id", userID,
-					"customer_id", *user.PaddleCustomerID,
-					"error", err,
-				)
-				if s.analytics != nil {
-					s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "archive_customer"})
-				}
-			}
-		}
+		s.cleanupPaddleResources(ctx, userID, user)
 	}
 
 	// Issue #668: Remove Plaid items BEFORE database deletion to stop billing
@@ -280,4 +251,41 @@ func (s *deletionService) SetPaddleCleanupService(svc PaddleDeletionCleaner) {
 // SetAnalytics sets the analytics client for capturing deletion lifecycle events
 func (s *deletionService) SetAnalytics(a phclient.Analytics) {
 	s.analytics = a
+}
+
+// cleanupPaddleResources cancels subscriptions and archives customer for GDPR compliance.
+// Errors are logged but don't stop deletion (graceful degradation).
+func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID string, user *domain.User) {
+	anonymizedEmail := fmt.Sprintf("deleted_%s@deleted.local", userID)
+
+	// Cancel active subscriptions
+	if user.PaddleSubscriptionID != nil {
+		status := domain.SubscriptionStatus(user.SubscriptionStatus)
+		if status.IsActiveSubscription() || status == domain.SubscriptionStatusPastDue {
+			if err := s.paddleCleanupSvc.CancelSubscriptionImmediately(ctx, *user.PaddleSubscriptionID); err != nil {
+				slog.Default().Warn("failed to cancel Paddle subscription during deletion",
+					"user_id", userID,
+					"subscription_id", *user.PaddleSubscriptionID,
+					"error", err,
+				)
+				if s.analytics != nil {
+					s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "cancel_subscription"})
+				}
+			}
+		}
+	}
+
+	// Archive customer and anonymize email (GDPR PII erasure)
+	if user.PaddleCustomerID != nil {
+		if err := s.paddleCleanupSvc.ArchiveAndAnonymizeCustomer(ctx, *user.PaddleCustomerID, anonymizedEmail); err != nil {
+			slog.Default().Warn("failed to archive Paddle customer during deletion",
+				"user_id", userID,
+				"customer_id", *user.PaddleCustomerID,
+				"error", err,
+			)
+			if s.analytics != nil {
+				s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "archive_customer"})
+			}
+		}
+	}
 }
