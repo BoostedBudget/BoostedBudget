@@ -91,6 +91,13 @@ type PaddleService interface {
 	// UpdateCustomerEmail updates the email address of an existing Paddle customer.
 	UpdateCustomerEmail(ctx context.Context, customerID, email string) error
 
+	// ArchiveAndAnonymizeCustomer archives the Paddle customer and replaces their email
+	// with an anonymized value in a single PATCH call (GDPR PII erasure during deletion).
+	// anonymizedEmail must be "deleted_{userID}@deleted.local".
+	// Idempotent: already-archived customers are treated as success.
+	// Issue #1006: Paddle cleanup during account deletion
+	ArchiveAndAnonymizeCustomer(ctx context.Context, customerID, anonymizedEmail string) error
+
 	// GetClient returns the underlying Paddle SDK.
 	// Useful for operations not covered by this service interface.
 	GetClient() *paddle.SDK
@@ -587,6 +594,30 @@ func parseProrationMode(mode string) paddle.ProrationBillingMode {
 	default:
 		return paddle.ProrationBillingModeProratedImmediately
 	}
+}
+
+// ArchiveAndAnonymizeCustomer archives the Paddle customer and anonymizes their email
+// in one PATCH call for GDPR PII erasure during account deletion. Issue #1006.
+func (s *paddleService) ArchiveAndAnonymizeCustomer(ctx context.Context, customerID, anonymizedEmail string) error {
+	s.logger.Info("archiving and anonymizing Paddle customer",
+		"customer_id", customerID,
+	)
+	_, err := s.client.UpdateCustomer(ctx, &paddle.UpdateCustomerRequest{
+		CustomerID: customerID,
+		Email:      paddle.NewPatchField(anonymizedEmail),
+		Status:     paddle.NewPatchField(paddle.StatusArchived),
+	})
+	if err != nil {
+		s.logger.Error("failed to archive and anonymize Paddle customer",
+			"customer_id", customerID,
+			"error", err,
+		)
+		return fmt.Errorf("failed to archive and anonymize Paddle customer: %w", err)
+	}
+	s.logger.Info("Paddle customer archived and anonymized",
+		"customer_id", customerID,
+	)
+	return nil
 }
 
 // UpdateCustomerEmail updates the email address of an existing Paddle customer.

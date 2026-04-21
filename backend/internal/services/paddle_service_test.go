@@ -772,3 +772,57 @@ func TestCancelSubscriptionImmediately_AlreadyCancelled(t *testing.T) {
 
 	assert.NoError(t, err)
 }
+
+// TestArchiveAndAnonymizeCustomer_Success verifies the SDK is called with both Email
+// and Status fields set (single PATCH for GDPR PII erasure). Issue #1006.
+func TestArchiveAndAnonymizeCustomer_Success(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	customerID := "ctm_01abc123"
+	anonymizedEmail := "deleted_user-123@deleted.local"
+
+	var capturedReq *paddle.UpdateCustomerRequest
+	mockSDK.On("UpdateCustomer", ctx, mock.MatchedBy(func(req *paddle.UpdateCustomerRequest) bool {
+		capturedReq = req
+		return req.CustomerID == customerID
+	})).Return(&paddle.Customer{ID: customerID, Status: paddle.StatusArchived}, nil)
+
+	err := svc.ArchiveAndAnonymizeCustomer(ctx, customerID, anonymizedEmail)
+	assert.NoError(t, err)
+	require.NotNil(t, capturedReq)
+	assert.NotNil(t, capturedReq.Email, "Email field must be set")
+	assert.NotNil(t, capturedReq.Status, "Status field must be set")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestArchiveAndAnonymizeCustomer_SDKError verifies errors are propagated.
+func TestArchiveAndAnonymizeCustomer_SDKError(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	customerID := "ctm_01abc123"
+
+	mockSDK.On("UpdateCustomer", ctx, mock.MatchedBy(func(req *paddle.UpdateCustomerRequest) bool {
+		return req.CustomerID == customerID
+	})).Return(nil, errors.New("paddle API error"))
+
+	err := svc.ArchiveAndAnonymizeCustomer(ctx, customerID, "deleted_user-123@deleted.local")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to archive and anonymize Paddle customer")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestArchiveAndAnonymizeCustomer_AlreadyArchived verifies that an already-archived
+// customer (Paddle returns success with archived status) is treated as success (idempotent).
+func TestArchiveAndAnonymizeCustomer_AlreadyArchived(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	customerID := "ctm_01abc123"
+
+	mockSDK.On("UpdateCustomer", ctx, mock.MatchedBy(func(req *paddle.UpdateCustomerRequest) bool {
+		return req.CustomerID == customerID
+	})).Return(&paddle.Customer{ID: customerID, Status: paddle.StatusArchived}, nil)
+
+	err := svc.ArchiveAndAnonymizeCustomer(ctx, customerID, "deleted_user-123@deleted.local")
+	assert.NoError(t, err)
+	mockSDK.AssertExpectations(t)
+}
