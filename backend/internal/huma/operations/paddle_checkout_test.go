@@ -67,6 +67,14 @@ func (m *mockPaddleCheckoutService) CancelSubscription(ctx context.Context, subs
 	return args.Error(0)
 }
 
+func (m *mockPaddleCheckoutService) CancelSubscriptionImmediately(ctx context.Context, subscriptionID string) error {
+	return nil
+}
+
+func (m *mockPaddleCheckoutService) ArchiveAndAnonymizeCustomer(ctx context.Context, customerID, anonymizedEmail string) error {
+	return nil
+}
+
 func (m *mockPaddleCheckoutService) PreviewUpdate(ctx context.Context, subscriptionID, newPriceID string) (string, string, string, error) {
 	args := m.Called(ctx, subscriptionID, newPriceID)
 	return args.String(0), args.String(1), args.String(2), args.Error(3)

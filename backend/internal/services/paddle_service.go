@@ -71,19 +71,25 @@ type PaddleService interface {
 	// CancelSubscription cancels a subscription at the end of current billing period.
 	CancelSubscription(ctx context.Context, subscriptionID string) error
 
+	// CancelSubscriptionImmediately cancels a subscription effective immediately (no grace period).
+	// Issue #1006: Paddle cleanup during account deletion.
+	CancelSubscriptionImmediately(ctx context.Context, subscriptionID string) error
+
 	// PreviewUpdate calculates proration for a subscription tier change.
-	// Shows what the customer will be charged/credited immediately.
 	PreviewUpdate(
 		ctx context.Context,
 		subscriptionID, newPriceID string,
 	) (prorationAmount, currency, nextChargeDate string, err error)
 
 	// GetBillingPortalURL generates a URL for the Paddle billing portal session.
-	// Allows users to manage payment methods and view billing history.
 	GetBillingPortalURL(ctx context.Context, customerID string) (string, error)
 
 	// UpdateCustomerEmail updates the email address of an existing Paddle customer.
 	UpdateCustomerEmail(ctx context.Context, customerID, email string) error
+
+	// ArchiveAndAnonymizeCustomer archives the customer and anonymizes their email (GDPR PII erasure).
+	// Issue #1006: Paddle cleanup during account deletion.
+	ArchiveAndAnonymizeCustomer(ctx context.Context, customerID, anonymizedEmail string) error
 
 	// GetClient returns the underlying Paddle SDK.
 	// Useful for operations not covered by this service interface.
@@ -467,6 +473,41 @@ func (s *paddleService) CancelSubscription(ctx context.Context, subscriptionID s
 	return nil
 }
 
+// CancelSubscriptionImmediately cancels a subscription effective immediately (used during account deletion).
+// Issue #1006: Used during account deletion to stop billing with no grace period.
+func (s *paddleService) CancelSubscriptionImmediately(ctx context.Context, subscriptionID string) error {
+	s.logger.Info("canceling Paddle subscription immediately", "subscription_id", subscriptionID)
+
+	effectiveFrom := paddle.EffectiveFromImmediately
+	req := &paddle.CancelSubscriptionRequest{
+		SubscriptionID: subscriptionID,
+		EffectiveFrom:  &effectiveFrom,
+	}
+
+	canceledSub, err := s.client.CancelSubscription(ctx, req)
+	if err != nil {
+		// Already cancelled is idempotent success — Paddle returns this error on repeat cancels
+		if errors.Is(err, paddle.ErrSubscriptionIsCanceledActionInvalid) {
+			s.logger.Info("Paddle subscription already cancelled, treating as success",
+				"subscription_id", subscriptionID,
+			)
+			return nil
+		}
+		s.logger.Error("failed to cancel Paddle subscription immediately",
+			"subscription_id", subscriptionID,
+			"error", err,
+		)
+		return fmt.Errorf("failed to cancel Paddle subscription immediately: %w", err)
+	}
+
+	s.logger.Info("Paddle subscription cancelled immediately",
+		"subscription_id", subscriptionID,
+		"status", canceledSub.Status,
+	)
+
+	return nil
+}
+
 // PreviewUpdate calculates proration for a subscription tier change.
 func (s *paddleService) PreviewUpdate(
 	ctx context.Context,
@@ -551,6 +592,35 @@ func parseProrationMode(mode string) paddle.ProrationBillingMode {
 	default:
 		return paddle.ProrationBillingModeProratedImmediately
 	}
+}
+
+// ArchiveAndAnonymizeCustomer archives the Paddle customer and anonymizes their email (GDPR PII erasure).
+// Issue #1006: Used during account deletion to comply with GDPR data retention requirements.
+func (s *paddleService) ArchiveAndAnonymizeCustomer(ctx context.Context, customerID, anonymizedEmail string) error {
+	s.logger.Info("archiving and anonymizing Paddle customer", "customer_id", customerID)
+
+	_, err := s.client.UpdateCustomer(ctx, &paddle.UpdateCustomerRequest{
+		CustomerID: customerID,
+		Email:      paddle.NewPatchField(anonymizedEmail),
+		Status:     paddle.NewPatchField(paddle.StatusArchived),
+	})
+	if err != nil {
+		// Already archived is idempotent success — Paddle returns this error on repeat archives
+		if errors.Is(err, paddle.ErrEntityArchived) {
+			s.logger.Info("Paddle customer already archived, treating as success",
+				"customer_id", customerID,
+			)
+			return nil
+		}
+		s.logger.Error("failed to archive and anonymize Paddle customer",
+			"customer_id", customerID,
+			"error", err,
+		)
+		return fmt.Errorf("failed to archive and anonymize Paddle customer: %w", err)
+	}
+
+	s.logger.Info("Paddle customer archived and anonymized", "customer_id", customerID)
+	return nil
 }
 
 // UpdateCustomerEmail updates the email address of an existing Paddle customer.
