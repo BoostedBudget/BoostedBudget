@@ -927,6 +927,8 @@ func TestExecuteDeletion_PaddleCancelFails_DeletionContinues(t *testing.T) {
 	// Must succeed despite Paddle cancel failure
 	assert.NoError(t, err)
 	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
+	// Archive must still run even when cancel fails
+	mockPaddle.AssertCalled(t, "ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail)
 }
 
 // TestExecuteDeletion_PaddleArchiveFails_DeletionContinues verifies that a Paddle archive
