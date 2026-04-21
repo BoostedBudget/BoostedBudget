@@ -486,6 +486,13 @@ func (s *paddleService) CancelSubscriptionImmediately(ctx context.Context, subsc
 
 	canceledSub, err := s.client.CancelSubscription(ctx, req)
 	if err != nil {
+		// Already cancelled is idempotent success — Paddle returns this error on repeat cancels
+		if errors.Is(err, paddle.ErrSubscriptionIsCanceledActionInvalid) {
+			s.logger.Info("Paddle subscription already cancelled, treating as success",
+				"subscription_id", subscriptionID,
+			)
+			return nil
+		}
 		s.logger.Error("failed to cancel Paddle subscription immediately",
 			"subscription_id", subscriptionID,
 			"error", err,
@@ -598,6 +605,13 @@ func (s *paddleService) ArchiveAndAnonymizeCustomer(ctx context.Context, custome
 		Status:     paddle.NewPatchField(paddle.StatusArchived),
 	})
 	if err != nil {
+		// Already archived is idempotent success — Paddle returns this error on repeat archives
+		if errors.Is(err, paddle.ErrEntityArchived) {
+			s.logger.Info("Paddle customer already archived, treating as success",
+				"customer_id", customerID,
+			)
+			return nil
+		}
 		s.logger.Error("failed to archive and anonymize Paddle customer",
 			"customer_id", customerID,
 			"error", err,
