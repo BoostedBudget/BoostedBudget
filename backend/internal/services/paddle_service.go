@@ -34,10 +34,10 @@ var (
 	// ErrSubscriptionNotFound is returned when attempting operations on a non-existent subscription.
 	ErrSubscriptionNotFound = errors.New("paddle subscription not found")
 
-	// ErrPaddleCustomerOwnershipMismatch is returned by EnsureCustomer when an archived Paddle customer
-	// is found by email but its custom_data.user_id does not match the calling user. Reusing the customer
-	// would attach a different user's billing history to the current user.
-	ErrPaddleCustomerOwnershipMismatch = errors.New("archived paddle customer belongs to a different user")
+	// ErrPaddleCustomerOwnershipMismatch is returned by EnsureCustomer when a Paddle customer is found by
+	// email but its custom_data.user_id does not match the calling user. Reusing would attach a different
+	// user's billing history to the current user.
+	ErrPaddleCustomerOwnershipMismatch = errors.New("paddle customer belongs to a different user")
 )
 
 // PaddleService defines the interface for Paddle payment operations.
@@ -298,25 +298,34 @@ func (s *paddleService) EnsureCustomer(ctx context.Context, userID, email string
 		return s.unarchiveCustomerForUser(ctx, customers[0], userID, email)
 	}
 
-	// Active-customer reuse: Clerk enforces email uniqueness for active accounts, so an active
-	// Paddle customer for this email belongs to the current user by construction. No ownership
-	// check is needed here — the archived path is different because the email may have been
-	// claimed by a new Clerk user after the original user deleted their account.
+	if err := s.verifyCustomerOwnership(customers[0], userID); err != nil {
+		return "", err
+	}
 	return customers[0].ID, nil
 }
 
-// unarchiveCustomerForUser reactivates an archived Paddle customer, but only when the archived
-// record's custom_data.user_id matches the current user. Reusing a customer belonging to a
-// different prior user would expose that user's Paddle portal history to the caller.
-func (s *paddleService) unarchiveCustomerForUser(ctx context.Context, customer *paddle.Customer, userID, email string) (string, error) {
+// verifyCustomerOwnership fails closed when the Paddle customer's custom_data.user_id does not
+// match the caller's userID. Used on both active and archived email-fallback paths.
+func (s *paddleService) verifyCustomerOwnership(customer *paddle.Customer, userID string) error {
 	ownerID, _ := customer.CustomData["user_id"].(string)
 	if ownerID == "" || ownerID != userID {
-		s.logger.Warn("archived Paddle customer belongs to a different user; failing closed",
+		s.logger.Warn("Paddle customer ownership mismatch; failing closed",
 			"user_id", userID,
 			"customer_id", customer.ID,
+			"customer_status", string(customer.Status),
 			"customer_owner_id", ownerID,
 		)
-		return "", fmt.Errorf("paddle customer %s: %w", customer.ID, ErrPaddleCustomerOwnershipMismatch)
+		return fmt.Errorf("paddle customer %s (status=%s): %w", customer.ID, customer.Status, ErrPaddleCustomerOwnershipMismatch)
+	}
+	return nil
+}
+
+// unarchiveCustomerForUser reactivates an archived Paddle customer whose custom_data.user_id
+// matches the current user. Reusing a customer belonging to a different user would expose that
+// user's Paddle portal history to the caller.
+func (s *paddleService) unarchiveCustomerForUser(ctx context.Context, customer *paddle.Customer, userID, email string) (string, error) {
+	if err := s.verifyCustomerOwnership(customer, userID); err != nil {
+		return "", err
 	}
 
 	_, err := s.client.UpdateCustomer(ctx, &paddle.UpdateCustomerRequest{
@@ -621,16 +630,15 @@ func buildCatalogItem(priceID string, currentSub *paddle.Subscription) *paddle.S
 // parseProrationMode converts a string to the corresponding ProrationBillingMode enum.
 // Defaults to ProratedImmediately for unknown values.
 func parseProrationMode(mode string) paddle.ProrationBillingMode {
-	switch mode {
-	case "prorated_immediately":
-		return paddle.ProrationBillingModeProratedImmediately
-	case "full_immediately":
-		return paddle.ProrationBillingModeFullImmediately
-	case "full_next_billing_period":
-		return paddle.ProrationBillingModeFullNextBillingPeriod
-	default:
-		return paddle.ProrationBillingModeProratedImmediately
+	modes := map[string]paddle.ProrationBillingMode{
+		"prorated_immediately":     paddle.ProrationBillingModeProratedImmediately,
+		"full_immediately":         paddle.ProrationBillingModeFullImmediately,
+		"full_next_billing_period": paddle.ProrationBillingModeFullNextBillingPeriod,
 	}
+	if m, ok := modes[mode]; ok {
+		return m
+	}
+	return paddle.ProrationBillingModeProratedImmediately
 }
 
 // ArchiveAndAnonymizeCustomer archives the Paddle customer and anonymizes their email (GDPR PII erasure).
