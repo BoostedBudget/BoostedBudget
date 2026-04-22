@@ -1045,3 +1045,21 @@ func TestEnsureCustomer_ActiveEmptyStringCustomData_FailsClosed(t *testing.T) {
 	mockSDK.AssertNotCalled(t, "UpdateCustomer")
 	mockSDK.AssertExpectations(t)
 }
+
+func TestEnsureCustomer_ActiveWhitespaceUserIdCustomData_FailsClosed(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_active", Status: paddle.StatusActive, CustomData: paddle.CustomData{"user_id": "  "}}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.ErrorIs(t, err, ErrPaddleCustomerOwnershipMismatch)
+	mockSDK.AssertNotCalled(t, "UpdateCustomer")
+	mockSDK.AssertExpectations(t)
+}

@@ -630,15 +630,16 @@ func buildCatalogItem(priceID string, currentSub *paddle.Subscription) *paddle.S
 // parseProrationMode converts a string to the corresponding ProrationBillingMode enum.
 // Defaults to ProratedImmediately for unknown values.
 func parseProrationMode(mode string) paddle.ProrationBillingMode {
-	modes := map[string]paddle.ProrationBillingMode{
-		"prorated_immediately":     paddle.ProrationBillingModeProratedImmediately,
-		"full_immediately":         paddle.ProrationBillingModeFullImmediately,
-		"full_next_billing_period": paddle.ProrationBillingModeFullNextBillingPeriod,
+	switch mode {
+	case "prorated_immediately":
+		return paddle.ProrationBillingModeProratedImmediately
+	case "full_immediately":
+		return paddle.ProrationBillingModeFullImmediately
+	case "full_next_billing_period":
+		return paddle.ProrationBillingModeFullNextBillingPeriod
+	default:
+		return paddle.ProrationBillingModeProratedImmediately
 	}
-	if m, ok := modes[mode]; ok {
-		return m
-	}
-	return paddle.ProrationBillingModeProratedImmediately
 }
 
 // ArchiveAndAnonymizeCustomer archives the Paddle customer and anonymizes their email (GDPR PII erasure).
