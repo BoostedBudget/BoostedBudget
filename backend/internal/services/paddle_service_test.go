@@ -860,3 +860,114 @@ func TestArchiveAndAnonymizeCustomer_AlreadyArchived_ErrorForm(t *testing.T) {
 	assert.NoError(t, err, "already-archived error must be treated as success")
 	mockSDK.AssertExpectations(t)
 }
+
+// Tests for archived-customer handling in EnsureCustomer (issue #1039)
+
+func TestEnsureCustomer_ActiveMatch_Reuses(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_active", Status: paddle.StatusActive, CustomData: paddle.CustomData{"user_id": "user_123"}}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ctm_active", customerID)
+	mockSDK.AssertNotCalled(t, "UpdateCustomer")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ArchivedSameOwner_Unarchives(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_archived", Status: paddle.StatusArchived, CustomData: paddle.CustomData{"user_id": "user_123"}}}, nil)
+	mockSDK.On("UpdateCustomer", ctx, mock.MatchedBy(func(req *paddle.UpdateCustomerRequest) bool {
+		return req.CustomerID == "ctm_archived" && req.Status != nil && req.Status.Value() != nil && *req.Status.Value() == paddle.StatusActive
+	})).Return(&paddle.Customer{ID: "ctm_archived", Status: paddle.StatusActive}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ctm_archived", customerID)
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ArchivedDifferentOwner_FailsClosed(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_archived", Status: paddle.StatusArchived, CustomData: paddle.CustomData{"user_id": "other_user"}}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.ErrorIs(t, err, ErrPaddleCustomerOwnershipMismatch)
+	mockSDK.AssertNotCalled(t, "UpdateCustomer")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ArchivedMissingCustomData_FailsClosed(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_archived", Status: paddle.StatusArchived, CustomData: nil}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.ErrorIs(t, err, ErrPaddleCustomerOwnershipMismatch)
+	mockSDK.AssertNotCalled(t, "UpdateCustomer")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ArchivedNonStringCustomData_FailsClosed(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_archived", Status: paddle.StatusArchived, CustomData: paddle.CustomData{"user_id": 12345}}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.ErrorIs(t, err, ErrPaddleCustomerOwnershipMismatch)
+	mockSDK.AssertNotCalled(t, "UpdateCustomer")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ArchivedSameOwner_UnarchiveFails_Propagates(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_archived", Status: paddle.StatusArchived, CustomData: paddle.CustomData{"user_id": "user_123"}}}, nil)
+	mockSDK.On("UpdateCustomer", ctx, mock.AnythingOfType("*paddle.UpdateCustomerRequest")).
+		Return(nil, errors.New("paddle API error"))
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.Contains(t, err.Error(), "paddle API error")
+	mockSDK.AssertExpectations(t)
+}
