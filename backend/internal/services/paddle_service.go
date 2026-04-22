@@ -33,6 +33,11 @@ var (
 
 	// ErrSubscriptionNotFound is returned when attempting operations on a non-existent subscription.
 	ErrSubscriptionNotFound = errors.New("paddle subscription not found")
+
+	// ErrPaddleCustomerOwnershipMismatch is returned by EnsureCustomer when an archived Paddle customer
+	// is found by email but its custom_data.user_id does not match the calling user. Reusing the customer
+	// would attach a different user's billing history to the current user.
+	ErrPaddleCustomerOwnershipMismatch = errors.New("archived paddle customer belongs to a different user")
 )
 
 // PaddleService defines the interface for Paddle payment operations.
@@ -118,7 +123,8 @@ func (c *paddleSDKClient) CreateCustomer(ctx context.Context, req *paddle.Create
 
 func (c *paddleSDKClient) ListCustomersByEmail(ctx context.Context, email string) ([]*paddle.Customer, error) {
 	collection, err := c.sdk.ListCustomers(ctx, &paddle.ListCustomersRequest{
-		Email: []string{email},
+		Email:  []string{email},
+		Status: []string{string(paddle.StatusActive), string(paddle.StatusArchived)},
 	})
 	if err != nil {
 		return nil, err
@@ -288,13 +294,46 @@ func (s *paddleService) EnsureCustomer(ctx context.Context, userID, email string
 		return "", fmt.Errorf("existing Paddle customer for email %s is missing an ID", email)
 	}
 
-	s.logger.Info("resolved existing Paddle customer",
+	if customers[0].Status == paddle.StatusArchived {
+		return s.unarchiveCustomerForUser(ctx, customers[0], userID, email)
+	}
+
+	// Active-customer reuse: Clerk enforces email uniqueness for active accounts, so an active
+	// Paddle customer for this email belongs to the current user by construction. No ownership
+	// check is needed here — the archived path is different because the email may have been
+	// claimed by a new Clerk user after the original user deleted their account.
+	return customers[0].ID, nil
+}
+
+// unarchiveCustomerForUser reactivates an archived Paddle customer, but only when the archived
+// record's custom_data.user_id matches the current user. Reusing a customer belonging to a
+// different prior user would expose that user's Paddle portal history to the caller.
+func (s *paddleService) unarchiveCustomerForUser(ctx context.Context, customer *paddle.Customer, userID, email string) (string, error) {
+	ownerID, _ := customer.CustomData["user_id"].(string)
+	if ownerID == "" || ownerID != userID {
+		s.logger.Warn("archived Paddle customer belongs to a different user; failing closed",
+			"user_id", userID,
+			"customer_id", customer.ID,
+			"customer_owner_id", ownerID,
+		)
+		return "", fmt.Errorf("paddle customer %s: %w", customer.ID, ErrPaddleCustomerOwnershipMismatch)
+	}
+
+	_, err := s.client.UpdateCustomer(ctx, &paddle.UpdateCustomerRequest{
+		CustomerID: customer.ID,
+		Status:     paddle.NewPatchField(paddle.StatusActive),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to unarchive Paddle customer %s: %w", customer.ID, err)
+	}
+
+	s.logger.Info("Paddle customer unarchived and reused",
 		"user_id", userID,
-		"email", email,
-		"customer_id", customers[0].ID,
+		"customer_id", customer.ID,
+		"previous_status", "archived",
 	)
 
-	return customers[0].ID, nil
+	return customer.ID, nil
 }
 
 // GetCustomer retrieves a Paddle customer by ID.
