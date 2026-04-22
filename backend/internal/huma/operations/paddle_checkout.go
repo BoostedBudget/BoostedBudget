@@ -226,7 +226,7 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 	if customerID == nil || *customerID == "" {
 		newCustomerID, err := h.paddleService.EnsureCustomer(ctx, user.ID, user.Email)
 		if err != nil {
-			return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to resolve Paddle customer for user %s: %w", user.ID, err))
+			return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("stage=ensure_customer: failed to resolve Paddle customer for user %s: %w", user.ID, err))
 		}
 
 		// Update user with Paddle customer ID (non-critical if fails)
