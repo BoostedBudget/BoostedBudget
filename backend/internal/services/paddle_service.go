@@ -319,11 +319,6 @@ func (s *paddleService) unarchiveCustomerForUser(ctx context.Context, customer *
 		return "", fmt.Errorf("paddle customer %s: %w", customer.ID, ErrPaddleCustomerOwnershipMismatch)
 	}
 
-	s.logger.Warn("unarchiving archived Paddle customer for same-owner user",
-		"user_id", userID,
-		"customer_id", customer.ID,
-	)
-
 	_, err := s.client.UpdateCustomer(ctx, &paddle.UpdateCustomerRequest{
 		CustomerID: customer.ID,
 		Status:     paddle.NewPatchField(paddle.StatusActive),
@@ -335,6 +330,7 @@ func (s *paddleService) unarchiveCustomerForUser(ctx context.Context, customer *
 	s.logger.Info("Paddle customer unarchived and reused",
 		"user_id", userID,
 		"customer_id", customer.ID,
+		"previous_status", "archived",
 	)
 
 	return customer.ID, nil
