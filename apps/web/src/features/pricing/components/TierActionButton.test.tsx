@@ -257,7 +257,7 @@ describe('TierActionButton', () => {
       expect(btn).toBeDisabled()
     })
 
-    it('shows Change Plan for different tier', () => {
+    it('shows Upgrade for a higher-priced tier', () => {
       const cancelledState: PricingState = {
         status: 'cancelled',
         tier: 'premium',
@@ -266,11 +266,34 @@ describe('TierActionButton', () => {
         cancelAtPeriodEnd: true,
       }
       renderButton(cancelledState, 'household_2', 'month')
-      const btn = screen.getByRole('button')
-      expect(btn).not.toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Upgrade' })).not.toBeDisabled()
     })
 
-    it('calls onChangePlan on change click for different tier', () => {
+    it('shows Downgrade for a lower-priced tier', () => {
+      const cancelledState: PricingState = {
+        status: 'cancelled',
+        tier: 'household_5',
+        billingInterval: 'month',
+        subscriptionId: 'sub_123',
+        cancelAtPeriodEnd: true,
+      }
+      renderButton(cancelledState, 'premium', 'month')
+      expect(screen.getByRole('button', { name: 'Downgrade' })).not.toBeDisabled()
+    })
+
+    it('shows Switch to Yearly for same tier different interval', () => {
+      const cancelledState: PricingState = {
+        status: 'cancelled',
+        tier: 'premium',
+        billingInterval: 'month',
+        subscriptionId: 'sub_123',
+        cancelAtPeriodEnd: true,
+      }
+      renderButton(cancelledState, 'premium', 'year')
+      expect(screen.getByRole('button', { name: 'Switch to Yearly' })).not.toBeDisabled()
+    })
+
+    it('calls onChangePlan on directional CTA click', () => {
       const cancelledState: PricingState = {
         status: 'cancelled',
         tier: 'premium',
@@ -279,7 +302,7 @@ describe('TierActionButton', () => {
         cancelAtPeriodEnd: true,
       }
       renderButton(cancelledState, 'household_2', 'month')
-      fireEvent.click(screen.getByRole('button'))
+      fireEvent.click(screen.getByRole('button', { name: 'Upgrade' }))
       expect(mockOnChangePlan).toHaveBeenCalledWith('household_2', 'month')
     })
   })
