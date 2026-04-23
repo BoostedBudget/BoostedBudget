@@ -213,6 +213,7 @@ export * from "./updateProfileRequest";
 export * from "./updateSavingsGoalRequest";
 export * from "./updateSubscriptionInputBody";
 export * from "./updateSubscriptionInputBodyBillingInterval";
+export * from "./updateSubscriptionInputBodyCurrentBillingInterval";
 export * from "./updateSubscriptionInputBodyProrationBillingMode";
 export * from "./updateSubscriptionOutputBody";
 export * from "./updateTransactionCategoryBody";
