@@ -302,4 +302,42 @@ describe('useSubscriptionManagement', () => {
       expect(result.current.billingPortalUrl).toBeUndefined()
     })
   })
+
+  describe('updateSubscription', () => {
+    it('includes current_billing_interval in mutation payload when provided', async () => {
+      mockUpdateSubscriptionMutateAsync.mockResolvedValue({})
+      const { result } = renderHook(() => useSubscriptionManagement(), {
+        wrapper: createWrapper(),
+      })
+
+      await result.current.updateSubscription({
+        newTier: 'household_2',
+        billingInterval: 'year',
+        currentBillingInterval: 'month',
+      })
+
+      expect(mockUpdateSubscriptionMutateAsync).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          new_tier: 'household_2',
+          billing_interval: 'year',
+          current_billing_interval: 'month',
+        }),
+      })
+    })
+
+    it('omits current_billing_interval when not provided', async () => {
+      mockUpdateSubscriptionMutateAsync.mockResolvedValue({})
+      const { result } = renderHook(() => useSubscriptionManagement(), {
+        wrapper: createWrapper(),
+      })
+
+      await result.current.updateSubscription({
+        newTier: 'premium',
+        billingInterval: 'month',
+      })
+
+      const call = mockUpdateSubscriptionMutateAsync.mock.calls[0]?.[0]
+      expect(call.data.current_billing_interval).toBeUndefined()
+    })
+  })
 })

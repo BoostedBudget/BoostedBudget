@@ -129,6 +129,16 @@ function TierCard({
 
   const TierIcon = isHousehold5 ? Gem : Award
 
+  const cancelDateLabel = pricingState.status === 'cancelled' && isCurrentTier
+    ? (() => {
+        const iso = pricingState.scheduledChangeAt ?? pricingState.currentPeriodEnd
+        if (!iso) return null
+        // Slice to YYYY-MM-DD and construct at local noon to avoid UTC midnight → previous day in western timezones
+        const datePart = iso.slice(0, 10)
+        return new Date(`${datePart}T12:00:00`).toLocaleDateString()
+      })()
+    : null
+
   return (
     <div
       className={`pricing-card${isHousehold5 ? ' featured' : ''} relative flex flex-col rounded-2xl p-8 transition-all duration-300 border-2 bg-card hover:shadow-lg ${
@@ -197,6 +207,11 @@ function TierCard({
       </ul>
 
       <div className="mt-auto">
+        {cancelDateLabel && (
+          <p className="text-sm text-muted-foreground text-center mb-2">
+            Cancels on {cancelDateLabel}
+          </p>
+        )}
         {shouldShowResume ? (
           <ResumeButton billingPortalUrl={billingPortalUrl} isLoadingPortal={isLoadingPortal} />
         ) : (
@@ -287,6 +302,7 @@ export function PricingPage() {
       data: {
         new_tier: tier,
         billing_interval: interval,
+        current_billing_interval: currentIntervalForModal,
         proration_billing_mode: prorationMode,
       },
     }).then(() => {

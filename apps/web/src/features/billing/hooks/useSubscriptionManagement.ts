@@ -12,6 +12,7 @@ import type {
 interface UpdateOptions {
   newTier: string
   billingInterval: 'month' | 'year'
+  currentBillingInterval?: 'month' | 'year'
   prorationBillingMode?: 'prorated_immediately' | 'full_immediately' | 'full_next_billing_period'
 }
 
@@ -55,6 +56,7 @@ export function useSubscriptionManagement() {
       data: {
         new_tier: options.newTier,
         billing_interval: options.billingInterval,
+        current_billing_interval: options.currentBillingInterval,
         proration_billing_mode: options.prorationBillingMode,
       } as UpdateSubscriptionInputBody,
     })

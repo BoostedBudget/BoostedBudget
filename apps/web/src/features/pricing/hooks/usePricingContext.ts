@@ -13,7 +13,7 @@ export type PricingState =
   | { status: 'trial'; tier: TierName; daysRemaining: number; trialEndsAt: string }
   | { status: 'trialing'; tier: TierName; billingInterval: 'month' | 'year'; subscriptionId: string }
   | { status: 'active'; tier: TierName; billingInterval: 'month' | 'year'; subscriptionId: string; cancelAtPeriodEnd: boolean; scheduledChangeAt?: string }
-  | { status: 'cancelled'; tier: TierName; billingInterval: 'month' | 'year'; subscriptionId: string; cancelAtPeriodEnd: boolean; scheduledChangeAt?: string }
+  | { status: 'cancelled'; tier: TierName; billingInterval: 'month' | 'year'; subscriptionId: string; cancelAtPeriodEnd: boolean; scheduledChangeAt?: string; currentPeriodEnd?: string }
   | { status: 'past_due'; tier: TierName; billingInterval: 'month' | 'year'; subscriptionId: string }
 
 export interface UsePricingContextResult {
@@ -118,6 +118,7 @@ export function usePricingContext(): UsePricingContextResult {
           subscriptionId: sub.subscription_id ?? '',
           cancelAtPeriodEnd: sub.cancel_at_period_end,
           scheduledChangeAt: sub.scheduled_change_at,
+          currentPeriodEnd: sub.current_period_end,
         },
         tiers,
       }

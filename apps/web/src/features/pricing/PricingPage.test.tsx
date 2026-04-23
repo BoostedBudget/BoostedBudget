@@ -671,10 +671,37 @@ describe('PricingPage', () => {
         expect(resumeButton).toBeInTheDocument()
       })
 
-      it('shows Change Plan buttons for other tiers', () => {
+      it('shows directional CTAs (Upgrade/Downgrade/Switch) for other tiers', () => {
         renderWithProviders(<PricingPage />)
-        const changePlanButtons = screen.getAllByRole('button', { name: /change plan/i })
-        expect(changePlanButtons.length).toBe(4)
+        expect(screen.queryAllByRole('button', { name: /change plan/i }).length).toBe(0)
+        const directionalButtons = screen.getAllByRole('button', {
+          name: /upgrade|downgrade|switch to/i,
+        })
+        expect(directionalButtons.length).toBeGreaterThan(0)
+      })
+
+      it('shows Cancels on {date} label on current tier card when scheduled_change_at is set', () => {
+        renderWithProviders(<PricingPage />)
+        const expectedDate = new Date('2026-05-08T12:00:00').toLocaleDateString()
+        expect(screen.getByText(new RegExp(`Cancels on ${expectedDate}`, 'i'))).toBeInTheDocument()
+      })
+
+      it('shows Cancels on {date} label from current_period_end when scheduled_change_at is absent', () => {
+        mockUseGetCurrentSubscription.mockReturnValue({
+          data: {
+            subscription_id: 'sub_123',
+            status: 'cancelled',
+            tier: 'premium',
+            billing_interval: 'month',
+            cancel_at_period_end: true,
+            current_period_end: '2026-06-01',
+          },
+          isLoading: false,
+          error: null,
+        })
+        renderWithProviders(<PricingPage />)
+        const expectedDate = new Date('2026-06-01T12:00:00').toLocaleDateString()
+        expect(screen.getByText(new RegExp(`Cancels on ${expectedDate}`, 'i'))).toBeInTheDocument()
       })
     })
 

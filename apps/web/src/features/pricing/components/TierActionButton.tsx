@@ -64,7 +64,11 @@ export function TierActionButton({
     return <Button disabled className="w-full">Update Payment</Button>
   }
 
-  if (pricingState.status === 'active' || pricingState.status === 'trialing') {
+  if (
+    pricingState.status === 'active' ||
+    pricingState.status === 'trialing' ||
+    pricingState.status === 'cancelled'
+  ) {
     const direction = tiers
       ? classifyTierChange(pricingState.tier, pricingState.billingInterval, tierKey, billingInterval, tiers)
       : 'same'
@@ -81,18 +85,6 @@ export function TierActionButton({
     return (
       <Button onClick={() => onChangePlan(tierKey, billingInterval)} className="w-full">
         {label}
-      </Button>
-    )
-  }
-
-  if (pricingState.status === 'cancelled') {
-    const isSameTier = pricingState.tier === tierKey
-    if (isSameTier) {
-      return <Button disabled className="w-full">Current Plan</Button>
-    }
-    return (
-      <Button onClick={() => onChangePlan(tierKey, billingInterval)} className="w-full">
-        Change Plan
       </Button>
     )
   }
