@@ -27,25 +27,21 @@ function getErrorStatus(error: unknown): number | undefined {
   return err.status ?? err.response?.status
 }
 
-function is404Error(error: unknown): boolean {
-  return getErrorStatus(error) === 404
-}
-
 export function useSubscriptionManagement() {
   // Query hooks
   const subscriptionQuery = useGetCurrentSubscription({
     query: {
       retry: (failureCount: number, error: unknown) => {
-        if (is404Error(error)) return false
+        if (getErrorStatus(error) === 404) return false
         return failureCount < 1
       },
     },
   })
   const billingPortalQuery = useGetBillingPortalUrl({
     query: {
-      enabled:
-        subscriptionQuery.data?.status === 'active' ||
-        subscriptionQuery.data?.status === 'trialing',
+      enabled: ['active', 'trialing', 'cancelled', 'past_due'].includes(
+        subscriptionQuery.data?.status ?? '',
+      ),
     },
   })
 
@@ -93,7 +89,7 @@ export function useSubscriptionManagement() {
     return { status, message: err.message || 'Failed to update subscription. Please try again.' }
   }
 
-  const noSubscription = is404Error(subscriptionQuery.error)
+  const noSubscription = getErrorStatus(subscriptionQuery.error) === 404
 
   return {
     // Current subscription data

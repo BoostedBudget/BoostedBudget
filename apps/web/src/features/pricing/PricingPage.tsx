@@ -1,30 +1,29 @@
 import { useState, useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
-import { useUser } from '@clerk/react-router'
 import { Award, Gem, Check, X, AlertTriangle } from 'lucide-react'
-import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import type { TierName, SubscriptionTier } from '../subscription/types'
-import { PaddleCheckoutButton } from '../billing/components/PaddleCheckoutButton'
 import { usePaddleEvents } from '../billing/hooks/usePaddleEvents'
-import { useGetCurrentSubscription } from '@boostedbudget/api-client/endpoints/subscription/subscription'
+import {
+  useGetBillingPortalUrl,
+  useGetSubscriptionTiers,
+  useUpdatePaddleSubscription,
+} from '@boostedbudget/api-client/endpoints/subscription/subscription'
+import { PlanChangeModal } from '../billing/components/PlanChangeModal'
+import { TierActionButton } from './components/TierActionButton'
+import { ResumeButton } from './components/ResumeButton'
+import { usePricingContext } from './hooks/usePricingContext'
+import type { PricingState } from './hooks/usePricingContext'
+import { usePostSignInCheckoutIntent } from './hooks/usePostSignInCheckoutIntent'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 
 type BillingPeriod = 'monthly' | 'yearly'
 
-/**
- * Format price for display
- */
 function formatPrice(price: number | undefined): string {
-  if (!price) {
-    return 'Free'
-  }
+  if (!price) return 'Free'
   return `$${price.toFixed(2)}`
 }
 
-/**
- * Calculate savings percentage for yearly billing
- */
 function calculateSavingsPercent(tierData: SubscriptionTier): number {
   const monthlyTotal = tierData.pricing.price_monthly * 12
   const yearlyTotal = tierData.pricing.price_yearly
@@ -32,13 +31,7 @@ function calculateSavingsPercent(tierData: SubscriptionTier): number {
   return Math.round(((monthlyTotal - yearlyTotal) / monthlyTotal) * 100)
 }
 
-
-/**
- * Build feature list with included/excluded status
- */
-function buildFeatureList(
-  tierData: SubscriptionTier
-): Array<{ feature: string; included: boolean }> {
+function buildFeatureList(tierData: SubscriptionTier): Array<{ feature: string; included: boolean }> {
   const { features: featureFlags, pricing } = tierData
 
   const usersLabel = pricing.users_included === 1
@@ -90,18 +83,45 @@ function FrozenAccountBanner() {
   )
 }
 
+function hasTier(state: PricingState): state is Extract<PricingState, { tier: TierName }> {
+  return 'tier' in state
+}
+
 interface TierCardProps {
   tierKey: TierName
   tierData: SubscriptionTier
-  isCurrentTier: boolean
+  pricingState: PricingState
+  tiers: Record<TierName, SubscriptionTier> | null
   billingPeriod: BillingPeriod
+  billingPortalUrl: string | undefined
+  isLoadingPortal: boolean
+  onChangePlan: (tier: TierName, interval: 'month' | 'year') => void
 }
 
-function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardProps) {
+function TierCard({
+  tierKey,
+  tierData,
+  pricingState,
+  tiers,
+  billingPeriod,
+  billingPortalUrl,
+  isLoadingPortal,
+  onChangePlan,
+}: TierCardProps) {
   const features = buildFeatureList(tierData)
   const isHousehold5 = tierKey === 'household_5'
+  const billingInterval = billingPeriod === 'monthly' ? 'month' : 'year'
 
-  // Get the appropriate price based on billing period
+  const isCurrentTier =
+    ['active', 'trialing', 'cancelled', 'past_due'].includes(pricingState.status) &&
+    hasTier(pricingState) &&
+    pricingState.tier === tierKey
+
+  const shouldShowResume =
+    (pricingState.status === 'cancelled' || pricingState.status === 'past_due') &&
+    hasTier(pricingState) &&
+    pricingState.tier === tierKey
+
   const currentPrice = billingPeriod === 'monthly'
     ? tierData.pricing.price_monthly
     : tierData.pricing.price_yearly
@@ -177,17 +197,15 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardP
       </ul>
 
       <div className="mt-auto">
-        {isCurrentTier ? (
-          <button
-            className="w-full py-3.5 border-none rounded-lg text-base font-semibold cursor-default bg-primary/10 text-primary"
-            disabled
-          >
-            Current Plan
-          </button>
+        {shouldShowResume ? (
+          <ResumeButton billingPortalUrl={billingPortalUrl} isLoadingPortal={isLoadingPortal} />
         ) : (
-          <PaddleCheckoutButton
-            tier={tierKey}
-            billingInterval={billingPeriod === 'monthly' ? 'month' : 'year'}
+          <TierActionButton
+            tierKey={tierKey}
+            billingInterval={billingInterval}
+            pricingState={pricingState}
+            tiers={tiers}
+            onChangePlan={onChangePlan}
           />
         )}
       </div>
@@ -195,31 +213,44 @@ function TierCard({ tierKey, tierData, isCurrentTier, billingPeriod }: TierCardP
   )
 }
 
-export function PricingPage() {
-  const { user } = useUser()
-  const location = useLocation()
-  const { tiers, loading, error, refetch } = useSubscriptionTiers()
-  const { data: currentSubscription } = useGetCurrentSubscription()
-  const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly')
-  const trackEvent = useTrackEvent()
+const TIER_ORDER: TierName[] = ['premium', 'household_2', 'household_3', 'household_4', 'household_5']
 
-  // Listen for Paddle checkout events (completion/cancellation)
+export function PricingPage() {
+  const location = useLocation()
+  const { pricingState, tiers } = usePricingContext()
+  const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly')
+  const [planChangeModal, setPlanChangeModal] = useState<{
+    open: boolean
+    initialTier?: TierName
+    initialInterval?: 'month' | 'year'
+  }>({ open: false })
+
+  usePostSignInCheckoutIntent()
   usePaddleEvents()
 
+  const trackEvent = useTrackEvent()
   useEffect(() => {
     trackEvent(ANALYTICS_EVENTS.PRICING_VIEWED)
   }, [trackEvent])
 
-  const isFrozen = (location.state as { frozen?: boolean } | null)?.frozen === true
+  const updateMutation = useUpdatePaddleSubscription()
 
-  // Trial users (status="trial") get all tiers shown as Subscribe, unlike trialing users
-  // who have paid subscriptions and show "Current Plan"
-  const isTrialUser = currentSubscription?.status === 'trial'
-  const currentTier: TierName | null = isTrialUser
-    ? null
-    : (user?.publicMetadata?.subscription_tier as TierName) || 'premium'
+  const billingPortalQuery = useGetBillingPortalUrl({
+    query: {
+      enabled: pricingState.status === 'cancelled' || pricingState.status === 'past_due',
+    },
+  })
 
-  if (loading) {
+  // For error-state retry (shared cache with usePricingContext's internal query)
+  const { refetch: refetchTiers } = useGetSubscriptionTiers({
+    query: { staleTime: 24 * 60 * 60 * 1000 },
+  })
+
+  const isFrozen =
+    (location.state as { frozen?: boolean } | null)?.frozen === true ||
+    pricingState.status === 'past_due'
+
+  if (pricingState.status === 'loading') {
     return (
       <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8">
         <div className="text-center py-16 px-8 text-muted-foreground">Loading pricing plans...</div>
@@ -227,14 +258,13 @@ export function PricingPage() {
     )
   }
 
-  // Defensive check for malformed API response
-  if (error || !tiers || !tiers.tiers) {
+  if (tiers === null) {
     return (
       <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8">
         <div className="text-center py-16 px-8 text-destructive">
           <p>Failed to load pricing plans.</p>
           <button
-            onClick={refetch}
+            onClick={() => refetchTiers()}
             className="mt-4 bg-primary text-primary-foreground border-none px-6 py-3 rounded-md text-base cursor-pointer hover:opacity-90 transition-opacity"
           >
             Try Again
@@ -244,14 +274,37 @@ export function PricingPage() {
     )
   }
 
-  // Order tiers for display (free tier removed, household tiers added)
-  const tierOrder: TierName[] = ['premium', 'household_2', 'household_3', 'household_4', 'household_5']
+  const handleChangePlan = (tier: TierName, interval: 'month' | 'year') => {
+    setPlanChangeModal({ open: true, initialTier: tier, initialInterval: interval })
+  }
+
+  const handleUpdateSubscription = (
+    tier: string,
+    interval: 'month' | 'year',
+    prorationMode: 'prorated_immediately' | 'full_next_billing_period',
+  ) => {
+    updateMutation.mutateAsync({
+      data: {
+        new_tier: tier,
+        billing_interval: interval,
+        proration_billing_mode: prorationMode,
+      },
+    }).then(() => {
+      setPlanChangeModal({ open: false })
+    }).catch(() => {
+      // Error state visible via updateMutation.error
+    })
+  }
+
+  const showPlanChangeModal = ['active', 'trialing', 'cancelled'].includes(pricingState.status)
+  const currentTierForModal = hasTier(pricingState) ? pricingState.tier : 'premium'
+  const currentIntervalForModal = (pricingState as { billingInterval?: 'month' | 'year' }).billingInterval ?? 'month'
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8">
       {isFrozen && <FrozenAccountBanner />}
-      {isTrialUser && currentSubscription?.trial_days_remaining !== undefined && (
-        <TrialBanner daysRemaining={currentSubscription.trial_days_remaining} />
+      {pricingState.status === 'trial' && (
+        <TrialBanner daysRemaining={pricingState.daysRemaining} />
       )}
 
       <div className="text-center mb-12">
@@ -286,27 +339,45 @@ export function PricingPage() {
           aria-checked={billingPeriod === 'yearly'}
           role="radio"
         >
-          {tiers?.tiers.premium
-            ? `Yearly (Save ${calculateSavingsPercent(tiers.tiers.premium)}%)`
+          {tiers.premium
+            ? `Yearly (Save ${calculateSavingsPercent(tiers.premium)}%)`
             : 'Yearly'}
         </button>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-6 mb-16">
-        {tierOrder.map((tierKey) => {
-          const tierData = tiers.tiers[tierKey]
+        {TIER_ORDER.map((tierKey) => {
+          const tierData = tiers[tierKey]
           if (!tierData) return null
           return (
             <TierCard
               key={tierKey}
               tierKey={tierKey}
               tierData={tierData}
-              isCurrentTier={tierKey === currentTier}
+              pricingState={pricingState}
+              tiers={tiers}
               billingPeriod={billingPeriod}
+              billingPortalUrl={billingPortalQuery.data?.portal_url}
+              isLoadingPortal={billingPortalQuery.isLoading}
+              onChangePlan={handleChangePlan}
             />
           )
         })}
       </div>
+
+      {showPlanChangeModal && (
+        <PlanChangeModal
+          open={planChangeModal.open}
+          currentTier={currentTierForModal}
+          currentBillingInterval={currentIntervalForModal}
+          tiers={tiers as Record<string, SubscriptionTier>}
+          isUpdating={updateMutation.isPending}
+          onChangePlan={handleUpdateSubscription}
+          onClose={() => setPlanChangeModal({ open: false })}
+          initialTier={planChangeModal.initialTier}
+          initialInterval={planChangeModal.initialInterval}
+        />
+      )}
 
       <div className="mt-16 pt-12 border-t border-border">
         <h2 className="text-center text-3xl font-bold text-foreground mb-8">Frequently Asked Questions</h2>
