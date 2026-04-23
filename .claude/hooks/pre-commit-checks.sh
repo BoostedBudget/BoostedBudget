@@ -7,7 +7,7 @@
 #   1. Backend compilation:   go build ./...
 #   2. Backend vet:           go vet ./...
 #   3. Backend lint:          golangci-lint run (skipped if not installed)
-#   4. Frontend typecheck:    bun run typecheck (tsc --noEmit, non-blocking warning)
+#   4. Frontend typecheck:    bun run typecheck (tsc --noEmit)
 #   5. Frontend lint:         bun run lint (ESLint --max-warnings 0)
 
 set -euo pipefail
@@ -124,9 +124,8 @@ printf '\n'
 printf 'Frontend:\n'
 
 if command -v bun &>/dev/null; then
-  # TypeScript type check — non-blocking: surfaces errors without halting commit
-  # (codebase has pre-existing Plotly @types version conflicts to fix separately)
-  run_warn "bun run typecheck  (tsc --noEmit)" \
+  # TypeScript type check (CI: 'tsc --noEmit')
+  run_check "bun run typecheck  (tsc --noEmit)" \
     "$PROJECT_ROOT/apps/web" \
     "bun run typecheck"
 
@@ -135,7 +134,7 @@ if command -v bun &>/dev/null; then
     "$PROJECT_ROOT/apps/web" \
     "bun run lint"
 else
-  printf '  %-45s⚠️  (bun not installed — skip)\n' "bun run typecheck  (tsc --noEmit)"
+  printf '  %-45s⚠️  (bun not installed)\n' "bun run typecheck  (tsc --noEmit)"
   printf '  %-45s⚠️  (bun not installed)\n' "bun run lint"
   WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"
 fi
