@@ -52,6 +52,10 @@ EXCLUDE_PATTERNS=(
     # date mismatch failures in the full suite (#952)
     "src/features/dashboard/components/TimeframeSelector.test.tsx"
     "src/features/transactions/components/TransactionCard.test.tsx"
+    # usePricingContext: mock state pollution from full suite causes tiers to appear loading (#1038)
+    "src/features/pricing/hooks/usePricingContext.test.tsx"
+    # usePostSignInCheckoutIntent: mockUseCreatePaddleCheckout state leaks from prior tests (#1038)
+    "src/features/pricing/hooks/usePostSignInCheckoutIntent.test.tsx"
 )
 
 echo "Running regular tests (excluding real-implementation tests)..."

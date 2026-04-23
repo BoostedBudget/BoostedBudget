@@ -112,6 +112,7 @@ export function SubscriptionManagementPage() {
       await updateSubscription({
         newTier: targetTier,
         billingInterval,
+        currentBillingInterval: subscription.billing_interval as 'month' | 'year',
         prorationBillingMode,
       })
       toast.success(message)
@@ -155,6 +156,9 @@ export function SubscriptionManagementPage() {
     setShowPlanChangeModal(true)
   }
 
+  const nextBillingDate =
+    subscription.next_billing_date ?? subscription.current_period_end ?? ''
+
   // Helper to build subscription data for modals
   const getModalSubscriptionData = () => ({
     tier: subscription.tier,
@@ -162,7 +166,7 @@ export function SubscriptionManagementPage() {
     billing_interval: subscription.billing_interval,
     amount: subscription.amount,
     currency: subscription.currency,
-    next_billing_date: subscription.next_billing_date || subscription.current_period_end,
+    next_billing_date: nextBillingDate,
     features: formatTierFeatures(currentTierData),
   })
 
@@ -353,7 +357,7 @@ export function SubscriptionManagementPage() {
       )}
 
       <BillingDetails
-        nextBillingDate={subscription.next_billing_date || subscription.current_period_end}
+        nextBillingDate={nextBillingDate}
         amount={subscription.amount}
         currency={subscription.currency}
         billingInterval={subscription.billing_interval}
