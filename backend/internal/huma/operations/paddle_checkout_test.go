@@ -9,6 +9,7 @@ import (
 	"time"
 
 	paddle "github.com/PaddleHQ/paddle-go-sdk/v4"
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -1469,6 +1470,350 @@ func TestHandleCancelSubscription_TrialingUser(t *testing.T) {
 	require.NotNil(t, output)
 	assert.Contains(t, output.Body.Message, "cancelled")
 	assert.Equal(t, "2026-03-15", output.Body.EndsAt)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// --- Context-aware pricing: HandleGetCurrentSubscription extended status tests ---
+
+// TestHandleGetCurrentSubscription_CancelledWithScheduledCancel_ReturnsCancelAtPeriodEnd verifies
+// that a cancelled user with a scheduled Paddle cancel returns cancel_at_period_end=true and scheduled_change_at.
+func TestHandleGetCurrentSubscription_CancelledWithScheduledCancel_ReturnsCancelAtPeriodEnd(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "cancelled",
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	effectiveAt := "2026-05-01T00:00:00Z"
+	cancelAction := paddle.ScheduledChangeActionCancel
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockService.On("GetSubscription", ctx, subscriptionID).Return(&paddle.Subscription{
+		ID:              subscriptionID,
+		Status:          paddle.SubscriptionStatusActive,
+		BillingCycle:    paddle.Duration{Interval: "month", Frequency: 1},
+		CurrencyCode:    "USD",
+		ScheduledChange: &paddle.SubscriptionScheduledChange{Action: cancelAction, EffectiveAt: effectiveAt},
+		Items:           []paddle.SubscriptionItem{{Price: paddle.Price{UnitPrice: paddle.Money{Amount: "8.99"}}}},
+	}, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.True(t, output.Body.CancelAtPeriodEnd, "expected cancel_at_period_end=true when scheduled cancel exists")
+	assert.Equal(t, effectiveAt, output.Body.ScheduledChangeAt)
+	assert.Equal(t, subscriptionID, output.Body.SubscriptionID)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_CancelledNoScheduledChange_ReturnsData verifies
+// that a cancelled user without ScheduledChange still returns subscription data with cancel_at_period_end=false.
+func TestHandleGetCurrentSubscription_CancelledNoScheduledChange_ReturnsData(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "cancelled",
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockService.On("GetSubscription", ctx, subscriptionID).Return(&paddle.Subscription{
+		ID:              subscriptionID,
+		Status:          paddle.SubscriptionStatusCanceled,
+		BillingCycle:    paddle.Duration{Interval: "month", Frequency: 1},
+		CurrencyCode:    "USD",
+		ScheduledChange: nil,
+	}, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.False(t, output.Body.CancelAtPeriodEnd)
+	assert.Empty(t, output.Body.ScheduledChangeAt)
+	assert.Equal(t, subscriptionID, output.Body.SubscriptionID)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_PastDueReturnsData verifies past_due users get subscription data.
+func TestHandleGetCurrentSubscription_PastDueReturnsData(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "past_due",
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockService.On("GetSubscription", ctx, subscriptionID).Return(&paddle.Subscription{
+		ID:              subscriptionID,
+		Status:          paddle.SubscriptionStatusPastDue,
+		BillingCycle:    paddle.Duration{Interval: "month", Frequency: 1},
+		CurrencyCode:    "USD",
+		ScheduledChange: nil,
+	}, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, subscriptionID, output.Body.SubscriptionID)
+	assert.Equal(t, "past_due", output.Body.Status)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_InactiveReturns404 verifies inactive users get 404 (not 400).
+func TestHandleGetCurrentSubscription_InactiveReturns404(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "inactive",
+		PaddleCustomerID:     nil,
+		PaddleSubscriptionID: nil,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	var humaErr huma.StatusError
+	require.True(t, errors.As(err, &humaErr), "expected huma.StatusError")
+	assert.Equal(t, 404, humaErr.GetStatus())
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_NilCurrentBillingPeriodDoesNotPanic verifies nil CurrentBillingPeriod
+// (returned by Paddle for canceled/past_due subscriptions) does not cause a nil pointer panic.
+func TestHandleGetCurrentSubscription_NilCurrentBillingPeriodDoesNotPanic(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "cancelled",
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	cancelAction := paddle.ScheduledChangeActionCancel
+	effectiveAt := "2026-05-01T00:00:00Z"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockService.On("GetSubscription", ctx, subscriptionID).Return(&paddle.Subscription{
+		ID:                   subscriptionID,
+		Status:               paddle.SubscriptionStatusCanceled,
+		BillingCycle:         paddle.Duration{Interval: "month", Frequency: 1},
+		CurrencyCode:         "USD",
+		CurrentBillingPeriod: nil,
+		ScheduledChange:      &paddle.SubscriptionScheduledChange{Action: cancelAction, EffectiveAt: effectiveAt},
+	}, nil)
+
+	assert.NotPanics(t, func() {
+		_, _ = handler.HandleGetCurrentSubscription(ctx, input)
+	})
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// --- Context-aware pricing: HandleGetBillingPortalURL extended status tests ---
+
+// TestHandleGetBillingPortalURL_AllowsCancelled verifies cancelled users can get billing portal URL.
+func TestHandleGetBillingPortalURL_AllowsCancelled(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_cancelled_123"
+	subscriptionID := "sub_cancelled_123"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionStatus:   "cancelled",
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &GetBillingPortalURLInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("GetBillingPortalURL", ctx, customerID).Return("https://buy.paddle.com/customer/portal", nil)
+
+	output, err := handler.HandleGetBillingPortalURL(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.NotEmpty(t, output.Body.PortalURL)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleGetBillingPortalURL_AllowsPastDue verifies past_due users can get billing portal URL.
+func TestHandleGetBillingPortalURL_AllowsPastDue(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_pastdue_123"
+	subscriptionID := "sub_pastdue_123"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionStatus:   "past_due",
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &GetBillingPortalURLInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("GetBillingPortalURL", ctx, customerID).Return("https://buy.paddle.com/customer/portal", nil)
+
+	output, err := handler.HandleGetBillingPortalURL(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.NotEmpty(t, output.Body.PortalURL)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// --- Context-aware pricing: HandleUpdateSubscription direction enforcement tests ---
+
+// TestHandleUpdateSubscription_RejectsNoOp verifies that updating to the same tier and billing interval is rejected.
+func TestHandleUpdateSubscription_RejectsNoOp(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "active",
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &UpdateSubscriptionInput{}
+	input.UserID = "user_123"
+	input.Body.NewTier = "premium"
+	input.Body.BillingInterval = "month"
+	input.Body.CurrentBillingInterval = "month" // same as new interval → no-op
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+
+	var humaErr huma.StatusError
+	require.True(t, errors.As(err, &humaErr))
+	assert.Equal(t, 400, humaErr.GetStatus())
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleUpdateSubscription_DirectionalMessage_Upgrade verifies the response message reflects upgrade direction.
+func TestHandleUpdateSubscription_DirectionalMessage_Upgrade(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "active",
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &UpdateSubscriptionInput{}
+	input.UserID = "user_123"
+	input.Body.NewTier = "household_2"
+	input.Body.BillingInterval = "month"
+	input.Body.CurrentBillingInterval = "month" // different tier so not a no-op
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockService.On("UpdateSubscription", ctx, subscriptionID, mock.AnythingOfType("string"), "prorated_immediately").
+		Return(&paddle.Subscription{
+			ID:     subscriptionID,
+			Status: paddle.SubscriptionStatusActive,
+		}, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Contains(t, output.Body.Message, "upgraded")
 
 	mockRepo.AssertExpectations(t)
 	mockService.AssertExpectations(t)

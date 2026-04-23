@@ -4,6 +4,7 @@
  * Tests for the pricing page component that displays subscription tier comparison.
  * Migrated to bun:test with centralized mocks (Issue #575).
  * Updated for simplified tier structure: premium + household tiers (no free tier).
+ * Updated for context-aware pricing CTAs (Issue #1038).
  */
 
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
@@ -20,6 +21,7 @@ import {
   mockUseGetSubscriptionTiers,
   mockRefetchSubscriptionTiers,
   mockUseGetCurrentSubscription,
+  mockUseGetBillingPortalUrl,
 } from '@/test/mocks/subscription-api'
 
 function renderWithProviders(ui: React.ReactElement, routerState?: { frozen?: boolean }) {
@@ -36,6 +38,24 @@ function renderWithProviders(ui: React.ReactElement, routerState?: { frozen?: bo
   )
 }
 
+const defaultTiersReturn = {
+  data: mockSubscriptionTiersResponse,
+  isLoading: false,
+  error: null,
+  refetch: mockRefetchSubscriptionTiers,
+}
+
+const activeSubscription = {
+  subscription_id: 'sub_123',
+  status: 'active',
+  tier: 'premium',
+  billing_interval: 'month',
+  cancel_at_period_end: false,
+  amount: '8.99',
+  currency: 'USD',
+  current_period_end: '2026-05-08T00:00:00Z',
+}
+
 describe('PricingPage', () => {
   beforeEach(() => {
     // Reset all mocks
@@ -43,14 +63,10 @@ describe('PricingPage', () => {
     mockUseGetSubscriptionTiers.mockClear()
     mockRefetchSubscriptionTiers.mockClear()
     mockUseGetCurrentSubscription.mockClear()
+    mockUseGetBillingPortalUrl.mockClear()
 
     // Default: successful load with no authenticated user
-    mockUseGetSubscriptionTiers.mockReturnValue({
-      data: mockSubscriptionTiersResponse,
-      isLoading: false,
-      error: null,
-      refetch: mockRefetchSubscriptionTiers,
-    })
+    mockUseGetSubscriptionTiers.mockReturnValue(defaultTiersReturn)
     mockUseUser.mockReturnValue({
       user: undefined,
       isSignedIn: false,
@@ -61,6 +77,11 @@ describe('PricingPage', () => {
       isLoading: false,
       error: null,
       refetch: mock(() => Promise.resolve()),
+    })
+    mockUseGetBillingPortalUrl.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
     })
   })
 
@@ -179,46 +200,8 @@ describe('PricingPage', () => {
     })
   })
 
-  describe('Current plan highlighting', () => {
-    beforeEach(() => {
-      // Mock authenticated user with premium tier for all tests in this suite
-      mockUseUser.mockReturnValue({
-        user: {
-          id: 'user_123',
-          publicMetadata: {
-            subscription_tier: 'premium',
-          },
-        },
-        isSignedIn: true,
-        isLoaded: true,
-      })
-    })
-
-    it('should show "Current Plan" badge for user\'s tier', () => {
-      renderWithProviders(<PricingPage />)
-
-      const currentPlanElements = screen.getAllByText('Current Plan')
-      expect(currentPlanElements.length).toBeGreaterThan(0)
-    })
-
-    it('should show "Subscribe" buttons for non-current tiers', () => {
-      renderWithProviders(<PricingPage />)
-
-      const selectButtons = screen.getAllByRole('button', { name: /subscribe/i })
-      expect(selectButtons.length).toBeGreaterThan(0)
-    })
-
-    it('should disable button for current tier', () => {
-      renderWithProviders(<PricingPage />)
-
-      const currentPlanButtons = screen.getAllByRole('button', { name: /current plan/i })
-      expect(currentPlanButtons.length).toBeGreaterThan(0)
-      expect(currentPlanButtons[0]).toBeDisabled()
-    })
-  })
-
   describe('Unauthenticated user', () => {
-    it('should render all tiers and default to premium when not authenticated', () => {
+    it('should render all tiers without Current Plan badge when signed out', () => {
       renderWithProviders(<PricingPage />)
 
       const headings = screen.getAllByRole('heading', { level: 2 })
@@ -229,9 +212,58 @@ describe('PricingPage', () => {
       expect(headingTexts).toContain('Household (2 members)')
       expect(headingTexts).toContain('Household (5 members)')
 
-      // Should show "Current Plan" for premium tier as default
+      // Signed-out users should NOT see "Current Plan" — they should see Subscribe
+      expect(screen.queryByText('Current Plan')).not.toBeInTheDocument()
+    })
+
+    it('should show Subscribe buttons for all tiers when signed out', () => {
+      renderWithProviders(<PricingPage />)
+
+      const subscribeButtons = screen.getAllByRole('button', { name: /subscribe/i })
+      expect(subscribeButtons.length).toBe(5)
+    })
+  })
+
+  describe('Current plan highlighting (active subscriber)', () => {
+    beforeEach(() => {
+      mockUseUser.mockReturnValue({
+        user: {
+          id: 'user_123',
+          publicMetadata: {
+            subscription_tier: 'premium',
+          },
+        },
+        isSignedIn: true,
+        isLoaded: true,
+      })
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: activeSubscription,
+        isLoading: false,
+        error: null,
+      })
+    })
+
+    it('should show "Current Plan" badge for user\'s tier', () => {
+      renderWithProviders(<PricingPage />)
+
       const currentPlanElements = screen.getAllByText('Current Plan')
       expect(currentPlanElements.length).toBeGreaterThan(0)
+    })
+
+    it('should show directional buttons for non-current tiers', () => {
+      renderWithProviders(<PricingPage />)
+
+      // Active premium user — all 4 household tiers are upgrades
+      const upgradeButtons = screen.getAllByRole('button', { name: /upgrade/i })
+      expect(upgradeButtons.length).toBe(4)
+    })
+
+    it('should disable button for current tier', () => {
+      renderWithProviders(<PricingPage />)
+
+      const currentPlanButtons = screen.getAllByRole('button', { name: /current plan/i })
+      expect(currentPlanButtons.length).toBeGreaterThan(0)
+      expect(currentPlanButtons[0]).toBeDisabled()
     })
   })
 
@@ -424,7 +456,6 @@ describe('PricingPage', () => {
   // Issue #772: Trial user detection (GAP 1)
   describe('Trial user detection', () => {
     beforeEach(() => {
-      // Mock trial user with premium tier in metadata
       mockUseUser.mockReturnValue({
         user: {
           id: 'user_123',
@@ -461,7 +492,7 @@ describe('PricingPage', () => {
       expect(screen.queryByText('Current Plan')).not.toBeInTheDocument()
     })
 
-    it('should show Subscribe buttons for all tiers when user is on trial', () => {
+    it('should show "Start plan" buttons for all tiers when user is on trial', () => {
       mockUseGetCurrentSubscription.mockReturnValue({
         data: {
           subscription_id: 'sub_123',
@@ -481,9 +512,9 @@ describe('PricingPage', () => {
 
       renderWithProviders(<PricingPage />)
 
-      // All tiers should have Subscribe buttons (5 tiers)
-      const subscribeButtons = screen.getAllByRole('button', { name: /subscribe/i })
-      expect(subscribeButtons.length).toBe(5)
+      // All tiers should have "Start plan" buttons (5 tiers)
+      const startPlanButtons = screen.getAllByRole('button', { name: /start plan/i })
+      expect(startPlanButtons.length).toBe(5)
     })
 
     it('should show trial days remaining banner for trial users', () => {
@@ -512,15 +543,7 @@ describe('PricingPage', () => {
 
     it('should show "Current Plan" badge for paid users (not trial)', () => {
       mockUseGetCurrentSubscription.mockReturnValue({
-        data: {
-          subscription_id: 'sub_123',
-          status: 'active',
-          tier: 'premium',
-          billing_interval: 'month',
-          amount: '8.99',
-          currency: 'USD',
-          current_period_end: '2026-03-08T00:00:00Z',
-        },
+        data: activeSubscription,
         isLoading: false,
         error: null,
         refetch: mock(() => Promise.resolve()),
@@ -533,17 +556,9 @@ describe('PricingPage', () => {
       expect(currentPlanElements.length).toBeGreaterThan(0)
     })
 
-    it('should show Subscribe buttons for non-current tiers when user has active subscription', () => {
+    it('should show directional buttons for non-current tiers when user has active subscription', () => {
       mockUseGetCurrentSubscription.mockReturnValue({
-        data: {
-          subscription_id: 'sub_123',
-          status: 'active',
-          tier: 'premium',
-          billing_interval: 'month',
-          amount: '8.99',
-          currency: 'USD',
-          current_period_end: '2026-03-08T00:00:00Z',
-        },
+        data: activeSubscription,
         isLoading: false,
         error: null,
         refetch: mock(() => Promise.resolve()),
@@ -551,9 +566,158 @@ describe('PricingPage', () => {
 
       renderWithProviders(<PricingPage />)
 
-      // Should show Subscribe buttons for other tiers (4 non-current tiers)
-      const subscribeButtons = screen.getAllByRole('button', { name: /subscribe/i })
-      expect(subscribeButtons.length).toBe(4)
+      // Active premium → 4 household tiers are all upgrades
+      const upgradeButtons = screen.getAllByRole('button', { name: /upgrade/i })
+      expect(upgradeButtons.length).toBe(4)
+    })
+  })
+
+  // Issue #1038: Context-aware pricing behavior matrix
+  describe('Behavior matrix - context-aware CTAs', () => {
+    describe('inactive (no subscription)', () => {
+      beforeEach(() => {
+        mockUseUser.mockReturnValue({
+          user: { id: 'user_123', publicMetadata: {} },
+          isSignedIn: true,
+          isLoaded: true,
+        })
+        mockUseGetCurrentSubscription.mockReturnValue({
+          data: undefined,
+          isLoading: false,
+          error: { status: 404, message: 'Not found' },
+        })
+      })
+
+      it('shows Subscribe buttons for all tiers', () => {
+        renderWithProviders(<PricingPage />)
+        const subscribeButtons = screen.getAllByRole('button', { name: /subscribe/i })
+        expect(subscribeButtons.length).toBe(5)
+      })
+
+      it('shows no Current Plan badge', () => {
+        renderWithProviders(<PricingPage />)
+        expect(screen.queryByText('Current Plan')).not.toBeInTheDocument()
+      })
+    })
+
+    describe('trialing (paid trial on current tier)', () => {
+      beforeEach(() => {
+        mockUseUser.mockReturnValue({
+          user: { id: 'user_123', publicMetadata: { subscription_tier: 'premium' } },
+          isSignedIn: true,
+          isLoaded: true,
+        })
+        mockUseGetCurrentSubscription.mockReturnValue({
+          data: {
+            subscription_id: 'sub_123',
+            status: 'trialing',
+            tier: 'premium',
+            billing_interval: 'month',
+            cancel_at_period_end: false,
+          },
+          isLoading: false,
+          error: null,
+        })
+      })
+
+      it('shows Current Plan badge for current tier', () => {
+        renderWithProviders(<PricingPage />)
+        const currentPlanElements = screen.getAllByText('Current Plan')
+        expect(currentPlanElements.length).toBeGreaterThan(0)
+      })
+
+      it('shows directional buttons for other tiers', () => {
+        renderWithProviders(<PricingPage />)
+        const upgradeButtons = screen.getAllByRole('button', { name: /upgrade/i })
+        expect(upgradeButtons.length).toBe(4)
+      })
+    })
+
+    describe('cancelled (still within billing period)', () => {
+      beforeEach(() => {
+        mockUseUser.mockReturnValue({
+          user: { id: 'user_123', publicMetadata: { subscription_tier: 'premium' } },
+          isSignedIn: true,
+          isLoaded: true,
+        })
+        mockUseGetCurrentSubscription.mockReturnValue({
+          data: {
+            subscription_id: 'sub_123',
+            status: 'cancelled',
+            tier: 'premium',
+            billing_interval: 'month',
+            cancel_at_period_end: true,
+            scheduled_change_at: '2026-05-08T00:00:00Z',
+          },
+          isLoading: false,
+          error: null,
+        })
+        mockUseGetBillingPortalUrl.mockReturnValue({
+          data: { portal_url: 'https://portal.paddle.com/123' },
+          isLoading: false,
+          error: null,
+        })
+      })
+
+      it('shows Current Plan badge for current tier', () => {
+        renderWithProviders(<PricingPage />)
+        const currentPlanElements = screen.getAllByText('Current Plan')
+        expect(currentPlanElements.length).toBeGreaterThan(0)
+      })
+
+      it('shows Resume button for current tier', () => {
+        renderWithProviders(<PricingPage />)
+        const resumeButton = screen.getByRole('button', { name: /resume/i })
+        expect(resumeButton).toBeInTheDocument()
+      })
+
+      it('shows Change Plan buttons for other tiers', () => {
+        renderWithProviders(<PricingPage />)
+        const changePlanButtons = screen.getAllByRole('button', { name: /change plan/i })
+        expect(changePlanButtons.length).toBe(4)
+      })
+    })
+
+    describe('past_due (expired payment)', () => {
+      beforeEach(() => {
+        mockUseUser.mockReturnValue({
+          user: { id: 'user_123', publicMetadata: { subscription_tier: 'premium' } },
+          isSignedIn: true,
+          isLoaded: true,
+        })
+        mockUseGetCurrentSubscription.mockReturnValue({
+          data: {
+            subscription_id: 'sub_123',
+            status: 'past_due',
+            tier: 'premium',
+            billing_interval: 'month',
+          },
+          isLoading: false,
+          error: null,
+        })
+      })
+
+      it('shows FrozenAccountBanner', () => {
+        renderWithProviders(<PricingPage />)
+        expect(screen.getByText(/your subscription has expired/i)).toBeInTheDocument()
+      })
+
+      it('shows Resume button for current tier', () => {
+        mockUseGetBillingPortalUrl.mockReturnValue({
+          data: { portal_url: 'https://portal.paddle.com/past-due' },
+          isLoading: false,
+          error: null,
+        })
+        renderWithProviders(<PricingPage />)
+        expect(screen.getByRole('button', { name: /resume/i })).toBeInTheDocument()
+      })
+
+      it('shows disabled Update Payment buttons for non-current tiers', () => {
+        renderWithProviders(<PricingPage />)
+        const updatePaymentButtons = screen.getAllByRole('button', { name: /update payment/i })
+        expect(updatePaymentButtons.length).toBe(4) // 4 non-current tiers
+        updatePaymentButtons.forEach(btn => expect(btn).toBeDisabled())
+      })
     })
   })
 })

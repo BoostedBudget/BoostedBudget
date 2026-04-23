@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	paddle "github.com/PaddleHQ/paddle-go-sdk/v4"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -89,9 +90,10 @@ type PreviewUpdateOutput struct {
 type UpdateSubscriptionInput struct {
 	inputs.AuthenticatedInput
 	Body struct {
-		NewTier              string `json:"new_tier" doc:"New subscription tier" example:"household_2" minLength:"1"`
-		BillingInterval      string `json:"billing_interval" doc:"Billing interval (month or year)" example:"month" enum:"month,year"`
-		ProrationBillingMode string `json:"proration_billing_mode,omitempty" doc:"Proration mode (prorated_immediately, full_immediately, full_next_billing_period)" example:"prorated_immediately" enum:"prorated_immediately,full_immediately,full_next_billing_period"`
+		NewTier                string `json:"new_tier" doc:"New subscription tier" example:"household_2" minLength:"1"`
+		BillingInterval        string `json:"billing_interval" doc:"Billing interval (month or year)" example:"month" enum:"month,year"`
+		ProrationBillingMode   string `json:"proration_billing_mode,omitempty" doc:"Proration mode (prorated_immediately, full_immediately, full_next_billing_period)" example:"prorated_immediately" enum:"prorated_immediately,full_immediately,full_next_billing_period"`
+		CurrentBillingInterval string `json:"current_billing_interval,omitempty" doc:"Current billing interval, used server-side to detect and reject no-op updates" example:"month" enum:"month,year"`
 	}
 }
 
@@ -139,15 +141,17 @@ type GetCurrentSubscriptionInput struct {
 type GetCurrentSubscriptionOutput struct {
 	Body struct {
 		SubscriptionID     string `json:"subscription_id" doc:"Paddle subscription ID" example:"sub_01h1234567890"`
-		Status             string `json:"status" doc:"Subscription status (active, trial, cancelled)" example:"active"`
+		Status             string `json:"status" doc:"Subscription status (active, trial, trialing, cancelled, past_due)" example:"active"`
 		Tier               string `json:"tier" doc:"Current subscription tier" example:"premium"`
 		BillingInterval    string `json:"billing_interval" doc:"Billing interval (month/year)" example:"month"`
-		CurrentPeriodEnd   string `json:"current_period_end" doc:"End of current billing period" example:"2026-03-01"`
+		CurrentPeriodEnd   string `json:"current_period_end,omitempty" doc:"End of current billing period" example:"2026-03-01"`
 		NextBillingDate    string `json:"next_billing_date,omitempty" doc:"Next billing date" example:"2026-03-01"`
 		Amount             string `json:"amount" doc:"Subscription amount" example:"9.99"`
 		Currency           string `json:"currency" doc:"Currency code" example:"USD"`
 		TrialEndsAt        string `json:"trial_ends_at,omitempty" doc:"Trial end date (for trial users)" example:"2026-04-08"`
 		TrialDaysRemaining *int   `json:"trial_days_remaining,omitempty" doc:"Days remaining in trial (for trial users)" example:"45"`
+		CancelAtPeriodEnd  bool   `json:"cancel_at_period_end" doc:"Whether the subscription is scheduled to cancel at end of current period"`
+		ScheduledChangeAt  string `json:"scheduled_change_at,omitempty" doc:"RFC 3339 datetime when the scheduled cancel takes effect" example:"2026-05-01T00:00:00Z"`
 	}
 }
 
@@ -412,6 +416,12 @@ func (h *PaddleCheckoutHandler) HandleUpdateSubscription(
 		return nil, huma.Error400BadRequest("No active subscription to update")
 	}
 
+	if input.Body.CurrentBillingInterval != "" &&
+		input.Body.NewTier == user.SubscriptionTier &&
+		input.Body.BillingInterval == input.Body.CurrentBillingInterval {
+		return nil, huma.Error400BadRequest("No change: subscription is already on the requested plan and billing interval")
+	}
+
 	priceID, err := h.getPaddlePriceIDFromConfig(input.Body.NewTier, input.Body.BillingInterval)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get Paddle price ID for tier %s/%s: %w", input.Body.NewTier, input.Body.BillingInterval, err))
@@ -435,10 +445,22 @@ func (h *PaddleCheckoutHandler) HandleUpdateSubscription(
 
 	h.logger.Info("subscription updated successfully", "subscription_id", updatedSub.ID)
 
+	message := "Subscription updated successfully"
+	currentTier, currentErr := h.tierConfig.GetTier(domain.TierName(user.SubscriptionTier))
+	newTier, newErr := h.tierConfig.GetTier(domain.TierName(input.Body.NewTier))
+	if currentErr == nil && newErr == nil {
+		switch {
+		case newTier.Pricing.PriceMonthly > currentTier.Pricing.PriceMonthly:
+			message = "Subscription upgraded successfully"
+		case newTier.Pricing.PriceMonthly < currentTier.Pricing.PriceMonthly:
+			message = "Subscription downgraded successfully"
+		}
+	}
+
 	out := &UpdateSubscriptionOutput{}
 	out.Body.SubscriptionID = updatedSub.ID
 	out.Body.Status = string(updatedSub.Status)
-	out.Body.Message = "Subscription updated successfully"
+	out.Body.Message = message
 	return out, nil
 }
 
@@ -573,15 +595,19 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 		return out, nil
 	}
 
-	// Handle trialing and active users - both have paid subscriptions in Paddle
-	if user.SubscriptionStatus != "active" && user.SubscriptionStatus != "trialing" {
-		return nil, huma.Error400BadRequest("No active subscription")
+	// Users without a Paddle subscription (e.g., inactive/never subscribed) get a 404.
+	// Cancelled and past_due users still have a subscription in Paddle we can fetch.
+	switch user.SubscriptionStatus {
+	case "active", "trialing", "cancelled", "past_due":
+		// proceed to Paddle lookup below
+	default:
+		return nil, huma.Error404NotFound("No subscription found")
 	}
 
 	subscriptionID, err := h.getActiveSubscriptionID(ctx, user.ID)
 	if err != nil {
-		h.logger.Error("failed to get subscription ID", "user_id", user.ID, "error", err)
-		return nil, huma.Error400BadRequest("No active subscription found")
+		h.logger.Error("no Paddle subscription ID for user", "user_id", user.ID, "error", err)
+		return nil, huma.Error404NotFound("No subscription found")
 	}
 
 	subscription, err := h.paddleService.GetSubscription(ctx, subscriptionID)
@@ -596,12 +622,18 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 	out.Body.Status = string(subscription.Status)
 	out.Body.Tier = user.ComputeEffectiveTier()
 	out.Body.BillingInterval = string(subscription.BillingCycle.Interval)
-	out.Body.CurrentPeriodEnd = subscription.CurrentBillingPeriod.EndsAt
-	out.Body.NextBillingDate = subscription.CurrentBillingPeriod.EndsAt
+	if subscription.CurrentBillingPeriod != nil {
+		out.Body.CurrentPeriodEnd = subscription.CurrentBillingPeriod.EndsAt
+		out.Body.NextBillingDate = subscription.CurrentBillingPeriod.EndsAt
+	}
 	if len(subscription.Items) > 0 {
 		out.Body.Amount = subscription.Items[0].Price.UnitPrice.Amount
 	}
 	out.Body.Currency = string(subscription.CurrencyCode)
+	if subscription.ScheduledChange != nil && subscription.ScheduledChange.Action == paddle.ScheduledChangeActionCancel {
+		out.Body.CancelAtPeriodEnd = true
+		out.Body.ScheduledChangeAt = subscription.ScheduledChange.EffectiveAt
+	}
 	return out, nil
 }
 

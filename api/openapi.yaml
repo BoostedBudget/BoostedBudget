@@ -1983,6 +1983,9 @@ components:
           examples:
             - month
           type: string
+        cancel_at_period_end:
+          description: Whether the subscription is scheduled to cancel at end of current period
+          type: boolean
         currency:
           description: Currency code
           examples:
@@ -1998,8 +2001,13 @@ components:
           examples:
             - "2026-03-01"
           type: string
+        scheduled_change_at:
+          description: RFC 3339 datetime when the scheduled cancel takes effect
+          examples:
+            - "2026-05-01T00:00:00Z"
+          type: string
         status:
-          description: Subscription status (active, trial, cancelled)
+          description: Subscription status (active, trial, trialing, cancelled, past_due)
           examples:
             - active
           type: string
@@ -2029,9 +2037,9 @@ components:
         - status
         - tier
         - billing_interval
-        - current_period_end
         - amount
         - currency
+        - cancel_at_period_end
       type: object
     GetPaymentFailuresOutputBody:
       additionalProperties: false
@@ -4016,6 +4024,14 @@ components:
           type: string
         billing_interval:
           description: Billing interval (month or year)
+          enum:
+            - month
+            - year
+          examples:
+            - month
+          type: string
+        current_billing_interval:
+          description: Current billing interval, used server-side to detect and reject no-op updates
           enum:
             - month
             - year

@@ -19,6 +19,8 @@ interface PlanChangeModalProps {
   isUpdating: boolean
   onChangePlan: (tier: string, interval: 'month' | 'year', prorationMode: 'prorated_immediately' | 'full_next_billing_period') => void
   onClose: () => void
+  initialTier?: string
+  initialInterval?: 'month' | 'year'
 }
 
 export function PlanChangeModal({
@@ -29,21 +31,26 @@ export function PlanChangeModal({
   isUpdating,
   onChangePlan,
   onClose,
+  initialTier,
+  initialInterval,
 }: PlanChangeModalProps) {
-  const [selectedTier, setSelectedTier] = useState<string | null>(null)
-  const [billingInterval, setBillingInterval] = useState<'month' | 'year'>(currentBillingInterval)
+  const [selectedTier, setSelectedTier] = useState<string | null>(initialTier ?? null)
+  const [billingInterval, setBillingInterval] = useState<'month' | 'year'>(initialInterval ?? currentBillingInterval)
   const [downgradeConfirmed, setDowngradeConfirmed] = useState(false)
 
   const previewUpdate = usePreviewPaddleSubscriptionUpdate()
 
-  // Reset state when modal closes
+  // Sync pre-fill when opening, reset when closing
   useEffect(() => {
-    if (!open) {
+    if (open) {
+      setSelectedTier(initialTier ?? null)
+      setBillingInterval(initialInterval ?? currentBillingInterval)
+    } else {
       setSelectedTier(null)
       setDowngradeConfirmed(false)
       setBillingInterval(currentBillingInterval)
     }
-  }, [open, currentBillingInterval])
+  }, [open, initialTier, initialInterval, currentBillingInterval])
 
   // Trigger preview when tier is selected
   useEffect(() => {
@@ -74,9 +81,6 @@ export function PlanChangeModal({
 
   // Determine if selected tier is upgrade or downgrade
   const isUpgrade = selectedTierData ? getPrice(selectedTierData) > getPrice(currentTierData) : false
-
-  // Helper for billing interval display
-  const getBillingLabel = () => billingInterval === 'month' ? 'month' : 'year'
 
   const canConfirm = selectedTier && (isUpgrade || downgradeConfirmed)
 
@@ -177,7 +181,7 @@ export function PlanChangeModal({
                   </div>
                   <div className="mb-3">
                     <div className="text-2xl font-bold">{formatPrice(tierPrice)}</div>
-                    <div className="text-sm text-muted-foreground">per {getBillingLabel()}</div>
+                    <div className="text-sm text-muted-foreground">per {billingInterval === 'month' ? 'month' : 'year'}</div>
                   </div>
                   <div className="text-sm space-y-1">
                     <div className="text-foreground">{tier.pricing.users_included} users</div>

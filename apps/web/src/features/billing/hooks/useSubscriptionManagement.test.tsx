@@ -228,4 +228,78 @@ describe('useSubscriptionManagement', () => {
       expect(typeof result.current.refetchSubscription).toBe('function')
     })
   })
+
+  describe('Billing portal query gate', () => {
+    const portalResponse = { data: { portal_url: 'https://portal.paddle.com/123' }, isLoading: false, error: null, refetch: () => Promise.resolve() }
+
+    it('enables billing portal query for active subscriptions', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: { status: 'active', tier: 'premium' },
+      })
+      mockUseGetBillingPortalUrl.mockReturnValue(portalResponse)
+
+      const { result } = renderHook(() => useSubscriptionManagement(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.billingPortalUrl).toBe('https://portal.paddle.com/123')
+    })
+
+    it('enables billing portal query for trialing subscriptions', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: { status: 'trialing', tier: 'premium' },
+      })
+      mockUseGetBillingPortalUrl.mockReturnValue(portalResponse)
+
+      const { result } = renderHook(() => useSubscriptionManagement(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.billingPortalUrl).toBe('https://portal.paddle.com/123')
+    })
+
+    it('enables billing portal query for cancelled subscriptions', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: { status: 'cancelled', tier: 'premium' },
+      })
+      mockUseGetBillingPortalUrl.mockReturnValue(portalResponse)
+
+      const { result } = renderHook(() => useSubscriptionManagement(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.billingPortalUrl).toBe('https://portal.paddle.com/123')
+    })
+
+    it('enables billing portal query for past_due subscriptions', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: { status: 'past_due', tier: 'premium' },
+      })
+      mockUseGetBillingPortalUrl.mockReturnValue(portalResponse)
+
+      const { result } = renderHook(() => useSubscriptionManagement(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.billingPortalUrl).toBe('https://portal.paddle.com/123')
+    })
+
+    it('exposes undefined billingPortalUrl when portal query has no data', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: { status: 'active', tier: 'premium' },
+      })
+      mockUseGetBillingPortalUrl.mockReturnValue(defaultQueryState)
+
+      const { result } = renderHook(() => useSubscriptionManagement(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.billingPortalUrl).toBeUndefined()
+    })
+  })
 })

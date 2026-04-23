@@ -28,6 +28,7 @@ Multi-region support planned for Phase 7+.
  * OpenAPI spec version: 1.0.0
  */
 import type { UpdateSubscriptionInputBodyBillingInterval } from "./updateSubscriptionInputBodyBillingInterval";
+import type { UpdateSubscriptionInputBodyCurrentBillingInterval } from "./updateSubscriptionInputBodyCurrentBillingInterval";
 import type { UpdateSubscriptionInputBodyProrationBillingMode } from "./updateSubscriptionInputBodyProrationBillingMode";
 
 export interface UpdateSubscriptionInputBody {
@@ -35,6 +36,8 @@ export interface UpdateSubscriptionInputBody {
   readonly $schema?: string;
   /** Billing interval (month or year) */
   billing_interval: UpdateSubscriptionInputBodyBillingInterval;
+  /** Current billing interval, used server-side to detect and reject no-op updates */
+  current_billing_interval?: UpdateSubscriptionInputBodyCurrentBillingInterval;
   /**
    * New subscription tier
    * @minLength 1
