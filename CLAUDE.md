@@ -175,6 +175,7 @@ Out-of-sync causes infinite dashboard reset loops. Increment when adding/removin
 | Command | Trigger | What it does |
 |---------|---------|-------------|
 | `/smart-plan` | Starting a GitHub issue | Brainstorm → explore code → reason → plan |
+| `/requirements-gap-analysis` | After finishing a feature | Audit requirements, Codex co-review, identify gaps, plan remaining work |
 | `/plan-next-task` | Deciding what to work on | Fetch open issues, prioritize P0-P3, recommend next |
 | `/new-endpoint` | Adding REST API endpoint | Scaffold handler+service+repo+tests+Orval types |
 | `/new-component` | Adding frontend feature/page | Scaffold types+hook+page+card+tests+route |
