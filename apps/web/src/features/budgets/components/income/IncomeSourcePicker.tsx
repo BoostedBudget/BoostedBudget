@@ -27,10 +27,12 @@ export interface IncomeSourcePickerProps {
   disabled?: boolean;
 }
 
+// Note: 'manual' is intentionally excluded here — new budgets only support
+// category and tag sources. The manual render path in IncomeSourceItem.tsx is
+// preserved for existing budgets that already have manual sources in the DB.
 const SOURCE_TYPE_OPTIONS: { value: IncomeSourceType; label: string }[] = [
   { value: 'plaid_category', label: 'Category' },
   { value: 'tag', label: 'Tag' },
-  { value: 'manual', label: 'Manual' },
 ];
 
 export function IncomeSourcePicker({
