@@ -35,6 +35,7 @@ export interface UpdateBudgetRequest {
   amount?: number;
   description?: string;
   end_date?: string;
+  expected_income?: number;
   income_amount?: number;
   income_sources?: IncomeSource[];
   is_active?: boolean;

@@ -679,6 +679,9 @@ components:
         end_date:
           format: date-time
           type: string
+        expected_income:
+          format: double
+          type: number
         id:
           type: string
         income_amount:
@@ -717,6 +720,7 @@ components:
         - updated_at
         - income_amount
         - income_sources
+        - expected_income
       type: object
     BudgetCategory:
       additionalProperties: false
@@ -1308,6 +1312,9 @@ components:
         end_date:
           format: date-time
           type: string
+        expected_income:
+          format: double
+          type: number
         income_amount:
           format: double
           type: number
@@ -3874,6 +3881,9 @@ components:
         end_date:
           format: date-time
           type: string
+        expected_income:
+          format: double
+          type: number
         income_amount:
           format: double
           type: number
