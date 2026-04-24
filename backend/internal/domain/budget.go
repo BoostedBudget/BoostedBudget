@@ -120,6 +120,11 @@ type Budget struct {
 	IncomeAmount  float64        `json:"income_amount" db:"income_amount"`
 	IncomeSources []IncomeSource `json:"income_sources" db:"-"` // JSONB, populated from DB
 
+	// ExpectedIncome is the planned income for the budget period (Issue #1048).
+	// This replaces IncomeAmount as the basis for allocation calculations.
+	// IncomeAmount remains for backward compatibility and tracks actual income received.
+	ExpectedIncome float64 `json:"expected_income" db:"expected_income"`
+
 	// Associated data (populated on demand, not stored in DB)
 	Categories []BudgetCategory `json:"categories,omitempty" db:"-"`
 }
@@ -219,18 +224,24 @@ func (b *Budget) PercentUsed() float64 {
 	return (b.TotalSpent() / b.Amount) * 100
 }
 
-// UnallocatedAmount returns the income amount minus total allocated to categories.
+// UnallocatedAmount returns the expected income minus total allocated to categories.
 // This is used for envelope budgeting to show how much income remains to be allocated.
-// Issue #491
+// Uses ExpectedIncome as the basis (Issue #1048; previously used IncomeAmount).
 func (b *Budget) UnallocatedAmount() float64 {
-	return b.IncomeAmount - b.TotalAllocated()
+	return b.ExpectedIncome - b.TotalAllocated()
 }
 
-// IsFullyAllocated returns true if all income has been allocated to categories.
-// Returns true if IncomeAmount is 0 (no income to allocate) or if allocations >= income.
-// Issue #491
+// IsFullyAllocated returns true if all expected income has been allocated to categories.
+// Returns true if ExpectedIncome is 0 (no income to allocate) or if allocations >= expected income.
+// Uses ExpectedIncome as the basis (Issue #1048; previously used IncomeAmount).
 func (b *Budget) IsFullyAllocated() bool {
-	return b.TotalAllocated() >= b.IncomeAmount
+	return b.TotalAllocated() >= b.ExpectedIncome
+}
+
+// ExceedsExpectedIncome returns true if the total allocated to categories exceeds
+// the expected income for the budget period. Issue #1048.
+func (b *Budget) ExceedsExpectedIncome() bool {
+	return b.TotalAllocated() > b.ExpectedIncome
 }
 
 // BudgetCategory represents a category allocation within a budget.
@@ -318,6 +329,9 @@ type CreateBudgetRequest struct {
 	// Envelope budgeting fields (Issue #491)
 	IncomeAmount  float64        `json:"income_amount,omitempty"`
 	IncomeSources []IncomeSource `json:"income_sources,omitempty"`
+
+	// ExpectedIncome is optional; when nil the service falls back to Amount (Issue #1048).
+	ExpectedIncome *float64 `json:"expected_income,omitempty"`
 }
 
 // CreateBudgetCategoryRequest represents a category allocation in a budget creation request.
@@ -343,6 +357,9 @@ type UpdateBudgetRequest struct {
 	// Envelope budgeting fields (Issue #491)
 	IncomeAmount  *float64        `json:"income_amount,omitempty" validate:"omitempty,gte=0"`
 	IncomeSources *[]IncomeSource `json:"income_sources,omitempty"`
+
+	// ExpectedIncome is optional; when nil the service leaves the existing value unchanged (Issue #1048).
+	ExpectedIncome *float64 `json:"expected_income,omitempty"`
 }
 
 // UpdateBudgetCategoryRequest represents the request to update a budget category.
