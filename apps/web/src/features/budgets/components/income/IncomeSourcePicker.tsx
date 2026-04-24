@@ -5,7 +5,6 @@
  * Allows adding new income sources with type-specific pickers:
  * - plaid_category: Dropdown of Plaid categories
  * - tag: Dropdown of user tags
- * - manual: Amount input with optional description
  */
 
 import { useState, useCallback, useMemo } from 'react';
@@ -45,8 +44,6 @@ export function IncomeSourcePicker({
   const [sourceType, setSourceType] = useState<IncomeSourceType>('plaid_category');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [selectedTag, setSelectedTag] = useState('');
-  const [manualAmount, setManualAmount] = useState('');
-  const [manualDescription, setManualDescription] = useState('');
 
   // Filter out already selected categories
   const availableCategoriesFiltered = useMemo(() => {
@@ -73,12 +70,8 @@ export function IncomeSourcePicker({
         return selectedCategory !== '';
       case 'tag':
         return selectedTag !== '';
-      case 'manual': {
-        const amount = parseFloat(manualAmount);
-        return !isNaN(amount) && amount > 0;
-      }
     }
-  }, [sourceType, selectedCategory, selectedTag, manualAmount, disabled]);
+  }, [sourceType, selectedCategory, selectedTag, disabled]);
 
   // Handle type change
   const handleTypeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -87,8 +80,6 @@ export function IncomeSourcePicker({
     // Reset selections when type changes
     setSelectedCategory('');
     setSelectedTag('');
-    setManualAmount('');
-    setManualDescription('');
   }, []);
 
   // Handle add
@@ -104,13 +95,6 @@ export function IncomeSourcePicker({
       case 'tag':
         source = { type: 'tag', value: selectedTag };
         break;
-      case 'manual':
-        source = {
-          type: 'manual',
-          value: manualAmount,
-          description: manualDescription.trim() || undefined,
-        };
-        break;
     }
 
     onAdd(source);
@@ -118,14 +102,10 @@ export function IncomeSourcePicker({
     // Reset selection
     setSelectedCategory('');
     setSelectedTag('');
-    setManualAmount('');
-    setManualDescription('');
-  }, [sourceType, selectedCategory, selectedTag, manualAmount, manualDescription, isAddEnabled, onAdd]);
+  }, [sourceType, selectedCategory, selectedTag, isAddEnabled, onAdd]);
 
   const selectCls =
     'px-3 py-2 text-sm bg-card border border-input rounded-md text-foreground cursor-pointer transition-colors duration-150 focus:outline-none focus:border-ring focus:ring-2 focus:ring-ring disabled:bg-muted disabled:cursor-not-allowed disabled:opacity-60';
-  const inputCls =
-    'px-3 py-2 text-sm bg-card border border-input rounded-md text-foreground transition-colors duration-150 focus:outline-none focus:border-ring focus:ring-2 focus:ring-ring disabled:bg-muted disabled:cursor-not-allowed disabled:opacity-60';
 
   return (
     <div className="flex flex-col gap-3 p-4 bg-muted border border-border rounded-lg">
@@ -196,47 +176,6 @@ export function IncomeSourcePicker({
             ))}
           </select>
         </div>
-      )}
-
-      {/* Manual Entry */}
-      {sourceType === 'manual' && (
-        <>
-          <div className="flex flex-col gap-1">
-            <label htmlFor="manual-amount" className="text-xs font-medium text-muted-foreground">
-              Amount
-            </label>
-            <div className="relative flex items-center">
-              <span className="absolute left-3 text-muted-foreground pointer-events-none">$</span>
-              <input
-                type="number"
-                id="manual-amount"
-                className={`${inputCls} pl-6 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`}
-                value={manualAmount}
-                onChange={(e) => setManualAmount(e.target.value)}
-                min="0"
-                step="0.01"
-                placeholder="0.00"
-                disabled={disabled}
-                aria-label="Amount"
-              />
-            </div>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label htmlFor="manual-description" className="text-xs font-medium text-muted-foreground">
-              Description (optional)
-            </label>
-            <input
-              type="text"
-              id="manual-description"
-              className={inputCls}
-              value={manualDescription}
-              onChange={(e) => setManualDescription(e.target.value)}
-              placeholder="e.g., Monthly salary"
-              disabled={disabled}
-              aria-label="Description"
-            />
-          </div>
-        </>
       )}
 
       {/* Add Button */}
