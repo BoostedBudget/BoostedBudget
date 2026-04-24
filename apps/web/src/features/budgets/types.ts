@@ -103,6 +103,8 @@ export interface CreateBudgetRequest {
   // Issue #495: Envelope budgeting
   income_amount?: number;
   income_sources?: IncomeSource[];
+  // Issue #1048: Expected income (first-class field; also sent as `amount` for back-compat)
+  expected_income?: number;
 }
 
 export interface UpdateBudgetRequest {

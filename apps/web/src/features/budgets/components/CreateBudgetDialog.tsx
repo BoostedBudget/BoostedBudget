@@ -3,21 +3,21 @@
  * Issue #111: Goals Dashboard & Progress Visualization
  * Issue #462: Migrated from HeadlessUI to shadcn/ui
  * Issue #496: Income Source Configuration UI for Envelope Budgeting
+ * Issue #1048: Unified single-form design (removed tabs; Expected Income first-class field)
  *
  * Modal dialog for creating budgets with period selection and income sources.
- * Uses shadcn/ui Dialog and Tabs built on Radix UI.
+ * Uses shadcn/ui Dialog built on Radix UI.
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/utils';
-import { XIcon } from 'lucide-react';
+import { XIcon, ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useCreateBudget } from '@boostedbudget/api-client/endpoints/budgets/budgets';
 import { useGetPlaidCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 import { useGetUserTags } from '@boostedbudget/api-client/endpoints/tags/tags';
@@ -35,17 +35,15 @@ interface FormData {
   name: string;
   description: string;
   period: BudgetPeriod;
-  amount: string;
+  expectedIncome: string;
   start_date: string;
   end_date: string;
-  // Issue #496: Income source fields
   income_sources: IncomeSource[];
-  track_actual_income: boolean;
 }
 
 interface FormErrors {
   name?: string;
-  amount?: string;
+  expectedIncome?: string;
   end_date?: string;
 }
 
@@ -57,6 +55,14 @@ const PERIOD_OPTIONS: { value: BudgetPeriod; label: string }[] = [
   { value: 'custom', label: 'Custom' },
 ];
 
+const PERIOD_LABEL: Record<BudgetPeriod, string> = {
+  weekly: 'per week',
+  monthly: 'per month',
+  quarterly: 'per quarter',
+  yearly: 'per year',
+  custom: 'for period',
+};
+
 function getDefaultStartDate(): string {
   return new Date().toISOString().split('T')[0];
 }
@@ -65,12 +71,10 @@ const initialFormData: FormData = {
   name: '',
   description: '',
   period: 'monthly',
-  amount: '',
+  expectedIncome: '',
   start_date: getDefaultStartDate(),
   end_date: '',
-  // Issue #496: Income source defaults
   income_sources: [],
-  track_actual_income: false,
 };
 
 export function CreateBudgetDialog({
@@ -82,9 +86,8 @@ export function CreateBudgetDialog({
   const [errors, setErrors] = useState<FormErrors>({});
   const [apiError, setApiError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activeTab, setActiveTab] = useState<string>('budget');
+  const [trackingOpen, setTrackingOpen] = useState(false);
 
-  // Use generated hooks for data fetching
   const createBudgetMutation = useCreateBudget();
   const { data: plaidCategoriesData } = useGetPlaidCategories({
     query: { enabled: isOpen },
@@ -93,7 +96,6 @@ export function CreateBudgetDialog({
     query: { enabled: isOpen },
   });
 
-  // Issue #496: Derived state for income source options
   const plaidCategories = (plaidCategoriesData as unknown as string[]) ?? [];
   const userTags = (userTagsData as unknown as UserTag[]) ?? [];
 
@@ -103,7 +105,7 @@ export function CreateBudgetDialog({
       setFormData({ ...initialFormData, start_date: getDefaultStartDate() });
       setErrors({});
       setApiError(null);
-      setActiveTab('budget'); // Issue #496: Reset to budget tab
+      setTrackingOpen(false);
     }
   }, [isOpen]);
 
@@ -111,7 +113,6 @@ export function CreateBudgetDialog({
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
       const { name, value } = e.target;
       setFormData((prev) => ({ ...prev, [name]: value }));
-      // Clear error for this field
       if (errors[name as keyof FormErrors]) {
         setErrors((prev) => ({ ...prev, [name]: undefined }));
       }
@@ -119,7 +120,6 @@ export function CreateBudgetDialog({
     [errors]
   );
 
-  // Issue #496: Handler for income sources
   const handleIncomeSourcesChange = useCallback((sources: IncomeSource[]) => {
     setFormData((prev) => ({ ...prev, income_sources: sources }));
   }, []);
@@ -131,9 +131,9 @@ export function CreateBudgetDialog({
       newErrors.name = 'Name is required';
     }
 
-    const amount = parseFloat(formData.amount);
-    if (isNaN(amount) || amount <= 0) {
-      newErrors.amount = 'Amount must be greater than 0';
+    const income = parseFloat(formData.expectedIncome);
+    if (isNaN(income) || income <= 0) {
+      newErrors.expectedIncome = 'Expected income must be greater than 0';
     }
 
     if (formData.period === 'custom' && !formData.end_date) {
@@ -156,17 +156,18 @@ export function CreateBudgetDialog({
       setIsSubmitting(true);
 
       try {
+        const incomeValue = parseFloat(formData.expectedIncome);
         const request: CreateBudgetRequest = {
           name: formData.name.trim(),
           description: formData.description.trim() || undefined,
           period: formData.period,
-          // Convert date string (YYYY-MM-DD) to ISO 8601 datetime for Go time.Time parsing
           start_date: new Date(formData.start_date).toISOString(),
           end_date: formData.period === 'custom'
             ? new Date(formData.end_date).toISOString()
             : undefined,
-          amount: parseFloat(formData.amount),
-          // Issue #496: Include income sources
+          // Belt-and-suspenders: send both for back-compat
+          expected_income: incomeValue,
+          amount: incomeValue,
           income_sources: formData.income_sources.length > 0 ? formData.income_sources : undefined,
         };
 
@@ -183,7 +184,6 @@ export function CreateBudgetDialog({
     [formData, validate, onBudgetCreated, createBudgetMutation]
   );
 
-  // Handle dialog open state changes
   const handleOpenChange = useCallback(
     (open: boolean) => {
       if (!open) {
@@ -192,6 +192,8 @@ export function CreateBudgetDialog({
     },
     [onCancel]
   );
+
+  const periodLabel = PERIOD_LABEL[formData.period] ?? 'per period';
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
@@ -216,194 +218,171 @@ export function CreateBudgetDialog({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Issue #496: Tabbed interface for Budget and Income */}
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="w-full">
-              <TabsTrigger value="budget" className="flex-1">Budget</TabsTrigger>
-              <TabsTrigger value="income" className="flex-1">Income</TabsTrigger>
-            </TabsList>
-
-            {/* Budget Tab */}
-            <TabsContent value="budget" className="space-y-4">
-              {/* Name Field */}
-              <div>
-                <label
-                  htmlFor="name"
-                  className="block text-sm font-medium text-foreground"
-                >
-                  Name
-                </label>
-                <input
-                  type="text"
-                  id="name"
-                  name="name"
-                  value={formData.name}
-                  onChange={handleInputChange}
-                  className={cn(
-                    'w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground',
-                    errors.name && 'border-destructive focus:border-destructive focus:ring-destructive/10'
-                  )}
-                  placeholder="e.g., Monthly Budget"
-                />
-                {errors.name && (
-                  <p className="mt-1 text-sm text-red-600 dark:text-red-400">
-                    {errors.name}
-                  </p>
+          {/* Section: Basics */}
+          <div className="space-y-4">
+            {/* Name */}
+            <div>
+              <label htmlFor="name" className="block text-sm font-medium text-foreground">
+                Name
+              </label>
+              <input
+                type="text"
+                id="name"
+                name="name"
+                value={formData.name}
+                onChange={handleInputChange}
+                className={cn(
+                  'w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground',
+                  errors.name && 'border-destructive focus:border-destructive focus:ring-destructive/10'
                 )}
-              </div>
+                placeholder="e.g., Monthly Budget"
+              />
+              {errors.name && (
+                <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.name}</p>
+              )}
+            </div>
 
-              {/* Description Field */}
-              <div>
-                <label
-                  htmlFor="description"
-                  className="block text-sm font-medium text-foreground"
-                >
-                  Description
-                </label>
-                <textarea
-                  id="description"
-                  name="description"
-                  value={formData.description}
-                  onChange={handleInputChange}
-                  rows={2}
-                  className="w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground"
-                  placeholder="What is this budget for?"
-                />
-              </div>
+            {/* Description */}
+            <div>
+              <label htmlFor="description" className="block text-sm font-medium text-foreground">
+                Description
+              </label>
+              <textarea
+                id="description"
+                name="description"
+                value={formData.description}
+                onChange={handleInputChange}
+                rows={2}
+                className="w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground"
+                placeholder="What is this budget for?"
+              />
+            </div>
 
-              {/* Period Field */}
-              <div>
-                <label
-                  htmlFor="period"
-                  className="block text-sm font-medium text-foreground"
-                >
-                  Period
-                </label>
-                <select
-                  id="period"
-                  name="period"
-                  value={formData.period}
-                  onChange={handleInputChange}
-                  className="w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground"
-                >
-                  {PERIOD_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            {/* Period */}
+            <div>
+              <label htmlFor="period" className="block text-sm font-medium text-foreground">
+                Period
+              </label>
+              <select
+                id="period"
+                name="period"
+                value={formData.period}
+                onChange={handleInputChange}
+                className="w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground"
+              >
+                {PERIOD_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-              {/* Amount Field */}
-              <div>
-                <label
-                  htmlFor="amount"
-                  className="block text-sm font-medium text-foreground"
-                >
-                  Amount
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
-                    $
-                  </span>
-                  <input
-                    type="number"
-                    id="amount"
-                    name="amount"
-                    value={formData.amount}
-                    onChange={handleInputChange}
-                    min="0"
-                    step="0.01"
-                    className={cn(
-                      'w-full py-[0.625rem] px-3 mt-1 pl-7 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground',
-                      errors.amount && 'border-destructive focus:border-destructive focus:ring-destructive/10'
-                    )}
-                    placeholder="0.00"
-                  />
-                </div>
-                {errors.amount && (
-                  <p className="mt-1 text-sm text-red-600 dark:text-red-400">
-                    {errors.amount}
-                  </p>
-                )}
-              </div>
+            {/* Start Date */}
+            <div>
+              <label htmlFor="start_date" className="block text-sm font-medium text-foreground">
+                Start Date
+              </label>
+              <input
+                type="date"
+                id="start_date"
+                name="start_date"
+                value={formData.start_date}
+                onChange={handleInputChange}
+                className="w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground"
+              />
+            </div>
 
-              {/* Start Date Field */}
+            {/* End Date — only for custom period */}
+            {formData.period === 'custom' && (
               <div>
-                <label
-                  htmlFor="start_date"
-                  className="block text-sm font-medium text-foreground"
-                >
-                  Start Date
+                <label htmlFor="end_date" className="block text-sm font-medium text-foreground">
+                  End Date
                 </label>
                 <input
                   type="date"
-                  id="start_date"
-                  name="start_date"
-                  value={formData.start_date}
+                  id="end_date"
+                  name="end_date"
+                  value={formData.end_date}
                   onChange={handleInputChange}
-                  className="w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground"
+                  min={formData.start_date}
+                  className={cn(
+                    'w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground',
+                    errors.end_date && 'border-destructive focus:border-destructive focus:ring-destructive/10'
+                  )}
+                />
+                {errors.end_date && (
+                  <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.end_date}</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Section: Expected Income */}
+          <div>
+            <label htmlFor="expectedIncome" className="block text-sm font-medium text-foreground">
+              Expected Income
+              <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                ({periodLabel})
+              </span>
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+                $
+              </span>
+              <input
+                type="number"
+                id="expectedIncome"
+                name="expectedIncome"
+                value={formData.expectedIncome}
+                onChange={handleInputChange}
+                min="0"
+                step="0.01"
+                required
+                className={cn(
+                  'w-full py-[0.625rem] px-3 mt-1 pl-7 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground',
+                  errors.expectedIncome && 'border-destructive focus:border-destructive focus:ring-destructive/10'
+                )}
+                placeholder="0.00"
+              />
+            </div>
+            {errors.expectedIncome && (
+              <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.expectedIncome}</p>
+            )}
+          </div>
+
+          {/* Section: Track actual income (optional, collapsed by default) */}
+          <div className="border border-border rounded-lg overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setTrackingOpen((prev) => !prev)}
+              className="flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-foreground bg-muted hover:bg-muted/80 transition-colors"
+              aria-expanded={trackingOpen}
+            >
+              <span>Track actual income from transactions</span>
+              {trackingOpen ? (
+                <ChevronDownIcon className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronRightIcon className="h-4 w-4 text-muted-foreground" />
+              )}
+            </button>
+
+            {trackingOpen && (
+              <div className="p-4 space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  Link transaction categories or tags to automatically track income against your expected amount.
+                </p>
+                <IncomeSourceConfig
+                  sources={formData.income_sources}
+                  onChange={handleIncomeSourcesChange}
+                  availableCategories={plaidCategories}
+                  availableTags={userTags}
+                  disabled={isSubmitting}
+                  showTotal={false}
                 />
               </div>
-
-              {/* End Date Field (only for custom period) */}
-              {formData.period === 'custom' && (
-                <div>
-                  <label
-                    htmlFor="end_date"
-                    className="block text-sm font-medium text-foreground"
-                  >
-                    End Date
-                  </label>
-                  <input
-                    type="date"
-                    id="end_date"
-                    name="end_date"
-                    value={formData.end_date}
-                    onChange={handleInputChange}
-                    min={formData.start_date}
-                    className={cn(
-                      'w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground',
-                      errors.end_date && 'border-destructive focus:border-destructive focus:ring-destructive/10'
-                    )}
-                  />
-                  {errors.end_date && (
-                    <p className="mt-1 text-sm text-red-600 dark:text-red-400">
-                      {errors.end_date}
-                    </p>
-                  )}
-                </div>
-              )}
-            </TabsContent>
-
-            {/* Issue #496: Income Tab */}
-            <TabsContent value="income" className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Configure income sources to track expected vs actual income for this budget.
-              </p>
-              <IncomeSourceConfig
-                sources={formData.income_sources}
-                onChange={handleIncomeSourcesChange}
-                availableCategories={plaidCategories}
-                availableTags={userTags}
-                disabled={isSubmitting}
-                showTotal
-              />
-              {/* Issue #496: Track actual income checkbox */}
-              <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={formData.track_actual_income}
-                  onChange={(e) =>
-                    setFormData((prev) => ({ ...prev, track_actual_income: e.target.checked }))
-                  }
-                  disabled={isSubmitting}
-                  className="h-4 w-4 rounded border-border bg-background text-blue-600 focus:ring-blue-500"
-                />
-                Track actual income vs expected
-              </label>
-            </TabsContent>
-          </Tabs>
+            )}
+          </div>
 
           {/* API Error */}
           {apiError && (
