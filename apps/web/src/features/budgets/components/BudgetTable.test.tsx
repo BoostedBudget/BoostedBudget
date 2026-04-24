@@ -40,8 +40,9 @@ const mockBudgets: BudgetWithMetrics[] = [
     ],
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
-    income_amount: 0,
+    income_amount: 800,
     income_sources: [],
+    expected_income: 2000,
     // Computed metrics
     total_allocated: 500,
     total_spent: 325,
@@ -124,6 +125,7 @@ describe('BudgetTable', () => {
       expect(screen.getByText('Progress')).toBeInTheDocument()
       expect(screen.getByText('Remaining')).toBeInTheDocument()
       expect(screen.getByText('Categories')).toBeInTheDocument()
+      expect(screen.getByText('Income')).toBeInTheDocument()
 
       expect(screen.getByText('Monthly Groceries')).toBeInTheDocument()
       expect(screen.getByText('Entertainment')).toBeInTheDocument()
@@ -137,9 +139,11 @@ describe('BudgetTable', () => {
       expect(screen.getByText('Weekly')).toBeInTheDocument()
       expect(screen.getByText('Yearly')).toBeInTheDocument()
 
-      expect(screen.getByText('$500.00')).toBeInTheDocument()
+      // Amount column shows expected_income when set, otherwise falls back to amount.
+      // budget-1 has expected_income: 2000, budget-2 has no expected_income (amount 100),
+      // budget-3 has no expected_income (amount 2000).
+      expect(screen.getAllByText('$2,000.00').length).toBeGreaterThan(0)
       expect(screen.getAllByText('$100.00').length).toBeGreaterThan(0)
-      expect(screen.getByText('$2,000.00')).toBeInTheDocument()
     })
 
     it('should display category counts and status badges', () => {
@@ -162,6 +166,26 @@ describe('BudgetTable', () => {
     it('should apply loading class when loading', () => {
       render(<BudgetTable budgets={mockBudgets} loading />)
       expect(screen.getByRole('table')).toHaveClass('budget-table--loading')
+    })
+  })
+
+  describe('Income Column', () => {
+    it('renders Income column header', () => {
+      render(<BudgetTable budgets={mockBudgets} />)
+      expect(screen.getByText('Income')).toBeInTheDocument()
+    })
+
+    it('renders income amount in income column for budget with expected_income', () => {
+      render(<BudgetTable budgets={mockBudgets} />)
+      // budget-1 has income_amount: 800, expected_income: 2000
+      expect(screen.getByText('$800.00 / $2,000.00')).toBeInTheDocument()
+    })
+
+    it('renders dash for budget without expected_income', () => {
+      render(<BudgetTable budgets={mockBudgets} />)
+      // budget-2 and budget-3 have no expected_income; should show '—'
+      const dashes = screen.getAllByText('—')
+      expect(dashes.length).toBeGreaterThanOrEqual(1)
     })
   })
 

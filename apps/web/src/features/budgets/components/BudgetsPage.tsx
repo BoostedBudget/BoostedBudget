@@ -229,7 +229,7 @@ export function BudgetsPage() {
           break;
         }
         case 'amount': {
-          comparison = a.amount - b.amount;
+          comparison = (a.expected_income ?? a.amount) - (b.expected_income ?? b.amount);
           break;
         }
         case 'progress': {
