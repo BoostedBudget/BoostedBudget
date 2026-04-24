@@ -54,6 +54,18 @@ func NewBudgetRepository(db DB) BudgetRepository {
 	return &budgetRepository{db: db}
 }
 
+// unmarshalIncomeSources deserializes income_sources JSON. Returns empty slice on nil.
+func unmarshalIncomeSources(data []byte) ([]domain.IncomeSource, error) {
+	if data == nil {
+		return []domain.IncomeSource{}, nil
+	}
+	var sources []domain.IncomeSource
+	if err := json.Unmarshal(data, &sources); err != nil {
+		return nil, err
+	}
+	return sources, nil
+}
+
 // Create creates a new budget in the database.
 func (r *budgetRepository) Create(ctx context.Context, budget *domain.Budget) error {
 	if budget.ID == "" {
@@ -158,9 +170,11 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 	}
 
 	// Unmarshal income_sources from JSON (Issue #491)
-	if err := json.Unmarshal(incomeSourcesJSON, &budget.IncomeSources); err != nil {
+	sources, err := unmarshalIncomeSources(incomeSourcesJSON)
+	if err != nil {
 		return nil, err
 	}
+	budget.IncomeSources = sources
 
 	// Load categories
 	categories, err := r.GetCategoriesByBudgetID(ctx, budget.ID)
@@ -223,7 +237,7 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 	}
 
 	if budgets == nil {
-		budgets = []*domain.Budget{}
+		budgets = make([]*domain.Budget, 0)
 	}
 
 	return budgets, nil
@@ -280,7 +294,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 	}
 
 	if budgets == nil {
-		budgets = []*domain.Budget{}
+		budgets = make([]*domain.Budget, 0)
 	}
 
 	return budgets, nil
@@ -324,9 +338,11 @@ func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (
 	}
 
 	// Unmarshal income_sources from JSON (Issue #491)
-	if err := json.Unmarshal(incomeSourcesJSON, &budget.IncomeSources); err != nil {
+	sources, err := unmarshalIncomeSources(incomeSourcesJSON)
+	if err != nil {
 		return nil, err
 	}
+	budget.IncomeSources = sources
 
 	return budget, nil
 }
@@ -687,18 +703,16 @@ func (r *budgetRepository) GetCategoriesMatchingTransaction(ctx context.Context,
 	return categories, nil
 }
 
-// UpdateBudgetIncome updates income_amount and expected_income for a budget.
-// This is used for quick income adjustments in envelope budgeting (Issue #491, #1048).
-// expected_income is kept in sync with income_amount so allocation calculations
-// (which use expected_income) reflect the latest income value.
+// UpdateBudgetIncome updates only income_amount for a budget (the actual received sum).
+// expected_income is the user's planned target and must NOT be overwritten on every sync.
 func (r *budgetRepository) UpdateBudgetIncome(ctx context.Context, budgetID string, incomeAmount float64) error {
 	query := `
 		UPDATE budgets
-		SET income_amount = $1, expected_income = $2, updated_at = NOW()
-		WHERE id = $3
+		SET income_amount = $1, updated_at = NOW()
+		WHERE id = $2
 	`
 
-	ct, err := r.db.Exec(ctx, query, incomeAmount, incomeAmount, budgetID)
+	ct, err := r.db.Exec(ctx, query, incomeAmount, budgetID)
 	if err != nil {
 		return err
 	}

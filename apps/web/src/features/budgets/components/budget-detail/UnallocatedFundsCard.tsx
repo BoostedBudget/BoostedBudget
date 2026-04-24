@@ -152,7 +152,7 @@ export function UnallocatedFundsCard({
         ) : (
           <>
             <div className="flex items-baseline gap-2 flex-wrap">
-              <span className={`text-2xl font-bold ${status === 'warning' ? 'text-destructive' : 'text-foreground'}`}>
+              <span className={`text-2xl font-bold ${status === 'warning' ? 'text-destructive' : 'text-foreground'}`} data-ph-mask>
                 {formatCurrency(displayAmount, currencyCode)}
               </span>
               <span className="text-sm font-medium text-muted-foreground">

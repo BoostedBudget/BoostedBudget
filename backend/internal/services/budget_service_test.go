@@ -571,18 +571,8 @@ func TestBudgetService_AddCategory_Success(t *testing.T) {
 		AllocatedAmount: 300.00,
 	}
 
-	// Custom category with same name exists
-	customCats := []*domain.CustomCategory{
-		{ID: "cat-1", UserID: userID, Name: "Groceries"},
-	}
-
-	// Plaid categories include Food And Drink
-	plaidCats := []string{"FOOD_AND_DRINK", "TRANSPORTATION"}
-
-	// Setup mocks
+	// Setup mocks — category validation is deferred to domain so only GetByID and CreateCategory are called.
 	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-	mockCategoryRepo.On("GetByUserID", ctx, userID).Return(customCats, nil)
-	mockTransactionRepo.On("GetDistinctPlaidCategories", ctx, userID).Return(plaidCats, nil)
 	mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
 
 	// Execute
@@ -594,8 +584,6 @@ func TestBudgetService_AddCategory_Success(t *testing.T) {
 	assert.Equal(t, budgetID, category.BudgetID)
 	assert.Equal(t, req.AllocatedAmount, category.AllocatedAmount)
 	mockBudgetRepo.AssertExpectations(t)
-	mockCategoryRepo.AssertExpectations(t)
-	mockTransactionRepo.AssertExpectations(t)
 }
 
 func TestBudgetService_UpdateCategory_Success(t *testing.T) {

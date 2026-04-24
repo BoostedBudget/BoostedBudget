@@ -443,7 +443,7 @@ export function BudgetCategoryForm({
               ) : preview ? (
                 <span>
                   Matches <strong>{preview.transaction_count}</strong> transaction{preview.transaction_count !== 1 ? 's' : ''} totaling{' '}
-                  <strong>{formatCurrency(preview.total_amount)}</strong>
+                  <strong data-ph-mask>{formatCurrency(preview.total_amount)}</strong>
                 </span>
               ) : null}
             </div>
