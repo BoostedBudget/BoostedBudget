@@ -196,6 +196,9 @@ export function BudgetTable({
           <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground border-b border-border">
             {renderSortableHeader('Amount', 'amount')}
           </th>
+          <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground border-b border-border">
+            Income
+          </th>
           <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground border-b border-border min-w-[140px]">
             <div className="flex items-center gap-1">
               {renderSortableHeader('Progress', 'progress')}
@@ -223,7 +226,7 @@ export function BudgetTable({
       <tbody>
         {budgets.length === 0 ? (
           <tr>
-            <td colSpan={hasActions ? 7 : 6} className="py-12 px-4 text-center text-muted-foreground italic">
+            <td colSpan={hasActions ? 8 : 7} className="py-12 px-4 text-center text-muted-foreground italic">
               No budgets match your filters. Try adjusting your criteria.
             </td>
           </tr>
@@ -254,7 +257,12 @@ export function BudgetTable({
               </td>
               <td className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle">{getPeriodLabel(budget.period)}</td>
               <td className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle text-right font-medium tabular-nums">
-                {formatCurrency(budget.amount)}
+                {formatCurrency(budget.expected_income ?? budget.amount)}
+              </td>
+              <td className="px-4 py-3.5 text-sm text-muted-foreground border-b border-border align-middle text-right tabular-nums" data-ph-mask>
+                {(budget.expected_income ?? 0) > 0
+                  ? `${formatCurrency(budget.income_amount ?? 0)} / ${formatCurrency(budget.expected_income!)}`
+                  : '—'}
               </td>
               <td className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle min-w-[140px]">
                 <div className="flex items-center gap-3 max-sm:flex-col max-sm:items-start max-sm:gap-1">
