@@ -86,7 +86,7 @@ export function IncomeSourcePicker({
   const handleAdd = useCallback(() => {
     if (!isAddEnabled) return;
 
-    let source: IncomeSource;
+    let source: IncomeSource | undefined;
 
     switch (sourceType) {
       case 'plaid_category':
@@ -97,6 +97,7 @@ export function IncomeSourcePicker({
         break;
     }
 
+    if (!source) return;
     onAdd(source);
 
     // Reset selection
