@@ -256,6 +256,14 @@ export function BudgetCategoryManager({
           formDialog.mode === 'edit' ? availableCategories : filteredAvailableCategories
         }
         availableTags={availableTags}
+        expectedIncome={totalIncome}
+        totalAllocatedExcludingCurrent={
+          formDialog.mode === 'edit' && formDialog.category
+            ? categories
+                .filter((c) => c.id !== formDialog.category!.id)
+                .reduce((sum, c) => sum + c.allocated_amount, 0)
+            : categories.reduce((sum, c) => sum + c.allocated_amount, 0)
+        }
       />
 
       {/* Delete Confirmation Dialog — Issue #960 */}
