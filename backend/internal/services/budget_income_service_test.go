@@ -257,6 +257,41 @@ func TestBudgetIncomeService_CalculateBudgetIncome_RepositoryError(t *testing.T)
 	mockRepo.AssertExpectations(t)
 }
 
+// RegressionGuard: manual source type MUST continue to sum into income_amount.
+// Retiring it would silently drop income for existing budgets on next sync,
+// breaking percent_used on budget-alert rule triggers. See issue #1048.
+//
+// TestBudgetIncomeService_CalculateBudgetIncome_ManualSourceStillSums verifies
+// that manual income sources are still summed alongside other source types.
+func TestBudgetIncomeService_CalculateBudgetIncome_ManualSourceStillSums(t *testing.T) {
+	mockRepo := new(MockIncomeTransactionGetter)
+	logger := testIncomeServiceLogger()
+	service := NewBudgetIncomeService(mockRepo, logger)
+
+	ctx := context.Background()
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
+
+	budget := &domain.Budget{
+		UserID: "user-123",
+		IncomeSources: []domain.IncomeSource{
+			{Type: domain.IncomeSourceTypeManual, Value: "800.00"},
+			{Type: domain.IncomeSourceTypeTag, Value: "bonus"},
+		},
+	}
+
+	// Mock returns $200 from the tag source
+	mockRepo.On("GetIncomeSumByTag", ctx, "user-123", "bonus", startDate, endDate).
+		Return(200.00, nil)
+
+	income, err := service.CalculateBudgetIncome(ctx, budget, startDate, endDate)
+
+	// Should return $1000.00: $800 (manual) + $200 (tag)
+	assert.NoError(t, err)
+	assert.Equal(t, 1000.00, income)
+	mockRepo.AssertExpectations(t)
+}
+
 // =============================================================================
 // GetMatchingIncomeTransactions Tests
 // =============================================================================
