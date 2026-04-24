@@ -85,6 +85,7 @@ export const getGetBudgetsResponseMock = (): Budget[] | null =>
       faker.date.past().toISOString().slice(0, 19) + "Z",
       undefined,
     ]),
+    expected_income: faker.number.float({ fractionDigits: 2 }),
     id: faker.string.alpha({ length: { min: 10, max: 20 } }),
     income_amount: faker.number.float({ fractionDigits: 2 }),
     income_sources: faker.helpers.arrayElement([
@@ -154,6 +155,7 @@ export const getCreateBudgetResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
+  expected_income: faker.number.float({ fractionDigits: 2 }),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   income_amount: faker.number.float({ fractionDigits: 2 }),
   income_sources: faker.helpers.arrayElement([
@@ -230,6 +232,7 @@ export const getGetCurrentBudgetResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
+  expected_income: faker.number.float({ fractionDigits: 2 }),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   income_amount: faker.number.float({ fractionDigits: 2 }),
   income_sources: faker.helpers.arrayElement([
@@ -300,6 +303,7 @@ export const getGetBudgetResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
+  expected_income: faker.number.float({ fractionDigits: 2 }),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   income_amount: faker.number.float({ fractionDigits: 2 }),
   income_sources: faker.helpers.arrayElement([
@@ -370,6 +374,7 @@ export const getUpdateBudgetResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
+  expected_income: faker.number.float({ fractionDigits: 2 }),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   income_amount: faker.number.float({ fractionDigits: 2 }),
   income_sources: faker.helpers.arrayElement([
@@ -674,6 +679,7 @@ export const getSyncBudgetResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
+  expected_income: faker.number.float({ fractionDigits: 2 }),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   income_amount: faker.number.float({ fractionDigits: 2 }),
   income_sources: faker.helpers.arrayElement([
