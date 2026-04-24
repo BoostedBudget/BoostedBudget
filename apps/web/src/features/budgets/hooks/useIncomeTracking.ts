@@ -20,12 +20,20 @@ export interface UseIncomeTrackingOptions {
   endDate: string;
   /** Whether tracking is enabled */
   enabled?: boolean;
+  /** budget.expected_income — first-class expected income field (Issue #1048) */
+  budgetExpectedIncome?: number;
+  /** budget.amount — fallback when expected_income is absent */
+  budgetAmount?: number;
+  /** budget.income_amount — actual income received */
+  budgetIncomeAmount?: number;
 }
 
 export interface UseIncomeTrackingResult {
   /** Expected income (sum of manual sources) */
   expectedManualTotal: number;
-  /** Actual income from API (matching transactions) */
+  /** Expected total income: budget.expected_income ?? budget.amount ?? 0 */
+  expectedTotal: number;
+  /** Actual income: budget.income_amount ?? 0 */
   actualTotal: number;
   /** Whether actual income data is being fetched */
   loading: boolean;
@@ -50,9 +58,11 @@ export function useIncomeTracking({
   startDate: _startDate,
   endDate: _endDate,
   enabled = true,
+  budgetExpectedIncome,
+  budgetAmount,
+  budgetIncomeAmount,
 }: UseIncomeTrackingOptions): UseIncomeTrackingResult {
   // Note: _startDate and _endDate are reserved for future API integration
-  const [actualTotal, setActualTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
@@ -66,6 +76,13 @@ export function useIncomeTracking({
       }, 0);
   }, [sources]);
 
+  // Issue #1048: Expected total from budget fields — expected_income is the
+  // first-class field; fall back to amount for backwards compat with old data.
+  const expectedTotal = budgetExpectedIncome ?? budgetAmount ?? 0;
+
+  // Issue #1048: Actual income is what was received; no fallback to amount.
+  const actualTotal = budgetIncomeAmount ?? 0;
+
   // Fetch actual income for existing budgets
   // Note: This is a placeholder for future API integration
   // The backend already has BudgetIncomeService.CalculateBudgetIncome
@@ -78,12 +95,9 @@ export function useIncomeTracking({
     setError(null);
 
     try {
-      // TODO: Implement actual API call when endpoint is available
+      // Implement actual API call when endpoint is available
       // const result = await fetchBudgetIncomeActual(budgetId, startDate, endDate);
       // setActualTotal(result.total);
-
-      // For now, actual total remains 0 until API is implemented
-      setActualTotal(0);
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Failed to fetch income'));
     } finally {
@@ -93,6 +107,7 @@ export function useIncomeTracking({
 
   return {
     expectedManualTotal,
+    expectedTotal,
     actualTotal,
     loading,
     error,

@@ -73,17 +73,16 @@ export function BudgetDetailPage() {
   const updateCategoryMutation = useUpdateBudgetCategory();
   const deleteCategoryMutation = useDeleteBudgetCategory();
 
-  // Issue #498: Calculate income and allocation metrics
+  // Issue #498 / #1048: Calculate income and allocation metrics
   const incomeMetrics = useMemo(() => {
     if (!budget) return { expectedIncome: 0, actualIncome: 0, unallocated: 0, totalAllocated: 0 };
 
-    // Calculate expected income from manual income sources
-    const expectedIncome = (budget.income_sources || [])
-      .filter((src) => src.type === 'manual')
-      .reduce((sum, src) => sum + parseFloat(src.value || '0'), 0);
+    // Issue #1048: Use expected_income as the first-class field; fall back to
+    // amount for backwards compat with budgets created before this field existed.
+    const expectedIncome = budget.expected_income ?? budget.amount ?? 0;
 
-    // Use budget.income_amount as actual income (or fall back to expected)
-    const actualIncome = budget.income_amount || expectedIncome || budget.amount;
+    // Issue #1048: Actual income is what was received — no fallback to amount.
+    const actualIncome = budget.income_amount ?? 0;
 
     // Calculate total allocated from categories
     const totalAllocated = (budget.categories || []).reduce(
@@ -222,7 +221,7 @@ export function BudgetDetailPage() {
             </span>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Budget Amount</span>
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Expected Income</span>
             <span className="text-sm font-semibold text-foreground" data-ph-mask>
               {formatCurrency(budget.amount, budget.currency_code)}
             </span>

@@ -197,6 +197,81 @@ describe('useIncomeTracking', () => {
   });
 
   // ==========================================================================
+  // expectedTotal from budget fields
+  // ==========================================================================
+
+  describe('expectedTotal from budget fields', () => {
+    it('uses budget.expected_income when provided', () => {
+      const { result } = renderHook(() =>
+        useIncomeTracking({
+          sources: [],
+          startDate: '2025-01-01',
+          endDate: '2025-01-31',
+          budgetExpectedIncome: 3000,
+          budgetAmount: 5000,
+          budgetIncomeAmount: 0,
+        })
+      );
+
+      expect(result.current.expectedTotal).toBe(3000);
+    });
+
+    it('falls back to budget.amount when expected_income is undefined', () => {
+      const { result } = renderHook(() =>
+        useIncomeTracking({
+          sources: [],
+          startDate: '2025-01-01',
+          endDate: '2025-01-31',
+          budgetAmount: 5000,
+          budgetIncomeAmount: 0,
+        })
+      );
+
+      expect(result.current.expectedTotal).toBe(5000);
+    });
+
+    it('returns 0 for expectedTotal when neither expected_income nor amount provided', () => {
+      const { result } = renderHook(() =>
+        useIncomeTracking({
+          sources: [],
+          startDate: '2025-01-01',
+          endDate: '2025-01-31',
+        })
+      );
+
+      expect(result.current.expectedTotal).toBe(0);
+    });
+
+    it('uses budget.income_amount as actualTotal', () => {
+      const { result } = renderHook(() =>
+        useIncomeTracking({
+          sources: [],
+          startDate: '2025-01-01',
+          endDate: '2025-01-31',
+          budgetIncomeAmount: 1500,
+          budgetExpectedIncome: 3000,
+          budgetAmount: 9999,
+        })
+      );
+
+      expect(result.current.actualTotal).toBe(1500);
+    });
+
+    it('returns 0 for actualTotal when budget.income_amount is undefined', () => {
+      const { result } = renderHook(() =>
+        useIncomeTracking({
+          sources: [],
+          startDate: '2025-01-01',
+          endDate: '2025-01-31',
+          budgetExpectedIncome: 3000,
+        })
+      );
+
+      expect(result.current.actualTotal).toBe(0);
+    });
+  });
+
+  // ==========================================================================
   // Enabled State Tests
   // ==========================================================================
 
