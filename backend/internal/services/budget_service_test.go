@@ -715,4 +715,161 @@ func TestBudgetService_GetAvailableCategories_Success(t *testing.T) {
 	mockTransactionRepo.AssertExpectations(t)
 }
 
+// ============================================================================
+// ExpectedIncome / Amount Reconciliation Tests (Issue #1048)
+// ============================================================================
+
+func TestBudgetService_CreateBudget_ExpectedIncomeWins(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	expectedIncome := 2000.0
+	req := &domain.CreateBudgetRequest{
+		Name:           "Monthly Budget",
+		Period:         domain.BudgetPeriodMonthly,
+		StartDate:      time.Now(),
+		Amount:         1000.0,
+		CurrencyCode:   "USD",
+		ExpectedIncome: &expectedIncome,
+	}
+
+	mockBudgetRepo.On("Create", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, budget)
+	assert.Equal(t, 2000.0, budget.ExpectedIncome, "expected_income should win over amount")
+	assert.Equal(t, 2000.0, budget.Amount, "amount should mirror expected_income")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+func TestBudgetService_CreateBudget_AmountFallback(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	req := &domain.CreateBudgetRequest{
+		Name:         "Monthly Budget",
+		Period:       domain.BudgetPeriodMonthly,
+		StartDate:    time.Now(),
+		Amount:       1000.0,
+		CurrencyCode: "USD",
+		// ExpectedIncome is nil
+	}
+
+	mockBudgetRepo.On("Create", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, budget)
+	assert.Equal(t, 1000.0, budget.ExpectedIncome, "expected_income should fall back to amount")
+	assert.Equal(t, 1000.0, budget.Amount, "amount should remain unchanged")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+func TestBudgetService_CreateBudget_ExpectedIncomeOnly(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	expectedIncome := 3000.0
+	req := &domain.CreateBudgetRequest{
+		Name:           "Monthly Budget",
+		Period:         domain.BudgetPeriodMonthly,
+		StartDate:      time.Now(),
+		Amount:         3000.0, // must be positive to pass validation
+		CurrencyCode:   "USD",
+		ExpectedIncome: &expectedIncome,
+	}
+
+	mockBudgetRepo.On("Create", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, budget)
+	assert.Equal(t, 3000.0, budget.ExpectedIncome)
+	assert.Equal(t, 3000.0, budget.Amount)
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+func TestBudgetService_UpdateBudget_ExpectedIncomeUpdates(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+
+	expectedIncome := 4000.0
+	req := &domain.UpdateBudgetRequest{
+		ExpectedIncome: &expectedIncome,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockBudgetRepo.On("Update", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+
+	budget, err := service.UpdateBudget(ctx, userID, budgetID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, budget)
+	assert.Equal(t, 4000.0, budget.ExpectedIncome, "expected_income should be updated")
+	assert.Equal(t, 4000.0, budget.Amount, "amount should mirror expected_income")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+func TestBudgetService_UpdateBudget_AmountFallback(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+
+	newAmount := 500.0
+	req := &domain.UpdateBudgetRequest{
+		Amount: &newAmount,
+		// ExpectedIncome is nil
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockBudgetRepo.On("Update", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+
+	budget, err := service.UpdateBudget(ctx, userID, budgetID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, budget)
+	assert.Equal(t, 500.0, budget.Amount, "amount should be updated")
+	assert.Equal(t, 500.0, budget.ExpectedIncome, "expected_income should mirror amount")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
 // strPtr helper is defined in rule_application_service_test.go

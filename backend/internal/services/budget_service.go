@@ -68,20 +68,28 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		slog.String("period", string(req.Period)),
 	)
 
+	// Reconcile expected_income and amount: prefer expected_income if explicitly set (Issue #1048).
+	reconcileAmount, reconcileExpectedIncome := req.Amount, req.Amount
+	if req.ExpectedIncome != nil && *req.ExpectedIncome > 0 {
+		reconcileAmount = *req.ExpectedIncome
+		reconcileExpectedIncome = *req.ExpectedIncome
+	}
+
 	// Create budget from request
 	budget := &domain.Budget{
-		ID:           uuid.New().String(),
-		UserID:       userID,
-		Name:         req.Name,
-		Description:  req.Description,
-		Period:       req.Period,
-		StartDate:    req.StartDate,
-		EndDate:      req.EndDate,
-		Amount:       req.Amount,
-		CurrencyCode: req.CurrencyCode,
-		IsActive:     true,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:             uuid.New().String(),
+		UserID:         userID,
+		Name:           req.Name,
+		Description:    req.Description,
+		Period:         req.Period,
+		StartDate:      req.StartDate,
+		EndDate:        req.EndDate,
+		Amount:         reconcileAmount,
+		ExpectedIncome: reconcileExpectedIncome,
+		CurrencyCode:   req.CurrencyCode,
+		IsActive:       true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 		// Envelope budgeting fields (Issue #491)
 		IncomeAmount:  req.IncomeAmount,
 		IncomeSources: req.IncomeSources,
@@ -254,8 +262,13 @@ func (s *budgetService) UpdateBudget(ctx context.Context, userID, budgetID strin
 	if req.EndDate != nil {
 		budget.EndDate = req.EndDate
 	}
-	if req.Amount != nil {
+	// Reconcile expected_income and amount (Issue #1048): expected_income wins when set.
+	if req.ExpectedIncome != nil && *req.ExpectedIncome > 0 {
+		budget.ExpectedIncome = *req.ExpectedIncome
+		budget.Amount = *req.ExpectedIncome // mirror for back-compat
+	} else if req.Amount != nil {
 		budget.Amount = *req.Amount
+		budget.ExpectedIncome = *req.Amount // mirror
 	}
 	if req.IsActive != nil {
 		budget.IsActive = *req.IsActive
