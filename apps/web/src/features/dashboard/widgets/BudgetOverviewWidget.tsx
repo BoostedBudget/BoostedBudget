@@ -69,6 +69,9 @@ function BudgetOverviewWidget(_props: WidgetProps) {
 
   const spent = metrics?.total_spent ?? 0;
   const remaining = metrics?.remaining_amount ?? 0;
+  // Issue #1048: Use expected_income as the denominator when present; fall back
+  // to amount for budgets created before this field existed.
+  const totalBasis = budget.expected_income ?? budget.amount;
 
   return (
     <div className="flex flex-col gap-4 h-full p-2">
@@ -78,12 +81,12 @@ function BudgetOverviewWidget(_props: WidgetProps) {
       </div>
 
       <div className="text-2xl font-bold text-foreground">
-        {formatCurrency(budget.amount, budget.currency_code)}
+        {formatCurrency(totalBasis, budget.currency_code)}
       </div>
 
       <BudgetProgressBar
         spent={spent}
-        total={budget.amount}
+        total={totalBasis}
         currencyCode={budget.currency_code}
         size="medium"
       />
