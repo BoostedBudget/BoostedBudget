@@ -306,6 +306,42 @@ describe('AllocationBreakdown', () => {
     });
   });
 
+  describe('Soft Warning — over-income amber banner', () => {
+    it('should show amber income warning when total allocated exceeds expected income', () => {
+      const categories = [
+        createMockCategory({ id: 'cat-1', allocated_amount: 800 }),
+        createMockCategory({ id: 'cat-2', allocated_amount: 400 }),
+      ];
+
+      render(
+        <AllocationBreakdown
+          categories={categories}
+          totalIncome={1000}
+          unallocated={-200}
+        />
+      );
+
+      // The visible (non-sr-only) warning text should mention exceeding income
+      expect(screen.getByText(/exceed.*expected income/i)).toBeInTheDocument();
+    });
+
+    it('should not show amber income warning when allocations are within income', () => {
+      const categories = [
+        createMockCategory({ id: 'cat-1', allocated_amount: 500 }),
+      ];
+
+      render(
+        <AllocationBreakdown
+          categories={categories}
+          totalIncome={1000}
+          unallocated={500}
+        />
+      );
+
+      expect(screen.queryByText(/exceed.*expected income/i)).not.toBeInTheDocument();
+    });
+  });
+
   describe('Allocation Display Fixes (Phase 5)', () => {
     it('should show "Total Budget" label instead of "Total Income"', () => {
       render(

@@ -127,10 +127,14 @@ export function AllocationBreakdown({
         </span>
       </div>
 
-      {/* Over-allocation warning */}
+      {/* Over-allocation warning — soft amber, non-blocking */}
       {isOverAllocated && (
-        <div className="text-[0.8125rem] text-destructive bg-destructive/10 py-2 px-3 rounded-md font-medium">
-          Over-allocated by {formatCurrency(Math.abs(unallocated))}
+        <div
+          className="text-sm text-amber-600 dark:text-amber-400 flex items-center gap-1.5"
+          aria-label="over-income warning"
+        >
+          <span aria-hidden="true">⚠️</span>
+          Allocations exceed expected income by {formatCurrency(Math.abs(unallocated))}. You&apos;ll be dipping into savings or going over budget.
         </div>
       )}
 
@@ -204,9 +208,9 @@ export function AllocationBreakdown({
           <div className="allocation-breakdown__stats">
             <span>Allocated: {formatCurrency(totalAllocated)} ({percentAllocated}%)</span>
             <span className="allocation-breakdown__divider">|</span>
-            <span className={isOverAllocated ? 'allocation-breakdown__over' : ''}>
+            <span className={isOverAllocated ? 'allocation-breakdown__over text-amber-600 dark:text-amber-400' : ''}>
               {isOverAllocated
-                ? `Over-allocated: ${formatCurrency(Math.abs(unallocated))}`
+                ? `Over expected income: ${formatCurrency(Math.abs(unallocated))}`
                 : `Unallocated: ${formatCurrency(unallocated)} (${100 - percentAllocated}%)`
               }
             </span>

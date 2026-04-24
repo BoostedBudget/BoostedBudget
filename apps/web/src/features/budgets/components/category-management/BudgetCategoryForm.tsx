@@ -44,6 +44,10 @@ export interface BudgetCategoryFormProps {
   budgetStartDate?: string;
   /** Budget end date for preview (YYYY-MM-DD) */
   budgetEndDate?: string;
+  /** Expected income for the budget (used for soft over-allocation warning) */
+  expectedIncome?: number;
+  /** Sum of all other categories' allocations excluding the one being edited */
+  totalAllocatedExcludingCurrent?: number;
 }
 
 interface FormData {
@@ -76,6 +80,8 @@ export function BudgetCategoryForm({
   availableTags,
   budgetStartDate,
   budgetEndDate,
+  expectedIncome,
+  totalAllocatedExcludingCurrent = 0,
 }: BudgetCategoryFormProps) {
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [errors, setErrors] = useState<FormErrors>({});
@@ -131,6 +137,15 @@ export function BudgetCategoryForm({
     budgetEndDate || '',
     previewEnabled
   );
+
+  // Compute soft over-allocation warning
+  const allocationOverage = useMemo(() => {
+    if (expectedIncome == null || expectedIncome <= 0) return null;
+    const newAmount = parseFloat(formData.allocated_amount);
+    if (isNaN(newAmount) || newAmount <= 0) return null;
+    const projected = totalAllocatedExcludingCurrent + newAmount;
+    return projected > expectedIncome ? projected - expectedIncome : null;
+  }, [expectedIncome, totalAllocatedExcludingCurrent, formData.allocated_amount]);
 
   // Format currency for preview display
   const formatCurrency = (amount: number): string => {
@@ -431,6 +446,18 @@ export function BudgetCategoryForm({
                   <strong>{formatCurrency(preview.total_amount)}</strong>
                 </span>
               ) : null}
+            </div>
+          )}
+
+          {/* Soft over-allocation warning */}
+          {allocationOverage != null && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="text-sm text-amber-600 dark:text-amber-400 flex items-center gap-1.5"
+            >
+              <span aria-hidden="true">⚠️</span>
+              Allocations exceed expected income by ${allocationOverage.toFixed(2)}. You&apos;ll be dipping into savings or going over budget.
             </div>
           )}
 
