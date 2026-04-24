@@ -14,9 +14,9 @@ export interface UseIncomeTrackingOptions {
   budgetId?: string;
   /** Configured income sources */
   sources: IncomeSource[];
-  /** Budget start date (YYYY-MM-DD) */
+  /** Budget start date (YYYY-MM-DD) — reserved for future API integration */
   startDate: string;
-  /** Budget end date (YYYY-MM-DD) */
+  /** Budget end date (YYYY-MM-DD) — reserved for future API integration */
   endDate: string;
   /** Whether tracking is enabled */
   enabled?: boolean;
@@ -55,14 +55,11 @@ export interface UseIncomeTrackingResult {
 export function useIncomeTracking({
   budgetId,
   sources,
-  startDate: _startDate,
-  endDate: _endDate,
   enabled = true,
   budgetExpectedIncome,
   budgetAmount,
   budgetIncomeAmount,
 }: UseIncomeTrackingOptions): UseIncomeTrackingResult {
-  // Note: _startDate and _endDate are reserved for future API integration
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
@@ -83,9 +80,7 @@ export function useIncomeTracking({
   // Issue #1048: Actual income is what was received; no fallback to amount.
   const actualTotal = budgetIncomeAmount ?? 0;
 
-  // Fetch actual income for existing budgets
-  // Note: This is a placeholder for future API integration
-  // The backend already has BudgetIncomeService.CalculateBudgetIncome
+  // Placeholder for future API integration to fetch actual income
   const fetchActual = useCallback(async () => {
     if (!budgetId || !enabled) {
       return;
@@ -95,9 +90,7 @@ export function useIncomeTracking({
     setError(null);
 
     try {
-      // Implement actual API call when endpoint is available
-      // const result = await fetchBudgetIncomeActual(budgetId, startDate, endDate);
-      // setActualTotal(result.total);
+      // TODO: Implement when API endpoint becomes available
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Failed to fetch income'));
     } finally {

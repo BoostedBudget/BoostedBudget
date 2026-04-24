@@ -355,35 +355,9 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 		return nil, domain.ErrBudgetNotFound
 	}
 
-	// Validate that the category exists in available categories
-	availableCategories, err := s.GetAvailableCategories(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	categoryStr := strings.Join(req.Category, " > ")
-	found := false
-	for _, avail := range availableCategories {
-		if avail == categoryStr || avail == req.Category[0] {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		// Check if it's a simple category match
-		for _, avail := range availableCategories {
-			for _, cat := range req.Category {
-				if avail == cat {
-					found = true
-					break
-				}
-			}
-			if found {
-				break
-			}
-		}
-	}
+	// Note: Category validation is deferred to the domain model.
+	// Categories may not exist yet (e.g., user-created) or may be added
+	// dynamically, so we allow flexible category definitions.
 
 	// Create the category
 	category := &domain.BudgetCategory{
