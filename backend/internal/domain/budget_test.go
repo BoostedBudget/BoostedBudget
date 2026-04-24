@@ -881,23 +881,24 @@ func TestMatchLogic_IsValid(t *testing.T) {
 	}
 }
 
-// TestBudget_UnallocatedAmount tests the UnallocatedAmount calculation for envelope budgeting
+// TestBudget_UnallocatedAmount tests the UnallocatedAmount calculation for envelope budgeting.
+// UnallocatedAmount must use ExpectedIncome, not IncomeAmount (Issue #1048).
 func TestBudget_UnallocatedAmount(t *testing.T) {
 	tests := []struct {
-		name         string
-		incomeAmount float64
-		categories   []BudgetCategory
-		want         float64
+		name           string
+		expectedIncome float64
+		categories     []BudgetCategory
+		want           float64
 	}{
 		{
-			name:         "no allocations",
-			incomeAmount: 5000.00,
-			categories:   []BudgetCategory{},
-			want:         5000.00,
+			name:           "no allocations",
+			expectedIncome: 5000.00,
+			categories:     []BudgetCategory{},
+			want:           5000.00,
 		},
 		{
-			name:         "partial allocation",
-			incomeAmount: 5000.00,
+			name:           "partial allocation",
+			expectedIncome: 5000.00,
 			categories: []BudgetCategory{
 				{AllocatedAmount: 2000.00},
 				{AllocatedAmount: 1500.00},
@@ -905,16 +906,16 @@ func TestBudget_UnallocatedAmount(t *testing.T) {
 			want: 1500.00, // 5000 - 3500
 		},
 		{
-			name:         "fully allocated",
-			incomeAmount: 5000.00,
+			name:           "fully allocated",
+			expectedIncome: 5000.00,
 			categories: []BudgetCategory{
 				{AllocatedAmount: 5000.00},
 			},
 			want: 0.00,
 		},
 		{
-			name:         "over allocated (negative)",
-			incomeAmount: 5000.00,
+			name:           "over allocated (negative)",
+			expectedIncome: 5000.00,
 			categories: []BudgetCategory{
 				{AllocatedAmount: 3000.00},
 				{AllocatedAmount: 3000.00},
@@ -922,18 +923,18 @@ func TestBudget_UnallocatedAmount(t *testing.T) {
 			want: -1000.00, // 5000 - 6000
 		},
 		{
-			name:         "zero income zero allocations",
-			incomeAmount: 0,
-			categories:   []BudgetCategory{},
-			want:         0,
+			name:           "zero expected income zero allocations",
+			expectedIncome: 0,
+			categories:     []BudgetCategory{},
+			want:           0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			budget := Budget{
-				IncomeAmount: tt.incomeAmount,
-				Categories:   tt.categories,
+				ExpectedIncome: tt.expectedIncome,
+				Categories:     tt.categories,
 			}
 			if got := budget.UnallocatedAmount(); got != tt.want {
 				t.Errorf("UnallocatedAmount() = %v, want %v", got, tt.want)
@@ -942,54 +943,168 @@ func TestBudget_UnallocatedAmount(t *testing.T) {
 	}
 }
 
-// TestBudget_IsFullyAllocated tests the IsFullyAllocated check for envelope budgeting
+// TestBudget_UnallocatedAmount_UsesExpectedIncome confirms that UnallocatedAmount uses
+// ExpectedIncome (not IncomeAmount) as the basis for calculation (Issue #1048).
+func TestBudget_UnallocatedAmount_UsesExpectedIncome(t *testing.T) {
+	budget := Budget{
+		IncomeAmount:   3000.00, // old field — should NOT be used
+		ExpectedIncome: 5000.00, // new field — MUST be used
+		Categories: []BudgetCategory{
+			{AllocatedAmount: 2000.00},
+		},
+	}
+	// Should be 5000 - 2000 = 3000, not 3000 - 2000 = 1000
+	want := 3000.00
+	if got := budget.UnallocatedAmount(); got != want {
+		t.Errorf("UnallocatedAmount() = %v, want %v (must use ExpectedIncome, not IncomeAmount)", got, want)
+	}
+}
+
+// TestBudget_IsFullyAllocated tests the IsFullyAllocated check for envelope budgeting.
+// IsFullyAllocated must use ExpectedIncome (Issue #1048).
 func TestBudget_IsFullyAllocated(t *testing.T) {
 	tests := []struct {
-		name         string
-		incomeAmount float64
-		categories   []BudgetCategory
-		want         bool
+		name           string
+		expectedIncome float64
+		categories     []BudgetCategory
+		want           bool
 	}{
 		{
-			name:         "not fully allocated",
-			incomeAmount: 5000.00,
-			categories:   []BudgetCategory{{AllocatedAmount: 3000.00}},
-			want:         false,
+			name:           "not fully allocated",
+			expectedIncome: 5000.00,
+			categories:     []BudgetCategory{{AllocatedAmount: 3000.00}},
+			want:           false,
 		},
 		{
-			name:         "exactly fully allocated",
-			incomeAmount: 5000.00,
-			categories:   []BudgetCategory{{AllocatedAmount: 5000.00}},
-			want:         true,
+			name:           "exactly fully allocated",
+			expectedIncome: 5000.00,
+			categories:     []BudgetCategory{{AllocatedAmount: 5000.00}},
+			want:           true,
 		},
 		{
-			name:         "over allocated",
-			incomeAmount: 5000.00,
-			categories:   []BudgetCategory{{AllocatedAmount: 6000.00}},
-			want:         true, // Still considered "fully" allocated
+			name:           "over allocated",
+			expectedIncome: 5000.00,
+			categories:     []BudgetCategory{{AllocatedAmount: 6000.00}},
+			want:           true, // Still considered "fully" allocated
 		},
 		{
-			name:         "zero income is always fully allocated",
-			incomeAmount: 0,
-			categories:   []BudgetCategory{},
-			want:         true,
+			name:           "zero expected income is always fully allocated",
+			expectedIncome: 0,
+			categories:     []BudgetCategory{},
+			want:           true,
 		},
 		{
-			name:         "zero income with allocations",
-			incomeAmount: 0,
-			categories:   []BudgetCategory{{AllocatedAmount: 100.00}},
-			want:         true,
+			name:           "zero expected income with allocations",
+			expectedIncome: 0,
+			categories:     []BudgetCategory{{AllocatedAmount: 100.00}},
+			want:           true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			budget := Budget{
-				IncomeAmount: tt.incomeAmount,
-				Categories:   tt.categories,
+				ExpectedIncome: tt.expectedIncome,
+				Categories:     tt.categories,
 			}
 			if got := budget.IsFullyAllocated(); got != tt.want {
 				t.Errorf("IsFullyAllocated() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBudget_ExceedsExpectedIncome tests the ExceedsExpectedIncome helper (Issue #1048).
+func TestBudget_ExceedsExpectedIncome(t *testing.T) {
+	tests := []struct {
+		name           string
+		expectedIncome float64
+		categories     []BudgetCategory
+		want           bool
+	}{
+		{
+			name:           "total allocated below expected income",
+			expectedIncome: 5000.00,
+			categories:     []BudgetCategory{{AllocatedAmount: 4000.00}},
+			want:           false,
+		},
+		{
+			name:           "total allocated exactly equals expected income",
+			expectedIncome: 5000.00,
+			categories:     []BudgetCategory{{AllocatedAmount: 5000.00}},
+			want:           false,
+		},
+		{
+			name:           "total allocated exceeds expected income",
+			expectedIncome: 5000.00,
+			categories: []BudgetCategory{
+				{AllocatedAmount: 3000.00},
+				{AllocatedAmount: 3000.00},
+			},
+			want: true,
+		},
+		{
+			name:           "multiple categories under expected income",
+			expectedIncome: 5000.00,
+			categories: []BudgetCategory{
+				{AllocatedAmount: 1000.00},
+				{AllocatedAmount: 2000.00},
+				{AllocatedAmount: 1500.00},
+			},
+			want: false, // 4500 < 5000
+		},
+		{
+			name:           "no categories never exceeds",
+			expectedIncome: 5000.00,
+			categories:     []BudgetCategory{},
+			want:           false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			budget := Budget{
+				ExpectedIncome: tt.expectedIncome,
+				Categories:     tt.categories,
+			}
+			if got := budget.ExceedsExpectedIncome(); got != tt.want {
+				t.Errorf("ExceedsExpectedIncome() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBudget_ExceedsExpectedIncome_Zero verifies no division/panic when ExpectedIncome is 0 (Issue #1048).
+func TestBudget_ExceedsExpectedIncome_Zero(t *testing.T) {
+	tests := []struct {
+		name           string
+		expectedIncome float64
+		categories     []BudgetCategory
+		want           bool
+	}{
+		{
+			name:           "zero expected income no allocations",
+			expectedIncome: 0,
+			categories:     []BudgetCategory{},
+			want:           false,
+		},
+		{
+			name:           "zero expected income with allocations",
+			expectedIncome: 0,
+			categories:     []BudgetCategory{{AllocatedAmount: 100.00}},
+			want:           true, // 100 > 0
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Must not panic
+			budget := Budget{
+				ExpectedIncome: tt.expectedIncome,
+				Categories:     tt.categories,
+			}
+			if got := budget.ExceedsExpectedIncome(); got != tt.want {
+				t.Errorf("ExceedsExpectedIncome() = %v, want %v", got, tt.want)
 			}
 		})
 	}
