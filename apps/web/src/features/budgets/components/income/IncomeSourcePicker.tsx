@@ -7,7 +7,7 @@
  * - tag: Dropdown of user tags
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback } from 'react';
 import { PlusIcon } from 'lucide-react';
 import type { IncomeSource, IncomeSourceType } from '../../types';
 import type { UserTag } from '@/features/tags/types';
@@ -46,32 +46,26 @@ export function IncomeSourcePicker({
   const [selectedTag, setSelectedTag] = useState('');
 
   // Filter out already selected categories
-  const availableCategoriesFiltered = useMemo(() => {
-    const existingCategoryValues = existingSources
-      .filter((s) => s.type === 'plaid_category')
-      .map((s) => s.value);
-    return availableCategories.filter((cat) => !existingCategoryValues.includes(cat));
-  }, [availableCategories, existingSources]);
+  const existingCategoryValues = existingSources
+    .filter((s) => s.type === 'plaid_category')
+    .map((s) => s.value);
+  const availableCategoriesFiltered = availableCategories.filter(
+    (cat) => !existingCategoryValues.includes(cat)
+  );
 
   // Filter out already selected tags
-  const availableTagsFiltered = useMemo(() => {
-    const existingTagValues = existingSources
-      .filter((s) => s.type === 'tag')
-      .map((s) => s.value);
-    return availableTags.filter((tag) => !existingTagValues.includes(tag.name));
-  }, [availableTags, existingSources]);
+  const existingTagValues = existingSources
+    .filter((s) => s.type === 'tag')
+    .map((s) => s.value);
+  const availableTagsFiltered = availableTags.filter(
+    (tag) => !existingTagValues.includes(tag.name)
+  );
 
-  // Check if add button should be enabled
-  const isAddEnabled = useMemo(() => {
-    if (disabled) return false;
-
-    switch (sourceType) {
-      case 'plaid_category':
-        return selectedCategory !== '';
-      case 'tag':
-        return selectedTag !== '';
-    }
-  }, [sourceType, selectedCategory, selectedTag, disabled]);
+  // Determine if add button should be enabled
+  const isAddEnabled =
+    !disabled &&
+    ((sourceType === 'plaid_category' && selectedCategory !== '') ||
+      (sourceType === 'tag' && selectedTag !== ''));
 
   // Handle type change
   const handleTypeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
