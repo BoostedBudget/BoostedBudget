@@ -90,8 +90,8 @@ export function BudgetDetailPage() {
       0
     );
 
-    // Calculate unallocated funds
-    const unallocated = actualIncome - totalAllocated;
+    // Unallocated is relative to the planned target, not actual received income.
+    const unallocated = expectedIncome - totalAllocated;
 
     return { expectedIncome, actualIncome, unallocated, totalAllocated };
   }, [budget]);
@@ -284,7 +284,7 @@ export function BudgetDetailPage() {
         <BudgetCategoryManager
           budgetId={budgetId || ''}
           categories={budget.categories || []}
-          totalIncome={budget.income_amount || budget.amount}
+          totalIncome={budget.expected_income ?? budget.amount}
           onAddCategory={handleAddCategory}
           onUpdateCategory={handleUpdateCategory}
           onDeleteCategory={handleDeleteCategory}

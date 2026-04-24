@@ -1077,9 +1077,9 @@ func TestBudgetRepository_Update_DefaultsExpectedIncomeToAmount(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestBudgetRepository_UpdateBudgetIncome_IncludesExpectedIncome verifies that UpdateBudgetIncome
-// also updates expected_income to the same value.
-func TestBudgetRepository_UpdateBudgetIncome_IncludesExpectedIncome(t *testing.T) {
+// TestBudgetRepository_UpdateBudgetIncome_OnlyUpdatesIncomeAmount verifies that UpdateBudgetIncome
+// only touches income_amount (the actual received sum), never expected_income (the user's plan).
+func TestBudgetRepository_UpdateBudgetIncome_OnlyUpdatesIncomeAmount(t *testing.T) {
 	mock, repo := setupBudgetMockDB(t)
 	defer mock.Close()
 
@@ -1087,9 +1087,9 @@ func TestBudgetRepository_UpdateBudgetIncome_IncludesExpectedIncome(t *testing.T
 	budgetID := uuid.New().String()
 	incomeAmount := 3500.00
 
-	// The UPDATE must set both income_amount and expected_income (#1048).
+	// Only income_amount and budgetID — expected_income must NOT be touched.
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budgets`)).
-		WithArgs(incomeAmount, incomeAmount, budgetID).
+		WithArgs(incomeAmount, budgetID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.UpdateBudgetIncome(ctx, budgetID, incomeAmount)
