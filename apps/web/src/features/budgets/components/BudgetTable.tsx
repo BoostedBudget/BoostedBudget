@@ -7,6 +7,7 @@
 
 import { useCallback } from 'react'
 import { Settings, Trash2, ChevronUp, ChevronDown } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import type { BudgetWithMetrics } from '../types'
 import {
   ColumnFilterDropdown,
@@ -256,7 +257,10 @@ export function BudgetTable({
                 </div>
               </td>
               <td className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle">{getPeriodLabel(budget.period)}</td>
-              <td className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle text-right font-medium tabular-nums">
+              <td
+                className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle text-right font-medium tabular-nums"
+                data-ph-mask
+              >
                 {formatCurrency(budget.expected_income ?? budget.amount)}
               </td>
               <td className="px-4 py-3.5 text-sm text-muted-foreground border-b border-border align-middle text-right tabular-nums" data-ph-mask>
@@ -287,7 +291,10 @@ export function BudgetTable({
                   </span>
                 </div>
               </td>
-              <td className="px-4 py-3.5 text-sm border-b border-border align-middle text-right">
+              <td
+                className="px-4 py-3.5 text-sm border-b border-border align-middle text-right"
+                data-ph-mask
+              >
                 <span
                   className={`font-semibold tabular-nums ${
                     budget.remaining_amount < 0
@@ -308,28 +315,29 @@ export function BudgetTable({
                 >
                   <div className="flex items-center justify-end gap-2">
                     {onManage && (
-                      <button
-                        type="button"
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
                         onClick={() => onManage(budget)}
                         disabled={loading}
-                        className="inline-flex items-center justify-center w-8 h-8 p-0 bg-transparent border-none rounded-md text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-muted hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed [&_svg]:w-4 [&_svg]:h-4"
                         aria-label="Manage budget"
                         title="Manage budget"
                       >
                         <Settings aria-hidden="true" />
-                      </button>
+                      </Button>
                     )}
                     {onDelete && (
-                      <button
-                        type="button"
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
                         onClick={() => onDelete(budget.id)}
                         disabled={loading}
-                        className="inline-flex items-center justify-center w-8 h-8 p-0 bg-transparent border-none rounded-md text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-red-100 dark:hover:bg-red-900/30 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50 disabled:cursor-not-allowed [&_svg]:w-4 [&_svg]:h-4"
                         aria-label="Delete budget"
                         title="Delete budget"
+                        className="hover:bg-destructive/10 hover:text-destructive dark:hover:bg-destructive/20"
                       >
                         <Trash2 aria-hidden="true" />
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </td>

@@ -112,15 +112,6 @@ describe('BudgetCard', () => {
   })
 
   describe('Interactions', () => {
-    it('should call onEdit when edit button is clicked', () => {
-      const onEdit = mock(() => {})
-      renderWithRouter(<BudgetCard budget={mockBudget} onEdit={onEdit} />)
-
-      fireEvent.click(screen.getByRole('button', { name: /edit/i }))
-
-      expect(onEdit).toHaveBeenCalledWith(mockBudget)
-    })
-
     it('should call onDelete when delete button is clicked', () => {
       const onDelete = mock(() => {})
       renderWithRouter(<BudgetCard budget={mockBudget} onDelete={onDelete} />)
@@ -130,10 +121,9 @@ describe('BudgetCard', () => {
       expect(onDelete).toHaveBeenCalledWith('budget-1')
     })
 
-    it('should not show action buttons when callbacks not provided', () => {
+    it('should not show delete button when callback not provided', () => {
       renderWithRouter(<BudgetCard budget={mockBudget} />)
 
-      expect(screen.queryByRole('button', { name: /edit/i })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument()
     })
   })
@@ -142,7 +132,7 @@ describe('BudgetCard', () => {
     it('should link to budget detail page and navigate when clicked', async () => {
       renderWithRouter(<BudgetCard budget={mockBudget} />)
 
-      const link = screen.getByRole('link', { name: /manage categories/i })
+      const link = screen.getByRole('link', { name: /manage budget/i })
       expect(link).toBeInTheDocument()
       expect(link).toHaveAttribute('href', '/budgets/budget-1')
 

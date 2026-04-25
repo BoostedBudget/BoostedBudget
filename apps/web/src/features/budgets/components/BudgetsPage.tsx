@@ -9,6 +9,7 @@
  */
 
 import { useCallback, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
@@ -28,7 +29,7 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
 import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
-import { STORAGE_KEY_LIST_VIEW } from '../constants'
+import { STORAGE_KEY_LIST_VIEW, getBudgetDetailPath } from '../constants'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { computeBudgetMetrics, type Budget, type BudgetWithMetrics, type SavingsGoal } from '../types'
 
@@ -60,6 +61,7 @@ function getInitialView(): ListView {
 }
 
 export function BudgetsPage() {
+  const navigate = useNavigate()
   const trackEvent = useTrackEvent()
   const { budgets, loading: budgetsLoading, error: budgetsError, refetch: refetchBudgets, deleteBudget } = useBudgets()
   const { goals, loading: goalsLoading, error: goalsError, refetch: refetchGoals, deleteGoal } = useSavingsGoals()
@@ -166,6 +168,12 @@ export function BudgetsPage() {
     setSortColumn(column);
     setSortDirection(direction);
   }, []);
+
+  // Issue #1051: Navigate to budget detail page from table view
+  // Analytics are fired by BudgetDetailPage on mount, not here.
+  const handleOpenBudget = useCallback((budget: BudgetWithMetrics) => {
+    navigate(getBudgetDetailPath(budget.id));
+  }, [navigate]);
 
   // Issue #590: Create period options from budgets data
   const periodOptions = useMemo<FilterOption[]>(() => {
@@ -321,7 +329,9 @@ export function BudgetsPage() {
         ) : view === 'table' ? (
           <BudgetTable
             budgets={filterAndSortBudgets(activeBudgets)}
+            onManage={handleOpenBudget}
             onDelete={handleDeleteBudgetClick}
+            onRowClick={handleOpenBudget}
             sortable
             sortColumn={sortColumn}
             sortDirection={sortDirection}
@@ -348,7 +358,9 @@ export function BudgetsPage() {
           {view === 'table' ? (
             <BudgetTable
               budgets={filterAndSortBudgets(inactiveBudgets)}
+              onManage={handleOpenBudget}
               onDelete={handleDeleteBudgetClick}
+              onRowClick={handleOpenBudget}
               sortable
               sortColumn={sortColumn}
               sortDirection={sortDirection}
