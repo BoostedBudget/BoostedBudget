@@ -628,6 +628,19 @@ describe('BudgetsPage', () => {
 
       expect(mockNavigate).toHaveBeenCalledWith('/budgets/budget-1')
     })
+
+    it('inactive budget table also navigates to /budgets/<id>', async () => {
+      const user = userEvent.setup()
+      setupMocks({ budgets: [mockActiveBudget, mockInactiveBudget] })
+      render(<BudgetsPage />)
+
+      // Both active and inactive BudgetTable instances must wire onManage
+      const manageButtons = screen.getAllByRole('button', { name: /manage budget/i })
+      // Second button belongs to the inactive budgets table
+      await user.click(manageButtons[1])
+
+      expect(mockNavigate).toHaveBeenCalledWith('/budgets/budget-2')
+    })
   })
 
   describe('Delete Savings Goal (Issue #521, #960)', () => {
