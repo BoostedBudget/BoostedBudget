@@ -212,6 +212,16 @@ describe('BudgetTable', () => {
     })
   })
 
+  describe('PII Masking (data-ph-mask)', () => {
+    it('masks Amount, Income, and Remaining cells for every budget row', () => {
+      const { container } = render(<BudgetTable budgets={mockBudgets} />)
+
+      // 3 budgets × 3 masked financial cells (Amount, Income, Remaining) = 9 total
+      const maskedCells = container.querySelectorAll('td[data-ph-mask]')
+      expect(maskedCells.length).toBe(mockBudgets.length * 3)
+    })
+  })
+
   describe('Row Actions', () => {
     it('should toggle actions column visibility based on handlers', () => {
       const { rerender } = render(<BudgetTable budgets={mockBudgets} />)
@@ -246,6 +256,34 @@ describe('BudgetTable', () => {
       screen.getAllByRole('button', { name: /manage|delete/i }).forEach((btn) => {
         expect(btn).toBeDisabled()
       })
+    })
+  })
+
+  describe('Actions do not propagate to row click (Issue #1051)', () => {
+    it('clicking Manage button does NOT call onRowClick', () => {
+      const onManage = mock(() => {})
+      const onRowClick = mock(() => {})
+      render(
+        <BudgetTable budgets={mockBudgets} onManage={onManage} onDelete={() => {}} onRowClick={onRowClick} />
+      )
+
+      fireEvent.click(screen.getAllByRole('button', { name: /manage/i })[0])
+
+      expect(onManage).toHaveBeenCalledWith(mockBudgets[0])
+      expect(onRowClick).not.toHaveBeenCalled()
+    })
+
+    it('clicking Delete button does NOT call onRowClick', () => {
+      const onDelete = mock(() => {})
+      const onRowClick = mock(() => {})
+      render(
+        <BudgetTable budgets={mockBudgets} onManage={() => {}} onDelete={onDelete} onRowClick={onRowClick} />
+      )
+
+      fireEvent.click(screen.getAllByRole('button', { name: /delete/i })[0])
+
+      expect(onDelete).toHaveBeenCalledWith(mockBudgets[0].id)
+      expect(onRowClick).not.toHaveBeenCalled()
     })
   })
 

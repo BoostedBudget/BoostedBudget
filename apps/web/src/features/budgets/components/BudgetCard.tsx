@@ -7,15 +7,15 @@
  */
 
 import { Link } from 'react-router-dom';
+import { Button } from '@/components/ui/button';
 import { BudgetProgressBar } from './BudgetProgressBar';
 import { computeBudgetMetrics } from '../types';
+import { getBudgetDetailPath } from '../constants';
 import type { Budget } from '../types';
 
 export interface BudgetCardProps {
   /** The budget to display */
   budget: Budget;
-  /** Callback when edit is clicked */
-  onEdit?: (budget: Budget) => void;
   /** Callback when delete is clicked */
   onDelete?: (budgetId: string) => void;
 }
@@ -70,20 +70,19 @@ function formatPeriod(period: string): string {
  * />
  * ```
  */
-export function BudgetCard({ budget, onEdit, onDelete }: BudgetCardProps) {
+export function BudgetCard({ budget, onDelete }: BudgetCardProps) {
   const metrics = computeBudgetMetrics(budget);
   const categoryCount = budget.categories?.length || 0;
-
-  const handleEdit = () => {
-    onEdit?.(budget);
-  };
 
   const handleDelete = () => {
     onDelete?.(budget.id);
   };
 
   return (
-    <div className="bg-card border border-border rounded-xl p-6 flex flex-col gap-4 transition-shadow hover:shadow-md">
+    <div
+      data-testid="budget-card"
+      className="bg-card border border-border rounded-xl p-6 flex flex-col gap-4 transition-shadow hover:shadow-md"
+    >
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2">
           <h3 className="m-0 text-lg font-semibold text-foreground">{budget.name}</h3>
@@ -147,33 +146,21 @@ export function BudgetCard({ budget, onEdit, onDelete }: BudgetCardProps) {
         </span>
       </div>
 
-      <Link
-        to={`/budgets/${budget.id}`}
-        className="block text-center px-4 py-2 text-sm font-medium text-primary bg-primary/10 border border-primary rounded-md no-underline hover:bg-primary hover:text-primary-foreground transition-colors"
-      >
-        Manage Categories
-      </Link>
+      <Button asChild variant="outline" className="w-full">
+        <Link to={getBudgetDetailPath(budget.id)}>Manage budget</Link>
+      </Button>
 
-      {(onEdit || onDelete) && (
+      {onDelete && (
         <div className="flex gap-2 mt-2 pt-4 border-t border-border">
-          {onEdit && (
-            <button
-              className="px-4 py-2 text-sm font-medium text-primary bg-primary/10 border border-primary rounded-md cursor-pointer hover:bg-primary hover:text-primary-foreground transition-colors"
-              onClick={handleEdit}
-              aria-label="Edit budget"
-            >
-              Edit
-            </button>
-          )}
-          {onDelete && (
-            <button
-              className="px-4 py-2 text-sm font-medium text-destructive border border-destructive rounded-md cursor-pointer bg-transparent hover:bg-destructive hover:text-destructive-foreground transition-colors"
-              onClick={handleDelete}
-              aria-label="Delete budget"
-            >
-              Delete
-            </button>
-          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleDelete}
+            aria-label="Delete budget"
+            className="text-destructive border-destructive hover:bg-destructive hover:text-destructive-foreground"
+          >
+            Delete
+          </Button>
         </div>
       )}
     </div>

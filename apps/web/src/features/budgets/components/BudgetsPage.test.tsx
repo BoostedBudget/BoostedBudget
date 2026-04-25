@@ -1,4 +1,6 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { mockNavigate } from '@/test/mocks/react-router'
+import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import type { Budget, SavingsGoal } from '../types'
 
 import {
@@ -195,7 +197,7 @@ describe('BudgetsPage', () => {
     updated_at: '2025-01-15T00:00:00Z',
   }
 
-  beforeEach(() => {
+  function resetMocks() {
     // Clear all centralized mocks
     mockRefetchBudgets.mockClear()
     mockCreateBudget.mockClear()
@@ -238,36 +240,10 @@ describe('BudgetsPage', () => {
       updateGoal: mockUpdateGoal,
       deleteGoal: mockDeleteGoal,
     })
-  })
+  }
 
-  afterEach(() => {
-    // Reset to default state
-    mockUseBudgets.mockReturnValue({
-      budgets: [],
-      loading: false,
-      error: null,
-      refetch: mockRefetchBudgets,
-      createBudget: mockCreateBudget,
-      updateBudget: mockUpdateBudget,
-      deleteBudget: mockDeleteBudget,
-      getAvailableCategories: mockGetAvailableCategories,
-      addCategory: mockAddCategory,
-      updateCategory: mockUpdateCategory,
-      deleteCategory: mockDeleteCategory,
-    })
-    mockUseSavingsGoals.mockReturnValue({
-      goals: [],
-      goalsWithProgress: [],
-      loading: false,
-      error: null,
-      totalTarget: 0,
-      totalSaved: 0,
-      refetch: mockRefetchGoals,
-      createGoal: mockCreateGoal,
-      updateGoal: mockUpdateGoal,
-      deleteGoal: mockDeleteGoal,
-    })
-  })
+  beforeEach(resetMocks)
+  afterEach(resetMocks)
 
   function setupMocks(overrides?: {
     budgets?: Budget[]
@@ -617,6 +593,66 @@ describe('BudgetsPage', () => {
       await user.type(screen.getByRole('textbox'), 'Past Budget')
       await user.click(screen.getByRole('button', { name: /^delete$/i }))
       expect(localMockDeleteBudget).toHaveBeenCalledWith('budget-2')
+    })
+  })
+
+  describe('Table Navigation (Issue #1051)', () => {
+    beforeEach(() => {
+      mockNavigate.mockClear()
+      localStorage.setItem(STORAGE_KEY_LIST_VIEW, 'table')
+    })
+
+    afterEach(() => {
+      localStorage.removeItem(STORAGE_KEY_LIST_VIEW)
+    })
+
+    it('clicking the Manage budget button navigates to /budgets/<id>', async () => {
+      const user = userEvent.setup()
+      setupMocks({ budgets: [mockActiveBudget] })
+      render(<BudgetsPage />)
+
+      const manageButton = screen.getByRole('button', { name: /manage budget/i })
+      await user.click(manageButton)
+
+      expect(mockNavigate).toHaveBeenCalledWith('/budgets/budget-1')
+    })
+
+    it('clicking a budget row navigates to /budgets/<id>', async () => {
+      const user = userEvent.setup()
+      setupMocks({ budgets: [mockActiveBudget] })
+      render(<BudgetsPage />)
+
+      // Click the budget name cell (not an action button)
+      const budgetName = screen.getByText('Monthly Budget')
+      await user.click(budgetName)
+
+      expect(mockNavigate).toHaveBeenCalledWith('/budgets/budget-1')
+    })
+
+    it('inactive budget table also navigates to /budgets/<id>', async () => {
+      const user = userEvent.setup()
+      setupMocks({ budgets: [mockActiveBudget, mockInactiveBudget] })
+      render(<BudgetsPage />)
+
+      // Both active and inactive BudgetTable instances must wire onManage
+      const manageButtons = screen.getAllByRole('button', { name: /manage budget/i })
+      // Second button belongs to the inactive budgets table
+      await user.click(manageButtons[1])
+
+      expect(mockNavigate).toHaveBeenCalledWith('/budgets/budget-2')
+    })
+
+    it('clicking a row in the inactive budget table navigates to /budgets/<id>', async () => {
+      const user = userEvent.setup()
+      setupMocks({ budgets: [mockActiveBudget, mockInactiveBudget] })
+      render(<BudgetsPage />)
+
+      // The inactive table renders mockInactiveBudget ('Past Budget', id: budget-2).
+      // Click its name cell to exercise the onRowClick handler on the inactive table.
+      const inactiveBudgetName = screen.getByText('Past Budget')
+      await user.click(inactiveBudgetName)
+
+      expect(mockNavigate).toHaveBeenCalledWith('/budgets/budget-2')
     })
   })
 
