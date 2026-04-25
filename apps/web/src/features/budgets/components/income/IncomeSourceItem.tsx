@@ -9,6 +9,7 @@
 import { XIcon, TagIcon, DollarSignIcon, FolderIcon } from 'lucide-react';
 import type { IncomeSource } from '../../types';
 import { formatPlaidCategory } from '@/features/auto-categorization/utils/categoryUtils';
+import { Badge } from '@/components/ui/badge';
 
 export interface IncomeSourceItemProps {
   /** The income source to display */
@@ -92,9 +93,9 @@ export function IncomeSourceItem({
           <XIcon className="w-4 h-4" />
         </button>
       ) : (
-        <span className="text-xs text-muted-foreground px-1.5 py-0.5 rounded bg-muted border border-border shrink-0">
+        <Badge variant="secondary" size="sm" className="shrink-0">
           legacy
-        </span>
+        </Badge>
       )}
     </div>
   );

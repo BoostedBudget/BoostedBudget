@@ -164,7 +164,7 @@ export function BudgetIncomeSection({
         <div className="h-2 bg-muted rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full transition-[width] duration-300 ${
-              percentage >= 100 ? 'bg-green-600' : 'bg-primary'
+              percentage >= 100 ? 'bg-success' : 'bg-primary'
             }`}
             style={{ width: `${progressWidth}%` }}
             role="progressbar"

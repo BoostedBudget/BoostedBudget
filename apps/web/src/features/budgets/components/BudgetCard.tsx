@@ -131,7 +131,7 @@ export function BudgetCard({ budget, onEdit, onDelete }: BudgetCardProps) {
             aria-valuemax={100}
           >
             <div
-              className="h-full rounded-full bg-emerald-500 transition-[width] duration-300"
+              className="h-full rounded-full bg-success transition-[width] duration-300"
               style={{ width: `${Math.min(((budget.income_amount ?? 0) / budget.expected_income!) * 100, 100)}%` }}
             />
           </div>

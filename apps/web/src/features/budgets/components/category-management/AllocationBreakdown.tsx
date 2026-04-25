@@ -8,6 +8,7 @@
 import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import type { BudgetCategory } from '../../types';
+import { Alert } from '@/components/ui/alert';
 import { formatCategoryPath } from '../../types';
 
 export interface AllocationBreakdownProps {
@@ -127,15 +128,11 @@ export function AllocationBreakdown({
         </span>
       </div>
 
-      {/* Over-allocation warning — soft amber, non-blocking */}
+      {/* Over-allocation warning — soft, non-blocking (live region is the sr-only div above) */}
       {isOverAllocated && (
-        <div
-          className="text-sm text-amber-600 dark:text-amber-400 flex items-center gap-1.5"
-          aria-label="over-income warning"
-        >
-          <span aria-hidden="true">⚠️</span>
+        <Alert variant="warning">
           Allocations exceed expected income by {formatCurrency(Math.abs(unallocated))}. You&apos;ll be dipping into savings or going over budget.
-        </div>
+        </Alert>
       )}
 
       {/* Segmented progress bar */}
