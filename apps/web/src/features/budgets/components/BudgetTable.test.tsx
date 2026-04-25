@@ -249,6 +249,34 @@ describe('BudgetTable', () => {
     })
   })
 
+  describe('Actions do not propagate to row click (Issue #1051)', () => {
+    it('clicking Manage button does NOT call onRowClick', () => {
+      const onManage = mock(() => {})
+      const onRowClick = mock(() => {})
+      render(
+        <BudgetTable budgets={mockBudgets} onManage={onManage} onDelete={() => {}} onRowClick={onRowClick} />
+      )
+
+      fireEvent.click(screen.getAllByRole('button', { name: /manage/i })[0])
+
+      expect(onManage).toHaveBeenCalledWith(mockBudgets[0])
+      expect(onRowClick).not.toHaveBeenCalled()
+    })
+
+    it('clicking Delete button does NOT call onRowClick', () => {
+      const onDelete = mock(() => {})
+      const onRowClick = mock(() => {})
+      render(
+        <BudgetTable budgets={mockBudgets} onManage={() => {}} onDelete={onDelete} onRowClick={onRowClick} />
+      )
+
+      fireEvent.click(screen.getAllByRole('button', { name: /delete/i })[0])
+
+      expect(onDelete).toHaveBeenCalledWith(mockBudgets[0].id)
+      expect(onRowClick).not.toHaveBeenCalled()
+    })
+  })
+
   describe('Row Click', () => {
     it('should call onRowClick when row is clicked', () => {
       const onRowClick = mock(() => {})

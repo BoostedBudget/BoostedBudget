@@ -1,4 +1,6 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { mockNavigate } from '@/test/mocks/react-router'
+import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import type { Budget, SavingsGoal } from '../types'
 
 import {
@@ -617,6 +619,40 @@ describe('BudgetsPage', () => {
       await user.type(screen.getByRole('textbox'), 'Past Budget')
       await user.click(screen.getByRole('button', { name: /^delete$/i }))
       expect(localMockDeleteBudget).toHaveBeenCalledWith('budget-2')
+    })
+  })
+
+  describe('Table Navigation (Issue #1051)', () => {
+    beforeEach(() => {
+      mockNavigate.mockClear()
+      localStorage.setItem(STORAGE_KEY_LIST_VIEW, 'table')
+    })
+
+    afterEach(() => {
+      localStorage.removeItem(STORAGE_KEY_LIST_VIEW)
+    })
+
+    it('clicking the Manage budget button navigates to /budgets/<id>', async () => {
+      const user = userEvent.setup()
+      setupMocks({ budgets: [mockActiveBudget] })
+      render(<BudgetsPage />)
+
+      const manageButton = screen.getByRole('button', { name: /manage budget/i })
+      await user.click(manageButton)
+
+      expect(mockNavigate).toHaveBeenCalledWith('/budgets/budget-1')
+    })
+
+    it('clicking a budget row navigates to /budgets/<id>', async () => {
+      const user = userEvent.setup()
+      setupMocks({ budgets: [mockActiveBudget] })
+      render(<BudgetsPage />)
+
+      // Click the budget name cell (not an action button)
+      const budgetName = screen.getByText('Monthly Budget')
+      await user.click(budgetName)
+
+      expect(mockNavigate).toHaveBeenCalledWith('/budgets/budget-1')
     })
   })
 
