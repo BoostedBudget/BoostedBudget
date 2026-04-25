@@ -40,7 +40,7 @@ test.describe('Budget income unification (#1048)', () => {
     await openCreateBudgetDialog(page)
 
     // Assert - Dialog should be visible
-    await expect(page.locator('[role="dialog"]')).toBeVisible()
+    await expect(page.getByRole('dialog', { name: /create budget/i })).toBeVisible()
 
     // Assert - No tabs should exist in the dialog
     await expect(page.getByRole('tab')).toHaveCount(0)
@@ -58,7 +58,7 @@ test.describe('Budget income unification (#1048)', () => {
     await openCreateBudgetDialog(page)
 
     // Assert - Dialog appears
-    await expect(page.locator('[role="dialog"]')).toBeVisible()
+    await expect(page.getByRole('dialog', { name: /create budget/i })).toBeVisible()
 
     // Act - Fill in budget name
     await page.getByLabel(/budget name|name/i).fill('E2E Income Test Budget')
@@ -179,7 +179,7 @@ test.describe('Budget income unification (#1048)', () => {
     await openCreateBudgetDialog(page)
 
     // Assert - Dialog appears
-    const dialog = page.locator('[role="dialog"]')
+    const dialog = page.getByRole('dialog', { name: /create budget/i })
     await expect(dialog).toBeVisible()
 
     // Act - Click cancel button
