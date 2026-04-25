@@ -7,6 +7,7 @@
 
 import { useCallback } from 'react'
 import { Settings, Trash2, ChevronUp, ChevronDown } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import type { BudgetWithMetrics } from '../types'
 import {
   ColumnFilterDropdown,
@@ -308,28 +309,29 @@ export function BudgetTable({
                 >
                   <div className="flex items-center justify-end gap-2">
                     {onManage && (
-                      <button
-                        type="button"
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
                         onClick={() => onManage(budget)}
                         disabled={loading}
-                        className="inline-flex items-center justify-center w-8 h-8 p-0 bg-transparent border-none rounded-md text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-muted hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed [&_svg]:w-4 [&_svg]:h-4"
                         aria-label="Manage budget"
                         title="Manage budget"
                       >
                         <Settings aria-hidden="true" />
-                      </button>
+                      </Button>
                     )}
                     {onDelete && (
-                      <button
-                        type="button"
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
                         onClick={() => onDelete(budget.id)}
                         disabled={loading}
-                        className="inline-flex items-center justify-center w-8 h-8 p-0 bg-transparent border-none rounded-md text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-red-100 dark:hover:bg-red-900/30 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50 disabled:cursor-not-allowed [&_svg]:w-4 [&_svg]:h-4"
                         aria-label="Delete budget"
                         title="Delete budget"
+                        className="hover:bg-red-100 dark:hover:bg-red-900/30 hover:text-red-600 dark:hover:text-red-400"
                       >
                         <Trash2 aria-hidden="true" />
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </td>
