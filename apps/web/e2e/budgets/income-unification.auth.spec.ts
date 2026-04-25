@@ -99,7 +99,7 @@ test.describe('Budget income unification (#1048)', () => {
 
     // Assert - Budget card MUST show income row (R10: dual progress rows)
     // This is a strict assertion — if the income row is missing, R10 has regressed.
-    await expect(firstBudgetCard.locator('text=/income|expected/i')).toBeVisible()
+    await expect(firstBudgetCard.getByText('Income', { exact: true })).toBeVisible()
   })
 
   test('Budget detail page displays Expected Income information', async ({ page }) => {
