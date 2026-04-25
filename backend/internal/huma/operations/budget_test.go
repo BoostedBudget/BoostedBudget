@@ -681,6 +681,42 @@ func TestCreateBudget_BackCompatAmountOnly(t *testing.T) {
 	assert.Nil(t, input.Body.ExpectedIncome, "expected_income should be nil when not provided")
 }
 
+// TestCreateBudget_BothFieldsProvided_ExpectedIncomeWins asserts that when both amount
+// and expected_income are provided, the handler accepts the request and the mock service
+// returns the pre-set budget (service-layer reconciliation tests live in budget_service_test.go).
+// This test is a handler-contract test: both fields in → no error, response well-formed (R19a).
+func TestCreateBudget_BothFieldsProvided_ExpectedIncomeWins(t *testing.T) {
+	expectedIncome := 500.00
+	budget := createTestBudget()
+	budget.Amount = 500.00
+	budget.ExpectedIncome = 500.00 // mock returns reconciled values
+
+	mockService := &mockBudgetService{budget: budget}
+	mockSyncService := &mockBudgetSyncService{}
+	mockTxRepo := &mockTransactionRepoForBudget{}
+
+	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+
+	input := &CreateBudgetInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body = domain.CreateBudgetRequest{
+		Name:           "Monthly Budget",
+		Period:         domain.BudgetPeriodMonthly,
+		StartDate:      time.Now(),
+		Amount:         100.00,          // lower value
+		CurrencyCode:   "USD",
+		ExpectedIncome: &expectedIncome, // higher value — should win
+	}
+
+	output, err := handler.CreateBudget(context.Background(), input)
+
+	require.NoError(t, err, "both fields provided must be accepted")
+	require.NotNil(t, output)
+	assert.Equal(t, 500.00, output.Body.ExpectedIncome, "response should carry expected_income")
+	assert.Equal(t, 500.00, output.Body.Amount, "amount should mirror expected_income")
+}
+
 // TestUpdateBudget_WithExpectedIncome tests that expected_income can be updated via PUT
 // and is reflected in the response (Issue #1048).
 func TestUpdateBudget_WithExpectedIncome(t *testing.T) {

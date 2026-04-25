@@ -155,6 +155,10 @@ func (b *Budget) Validate() error {
 		return errors.New("amount must be positive")
 	}
 
+	if b.ExpectedIncome <= 0 {
+		return errors.New("expected_income must be positive")
+	}
+
 	if b.CurrencyCode == "" {
 		return errors.New("currency_code is required")
 	}
@@ -331,7 +335,7 @@ type CreateBudgetRequest struct {
 	IncomeSources []IncomeSource `json:"income_sources,omitempty"`
 
 	// ExpectedIncome is optional; when nil the service falls back to Amount (Issue #1048).
-	ExpectedIncome *float64 `json:"expected_income,omitempty"`
+	ExpectedIncome *float64 `json:"expected_income,omitempty" validate:"omitempty,gt=0"`
 }
 
 // CreateBudgetCategoryRequest represents a category allocation in a budget creation request.
@@ -359,7 +363,7 @@ type UpdateBudgetRequest struct {
 	IncomeSources *[]IncomeSource `json:"income_sources,omitempty"`
 
 	// ExpectedIncome is optional; when nil the service leaves the existing value unchanged (Issue #1048).
-	ExpectedIncome *float64 `json:"expected_income,omitempty"`
+	ExpectedIncome *float64 `json:"expected_income,omitempty" validate:"omitempty,gt=0"`
 }
 
 // UpdateBudgetCategoryRequest represents the request to update a budget category.

@@ -1,31 +1,20 @@
-/**
- * useIncomeTracking Hook
- * Issue #496: Income Source Configuration UI for Envelope Budgeting
- *
- * Calculates expected income from manual sources and
- * optionally fetches actual income for existing budgets.
- */
-
-import { useState, useMemo, useCallback } from 'react';
+import { useMemo } from 'react';
 import type { IncomeSource } from '../types';
 
 export interface UseIncomeTrackingOptions {
-  /** Budget ID for fetching actual income (undefined for new budgets) */
-  budgetId?: string;
   /** Configured income sources */
   sources: IncomeSource[];
-  /** Budget start date (YYYY-MM-DD) — reserved for future API integration */
-  startDate: string;
-  /** Budget end date (YYYY-MM-DD) — reserved for future API integration */
-  endDate: string;
-  /** Whether tracking is enabled */
-  enabled?: boolean;
   /** budget.expected_income — first-class expected income field (Issue #1048) */
   budgetExpectedIncome?: number;
   /** budget.amount — fallback when expected_income is absent */
   budgetAmount?: number;
   /** budget.income_amount — actual income received */
   budgetIncomeAmount?: number;
+  // Retained for API compatibility; currently unused (all income derived locally)
+  startDate?: string;
+  endDate?: string;
+  budgetId?: string;
+  enabled?: boolean;
 }
 
 export interface UseIncomeTrackingResult {
@@ -35,35 +24,14 @@ export interface UseIncomeTrackingResult {
   expectedTotal: number;
   /** Actual income: budget.income_amount ?? 0 */
   actualTotal: number;
-  /** Whether actual income data is being fetched */
-  loading: boolean;
-  /** Error from API call */
-  error: Error | null;
-  /** Refetch actual income data */
-  refetch: () => Promise<void>;
 }
 
-/**
- * Hook for tracking expected and actual income based on configured sources.
- *
- * Expected income is calculated locally from manual income sources.
- * Actual income (for existing budgets) would be fetched from the API.
- *
- * @param options - Configuration options
- * @returns Income tracking state and controls
- */
 export function useIncomeTracking({
-  budgetId,
   sources,
-  enabled = true,
   budgetExpectedIncome,
   budgetAmount,
   budgetIncomeAmount,
 }: UseIncomeTrackingOptions): UseIncomeTrackingResult {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-
-  // Calculate expected total from manual sources only
   const expectedManualTotal = useMemo(() => {
     return sources
       .filter((s) => s.type === 'manual')
@@ -73,37 +41,16 @@ export function useIncomeTracking({
       }, 0);
   }, [sources]);
 
-  // Issue #1048: Expected total from budget fields — expected_income is the
-  // first-class field; fall back to amount for backwards compat with old data.
+  // Issue #1048: expected_income is the first-class field; fall back to amount
+  // for budgets created before this field existed.
   const expectedTotal = budgetExpectedIncome ?? budgetAmount ?? 0;
 
   // Issue #1048: Actual income is what was received; no fallback to amount.
   const actualTotal = budgetIncomeAmount ?? 0;
 
-  // Placeholder for future API integration to fetch actual income
-  const fetchActual = useCallback(async () => {
-    if (!budgetId || !enabled) {
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-
-    try {
-      // TODO: Implement when API endpoint becomes available
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error('Failed to fetch income'));
-    } finally {
-      setLoading(false);
-    }
-  }, [budgetId, enabled]);
-
   return {
     expectedManualTotal,
     expectedTotal,
     actualTotal,
-    loading,
-    error,
-    refetch: fetchActual,
   };
 }

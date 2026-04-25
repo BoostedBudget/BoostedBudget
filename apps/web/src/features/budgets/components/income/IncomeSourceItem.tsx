@@ -19,9 +19,6 @@ export interface IncomeSourceItemProps {
   disabled?: boolean;
 }
 
-/**
- * Formats a currency amount for display
- */
 function formatCurrency(value: string): string {
   const amount = parseFloat(value);
   if (isNaN(amount)) return '$0.00';
@@ -31,9 +28,6 @@ function formatCurrency(value: string): string {
   }).format(amount);
 }
 
-/**
- * Gets the display value based on source type
- */
 function getDisplayValue(source: IncomeSource): string {
   switch (source.type) {
     case 'plaid_category':
@@ -45,9 +39,6 @@ function getDisplayValue(source: IncomeSource): string {
   }
 }
 
-/**
- * Gets the icon component based on source type
- */
 function getIcon(type: IncomeSource['type']): React.ReactNode {
   switch (type) {
     case 'plaid_category':
@@ -59,9 +50,6 @@ function getIcon(type: IncomeSource['type']): React.ReactNode {
   }
 }
 
-/**
- * Gets the aria-label for the remove button
- */
 function getRemoveAriaLabel(source: IncomeSource): string {
   const displayValue = getDisplayValue(source);
   return `Remove ${displayValue}`;
@@ -93,15 +81,21 @@ export function IncomeSourceItem({
           )}
         </div>
       </div>
-      <button
-        type="button"
-        className="flex items-center justify-center w-7 h-7 rounded-md bg-transparent text-muted-foreground cursor-pointer transition-colors duration-150 shrink-0 hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
-        onClick={onRemove}
-        disabled={disabled}
-        aria-label={getRemoveAriaLabel(source)}
-      >
-        <XIcon className="w-4 h-4" />
-      </button>
+      {source.type !== 'manual' ? (
+        <button
+          type="button"
+          className="flex items-center justify-center w-7 h-7 rounded-md bg-transparent text-muted-foreground cursor-pointer transition-colors duration-150 shrink-0 hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={onRemove}
+          disabled={disabled}
+          aria-label={getRemoveAriaLabel(source)}
+        >
+          <XIcon className="w-4 h-4" />
+        </button>
+      ) : (
+        <span className="text-xs text-muted-foreground px-1.5 py-0.5 rounded bg-muted border border-border shrink-0">
+          legacy
+        </span>
+      )}
     </div>
   );
 }

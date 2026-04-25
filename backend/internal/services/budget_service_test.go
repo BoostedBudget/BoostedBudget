@@ -799,6 +799,33 @@ func TestBudgetService_CreateBudget_ExpectedIncomeOnly(t *testing.T) {
 	mockBudgetRepo.AssertExpectations(t)
 }
 
+// TestBudgetService_CreateBudget_RejectsZeroAmount tests that amount=0 (which
+// also results in expected_income=0 after reconciliation) is rejected by Validate() (R19b).
+func TestBudgetService_CreateBudget_RejectsZeroAmount(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	req := &domain.CreateBudgetRequest{
+		Name:         "Budget",
+		Period:       domain.BudgetPeriodMonthly,
+		StartDate:    time.Now(),
+		Amount:       0, // triggers "amount must be positive"
+		CurrencyCode: "USD",
+	}
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	assert.Error(t, err, "zero amount must be rejected by Validate()")
+	assert.Nil(t, budget)
+	assert.Contains(t, err.Error(), "amount must be positive")
+}
+
 func TestBudgetService_UpdateBudget_ExpectedIncomeUpdates(t *testing.T) {
 	mockBudgetRepo := new(MockBudgetRepository)
 	mockCategoryRepo := new(MockCustomCategoryRepository)
