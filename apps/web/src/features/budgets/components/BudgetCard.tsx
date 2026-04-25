@@ -16,8 +16,6 @@ import type { Budget } from '../types';
 export interface BudgetCardProps {
   /** The budget to display */
   budget: Budget;
-  /** Callback when edit is clicked */
-  onEdit?: (budget: Budget) => void;
   /** Callback when delete is clicked */
   onDelete?: (budgetId: string) => void;
 }
@@ -72,13 +70,9 @@ function formatPeriod(period: string): string {
  * />
  * ```
  */
-export function BudgetCard({ budget, onEdit, onDelete }: BudgetCardProps) {
+export function BudgetCard({ budget, onDelete }: BudgetCardProps) {
   const metrics = computeBudgetMetrics(budget);
   const categoryCount = budget.categories?.length || 0;
-
-  const handleEdit = () => {
-    onEdit?.(budget);
-  };
 
   const handleDelete = () => {
     onDelete?.(budget.id);
@@ -153,24 +147,17 @@ export function BudgetCard({ budget, onEdit, onDelete }: BudgetCardProps) {
         <Link to={getBudgetDetailPath(budget.id)}>Manage budget</Link>
       </Button>
 
-      {(onEdit || onDelete) && (
+      {onDelete && (
         <div className="flex gap-2 mt-2 pt-4 border-t border-border">
-          {onEdit && (
-            <Button variant="outline" size="sm" onClick={handleEdit} aria-label="Edit budget">
-              Edit
-            </Button>
-          )}
-          {onDelete && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleDelete}
-              aria-label="Delete budget"
-              className="text-destructive border-destructive hover:bg-destructive hover:text-destructive-foreground"
-            >
-              Delete
-            </Button>
-          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleDelete}
+            aria-label="Delete budget"
+            className="text-destructive border-destructive hover:bg-destructive hover:text-destructive-foreground"
+          >
+            Delete
+          </Button>
         </div>
       )}
     </div>

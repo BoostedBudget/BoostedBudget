@@ -197,7 +197,7 @@ describe('BudgetsPage', () => {
     updated_at: '2025-01-15T00:00:00Z',
   }
 
-  beforeEach(() => {
+  function resetMocks() {
     // Clear all centralized mocks
     mockRefetchBudgets.mockClear()
     mockCreateBudget.mockClear()
@@ -240,36 +240,10 @@ describe('BudgetsPage', () => {
       updateGoal: mockUpdateGoal,
       deleteGoal: mockDeleteGoal,
     })
-  })
+  }
 
-  afterEach(() => {
-    // Reset to default state
-    mockUseBudgets.mockReturnValue({
-      budgets: [],
-      loading: false,
-      error: null,
-      refetch: mockRefetchBudgets,
-      createBudget: mockCreateBudget,
-      updateBudget: mockUpdateBudget,
-      deleteBudget: mockDeleteBudget,
-      getAvailableCategories: mockGetAvailableCategories,
-      addCategory: mockAddCategory,
-      updateCategory: mockUpdateCategory,
-      deleteCategory: mockDeleteCategory,
-    })
-    mockUseSavingsGoals.mockReturnValue({
-      goals: [],
-      goalsWithProgress: [],
-      loading: false,
-      error: null,
-      totalTarget: 0,
-      totalSaved: 0,
-      refetch: mockRefetchGoals,
-      createGoal: mockCreateGoal,
-      updateGoal: mockUpdateGoal,
-      deleteGoal: mockDeleteGoal,
-    })
-  })
+  beforeEach(resetMocks)
+  afterEach(resetMocks)
 
   function setupMocks(overrides?: {
     budgets?: Budget[]
