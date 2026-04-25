@@ -448,6 +448,60 @@ describe('BudgetCategoryForm', () => {
     })
   })
 
+  describe('Soft Warning — allocation exceeds expected income', () => {
+    it('TestSoftWarning_ShowsWhenAllocationExceedsIncome — shows warning and keeps save enabled', async () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          expectedIncome={1000}
+          totalAllocatedExcludingCurrent={900}
+        />
+      )
+
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+      fireEvent.change(categorySelect, { target: { value: 'Food and Drink > Restaurants' } })
+
+      const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
+      fireEvent.change(amountInput, { target: { value: '200' } })
+
+      // Warning should be visible (900 + 200 = 1100 > 1000)
+      expect(await screen.findByText(/exceed/i)).toBeInTheDocument()
+
+      // Save button must remain enabled
+      const saveButton = screen.getByRole('button', { name: /save|add|create/i })
+      expect(saveButton).not.toBeDisabled()
+    })
+
+    it('TestSoftWarning_HiddenWhenUnder — no warning when allocation is within income', async () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          expectedIncome={1000}
+          totalAllocatedExcludingCurrent={900}
+        />
+      )
+
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+      fireEvent.change(categorySelect, { target: { value: 'Food and Drink > Restaurants' } })
+
+      const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
+      fireEvent.change(amountInput, { target: { value: '50' } })
+
+      // No warning (900 + 50 = 950 <= 1000)
+      expect(screen.queryByText(/exceed/i)).not.toBeInTheDocument()
+    })
+  })
+
   describe('Category Preview', () => {
     it('should show preview when category selected and budget dates provided', async () => {
       const user = userEvent.setup({ delay: null })

@@ -39,6 +39,7 @@ export interface CreateBudgetRequest {
   currency_code?: string;
   description?: string;
   end_date?: string;
+  expected_income?: number;
   income_amount?: number;
   /** @nullable */
   income_sources?: IncomeSource[] | null;

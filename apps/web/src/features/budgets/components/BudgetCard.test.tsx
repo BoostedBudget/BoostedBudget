@@ -151,4 +151,30 @@ describe('BudgetCard', () => {
       expect(screen.getByTestId('budget-detail-page')).toBeInTheDocument()
     })
   })
+
+  describe('Income Progress', () => {
+    it('renders income progress row when expected_income is set', () => {
+      const budgetWithIncome = { ...mockBudget, expected_income: 2000, income_amount: 800 }
+      renderWithRouter(<BudgetCard budget={budgetWithIncome} />)
+
+      expect(screen.getByText('Income')).toBeInTheDocument()
+      // The income amounts are rendered inside a single span with currency formatting
+      expect(screen.getByText('$800.00 of $2,000.00 expected')).toBeInTheDocument()
+
+    })
+
+    it('does not render income progress row when expected_income is 0', () => {
+      const budgetNoIncome = { ...mockBudget, expected_income: 0, income_amount: 0 }
+      renderWithRouter(<BudgetCard budget={budgetNoIncome} />)
+
+      expect(screen.queryByText('Income')).not.toBeInTheDocument()
+    })
+
+    it('does not render income progress row when expected_income is absent', () => {
+      // mockBudget has no expected_income field
+      renderWithRouter(<BudgetCard budget={mockBudget} />)
+
+      expect(screen.queryByText('Income')).not.toBeInTheDocument()
+    })
+  })
 })

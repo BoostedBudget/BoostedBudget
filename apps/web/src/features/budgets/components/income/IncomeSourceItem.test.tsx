@@ -105,8 +105,8 @@ describe('IncomeSourceItem', () => {
 
     it('disables remove button when disabled prop is true', () => {
       const source: IncomeSource = {
-        type: 'manual',
-        value: '1000',
+        type: 'tag',
+        value: 'Salary',
       };
 
       render(<IncomeSourceItem source={source} onRemove={mockOnRemove} disabled />);
@@ -118,8 +118,8 @@ describe('IncomeSourceItem', () => {
     it('does not call onRemove when button is disabled and clicked', async () => {
       const user = userEvent.setup({ delay: null });
       const source: IncomeSource = {
-        type: 'manual',
-        value: '1000',
+        type: 'tag',
+        value: 'Salary',
       };
 
       render(<IncomeSourceItem source={source} onRemove={mockOnRemove} disabled />);
@@ -160,7 +160,7 @@ describe('IncomeSourceItem', () => {
       expect(removeButton).toBeInTheDocument();
     });
 
-    it('has accessible remove button for manual amount', () => {
+    it('manual source has no remove button (legacy read-only, tested in Legacy manual read-only suite)', () => {
       const source: IncomeSource = {
         type: 'manual',
         value: '2500',
@@ -168,9 +168,51 @@ describe('IncomeSourceItem', () => {
 
       render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
 
-      // For manual, aria-label should include the formatted amount
-      const removeButton = screen.getByRole('button', { name: /remove.*2,500/i });
-      expect(removeButton).toBeInTheDocument();
+      // Manual sources are read-only — no remove button, only a "legacy" pill
+      expect(screen.queryByRole('button', { name: /remove/i })).not.toBeInTheDocument();
+      expect(screen.getByText('legacy')).toBeInTheDocument();
+    });
+  });
+
+  // ==========================================================================
+  // Issue #1048: Legacy manual entries are read-only (R8)
+  // ==========================================================================
+
+  describe('Legacy manual read-only', () => {
+    it('does not render remove button for manual source type', () => {
+      const source: IncomeSource = {
+        type: 'manual',
+        value: '500',
+        description: 'Side gig',
+      };
+
+      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
+
+      expect(screen.queryByRole('button', { name: /remove/i })).not.toBeInTheDocument();
+    });
+
+    it('still renders value and description for manual source', () => {
+      const source: IncomeSource = {
+        type: 'manual',
+        value: '500',
+        description: 'Side gig',
+      };
+
+      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
+
+      expect(screen.getByText('$500.00')).toBeInTheDocument();
+      expect(screen.getByText('Side gig')).toBeInTheDocument();
+    });
+
+    it('shows legacy pill for manual source', () => {
+      const source: IncomeSource = {
+        type: 'manual',
+        value: '1000',
+      };
+
+      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
+
+      expect(screen.getByText('legacy')).toBeInTheDocument();
     });
   });
 

@@ -54,6 +54,18 @@ func NewBudgetRepository(db DB) BudgetRepository {
 	return &budgetRepository{db: db}
 }
 
+// unmarshalIncomeSources deserializes income_sources JSON. Returns empty slice on nil.
+func unmarshalIncomeSources(data []byte) ([]domain.IncomeSource, error) {
+	if data == nil {
+		return []domain.IncomeSource{}, nil
+	}
+	var sources []domain.IncomeSource
+	if err := json.Unmarshal(data, &sources); err != nil {
+		return nil, err
+	}
+	return sources, nil
+}
+
 // Create creates a new budget in the database.
 func (r *budgetRepository) Create(ctx context.Context, budget *domain.Budget) error {
 	if budget.ID == "" {
@@ -78,12 +90,17 @@ func (r *budgetRepository) Create(ctx context.Context, budget *domain.Budget) er
 		return err
 	}
 
+	// Mirror expected_income to Amount when not explicitly set (Issue #1048).
+	if budget.ExpectedIncome == 0 {
+		budget.ExpectedIncome = budget.Amount
+	}
+
 	query := `
 		INSERT INTO budgets (
 			id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			income_amount, income_sources, expected_income
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`
 
 	_, err = r.db.Exec(ctx, query,
@@ -101,6 +118,7 @@ func (r *budgetRepository) Create(ctx context.Context, budget *domain.Budget) er
 		budget.UpdatedAt,
 		budget.IncomeAmount,
 		incomeSourcesJSON,
+		budget.ExpectedIncome,
 	)
 
 	if err != nil {
@@ -119,7 +137,7 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources
+			income_amount, income_sources, expected_income
 		FROM budgets
 		WHERE id = $1
 	`
@@ -141,6 +159,7 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 		&budget.UpdatedAt,
 		&budget.IncomeAmount,
 		&incomeSourcesJSON,
+		&budget.ExpectedIncome,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -151,9 +170,11 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 	}
 
 	// Unmarshal income_sources from JSON (Issue #491)
-	if err := json.Unmarshal(incomeSourcesJSON, &budget.IncomeSources); err != nil {
+	sources, err := unmarshalIncomeSources(incomeSourcesJSON)
+	if err != nil {
 		return nil, err
 	}
+	budget.IncomeSources = sources
 
 	// Load categories
 	categories, err := r.GetCategoriesByBudgetID(ctx, budget.ID)
@@ -170,7 +191,7 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources
+			income_amount, income_sources, expected_income
 		FROM budgets
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -201,6 +222,7 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 			&budget.UpdatedAt,
 			&budget.IncomeAmount,
 			&incomeSourcesJSON,
+			&budget.ExpectedIncome,
 		)
 		if err != nil {
 			return nil, err
@@ -215,7 +237,7 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 	}
 
 	if budgets == nil {
-		budgets = []*domain.Budget{}
+		budgets = make([]*domain.Budget, 0)
 	}
 
 	return budgets, nil
@@ -226,7 +248,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources
+			income_amount, income_sources, expected_income
 		FROM budgets
 		WHERE user_id = $1 AND is_active = true
 		ORDER BY created_at DESC
@@ -257,6 +279,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 			&budget.UpdatedAt,
 			&budget.IncomeAmount,
 			&incomeSourcesJSON,
+			&budget.ExpectedIncome,
 		)
 		if err != nil {
 			return nil, err
@@ -271,7 +294,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 	}
 
 	if budgets == nil {
-		budgets = []*domain.Budget{}
+		budgets = make([]*domain.Budget, 0)
 	}
 
 	return budgets, nil
@@ -282,7 +305,7 @@ func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources
+			income_amount, income_sources, expected_income
 		FROM budgets
 		WHERE user_id = $1 AND name = $2
 	`
@@ -304,6 +327,7 @@ func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (
 		&budget.UpdatedAt,
 		&budget.IncomeAmount,
 		&incomeSourcesJSON,
+		&budget.ExpectedIncome,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -314,9 +338,11 @@ func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (
 	}
 
 	// Unmarshal income_sources from JSON (Issue #491)
-	if err := json.Unmarshal(incomeSourcesJSON, &budget.IncomeSources); err != nil {
+	sources, err := unmarshalIncomeSources(incomeSourcesJSON)
+	if err != nil {
 		return nil, err
 	}
+	budget.IncomeSources = sources
 
 	return budget, nil
 }
@@ -335,12 +361,18 @@ func (r *budgetRepository) Update(ctx context.Context, budget *domain.Budget) er
 		return err
 	}
 
+	// Mirror expected_income to Amount when not explicitly set (Issue #1048).
+	if budget.ExpectedIncome == 0 {
+		budget.ExpectedIncome = budget.Amount
+	}
+
 	query := `
 		UPDATE budgets
 		SET name = $1, description = $2, period = $3, start_date = $4,
 			end_date = $5, amount = $6, currency_code = $7, is_active = $8,
-			updated_at = $9, income_amount = $10, income_sources = $11
-		WHERE id = $12 AND user_id = $13
+			updated_at = $9, income_amount = $10, income_sources = $11,
+			expected_income = $12
+		WHERE id = $13 AND user_id = $14
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -355,6 +387,7 @@ func (r *budgetRepository) Update(ctx context.Context, budget *domain.Budget) er
 		budget.UpdatedAt,
 		budget.IncomeAmount,
 		incomeSourcesJSON,
+		budget.ExpectedIncome,
 		budget.ID,
 		budget.UserID,
 	)
@@ -670,8 +703,8 @@ func (r *budgetRepository) GetCategoriesMatchingTransaction(ctx context.Context,
 	return categories, nil
 }
 
-// UpdateBudgetIncome updates only the income_amount for a budget.
-// This is used for quick income adjustments in envelope budgeting (Issue #491).
+// UpdateBudgetIncome updates only income_amount for a budget (the actual received sum).
+// expected_income is the user's planned target and must NOT be overwritten on every sync.
 func (r *budgetRepository) UpdateBudgetIncome(ctx context.Context, budgetID string, incomeAmount float64) error {
 	query := `
 		UPDATE budgets

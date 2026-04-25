@@ -28,9 +28,6 @@ import { BudgetCategoryManager } from './category-management/BudgetCategoryManag
 import { BudgetIncomeSection } from './budget-detail/BudgetIncomeSection';
 import { UnallocatedFundsCard } from './budget-detail/UnallocatedFundsCard';
 
-/**
- * Format a date string for display
- */
 function formatDate(dateString: string): string {
   return new Date(dateString).toLocaleDateString('en-US', {
     month: 'short',
@@ -39,9 +36,6 @@ function formatDate(dateString: string): string {
   });
 }
 
-/**
- * Format currency for display
- */
 function formatCurrency(amount: number, currencyCode = 'USD'): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -49,9 +43,6 @@ function formatCurrency(amount: number, currencyCode = 'USD'): string {
   }).format(amount);
 }
 
-/**
- * Capitalize the first letter of a string
- */
 function capitalize(str: string): string {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
@@ -68,22 +59,20 @@ export function BudgetDetailPage() {
     trackEvent(ANALYTICS_EVENTS.BUDGET_DETAIL_VIEWED)
   }, [trackEvent])
 
-  // Use generated mutation hooks for budget category operations
   const addCategoryMutation = useAddBudgetCategory();
   const updateCategoryMutation = useUpdateBudgetCategory();
   const deleteCategoryMutation = useDeleteBudgetCategory();
 
-  // Issue #498: Calculate income and allocation metrics
+  // Issue #498 / #1048: Calculate income and allocation metrics
   const incomeMetrics = useMemo(() => {
     if (!budget) return { expectedIncome: 0, actualIncome: 0, unallocated: 0, totalAllocated: 0 };
 
-    // Calculate expected income from manual income sources
-    const expectedIncome = (budget.income_sources || [])
-      .filter((src) => src.type === 'manual')
-      .reduce((sum, src) => sum + parseFloat(src.value || '0'), 0);
+    // Issue #1048: Use expected_income as the first-class field; fall back to
+    // amount for backwards compat with budgets created before this field existed.
+    const expectedIncome = budget.expected_income ?? budget.amount ?? 0;
 
-    // Use budget.income_amount as actual income (or fall back to expected)
-    const actualIncome = budget.income_amount || expectedIncome || budget.amount;
+    // Issue #1048: Actual income is what was received — no fallback to amount.
+    const actualIncome = budget.income_amount ?? 0;
 
     // Calculate total allocated from categories
     const totalAllocated = (budget.categories || []).reduce(
@@ -91,18 +80,16 @@ export function BudgetDetailPage() {
       0
     );
 
-    // Calculate unallocated funds
-    const unallocated = actualIncome - totalAllocated;
+    // Unallocated is relative to the planned target, not actual received income.
+    const unallocated = expectedIncome - totalAllocated;
 
     return { expectedIncome, actualIncome, unallocated, totalAllocated };
   }, [budget]);
 
-  // Handler for navigating to create savings goal
   const handleCreateSavingsGoal = useCallback(() => {
     navigate('/budgets', { state: { openSavingsGoal: true } });
   }, [navigate]);
 
-  // Handler for adding a new category
   const handleAddCategory = useCallback(
     async (req: CreateBudgetCategoryRequest): Promise<BudgetCategory> => {
       const result = await addCategoryMutation.mutateAsync({
@@ -115,7 +102,6 @@ export function BudgetDetailPage() {
     [budgetId, refetch, addCategoryMutation]
   );
 
-  // Handler for updating a category
   const handleUpdateCategory = useCallback(
     async (categoryId: string, req: UpdateBudgetCategoryRequest): Promise<BudgetCategory> => {
       const result = await updateCategoryMutation.mutateAsync({
@@ -130,7 +116,6 @@ export function BudgetDetailPage() {
     [budgetId, refetch, trackEvent, updateCategoryMutation]
   );
 
-  // Handler for deleting a category
   const handleDeleteCategory = useCallback(
     async (categoryId: string): Promise<void> => {
       await deleteCategoryMutation.mutateAsync({
@@ -142,7 +127,6 @@ export function BudgetDetailPage() {
     [budgetId, refetch, deleteCategoryMutation]
   );
 
-  // Loading state
   if (loading) {
     return (
       <div className="max-w-[1200px] mx-auto p-6">
@@ -154,7 +138,6 @@ export function BudgetDetailPage() {
     );
   }
 
-  // Error state
   if (error) {
     return (
       <div className="max-w-[1200px] mx-auto p-6">
@@ -173,7 +156,6 @@ export function BudgetDetailPage() {
     );
   }
 
-  // Not found state
   if (!budget) {
     return (
       <div className="max-w-[1200px] mx-auto p-6">
@@ -222,9 +204,9 @@ export function BudgetDetailPage() {
             </span>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Budget Amount</span>
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Expected Income</span>
             <span className="text-sm font-semibold text-foreground" data-ph-mask>
-              {formatCurrency(budget.amount, budget.currency_code)}
+              {formatCurrency(budget.expected_income ?? budget.amount, budget.currency_code)}
             </span>
           </div>
           {budget.income_amount > 0 && (
@@ -274,7 +256,7 @@ export function BudgetDetailPage() {
       <section className="mt-6">
         <UnallocatedFundsCard
           unallocatedAmount={incomeMetrics.unallocated}
-          totalIncome={incomeMetrics.actualIncome}
+          totalIncome={incomeMetrics.expectedIncome}
           currencyCode={budget.currency_code}
           onCreateSavingsGoal={handleCreateSavingsGoal}
         />
@@ -285,7 +267,7 @@ export function BudgetDetailPage() {
         <BudgetCategoryManager
           budgetId={budgetId || ''}
           categories={budget.categories || []}
-          totalIncome={budget.income_amount || budget.amount}
+          totalIncome={budget.expected_income ?? budget.amount}
           onAddCategory={handleAddCategory}
           onUpdateCategory={handleUpdateCategory}
           onDeleteCategory={handleDeleteCategory}

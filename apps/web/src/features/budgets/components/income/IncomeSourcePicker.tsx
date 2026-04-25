@@ -5,14 +5,14 @@
  * Allows adding new income sources with type-specific pickers:
  * - plaid_category: Dropdown of Plaid categories
  * - tag: Dropdown of user tags
- * - manual: Amount input with optional description
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback } from 'react';
 import { PlusIcon } from 'lucide-react';
 import type { IncomeSource, IncomeSourceType } from '../../types';
 import type { UserTag } from '@/features/tags/types';
 import { formatPlaidCategory } from '@/features/auto-categorization/utils/categoryUtils';
+import { Button } from '@/components/ui/button';
 
 export interface IncomeSourcePickerProps {
   /** Available Plaid categories for selection */
@@ -27,10 +27,12 @@ export interface IncomeSourcePickerProps {
   disabled?: boolean;
 }
 
+// Note: 'manual' is intentionally excluded here — new budgets only support
+// category and tag sources. The manual render path in IncomeSourceItem.tsx is
+// preserved for existing budgets that already have manual sources in the DB.
 const SOURCE_TYPE_OPTIONS: { value: IncomeSourceType; label: string }[] = [
   { value: 'plaid_category', label: 'Category' },
   { value: 'tag', label: 'Tag' },
-  { value: 'manual', label: 'Manual' },
 ];
 
 export function IncomeSourcePicker({
@@ -43,40 +45,28 @@ export function IncomeSourcePicker({
   const [sourceType, setSourceType] = useState<IncomeSourceType>('plaid_category');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [selectedTag, setSelectedTag] = useState('');
-  const [manualAmount, setManualAmount] = useState('');
-  const [manualDescription, setManualDescription] = useState('');
 
   // Filter out already selected categories
-  const availableCategoriesFiltered = useMemo(() => {
-    const existingCategoryValues = existingSources
-      .filter((s) => s.type === 'plaid_category')
-      .map((s) => s.value);
-    return availableCategories.filter((cat) => !existingCategoryValues.includes(cat));
-  }, [availableCategories, existingSources]);
+  const existingCategoryValues = existingSources
+    .filter((s) => s.type === 'plaid_category')
+    .map((s) => s.value);
+  const availableCategoriesFiltered = availableCategories.filter(
+    (cat) => !existingCategoryValues.includes(cat)
+  );
 
   // Filter out already selected tags
-  const availableTagsFiltered = useMemo(() => {
-    const existingTagValues = existingSources
-      .filter((s) => s.type === 'tag')
-      .map((s) => s.value);
-    return availableTags.filter((tag) => !existingTagValues.includes(tag.name));
-  }, [availableTags, existingSources]);
+  const existingTagValues = existingSources
+    .filter((s) => s.type === 'tag')
+    .map((s) => s.value);
+  const availableTagsFiltered = availableTags.filter(
+    (tag) => !existingTagValues.includes(tag.name)
+  );
 
-  // Check if add button should be enabled
-  const isAddEnabled = useMemo(() => {
-    if (disabled) return false;
-
-    switch (sourceType) {
-      case 'plaid_category':
-        return selectedCategory !== '';
-      case 'tag':
-        return selectedTag !== '';
-      case 'manual': {
-        const amount = parseFloat(manualAmount);
-        return !isNaN(amount) && amount > 0;
-      }
-    }
-  }, [sourceType, selectedCategory, selectedTag, manualAmount, disabled]);
+  // Determine if add button should be enabled
+  const isAddEnabled =
+    !disabled &&
+    ((sourceType === 'plaid_category' && selectedCategory !== '') ||
+      (sourceType === 'tag' && selectedTag !== ''));
 
   // Handle type change
   const handleTypeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -85,15 +75,13 @@ export function IncomeSourcePicker({
     // Reset selections when type changes
     setSelectedCategory('');
     setSelectedTag('');
-    setManualAmount('');
-    setManualDescription('');
   }, []);
 
   // Handle add
   const handleAdd = useCallback(() => {
     if (!isAddEnabled) return;
 
-    let source: IncomeSource;
+    let source: IncomeSource | undefined;
 
     switch (sourceType) {
       case 'plaid_category':
@@ -102,28 +90,18 @@ export function IncomeSourcePicker({
       case 'tag':
         source = { type: 'tag', value: selectedTag };
         break;
-      case 'manual':
-        source = {
-          type: 'manual',
-          value: manualAmount,
-          description: manualDescription.trim() || undefined,
-        };
-        break;
     }
 
+    if (!source) return;
     onAdd(source);
 
     // Reset selection
     setSelectedCategory('');
     setSelectedTag('');
-    setManualAmount('');
-    setManualDescription('');
-  }, [sourceType, selectedCategory, selectedTag, manualAmount, manualDescription, isAddEnabled, onAdd]);
+  }, [sourceType, selectedCategory, selectedTag, isAddEnabled, onAdd]);
 
   const selectCls =
     'px-3 py-2 text-sm bg-card border border-input rounded-md text-foreground cursor-pointer transition-colors duration-150 focus:outline-none focus:border-ring focus:ring-2 focus:ring-ring disabled:bg-muted disabled:cursor-not-allowed disabled:opacity-60';
-  const inputCls =
-    'px-3 py-2 text-sm bg-card border border-input rounded-md text-foreground transition-colors duration-150 focus:outline-none focus:border-ring focus:ring-2 focus:ring-ring disabled:bg-muted disabled:cursor-not-allowed disabled:opacity-60';
 
   return (
     <div className="flex flex-col gap-3 p-4 bg-muted border border-border rounded-lg">
@@ -196,58 +174,17 @@ export function IncomeSourcePicker({
         </div>
       )}
 
-      {/* Manual Entry */}
-      {sourceType === 'manual' && (
-        <>
-          <div className="flex flex-col gap-1">
-            <label htmlFor="manual-amount" className="text-xs font-medium text-muted-foreground">
-              Amount
-            </label>
-            <div className="relative flex items-center">
-              <span className="absolute left-3 text-muted-foreground pointer-events-none">$</span>
-              <input
-                type="number"
-                id="manual-amount"
-                className={`${inputCls} pl-6 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`}
-                value={manualAmount}
-                onChange={(e) => setManualAmount(e.target.value)}
-                min="0"
-                step="0.01"
-                placeholder="0.00"
-                disabled={disabled}
-                aria-label="Amount"
-              />
-            </div>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label htmlFor="manual-description" className="text-xs font-medium text-muted-foreground">
-              Description (optional)
-            </label>
-            <input
-              type="text"
-              id="manual-description"
-              className={inputCls}
-              value={manualDescription}
-              onChange={(e) => setManualDescription(e.target.value)}
-              placeholder="e.g., Monthly salary"
-              disabled={disabled}
-              aria-label="Description"
-            />
-          </div>
-        </>
-      )}
-
       {/* Add Button */}
-      <button
+      <Button
         type="button"
-        className="flex items-center justify-center gap-1.5 px-4 py-2 mt-1 text-sm font-medium text-primary-foreground bg-primary border-none rounded-md cursor-pointer transition-colors duration-150 hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="mt-1"
         onClick={handleAdd}
         disabled={!isAddEnabled}
         aria-label="Add income source"
       >
         <PlusIcon className="w-4 h-4" />
         Add
-      </button>
+      </Button>
     </div>
   );
 }

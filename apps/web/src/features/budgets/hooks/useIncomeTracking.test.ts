@@ -113,18 +113,6 @@ describe('useIncomeTracking', () => {
   // ==========================================================================
 
   describe('Hook State', () => {
-    it('returns loading false initially when no budgetId', () => {
-      const { result } = renderHook(() =>
-        useIncomeTracking({
-          sources: [],
-          startDate: '2025-01-01',
-          endDate: '2025-01-31',
-        })
-      );
-
-      expect(result.current.loading).toBe(false);
-    });
-
     it('returns actualTotal as 0 when no budgetId', () => {
       const { result } = renderHook(() =>
         useIncomeTracking({
@@ -137,7 +125,9 @@ describe('useIncomeTracking', () => {
       expect(result.current.actualTotal).toBe(0);
     });
 
-    it('returns error as null initially', () => {
+    // Issue #1048: loading/error/refetch are dead fields now that actualTotal
+    // is derived directly from budgetIncomeAmount — no API call needed.
+    it('does not expose loading, error, or refetch on the result (dead fields removed)', () => {
       const { result } = renderHook(() =>
         useIncomeTracking({
           sources: [],
@@ -146,19 +136,9 @@ describe('useIncomeTracking', () => {
         })
       );
 
-      expect(result.current.error).toBe(null);
-    });
-
-    it('provides refetch function', () => {
-      const { result } = renderHook(() =>
-        useIncomeTracking({
-          sources: [],
-          startDate: '2025-01-01',
-          endDate: '2025-01-31',
-        })
-      );
-
-      expect(typeof result.current.refetch).toBe('function');
+      expect('loading' in result.current).toBe(false);
+      expect('error' in result.current).toBe(false);
+      expect('refetch' in result.current).toBe(false);
     });
   });
 
@@ -193,6 +173,81 @@ describe('useIncomeTracking', () => {
       rerender({ sources: newSources });
 
       expect(result.current.expectedManualTotal).toBe(1500);
+    });
+  });
+
+  // ==========================================================================
+  // expectedTotal from budget fields
+  // ==========================================================================
+
+  describe('expectedTotal from budget fields', () => {
+    it('uses budget.expected_income when provided', () => {
+      const { result } = renderHook(() =>
+        useIncomeTracking({
+          sources: [],
+          startDate: '2025-01-01',
+          endDate: '2025-01-31',
+          budgetExpectedIncome: 3000,
+          budgetAmount: 5000,
+          budgetIncomeAmount: 0,
+        })
+      );
+
+      expect(result.current.expectedTotal).toBe(3000);
+    });
+
+    it('falls back to budget.amount when expected_income is undefined', () => {
+      const { result } = renderHook(() =>
+        useIncomeTracking({
+          sources: [],
+          startDate: '2025-01-01',
+          endDate: '2025-01-31',
+          budgetAmount: 5000,
+          budgetIncomeAmount: 0,
+        })
+      );
+
+      expect(result.current.expectedTotal).toBe(5000);
+    });
+
+    it('returns 0 for expectedTotal when neither expected_income nor amount provided', () => {
+      const { result } = renderHook(() =>
+        useIncomeTracking({
+          sources: [],
+          startDate: '2025-01-01',
+          endDate: '2025-01-31',
+        })
+      );
+
+      expect(result.current.expectedTotal).toBe(0);
+    });
+
+    it('uses budget.income_amount as actualTotal', () => {
+      const { result } = renderHook(() =>
+        useIncomeTracking({
+          sources: [],
+          startDate: '2025-01-01',
+          endDate: '2025-01-31',
+          budgetIncomeAmount: 1500,
+          budgetExpectedIncome: 3000,
+          budgetAmount: 9999,
+        })
+      );
+
+      expect(result.current.actualTotal).toBe(1500);
+    });
+
+    it('returns 0 for actualTotal when budget.income_amount is undefined', () => {
+      const { result } = renderHook(() =>
+        useIncomeTracking({
+          sources: [],
+          startDate: '2025-01-01',
+          endDate: '2025-01-31',
+          budgetExpectedIncome: 3000,
+        })
+      );
+
+      expect(result.current.actualTotal).toBe(0);
     });
   });
 
