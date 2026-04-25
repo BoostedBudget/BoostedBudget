@@ -82,8 +82,8 @@ test.describe('Budget list-to-detail navigation (#1051)', () => {
     // Wait for table to render
     await page.waitForLoadState('networkidle')
 
-    // Act - Find a budget row (any row containing text that looks like a budget name)
-    const budgetRow = page.getByRole('row').filter({ hasText: /budget/i }).first()
+    // Act - Find first data row (skip header row at index 0)
+    const budgetRow = page.getByRole('row').nth(1)
 
     if (await budgetRow.isVisible().catch(() => false)) {
       // Click the Name cell (first cell) to avoid hitting action buttons
