@@ -123,14 +123,14 @@ export function BudgetIncomeSection({
       <div className="flex flex-wrap gap-6 mb-4">
         <div className="flex flex-col gap-1">
           <span className="income-section__label text-xs font-medium uppercase tracking-wide text-muted-foreground">Expected</span>
-          <span className="text-xl font-semibold text-foreground">
+          <span className="text-xl font-semibold text-foreground" data-ph-mask>
             {formatCurrency(expectedIncome, currencyCode)}
           </span>
         </div>
 
         <div className="flex flex-col gap-1">
           <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Actual</span>
-          <span className="text-xl font-semibold text-foreground">
+          <span className="text-xl font-semibold text-foreground" data-ph-mask>
             {formatCurrency(actualIncome, currencyCode)}
           </span>
         </div>
@@ -164,7 +164,7 @@ export function BudgetIncomeSection({
         <div className="h-2 bg-muted rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full transition-[width] duration-300 ${
-              percentage >= 100 ? 'bg-green-600' : 'bg-primary'
+              percentage >= 100 ? 'bg-success' : 'bg-primary'
             }`}
             style={{ width: `${progressWidth}%` }}
             role="progressbar"

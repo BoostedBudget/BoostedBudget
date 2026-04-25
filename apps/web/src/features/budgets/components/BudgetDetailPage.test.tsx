@@ -301,7 +301,8 @@ describe('BudgetDetailPage', () => {
 
       renderWithRouter()
 
-      expect(screen.getByText('$5,000.00')).toBeInTheDocument()
+      // Issue #1048: $5,000.00 may appear in both the stat card and income section
+      expect(screen.getAllByText('$5,000.00').length).toBeGreaterThan(0)
     })
 
     it('should render income when greater than zero', () => {
@@ -355,6 +356,46 @@ describe('BudgetDetailPage', () => {
       expect(screen.getByText('Actual')).toBeInTheDocument()
       // $7,500.00 may appear multiple times (header + income section)
       expect(screen.getAllByText('$7,500.00').length).toBeGreaterThan(0)
+    })
+
+    it('uses expected_income as expectedIncome when set', () => {
+      mockUseBudgetDetail.mockReturnValue({
+        budget: createMockBudget({
+          expected_income: 3000,
+          income_sources: [],
+        }),
+        loading: false,
+        error: null,
+        refetch: mockBudgetDetailRefetch,
+      })
+
+      renderWithRouter()
+
+      // expectedIncome = budget.expected_income = 3000, so income section renders
+      // BudgetIncomeSection shows "Expected" label with $3,000.00
+      expect(screen.getByText('Expected')).toBeInTheDocument()
+      expect(screen.getAllByText('$3,000.00').length).toBeGreaterThan(0)
+    })
+
+    it('actualIncome uses income_amount without amount fallback', () => {
+      mockUseBudgetDetail.mockReturnValue({
+        budget: createMockBudget({
+          income_amount: 1500,
+          expected_income: 3000,
+          amount: 9999,
+        }),
+        loading: false,
+        error: null,
+        refetch: mockBudgetDetailRefetch,
+      })
+
+      renderWithRouter()
+
+      // actualIncome = budget.income_amount = 1500 (NOT 9999 from amount)
+      expect(screen.getByText('Actual')).toBeInTheDocument()
+      expect(screen.getAllByText('$1,500.00').length).toBeGreaterThan(0)
+      // $9,999.00 should NOT appear as an income value
+      // (it may appear in header as "Budget Amount" stat, but not in income section)
     })
 
     it('should calculate unallocated funds correctly', () => {
@@ -417,6 +458,87 @@ describe('BudgetDetailPage', () => {
     })
   })
 
+  describe('Issue #1048: Expected Income header reads expected_income, not amount', () => {
+    it('stat card shows expected_income value when it differs from amount', () => {
+      // expected_income=5000, amount=3000 — header must show $5,000, NOT $3,000
+      // With empty income_sources the only place $3,000 could appear is the buggy stat card
+      mockUseBudgetDetail.mockReturnValue({
+        budget: createMockBudget({
+          expected_income: 5000,
+          amount: 3000,
+          income_sources: [],
+          categories: [],
+        }),
+        loading: false,
+        error: null,
+        refetch: mockBudgetDetailRefetch,
+      })
+
+      renderWithRouter()
+
+      // $3,000.00 must NOT appear anywhere — it would only surface via the bug
+      expect(screen.queryAllByText('$3,000.00').length).toBe(0)
+      // $5,000.00 must appear (from the fixed stat card + income section)
+      expect(screen.getAllByText('$5,000.00').length).toBeGreaterThan(0)
+    })
+
+    it('falls back to amount when expected_income is absent (legacy budget)', () => {
+      mockUseBudgetDetail.mockReturnValue({
+        budget: createMockBudget({
+          expected_income: undefined,
+          amount: 4500,
+          income_sources: [],
+          categories: [],
+        }),
+        loading: false,
+        error: null,
+        refetch: mockBudgetDetailRefetch,
+      })
+
+      renderWithRouter()
+
+      expect(screen.getByText('Expected Income')).toBeInTheDocument()
+      expect(screen.getAllByText('$4,500.00').length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('Issue #1048: UnallocatedFundsCard percentage uses expectedIncome as basis', () => {
+    it('uses expectedIncome (not actualIncome) for the percentage denominator', () => {
+      // expected_income = 5000, actualIncome (income_amount) = 0, allocated = 4000
+      // unallocated = 5000 - 4000 = 1000 → should show 20% of income (1000/5000)
+      // Bug: if actualIncome (0) is used as basis → divide-by-zero or 0%
+      mockUseBudgetDetail.mockReturnValue({
+        budget: createMockBudget({
+          expected_income: 5000,
+          income_amount: 0,
+          amount: 5000,
+          income_sources: [],
+          categories: [
+            {
+              id: 'cat-1',
+              budget_id: 'budget-1',
+              category: ['Food and Drink', 'Groceries'],
+              allocated_amount: 4000,
+              spent_amount: 0,
+              tags: [],
+              match_logic: 'category_only',
+              created_at: '2025-01-01T00:00:00Z',
+              updated_at: '2025-01-01T00:00:00Z',
+            },
+          ],
+        }),
+        loading: false,
+        error: null,
+        refetch: mockBudgetDetailRefetch,
+      })
+
+      renderWithRouter()
+
+      // unallocated = 5000 - 4000 = 1000, basis = expectedIncome = 5000 → 20%
+      expect(screen.getByText('(20% of income)')).toBeInTheDocument()
+    })
+  })
+
   describe('Sections Visibility', () => {
     it('should show income section when income sources exist', () => {
       mockUseBudgetDetail.mockReturnValue({
@@ -434,10 +556,11 @@ describe('BudgetDetailPage', () => {
       expect(screen.getByRole('region', { name: /income/i })).toBeInTheDocument()
     })
 
-    it('should not show income section when no income sources', () => {
+    it('shows income section when expected_income is positive (even with no income sources)', () => {
       mockUseBudgetDetail.mockReturnValue({
         budget: createMockBudget({
           income_sources: [],
+          // amount = 5000 (default), no expected_income → expectedIncome = amount = 5000
         }),
         loading: false,
         error: null,
@@ -446,8 +569,8 @@ describe('BudgetDetailPage', () => {
 
       renderWithRouter()
 
-      // Issue #575: Real BudgetIncomeSection has role="region" with heading "Income"
-      expect(screen.queryByRole('region', { name: /income/i })).not.toBeInTheDocument()
+      // Issue #1048: expectedIncome = budget.amount = 5000 > 0, so section renders
+      expect(screen.getByRole('region', { name: /income/i })).toBeInTheDocument()
     })
 
     it('should render unallocated funds card', () => {

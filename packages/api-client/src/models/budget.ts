@@ -40,6 +40,7 @@ export interface Budget {
   currency_code: string;
   description?: string;
   end_date?: string;
+  expected_income: number;
   id: string;
   income_amount: number;
   /** @nullable */

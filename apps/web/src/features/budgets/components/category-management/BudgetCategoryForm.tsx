@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Alert } from '@/components/ui/alert';
 import type { BudgetCategory, CreateBudgetCategoryRequest, UpdateBudgetCategoryRequest } from '../../types';
 import { formatCategoryPath } from '../../types';
 import type { MatchLogic } from '@boostedbudget/shared-types/matching';
@@ -44,6 +45,10 @@ export interface BudgetCategoryFormProps {
   budgetStartDate?: string;
   /** Budget end date for preview (YYYY-MM-DD) */
   budgetEndDate?: string;
+  /** Expected income for the budget (used for soft over-allocation warning) */
+  expectedIncome?: number;
+  /** Sum of all other categories' allocations excluding the one being edited */
+  totalAllocatedExcludingCurrent?: number;
 }
 
 interface FormData {
@@ -76,6 +81,8 @@ export function BudgetCategoryForm({
   availableTags,
   budgetStartDate,
   budgetEndDate,
+  expectedIncome,
+  totalAllocatedExcludingCurrent = 0,
 }: BudgetCategoryFormProps) {
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [errors, setErrors] = useState<FormErrors>({});
@@ -131,6 +138,15 @@ export function BudgetCategoryForm({
     budgetEndDate || '',
     previewEnabled
   );
+
+  // Compute soft over-allocation warning
+  const allocationOverage = useMemo(() => {
+    if (expectedIncome == null || expectedIncome <= 0) return null;
+    const newAmount = parseFloat(formData.allocated_amount);
+    if (isNaN(newAmount) || newAmount <= 0) return null;
+    const projected = totalAllocatedExcludingCurrent + newAmount;
+    return projected > expectedIncome ? projected - expectedIncome : null;
+  }, [expectedIncome, totalAllocatedExcludingCurrent, formData.allocated_amount]);
 
   // Format currency for preview display
   const formatCurrency = (amount: number): string => {
@@ -428,10 +444,21 @@ export function BudgetCategoryForm({
               ) : preview ? (
                 <span>
                   Matches <strong>{preview.transaction_count}</strong> transaction{preview.transaction_count !== 1 ? 's' : ''} totaling{' '}
-                  <strong>{formatCurrency(preview.total_amount)}</strong>
+                  <strong data-ph-mask>{formatCurrency(preview.total_amount)}</strong>
                 </span>
               ) : null}
             </div>
+          )}
+
+          {/* Soft over-allocation warning */}
+          {allocationOverage != null && (
+            <Alert
+              variant="warning"
+              role="status"
+              aria-live="polite"
+            >
+              Allocations exceed expected income by ${allocationOverage.toFixed(2)}. You&apos;ll be dipping into savings or going over budget.
+            </Alert>
           )}
 
           {/* API Error */}

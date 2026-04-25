@@ -620,6 +620,131 @@ func TestBudgetRouteRegistration(t *testing.T) {
 	assert.Contains(t, body, "User not authenticated")
 }
 
+// TestCreateBudget_WithExpectedIncome tests that expected_income flows through to the service
+// and is reflected in the response (Issue #1048).
+func TestCreateBudget_WithExpectedIncome(t *testing.T) {
+	expectedIncome := 5000.00
+	budget := createTestBudget()
+	budget.ExpectedIncome = expectedIncome
+
+	mockService := &mockBudgetService{budget: budget}
+	mockSyncService := &mockBudgetSyncService{}
+	mockTxRepo := &mockTransactionRepoForBudget{}
+
+	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+
+	input := &CreateBudgetInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body = domain.CreateBudgetRequest{
+		Name:           "Monthly Budget",
+		Period:         domain.BudgetPeriodMonthly,
+		StartDate:      time.Now(),
+		Amount:         5000.00,
+		CurrencyCode:   "USD",
+		ExpectedIncome: &expectedIncome,
+	}
+
+	output, err := handler.CreateBudget(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, expectedIncome, output.Body.ExpectedIncome, "response should include expected_income")
+}
+
+// TestCreateBudget_BackCompatAmountOnly tests backward-compatibility: providing only amount
+// (no expected_income) must still succeed (Issue #1048).
+func TestCreateBudget_BackCompatAmountOnly(t *testing.T) {
+	mockService := &mockBudgetService{budget: createTestBudget()}
+	mockSyncService := &mockBudgetSyncService{}
+	mockTxRepo := &mockTransactionRepoForBudget{}
+
+	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+
+	input := &CreateBudgetInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body = domain.CreateBudgetRequest{
+		Name:         "Monthly Budget",
+		Period:       domain.BudgetPeriodMonthly,
+		StartDate:    time.Now(),
+		Amount:       3000.00,
+		CurrencyCode: "USD",
+		// ExpectedIncome intentionally omitted — back-compat path
+	}
+
+	output, err := handler.CreateBudget(context.Background(), input)
+
+	require.NoError(t, err, "amount-only request must succeed for backward compatibility")
+	require.NotNil(t, output)
+	assert.Equal(t, "budget-123", output.Body.ID)
+	assert.Nil(t, input.Body.ExpectedIncome, "expected_income should be nil when not provided")
+}
+
+// TestCreateBudget_BothFieldsProvided_ExpectedIncomeWins asserts that when both amount
+// and expected_income are provided, the handler accepts the request and the mock service
+// returns the pre-set budget (service-layer reconciliation tests live in budget_service_test.go).
+// This test is a handler-contract test: both fields in → no error, response well-formed (R19a).
+func TestCreateBudget_BothFieldsProvided_ExpectedIncomeWins(t *testing.T) {
+	expectedIncome := 500.00
+	budget := createTestBudget()
+	budget.Amount = 500.00
+	budget.ExpectedIncome = 500.00 // mock returns reconciled values
+
+	mockService := &mockBudgetService{budget: budget}
+	mockSyncService := &mockBudgetSyncService{}
+	mockTxRepo := &mockTransactionRepoForBudget{}
+
+	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+
+	input := &CreateBudgetInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body = domain.CreateBudgetRequest{
+		Name:           "Monthly Budget",
+		Period:         domain.BudgetPeriodMonthly,
+		StartDate:      time.Now(),
+		Amount:         100.00,          // lower value
+		CurrencyCode:   "USD",
+		ExpectedIncome: &expectedIncome, // higher value — should win
+	}
+
+	output, err := handler.CreateBudget(context.Background(), input)
+
+	require.NoError(t, err, "both fields provided must be accepted")
+	require.NotNil(t, output)
+	assert.Equal(t, 500.00, output.Body.ExpectedIncome, "response should carry expected_income")
+	assert.Equal(t, 500.00, output.Body.Amount, "amount should mirror expected_income")
+}
+
+// TestUpdateBudget_WithExpectedIncome tests that expected_income can be updated via PUT
+// and is reflected in the response (Issue #1048).
+func TestUpdateBudget_WithExpectedIncome(t *testing.T) {
+	expectedIncome := 7000.00
+	budget := createTestBudget()
+	budget.ExpectedIncome = expectedIncome
+
+	mockService := &mockBudgetService{budget: budget}
+	mockSyncService := &mockBudgetSyncService{}
+	mockTxRepo := &mockTransactionRepoForBudget{}
+
+	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+
+	input := &UpdateBudgetInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "budget-123",
+	}
+	input.Body = domain.UpdateBudgetRequest{
+		ExpectedIncome: &expectedIncome,
+	}
+
+	output, err := handler.UpdateBudget(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, expectedIncome, output.Body.ExpectedIncome, "response should include updated expected_income")
+}
+
 // TestBudgetResponseJSON tests JSON serialization of response.
 func TestBudgetResponseJSON(t *testing.T) {
 	mockService := &mockBudgetService{}

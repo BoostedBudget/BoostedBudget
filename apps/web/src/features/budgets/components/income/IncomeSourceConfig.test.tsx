@@ -159,12 +159,12 @@ describe('IncomeSourceConfig', () => {
       ]);
     });
 
-    it('calls onChange with filtered sources array', async () => {
+    it('calls onChange with filtered sources array when non-manual sources are removed', async () => {
       const user = userEvent.setup({ delay: null });
       const sources: IncomeSource[] = [
-        { type: 'manual', value: '1000', description: 'First' },
-        { type: 'manual', value: '2000', description: 'Second' },
-        { type: 'manual', value: '3000', description: 'Third' },
+        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'tag', value: 'Salary' },
+        { type: 'tag', value: 'Freelance' },
       ];
 
       render(
@@ -176,15 +176,34 @@ describe('IncomeSourceConfig', () => {
         />
       );
 
-      // Remove the middle one (Second)
+      // Remove the middle one (Salary)
       const removeButtons = screen.getAllByRole('button', { name: /remove/i });
       await user.click(removeButtons[1]);
 
       // Should have first and third
       expect(mockOnChange).toHaveBeenCalledWith([
-        { type: 'manual', value: '1000', description: 'First' },
-        { type: 'manual', value: '3000', description: 'Third' },
+        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'tag', value: 'Freelance' },
       ]);
+    });
+
+    it('manual sources show legacy pill instead of remove button', () => {
+      const sources: IncomeSource[] = [
+        { type: 'manual', value: '1000', description: 'Legacy entry' },
+      ];
+
+      render(
+        <IncomeSourceConfig
+          sources={sources}
+          onChange={mockOnChange}
+          availableCategories={mockCategories}
+          availableTags={mockTags}
+        />
+      );
+
+      // No remove button for manual (legacy) sources
+      expect(screen.queryByRole('button', { name: /remove/i })).not.toBeInTheDocument();
+      expect(screen.getByText('legacy')).toBeInTheDocument();
     });
   });
 

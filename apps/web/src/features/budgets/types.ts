@@ -58,6 +58,8 @@ export interface Budget {
   // Issue #495: Envelope budgeting - income tracking
   income_amount: number;
   income_sources: IncomeSource[];
+  // Issue #1048: Expected income (first-class field for income vs spending unification)
+  expected_income?: number;
 }
 
 // Computed metrics for budget display
@@ -103,6 +105,8 @@ export interface CreateBudgetRequest {
   // Issue #495: Envelope budgeting
   income_amount?: number;
   income_sources?: IncomeSource[];
+  // Issue #1048: Expected income (first-class field; also sent as `amount` for back-compat)
+  expected_income?: number;
 }
 
 export interface UpdateBudgetRequest {
@@ -158,9 +162,11 @@ export function computeBudgetMetrics(budget: Budget): BudgetWithMetrics {
   const categories = budget.categories || [];
   const total_allocated = categories.reduce((sum, cat) => sum + cat.allocated_amount, 0);
   const total_spent = categories.reduce((sum, cat) => sum + cat.spent_amount, 0);
-  const remaining_amount = budget.amount - total_spent;
-  const percent_used = budget.amount > 0 ? (total_spent / budget.amount) * 100 : 0;
-  const is_over_budget = total_spent > budget.amount;
+  // Issue #1048: Use expected_income as the denominator when present, fall back to amount
+  const spendingBasis = budget.expected_income ?? budget.amount;
+  const remaining_amount = spendingBasis - total_spent;
+  const percent_used = spendingBasis > 0 ? (total_spent / spendingBasis) * 100 : 0;
+  const is_over_budget = total_spent > spendingBasis;
 
   // Issue #495: Envelope budgeting metrics
   const income_amount = budget.income_amount || 0;

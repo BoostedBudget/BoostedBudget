@@ -108,10 +108,35 @@ export function BudgetCard({ budget, onEdit, onDelete }: BudgetCardProps) {
 
       <BudgetProgressBar
         spent={metrics.total_spent}
-        total={budget.amount}
+        total={budget.expected_income ?? budget.amount}
         currencyCode={budget.currency_code}
         size="medium"
       />
+
+      {/* Issue #1048: Income progress row */}
+      {(budget.expected_income ?? 0) > 0 && (
+        <div className="flex flex-col gap-1">
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <span>Income</span>
+            <span data-ph-mask>
+              {formatCurrency(budget.income_amount ?? 0, budget.currency_code)} of {formatCurrency(budget.expected_income!, budget.currency_code)} expected
+            </span>
+          </div>
+          <div
+            className="h-1 bg-muted rounded-full overflow-hidden"
+            role="progressbar"
+            aria-label="Income received"
+            aria-valuenow={Math.round(((budget.income_amount ?? 0) / budget.expected_income!) * 100)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div
+              className="h-full rounded-full bg-success transition-[width] duration-300"
+              style={{ width: `${Math.min(((budget.income_amount ?? 0) / budget.expected_income!) * 100, 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       <div className="flex justify-between items-center text-sm text-muted-foreground">
         <span className="font-medium" data-ph-mask>
