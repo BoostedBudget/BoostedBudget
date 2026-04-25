@@ -22,9 +22,5 @@ describe('budgets constants', () => {
       const uuid = '550e8400-e29b-41d4-a716-446655440000'
       expect(getBudgetDetailPath(uuid)).toBe(`/budgets/${uuid}`)
     })
-
-    it('includes the leading slash', () => {
-      expect(getBudgetDetailPath('test-id')).toMatch(/^\/budgets\//)
-    })
   })
 })
