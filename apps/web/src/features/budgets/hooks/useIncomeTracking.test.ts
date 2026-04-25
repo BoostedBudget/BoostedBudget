@@ -113,18 +113,6 @@ describe('useIncomeTracking', () => {
   // ==========================================================================
 
   describe('Hook State', () => {
-    it('returns loading false initially when no budgetId', () => {
-      const { result } = renderHook(() =>
-        useIncomeTracking({
-          sources: [],
-          startDate: '2025-01-01',
-          endDate: '2025-01-31',
-        })
-      );
-
-      expect(result.current.loading).toBe(false);
-    });
-
     it('returns actualTotal as 0 when no budgetId', () => {
       const { result } = renderHook(() =>
         useIncomeTracking({
@@ -137,7 +125,9 @@ describe('useIncomeTracking', () => {
       expect(result.current.actualTotal).toBe(0);
     });
 
-    it('returns error as null initially', () => {
+    // Issue #1048: loading/error/refetch are dead fields now that actualTotal
+    // is derived directly from budgetIncomeAmount — no API call needed.
+    it('does not expose loading, error, or refetch on the result (dead fields removed)', () => {
       const { result } = renderHook(() =>
         useIncomeTracking({
           sources: [],
@@ -146,19 +136,9 @@ describe('useIncomeTracking', () => {
         })
       );
 
-      expect(result.current.error).toBe(null);
-    });
-
-    it('provides refetch function', () => {
-      const { result } = renderHook(() =>
-        useIncomeTracking({
-          sources: [],
-          startDate: '2025-01-01',
-          endDate: '2025-01-31',
-        })
-      );
-
-      expect(typeof result.current.refetch).toBe('function');
+      expect('loading' in result.current).toBe(false);
+      expect('error' in result.current).toBe(false);
+      expect('refetch' in result.current).toBe(false);
     });
   });
 

@@ -87,18 +87,9 @@ test.describe('Budget income unification (#1048)', () => {
     // Assert - Card should be visible
     await expect(firstBudgetCard).toBeVisible()
 
-    // Assert - Budget card should have income-related content
-    // Look for income label or progress indication
-    const incomeText = firstBudgetCard.locator('text=/income|expected/i')
-    const isIncomeVisible = await incomeText.isVisible().catch(() => false)
-
-    // If income row doesn't exist, at least verify card structure
-    if (!isIncomeVisible) {
-      // Verify card contains expected elements (name, progress, etc.)
-      await expect(firstBudgetCard.locator('text=/')).toBeVisible()
-    } else {
-      await expect(incomeText).toBeVisible()
-    }
+    // Assert - Budget card MUST show income row (R10: dual progress rows)
+    // This is a strict assertion — if the income row is missing, R10 has regressed.
+    await expect(firstBudgetCard.locator('text=/income|expected/i')).toBeVisible()
   })
 
   test('Budget detail page displays Expected Income information', async ({ page }) => {

@@ -20,25 +20,27 @@ func TestBudget_Validate(t *testing.T) {
 		{
 			name: "valid monthly budget",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Monthly Groceries",
-				Period:       BudgetPeriodMonthly,
-				StartDate:    validStartDate,
-				Amount:       500.00,
-				CurrencyCode: "USD",
+				UserID:         "user-123",
+				Name:           "Monthly Groceries",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         500.00,
+				ExpectedIncome: 500.00,
+				CurrencyCode:   "USD",
 			},
 			wantErr: false,
 		},
 		{
 			name: "valid custom period budget with end date",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Vacation Budget",
-				Period:       BudgetPeriodCustom,
-				StartDate:    validStartDate,
-				EndDate:      &validEndDate,
-				Amount:       2000.00,
-				CurrencyCode: "USD",
+				UserID:         "user-123",
+				Name:           "Vacation Budget",
+				Period:         BudgetPeriodCustom,
+				StartDate:      validStartDate,
+				EndDate:        &validEndDate,
+				Amount:         2000.00,
+				ExpectedIncome: 2000.00,
+				CurrencyCode:   "USD",
 			},
 			wantErr: false,
 		},
@@ -133,11 +135,12 @@ func TestBudget_Validate(t *testing.T) {
 		{
 			name: "missing currency_code",
 			budget: Budget{
-				UserID:    "user-123",
-				Name:      "Test Budget",
-				Period:    BudgetPeriodMonthly,
-				StartDate: validStartDate,
-				Amount:    100.00,
+				UserID:         "user-123",
+				Name:           "Test Budget",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         100.00,
+				ExpectedIncome: 100.00,
 			},
 			wantErr: true,
 			errMsg:  "currency_code is required",
@@ -145,12 +148,13 @@ func TestBudget_Validate(t *testing.T) {
 		{
 			name: "custom period without end_date",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Custom Budget",
-				Period:       BudgetPeriodCustom,
-				StartDate:    validStartDate,
-				Amount:       100.00,
-				CurrencyCode: "USD",
+				UserID:         "user-123",
+				Name:           "Custom Budget",
+				Period:         BudgetPeriodCustom,
+				StartDate:      validStartDate,
+				Amount:         100.00,
+				ExpectedIncome: 100.00,
+				CurrencyCode:   "USD",
 			},
 			wantErr: true,
 			errMsg:  "end_date is required for custom period budgets",
@@ -158,13 +162,14 @@ func TestBudget_Validate(t *testing.T) {
 		{
 			name: "end_date before start_date",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Test Budget",
-				Period:       BudgetPeriodCustom,
-				StartDate:    validEndDate, // later date as start
-				EndDate:      &validStartDate, // earlier date as end
-				Amount:       100.00,
-				CurrencyCode: "USD",
+				UserID:         "user-123",
+				Name:           "Test Budget",
+				Period:         BudgetPeriodCustom,
+				StartDate:      validEndDate,   // later date as start
+				EndDate:        &validStartDate, // earlier date as end
+				Amount:         100.00,
+				ExpectedIncome: 100.00,
+				CurrencyCode:   "USD",
 			},
 			wantErr: true,
 			errMsg:  "end_date must be after start_date",
@@ -184,6 +189,54 @@ func TestBudget_Validate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBudget_Validate_RequiresExpectedIncomePositive tests Issue #1048 domain invariant:
+// expected_income must be positive after service reconciliation sets it.
+func TestBudget_Validate_RequiresExpectedIncomePositive(t *testing.T) {
+	validStartDate := time.Now()
+
+	base := Budget{
+		UserID:       "user-123",
+		Name:         "Test Budget",
+		Period:       BudgetPeriodMonthly,
+		StartDate:    validStartDate,
+		Amount:       100.00,
+		CurrencyCode: "USD",
+	}
+
+	t.Run("zero expected_income is rejected", func(t *testing.T) {
+		b := base
+		b.ExpectedIncome = 0
+		err := b.Validate()
+		if err == nil {
+			t.Fatal("Validate() expected error for ExpectedIncome=0, got nil")
+		}
+		if !contains(err.Error(), "expected_income") {
+			t.Errorf("error should mention expected_income, got: %v", err)
+		}
+	})
+
+	t.Run("negative expected_income is rejected", func(t *testing.T) {
+		b := base
+		b.ExpectedIncome = -1.0
+		err := b.Validate()
+		if err == nil {
+			t.Fatal("Validate() expected error for ExpectedIncome=-1, got nil")
+		}
+		if !contains(err.Error(), "expected_income") {
+			t.Errorf("error should mention expected_income, got: %v", err)
+		}
+	})
+
+	t.Run("positive expected_income is accepted", func(t *testing.T) {
+		b := base
+		b.ExpectedIncome = 100.00
+		err := b.Validate()
+		if err != nil {
+			t.Errorf("Validate() unexpected error for ExpectedIncome=100: %v", err)
+		}
+	})
 }
 
 // TestBudgetPeriod_IsValid tests the IsValid helper for budget periods
@@ -1123,13 +1176,14 @@ func TestBudget_Validate_IncomeFields(t *testing.T) {
 		{
 			name: "valid budget with income",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Monthly Budget",
-				Period:       BudgetPeriodMonthly,
-				StartDate:    validStartDate,
-				Amount:       500.00,
-				CurrencyCode: "USD",
-				IncomeAmount: 5000.00,
+				UserID:         "user-123",
+				Name:           "Monthly Budget",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         500.00,
+				ExpectedIncome: 500.00,
+				CurrencyCode:   "USD",
+				IncomeAmount:   5000.00,
 				IncomeSources: []IncomeSource{
 					{Type: IncomeSourceTypePlaidCategory, Value: "Payroll"},
 				},
@@ -1139,38 +1193,41 @@ func TestBudget_Validate_IncomeFields(t *testing.T) {
 		{
 			name: "valid budget without income (backward compatible)",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Monthly Budget",
-				Period:       BudgetPeriodMonthly,
-				StartDate:    validStartDate,
-				Amount:       500.00,
-				CurrencyCode: "USD",
+				UserID:         "user-123",
+				Name:           "Monthly Budget",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         500.00,
+				ExpectedIncome: 500.00,
+				CurrencyCode:   "USD",
 			},
 			wantErr: false,
 		},
 		{
 			name: "zero income is valid",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Monthly Budget",
-				Period:       BudgetPeriodMonthly,
-				StartDate:    validStartDate,
-				Amount:       500.00,
-				CurrencyCode: "USD",
-				IncomeAmount: 0,
+				UserID:         "user-123",
+				Name:           "Monthly Budget",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         500.00,
+				ExpectedIncome: 500.00,
+				CurrencyCode:   "USD",
+				IncomeAmount:   0,
 			},
 			wantErr: false,
 		},
 		{
 			name: "negative income_amount",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Monthly Budget",
-				Period:       BudgetPeriodMonthly,
-				StartDate:    validStartDate,
-				Amount:       500.00,
-				CurrencyCode: "USD",
-				IncomeAmount: -100.00,
+				UserID:         "user-123",
+				Name:           "Monthly Budget",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         500.00,
+				ExpectedIncome: 500.00,
+				CurrencyCode:   "USD",
+				IncomeAmount:   -100.00,
 			},
 			wantErr: true,
 			errMsg:  "income_amount cannot be negative",
@@ -1178,13 +1235,14 @@ func TestBudget_Validate_IncomeFields(t *testing.T) {
 		{
 			name: "invalid income source in array",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Monthly Budget",
-				Period:       BudgetPeriodMonthly,
-				StartDate:    validStartDate,
-				Amount:       500.00,
-				CurrencyCode: "USD",
-				IncomeAmount: 5000.00,
+				UserID:         "user-123",
+				Name:           "Monthly Budget",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         500.00,
+				ExpectedIncome: 500.00,
+				CurrencyCode:   "USD",
+				IncomeAmount:   5000.00,
 				IncomeSources: []IncomeSource{
 					{Type: IncomeSourceType("invalid"), Value: "test"},
 				},
@@ -1195,14 +1253,15 @@ func TestBudget_Validate_IncomeFields(t *testing.T) {
 		{
 			name: "empty income sources array is valid",
 			budget: Budget{
-				UserID:        "user-123",
-				Name:          "Monthly Budget",
-				Period:        BudgetPeriodMonthly,
-				StartDate:     validStartDate,
-				Amount:        500.00,
-				CurrencyCode:  "USD",
-				IncomeAmount:  5000.00,
-				IncomeSources: []IncomeSource{},
+				UserID:         "user-123",
+				Name:           "Monthly Budget",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         500.00,
+				ExpectedIncome: 500.00,
+				CurrencyCode:   "USD",
+				IncomeAmount:   5000.00,
+				IncomeSources:  []IncomeSource{},
 			},
 			wantErr: false,
 		},
