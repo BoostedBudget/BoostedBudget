@@ -122,7 +122,7 @@ test.describe('Budget income unification (#1048)', () => {
 
     // Act - Create or open a budget for editing
     // Try to find an edit or manage button
-    const editButton = page.locator('button, a').filter({ hasText: /edit|manage categories|allocate/i }).first()
+    const editButton = page.locator('button, a').filter({ hasText: /edit|manage budget|allocate/i }).first()
 
     if (await editButton.isVisible().catch(() => false)) {
       await editButton.click()
