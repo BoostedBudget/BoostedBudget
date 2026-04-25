@@ -171,8 +171,9 @@ export function BudgetsPage() {
 
   // Issue #1051: Navigate to budget detail page from table view
   const handleOpenBudget = useCallback((budget: BudgetWithMetrics) => {
+    trackEvent(ANALYTICS_EVENTS.BUDGET_DETAIL_VIEWED, { budget_id: budget.id });
     navigate(getBudgetDetailPath(budget.id));
-  }, [navigate]);
+  }, [navigate, trackEvent]);
 
   // Issue #590: Create period options from budgets data
   const periodOptions = useMemo<FilterOption[]>(() => {
