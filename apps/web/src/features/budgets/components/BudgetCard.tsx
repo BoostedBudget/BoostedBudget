@@ -151,7 +151,7 @@ export function BudgetCard({ budget, onEdit, onDelete }: BudgetCardProps) {
         to={`/budgets/${budget.id}`}
         className="block text-center px-4 py-2 text-sm font-medium text-primary bg-primary/10 border border-primary rounded-md no-underline hover:bg-primary hover:text-primary-foreground transition-colors"
       >
-        Manage Categories
+        Manage budget
       </Link>
 
       {(onEdit || onDelete) && (

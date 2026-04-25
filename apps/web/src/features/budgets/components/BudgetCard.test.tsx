@@ -142,7 +142,7 @@ describe('BudgetCard', () => {
     it('should link to budget detail page and navigate when clicked', async () => {
       renderWithRouter(<BudgetCard budget={mockBudget} />)
 
-      const link = screen.getByRole('link', { name: /manage categories/i })
+      const link = screen.getByRole('link', { name: /manage budget/i })
       expect(link).toBeInTheDocument()
       expect(link).toHaveAttribute('href', '/budgets/budget-1')
 
