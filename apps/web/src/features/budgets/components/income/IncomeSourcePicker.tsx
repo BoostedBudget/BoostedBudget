@@ -12,6 +12,7 @@ import { PlusIcon } from 'lucide-react';
 import type { IncomeSource, IncomeSourceType } from '../../types';
 import type { UserTag } from '@/features/tags/types';
 import { formatPlaidCategory } from '@/features/auto-categorization/utils/categoryUtils';
+import { Button } from '@/components/ui/button';
 
 export interface IncomeSourcePickerProps {
   /** Available Plaid categories for selection */
@@ -174,16 +175,16 @@ export function IncomeSourcePicker({
       )}
 
       {/* Add Button */}
-      <button
+      <Button
         type="button"
-        className="flex items-center justify-center gap-1.5 px-4 py-2 mt-1 text-sm font-medium text-primary-foreground bg-primary border-none rounded-md cursor-pointer transition-colors duration-150 hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="mt-1"
         onClick={handleAdd}
         disabled={!isAddEnabled}
         aria-label="Add income source"
       >
         <PlusIcon className="w-4 h-4" />
         Add
-      </button>
+      </Button>
     </div>
   );
 }

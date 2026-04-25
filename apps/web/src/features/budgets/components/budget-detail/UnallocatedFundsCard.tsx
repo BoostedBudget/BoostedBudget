@@ -1,13 +1,4 @@
-/**
- * UnallocatedFundsCard Component
- * Issue #498: Budget Detail Page for Envelope Budgeting
- *
- * Displays unallocated funds with action buttons for creating
- * savings goals or allocating to categories.
- *
- * TDD GREEN: Implementation to pass all tests.
- */
-
+import { Button } from '@/components/ui/button';
 
 export interface UnallocatedFundsCardProps {
   /** Amount of unallocated funds (can be negative if over-allocated) */
@@ -82,13 +73,13 @@ export function UnallocatedFundsCard({
 
   const cardVariant =
     status === 'neutral'
-      ? 'unallocated-card--neutral border-l-4 border-l-green-600'
+      ? 'unallocated-card--neutral border-l-4 border-l-success'
       : status === 'warning'
-        ? 'unallocated-card--warning border-l-4 border-l-red-500 bg-destructive/5'
+        ? 'unallocated-card--warning border-l-4 border-l-destructive bg-destructive/5'
         : 'unallocated-card--positive border-l-4 border-l-primary'
 
   const iconColor =
-    status === 'neutral' ? 'text-green-600' :
+    status === 'neutral' ? 'text-success' :
     status === 'warning' ? 'text-destructive' :
     'text-primary'
 
@@ -176,22 +167,14 @@ export function UnallocatedFundsCard({
       {hasActions && (
         <div className="flex gap-3 mt-4 flex-wrap">
           {onCreateSavingsGoal && (
-            <button
-              type="button"
-              className="px-4 py-2 text-sm font-medium rounded-md cursor-pointer transition-colors duration-200 bg-primary text-primary-foreground border border-primary hover:bg-primary/90"
-              onClick={onCreateSavingsGoal}
-            >
+            <Button variant="default" onClick={onCreateSavingsGoal}>
               Create Savings Goal
-            </button>
+            </Button>
           )}
           {onAllocateToCategory && (
-            <button
-              type="button"
-              className="px-4 py-2 text-sm font-medium rounded-md cursor-pointer transition-colors duration-200 bg-transparent text-primary border border-primary hover:bg-primary/10"
-              onClick={onAllocateToCategory}
-            >
+            <Button variant="outline" onClick={onAllocateToCategory}>
               Allocate to Category
-            </button>
+            </Button>
           )}
         </div>
       )}

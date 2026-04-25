@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Alert } from '@/components/ui/alert';
 import type { BudgetCategory, CreateBudgetCategoryRequest, UpdateBudgetCategoryRequest } from '../../types';
 import { formatCategoryPath } from '../../types';
 import type { MatchLogic } from '@boostedbudget/shared-types/matching';
@@ -451,14 +452,13 @@ export function BudgetCategoryForm({
 
           {/* Soft over-allocation warning */}
           {allocationOverage != null && (
-            <div
+            <Alert
+              variant="warning"
               role="status"
               aria-live="polite"
-              className="text-sm text-amber-600 dark:text-amber-400 flex items-center gap-1.5"
             >
-              <span aria-hidden="true">⚠️</span>
               Allocations exceed expected income by ${allocationOverage.toFixed(2)}. You&apos;ll be dipping into savings or going over budget.
-            </div>
+            </Alert>
           )}
 
           {/* API Error */}
