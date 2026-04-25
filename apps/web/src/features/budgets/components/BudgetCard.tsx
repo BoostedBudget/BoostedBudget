@@ -7,8 +7,10 @@
  */
 
 import { Link } from 'react-router-dom';
+import { Button } from '@/components/ui/button';
 import { BudgetProgressBar } from './BudgetProgressBar';
 import { computeBudgetMetrics } from '../types';
+import { getBudgetDetailPath } from '../constants';
 import type { Budget } from '../types';
 
 export interface BudgetCardProps {
@@ -147,32 +149,27 @@ export function BudgetCard({ budget, onEdit, onDelete }: BudgetCardProps) {
         </span>
       </div>
 
-      <Link
-        to={`/budgets/${budget.id}`}
-        className="block text-center px-4 py-2 text-sm font-medium text-primary bg-primary/10 border border-primary rounded-md no-underline hover:bg-primary hover:text-primary-foreground transition-colors"
-      >
-        Manage budget
-      </Link>
+      <Button asChild variant="outline" className="w-full">
+        <Link to={getBudgetDetailPath(budget.id)}>Manage budget</Link>
+      </Button>
 
       {(onEdit || onDelete) && (
         <div className="flex gap-2 mt-2 pt-4 border-t border-border">
           {onEdit && (
-            <button
-              className="px-4 py-2 text-sm font-medium text-primary bg-primary/10 border border-primary rounded-md cursor-pointer hover:bg-primary hover:text-primary-foreground transition-colors"
-              onClick={handleEdit}
-              aria-label="Edit budget"
-            >
+            <Button variant="outline" size="sm" onClick={handleEdit} aria-label="Edit budget">
               Edit
-            </button>
+            </Button>
           )}
           {onDelete && (
-            <button
-              className="px-4 py-2 text-sm font-medium text-destructive border border-destructive rounded-md cursor-pointer bg-transparent hover:bg-destructive hover:text-destructive-foreground transition-colors"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={handleDelete}
               aria-label="Delete budget"
+              className="text-destructive border-destructive hover:bg-destructive hover:text-destructive-foreground"
             >
               Delete
-            </button>
+            </Button>
           )}
         </div>
       )}
