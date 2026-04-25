@@ -257,7 +257,10 @@ export function BudgetTable({
                 </div>
               </td>
               <td className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle">{getPeriodLabel(budget.period)}</td>
-              <td className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle text-right font-medium tabular-nums">
+              <td
+                className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle text-right font-medium tabular-nums"
+                data-ph-mask
+              >
                 {formatCurrency(budget.expected_income ?? budget.amount)}
               </td>
               <td className="px-4 py-3.5 text-sm text-muted-foreground border-b border-border align-middle text-right tabular-nums" data-ph-mask>
@@ -288,7 +291,10 @@ export function BudgetTable({
                   </span>
                 </div>
               </td>
-              <td className="px-4 py-3.5 text-sm border-b border-border align-middle text-right">
+              <td
+                className="px-4 py-3.5 text-sm border-b border-border align-middle text-right"
+                data-ph-mask
+              >
                 <span
                   className={`font-semibold tabular-nums ${
                     budget.remaining_amount < 0

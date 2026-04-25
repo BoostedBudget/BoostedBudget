@@ -641,6 +641,19 @@ describe('BudgetsPage', () => {
 
       expect(mockNavigate).toHaveBeenCalledWith('/budgets/budget-2')
     })
+
+    it('clicking a row in the inactive budget table navigates to /budgets/<id>', async () => {
+      const user = userEvent.setup()
+      setupMocks({ budgets: [mockActiveBudget, mockInactiveBudget] })
+      render(<BudgetsPage />)
+
+      // The inactive table renders mockInactiveBudget ('Past Budget', id: budget-2).
+      // Click its name cell to exercise the onRowClick handler on the inactive table.
+      const inactiveBudgetName = screen.getByText('Past Budget')
+      await user.click(inactiveBudgetName)
+
+      expect(mockNavigate).toHaveBeenCalledWith('/budgets/budget-2')
+    })
   })
 
   describe('Delete Savings Goal (Issue #521, #960)', () => {

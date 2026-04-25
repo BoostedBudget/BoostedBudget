@@ -212,6 +212,16 @@ describe('BudgetTable', () => {
     })
   })
 
+  describe('PII Masking (data-ph-mask)', () => {
+    it('masks Amount, Income, and Remaining cells for every budget row', () => {
+      const { container } = render(<BudgetTable budgets={mockBudgets} />)
+
+      // 3 budgets × 3 masked financial cells (Amount, Income, Remaining) = 9 total
+      const maskedCells = container.querySelectorAll('td[data-ph-mask]')
+      expect(maskedCells.length).toBe(mockBudgets.length * 3)
+    })
+  })
+
   describe('Row Actions', () => {
     it('should toggle actions column visibility based on handlers', () => {
       const { rerender } = render(<BudgetTable budgets={mockBudgets} />)
