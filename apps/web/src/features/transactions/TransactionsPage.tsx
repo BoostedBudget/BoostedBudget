@@ -10,7 +10,8 @@ import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterD
 import { TransactionEditor } from './components/TransactionEditor'
 import { TransactionFilterPanel } from './components/TransactionFilterPanel'
 import { useGetUserTags, getGetUserTagsQueryKey } from '@boostedbudget/api-client/endpoints/tags/tags'
-import { useGetUserCategories, getGetUserCategoriesQueryKey } from '@boostedbudget/api-client/endpoints/categories/categories'
+import { useGetUserCategories, getGetUserCategoriesQueryKey, useGetPlaidPrimaryCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
+import type { Primary } from '@boostedbudget/api-client/models/primary'
 import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import type { Transaction } from './types'
 import type { Account } from '../accounts/types'
@@ -65,13 +66,15 @@ export function TransactionsPage() {
   const [sortColumn, setSortColumn] = useState<TransactionSortColumn | undefined>(undefined)
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
-  // Fetch available tags, categories, and accounts using generated hooks
+  // Fetch available tags, categories, accounts, and curated PFC primaries
   const { data: tagsData } = useGetUserTags()
   const { data: categoriesData } = useGetUserCategories()
   const { data: accountsData } = useGetAccounts()
+  const { data: plaidPrimariesData } = useGetPlaidPrimaryCategories()
 
   const availableTags = (tagsData as unknown as UserTag[]) ?? []
   const availableCategories = (categoriesData as unknown as CustomCategory[]) ?? []
+  const plaidPrimaries = useMemo(() => (plaidPrimariesData as unknown as Primary[]) ?? [], [plaidPrimariesData])
 
   // Issue #531: Create accounts lookup map for O(1) access
   // Use accountsData?.accounts directly to avoid unstable reference in deps
@@ -151,11 +154,14 @@ export function TransactionsPage() {
     currentPage,
   } = useTransactions({ filters, limit: 50 })
 
-  // Issue #590: Create category filter options from transaction data
+  // Category filter options: union of curated PFC primaries + observed transaction categories
   const categoryOptions = useMemo<FilterOption[]>(() => {
-    const transactions = data?.transactions ?? []
     const categorySet = new Set<string>()
 
+    // Seed with curated PFC primaries so brand-new users see all 18 buckets
+    plaidPrimaries.forEach(p => categorySet.add(p.display))
+
+    const transactions = data?.transactions ?? []
     transactions.forEach((t) => {
       const category = t.category_override || t.category
       if (category) {
@@ -165,22 +171,17 @@ export function TransactionsPage() {
             categorySet.add(parsed[0])
           }
         } catch {
-          // If not JSON, use as-is
           categorySet.add(category)
         }
       } else if (t.personal_finance_category_data?.primary_display) {
-        // PFC fallback for pre-backfill transactions
         categorySet.add(t.personal_finance_category_data.primary_display)
       }
     })
 
     return Array.from(categorySet)
       .sort()
-      .map((cat) => ({
-        value: cat,
-        label: cat,
-      }))
-  }, [data?.transactions])
+      .map((cat) => ({ value: cat, label: cat }))
+  }, [data?.transactions, plaidPrimaries])
 
   // Handle opening the transaction editor
   const handleEditTransaction = (transaction: Transaction) => {
@@ -438,6 +439,7 @@ export function TransactionsPage() {
           transaction={selectedTransaction}
           availableTags={availableTags}
           availableCategories={availableCategories}
+          plaidPrimaries={plaidPrimaries}
           isOpen={isEditorOpen}
           onClose={handleEditorClose}
           onSave={handleEditorSave}

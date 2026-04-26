@@ -2,7 +2,11 @@ package domain
 
 import (
 	"errors"
+	"fmt"
+	"sync"
 	"time"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/pfc"
 )
 
 // ConditionType represents the type of condition for rule matching.
@@ -83,6 +87,26 @@ type CategorizationRule struct {
 	UpdatedAt      time.Time       `json:"updated_at" db:"updated_at"`
 }
 
+// pfcValidationSets holds the valid PFC enum sets built once from the curated registry.
+var (
+	pfcOnce          sync.Once
+	validPFCPrimaries map[string]struct{}
+	validPFCDetaileds map[string]struct{}
+)
+
+func initPFCValidationSets() {
+	pfcOnce.Do(func() {
+		validPFCPrimaries = make(map[string]struct{}, 18)
+		for _, p := range pfc.AllPrimaries() {
+			validPFCPrimaries[p.Enum] = struct{}{}
+		}
+		validPFCDetaileds = make(map[string]struct{})
+		for _, d := range pfc.AllDetailed() {
+			validPFCDetaileds[d.Enum] = struct{}{}
+		}
+	})
+}
+
 // Validate checks that the CategorizationRule has all required fields and valid values.
 func (r *CategorizationRule) Validate() error {
 	if r.UserID == "" {
@@ -102,9 +126,28 @@ func (r *CategorizationRule) Validate() error {
 		return errors.New("at least one condition is required")
 	}
 
+	initPFCValidationSets()
 	for _, cond := range r.Conditions {
 		if !cond.Type.IsValid() {
 			return errors.New("invalid condition type: " + string(cond.Type))
+		}
+		if cond.Type == ConditionExistingPFCPrimary {
+			val, ok := cond.Value.(string)
+			if !ok || val == "" {
+				return errors.New("existing_pfc_primary value must be a non-empty string")
+			}
+			if _, known := validPFCPrimaries[val]; !known {
+				return fmt.Errorf("unknown PFC primary enum: %s", val)
+			}
+		}
+		if cond.Type == ConditionExistingPFCDetailed {
+			val, ok := cond.Value.(string)
+			if !ok || val == "" {
+				return errors.New("existing_pfc_detailed value must be a non-empty string")
+			}
+			if _, known := validPFCDetaileds[val]; !known {
+				return fmt.Errorf("unknown PFC detailed enum: %s", val)
+			}
 		}
 	}
 

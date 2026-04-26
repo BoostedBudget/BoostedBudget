@@ -21,7 +21,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { useCreateBudget } from '@boostedbudget/api-client/endpoints/budgets/budgets';
-import { useGetPlaidCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
+import { useGetPlaidPrimaryCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
+import type { Primary } from '@boostedbudget/api-client/models/primary';
 import { useGetUserTags } from '@boostedbudget/api-client/endpoints/tags/tags';
 import type { UserTag } from '@/features/tags/types';
 import type { Budget, BudgetPeriod, CreateBudgetRequest, IncomeSource } from '../types';
@@ -91,14 +92,16 @@ export function CreateBudgetDialog({
   const [trackingOpen, setTrackingOpen] = useState(false);
 
   const createBudgetMutation = useCreateBudget();
-  const { data: plaidCategoriesData } = useGetPlaidCategories({
+  const { data: plaidPrimariesData } = useGetPlaidPrimaryCategories({
     query: { enabled: isOpen },
   });
   const { data: userTagsData } = useGetUserTags({
     query: { enabled: isOpen },
   });
 
-  const plaidCategories = (plaidCategoriesData as unknown as string[]) ?? [];
+  const allPlaidPrimaries = (plaidPrimariesData as unknown as Primary[]) ?? [];
+  // Filter to income-relevant categories only
+  const plaidCategories = allPlaidPrimaries.filter(p => p.enum === 'INCOME' || p.enum === 'TRANSFER_IN');
   const userTags = (userTagsData as unknown as UserTag[]) ?? [];
 
   // Reset form when dialog closes

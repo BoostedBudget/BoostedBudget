@@ -9,6 +9,7 @@
 
 import type { Transaction } from '../../transactions/types'
 import type { BudgetCategory } from '../types'
+import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
 
 /**
  * Reason why a transaction matched a budget category
@@ -110,10 +111,7 @@ export function matchTransactionToBudgetCategories(
 ): BudgetCategoryMatch | null {
   if (!categories || categories.length === 0) return null
 
-  // Get effective transaction category (override takes precedence)
-  const txCategory = parseTransactionCategory(
-    transaction.category_override || transaction.category
-  )
+  const txCategory = getEffectiveCategory(transaction)
   const txTags = transaction.tags || []
 
   for (const budgetCat of categories) {

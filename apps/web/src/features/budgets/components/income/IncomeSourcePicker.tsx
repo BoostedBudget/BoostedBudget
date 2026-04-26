@@ -11,12 +11,12 @@ import { useState, useCallback } from 'react';
 import { PlusIcon } from 'lucide-react';
 import type { IncomeSource, IncomeSourceType } from '../../types';
 import type { UserTag } from '@/features/tags/types';
-import { formatPlaidCategory } from '@/features/auto-categorization/utils/categoryUtils';
+import type { Primary } from '@boostedbudget/api-client/models/primary';
 import { Button } from '@/components/ui/button';
 
 export interface IncomeSourcePickerProps {
   /** Available Plaid categories for selection */
-  availableCategories: string[];
+  availableCategories: Primary[];
   /** Available user tags for selection */
   availableTags: UserTag[];
   /** Already configured sources (to filter from dropdowns) */
@@ -51,7 +51,7 @@ export function IncomeSourcePicker({
     .filter((s) => s.type === 'plaid_category')
     .map((s) => s.value);
   const availableCategoriesFiltered = availableCategories.filter(
-    (cat) => !existingCategoryValues.includes(cat)
+    (primary) => !existingCategoryValues.includes(primary.enum)
   );
 
   // Filter out already selected tags
@@ -141,9 +141,9 @@ export function IncomeSourcePicker({
             aria-label="Select Category"
           >
             <option value="">Select a category...</option>
-            {availableCategoriesFiltered.map((cat) => (
-              <option key={cat} value={cat}>
-                {formatPlaidCategory(cat)}
+            {availableCategoriesFiltered.map((primary) => (
+              <option key={primary.enum} value={primary.enum}>
+                {primary.display}
               </option>
             ))}
           </select>

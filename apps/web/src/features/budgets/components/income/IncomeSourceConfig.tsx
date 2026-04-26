@@ -9,6 +9,7 @@
 import { useCallback, useMemo } from 'react';
 import type { IncomeSource } from '../../types';
 import type { UserTag } from '@/features/tags/types';
+import type { Primary } from '@boostedbudget/api-client/models/primary';
 import { IncomeSourceItem } from './IncomeSourceItem';
 import { IncomeSourcePicker } from './IncomeSourcePicker';
 
@@ -18,7 +19,7 @@ export interface IncomeSourceConfigProps {
   /** Callback when sources change (add/remove) */
   onChange: (sources: IncomeSource[]) => void;
   /** Available Plaid categories for the picker */
-  availableCategories: string[];
+  availableCategories: Primary[];
   /** Available user tags for the picker */
   availableTags: UserTag[];
   /** Whether the component is disabled */

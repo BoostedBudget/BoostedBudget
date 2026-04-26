@@ -42,11 +42,11 @@ describe('AutoCategorizationRuleEditor', () => {
     ['Shopping', 'Clothing'],
   ]
 
-  const mockPlaidCategories = [
-    'FOOD_AND_DRINK',
-    'SHOPPING',
-    'TRANSPORTATION',
-    'ENTERTAINMENT',
+  const mockPlaidPrimaries = [
+    { enum: 'FOOD_AND_DRINK', display: 'Food And Drink' },
+    { enum: 'SHOPPING', display: 'Shopping' },
+    { enum: 'TRANSPORTATION', display: 'Transportation' },
+    { enum: 'ENTERTAINMENT', display: 'Entertainment' },
   ]
 
   beforeEach(() => {
@@ -602,7 +602,7 @@ describe('AutoCategorizationRuleEditor', () => {
           onSave={mockOnSave}
           onCancel={mockOnCancel}
           categories={mockCategories}
-          plaidCategories={mockPlaidCategories}
+          plaidPrimaries={mockPlaidPrimaries}
         />
       )
 
@@ -612,7 +612,7 @@ describe('AutoCategorizationRuleEditor', () => {
       const typeSelect = screen.getByLabelText(/condition type/i)
       await user.selectOptions(typeSelect, 'existing_category')
 
-      const categorySelect = screen.getByRole('combobox', { name: /select plaid category/i })
+      const categorySelect = screen.getByRole('combobox', { name: /select category/i })
       expect(categorySelect).toBeInTheDocument()
       expect(categorySelect.tagName).toBe('INPUT')
     })
@@ -1160,7 +1160,7 @@ describe('AutoCategorizationRuleEditor', () => {
             onSave={mockOnSave}
             onCancel={mockOnCancel}
             categories={mockCategories}
-            plaidCategories={mockPlaidCategories}
+            plaidPrimaries={mockPlaidPrimaries}
           />
         )
 
@@ -1170,7 +1170,7 @@ describe('AutoCategorizationRuleEditor', () => {
         const typeSelect = screen.getByLabelText(/condition type/i)
         await user.selectOptions(typeSelect, 'existing_category')
 
-        const searchInput = screen.getByRole('combobox', { name: /select plaid category/i })
+        const searchInput = screen.getByRole('combobox', { name: /select category/i })
         expect(searchInput).toBeInTheDocument()
       })
 
@@ -1183,7 +1183,7 @@ describe('AutoCategorizationRuleEditor', () => {
             onSave={mockOnSave}
             onCancel={mockOnCancel}
             categories={mockCategories}
-            plaidCategories={mockPlaidCategories}
+            plaidPrimaries={mockPlaidPrimaries}
           />
         )
 
@@ -1193,7 +1193,7 @@ describe('AutoCategorizationRuleEditor', () => {
         const typeSelect = screen.getByLabelText(/condition type/i)
         await user.selectOptions(typeSelect, 'existing_category')
 
-        const searchInput = screen.getByRole('combobox', { name: /select plaid category/i })
+        const searchInput = screen.getByRole('combobox', { name: /select category/i })
         await user.click(searchInput)
         await user.type(searchInput, 'food')
 
@@ -1203,7 +1203,9 @@ describe('AutoCategorizationRuleEditor', () => {
         })
       })
 
-      it('should update condition value on selection', async () => {
+      it('existing_category_writes_display_string_not_enum', async () => {
+        // CRITICAL: existing_category must store display string (e.g. "Shopping") not enum ("SHOPPING")
+        // The backend evaluator compares condition.value against tx.Category[0] lowercased
         const user = userEvent.setup({ delay: null })
 
         render(
@@ -1212,7 +1214,7 @@ describe('AutoCategorizationRuleEditor', () => {
             onSave={mockOnSave}
             onCancel={mockOnCancel}
             categories={mockCategories}
-            plaidCategories={mockPlaidCategories}
+            plaidPrimaries={mockPlaidPrimaries}
           />
         )
 
@@ -1224,9 +1226,8 @@ describe('AutoCategorizationRuleEditor', () => {
         const typeSelect = screen.getByLabelText(/condition type/i)
         await user.selectOptions(typeSelect, 'existing_category')
 
-        const searchInput = screen.getByRole('combobox', { name: /select plaid category/i })
+        const searchInput = screen.getByRole('combobox', { name: /select category/i })
         await user.click(searchInput)
-
         await user.click(screen.getByText('Shopping'))
 
         const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
@@ -1238,7 +1239,8 @@ describe('AutoCategorizationRuleEditor', () => {
 
         await waitFor(() => {
           expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
-            conditions: [{ type: 'existing_category', value: 'SHOPPING' }],
+            // Must be display string "Shopping", NOT raw enum "SHOPPING"
+            conditions: [{ type: 'existing_category', value: 'Shopping' }],
           }))
         })
       })
@@ -1419,7 +1421,7 @@ describe('AutoCategorizationRuleEditor', () => {
         })
       })
 
-      it('should show both custom and Plaid categories in dropdown', async () => {
+      it('target_picker_dedupes_curated_with_custom', async () => {
         const user = userEvent.setup({ delay: null })
 
         render(
@@ -1428,7 +1430,7 @@ describe('AutoCategorizationRuleEditor', () => {
             onSave={mockOnSave}
             onCancel={mockOnCancel}
             categories={mockCategories}
-            plaidCategories={mockPlaidCategories}
+            plaidPrimaries={mockPlaidPrimaries}
           />
         )
 
@@ -1436,9 +1438,9 @@ describe('AutoCategorizationRuleEditor', () => {
         await user.click(targetCategoryInput)
 
         await waitFor(() => {
+          // Custom category "Food & Drink" is present
           expect(screen.getByText('Food & Drink')).toBeInTheDocument()
-          expect(screen.getByText('Shopping')).toBeInTheDocument()
-          expect(screen.getByText('Food And Drink')).toBeInTheDocument()
+          // Curated PFC primaries not in custom list are present
           expect(screen.getByText('Transportation')).toBeInTheDocument()
           expect(screen.getByText('Entertainment')).toBeInTheDocument()
         })
@@ -1453,7 +1455,7 @@ describe('AutoCategorizationRuleEditor', () => {
             onSave={mockOnSave}
             onCancel={mockOnCancel}
             categories={mockCategories}
-            plaidCategories={mockPlaidCategories}
+            plaidPrimaries={mockPlaidPrimaries}
           />
         )
 
@@ -1475,7 +1477,7 @@ describe('AutoCategorizationRuleEditor', () => {
             onSave={mockOnSave}
             onCancel={mockOnCancel}
             categories={mockCategories}
-            plaidCategories={mockPlaidCategories}
+            plaidPrimaries={mockPlaidPrimaries}
           />
         )
 
