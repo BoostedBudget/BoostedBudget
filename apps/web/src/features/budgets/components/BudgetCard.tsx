@@ -7,6 +7,7 @@
  */
 
 import { Link } from 'react-router-dom';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { BudgetProgressBar } from './BudgetProgressBar';
 import { computeBudgetMetrics } from '../types';
@@ -86,7 +87,7 @@ export function BudgetCard({ budget, onDelete }: BudgetCardProps) {
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2">
           <h3 className="m-0 text-lg font-semibold text-foreground">{budget.name}</h3>
-          {budget.is_active && <span className="bg-success/10 text-success text-xs font-medium px-2 py-0.5 rounded-full">Active</span>}
+          {budget.is_active && <Badge variant="success">Active</Badge>}
         </div>
         {budget.description && (
           <p className="m-0 text-sm text-muted-foreground">{budget.description}</p>
@@ -157,7 +158,7 @@ export function BudgetCard({ budget, onDelete }: BudgetCardProps) {
             size="sm"
             onClick={handleDelete}
             aria-label="Delete budget"
-            className="text-destructive border-destructive hover:bg-destructive hover:text-destructive-foreground"
+            className="text-destructive border-destructive hover:bg-destructive/10 hover:text-destructive"
           >
             Delete
           </Button>

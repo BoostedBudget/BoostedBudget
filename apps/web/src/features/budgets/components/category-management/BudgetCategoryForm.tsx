@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Alert } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import type { BudgetCategory, CreateBudgetCategoryRequest, UpdateBudgetCategoryRequest } from '../../types';
 import { formatCategoryPath } from '../../types';
 import type { MatchLogic } from '@boostedbudget/shared-types/matching';
@@ -341,7 +342,7 @@ export function BudgetCategoryForm({
               ))}
             </select>
             {errors.category && (
-              <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+              <p className="mt-1 text-sm text-destructive">
                 {errors.category}
               </p>
             )}
@@ -371,7 +372,7 @@ export function BudgetCategoryForm({
               />
             </div>
             {errors.allocated_amount && (
-              <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+              <p className="mt-1 text-sm text-destructive">
                 {errors.allocated_amount}
               </p>
             )}
@@ -417,7 +418,7 @@ export function BudgetCategoryForm({
                 })}
               </div>
               {errors.tags && (
-                <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+                <p className="mt-1 text-sm text-destructive">
                   {errors.tags}
                 </p>
               )}
@@ -426,11 +427,12 @@ export function BudgetCategoryForm({
 
           {/* Issue #497: Transaction Preview */}
           {previewEnabled && (
-            <div
-              className="budget-category-form__preview p-3 rounded-lg bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-sm"
-              data-testid="category-preview"
+            <Alert
+              variant="info"
               role="status"
               aria-live="polite"
+              data-testid="category-preview"
+              className="budget-category-form__preview"
             >
               {previewLoading ? (
                 <span className="flex items-center gap-2">
@@ -438,7 +440,7 @@ export function BudgetCategoryForm({
                   <span>Calculating matches...</span>
                 </span>
               ) : previewError ? (
-                <span className="text-amber-600 dark:text-amber-400">
+                <span className="text-warning">
                   Unable to load preview
                 </span>
               ) : preview ? (
@@ -447,7 +449,7 @@ export function BudgetCategoryForm({
                   <strong data-ph-mask>{formatCurrency(preview.total_amount)}</strong>
                 </span>
               ) : null}
-            </div>
+            </Alert>
           )}
 
           {/* Soft over-allocation warning */}
@@ -463,27 +465,17 @@ export function BudgetCategoryForm({
 
           {/* API Error */}
           {apiError && (
-            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 text-sm">
-              {apiError}
-            </div>
+            <Alert variant="destructive">{apiError}</Alert>
           )}
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-4">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-foreground bg-muted rounded-lg hover:bg-muted/80 transition-colors"
-            >
+            <Button variant="outline" type="button" onClick={onClose}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
+            </Button>
+            <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? 'Saving...' : submitButtonText}
-            </button>
+            </Button>
           </div>
         </form>
       </DialogContent>

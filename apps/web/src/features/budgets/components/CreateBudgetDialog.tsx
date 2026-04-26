@@ -18,6 +18,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Alert } from '@/components/ui/alert';
 import { useCreateBudget } from '@boostedbudget/api-client/endpoints/budgets/budgets';
 import { useGetPlaidCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 import { useGetUserTags } from '@boostedbudget/api-client/endpoints/tags/tags';
@@ -239,7 +241,7 @@ export function CreateBudgetDialog({
                 placeholder="e.g., Monthly Budget"
               />
               {errors.name && (
-                <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.name}</p>
+                <p className="mt-1 text-sm text-destructive">{errors.name}</p>
               )}
             </div>
 
@@ -313,7 +315,7 @@ export function CreateBudgetDialog({
                   )}
                 />
                 {errors.end_date && (
-                  <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.end_date}</p>
+                  <p className="mt-1 text-sm text-destructive">{errors.end_date}</p>
                 )}
               </div>
             )}
@@ -348,7 +350,7 @@ export function CreateBudgetDialog({
               />
             </div>
             {errors.expectedIncome && (
-              <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.expectedIncome}</p>
+              <p className="mt-1 text-sm text-destructive">{errors.expectedIncome}</p>
             )}
           </div>
 
@@ -387,27 +389,17 @@ export function CreateBudgetDialog({
 
           {/* API Error */}
           {apiError && (
-            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 text-sm">
-              {apiError}
-            </div>
+            <Alert variant="destructive">{apiError}</Alert>
           )}
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-4">
-            <button
-              type="button"
-              onClick={onCancel}
-              className="px-4 py-2 text-sm font-medium text-foreground bg-muted rounded-lg hover:bg-muted/80 transition-colors"
-            >
+            <Button variant="outline" type="button" onClick={onCancel}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
+            </Button>
+            <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? 'Creating...' : 'Create Budget'}
-            </button>
+            </Button>
           </div>
         </form>
       </DialogContent>
