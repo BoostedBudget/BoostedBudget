@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -207,7 +206,7 @@ func (s *analyticsService) GetSpendingByCategory(ctx context.Context, userID str
 	}
 
 	for i := range categories {
-		categories[i].DisplayName = formatCategoryName(categories[i].Category)
+		categories[i].DisplayName = PFCPrimaryDisplayName(categories[i].Category)
 		if totalSpent > 0 {
 			categories[i].Percentage = (categories[i].Total / totalSpent) * 100
 		}
@@ -314,7 +313,7 @@ func (s *analyticsService) GetSpendingTrends(ctx context.Context, userID string,
 			if spend, ok := catSpend[tc]; ok {
 				cats = append(cats, domain.CategorySpending{
 					Category:    tc,
-					DisplayName: formatCategoryName(tc),
+					DisplayName: PFCPrimaryDisplayName(tc),
 					Total:       spend,
 				})
 				periodTotal += spend
@@ -346,21 +345,6 @@ func (s *analyticsService) GetSpendingTrends(ctx context.Context, userID string,
 		Periods:       periods,
 		TopCategories: topCategories,
 	}, nil
-}
-
-// formatCategoryName converts a SCREAMING_SNAKE_CASE category to Title Case
-// e.g. FOOD_AND_DRINK → "Food & Drink"
-func formatCategoryName(s string) string {
-	words := strings.Split(s, "_")
-	for i, w := range words {
-		if len(w) == 0 {
-			continue
-		}
-		words[i] = strings.ToUpper(w[:1]) + strings.ToLower(w[1:])
-	}
-	result := strings.Join(words, " ")
-	result = strings.ReplaceAll(result, " And ", " & ")
-	return result
 }
 
 // absFloat returns the absolute value of a float64

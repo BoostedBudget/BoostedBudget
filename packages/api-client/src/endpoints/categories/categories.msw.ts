@@ -32,7 +32,7 @@ import { faker } from "@faker-js/faker";
 import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
-import type { CustomCategory } from "../../models";
+import type { CustomCategory, Detailed, Primary } from "../../models";
 
 export const getGetUserCategoriesResponseMock = (): CustomCategory[] | null =>
   Array.from(
@@ -90,6 +90,28 @@ export const getGetPlaidCategoriesResponseMock = (): string[] | null =>
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,
   ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } }));
+
+export const getGetPlaidDetailedCategoriesResponseMock = ():
+  | Detailed[]
+  | null =>
+  Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    display: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    enum: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    primary_enum: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  }));
+
+export const getGetPlaidPrimaryCategoriesResponseMock = (): Primary[] | null =>
+  Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    display: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    enum: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  }));
 
 export const getGetCategoryByIDResponseMock = (
   overrideResponse: Partial<Extract<CustomCategory, object>> = {},
@@ -221,6 +243,60 @@ export const getGetPlaidCategoriesMockHandler = (
   );
 };
 
+export const getGetPlaidDetailedCategoriesMockHandler = (
+  overrideResponse?:
+    | Detailed[]
+    | null
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<Detailed[] | null> | Detailed[] | null),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/categories/plaid-detailed",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetPlaidDetailedCategoriesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetPlaidPrimaryCategoriesMockHandler = (
+  overrideResponse?:
+    | Primary[]
+    | null
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<Primary[] | null> | Primary[] | null),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/categories/plaid-primaries",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetPlaidPrimaryCategoriesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getDeleteCategoryMockHandler = (
   overrideResponse?:
     | void
@@ -298,6 +374,8 @@ export const getCategoriesMock = () => [
   getGetUserCategoriesMockHandler(),
   getCreateCategoryMockHandler(),
   getGetPlaidCategoriesMockHandler(),
+  getGetPlaidDetailedCategoriesMockHandler(),
+  getGetPlaidPrimaryCategoriesMockHandler(),
   getDeleteCategoryMockHandler(),
   getGetCategoryByIDMockHandler(),
   getUpdateCategoryMockHandler(),

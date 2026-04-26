@@ -8,6 +8,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/pfc"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
@@ -71,6 +72,26 @@ type UpdateCategoryOutput struct {
 type DeleteCategoryInput struct {
 	inputs.AuthenticatedInput
 	ID string `path:"id" doc:"Category UUID"`
+}
+
+// GetPlaidPrimaryCategoriesInput represents the input for listing curated PFC primaries.
+type GetPlaidPrimaryCategoriesInput struct {
+	inputs.AuthenticatedInput
+}
+
+// GetPlaidPrimaryCategoriesOutput represents the response for listing curated PFC primaries.
+type GetPlaidPrimaryCategoriesOutput struct {
+	Body []pfc.Primary
+}
+
+// GetPlaidDetailedCategoriesInput represents the input for listing curated PFC detailed categories.
+type GetPlaidDetailedCategoriesInput struct {
+	inputs.AuthenticatedInput
+}
+
+// GetPlaidDetailedCategoriesOutput represents the response for listing curated PFC detailed categories.
+type GetPlaidDetailedCategoriesOutput struct {
+	Body []pfc.Detailed
 }
 
 // --- Handler Methods ---
@@ -140,6 +161,20 @@ func (h *CategoryHandler) DeleteCategory(ctx context.Context, input *DeleteCateg
 	return nil, nil
 }
 
+// GetPlaidPrimaryCategories handles GET /api/v1/categories/plaid-primaries requests.
+// Returns all 18 PFCv2 curated primary categories, sorted alphabetically by display name.
+// The handler reads the static pfc.AllPrimaries() registry directly — no DB, no service call.
+func (h *CategoryHandler) GetPlaidPrimaryCategories(_ context.Context, _ *GetPlaidPrimaryCategoriesInput) (*GetPlaidPrimaryCategoriesOutput, error) {
+	return &GetPlaidPrimaryCategoriesOutput{Body: pfc.AllPrimaries()}, nil
+}
+
+// GetPlaidDetailedCategories handles GET /api/v1/categories/plaid-detailed requests.
+// Returns the full PFCv2 detailed taxonomy (~120 entries), sorted by primary display then display.
+// The handler reads the static pfc.AllDetailed() registry directly — no DB, no service call.
+func (h *CategoryHandler) GetPlaidDetailedCategories(_ context.Context, _ *GetPlaidDetailedCategoriesInput) (*GetPlaidDetailedCategoriesOutput, error) {
+	return &GetPlaidDetailedCategoriesOutput{Body: pfc.AllDetailed()}, nil
+}
+
 // RegisterCategoryRoutes registers category routes with the Huma API.
 // Note: These routes require the Clerk middleware to be applied.
 func RegisterCategoryRoutes(api huma.API, handler *CategoryHandler) {
@@ -199,4 +234,26 @@ func RegisterCategoryRoutes(api huma.API, handler *CategoryHandler) {
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteCategory)
+
+	// GET /api/v1/categories/plaid-primaries - List curated PFCv2 primary categories
+	huma.Register(api, huma.Operation{
+		OperationID: "getPlaidPrimaryCategories",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/categories/plaid-primaries",
+		Summary:     "List curated Plaid PFC primary categories",
+		Description: "Returns all 18 PFCv2 curated primary categories sorted alphabetically. Used by every PFC selection surface.",
+		Tags:        []string{"Categories"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetPlaidPrimaryCategories)
+
+	// GET /api/v1/categories/plaid-detailed - List curated PFCv2 detailed categories
+	huma.Register(api, huma.Operation{
+		OperationID: "getPlaidDetailedCategories",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/categories/plaid-detailed",
+		Summary:     "List curated Plaid PFC detailed categories",
+		Description: "Returns the full PFCv2 detailed taxonomy (~120 entries) sorted by primary then detailed display name. Used only by the rule editor's existing_pfc_detailed condition.",
+		Tags:        []string{"Categories"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetPlaidDetailedCategories)
 }
