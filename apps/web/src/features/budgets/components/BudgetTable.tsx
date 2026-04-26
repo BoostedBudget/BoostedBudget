@@ -8,6 +8,7 @@
 import { useCallback } from 'react'
 import { Settings, Trash2, ChevronUp, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import type { BudgetWithMetrics } from '../types'
 import {
   ColumnFilterDropdown,
@@ -245,15 +246,11 @@ export function BudgetTable({
               <td className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle min-w-[200px] max-sm:min-w-[150px]">
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-foreground">{budget.name}</span>
-                  <span
-                    className={`inline-flex items-center px-2 py-0.5 text-[0.625rem] font-medium rounded-full uppercase tracking-wide ${
-                      budget.is_active
-                        ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300'
-                        : 'bg-muted text-muted-foreground'
-                    }`}
-                  >
-                    {budget.is_active ? 'Active' : 'Inactive'}
-                  </span>
+                  {budget.is_active ? (
+                    <Badge variant="success">Active</Badge>
+                  ) : (
+                    <Badge variant="secondary">Inactive</Badge>
+                  )}
                 </div>
               </td>
               <td className="px-4 py-3.5 text-sm text-foreground border-b border-border align-middle">{getPeriodLabel(budget.period)}</td>
@@ -278,13 +275,13 @@ export function BudgetTable({
                     aria-valuemax={100}
                   >
                     <div
-                      className={`h-full rounded-full transition-[width] duration-300 ${isOverBudget ? 'bg-red-500' : 'bg-blue-500'}`}
+                      className={`h-full rounded-full transition-[width] duration-300 ${isOverBudget ? 'bg-destructive' : 'bg-primary'}`}
                       style={{ width: `${Math.min(percentUsed, 100)}%` }}
                     />
                   </div>
                   <span
                     className={`min-w-12 text-right text-xs font-medium max-sm:min-w-0 max-sm:text-left ${
-                      isOverBudget ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'
+                      isOverBudget ? 'text-destructive' : 'text-muted-foreground'
                     }`}
                   >
                     {percentUsed}%
@@ -298,8 +295,8 @@ export function BudgetTable({
                 <span
                   className={`font-semibold tabular-nums ${
                     budget.remaining_amount < 0
-                      ? 'budget-table__remaining--negative text-red-600 dark:text-red-400'
-                      : 'budget-table__remaining--positive text-green-600 dark:text-green-400'
+                      ? 'budget-table__remaining--negative text-destructive'
+                      : 'budget-table__remaining--positive text-success'
                   }`}
                 >
                   {formatCurrency(budget.remaining_amount)}
