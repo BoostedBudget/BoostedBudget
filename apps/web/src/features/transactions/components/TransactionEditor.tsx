@@ -48,6 +48,25 @@ function getOriginalCategoryName(originalCategory: string | null | undefined): s
   return parsed.length > 0 ? parsed[0] : null
 }
 
+/**
+ * Resolve effective category for initial editor state:
+ * category_override → category → PFC primary display → empty
+ */
+function getEffectiveCategory(transaction: Transaction): string[] {
+  if (transaction.category_override) {
+    const parsed = parseCategory(transaction.category_override)
+    if (parsed.length > 0) return parsed
+  }
+  if (transaction.category) {
+    const parsed = parseCategory(transaction.category)
+    if (parsed.length > 0) return parsed
+  }
+  if (transaction.personal_finance_category_data?.primary_display) {
+    return [transaction.personal_finance_category_data.primary_display]
+  }
+  return []
+}
+
 export function TransactionEditor({
   transaction,
   availableTags,
@@ -60,9 +79,7 @@ export function TransactionEditor({
 }: TransactionEditorProps) {
   const [tags, setTags] = useState<string[]>(transaction.tags || [])
   const [category, setCategory] = useState<string[]>(
-    transaction.category_override
-      ? parseCategory(transaction.category_override)
-      : parseCategory(transaction.category)
+    getEffectiveCategory(transaction)
   )
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -73,9 +90,7 @@ export function TransactionEditor({
   const updateCategoryMutation = useUpdateTransactionCategory()
 
   const initialTags = transaction.tags || []
-  const initialCategory = transaction.category_override
-    ? parseCategory(transaction.category_override)
-    : parseCategory(transaction.category)
+  const initialCategory = getEffectiveCategory(transaction)
 
   const hasTagChanges = JSON.stringify(tags) !== JSON.stringify(initialTags)
   const hasCategoryChanges = JSON.stringify(category) !== JSON.stringify(initialCategory)
