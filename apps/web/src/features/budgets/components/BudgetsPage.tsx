@@ -13,8 +13,7 @@ import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
-import { PlusIcon } from '@heroicons/react/24/outline'
-import { PieChart, Target } from 'lucide-react'
+import { PieChart, Plus, Target } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { useBudgets } from '../hooks/useBudgets'
@@ -300,15 +299,10 @@ export function BudgetsPage() {
           <h2 className="m-0 text-xl font-semibold text-foreground">Active Budgets</h2>
           {activeBudgets.length > 0 && (
             <ReadOnlyGuard>
-              <button
-                type="button"
-                onClick={openBudgetDialog}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary bg-primary/10 border border-primary rounded-lg cursor-pointer transition-all hover:bg-primary hover:text-primary-foreground"
-                aria-label="Create budget"
-              >
-                <PlusIcon className="h-5 w-5" />
-                <span>Create Budget</span>
-              </button>
+              <Button type="button" onClick={openBudgetDialog}>
+                <Plus />
+                Create Budget
+              </Button>
             </ReadOnlyGuard>
           )}
         </div>
@@ -320,7 +314,7 @@ export function BudgetsPage() {
             action={
               <ReadOnlyGuard>
                 <Button onClick={openBudgetDialog}>
-                  <PlusIcon className="h-5 w-5" />
+                  <Plus />
                   Create your first budget
                 </Button>
               </ReadOnlyGuard>
@@ -387,15 +381,10 @@ export function BudgetsPage() {
           <h2 className="m-0 text-xl font-semibold text-foreground">Savings Goals</h2>
           {(activeGoals.length > 0 || completedGoals.length > 0) && (
             <ReadOnlyGuard>
-              <button
-                type="button"
-                onClick={openGoalDialog}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary bg-primary/10 border border-primary rounded-lg cursor-pointer transition-all hover:bg-primary hover:text-primary-foreground"
-                aria-label="Create savings goal"
-              >
-                <PlusIcon className="h-5 w-5" />
-                <span>Create Goal</span>
-              </button>
+              <Button type="button" variant="outline" onClick={openGoalDialog} aria-label="Create savings goal">
+                <Plus />
+                Create Goal
+              </Button>
             </ReadOnlyGuard>
           )}
         </div>
@@ -407,7 +396,7 @@ export function BudgetsPage() {
             action={
               <ReadOnlyGuard>
                 <Button onClick={openGoalDialog}>
-                  <PlusIcon className="h-5 w-5" />
+                  <Plus />
                   Create your first goal
                 </Button>
               </ReadOnlyGuard>
