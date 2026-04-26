@@ -168,6 +168,9 @@ export function TransactionsPage() {
           // If not JSON, use as-is
           categorySet.add(category)
         }
+      } else if (t.personal_finance_category_data?.primary_display) {
+        // PFC fallback for pre-backfill transactions
+        categorySet.add(t.personal_finance_category_data.primary_display)
       }
     })
 
@@ -267,9 +270,14 @@ export function TransactionsPage() {
           break
         }
         case 'category': {
-          const catA = a.category_override || a.category || ''
-          const catB = b.category_override || b.category || ''
-          comparison = catA.localeCompare(catB)
+          const resolveCat = (t: Transaction) => {
+            const raw = t.category_override || t.category
+            if (raw) {
+              try { return (JSON.parse(raw) as string[])[0] ?? '' } catch { return raw }
+            }
+            return t.personal_finance_category_data?.primary_display ?? ''
+          }
+          comparison = resolveCat(a).localeCompare(resolveCat(b))
           break
         }
       }
