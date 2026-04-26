@@ -145,6 +145,7 @@ export * from "./paddleStatusMetrics";
 export * from "./paddleTransaction";
 export * from "./paddleWebhookEvent";
 export * from "./paddleWebhookResponseBody";
+export * from "./parsedPersonalFinanceCategoryData";
 export * from "./periodComparisonData";
 export * from "./plaidHealth";
 export * from "./plaidWebhookResponseBody";

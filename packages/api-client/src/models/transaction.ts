@@ -28,6 +28,7 @@ Multi-region support planned for Phase 7+.
  * OpenAPI spec version: 1.0.0
  */
 import type { Account } from "./account";
+import type { ParsedPersonalFinanceCategoryData } from "./parsedPersonalFinanceCategoryData";
 import type { TagSource } from "./tagSource";
 
 export interface Transaction {
@@ -53,6 +54,7 @@ export interface Transaction {
   payment_channel?: string;
   pending: boolean;
   personal_finance_category?: string;
+  personal_finance_category_data?: ParsedPersonalFinanceCategoryData;
   source: string;
   /** @nullable */
   tags: string[] | null;

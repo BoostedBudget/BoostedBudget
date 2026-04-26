@@ -175,6 +175,25 @@ export const getGetTransactionsResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      personal_finance_category_data: faker.helpers.arrayElement([
+        {
+          confidence_level: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          detailed: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          detailed_display: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          primary: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        },
+        undefined,
+      ]),
       source: faker.string.alpha({ length: { min: 10, max: 20 } }),
       tags: faker.helpers.arrayElement([
         Array.from(
@@ -342,6 +361,25 @@ export const getGetTransactionByIDResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  personal_finance_category_data: faker.helpers.arrayElement([
+    {
+      confidence_level: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      detailed: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      detailed_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      primary: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    },
+    undefined,
+  ]),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   tags: faker.helpers.arrayElement([
     Array.from(
@@ -506,6 +544,25 @@ export const getUpdateTransactionCategoryResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  personal_finance_category_data: faker.helpers.arrayElement([
+    {
+      confidence_level: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      detailed: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      detailed_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      primary: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    },
+    undefined,
+  ]),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   tags: faker.helpers.arrayElement([
     Array.from(
@@ -668,6 +725,25 @@ export const getUpdateTransactionTagsResponseMock = (
   pending: faker.datatype.boolean(),
   personal_finance_category: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  personal_finance_category_data: faker.helpers.arrayElement([
+    {
+      confidence_level: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      detailed: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      detailed_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      primary: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    },
     undefined,
   ]),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),

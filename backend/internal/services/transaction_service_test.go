@@ -501,3 +501,77 @@ func TestTransactionService_GetDistinctPlaidCategories_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to get distinct plaid categories")
 	mockRepo.AssertExpectations(t)
 }
+
+// ============================================================================
+// Issue #1058: D2 — Parsed PFC data in API responses
+// ============================================================================
+
+func ptrStr(s string) *string { return &s }
+
+func TestGetTransactionByID_PopulatesParsedPFC(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo)
+
+	pfcJSON := `{"primary":"FOOD_AND_DRINK","detailed":"FOOD_AND_DRINK_FAST_FOOD","confidence_level":"VERY_HIGH"}`
+	txn := &domain.Transaction{
+		ID:                      "txn-1",
+		UserID:                  "user-1",
+		PersonalFinanceCategory: ptrStr(pfcJSON),
+	}
+	mockRepo.On("GetByID", ctx, "txn-1").Return(txn, nil)
+
+	result, err := service.GetTransactionByID(ctx, "user-1", "txn-1")
+	require.NoError(t, err)
+	require.NotNil(t, result.PersonalFinanceCategoryData, "parsed PFC should be populated")
+	assert.Equal(t, "FOOD_AND_DRINK", result.PersonalFinanceCategoryData.Primary)
+	assert.Equal(t, "Food And Drink", result.PersonalFinanceCategoryData.PrimaryDisplay)
+	assert.Equal(t, "FOOD_AND_DRINK_FAST_FOOD", result.PersonalFinanceCategoryData.Detailed)
+	assert.Equal(t, "Fast Food", result.PersonalFinanceCategoryData.DetailedDisplay)
+	assert.Equal(t, "VERY_HIGH", result.PersonalFinanceCategoryData.ConfidenceLevel)
+	mockRepo.AssertExpectations(t)
+}
+
+func TestGetTransactionByID_NilPFC_NoParsedData(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo)
+
+	txn := &domain.Transaction{
+		ID:                      "txn-1",
+		UserID:                  "user-1",
+		PersonalFinanceCategory: nil,
+	}
+	mockRepo.On("GetByID", ctx, "txn-1").Return(txn, nil)
+
+	result, err := service.GetTransactionByID(ctx, "user-1", "txn-1")
+	require.NoError(t, err)
+	assert.Nil(t, result.PersonalFinanceCategoryData, "no PFC data should be populated when raw JSON is nil")
+	mockRepo.AssertExpectations(t)
+}
+
+func TestListTransactions_PopulatesParsedPFC(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo)
+
+	pfcJSON := `{"primary":"TRANSPORTATION","detailed":"TRANSPORTATION_TAXIS_AND_RIDE_SHARES","confidence_level":"HIGH"}`
+	transactions := []domain.Transaction{
+		{ID: "txn-1", UserID: "user-1", PersonalFinanceCategory: ptrStr(pfcJSON)},
+		{ID: "txn-2", UserID: "user-1", PersonalFinanceCategory: nil},
+	}
+	mockRepo.On("GetByUserIDWithFilters", ctx, "user-1", mock.Anything, 50, 0).Return(transactions, nil)
+	mockRepo.On("CountByUserID", ctx, "user-1", mock.Anything).Return(2, nil)
+
+	resp, err := service.ListTransactions(ctx, "user-1", domain.TransactionFilters{}, 50, 0)
+	require.NoError(t, err)
+	require.Len(t, resp.Transactions, 2)
+
+	require.NotNil(t, resp.Transactions[0].PersonalFinanceCategoryData, "PFC data should be populated for txn-1")
+	assert.Equal(t, "TRANSPORTATION", resp.Transactions[0].PersonalFinanceCategoryData.Primary)
+	assert.Equal(t, "Transportation", resp.Transactions[0].PersonalFinanceCategoryData.PrimaryDisplay)
+	assert.Equal(t, "Taxis And Ride Shares", resp.Transactions[0].PersonalFinanceCategoryData.DetailedDisplay)
+
+	assert.Nil(t, resp.Transactions[1].PersonalFinanceCategoryData, "PFC data should be nil when raw JSON is nil")
+	mockRepo.AssertExpectations(t)
+}

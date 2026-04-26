@@ -753,3 +753,117 @@ func TestAmountEqualsEvaluator_Evaluate(t *testing.T) {
 		})
 	}
 }
+
+// ============================================================================
+// Issue #1058: PFC Evaluator Tests
+// ============================================================================
+
+func newTestTransactionWithPFC(pfcJSON string) *domain.Transaction {
+	return &domain.Transaction{
+		PersonalFinanceCategory: strPtr(pfcJSON),
+	}
+}
+
+func TestExistingPFCPrimaryEvaluator_Match(t *testing.T) {
+	evaluator := &ExistingPFCPrimaryEvaluator{}
+
+	pfcJSON := mustMarshalJSON(map[string]string{
+		"primary":          "FOOD_AND_DRINK",
+		"detailed":         "FOOD_AND_DRINK_FAST_FOOD",
+		"confidence_level": "VERY_HIGH",
+	})
+
+	tx := newTestTransactionWithPFC(pfcJSON)
+
+	got, err := evaluator.Evaluate(tx, domain.RuleCondition{
+		Type:  domain.ConditionExistingPFCPrimary,
+		Value: "FOOD_AND_DRINK",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got {
+		t.Error("Evaluate() = false, want true for matching PFC primary")
+	}
+}
+
+func TestExistingPFCPrimaryEvaluator_CaseInsensitive(t *testing.T) {
+	evaluator := &ExistingPFCPrimaryEvaluator{}
+	pfcJSON := mustMarshalJSON(map[string]string{"primary": "FOOD_AND_DRINK"})
+	tx := newTestTransactionWithPFC(pfcJSON)
+
+	got, _ := evaluator.Evaluate(tx, domain.RuleCondition{
+		Type:  domain.ConditionExistingPFCPrimary,
+		Value: "food_and_drink",
+	})
+	if !got {
+		t.Error("Evaluate() should be case-insensitive")
+	}
+}
+
+func TestExistingPFCPrimaryEvaluator_NoMatch(t *testing.T) {
+	evaluator := &ExistingPFCPrimaryEvaluator{}
+	pfcJSON := mustMarshalJSON(map[string]string{"primary": "TRANSPORTATION"})
+	tx := newTestTransactionWithPFC(pfcJSON)
+
+	got, _ := evaluator.Evaluate(tx, domain.RuleCondition{
+		Type:  domain.ConditionExistingPFCPrimary,
+		Value: "FOOD_AND_DRINK",
+	})
+	if got {
+		t.Error("Evaluate() = true, want false for non-matching PFC primary")
+	}
+}
+
+func TestExistingPFCPrimaryEvaluator_NilPFC(t *testing.T) {
+	evaluator := &ExistingPFCPrimaryEvaluator{}
+	tx := &domain.Transaction{PersonalFinanceCategory: nil}
+
+	got, err := evaluator.Evaluate(tx, domain.RuleCondition{
+		Type:  domain.ConditionExistingPFCPrimary,
+		Value: "FOOD_AND_DRINK",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got {
+		t.Error("Evaluate() = true, want false for nil PFC")
+	}
+}
+
+func TestExistingPFCDetailedEvaluator_Match(t *testing.T) {
+	evaluator := &ExistingPFCDetailedEvaluator{}
+	pfcJSON := mustMarshalJSON(map[string]string{
+		"primary":  "FOOD_AND_DRINK",
+		"detailed": "FOOD_AND_DRINK_FAST_FOOD",
+	})
+	tx := newTestTransactionWithPFC(pfcJSON)
+
+	got, err := evaluator.Evaluate(tx, domain.RuleCondition{
+		Type:  domain.ConditionExistingPFCDetailed,
+		Value: "FOOD_AND_DRINK_FAST_FOOD",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got {
+		t.Error("Evaluate() = false, want true for matching PFC detailed")
+	}
+}
+
+func TestExistingPFCDetailedEvaluator_NoMatch(t *testing.T) {
+	evaluator := &ExistingPFCDetailedEvaluator{}
+	pfcJSON := mustMarshalJSON(map[string]string{
+		"primary":  "FOOD_AND_DRINK",
+		"detailed": "FOOD_AND_DRINK_FAST_FOOD",
+	})
+	tx := newTestTransactionWithPFC(pfcJSON)
+
+	got, _ := evaluator.Evaluate(tx, domain.RuleCondition{
+		Type:  domain.ConditionExistingPFCDetailed,
+		Value: "FOOD_AND_DRINK_COFFEE_SHOPS",
+	})
+	if got {
+		t.Error("Evaluate() = true, want false for non-matching PFC detailed")
+	}
+}

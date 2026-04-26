@@ -432,12 +432,32 @@ func (s *transactionSyncService) mapPlaidTransaction(
 		return nil, fmt.Errorf("failed to serialize external metadata: %w", err)
 	}
 
-	// Serialize category array as JSON
+	// Serialize category array as JSON. When Plaid sends no legacy category but does send
+	// personal_finance_category (PFC v2), synthesize a display-friendly array from PFC so
+	// downstream consumers (rule engine, budget matcher, display) never see a NULL.
 	var categoryJSON *string
 	if len(plaidTxn.Category) > 0 {
 		catBytes, _ := json.Marshal(plaidTxn.Category)
 		catStr := string(catBytes)
 		categoryJSON = &catStr
+	} else if plaidTxn.PersonalFinanceCategory.IsSet() {
+		pfc := plaidTxn.PersonalFinanceCategory.Get()
+		if pfc != nil && pfc.Primary != "" {
+			derived := PFCToCategoryArray(pfc.Primary, pfc.Detailed)
+			if derived != nil {
+				catBytes, _ := json.Marshal(derived)
+				catStr := string(catBytes)
+				categoryJSON = &catStr
+			}
+		}
+	}
+
+	// OriginalCategory faithfully mirrors the legacy Plaid category array only.
+	// It is intentionally NOT set from synthesized PFC data so that "reset to original"
+	// semantics remain meaningful (NULL = Plaid never sent a legacy category).
+	var originalCategoryJSON *string
+	if len(plaidTxn.Category) > 0 {
+		originalCategoryJSON = categoryJSON
 	}
 
 	// Serialize personal finance category as JSON
@@ -475,7 +495,7 @@ func (s *transactionSyncService) mapPlaidTransaction(
 		Name:                    plaidTxn.Name,
 		MerchantName:            merchantName,
 		Category:                categoryJSON,
-		OriginalCategory:        categoryJSON,
+		OriginalCategory:        originalCategoryJSON,
 		PersonalFinanceCategory: pfCategoryJSON,
 		PaymentChannel:          paymentChannel,
 		Pending:                 plaidTxn.GetPending(),
