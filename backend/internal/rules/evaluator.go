@@ -46,6 +46,8 @@ func NewConditionRegistry() *ConditionRegistry {
 	r.evaluators[domain.ConditionAccountType] = &AccountTypeEvaluator{}
 	r.evaluators[domain.ConditionExistingCategory] = &ExistingCategoryEvaluator{}
 	r.evaluators[domain.ConditionDateRange] = &DateRangeEvaluator{}
+	r.evaluators[domain.ConditionExistingPFCPrimary] = &ExistingPFCPrimaryEvaluator{}
+	r.evaluators[domain.ConditionExistingPFCDetailed] = &ExistingPFCDetailedEvaluator{}
 
 	return r
 }
@@ -325,6 +327,65 @@ func (e *ExistingCategoryEvaluator) Evaluate(tx *domain.Transaction, condition d
 	primaryCategory := strings.ToLower(categories[0])
 	for _, v := range values {
 		if primaryCategory == strings.ToLower(v) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// parsePFCField safely extracts a single field from the PersonalFinanceCategory JSON.
+// Returns empty string if JSON is missing, malformed, or field is absent.
+func parsePFCField(pfcJSON *string, field string) string {
+	if pfcJSON == nil {
+		return ""
+	}
+	var pfc map[string]string
+	if err := json.Unmarshal([]byte(*pfcJSON), &pfc); err != nil {
+		return ""
+	}
+	return pfc[field]
+}
+
+// ExistingPFCPrimaryEvaluator checks against the Plaid PFC primary field (e.g. "FOOD_AND_DRINK").
+type ExistingPFCPrimaryEvaluator struct{}
+
+func (e *ExistingPFCPrimaryEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
+	primary := parsePFCField(tx.PersonalFinanceCategory, "primary")
+	if primary == "" {
+		return false, nil
+	}
+
+	values := matching.ExtractStringValues(condition.Value)
+	if len(values) == 0 {
+		return false, nil
+	}
+
+	primary = strings.ToLower(primary)
+	for _, v := range values {
+		if primary == strings.ToLower(v) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ExistingPFCDetailedEvaluator checks against the Plaid PFC detailed field (e.g. "FOOD_AND_DRINK_FAST_FOOD").
+type ExistingPFCDetailedEvaluator struct{}
+
+func (e *ExistingPFCDetailedEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
+	detailed := parsePFCField(tx.PersonalFinanceCategory, "detailed")
+	if detailed == "" {
+		return false, nil
+	}
+
+	values := matching.ExtractStringValues(condition.Value)
+	if len(values) == 0 {
+		return false, nil
+	}
+
+	detailed = strings.ToLower(detailed)
+	for _, v := range values {
+		if detailed == strings.ToLower(v) {
 			return true, nil
 		}
 	}

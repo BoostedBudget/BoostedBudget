@@ -1,4 +1,4 @@
-import type { Transaction, CategorySource } from '../types'
+import type { Transaction, CategorySource, ParsedPersonalFinanceCategoryData } from '../types'
 import type { Account } from '../../accounts/types'
 import { ReadOnlyGuard, useReadOnly } from '@/auth'
 import { TransactionBudgetBadge } from '../../budgets/components/transaction-link'
@@ -54,6 +54,15 @@ function parseCategory(categoryJson: string | null | undefined): string {
 }
 
 /**
+ * Get display category from PFC data if present (D5 fallback).
+ * Returns null when no usable PFC data is available.
+ */
+function getPFCDisplayCategory(pfcData: ParsedPersonalFinanceCategoryData | null | undefined): string | null {
+  if (pfcData?.primary_display) return pfcData.primary_display
+  return null
+}
+
+/**
  * Check if transaction is explicitly uncategorized by user
  * Returns true when user manually cleared the category (should NOT fall back to Plaid)
  */
@@ -70,32 +79,6 @@ function isExplicitlyUncategorized(
   return false
 }
 
-/**
- * Check if transaction should display as uncategorized (for warning indicator)
- */
-function isUncategorized(
-  category: string | null | undefined,
-  categoryOverride: string | null | undefined,
-  categorySource: CategorySource | undefined
-): boolean {
-  // Explicitly uncategorized by user
-  if (isExplicitlyUncategorized(categoryOverride, categorySource)) {
-    return true
-  }
-  // Never had a category
-  if (!category && !categoryOverride) {
-    return true
-  }
-  // Has override but it's empty (and not manual source)
-  if (categoryOverride && parseCategory(categoryOverride) === 'Uncategorized' && categorySource !== 'manual') {
-    return parseCategory(category) === 'Uncategorized'
-  }
-  // Check if displayed category would be uncategorized
-  const displayedCategory = categoryOverride && parseCategory(categoryOverride) !== 'Uncategorized'
-    ? categoryOverride
-    : category
-  return parseCategory(displayedCategory) === 'Uncategorized'
-}
 
 /**
  * Format date with relative labels (Today, Yesterday) or readable format
@@ -166,6 +149,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
     date,
     authorized_date,
     category,
+    personal_finance_category_data,
     category_override,
     category_source,
     original_category,
@@ -190,20 +174,22 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
   // Check if explicitly uncategorized by user (should NOT fall back to Plaid)
   const explicitlyUncategorized = isExplicitlyUncategorized(category_override, category_source)
 
-  // Use category_override if present and non-empty, otherwise fall back to category
-  // UNLESS explicitly uncategorized by user
-  let categoryToDisplay: string | null | undefined
+  // Use category_override if present and non-empty, otherwise fall back to category,
+  // then PFC data as a last resort. UNLESS explicitly uncategorized by user.
+  let categoryLabel: string
   if (explicitlyUncategorized) {
-    categoryToDisplay = null // Will display as "Uncategorized"
+    categoryLabel = 'Uncategorized'
   } else if (category_override && parseCategory(category_override) !== 'Uncategorized') {
-    categoryToDisplay = category_override
+    categoryLabel = parseCategory(category_override)
+  } else if (category && parseCategory(category) !== 'Uncategorized') {
+    categoryLabel = parseCategory(category)
   } else {
-    categoryToDisplay = category
+    // D5: fall back to PFC primary_display when legacy category is absent
+    categoryLabel = getPFCDisplayCategory(personal_finance_category_data) ?? 'Uncategorized'
   }
-  const categoryLabel = parseCategory(categoryToDisplay)
 
-  // Check if should show warning indicator
-  const showUncategorizedWarning = isUncategorized(category, category_override, category_source)
+  // Check if should show warning indicator — no warning when PFC provides a fallback
+  const showUncategorizedWarning = categoryLabel === 'Uncategorized'
   const amountFormatted = formatAmount(amount)
 
   // Determine amount styling

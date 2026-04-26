@@ -2552,6 +2552,23 @@ components:
         - status
         - message
       type: object
+    ParsedPersonalFinanceCategoryData:
+      additionalProperties: false
+      properties:
+        confidence_level:
+          type: string
+        detailed:
+          type: string
+        detailed_display:
+          type: string
+        primary:
+          type: string
+        primary_display:
+          type: string
+      required:
+        - primary
+        - primary_display
+      type: object
     PeriodComparisonData:
       additionalProperties: false
       properties:
@@ -3601,6 +3618,8 @@ components:
           type: boolean
         personal_finance_category:
           type: string
+        personal_finance_category_data:
+          $ref: "#/components/schemas/ParsedPersonalFinanceCategoryData"
         source:
           type: string
         tags:
