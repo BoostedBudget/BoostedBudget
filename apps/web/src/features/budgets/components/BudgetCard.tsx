@@ -154,10 +154,11 @@ export function BudgetCard({ budget, onDelete }: BudgetCardProps) {
       {onDelete && (
         <div className="flex gap-2 mt-2 pt-4 border-t border-border">
           <Button
-            variant="destructive"
+            variant="outline"
             size="sm"
             onClick={handleDelete}
             aria-label="Delete budget"
+            className="text-destructive border-destructive hover:bg-destructive/10 hover:text-destructive"
           >
             Delete
           </Button>
