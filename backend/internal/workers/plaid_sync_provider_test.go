@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -9,6 +10,7 @@ import (
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // TestPlaidSyncProvider_ProcessModified_PendingToPosted tests the pending→posted transition
@@ -135,4 +137,148 @@ func TestPlaidSyncProvider_ProcessModified_TransactionNotFound(t *testing.T) {
 
 	// Assert: Update should NOT have been called
 	txnRepo.AssertNotCalled(t, "Update")
+}
+
+// ============================================================================
+// Issue #1058: Worker-path PFC fallback tests (T3)
+// Mirrors transaction_mapper_test.go coverage for the service path.
+// ============================================================================
+
+func makeTestLinkedItem() *domain.LinkedItem {
+	return &domain.LinkedItem{
+		ID:     "item-123",
+		UserID: "user-456",
+	}
+}
+
+func makeTestProvider() *plaidSyncProvider {
+	return NewPlaidSyncProvider(
+		new(MockLinkedItemRepository),
+		new(MockTransactionRepository),
+		new(MockPlaidClient),
+		new(MockEventEmitter),
+	).(*plaidSyncProvider)
+}
+
+// TestConvertPlaidTransaction_PFCFallback_NoLegacyCategory verifies that when Plaid returns no
+// legacy category but does return personal_finance_category, the worker path synthesizes Category
+// from PFC primary + detailed. Mirrors TestMapPlaidTransaction_PFCFallback_NoLegacyCategory.
+func TestConvertPlaidTransaction_PFCFallback_NoLegacyCategory(t *testing.T) {
+	provider := makeTestProvider()
+	linkedItem := makeTestLinkedItem()
+
+	pfc := plaid.PersonalFinanceCategory{
+		Primary:  "FOOD_AND_DRINK",
+		Detailed: "FOOD_AND_DRINK_FAST_FOOD",
+	}
+	pfc.SetConfidenceLevel("VERY_HIGH")
+
+	plaidTxn := plaid.Transaction{
+		TransactionId:           "plaid-txn-pfc",
+		AccountId:               "plaid-acc-1",
+		Amount:                  12.45,
+		Date:                    "2024-01-15",
+		Name:                    "KFC",
+		Category:                nil,
+		PersonalFinanceCategory: *plaid.NewNullablePersonalFinanceCategory(&pfc),
+	}
+
+	result, err := provider.convertPlaidTransaction(linkedItem, plaidTxn)
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Category, "Category should be synthesized from PFC when legacy is absent")
+
+	var categories []string
+	require.NoError(t, json.Unmarshal([]byte(*result.Category), &categories))
+	assert.Equal(t, "Food And Drink", categories[0], "Primary display name should be curated")
+	assert.Equal(t, "Fast Food", categories[1], "Detailed display name should strip primary prefix")
+}
+
+// TestConvertPlaidTransaction_LegacyCategoryTakesPriority verifies that the legacy category wins
+// over PFC when Plaid sends both. Mirrors TestMapPlaidTransaction_LegacyCategoryTakesPriority.
+func TestConvertPlaidTransaction_LegacyCategoryTakesPriority(t *testing.T) {
+	provider := makeTestProvider()
+	linkedItem := makeTestLinkedItem()
+
+	pfc := plaid.PersonalFinanceCategory{
+		Primary:  "FOOD_AND_DRINK",
+		Detailed: "FOOD_AND_DRINK_FAST_FOOD",
+	}
+
+	plaidTxn := plaid.Transaction{
+		TransactionId:           "plaid-txn-both",
+		AccountId:               "plaid-acc-1",
+		Amount:                  12.45,
+		Date:                    "2024-01-15",
+		Name:                    "KFC",
+		Category:                []string{"Food and Drink", "Restaurants"},
+		PersonalFinanceCategory: *plaid.NewNullablePersonalFinanceCategory(&pfc),
+	}
+
+	result, err := provider.convertPlaidTransaction(linkedItem, plaidTxn)
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Category)
+
+	var categories []string
+	require.NoError(t, json.Unmarshal([]byte(*result.Category), &categories))
+	assert.Equal(t, "Food and Drink", categories[0], "Legacy category should take priority over synthesized PFC")
+}
+
+// TestConvertPlaidTransaction_PartialPFC_EmptyPrimary verifies that PFC with empty Primary
+// is treated as absent and Category stays nil. Mirrors TestMapPlaidTransaction_PartialPFC_EmptyPrimary.
+func TestConvertPlaidTransaction_PartialPFC_EmptyPrimary(t *testing.T) {
+	provider := makeTestProvider()
+	linkedItem := makeTestLinkedItem()
+
+	pfc := plaid.PersonalFinanceCategory{
+		Primary:  "",
+		Detailed: "FOOD_AND_DRINK_FAST_FOOD",
+	}
+
+	plaidTxn := plaid.Transaction{
+		TransactionId:           "plaid-txn-partial-pfc",
+		AccountId:               "plaid-acc-1",
+		Amount:                  12.45,
+		Date:                    "2024-01-15",
+		Name:                    "Unknown",
+		Category:                nil,
+		PersonalFinanceCategory: *plaid.NewNullablePersonalFinanceCategory(&pfc),
+	}
+
+	result, err := provider.convertPlaidTransaction(linkedItem, plaidTxn)
+
+	require.NoError(t, err)
+	assert.Nil(t, result.Category, "Category must remain nil when PFC Primary is empty")
+}
+
+// TestConvertPlaidTransaction_PFCOnly_NoDetailed verifies PFC with only primary (no detailed)
+// synthesizes a single-element category array. Mirrors TestMapPlaidTransaction_PFCOnly_NoDetailed.
+func TestConvertPlaidTransaction_PFCOnly_NoDetailed(t *testing.T) {
+	provider := makeTestProvider()
+	linkedItem := makeTestLinkedItem()
+
+	pfc := plaid.PersonalFinanceCategory{
+		Primary:  "TRANSPORTATION",
+		Detailed: "",
+	}
+
+	plaidTxn := plaid.Transaction{
+		TransactionId:           "plaid-txn-primary-only",
+		AccountId:               "plaid-acc-1",
+		Amount:                  25.00,
+		Date:                    "2024-01-15",
+		Name:                    "Transit",
+		Category:                nil,
+		PersonalFinanceCategory: *plaid.NewNullablePersonalFinanceCategory(&pfc),
+	}
+
+	result, err := provider.convertPlaidTransaction(linkedItem, plaidTxn)
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Category)
+
+	var categories []string
+	require.NoError(t, json.Unmarshal([]byte(*result.Category), &categories))
+	assert.Equal(t, []string{"Transportation"}, categories)
 }

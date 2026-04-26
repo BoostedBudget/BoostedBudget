@@ -289,7 +289,17 @@ export function TransactionTable({
           const displayName = transaction.merchant_name || transaction.name
           const categoryToDisplay =
             transaction.category_override || transaction.category
-          const categoryLabel = parseCategory(categoryToDisplay)
+          const explicitlyUncategorized =
+            transaction.category_source === 'manual' &&
+            parseCategory(categoryToDisplay) === 'Uncategorized'
+          const categoryLabel = (() => {
+            const fromJson = parseCategory(categoryToDisplay)
+            if (fromJson !== 'Uncategorized') return fromJson
+            if (!explicitlyUncategorized && transaction.personal_finance_category_data?.primary_display) {
+              return transaction.personal_finance_category_data.primary_display
+            }
+            return 'Uncategorized'
+          })()
           const categoryColor = getCategoryColor(categoryLabel)
           const accountDisplayName = account
             ? account.nickname || account.name
