@@ -49,10 +49,16 @@ function getOriginalCategoryName(originalCategory: string | null | undefined): s
 }
 
 /**
- * Resolve effective category for initial editor state:
- * category_override → category → PFC primary display → empty
+ * Resolve effective category for initial editor state.
+ * When the user has manually cleared the category (category_source='manual',
+ * category_override=null), preserve the empty state — do NOT fall back to PFC.
+ * Otherwise: category_override → category → PFC primary display → empty.
  */
 function getEffectiveCategory(transaction: Transaction): string[] {
+  // Explicitly cleared by user: do not repopulate from PFC or legacy category
+  if (transaction.category_source === 'manual' && !transaction.category_override) {
+    return []
+  }
   if (transaction.category_override) {
     const parsed = parseCategory(transaction.category_override)
     if (parsed.length > 0) return parsed
