@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event'
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
 import type { CategorizationRule } from '../types'
 import { fillInputByLabel, fillInput } from '@/test/utils/formTestHelpers'
+import { mockUseGetPlaidDetailedCategories } from '@/test/mocks/categories-api'
 
 describe('AutoCategorizationRuleEditor', () => {
   const mockOnSave = mock(() => Promise.resolve())
@@ -1681,6 +1682,425 @@ describe('AutoCategorizationRuleEditor', () => {
       expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
         target_category: undefined,
       }))
+    })
+  })
+
+  describe('PFC conditions (Issue #1062 / #1060)', () => {
+    const mockPlaidDetailed = [
+      { primary_enum: 'FOOD_AND_DRINK', primary_display: 'Food And Drink', enum: 'FOOD_AND_DRINK_GROCERIES', display: 'Groceries' },
+      { primary_enum: 'FOOD_AND_DRINK', primary_display: 'Food And Drink', enum: 'FOOD_AND_DRINK_RESTAURANT', display: 'Restaurant' },
+      { primary_enum: 'FOOD_AND_DRINK', primary_display: 'Food And Drink', enum: 'FOOD_AND_DRINK_COFFEE', display: 'Coffee' },
+      { primary_enum: 'TRANSPORTATION', primary_display: 'Transportation', enum: 'TRANSPORTATION_GAS', display: 'Gas' },
+      { primary_enum: 'TRANSPORTATION', primary_display: 'Transportation', enum: 'TRANSPORTATION_TAXIS_AND_RIDE_SHARES', display: 'Taxis And Ride Shares' },
+    ]
+
+    beforeEach(() => {
+      mockUseGetPlaidDetailedCategories.mockReturnValue({ data: [], isLoading: false, error: null })
+    })
+
+    describe('existing_pfc_primary condition', () => {
+      it('existing_pfc_primary_renders_dropdown_with_curated_enums', async () => {
+        const user = userEvent.setup({ delay: null })
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            plaidPrimaries={mockPlaidPrimaries}
+          />
+        )
+
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+        const typeSelect = screen.getByLabelText(/condition type/i)
+        await user.selectOptions(typeSelect, 'existing_pfc_primary')
+
+        const searchInput = screen.getByRole('combobox', { name: /select pfc primary$/i })
+        await user.click(searchInput)
+
+        await waitFor(() => {
+          expect(screen.getByText('Food And Drink')).toBeInTheDocument()
+          expect(screen.getByText('Shopping')).toBeInTheDocument()
+          expect(screen.getByText('Transportation')).toBeInTheDocument()
+          expect(screen.getByText('Entertainment')).toBeInTheDocument()
+        })
+      })
+
+      it('existing_pfc_primary_writes_raw_enum_not_display', async () => {
+        const user = userEvent.setup({ delay: null })
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            plaidPrimaries={mockPlaidPrimaries}
+          />
+        )
+
+        await user.type(screen.getByLabelText(/rule name/i), 'PFC Primary Rule')
+
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+        const typeSelect = screen.getByLabelText(/condition type/i)
+        await user.selectOptions(typeSelect, 'existing_pfc_primary')
+
+        const searchInput = screen.getByRole('combobox', { name: /select pfc primary$/i })
+        await user.click(searchInput)
+        await user.click(screen.getByText('Food And Drink'))
+
+        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+        await user.click(targetCategoryInput)
+        await user.click(screen.getAllByText('Food And Drink')[0])
+
+        const saveButton = screen.getByRole('button', { name: /save/i })
+        fireEvent.click(saveButton)
+
+        await waitFor(() => {
+          expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+            conditions: [{ type: 'existing_pfc_primary', value: 'FOOD_AND_DRINK' }],
+          }))
+        })
+      })
+    })
+
+    describe('existing_pfc_detailed condition', () => {
+      beforeEach(() => {
+        mockUseGetPlaidDetailedCategories.mockReturnValue({ data: mockPlaidDetailed, isLoading: false, error: null })
+      })
+
+      it('existing_pfc_detailed_cascades_primary_then_detailed', async () => {
+        const user = userEvent.setup({ delay: null })
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            plaidPrimaries={mockPlaidPrimaries}
+          />
+        )
+
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+        const typeSelect = screen.getByLabelText(/condition type/i)
+        await user.selectOptions(typeSelect, 'existing_pfc_detailed')
+
+        // Stage 1 should be visible and enabled (data loaded)
+        const stage1 = screen.getByRole('combobox', { name: /select pfc primary for detailed/i })
+        expect(stage1).toBeInTheDocument()
+        expect(stage1).not.toBeDisabled()
+
+        // Stage 2 should NOT be visible until primary is selected
+        expect(screen.queryByRole('combobox', { name: /select pfc detailed/i })).not.toBeInTheDocument()
+
+        // Select primary
+        await user.click(stage1)
+        await user.click(screen.getByText('Food And Drink'))
+
+        // Stage 2 should now appear
+        await waitFor(() => {
+          expect(screen.getByRole('combobox', { name: /select pfc detailed/i })).toBeInTheDocument()
+        })
+      })
+
+      it('existing_pfc_detailed_persists_only_detailed_enum', async () => {
+        const user = userEvent.setup({ delay: null })
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            plaidPrimaries={mockPlaidPrimaries}
+          />
+        )
+
+        await user.type(screen.getByLabelText(/rule name/i), 'PFC Detailed Rule')
+
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+        const typeSelect = screen.getByLabelText(/condition type/i)
+        await user.selectOptions(typeSelect, 'existing_pfc_detailed')
+
+        // Select primary
+        const stage1 = screen.getByRole('combobox', { name: /select pfc primary for detailed/i })
+        await user.click(stage1)
+        await user.click(screen.getByText('Food And Drink'))
+
+        // Select detailed
+        const stage2 = await screen.findByRole('combobox', { name: /select pfc detailed/i })
+        await user.click(stage2)
+        await user.click(screen.getByText('Groceries'))
+
+        // Set target and save
+        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
+        await user.click(targetCategoryInput)
+        await user.click(screen.getAllByText('Food And Drink')[0])
+
+        const saveButton = screen.getByRole('button', { name: /save/i })
+        fireEvent.click(saveButton)
+
+        await waitFor(() => {
+          expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+            conditions: [{ type: 'existing_pfc_detailed', value: 'FOOD_AND_DRINK_GROCERIES' }],
+          }))
+        })
+      })
+
+      it('existing_pfc_detailed_filters_options_by_selected_primary', async () => {
+        const user = userEvent.setup({ delay: null })
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            plaidPrimaries={mockPlaidPrimaries}
+          />
+        )
+
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+        const typeSelect = screen.getByLabelText(/condition type/i)
+        await user.selectOptions(typeSelect, 'existing_pfc_detailed')
+
+        // Select Food And Drink as primary
+        const stage1 = screen.getByRole('combobox', { name: /select pfc primary for detailed/i })
+        await user.click(stage1)
+        await user.click(screen.getByText('Food And Drink'))
+
+        // Open stage 2 — only Food And Drink children should be visible
+        const stage2 = await screen.findByRole('combobox', { name: /select pfc detailed/i })
+        await user.click(stage2)
+
+        await waitFor(() => {
+          expect(screen.getByText('Groceries')).toBeInTheDocument()
+          expect(screen.getByText('Restaurant')).toBeInTheDocument()
+          expect(screen.getByText('Coffee')).toBeInTheDocument()
+          // Transportation children must NOT appear
+          expect(screen.queryByText('Gas')).not.toBeInTheDocument()
+          expect(screen.queryByText('Taxis And Ride Shares')).not.toBeInTheDocument()
+        })
+      })
+
+      it('existing_pfc_detailed_search_input_filters_within_selected_primary', async () => {
+        const user = userEvent.setup({ delay: null })
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            plaidPrimaries={mockPlaidPrimaries}
+          />
+        )
+
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+        const typeSelect = screen.getByLabelText(/condition type/i)
+        await user.selectOptions(typeSelect, 'existing_pfc_detailed')
+
+        // Select Food And Drink as primary
+        const stage1 = screen.getByRole('combobox', { name: /select pfc primary for detailed/i })
+        await user.click(stage1)
+        await user.click(screen.getByText('Food And Drink'))
+
+        // Type "Gro" in stage 2 search
+        const stage2 = await screen.findByRole('combobox', { name: /select pfc detailed/i })
+        await user.click(stage2)
+        await user.type(stage2, 'Gro')
+
+        await waitFor(() => {
+          expect(screen.getByText('Groceries')).toBeInTheDocument()
+          expect(screen.queryByText('Restaurant')).not.toBeInTheDocument()
+          expect(screen.queryByText('Coffee')).not.toBeInTheDocument()
+        })
+      })
+
+      it('existing_pfc_detailed_edit_mode_derives_primary_from_cached_row', async () => {
+        const ruleWithDetailedCondition: CategorizationRule = {
+          ...mockExistingRule,
+          conditions: [{ type: 'existing_pfc_detailed', value: 'FOOD_AND_DRINK_GROCERIES' }],
+        }
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="edit"
+            rule={ruleWithDetailedCondition}
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            plaidPrimaries={mockPlaidPrimaries}
+          />
+        )
+
+        // Stage 1 should show "Food And Drink" pre-selected (derived from cached Detailed row)
+        await waitFor(() => {
+          const stage1 = screen.getByRole('combobox', { name: /select pfc primary for detailed/i })
+          expect(stage1).toHaveValue('Food And Drink')
+        })
+
+        // Stage 2 should be visible and show "Groceries" selected
+        const stage2 = screen.getByRole('combobox', { name: /select pfc detailed/i })
+        expect(stage2).toHaveValue('Groceries')
+      })
+    })
+
+    it('detailed_endpoint_only_fetched_when_pfc_detailed_condition_present', async () => {
+      const user = userEvent.setup({ delay: null })
+      mockUseGetPlaidDetailedCategories.mockClear()
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+          plaidPrimaries={mockPlaidPrimaries}
+        />
+      )
+
+      // Initially, no existing_pfc_detailed condition — hook called with enabled: false
+      expect(mockUseGetPlaidDetailedCategories).toHaveBeenCalledWith(
+        expect.objectContaining({ query: { enabled: false } })
+      )
+
+      // Add a condition and set type to existing_pfc_detailed
+      const addButton = screen.getByRole('button', { name: /add condition/i })
+      fireEvent.click(addButton)
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      await user.selectOptions(typeSelect, 'existing_pfc_detailed')
+
+      // Now hook should be called with enabled: true
+      await waitFor(() => {
+        expect(mockUseGetPlaidDetailedCategories).toHaveBeenCalledWith(
+          expect.objectContaining({ query: { enabled: true } })
+        )
+      })
+    })
+
+    describe('existing_category orphan edit-mode', () => {
+      it('existing_category_edit_mode_shows_legacy_synthetic_option_for_orphan', () => {
+        // 'Shops' is not in mockPlaidPrimaries — it is an orphan
+        const ruleWithOrphan: CategorizationRule = {
+          ...mockExistingRule,
+          conditions: [{ type: 'existing_category', value: 'Shops' }],
+        }
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="edit"
+            rule={ruleWithOrphan}
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            plaidPrimaries={mockPlaidPrimaries}
+          />
+        )
+
+        // Input should display "Shops (legacy)" — the synthetic option's label
+        const searchInput = screen.getByRole('combobox', { name: /select category/i })
+        expect(searchInput).toHaveValue('Shops (legacy)')
+      })
+
+      it('existing_category_edit_mode_does_not_inject_when_value_already_curated', () => {
+        // 'Food And Drink' IS in mockPlaidPrimaries — no orphan injection
+        const ruleWithCurated: CategorizationRule = {
+          ...mockExistingRule,
+          conditions: [{ type: 'existing_category', value: 'Food And Drink' }],
+        }
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="edit"
+            rule={ruleWithCurated}
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            plaidPrimaries={mockPlaidPrimaries}
+          />
+        )
+
+        const searchInput = screen.getByRole('combobox', { name: /select category/i })
+        expect(searchInput).toHaveValue('Food And Drink')
+        expect(searchInput).not.toHaveValue('Food And Drink (legacy)')
+      })
+
+      it('existing_category_edit_mode_preserves_raw_orphan_value_on_save_without_change', async () => {
+        const ruleWithOrphan: CategorizationRule = {
+          ...mockExistingRule,
+          conditions: [{ type: 'existing_category', value: 'Shops' }],
+        }
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="edit"
+            rule={ruleWithOrphan}
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            plaidPrimaries={mockPlaidPrimaries}
+          />
+        )
+
+        // Save without changing anything
+        const saveButton = screen.getByRole('button', { name: /save/i })
+        fireEvent.click(saveButton)
+
+        await waitFor(() => {
+          expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+            // Must be raw "Shops", NOT "Shops (legacy)"
+            conditions: [{ type: 'existing_category', value: 'Shops' }],
+          }))
+        })
+      })
+
+      it('existing_category_edit_mode_orphan_disappears_after_user_picks_curated', async () => {
+        const user = userEvent.setup({ delay: null })
+
+        const ruleWithOrphan: CategorizationRule = {
+          ...mockExistingRule,
+          conditions: [{ type: 'existing_category', value: 'Shops' }],
+        }
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="edit"
+            rule={ruleWithOrphan}
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            plaidPrimaries={mockPlaidPrimaries}
+          />
+        )
+
+        // Initially shows orphan label
+        const searchInput = screen.getByRole('combobox', { name: /select category/i })
+        expect(searchInput).toHaveValue('Shops (legacy)')
+
+        // Pick a curated option
+        await user.click(searchInput)
+        await user.click(screen.getByText('Food And Drink'))
+
+        // After picking curated, input shows curated display — no "(legacy)" suffix
+        await waitFor(() => {
+          expect(searchInput).toHaveValue('Food And Drink')
+        })
+
+        // Open dropdown again — orphan option no longer present
+        await user.click(searchInput)
+        await waitFor(() => {
+          expect(screen.queryByText(/Shops \(legacy\)/)).not.toBeInTheDocument()
+        })
+      })
     })
   })
 })
