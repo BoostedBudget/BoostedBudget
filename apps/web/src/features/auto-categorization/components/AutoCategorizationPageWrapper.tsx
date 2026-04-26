@@ -19,7 +19,8 @@ import { useEffect, useMemo } from 'react'
 import { AutoCategorizationPage } from './AutoCategorizationPage'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
-import { useGetUserCategories, useGetPlaidCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
+import { useGetUserCategories, useGetPlaidPrimaryCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
+import type { Primary } from '@boostedbudget/api-client/models/primary'
 import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import { useGetUserTags } from '@boostedbudget/api-client/endpoints/tags/tags'
 import { useProfile } from '../../profile/hooks/useProfile'
@@ -36,7 +37,7 @@ export function AutoCategorizationPageWrapper() {
 
   // Fetch data using generated hooks
   const { data: customCategoriesData } = useGetUserCategories()
-  const { data: plaidCategoriesData } = useGetPlaidCategories()
+  const { data: plaidPrimariesData } = useGetPlaidPrimaryCategories()
   const { data: accountsData } = useGetAccounts()
   const { data: userTagsData } = useGetUserTags()
 
@@ -50,17 +51,15 @@ export function AutoCategorizationPageWrapper() {
     )
   }, [customCategoriesData])
 
-  const plaidCategories = (plaidCategoriesData as unknown as string[]) ?? []
+  const plaidPrimaries = (plaidPrimariesData as unknown as Primary[]) ?? []
   const accounts = accountsData?.accounts ?? []
   const tags = (userTagsData as unknown as UserTag[]) ?? []
-
-  // Get user's effective tier (includes manual overrides if active)
   const userTier = user?.effective_tier ?? user?.subscription_tier ?? 'premium'
 
   return (
     <AutoCategorizationPage
       categories={categories}
-      plaidCategories={plaidCategories}
+      plaidPrimaries={plaidPrimaries}
       accounts={accounts}
       tags={tags}
       maxRules={undefined}

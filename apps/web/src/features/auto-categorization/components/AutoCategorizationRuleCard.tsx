@@ -6,9 +6,10 @@
  */
 
 import { useState } from 'react'
-import type { CategorizationRule } from '../types'
+import type { CategorizationRule, ConditionType } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
+import { formatPFCPrimary, formatPFCDetailed } from '../utils/pfcFormat'
 
 export interface AutoCategorizationRuleCardProps {
   rule: CategorizationRule
@@ -17,21 +18,23 @@ export interface AutoCategorizationRuleCardProps {
   onDelete: () => Promise<void>
 }
 
-/**
- * Formats a condition value for display
- */
-function formatConditionValue(value: unknown): string {
+function formatConditionValue(conditionType: ConditionType, value: unknown): string {
+  if (conditionType === 'existing_pfc_primary' && typeof value === 'string') {
+    return formatPFCPrimary(value)
+  }
+  if (conditionType === 'existing_pfc_detailed' && typeof value === 'string') {
+    return formatPFCDetailed(value)
+  }
   if (Array.isArray(value)) {
     return value.join(', ')
   }
   if (typeof value === 'object' && value !== null) {
-    // Handle range objects
     const obj = value as Record<string, unknown>
     if ('min' in obj && 'max' in obj) {
       return `${obj.min} - ${obj.max}`
     }
     if ('start' in obj || 'end' in obj) {
-      const parts = []
+      const parts: string[] = []
       if (obj.start) parts.push(`from ${obj.start}`)
       if (obj.end) parts.push(`to ${obj.end}`)
       return parts.join(' ')
@@ -91,7 +94,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
                   {CONDITION_TYPE_LABELS[condition.type] || condition.type}
                 </span>
                 <span className="text-foreground font-medium">
-                  {formatConditionValue(condition.value)}
+                  {formatConditionValue(condition.type, condition.value)}
                 </span>
               </li>
             ))}

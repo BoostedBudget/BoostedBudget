@@ -4,11 +4,16 @@ import userEvent from '@testing-library/user-event'
 import { IncomeSourcePicker } from './IncomeSourcePicker'
 import type { IncomeSource } from '../../types'
 import type { UserTag } from '@/features/tags/types'
+import type { Primary } from '@boostedbudget/api-client/models/primary'
 
 describe('IncomeSourcePicker', () => {
   const mockOnAdd = mock(() => {})
 
-  const mockCategories = ['INCOME', 'TRANSFER_IN', 'LOAN_PAYMENTS']
+  const mockCategories: Primary[] = [
+    { enum: 'INCOME', display: 'Income' },
+    { enum: 'TRANSFER_IN', display: 'Transfer In' },
+    { enum: 'LOAN_PAYMENTS', display: 'Loan Payments' },
+  ]
   const mockTags: UserTag[] = [
     { id: '1', user_id: 'user-1', name: 'Salary', color: '#22c55e', usage_count: 5, created_at: '', updated_at: '' },
     { id: '2', user_id: 'user-1', name: 'Freelance', color: '#3b82f6', usage_count: 3, created_at: '', updated_at: '' },
@@ -370,4 +375,30 @@ describe('IncomeSourcePicker', () => {
       });
     });
   });
+
+  // ==========================================================================
+  // Curated Categories Test (brand-new user)
+  // ==========================================================================
+
+  describe('Curated categories', () => {
+    it('lists_curated_income_categories_for_new_user', () => {
+      const curatedIncomeCategories: Primary[] = [
+        { enum: 'INCOME', display: 'Income' },
+        { enum: 'TRANSFER_IN', display: 'Transfer In' },
+      ]
+
+      render(
+        <IncomeSourcePicker
+          availableCategories={curatedIncomeCategories}
+          availableTags={[]}
+          existingSources={[]}
+          onAdd={mockOnAdd}
+        />
+      )
+
+      // Brand-new user with no transactions sees curated categories
+      expect(screen.getByRole('option', { name: /^income$/i })).toBeInTheDocument()
+      expect(screen.getByRole('option', { name: /^transfer in$/i })).toBeInTheDocument()
+    })
+  })
 });

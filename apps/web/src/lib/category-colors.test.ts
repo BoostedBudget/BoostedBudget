@@ -112,4 +112,33 @@ describe('getCategoryColor', () => {
     expect(travelColor).not.toBe(incomeColor)
     expect(foodColor).not.toBe(incomeColor)
   })
+
+  it('returns_non_default_for_each_curated_primary', () => {
+    // All 18 PFCv2 primary display names must resolve to a non-default color.
+    const pfcv2Primaries = [
+      'Bank Fees',
+      'Entertainment',
+      'Food And Drink',
+      'General Merchandise',
+      'General Services',
+      'Government And Non Profit',
+      'Home Improvement',
+      'Income',
+      'Loan Disbursements',
+      'Loan Payments',
+      'Medical',
+      'Other',
+      'Personal Care',
+      'Rent And Utilities',
+      'Transfer In',
+      'Transfer Out',
+      'Transportation',
+      'Travel',
+    ]
+
+    for (const primary of pfcv2Primaries) {
+      const color = getCategoryColor(primary)
+      expect(color).not.toBe(DEFAULT_CATEGORY_COLOR)
+    }
+  })
 })

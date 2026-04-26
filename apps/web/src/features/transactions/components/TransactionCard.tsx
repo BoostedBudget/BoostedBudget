@@ -1,9 +1,10 @@
-import type { Transaction, CategorySource, ParsedPersonalFinanceCategoryData } from '../types'
+import type { Transaction } from '../types'
 import type { Account } from '../../accounts/types'
 import { ReadOnlyGuard, useReadOnly } from '@/auth'
 import { TransactionBudgetBadge } from '../../budgets/components/transaction-link'
 import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetMatcher'
 import { getCategoryColor } from '@/lib/category-colors'
+import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
 import { ArrowUpRight, ArrowDownRight, Clock, Pencil, Tag } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -34,51 +35,6 @@ function formatAmount(amount: number): string {
   if (amount > 0) return `+${formatted}`
   return `-${formatted}`
 }
-
-/**
- * Parse category from JSON string
- * Uses primary category (index 0) for consistency across the application
- */
-function parseCategory(categoryJson: string | null | undefined): string {
-  if (!categoryJson) return 'Uncategorized'
-
-  try {
-    const categories = JSON.parse(categoryJson)
-    if (Array.isArray(categories) && categories.length > 0) {
-      return categories[0] // Always use primary category
-    }
-    return 'Uncategorized'
-  } catch {
-    return 'Uncategorized'
-  }
-}
-
-/**
- * Get display category from PFC data if present (D5 fallback).
- * Returns null when no usable PFC data is available.
- */
-function getPFCDisplayCategory(pfcData: ParsedPersonalFinanceCategoryData | null | undefined): string | null {
-  if (pfcData?.primary_display) return pfcData.primary_display
-  return null
-}
-
-/**
- * Check if transaction is explicitly uncategorized by user
- * Returns true when user manually cleared the category (should NOT fall back to Plaid)
- */
-function isExplicitlyUncategorized(
-  categoryOverride: string | null | undefined,
-  categorySource: CategorySource | undefined
-): boolean {
-  // If category_source is 'manual', user explicitly set something
-  // If override is empty/null at that point, they explicitly uncategorized it
-  if (categorySource === 'manual') {
-    const parsed = parseCategory(categoryOverride)
-    return parsed === 'Uncategorized'
-  }
-  return false
-}
-
 
 /**
  * Format date with relative labels (Today, Yesterday) or readable format
@@ -148,10 +104,6 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
     amount,
     date,
     authorized_date,
-    category,
-    personal_finance_category_data,
-    category_override,
-    category_source,
     original_category,
     tags,
     pending,
@@ -171,22 +123,8 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
   const displayDate = formatDate(authorized_date || date)
   const displayName = merchant_name || name
 
-  // Check if explicitly uncategorized by user (should NOT fall back to Plaid)
-  const explicitlyUncategorized = isExplicitlyUncategorized(category_override, category_source)
-
-  // Use category_override if present and non-empty, otherwise fall back to category,
-  // then PFC data as a last resort. UNLESS explicitly uncategorized by user.
-  let categoryLabel: string
-  if (explicitlyUncategorized) {
-    categoryLabel = 'Uncategorized'
-  } else if (category_override && parseCategory(category_override) !== 'Uncategorized') {
-    categoryLabel = parseCategory(category_override)
-  } else if (category && parseCategory(category) !== 'Uncategorized') {
-    categoryLabel = parseCategory(category)
-  } else {
-    // D5: fall back to PFC primary_display when legacy category is absent
-    categoryLabel = getPFCDisplayCategory(personal_finance_category_data) ?? 'Uncategorized'
-  }
+  const effective = getEffectiveCategory(transaction)
+  const categoryLabel = effective.length > 0 ? effective[0] : 'Uncategorized'
 
   // Check if should show warning indicator — no warning when PFC provides a fallback
   const showUncategorizedWarning = categoryLabel === 'Uncategorized'

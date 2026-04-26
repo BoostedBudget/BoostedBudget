@@ -1,11 +1,13 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { CustomCategory } from '../types'
+import type { Primary } from '@boostedbudget/api-client/models/primary'
 import { useCreateCategory } from '@boostedbudget/api-client/endpoints/categories/categories'
 import { ReadOnlyGuard } from '@/auth'
 
 interface CategoryEditorProps {
   selectedCategory: string[]
   availableCategories: CustomCategory[]
+  plaidPrimaries?: Primary[]
   onChange: (category: string[]) => void
   onCategoryCreated?: (category: CustomCategory) => void
   disabled?: boolean
@@ -14,6 +16,7 @@ interface CategoryEditorProps {
 export function CategoryEditor({
   selectedCategory,
   availableCategories,
+  plaidPrimaries,
   onChange,
   onCategoryCreated,
   disabled = false,
@@ -26,10 +29,30 @@ export function CategoryEditor({
   // Use generated mutation hook
   const createCategoryMutation = useCreateCategory()
 
+  const mergedCategories = useMemo(() => {
+    const result = new Map<string, { key: string; name: string; color?: string | null }>()
+
+    for (const cat of availableCategories) {
+      const norm = cat.name.trim().toLowerCase()
+      if (norm === 'uncategorized') continue
+      result.set(norm, { key: cat.id, name: cat.name, color: cat.color })
+    }
+
+    if (plaidPrimaries) {
+      for (const primary of plaidPrimaries) {
+        const norm = primary.display.trim().toLowerCase()
+        if (norm === 'uncategorized') continue
+        if (!result.has(norm)) {
+          result.set(norm, { key: `pfc:${primary.enum}`, name: primary.display, color: null })
+        }
+      }
+    }
+
+    return [...result.values()].sort((a, b) => a.name.localeCompare(b.name))
+  }, [availableCategories, plaidPrimaries])
+
   const currentCategory = selectedCategory[0] || null
-  const currentCategoryObj = availableCategories.find(
-    (cat) => cat.name === currentCategory
-  )
+  const currentCategoryObj = mergedCategories.find((cat) => cat.name === currentCategory)
 
   const handleSelectCategory = (categoryName: string) => {
     onChange([categoryName])
@@ -128,9 +151,9 @@ export function CategoryEditor({
               />
               Uncategorized
             </li>
-            {availableCategories.map((category) => (
+            {mergedCategories.map((category) => (
               <li
-                key={category.id}
+                key={category.key}
                 role="option"
                 aria-label={category.name}
                 className={`flex items-center gap-2 px-3 py-2 cursor-pointer text-sm hover:bg-muted ${category.name === currentCategory ? 'bg-primary/5 font-medium' : ''}`}

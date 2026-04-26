@@ -20,7 +20,9 @@ import type {
 import { CONDITION_TYPE_LABELS } from '../types'
 import { SearchableSelect } from '../../../shared/components/SearchableSelect'
 import type { Account } from '../../accounts/types'
-import { formatPlaidCategory } from '../utils/categoryUtils'
+import type { Primary } from '@boostedbudget/api-client/models/primary'
+import type { Detailed } from '@boostedbudget/api-client/models/detailed'
+import { useGetPlaidDetailedCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
 
 // Account types available for selection
 const ACCOUNT_TYPES = [
@@ -53,6 +55,10 @@ function getInputTypeForCondition(conditionType: ConditionType): string {
       return 'date_range'
     case 'existing_category':
       return 'category_select'
+    case 'existing_pfc_primary':
+      return 'pfc_primary_select'
+    case 'existing_pfc_detailed':
+      return 'pfc_detailed_select'
     case 'account_id':
       return 'account_select'
     case 'account_type':
@@ -132,7 +138,7 @@ export interface AutoCategorizationRuleEditorProps {
   onSave: (data: CreateRuleRequest | UpdateRuleRequest) => Promise<void>
   onCancel: () => void
   categories: string[][]
-  plaidCategories?: string[] // Plaid categories from user's transactions for "existing_category" condition
+  plaidPrimaries?: Primary[]
   accounts?: Account[] // Optional accounts list for account_id dropdown
   tags?: { id: string; name: string }[] // User tags for target tags autocomplete
 }
@@ -152,7 +158,7 @@ const DEFAULT_CONDITION: RuleCondition = {
   value: '',
 }
 
-export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, categories, plaidCategories = [], accounts = [], tags = [] }: AutoCategorizationRuleEditorProps) {
+export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, categories, plaidPrimaries = [], accounts = [], tags = [] }: AutoCategorizationRuleEditorProps) {
   // Form state
   const [name, setName] = useState(rule?.name || '')
   const [description, setDescription] = useState(rule?.description || '')
@@ -174,6 +180,16 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
   const [saving, setSaving] = useState(false)
   const [errors, setErrors] = useState<FormErrors>({})
   const [conditionErrors, setConditionErrors] = useState<ConditionErrors>({})
+  // Per-condition primary selection for pfc_detailed_select stage-1 (index → primary enum)
+  const [pfcDetailedPrimarySelections, setPfcDetailedPrimarySelections] = useState<Record<number, string>>({})
+
+  // Lazy-load detailed categories only when an existing_pfc_detailed condition is present
+  const hasPFCDetailedCondition = useMemo(
+    () => conditions.some(c => c.type === 'existing_pfc_detailed'),
+    [conditions]
+  )
+  const { data: plaidDetailedData } = useGetPlaidDetailedCategories({ query: { enabled: hasPFCDetailedCondition } })
+  const plaidDetailed = (plaidDetailedData as unknown as Detailed[]) ?? []
 
   // Flatten categories for the searchable dropdown
   const flatCategories = useMemo(() => {
@@ -197,17 +213,13 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
     // Custom categories (keep as-is)
     const customOptions = flatCategories.map(cat => ({ value: cat, label: cat }))
 
-    // Track existing values for deduplication
-    const existingValues = new Set(customOptions.map(opt => opt.value.toLowerCase()))
+    // Track existing values for deduplication (custom wins)
+    const existingValues = new Set(customOptions.map(opt => opt.value.trim().toLowerCase()))
 
-    // Plaid categories (format for display, keep human-readable value for storage)
-    // Filter out duplicates that already exist in custom categories
-    const plaidOptions = plaidCategories
-      .map(cat => ({
-        value: formatPlaidCategory(cat),
-        label: formatPlaidCategory(cat),
-      }))
-      .filter(opt => !existingValues.has(opt.value.toLowerCase()))
+    // Curated PFC primaries — display string as both value and label
+    const plaidOptions = plaidPrimaries
+      .map(p => ({ value: p.display, label: p.display }))
+      .filter(opt => !existingValues.has(opt.value.trim().toLowerCase()))
 
     // Merge and sort alphabetically, then add Uncategorized at the top
     const sortedCategories = [...customOptions, ...plaidOptions].sort((a, b) =>
@@ -215,7 +227,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
     )
 
     return [uncategorizedOption, ...sortedCategories]
-  }, [flatCategories, plaidCategories])
+  }, [flatCategories, plaidPrimaries])
 
   // Validate a single condition and update error state
   const validateSingleCondition = useCallback((index: number, condition: RuleCondition): string | null => {
@@ -499,24 +511,95 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         )
       }
 
-      case 'category_select':
-        // Use Plaid categories from user's transactions for "existing_category" condition
-        // Issue #402: Display human-readable format, store Plaid enum value
+      case 'category_select': {
+        // existing_category: writes display string; evaluator matches tx.Category[0] case-insensitively
+        const curatedOptions = plaidPrimaries.map(p => ({ value: p.display, label: p.display }))
+        // Legacy orphan: saved value not in curated 18 → inject synthetic option
+        const savedValue = String(condition.value || '')
+        const isOrphan = savedValue !== '' && !plaidPrimaries.some(
+          p => p.display.trim().toLowerCase() === savedValue.trim().toLowerCase()
+        )
+        const options = isOrphan
+          ? [{ value: savedValue, label: `${savedValue} (legacy)`, sublabel: 'Saved value not in current Plaid taxonomy — keep as-is or pick a curated primary.' }, ...curatedOptions]
+          : curatedOptions
         return (
           <SearchableSelect
-            options={plaidCategories.map(cat => ({
-              value: cat,
-              label: formatPlaidCategory(cat),
-            }))}
-            value={String(condition.value || '') || null}
+            options={options}
+            value={savedValue || null}
             onChange={(value) => updateCondition(index, { value: value || '' })}
-            placeholder="Search Plaid categories..."
+            placeholder="Search categories..."
             disabled={saving}
-            aria-label="Select Plaid category"
+            aria-label="Select category"
             allowClear
             clearLabel="Select a category"
           />
         )
+      }
+
+      case 'pfc_primary_select':
+        // existing_pfc_primary: display shown, raw PFC enum stored
+        return (
+          <SearchableSelect
+            options={plaidPrimaries.map(p => ({ value: p.enum, label: p.display }))}
+            value={String(condition.value || '') || null}
+            onChange={(value) => updateCondition(index, { value: value || '' })}
+            placeholder="Search PFC primaries..."
+            disabled={saving}
+            aria-label="Select PFC primary"
+            allowClear
+            clearLabel="Select a primary"
+          />
+        )
+
+      case 'pfc_detailed_select': {
+        // existing_pfc_detailed: two-stage cascading dropdown (primary → detailed children)
+        const detailedValue = String(condition.value || '')
+        // Derive selected primary: from explicit per-condition selection, OR from cached row on edit
+        const selectedPrimary = pfcDetailedPrimarySelections[index] ??
+          plaidDetailed.find(d => d.enum === detailedValue)?.primary_enum ?? ''
+
+        // Build stage-1: distinct primaries that have at least one detailed child
+        const primarysWithChildren = Array.from(new Map(
+          plaidDetailed.map(d => [d.primary_enum, { value: d.primary_enum, label: d.primary_display }])
+        ).values()).sort((a, b) => a.label.localeCompare(b.label))
+
+        // Build stage-2: detailed children of the selected primary
+        const detailedChildren = plaidDetailed
+          .filter(d => d.primary_enum === selectedPrimary)
+          .map(d => ({ value: d.enum, label: d.display }))
+          .sort((a, b) => a.label.localeCompare(b.label))
+
+        return (
+          <div className="flex flex-col gap-2 flex-1">
+            <SearchableSelect
+              options={primarysWithChildren}
+              value={selectedPrimary || null}
+              onChange={(value) => {
+                setPfcDetailedPrimarySelections(prev => ({ ...prev, [index]: value || '' }))
+                // Clear the detailed value when primary changes
+                updateCondition(index, { value: '' })
+              }}
+              placeholder="Select primary category..."
+              disabled={saving || plaidDetailed.length === 0}
+              aria-label="Select PFC primary for detailed"
+              allowClear
+              clearLabel="Select a primary"
+            />
+            {selectedPrimary && (
+              <SearchableSelect
+                options={detailedChildren}
+                value={detailedValue || null}
+                onChange={(value) => updateCondition(index, { value: value || '' })}
+                placeholder="Select detailed category..."
+                disabled={saving}
+                aria-label="Select PFC detailed"
+                allowClear
+                clearLabel="Select a detailed category"
+              />
+            )}
+          </div>
+        )
+      }
 
       case 'account_select':
         return (

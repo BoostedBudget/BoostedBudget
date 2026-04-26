@@ -265,6 +265,26 @@ func PrimaryDisplayName(primary string) string {
 	return enumToTitleCase(primary)
 }
 
+// NormalizePrimaryDisplay accepts either a PFC primary enum (e.g. "FOOD_AND_DRINK") or its
+// display string (e.g. "Food And Drink") and returns the canonical curated display name.
+// This normalizes the heterogeneous values produced by effectiveCategoryExpr, which returns
+// display strings from category_override->>0 and raw enums from personal_finance_category->>'primary'.
+// For unknown values, returns the input as-is.
+func NormalizePrimaryDisplay(s string) string {
+	// Fast path: direct enum lookup
+	if display, ok := pfcPrimaryDisplayNames[s]; ok {
+		return display
+	}
+	// Reverse lookup: check if s is already a known display name (case-insensitive)
+	lower := strings.ToLower(s)
+	for _, display := range pfcPrimaryDisplayNames {
+		if strings.ToLower(display) == lower {
+			return display // return canonical casing
+		}
+	}
+	return s
+}
+
 // DetailedDisplayName derives a short display name for a Plaid PFC detailed enum by
 // stripping the primary prefix. e.g. ("FOOD_AND_DRINK", "FOOD_AND_DRINK_FAST_FOOD") → "Fast Food".
 func DetailedDisplayName(primary, detailed string) string {

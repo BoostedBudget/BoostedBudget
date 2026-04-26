@@ -23,10 +23,11 @@ import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import type { CategorizationRule, CreateRuleRequest, UpdateRuleRequest } from '../types'
 import type { Account } from '../../accounts/types'
 import type { UserTag } from '../../tags/types'
+import type { Primary } from '@boostedbudget/api-client/models/primary'
 
 export interface AutoCategorizationPageProps {
   categories: string[][]
-  plaidCategories?: string[]  // Plaid categories from user's transactions for "existing_category" condition
+  plaidPrimaries?: Primary[]
   accounts?: Account[]
   tags?: UserTag[]  // User tags for target tags autocomplete
   maxRules?: number
@@ -48,7 +49,7 @@ const getInitialView = (): ListView => {
   return 'cards'
 }
 
-export function AutoCategorizationPage({ categories, plaidCategories = [], accounts = [], tags = [], maxRules, currentTier }: AutoCategorizationPageProps) {
+export function AutoCategorizationPage({ categories, plaidPrimaries = [], accounts = [], tags = [], maxRules, currentTier }: AutoCategorizationPageProps) {
   const {
     rules,
     loading,
@@ -160,10 +161,7 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
     })
     return Array.from(cats)
       .sort()
-      .map((cat) => ({
-        value: cat,
-        label: cat,
-      }))
+      .map((cat) => ({ value: cat, label: cat }))
   }, [rules])
 
   // Issue #590: Filter handlers from useRuleFilters hook (URL-synced)
@@ -273,7 +271,7 @@ export function AutoCategorizationPage({ categories, plaidCategories = [], accou
           onSave={handleEditorSave}
           onCancel={handleEditorCancel}
           categories={categories}
-          plaidCategories={plaidCategories}
+          plaidPrimaries={plaidPrimaries}
           accounts={accounts}
           tags={tags}
         />

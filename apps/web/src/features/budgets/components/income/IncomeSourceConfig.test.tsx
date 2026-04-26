@@ -4,11 +4,16 @@ import userEvent from '@testing-library/user-event'
 import { IncomeSourceConfig } from './IncomeSourceConfig'
 import type { IncomeSource } from '../../types'
 import type { UserTag } from '@/features/tags/types'
+import type { Primary } from '@boostedbudget/api-client/models/primary'
 
 describe('IncomeSourceConfig', () => {
   const mockOnChange = mock(() => {})
 
-  const mockCategories = ['INCOME', 'TRANSFER_IN', 'LOAN_PAYMENTS']
+  const mockCategories: Primary[] = [
+    { enum: 'INCOME', display: 'Income' },
+    { enum: 'TRANSFER_IN', display: 'Transfer In' },
+    { enum: 'LOAN_PAYMENTS', display: 'Loan Payments' },
+  ]
   const mockTags: UserTag[] = [
     { id: '1', user_id: 'user-1', name: 'Salary', color: '#22c55e', usage_count: 5, created_at: '', updated_at: '' },
     { id: '2', user_id: 'user-1', name: 'Freelance', color: '#3b82f6', usage_count: 3, created_at: '', updated_at: '' },

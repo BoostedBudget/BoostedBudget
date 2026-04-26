@@ -611,4 +611,21 @@ describe('matchTransactionToBudgetCategories - edge cases', () => {
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).toBeNull()
   })
+
+  it('matches_pfc_primary_when_legacy_category_and_override_are_empty', () => {
+    const transaction = createTransaction({
+      category: null,
+      category_override: null,
+      personal_finance_category_data: {
+        primary: 'FOOD_AND_DRINK',
+        primary_display: 'Food And Drink',
+      },
+    })
+    const categories = [
+      createBudgetCategory({ category: ['Food And Drink'], match_logic: 'category_only' }),
+    ]
+    const result = matchTransactionToBudgetCategories(transaction, categories)
+    expect(result).not.toBeNull()
+    expect(result!.matchReason).toBe('category')
+  })
 })
