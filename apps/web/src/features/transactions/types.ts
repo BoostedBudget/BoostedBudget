@@ -22,6 +22,17 @@ export interface TagSource {
 }
 
 /**
+ * Structured representation of Plaid PFC v2 data, populated server-side from the raw JSON.
+ */
+export interface ParsedPersonalFinanceCategoryData {
+  primary: string
+  primary_display: string
+  detailed?: string
+  detailed_display?: string
+  confidence_level?: string
+}
+
+/**
  * Transaction record from any provider
  * Matches backend domain.Transaction schema
  */
@@ -40,6 +51,7 @@ export interface Transaction {
   merchant_name?: string | null
   category?: string | null // JSON array of category strings
   personal_finance_category?: string | null // JSON object with detailed categorization
+  personal_finance_category_data?: ParsedPersonalFinanceCategoryData | null // Parsed PFC (populated server-side)
   payment_channel?: string | null // 'online', 'in store', 'other'
   pending: boolean
   user_notes?: string | null

@@ -10,6 +10,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/events"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/plaid/plaid-go/v23/plaid"
 )
 
@@ -278,12 +279,23 @@ func (p *plaidSyncProvider) convertPlaidTransaction(linkedItem *domain.LinkedIte
 		return nil, fmt.Errorf("failed to serialize external metadata: %w", err)
 	}
 
-	// Serialize category array as JSON
+	// Serialize category array as JSON. When Plaid sends no legacy category but does send
+	// personal_finance_category (PFC v2), synthesize a display-friendly array from PFC.
 	var categoryJSON *string
 	if len(plaidTxn.Category) > 0 {
 		catBytes, _ := json.Marshal(plaidTxn.Category)
 		catStr := string(catBytes)
 		categoryJSON = &catStr
+	} else if plaidTxn.PersonalFinanceCategory.IsSet() {
+		pfc := plaidTxn.PersonalFinanceCategory.Get()
+		if pfc != nil && pfc.Primary != "" {
+			derived := services.PFCToCategoryArray(pfc.Primary, pfc.Detailed)
+			if derived != nil {
+				catBytes, _ := json.Marshal(derived)
+				catStr := string(catBytes)
+				categoryJSON = &catStr
+			}
+		}
 	}
 
 	// Serialize personal finance category as JSON

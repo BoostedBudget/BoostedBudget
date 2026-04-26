@@ -169,3 +169,212 @@ func TestMapPlaidTransaction_InvalidDate(t *testing.T) {
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "failed to parse transaction date")
 }
+
+// ============================================================================
+// Issue #1058: PFC Fallback Tests
+// ============================================================================
+
+// TestMapPlaidTransaction_PFCFallback_NoLegacyCategory verifies that when Plaid returns no legacy
+// category but does return personal_finance_category, the domain transaction's Category is
+// synthesized from PFC primary + detailed.
+func TestMapPlaidTransaction_PFCFallback_NoLegacyCategory(t *testing.T) {
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	ctx := context.Background()
+
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	pfc := plaid.PersonalFinanceCategory{
+		Primary:  "FOOD_AND_DRINK",
+		Detailed: "FOOD_AND_DRINK_FAST_FOOD",
+	}
+	pfc.SetConfidenceLevel("VERY_HIGH")
+
+	plaidTxn := plaid.Transaction{
+		TransactionId:           "plaid-txn-pfc",
+		AccountId:               "plaid-acc-1",
+		Amount:                  12.45,
+		Date:                    "2024-01-15",
+		Name:                    "KFC",
+		Category:                nil, // no legacy category
+		PersonalFinanceCategory: *plaid.NewNullablePersonalFinanceCategory(&pfc),
+	}
+
+	result, err := service.mapPlaidTransaction(ctx, plaidTxn, "item-1", "user-1", accountMap, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Category, "Category should be synthesized from PFC when legacy is absent")
+
+	var categories []string
+	require.NoError(t, json.Unmarshal([]byte(*result.Category), &categories))
+	assert.Equal(t, "Food And Drink", categories[0], "Primary display name should be curated")
+	assert.Equal(t, "Fast Food", categories[1], "Detailed display name should strip primary prefix")
+
+	// OriginalCategory must NOT be set from synthesized data — faithful to Plaid's actual output
+	assert.Nil(t, result.OriginalCategory, "OriginalCategory must remain nil when Plaid sent no legacy category")
+}
+
+// TestMapPlaidTransaction_LegacyCategoryTakesPriority verifies legacy category wins over PFC
+// when Plaid sends both.
+func TestMapPlaidTransaction_LegacyCategoryTakesPriority(t *testing.T) {
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	ctx := context.Background()
+
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	pfc := plaid.PersonalFinanceCategory{
+		Primary:  "FOOD_AND_DRINK",
+		Detailed: "FOOD_AND_DRINK_FAST_FOOD",
+	}
+
+	plaidTxn := plaid.Transaction{
+		TransactionId:           "plaid-txn-both",
+		AccountId:               "plaid-acc-1",
+		Amount:                  12.45,
+		Date:                    "2024-01-15",
+		Name:                    "KFC",
+		Category:                []string{"Food and Drink", "Restaurants"}, // legacy present
+		PersonalFinanceCategory: *plaid.NewNullablePersonalFinanceCategory(&pfc),
+	}
+
+	result, err := service.mapPlaidTransaction(ctx, plaidTxn, "item-1", "user-1", accountMap, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Category)
+
+	var categories []string
+	require.NoError(t, json.Unmarshal([]byte(*result.Category), &categories))
+	assert.Equal(t, "Food and Drink", categories[0], "Legacy category should take priority over synthesized PFC")
+
+	// OriginalCategory should also mirror legacy (existing behavior)
+	require.NotNil(t, result.OriginalCategory)
+	var origCategories []string
+	require.NoError(t, json.Unmarshal([]byte(*result.OriginalCategory), &origCategories))
+	assert.Equal(t, "Food and Drink", origCategories[0])
+}
+
+// TestMapPlaidTransaction_PartialPFC_EmptyPrimary verifies that PFC with an empty Primary
+// is treated as absent and Category stays nil.
+func TestMapPlaidTransaction_PartialPFC_EmptyPrimary(t *testing.T) {
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	ctx := context.Background()
+
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	pfc := plaid.PersonalFinanceCategory{
+		Primary:  "", // empty primary — treat as missing
+		Detailed: "FOOD_AND_DRINK_FAST_FOOD",
+	}
+
+	plaidTxn := plaid.Transaction{
+		TransactionId:           "plaid-txn-partial-pfc",
+		AccountId:               "plaid-acc-1",
+		Amount:                  12.45,
+		Date:                    "2024-01-15",
+		Name:                    "Unknown Merchant",
+		Category:                nil,
+		PersonalFinanceCategory: *plaid.NewNullablePersonalFinanceCategory(&pfc),
+	}
+
+	result, err := service.mapPlaidTransaction(ctx, plaidTxn, "item-1", "user-1", accountMap, nil)
+
+	require.NoError(t, err)
+	assert.Nil(t, result.Category, "Category must remain nil when PFC Primary is empty")
+	assert.Nil(t, result.OriginalCategory)
+}
+
+// TestMapPlaidTransaction_PFCOnly_NoDetailed verifies PFC with only primary (no detailed)
+// synthesizes a single-element category array.
+func TestMapPlaidTransaction_PFCOnly_NoDetailed(t *testing.T) {
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	ctx := context.Background()
+
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	pfc := plaid.PersonalFinanceCategory{
+		Primary:  "TRANSPORTATION",
+		Detailed: "",
+	}
+
+	plaidTxn := plaid.Transaction{
+		TransactionId:           "plaid-txn-primary-only",
+		AccountId:               "plaid-acc-1",
+		Amount:                  25.00,
+		Date:                    "2024-01-15",
+		Name:                    "Transit",
+		Category:                nil,
+		PersonalFinanceCategory: *plaid.NewNullablePersonalFinanceCategory(&pfc),
+	}
+
+	result, err := service.mapPlaidTransaction(ctx, plaidTxn, "item-1", "user-1", accountMap, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Category)
+
+	var categories []string
+	require.NoError(t, json.Unmarshal([]byte(*result.Category), &categories))
+	assert.Equal(t, []string{"Transportation"}, categories)
+}
+
+// ============================================================================
+// Issue #1058: Mapper parity tests (T12)
+// Guards against Category/OriginalCategory/PersonalFinanceCategory divergence
+// between the two ingest paths (service mapPlaidTransaction vs worker
+// convertPlaidTransaction). The worker path is tested directly in
+// internal/workers/plaid_sync_provider_test.go — this test anchors the
+// service-side expectations that the worker must match for the PFC fields.
+// ============================================================================
+
+// TestMapPlaidTransaction_PFCFields_AnchorExpectations asserts the exact Category and
+// OriginalCategory values for the three PFC scenarios. Any future edit that drifts
+// the service path output will break this test before it reaches prod.
+func TestMapPlaidTransaction_PFCFields_AnchorExpectations(t *testing.T) {
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	ctx := context.Background()
+	accountMap := map[string]string{"acc": "uuid"}
+
+	t.Run("PFC only: Category synthesized, OriginalCategory nil", func(t *testing.T) {
+		pfc := plaid.PersonalFinanceCategory{Primary: "FOOD_AND_DRINK", Detailed: "FOOD_AND_DRINK_FAST_FOOD"}
+		txn := plaid.Transaction{
+			TransactionId: "t1", AccountId: "acc", Amount: 10, Date: "2024-01-01", Name: "KFC",
+			PersonalFinanceCategory: *plaid.NewNullablePersonalFinanceCategory(&pfc),
+		}
+		got, err := service.mapPlaidTransaction(ctx, txn, "item", "user", accountMap, nil)
+		require.NoError(t, err)
+
+		var cats []string
+		require.NoError(t, json.Unmarshal([]byte(*got.Category), &cats))
+		assert.Equal(t, []string{"Food And Drink", "Fast Food"}, cats, "PFC-derived Category must be ['Food And Drink','Fast Food']")
+		assert.Nil(t, got.OriginalCategory, "OriginalCategory must be nil when Plaid sent no legacy category")
+	})
+
+	t.Run("Legacy category wins: Category=legacy, OriginalCategory=legacy", func(t *testing.T) {
+		pfc := plaid.PersonalFinanceCategory{Primary: "FOOD_AND_DRINK", Detailed: "FOOD_AND_DRINK_FAST_FOOD"}
+		txn := plaid.Transaction{
+			TransactionId: "t2", AccountId: "acc", Amount: 10, Date: "2024-01-01", Name: "KFC",
+			Category:                []string{"Food and Drink", "Restaurants"},
+			PersonalFinanceCategory: *plaid.NewNullablePersonalFinanceCategory(&pfc),
+		}
+		got, err := service.mapPlaidTransaction(ctx, txn, "item", "user", accountMap, nil)
+		require.NoError(t, err)
+
+		var cats []string
+		require.NoError(t, json.Unmarshal([]byte(*got.Category), &cats))
+		assert.Equal(t, "Food and Drink", cats[0], "Legacy category must take priority")
+		require.NotNil(t, got.OriginalCategory)
+		var origCats []string
+		require.NoError(t, json.Unmarshal([]byte(*got.OriginalCategory), &origCats))
+		assert.Equal(t, "Food and Drink", origCats[0], "OriginalCategory must mirror legacy")
+	})
+
+	t.Run("Empty PFC Primary: Category nil, OriginalCategory nil", func(t *testing.T) {
+		pfc := plaid.PersonalFinanceCategory{Primary: "", Detailed: "FOOD_AND_DRINK_FAST_FOOD"}
+		txn := plaid.Transaction{
+			TransactionId: "t3", AccountId: "acc", Amount: 10, Date: "2024-01-01", Name: "Unknown",
+			PersonalFinanceCategory: *plaid.NewNullablePersonalFinanceCategory(&pfc),
+		}
+		got, err := service.mapPlaidTransaction(ctx, txn, "item", "user", accountMap, nil)
+		require.NoError(t, err)
+		assert.Nil(t, got.Category, "Category must be nil when PFC Primary is empty")
+		assert.Nil(t, got.OriginalCategory)
+	})
+}

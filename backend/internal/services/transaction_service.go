@@ -149,6 +149,11 @@ func (s *transactionService) ListTransactions(
 	// hasMore is true if there are more results beyond current page
 	hasMore := (offset + len(transactions)) < totalCount
 
+	// Populate parsed PFC data for each transaction
+	for i := range transactions {
+		transactions[i].PersonalFinanceCategoryData = ParsePersonalFinanceCategoryJSON(transactions[i].PersonalFinanceCategory)
+	}
+
 	return &TransactionListResponse{
 		Transactions: transactions,
 		TotalCount:   totalCount,
@@ -222,6 +227,7 @@ func (s *transactionService) GetTransactionByID(ctx context.Context, userID, tra
 		return nil, repository.ErrTransactionNotFound
 	}
 
+	tx.PersonalFinanceCategoryData = ParsePersonalFinanceCategoryJSON(tx.PersonalFinanceCategory)
 	return tx, nil
 }
 
