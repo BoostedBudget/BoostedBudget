@@ -958,3 +958,75 @@ describe('TransactionCard', () => {
     })
   })
 })
+
+// ============================================================================
+// Issue #1058: PFC fallback tests (D5)
+// ============================================================================
+
+describe('TransactionCard — PFC fallback (Issue #1058)', () => {
+  const baseTxn: Transaction = {
+    id: 'txn-pfc',
+    user_id: 'user-1',
+    account_id: 'acc-1',
+    linked_item_id: 'item-1',
+    source: 'plaid',
+    external_transaction_id: 'plaid-ext-1',
+    amount: -12.45,
+    date: '2024-01-15',
+    name: 'KFC',
+    pending: false,
+    tags: [],
+    created_at: '2024-01-15T00:00:00Z',
+    updated_at: '2024-01-15T00:00:00Z',
+    category: null,
+    category_source: 'plaid',
+  }
+
+  it('shows PFC primary_display when category is null and personal_finance_category_data is present', () => {
+    const txn: Transaction = {
+      ...baseTxn,
+      personal_finance_category_data: {
+        primary: 'FOOD_AND_DRINK',
+        primary_display: 'Food And Drink',
+        detailed: 'FOOD_AND_DRINK_FAST_FOOD',
+        detailed_display: 'Fast Food',
+        confidence_level: 'VERY_HIGH',
+      },
+    }
+
+    render(<TransactionCard transaction={txn} />)
+
+    expect(screen.getByText('Food And Drink')).toBeTruthy()
+  })
+
+  it('does not show ⚠️ warning when PFC data provides a category', () => {
+    const txn: Transaction = {
+      ...baseTxn,
+      personal_finance_category_data: {
+        primary: 'FOOD_AND_DRINK',
+        primary_display: 'Food And Drink',
+      },
+    }
+
+    render(<TransactionCard transaction={txn} />)
+
+    const warnings = screen.queryAllByTitle('Uncategorized')
+    expect(warnings).toHaveLength(0)
+  })
+
+  it('explicit user-set uncategorized still overrides PFC fallback', () => {
+    const txn: Transaction = {
+      ...baseTxn,
+      category_override: '[]',
+      category_source: 'manual',
+      personal_finance_category_data: {
+        primary: 'FOOD_AND_DRINK',
+        primary_display: 'Food And Drink',
+      },
+    }
+
+    render(<TransactionCard transaction={txn} />)
+
+    expect(screen.getByText('Uncategorized')).toBeTruthy()
+  })
+})

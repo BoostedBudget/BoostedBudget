@@ -119,6 +119,18 @@ type Transaction struct {
 	// Associated data (populated on demand, not stored in DB)
 	// Used by rule engine to evaluate account_type conditions
 	Account *Account `json:"account,omitempty" db:"-"`
+
+	// Parsed PFC data (populated at read time from PersonalFinanceCategory JSON, not stored in DB)
+	PersonalFinanceCategoryData *ParsedPersonalFinanceCategoryData `json:"personal_finance_category_data,omitempty" db:"-"`
+}
+
+// ParsedPersonalFinanceCategoryData holds the structured representation of Plaid's PFC v2 data.
+type ParsedPersonalFinanceCategoryData struct {
+	Primary         string `json:"primary"`
+	PrimaryDisplay  string `json:"primary_display"`
+	Detailed        string `json:"detailed,omitempty"`
+	DetailedDisplay string `json:"detailed_display,omitempty"`
+	ConfidenceLevel string `json:"confidence_level,omitempty"`
 }
 
 // Validate checks that the Transaction has all required fields and valid values.

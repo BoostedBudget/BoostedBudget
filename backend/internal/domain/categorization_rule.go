@@ -23,23 +23,30 @@ const (
 	ConditionPaymentChannel     ConditionType = "payment_channel"
 	ConditionExistingCategory   ConditionType = "existing_category"
 	ConditionDateRange          ConditionType = "date_range"
+
+	// ConditionExistingPFCPrimary matches against the Plaid PFC primary enum (e.g. "FOOD_AND_DRINK").
+	ConditionExistingPFCPrimary ConditionType = "existing_pfc_primary"
+	// ConditionExistingPFCDetailed matches against the Plaid PFC detailed enum (e.g. "FOOD_AND_DRINK_FAST_FOOD").
+	ConditionExistingPFCDetailed ConditionType = "existing_pfc_detailed"
 )
 
 // validConditionTypes is a set of all valid condition types.
 var validConditionTypes = map[ConditionType]bool{
-	ConditionMerchantContains:   true,
-	ConditionMerchantEquals:     true,
-	ConditionMerchantStartsWith: true,
-	ConditionMerchantEndsWith:   true,
-	ConditionAmountGreaterThan:  true,
-	ConditionAmountLessThan:     true,
-	ConditionAmountEquals:       true,
-	ConditionAmountRange:        true,
-	ConditionAccountID:          true,
-	ConditionAccountType:        true,
-	ConditionPaymentChannel:     true,
-	ConditionExistingCategory:   true,
-	ConditionDateRange:          true,
+	ConditionMerchantContains:    true,
+	ConditionMerchantEquals:      true,
+	ConditionMerchantStartsWith:  true,
+	ConditionMerchantEndsWith:    true,
+	ConditionAmountGreaterThan:   true,
+	ConditionAmountLessThan:      true,
+	ConditionAmountEquals:        true,
+	ConditionAmountRange:         true,
+	ConditionAccountID:           true,
+	ConditionAccountType:         true,
+	ConditionPaymentChannel:      true,
+	ConditionExistingCategory:    true,
+	ConditionDateRange:           true,
+	ConditionExistingPFCPrimary:  true,
+	ConditionExistingPFCDetailed: true,
 }
 
 // IsValid checks if the condition type is valid.
