@@ -331,7 +331,7 @@ export function BudgetTable({
                         disabled={loading}
                         aria-label="Delete budget"
                         title="Delete budget"
-                        className="hover:bg-destructive/10 hover:text-destructive dark:hover:bg-destructive/20"
+                        className="hover:bg-destructive/10 hover:text-destructive"
                       >
                         <Trash2 aria-hidden="true" />
                       </Button>
