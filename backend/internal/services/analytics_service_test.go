@@ -395,12 +395,14 @@ func TestAbsFloat(t *testing.T) {
 	}
 }
 
-func TestFormatCategoryName(t *testing.T) {
+// TestFormatCategoryName_UsesCuratedRegistry verifies analytics uses the curated PFC registry
+// (via PFCPrimaryDisplayName) and outputs "Food And Drink" not "Food And Drink".
+func TestFormatCategoryName_UsesCuratedRegistry(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected string
 	}{
-		{"FOOD_AND_DRINK", "Food & Drink"},
+		{"FOOD_AND_DRINK", "Food And Drink"}, // curated registry uses "And" not "&"
 		{"TRANSPORTATION", "Transportation"},
 		{"GENERAL_MERCHANDISE", "General Merchandise"},
 		{"UNCATEGORIZED", "Uncategorized"},
@@ -410,9 +412,9 @@ func TestFormatCategoryName(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := formatCategoryName(tt.input)
+		result := PFCPrimaryDisplayName(tt.input)
 		if result != tt.expected {
-			t.Errorf("formatCategoryName(%q) = %q, expected %q", tt.input, result, tt.expected)
+			t.Errorf("PFCPrimaryDisplayName(%q) = %q, expected %q", tt.input, result, tt.expected)
 		}
 	}
 }
@@ -456,7 +458,7 @@ func TestAnalyticsService_GetSpendingByCategory(t *testing.T) {
 		if cat.Category != "FOOD_AND_DRINK" {
 			t.Errorf("expected FOOD_AND_DRINK, got %s", cat.Category)
 		}
-		if cat.DisplayName != "Food & Drink" {
+		if cat.DisplayName != "Food And Drink" {
 			t.Errorf("expected 'Food & Drink', got %s", cat.DisplayName)
 		}
 		// 300/500 * 100 = 60%

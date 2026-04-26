@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -536,26 +535,10 @@ func (s *budgetService) GetAvailableCategories(ctx context.Context, userID strin
 
 	// Add Plaid categories (formatted: FOOD_AND_DRINK -> Food And Drink)
 	for _, cat := range plaidCats {
-		formatted := formatPlaidCategory(cat)
+		formatted := PFCPrimaryDisplayName(cat)
 		categories = append(categories, formatted)
 	}
 
 	return categories, nil
 }
 
-// formatPlaidCategory converts Plaid category format to display format.
-// e.g., "FOOD_AND_DRINK" -> "Food And Drink"
-func formatPlaidCategory(category string) string {
-	// Replace underscores with spaces
-	result := strings.ReplaceAll(category, "_", " ")
-
-	// Title case each word
-	words := strings.Fields(result)
-	for i, word := range words {
-		if len(word) > 0 {
-			words[i] = strings.ToUpper(string(word[0])) + strings.ToLower(word[1:])
-		}
-	}
-
-	return strings.Join(words, " ")
-}
