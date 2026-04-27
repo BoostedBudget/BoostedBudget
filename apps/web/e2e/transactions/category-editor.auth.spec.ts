@@ -65,18 +65,11 @@ async function mockCategoryEditorAPIs(page: Page) {
     })
   })
 
-  // User custom categories — empty (brand-new user scenario)
-  await page.route('**/api/v1/categories/user*', (route) => {
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify([]),
-    })
-  })
-
-  // General categories wildcard (catches any remaining category routes)
-  await page.route('**/api/v1/categories*', (route) => {
-    if (!route.request().url().includes('plaid')) {
+  // User custom categories — empty (brand-new user scenario).
+  // Orval's useGetUserCategories hits GET /api/v1/categories (the function name
+  // contains "User" but the URL does not). Mock the exact URL.
+  await page.route('**/api/v1/categories', (route) => {
+    if (route.request().method() === 'GET') {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -172,21 +165,18 @@ test.describe('Transaction Category Editor — PFC curated source', () => {
       })
     })
 
-    // Two custom categories — one overlaps with a PFC primary (should not duplicate)
-    await page.route('**/api/v1/categories/user*', (route) => {
-      route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify([
-          { id: 'cat-1', name: 'My Custom', color: '#FF0000' },
-          { id: 'cat-2', name: 'Food And Drink', color: '#00FF00' }, // overlaps PFC primary
-        ]),
-      })
-    })
-
-    await page.route('**/api/v1/categories*', (route) => {
-      if (!route.request().url().includes('plaid') && !route.request().url().includes('user')) {
-        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+    // Two custom categories — one overlaps with a PFC primary (should not duplicate).
+    // Orval's useGetUserCategories hits GET /api/v1/categories (not /categories/user).
+    await page.route('**/api/v1/categories', (route) => {
+      if (route.request().method() === 'GET') {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([
+            { id: 'cat-1', name: 'My Custom', color: '#FF0000' },
+            { id: 'cat-2', name: 'Food And Drink', color: '#00FF00' }, // overlaps PFC primary
+          ]),
+        })
       } else {
         route.fallback()
       }
