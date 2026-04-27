@@ -447,3 +447,114 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_RepositoryError(t *te
 func incomeTestStrPtr(s string) *string {
 	return &s
 }
+
+// =============================================================================
+// Issue #1066: PFC Primary Enum Matching Tests
+// =============================================================================
+
+// TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimary tests that transactions
+// matched via personal_finance_category.primary are included in the result.
+func TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimary(t *testing.T) {
+	mockRepo := new(MockIncomeTransactionGetter)
+	logger := testIncomeServiceLogger()
+	service := NewBudgetIncomeService(mockRepo, logger)
+
+	ctx := context.Background()
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
+
+	incomeSources := []domain.IncomeSource{
+		{Type: domain.IncomeSourceTypePlaidCategory, Value: "INCOME"},
+	}
+
+	transactions := []domain.Transaction{
+		// PFC-only transaction: no legacy category, primary enum matches — must be included
+		{
+			ID:                      "tx-pfc-match",
+			UserID:                  "user-123",
+			Amount:                  4200.00,
+			PersonalFinanceCategory: incomeTestStrPtr(`{"primary":"INCOME","detailed":"INCOME_WAGES"}`),
+		},
+		// PFC mismatch: primary is TRANSFER_IN, source expects INCOME — must be excluded
+		{
+			ID:                      "tx-pfc-mismatch",
+			UserID:                  "user-123",
+			Amount:                  1000.00,
+			PersonalFinanceCategory: incomeTestStrPtr(`{"primary":"TRANSFER_IN","detailed":"TRANSFER_IN_ACCOUNT_TRANSFER"}`),
+		},
+		// Legacy category + PFC both present; source matches legacy — must be included (regression guard)
+		{
+			ID:                      "tx-legacy-match",
+			UserID:                  "user-123",
+			Amount:                  3000.00,
+			Category:                incomeTestStrPtr(`["Income"]`),
+			PersonalFinanceCategory: incomeTestStrPtr(`{"primary":"INCOME"}`),
+		},
+		// Negative amount with matching PFC primary — must be excluded (not income)
+		{
+			ID:                      "tx-negative",
+			UserID:                  "user-123",
+			Amount:                  -100.00,
+			PersonalFinanceCategory: incomeTestStrPtr(`{"primary":"INCOME"}`),
+		},
+		// Malformed PFC JSON — must not panic, must be excluded
+		{
+			ID:                      "tx-bad-pfc",
+			UserID:                  "user-123",
+			Amount:                  500.00,
+			PersonalFinanceCategory: incomeTestStrPtr(`{not valid json`),
+		},
+		// Empty primary field — must be excluded
+		{
+			ID:                      "tx-empty-primary",
+			UserID:                  "user-123",
+			Amount:                  500.00,
+			PersonalFinanceCategory: incomeTestStrPtr(`{"primary":""}`),
+		},
+	}
+
+	mockRepo.On("GetByUserIDWithFilters", ctx, "user-123", mock.Anything, 10000, 0).
+		Return(transactions, nil)
+
+	result, err := service.GetMatchingIncomeTransactions(ctx, "user-123", incomeSources, startDate, endDate)
+
+	assert.NoError(t, err)
+	// tx-pfc-match and tx-legacy-match should be included; all others excluded
+	assert.Len(t, result, 2)
+	ids := make([]string, len(result))
+	for i, tx := range result {
+		ids[i] = tx.ID
+	}
+	assert.Contains(t, ids, "tx-pfc-match")
+	assert.Contains(t, ids, "tx-legacy-match")
+	mockRepo.AssertExpectations(t)
+}
+
+// TestBudgetIncomeService_CalculateBudgetIncome_PFCPrimary confirms the service forwards
+// PFC enum values to the repository unchanged when source type is plaid_category.
+func TestBudgetIncomeService_CalculateBudgetIncome_PFCPrimary(t *testing.T) {
+	mockRepo := new(MockIncomeTransactionGetter)
+	logger := testIncomeServiceLogger()
+	service := NewBudgetIncomeService(mockRepo, logger)
+
+	ctx := context.Background()
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
+
+	budget := &domain.Budget{
+		UserID: "user-123",
+		IncomeSources: []domain.IncomeSource{
+			{Type: domain.IncomeSourceTypePlaidCategory, Value: "INCOME"},
+		},
+	}
+
+	// The service must forward the enum value "INCOME" to the repo exactly as stored.
+	mockRepo.On("GetIncomeSumByCategory", ctx, "user-123", "INCOME", startDate, endDate).
+		Return(4200.00, nil)
+
+	income, err := service.CalculateBudgetIncome(ctx, budget, startDate, endDate)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 4200.00, income)
+	mockRepo.AssertExpectations(t)
+}
