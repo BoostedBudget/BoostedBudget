@@ -161,9 +161,17 @@ func (s *budgetIncomeService) GetMatchingIncomeTransactions(ctx context.Context,
 func (s *budgetIncomeService) transactionMatchesSource(tx domain.Transaction, source domain.IncomeSource) bool {
 	switch source.Type {
 	case domain.IncomeSourceTypePlaidCategory:
-		// Check if transaction category contains the source value
-		return s.categoryContains(tx.Category, source.Value) ||
-			s.categoryContains(tx.CategoryOverride, source.Value)
+		if s.categoryContains(tx.Category, source.Value) {
+			return true
+		}
+		if s.categoryContains(tx.CategoryOverride, source.Value) {
+			return true
+		}
+		// Fall back to PFC primary enum for transactions with display names in legacy category field
+		if pfc := ParsePersonalFinanceCategoryJSON(tx.PersonalFinanceCategory); pfc != nil {
+			return pfc.Primary == source.Value
+		}
+		return false
 
 	case domain.IncomeSourceTypeTag:
 		// Check if transaction has the tag
