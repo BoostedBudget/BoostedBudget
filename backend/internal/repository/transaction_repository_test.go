@@ -1186,7 +1186,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_Success(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Paycheck"]`).
+		WithArgs(userID, startDate, endDate, `["Paycheck"]`, category).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetIncomeSumByCategory(ctx, userID, category, startDate, endDate)
@@ -1215,7 +1215,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_NoMatches(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(0.0)
 
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["NonExistentCategory"]`).
+		WithArgs(userID, startDate, endDate, `["NonExistentCategory"]`, category).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetIncomeSumByCategory(ctx, userID, category, startDate, endDate)
@@ -1241,13 +1241,44 @@ func TestTransactionRepository_GetIncomeSumByCategory_DBError(t *testing.T) {
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Paycheck"]`).
+		WithArgs(userID, startDate, endDate, `["Paycheck"]`, category).
 		WillReturnError(errors.New("connection done"))
 
 	sum, err := repo.GetIncomeSumByCategory(ctx, userID, category, startDate, endDate)
 	assert.Error(t, err)
 	assert.Equal(t, 0.0, sum)
 	assert.Contains(t, err.Error(), "failed to get income sum by category")
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetIncomeSumByCategory_PFCPrimary tests that the PFC primary enum
+// is matched directly via personal_finance_category->>'primary' = $5.
+func TestTransactionRepository_GetIncomeSumByCategory_PFCPrimary(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	category := "INCOME"
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedSum := 4200.00
+
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+
+	// $4 is the JSONB array form, $5 is the raw enum string for personal_finance_category->>'primary'
+	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
+		WithArgs(userID, startDate, endDate, `["INCOME"]`, category).
+		WillReturnRows(rows)
+
+	sum, err := repo.GetIncomeSumByCategory(ctx, userID, category, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedSum, sum)
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)

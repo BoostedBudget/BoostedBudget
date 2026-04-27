@@ -1018,11 +1018,10 @@ func (r *transactionRepository) GetDistinctPlaidCategories(ctx context.Context, 
 
 // GetIncomeSumByCategory returns the sum of income (positive amount) transactions
 // matching the given category within the date range.
-// Checks both category and category_override fields using JSONB containment operator (@>).
+// Supports both legacy category arrays and PFCv2 primary enums for backward compatibility.
 func (r *transactionRepository) GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error) {
-	// Format category as JSON array for JSONB containment operator
-	// e.g., "Paycheck" -> ["Paycheck"]
-	categoryJSON := fmt.Sprintf(`["%s"]`, category)
+	categoryJSONBytes, _ := json.Marshal([]string{category})
+	categoryJSON := string(categoryJSONBytes)
 
 	query := `
 		SELECT COALESCE(SUM(amount), 0)
@@ -1030,11 +1029,15 @@ func (r *transactionRepository) GetIncomeSumByCategory(ctx context.Context, user
 		WHERE user_id = $1
 		  AND amount > 0
 		  AND date BETWEEN $2 AND $3
-		  AND (category @> $4::jsonb OR category_override @> $4::jsonb)
+		  AND (
+		      category @> $4::jsonb
+		      OR category_override @> $4::jsonb
+		      OR personal_finance_category->>'primary' = $5
+		  )
 	`
 
 	var sum float64
-	err := r.db.QueryRow(ctx, query, userID, startDate, endDate, categoryJSON).Scan(&sum)
+	err := r.db.QueryRow(ctx, query, userID, startDate, endDate, categoryJSON, category).Scan(&sum)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get income sum by category: %w", err)
 	}
