@@ -270,13 +270,15 @@ func advancePeriod(t time.Time, grouping string) time.Time {
 }
 
 // effectiveCategoryExpr returns the SQL expression for computing effective category.
-// When subcategory is true, uses the 'detailed' field instead of 'primary'.
+// category_override is a JSON array (["Food And Drink"] or ["Food And Drink","Groceries"]),
+// NOT a JSON object — element access uses ->>0 (primary) and ->>1 (subcategory).
+// When category_override is a single-element array, ->>1 returns NULL and COALESCE falls
+// through to personal_finance_category->>'detailed' and finally 'UNCATEGORIZED'.
 func effectiveCategoryExpr(subcategory bool) string {
-	field := "primary"
 	if subcategory {
-		field = "detailed"
+		return `COALESCE(t.category_override->>1, t.personal_finance_category->>'detailed', 'UNCATEGORIZED')`
 	}
-	return fmt.Sprintf(`COALESCE(t.category_override->>'%s', t.personal_finance_category->>'%s', 'UNCATEGORIZED')`, field, field)
+	return `COALESCE(t.category_override->>0, t.personal_finance_category->>'primary', 'UNCATEGORIZED')`
 }
 
 // spendingBaseQuery returns the common WHERE clause args and starting argIndex for spending queries.

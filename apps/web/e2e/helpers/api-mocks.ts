@@ -61,3 +61,41 @@ export async function mockAuthDependencies(
     })
   })
 }
+
+/**
+ * All 18 PFCv2 primary categories — curated, canonical source for e2e tests.
+ * Used in category-editor.auth.spec.ts and rule-editor-pfc.auth.spec.ts.
+ */
+export const ALL_PFC_PRIMARIES = [
+  { enum: 'BANK_FEES', display: 'Bank Fees' },
+  { enum: 'ENTERTAINMENT', display: 'Entertainment' },
+  { enum: 'FOOD_AND_DRINK', display: 'Food And Drink' },
+  { enum: 'GENERAL_MERCHANDISE', display: 'General Merchandise' },
+  { enum: 'GENERAL_SERVICES', display: 'General Services' },
+  { enum: 'GOVERNMENT_AND_NON_PROFIT', display: 'Government And Non Profit' },
+  { enum: 'HOME_IMPROVEMENT', display: 'Home Improvement' },
+  { enum: 'INCOME', display: 'Income' },
+  { enum: 'LOAN_DISBURSEMENTS', display: 'Loan Disbursements' },
+  { enum: 'LOAN_PAYMENTS', display: 'Loan Payments' },
+  { enum: 'MEDICAL', display: 'Medical' },
+  { enum: 'OTHER', display: 'Other' },
+  { enum: 'PERSONAL_CARE', display: 'Personal Care' },
+  { enum: 'RENT_AND_UTILITIES', display: 'Rent And Utilities' },
+  { enum: 'TRANSFER_IN', display: 'Transfer In' },
+  { enum: 'TRANSFER_OUT', display: 'Transfer Out' },
+  { enum: 'TRANSPORTATION', display: 'Transportation' },
+  { enum: 'TRAVEL', display: 'Travel' },
+]
+
+/**
+ * Subset of PFCv2 detailed categories for cascading selector tests.
+ * Used in rule-editor-pfc.auth.spec.ts.
+ */
+export const FOOD_AND_DRINK_DETAILED = [
+  { primary_enum: 'FOOD_AND_DRINK', primary_display: 'Food And Drink', enum: 'FOOD_AND_DRINK_COFFEE', display: 'Coffee' },
+  { primary_enum: 'FOOD_AND_DRINK', primary_display: 'Food And Drink', enum: 'FOOD_AND_DRINK_FAST_FOOD', display: 'Fast Food' },
+  { primary_enum: 'FOOD_AND_DRINK', primary_display: 'Food And Drink', enum: 'FOOD_AND_DRINK_GROCERIES', display: 'Groceries' },
+  { primary_enum: 'FOOD_AND_DRINK', primary_display: 'Food And Drink', enum: 'FOOD_AND_DRINK_RESTAURANT', display: 'Restaurant' },
+  { primary_enum: 'TRANSPORTATION', primary_display: 'Transportation', enum: 'TRANSPORTATION_GAS', display: 'Gas' },
+  { primary_enum: 'TRANSPORTATION', primary_display: 'Transportation', enum: 'TRANSPORTATION_TAXIS_AND_RIDE_SHARES', display: 'Taxis And Ride Shares' },
+]

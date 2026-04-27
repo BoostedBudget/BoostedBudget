@@ -54,9 +54,10 @@ type TransactionService interface {
 	// Returns the updated transaction
 	UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error)
 
-	// GetDistinctPlaidCategories returns distinct Plaid category names from user's transactions
-	// Uses primary category level (e.g., "Food and Drink") for consistency across the application
-	// Used by rule editor to populate "existing_category" dropdown
+	// GetDistinctPlaidCategories returns raw `personal_finance_category->>'primary'` enums
+	// observed in user transactions (e.g., "FOOD_AND_DRINK"). NOT a legacy Category[0] source.
+	// DEPRECATED: Consumers should prefer pfc.AllPrimaries() for the curated list.
+	// This method is kept for backward compatibility until confirmed no external consumers remain.
 	GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error)
 }
 

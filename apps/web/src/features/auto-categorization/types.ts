@@ -17,6 +17,8 @@ export type ConditionType =
   | 'account_type'
   | 'payment_channel'
   | 'existing_category'
+  | 'existing_pfc_primary'
+  | 'existing_pfc_detailed'
   | 'date_range'
 
 /**
@@ -34,7 +36,9 @@ export const CONDITION_TYPE_LABELS: Record<ConditionType, string> = {
   account_id: 'Account is',
   account_type: 'Account type is',
   payment_channel: 'Payment channel is',
-  existing_category: 'Current category is',
+  existing_category: 'Existing Category (legacy text — matches transaction.Category[0])',
+  existing_pfc_primary: 'PFC Primary (modern enum — matches personal_finance_category.primary)',
+  existing_pfc_detailed: 'PFC Detailed (modern enum — matches personal_finance_category.detailed, fine-grained)',
   date_range: 'Date between',
 }
 

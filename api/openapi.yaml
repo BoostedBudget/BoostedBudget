@@ -1776,6 +1776,23 @@ components:
         - last_24_hours
         - by_kind
       type: object
+    Detailed:
+      additionalProperties: false
+      properties:
+        display:
+          type: string
+        enum:
+          type: string
+        primary_display:
+          type: string
+        primary_enum:
+          type: string
+      required:
+        - primary_enum
+        - primary_display
+        - enum
+        - display
+      type: object
     ErrorDetail:
       additionalProperties: false
       properties:
@@ -2680,6 +2697,17 @@ components:
         - currency
         - next_charge_date
         - next_charge_amount
+      type: object
+    Primary:
+      additionalProperties: false
+      properties:
+        display:
+          type: string
+        enum:
+          type: string
+      required:
+        - enum
+        - display
       type: object
     PrivacySettings:
       additionalProperties: false
@@ -6514,6 +6542,58 @@ paths:
       security:
         - clerk: []
       summary: Get Plaid categories
+      tags:
+        - Categories
+  /api/v1/categories/plaid-detailed:
+    get:
+      description: Returns the full PFCv2 detailed taxonomy (~120 entries) sorted by primary then detailed display name. Used only by the rule editor's existing_pfc_detailed condition.
+      operationId: getPlaidDetailedCategories
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Detailed"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List curated Plaid PFC detailed categories
+      tags:
+        - Categories
+  /api/v1/categories/plaid-primaries:
+    get:
+      description: Returns all 18 PFCv2 curated primary categories sorted alphabetically. Used by every PFC selection surface.
+      operationId: getPlaidPrimaryCategories
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Primary"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List curated Plaid PFC primary categories
       tags:
         - Categories
   /api/v1/categories/{id}:

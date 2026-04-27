@@ -46,7 +46,9 @@ import type {
 import type {
   CreateCustomCategoryRequest,
   CustomCategory,
+  Detailed,
   ErrorModel,
+  Primary,
   UpdateCustomCategoryRequest,
 } from "../../models";
 
@@ -474,6 +476,314 @@ export function useGetPlaidCategories<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getGetPlaidCategoriesQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Returns the full PFCv2 detailed taxonomy (~120 entries) sorted by primary then detailed display name. Used only by the rule editor's existing_pfc_detailed condition.
+ * @summary List curated Plaid PFC detailed categories
+ */
+export const getPlaidDetailedCategories = (
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<Detailed[] | null>(
+    { url: `/api/v1/categories/plaid-detailed`, method: "GET", signal },
+    options,
+  );
+};
+
+export const getGetPlaidDetailedCategoriesQueryKey = () => {
+  return [`/api/v1/categories/plaid-detailed`] as const;
+};
+
+export const getGetPlaidDetailedCategoriesQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPlaidDetailedCategories>>,
+  TError = ErrorType<ErrorModel>,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof getPlaidDetailedCategories>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof customInstance>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetPlaidDetailedCategoriesQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPlaidDetailedCategories>>
+  > = ({ signal }) => getPlaidDetailedCategories(requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPlaidDetailedCategories>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetPlaidDetailedCategoriesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPlaidDetailedCategories>>
+>;
+export type GetPlaidDetailedCategoriesQueryError = ErrorType<ErrorModel>;
+
+export function useGetPlaidDetailedCategories<
+  TData = Awaited<ReturnType<typeof getPlaidDetailedCategories>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPlaidDetailedCategories>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPlaidDetailedCategories>>,
+          TError,
+          Awaited<ReturnType<typeof getPlaidDetailedCategories>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPlaidDetailedCategories<
+  TData = Awaited<ReturnType<typeof getPlaidDetailedCategories>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPlaidDetailedCategories>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPlaidDetailedCategories>>,
+          TError,
+          Awaited<ReturnType<typeof getPlaidDetailedCategories>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPlaidDetailedCategories<
+  TData = Awaited<ReturnType<typeof getPlaidDetailedCategories>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPlaidDetailedCategories>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List curated Plaid PFC detailed categories
+ */
+
+export function useGetPlaidDetailedCategories<
+  TData = Awaited<ReturnType<typeof getPlaidDetailedCategories>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPlaidDetailedCategories>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetPlaidDetailedCategoriesQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Returns all 18 PFCv2 curated primary categories sorted alphabetically. Used by every PFC selection surface.
+ * @summary List curated Plaid PFC primary categories
+ */
+export const getPlaidPrimaryCategories = (
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<Primary[] | null>(
+    { url: `/api/v1/categories/plaid-primaries`, method: "GET", signal },
+    options,
+  );
+};
+
+export const getGetPlaidPrimaryCategoriesQueryKey = () => {
+  return [`/api/v1/categories/plaid-primaries`] as const;
+};
+
+export const getGetPlaidPrimaryCategoriesQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPlaidPrimaryCategories>>,
+  TError = ErrorType<ErrorModel>,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof getPlaidPrimaryCategories>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof customInstance>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetPlaidPrimaryCategoriesQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPlaidPrimaryCategories>>
+  > = ({ signal }) => getPlaidPrimaryCategories(requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPlaidPrimaryCategories>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetPlaidPrimaryCategoriesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPlaidPrimaryCategories>>
+>;
+export type GetPlaidPrimaryCategoriesQueryError = ErrorType<ErrorModel>;
+
+export function useGetPlaidPrimaryCategories<
+  TData = Awaited<ReturnType<typeof getPlaidPrimaryCategories>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPlaidPrimaryCategories>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPlaidPrimaryCategories>>,
+          TError,
+          Awaited<ReturnType<typeof getPlaidPrimaryCategories>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPlaidPrimaryCategories<
+  TData = Awaited<ReturnType<typeof getPlaidPrimaryCategories>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPlaidPrimaryCategories>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPlaidPrimaryCategories>>,
+          TError,
+          Awaited<ReturnType<typeof getPlaidPrimaryCategories>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPlaidPrimaryCategories<
+  TData = Awaited<ReturnType<typeof getPlaidPrimaryCategories>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPlaidPrimaryCategories>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List curated Plaid PFC primary categories
+ */
+
+export function useGetPlaidPrimaryCategories<
+  TData = Awaited<ReturnType<typeof getPlaidPrimaryCategories>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPlaidPrimaryCategories>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetPlaidPrimaryCategoriesQueryOptions(options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

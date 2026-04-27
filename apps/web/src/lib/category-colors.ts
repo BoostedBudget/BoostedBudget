@@ -48,6 +48,20 @@ export const CATEGORY_COLORS: Record<string, string> = {
   'Government': '#4F46E5',          // Indigo-600 - Official
   'Insurance': '#7C3AED',           // Violet-600 - Protection
 
+  // PFCv2 primary display names (ensure all 18 resolve to a non-default color)
+  'Food And Drink': '#F97316',        // alias for existing 'Food and Drink' entry
+  'General Merchandise': '#A855F7',   // Purple-500 - Retail
+  'General Services': '#6366F1',      // Indigo-500 - Services
+  'Government And Non Profit': '#4F46E5', // Indigo-600 - Official
+  'Home Improvement': '#14B8A6',      // Teal-500 - Home
+  'Loan Disbursements': '#DC2626',    // Red-600 - New debt
+  'Loan Payments': '#EF4444',         // Red-500 - Debt repayment
+  'Medical': '#EF4444',               // Red-500 - Health attention
+  'Rent And Utilities': '#64748B',    // Slate-500 - Fixed monthly
+  'Transfer In': '#06B6D4',           // Cyan-500 - Money in
+  'Transfer Out': '#0EA5E9',          // Sky-500 - Money out
+  'Other': '#9CA3AF',                 // Gray-400 - Catch-all (distinct from #6B7280 default)
+
   // Other
   'Subscriptions': '#8B5CF6',       // Violet-500 - Recurring
   'Community': '#F472B6',           // Pink-400 - Social

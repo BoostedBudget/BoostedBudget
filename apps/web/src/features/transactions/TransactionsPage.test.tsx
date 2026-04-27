@@ -34,6 +34,7 @@ import {
 import {
   mockUseGetUserCategories,
   mockUseGetPlaidCategories,
+  mockUseGetPlaidPrimaryCategories,
   mockCreateCategoryMutateAsync,
   mockUseCreateCategory,
 } from '@/test/mocks/categories-api'
@@ -174,6 +175,12 @@ describe('TransactionsPage', () => {
       error: null,
     })
 
+    mockUseGetPlaidPrimaryCategories.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+    })
+
     mockUseGetAccounts.mockReturnValue({
       data: { accounts: [] },
       isLoading: false,
@@ -213,6 +220,7 @@ describe('TransactionsPage', () => {
       mockUseGetUserTags,
       mockUseGetUserCategories,
       mockUseGetPlaidCategories,
+      mockUseGetPlaidPrimaryCategories,
       mockUseGetAccounts,
       mockUseCreateTag,
       mockUseCreateCategory,
@@ -542,6 +550,30 @@ describe('TransactionsPage', () => {
       expect(screen.getByRole('table')).toBeInTheDocument()
       const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
       expect(editButtons.length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('filter_dropdown_includes_curated_pfc_primaries_not_in_loaded_rows', () => {
+    it('includes curated PFC primaries even when no transactions have that category', async () => {
+      // Loan Payments is a curated primary absent from all mock transactions (which use Food/Drink)
+      mockUseGetPlaidPrimaryCategories.mockReturnValueOnce({
+        data: [
+          { enum: 'FOOD_AND_DRINK', display: 'Food And Drink' },
+          { enum: 'LOAN_PAYMENTS', display: 'Loan Payments' },
+        ],
+        isLoading: false,
+        error: null,
+      })
+
+      const Wrapper = createWrapper()
+      render(<TransactionsPage />, { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
+      })
+
+      // useGetPlaidPrimaryCategories must have been called (curated source is wired up)
+      expect(mockUseGetPlaidPrimaryCategories).toHaveBeenCalled()
     })
   })
 })

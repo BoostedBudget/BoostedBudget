@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/pfc"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -201,13 +201,35 @@ func (s *analyticsService) GetSpendingByCategory(ctx context.Context, userID str
 		return nil, fmt.Errorf("failed to get spending by category: %w", err)
 	}
 
-	var totalSpent float64
+	// Normalize and merge: effectiveCategoryExpr returns display strings from category_override
+	// but raw enums from personal_finance_category->>'primary'. Normalize both to canonical display
+	// names, then sum any rows that map to the same display (e.g. "Food And Drink" + "FOOD_AND_DRINK").
+	merged := make(map[string]*domain.SpendingByCategory)
+	var order []string
 	for _, c := range categories {
-		totalSpent += c.Total
+		displayName := pfc.NormalizePrimaryDisplay(c.Category)
+		if existing, ok := merged[displayName]; ok {
+			existing.Total += c.Total
+			existing.TransactionCount += c.TransactionCount
+		} else {
+			merged[displayName] = &domain.SpendingByCategory{
+				Category:         c.Category,
+				DisplayName:      displayName,
+				Total:            c.Total,
+				TransactionCount: c.TransactionCount,
+			}
+			order = append(order, displayName)
+		}
+	}
+
+	categories = make([]domain.SpendingByCategory, 0, len(order))
+	var totalSpent float64
+	for _, name := range order {
+		categories = append(categories, *merged[name])
+		totalSpent += merged[name].Total
 	}
 
 	for i := range categories {
-		categories[i].DisplayName = formatCategoryName(categories[i].Category)
 		if totalSpent > 0 {
 			categories[i].Percentage = (categories[i].Total / totalSpent) * 100
 		}
@@ -314,7 +336,7 @@ func (s *analyticsService) GetSpendingTrends(ctx context.Context, userID string,
 			if spend, ok := catSpend[tc]; ok {
 				cats = append(cats, domain.CategorySpending{
 					Category:    tc,
-					DisplayName: formatCategoryName(tc),
+					DisplayName: PFCPrimaryDisplayName(tc),
 					Total:       spend,
 				})
 				periodTotal += spend
@@ -346,21 +368,6 @@ func (s *analyticsService) GetSpendingTrends(ctx context.Context, userID string,
 		Periods:       periods,
 		TopCategories: topCategories,
 	}, nil
-}
-
-// formatCategoryName converts a SCREAMING_SNAKE_CASE category to Title Case
-// e.g. FOOD_AND_DRINK → "Food & Drink"
-func formatCategoryName(s string) string {
-	words := strings.Split(s, "_")
-	for i, w := range words {
-		if len(w) == 0 {
-			continue
-		}
-		words[i] = strings.ToUpper(w[:1]) + strings.ToLower(w[1:])
-	}
-	result := strings.Join(words, " ")
-	result = strings.ReplaceAll(result, " And ", " & ")
-	return result
 }
 
 // absFloat returns the absolute value of a float64

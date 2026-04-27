@@ -680,12 +680,8 @@ func TestBudgetService_GetAvailableCategories_Success(t *testing.T) {
 		{ID: "cat-2", UserID: userID, Name: "Dining", ParentCategory: strPtr("Food")},
 	}
 
-	// Plaid categories
-	plaidCats := []string{"FOOD_AND_DRINK", "TRANSPORTATION", "ENTERTAINMENT"}
-
-	// Setup mocks
+	// Setup mocks — no GetDistinctPlaidCategories call expected (replaced by pfc.AllPrimaries())
 	mockCategoryRepo.On("GetByUserID", ctx, userID).Return(customCats, nil)
-	mockTransactionRepo.On("GetDistinctPlaidCategories", ctx, userID).Return(plaidCats, nil)
 
 	// Execute
 	categories, err := service.GetAvailableCategories(ctx, userID)
@@ -693,14 +689,63 @@ func TestBudgetService_GetAvailableCategories_Success(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, categories)
-	// Should contain merged categories (custom + plaid formatted)
+	// Custom categories
 	assert.Contains(t, categories, "Groceries")
 	assert.Contains(t, categories, "Food > Dining")
+	// Curated PFCv2 primaries present
 	assert.Contains(t, categories, "Food And Drink")
 	assert.Contains(t, categories, "Transportation")
 	assert.Contains(t, categories, "Entertainment")
 	mockCategoryRepo.AssertExpectations(t)
-	mockTransactionRepo.AssertExpectations(t)
+}
+
+func TestGetAvailableCategories_IncludesCuratedPrimariesEvenWithoutObserved(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-new"
+
+	// Brand-new user with no custom categories
+	mockCategoryRepo.On("GetByUserID", ctx, userID).Return([]*domain.CustomCategory{}, nil)
+
+	categories, err := service.GetAvailableCategories(ctx, userID)
+
+	assert.NoError(t, err)
+	// All 18 PFCv2 primaries must be present
+	assert.Contains(t, categories, "Food And Drink")
+	assert.Contains(t, categories, "Income")
+	assert.Contains(t, categories, "Loan Disbursements")
+	assert.Contains(t, categories, "Other")
+	assert.GreaterOrEqual(t, len(categories), 18)
+}
+
+func TestGetAvailableCategories_DedupesCustomVsCuratedCaseInsensitive(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	// Custom category with same name as curated primary (different case)
+	customCats := []*domain.CustomCategory{
+		{ID: "cat-1", UserID: userID, Name: "food and drink"},
+	}
+	mockCategoryRepo.On("GetByUserID", ctx, userID).Return(customCats, nil)
+
+	categories, err := service.GetAvailableCategories(ctx, userID)
+
+	assert.NoError(t, err)
+	// Custom entry wins — curated display version dropped
+	assert.Contains(t, categories, "food and drink")
+	// Curated "Food And Drink" must NOT appear (deduped by custom)
+	assert.NotContains(t, categories, "Food And Drink")
 }
 
 // ============================================================================
