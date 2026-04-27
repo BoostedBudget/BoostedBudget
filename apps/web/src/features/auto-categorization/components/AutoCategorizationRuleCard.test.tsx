@@ -363,8 +363,26 @@ describe('AutoCategorizationRuleCard', () => {
         conditions: [{ type: 'existing_category' as const, value: 'Food & Drink' }],
       })
 
-      expect(screen.getByText('Current category is')).toBeInTheDocument()
+      expect(screen.getByText('Existing Category (legacy text — matches transaction.Category[0])')).toBeInTheDocument()
       expect(screen.getByText('Food & Drink')).toBeInTheDocument()
+    })
+
+    it('formatConditionValue_renders_pfc_primary_with_curated_display', () => {
+      renderCard({
+        ...mockRule,
+        conditions: [{ type: 'existing_pfc_primary' as const, value: 'FOOD_AND_DRINK' }],
+      })
+
+      expect(screen.getByText('Food And Drink')).toBeInTheDocument()
+    })
+
+    it('formatConditionValue_renders_pfc_detailed_with_breadcrumb', () => {
+      renderCard({
+        ...mockRule,
+        conditions: [{ type: 'existing_pfc_detailed' as const, value: 'FOOD_AND_DRINK_GROCERIES' }],
+      })
+
+      expect(screen.getByText('Food And Drink › Groceries')).toBeInTheDocument()
     })
 
     it('should display date_range with only start date', () => {

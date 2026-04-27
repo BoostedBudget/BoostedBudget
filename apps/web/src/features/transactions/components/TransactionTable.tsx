@@ -13,6 +13,7 @@ import { ReadOnlyGuard } from '@/auth'
 import type { Transaction } from '../types'
 import type { Account } from '../../accounts/types'
 import { getCategoryColor } from '@/lib/category-colors'
+import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
 import {
   ColumnFilterDropdown,
   type FilterOption,
@@ -84,23 +85,6 @@ function formatAmount(amount: number): string {
   return `-${formatted}`
 }
 
-/**
- * Parse category from JSON string
- * Uses primary category (index 0) for consistency
- */
-function parseCategory(categoryJson: string | null | undefined): string {
-  if (!categoryJson) return 'Uncategorized'
-
-  try {
-    const categories = JSON.parse(categoryJson)
-    if (Array.isArray(categories) && categories.length > 0) {
-      return categories[0]
-    }
-    return 'Uncategorized'
-  } catch {
-    return 'Uncategorized'
-  }
-}
 
 /**
  * Format date for display
@@ -287,19 +271,8 @@ export function TransactionTable({
             transaction.authorized_date || transaction.date
           )
           const displayName = transaction.merchant_name || transaction.name
-          const categoryToDisplay =
-            transaction.category_override || transaction.category
-          const explicitlyUncategorized =
-            transaction.category_source === 'manual' &&
-            parseCategory(categoryToDisplay) === 'Uncategorized'
-          const categoryLabel = (() => {
-            const fromJson = parseCategory(categoryToDisplay)
-            if (fromJson !== 'Uncategorized') return fromJson
-            if (!explicitlyUncategorized && transaction.personal_finance_category_data?.primary_display) {
-              return transaction.personal_finance_category_data.primary_display
-            }
-            return 'Uncategorized'
-          })()
+          const effective = getEffectiveCategory(transaction)
+          const categoryLabel = effective.length > 0 ? effective[0] : 'Uncategorized'
           const categoryColor = getCategoryColor(categoryLabel)
           const accountDisplayName = account
             ? account.nickname || account.name

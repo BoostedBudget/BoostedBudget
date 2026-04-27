@@ -3,11 +3,13 @@ package services
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/pfc"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -508,54 +510,43 @@ func (s *budgetService) DeleteCategory(ctx context.Context, userID, budgetID, ca
 	return nil
 }
 
-// GetAvailableCategories returns a merged list of custom categories and Plaid categories.
-// This follows the same pattern as the auto-categorization rule editor.
+// GetAvailableCategories returns a merged list of custom categories and curated PFCv2 primaries.
+// Custom categories win on case-insensitive name collision with a curated primary.
+// Result is sorted alphabetically.
 func (s *budgetService) GetAvailableCategories(ctx context.Context, userID string) ([]string, error) {
-	var categories []string
-
-	// Get custom categories
 	customCats, err := s.customCategoryRepo.GetByUserID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Add custom categories (with parent > child format if parent exists)
+	// Track which normalised display names the custom set already covers.
+	customNorms := make(map[string]struct{}, len(customCats))
+	var result []string
+
 	for _, cat := range customCats {
+		var display string
 		if cat.ParentCategory != nil && *cat.ParentCategory != "" {
-			categories = append(categories, *cat.ParentCategory+" > "+cat.Name)
+			display = *cat.ParentCategory + " > " + cat.Name
 		} else {
-			categories = append(categories, cat.Name)
+			display = cat.Name
+		}
+		result = append(result, display)
+		customNorms[strings.ToLower(strings.TrimSpace(display))] = struct{}{}
+	}
+
+	// Merge curated PFCv2 primaries; skip entries already covered by a custom category.
+	const uncategorizedNorm = "uncategorized"
+	for _, primary := range pfc.AllPrimaries() {
+		norm := strings.ToLower(strings.TrimSpace(primary.Display))
+		if norm == uncategorizedNorm {
+			continue
+		}
+		if _, exists := customNorms[norm]; !exists {
+			result = append(result, primary.Display)
 		}
 	}
 
-	// Get Plaid categories
-	plaidCats, err := s.plaidCategoryRepo.GetDistinctPlaidCategories(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Add Plaid categories (formatted: FOOD_AND_DRINK -> Food And Drink)
-	for _, cat := range plaidCats {
-		formatted := formatPlaidCategory(cat)
-		categories = append(categories, formatted)
-	}
-
-	return categories, nil
+	sort.Strings(result)
+	return result, nil
 }
 
-// formatPlaidCategory converts Plaid category format to display format.
-// e.g., "FOOD_AND_DRINK" -> "Food And Drink"
-func formatPlaidCategory(category string) string {
-	// Replace underscores with spaces
-	result := strings.ReplaceAll(category, "_", " ")
-
-	// Title case each word
-	words := strings.Fields(result)
-	for i, word := range words {
-		if len(word) > 0 {
-			words[i] = strings.ToUpper(string(word[0])) + strings.ToLower(word[1:])
-		}
-	}
-
-	return strings.Join(words, " ")
-}

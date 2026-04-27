@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -467,5 +468,133 @@ func TestConditionType_IsValid(t *testing.T) {
 	invalidType := ConditionType("invalid")
 	if invalidType.IsValid() {
 		t.Errorf("IsValid() = true, want false for invalid type")
+	}
+}
+
+// ============================================================================
+// PFC enum validation (Group E — Issue #1062)
+// ============================================================================
+
+func baseRule() CategorizationRule {
+	return CategorizationRule{
+		UserID:         "user-1",
+		Name:           "Test Rule",
+		ConditionLogic: "AND",
+		TagBehavior:    "add",
+		Source:         "manual",
+		TargetCategory: []string{"Food And Drink"},
+		Conditions: []RuleCondition{
+			{Type: ConditionMerchantContains, Value: "starbucks"},
+		},
+	}
+}
+
+func TestValidate_RejectsUnknownPFCPrimary(t *testing.T) {
+	r := baseRule()
+	r.Conditions = []RuleCondition{
+		{Type: ConditionExistingPFCPrimary, Value: "FAKE_PRIMARY"},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected error for unknown PFC primary, got nil")
+	}
+	if !strings.Contains(err.Error(), "FAKE_PRIMARY") {
+		t.Errorf("error message should mention the bad enum, got: %s", err.Error())
+	}
+}
+
+func TestValidate_RejectsUnknownPFCDetailed(t *testing.T) {
+	r := baseRule()
+	r.Conditions = []RuleCondition{
+		{Type: ConditionExistingPFCDetailed, Value: "FOOD_AND_DRINK_NONEXISTENT"},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected error for unknown PFC detailed, got nil")
+	}
+}
+
+func TestValidate_AcceptsAllCuratedPFCDetailedEnums(t *testing.T) {
+	// Spot-check a handful of known curated detailed enums.
+	knownEnums := []string{
+		"FOOD_AND_DRINK_FAST_FOOD",
+		"FOOD_AND_DRINK_GROCERIES",
+		"TRANSPORTATION_GAS",
+		"LOAN_DISBURSEMENTS_AUTO", // PFCv2 addition
+		"INCOME_WAGES",
+	}
+	for _, enum := range knownEnums {
+		r := baseRule()
+		r.Conditions = []RuleCondition{
+			{Type: ConditionExistingPFCDetailed, Value: enum},
+		}
+		if err := r.Validate(); err != nil {
+			t.Errorf("expected no error for valid detailed enum %q, got: %s", enum, err.Error())
+		}
+	}
+}
+
+func TestValidate_RejectsDetailedWithUnknownPrimaryPrefix(t *testing.T) {
+	r := baseRule()
+	// "LOAN_PAYMENTS_AUTO" is not in PFCv2 detailed (LOAN_DISBURSEMENTS_AUTO is)
+	r.Conditions = []RuleCondition{
+		{Type: ConditionExistingPFCDetailed, Value: "FAKE_PRIMARY_CHILD"},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected error for detailed enum with unknown primary prefix, got nil")
+	}
+}
+
+func TestValidate_AcceptsAnyExistingCategoryString(t *testing.T) {
+	// existing_category accepts any non-empty string for legacy compat
+	legacyValues := []string{"Shops", "Recreation", "Food and Drink", "anything_goes"}
+	for _, val := range legacyValues {
+		r := baseRule()
+		r.Conditions = []RuleCondition{
+			{Type: ConditionExistingCategory, Value: val},
+		}
+		if err := r.Validate(); err != nil {
+			t.Errorf("existing_category %q should be accepted, got error: %s", val, err.Error())
+		}
+	}
+}
+
+func TestValidate_AcceptsKnownPFCPrimary(t *testing.T) {
+	r := baseRule()
+	r.Conditions = []RuleCondition{
+		{Type: ConditionExistingPFCPrimary, Value: "FOOD_AND_DRINK"},
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("expected no error for valid PFC primary, got: %s", err.Error())
+	}
+}
+
+func TestValidate_AcceptsRuleWithBothPFCPrimaryAndDetailed(t *testing.T) {
+	// A rule can have both condition types simultaneously (AND/OR logic); each is validated independently.
+	r := baseRule()
+	r.ConditionLogic = "OR"
+	r.Conditions = []RuleCondition{
+		{Type: ConditionExistingPFCPrimary, Value: "FOOD_AND_DRINK"},
+		{Type: ConditionExistingPFCDetailed, Value: "FOOD_AND_DRINK_GROCERIES"},
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("expected no error for valid PFC primary + detailed pair, got: %s", err.Error())
+	}
+}
+
+func TestValidate_RejectsRuleWithMismatchedPFCPrimaryAndDetailed(t *testing.T) {
+	// The two conditions are validated independently: a mismatched pair (primary=INCOME, detailed=FOOD_AND_DRINK_GROCERIES)
+	// still has both as individually valid enums — validation does NOT cross-check the pair.
+	// This is intentional: OR rules can match different aspects of a transaction.
+	r := baseRule()
+	r.ConditionLogic = "OR"
+	r.Conditions = []RuleCondition{
+		{Type: ConditionExistingPFCPrimary, Value: "INCOME"},
+		{Type: ConditionExistingPFCDetailed, Value: "FOOD_AND_DRINK_GROCERIES"},
+	}
+	// Both enums are individually valid, so validation should pass.
+	if err := r.Validate(); err != nil {
+		t.Fatalf("individually valid enums should not be rejected even when mismatched: %s", err.Error())
 	}
 }

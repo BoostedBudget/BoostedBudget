@@ -5,8 +5,10 @@ import { ReadOnlyGuard } from '@/auth'
 import type { Transaction } from '../types'
 import type { UserTag } from '../../tags/types'
 import type { CustomCategory } from '../../categories/types'
+import type { Primary } from '@boostedbudget/api-client/models/primary'
 import { TagEditor } from '../../tags/components/TagEditor'
 import { CategoryEditor } from '../../categories/components/CategoryEditor'
+import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
 import {
   useUpdateTransactionTags,
   useUpdateTransactionCategory,
@@ -16,6 +18,7 @@ interface TransactionEditorProps {
   transaction: Transaction
   availableTags: UserTag[]
   availableCategories: CustomCategory[]
+  plaidPrimaries?: Primary[]
   onClose: () => void
   onSave: (updatedTransaction: Transaction) => void
   onTagCreated?: (tag: UserTag) => void
@@ -24,59 +27,24 @@ interface TransactionEditorProps {
 }
 
 /**
- * Parse category from JSON string or array
- */
-function parseCategory(categoryJson: string | null | undefined): string[] {
-  if (!categoryJson) return []
-
-  try {
-    if (typeof categoryJson === 'string') {
-      const parsed = JSON.parse(categoryJson)
-      if (Array.isArray(parsed)) return parsed
-    }
-    return []
-  } catch {
-    return []
-  }
-}
-
-/**
- * Get display name for original category
+ * Get display name for original category from raw JSON string.
  */
 function getOriginalCategoryName(originalCategory: string | null | undefined): string | null {
-  const parsed = parseCategory(originalCategory)
-  return parsed.length > 0 ? parsed[0] : null
-}
-
-/**
- * Resolve effective category for initial editor state.
- * When the user has manually cleared the category (category_source='manual',
- * category_override=null), preserve the empty state — do NOT fall back to PFC.
- * Otherwise: category_override → category → PFC primary display → empty.
- */
-function getEffectiveCategory(transaction: Transaction): string[] {
-  // Explicitly cleared by user: do not repopulate from PFC or legacy category
-  if (transaction.category_source === 'manual' && !transaction.category_override) {
-    return []
+  if (!originalCategory) return null
+  try {
+    const parsed = JSON.parse(originalCategory)
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed[0] as string
+  } catch {
+    // ignore malformed JSON
   }
-  if (transaction.category_override) {
-    const parsed = parseCategory(transaction.category_override)
-    if (parsed.length > 0) return parsed
-  }
-  if (transaction.category) {
-    const parsed = parseCategory(transaction.category)
-    if (parsed.length > 0) return parsed
-  }
-  if (transaction.personal_finance_category_data?.primary_display) {
-    return [transaction.personal_finance_category_data.primary_display]
-  }
-  return []
+  return null
 }
 
 export function TransactionEditor({
   transaction,
   availableTags,
   availableCategories,
+  plaidPrimaries,
   onClose,
   onSave,
   onTagCreated,
@@ -95,8 +63,8 @@ export function TransactionEditor({
   const updateTagsMutation = useUpdateTransactionTags()
   const updateCategoryMutation = useUpdateTransactionCategory()
 
-  const initialTags = transaction.tags || []
   const initialCategory = getEffectiveCategory(transaction)
+  const initialTags = transaction.tags || []
 
   const hasTagChanges = JSON.stringify(tags) !== JSON.stringify(initialTags)
   const hasCategoryChanges = JSON.stringify(category) !== JSON.stringify(initialCategory)
@@ -197,6 +165,7 @@ export function TransactionEditor({
           <CategoryEditor
             selectedCategory={category}
             availableCategories={availableCategories}
+            plaidPrimaries={plaidPrimaries}
             onChange={setCategory}
             onCategoryCreated={onCategoryCreated}
             disabled={isSaving}
@@ -205,7 +174,12 @@ export function TransactionEditor({
             <button
               type="button"
               className="mt-2 px-2 py-1 border border-input rounded bg-muted text-muted-foreground text-xs cursor-pointer hover:bg-accent hover:border-border transition-all disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={() => setCategory(parseCategory(transaction.original_category))}
+              onClick={() => {
+                try {
+                  const parsed = JSON.parse(transaction.original_category!)
+                  if (Array.isArray(parsed)) setCategory(parsed as string[])
+                } catch { /* ignore malformed JSON */ }
+              }}
               disabled={isSaving}
               aria-label={`Reset to original: ${getOriginalCategoryName(transaction.original_category)}`}
             >
