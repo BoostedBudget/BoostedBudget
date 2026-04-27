@@ -84,7 +84,7 @@ async function mockRuleEditorAPIs(page: Page, options: { withDetailed?: boolean 
     if (!route.request().url().includes('plaid') && !route.request().url().includes('user')) {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
     } else {
-      route.continue()
+      route.fallback()
     }
   })
 
@@ -101,7 +101,7 @@ async function mockRuleEditorAPIs(page: Page, options: { withDetailed?: boolean 
   })
 
   await page.route('**/api/v1/auto-categorization/**', (route) => {
-    route.continue()
+    route.fallback()
   })
 }
 
@@ -127,7 +127,7 @@ test.describe('Rule Editor — PFC condition types', () => {
           body: JSON.stringify({ ...mockRule, id: 'new-rule', ...savedBody }),
         })
       } else {
-        route.continue()
+        route.fallback()
       }
     })
 
