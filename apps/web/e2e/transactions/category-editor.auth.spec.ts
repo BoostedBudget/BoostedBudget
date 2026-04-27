@@ -83,7 +83,7 @@ async function mockCategoryEditorAPIs(page: Page) {
         body: JSON.stringify([]),
       })
     } else {
-      route.continue()
+      route.fallback()
     }
   })
 
@@ -188,7 +188,7 @@ test.describe('Transaction Category Editor — PFC curated source', () => {
       if (!route.request().url().includes('plaid') && !route.request().url().includes('user')) {
         route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
       } else {
-        route.continue()
+        route.fallback()
       }
     })
 
