@@ -751,6 +751,37 @@ func TestGetAvailableCategories_DedupesCustomVsCuratedCaseInsensitive(t *testing
 	assert.NotContains(t, categories, "FOOD_AND_DRINK")
 }
 
+func TestGetAvailableCategories_DedupesCustomVsCuratedByEnumName(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	// Custom category named exactly like the PFC enum string
+	customCats := []*domain.CustomCategory{
+		{ID: "cat-1", UserID: userID, Name: "FOOD_AND_DRINK"},
+	}
+	mockCategoryRepo.On("GetByUserID", ctx, userID).Return(customCats, nil)
+
+	categories, err := service.GetAvailableCategories(ctx, userID)
+
+	assert.NoError(t, err)
+	// Custom entry stays
+	assert.Contains(t, categories, "FOOD_AND_DRINK")
+	// Curated enum must NOT appear as a second entry
+	occurrences := 0
+	for _, c := range categories {
+		if c == "FOOD_AND_DRINK" {
+			occurrences++
+		}
+	}
+	assert.Equal(t, 1, occurrences, "FOOD_AND_DRINK should appear exactly once")
+}
+
 // ============================================================================
 // ExpectedIncome / Amount Reconciliation Tests (Issue #1048)
 // ============================================================================

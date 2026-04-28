@@ -1,4 +1,4 @@
-const CURATED_PRIMARIES: readonly string[] = [
+export const CURATED_PRIMARIES: readonly string[] = [
   'BANK_FEES',
   'ENTERTAINMENT',
   'FOOD_AND_DRINK',
@@ -21,6 +21,10 @@ const CURATED_PRIMARIES: readonly string[] = [
 
 function titleCase(tokens: string[]): string {
   return tokens.map(t => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()).join(' ')
+}
+
+export function isPFCPrimary(value: string): boolean {
+  return (CURATED_PRIMARIES as readonly string[]).includes(value)
 }
 
 export function formatPFCPrimary(primary: string): string {
