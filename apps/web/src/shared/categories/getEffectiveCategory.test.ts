@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { getEffectiveCategory } from './getEffectiveCategory'
+import { getEffectiveCategory, getEffectiveCategoryLabel } from './getEffectiveCategory'
 import type { Transaction } from '@/features/transactions/types'
 
 const baseTransaction: Transaction = {
@@ -17,124 +17,129 @@ const baseTransaction: Transaction = {
 }
 
 describe('getEffectiveCategory', () => {
-  it('returns category_override when present', () => {
+  it('returns pfc custom override when category_override_kind is custom', () => {
     const tx: Transaction = {
       ...baseTransaction,
-      category_override: JSON.stringify(['Food And Drink', 'Groceries']),
+      category_override_kind: 'custom',
+      custom_category_override_id: 'custom-uuid-123',
     }
-    expect(getEffectiveCategory(tx)).toEqual(['Food And Drink', 'Groceries'])
+    expect(getEffectiveCategory(tx)).toEqual({ kind: 'custom', custom_category_id: 'custom-uuid-123' })
   })
 
-  it('falls through to legacy category when no override', () => {
+  it('returns pfc override when category_override_kind is pfc', () => {
     const tx: Transaction = {
       ...baseTransaction,
-      category: JSON.stringify(['Shops', 'Sporting Goods']),
+      category_override_kind: 'pfc',
+      pfc_primary_override: 'FOOD_AND_DRINK',
+      pfc_detailed_override: 'FOOD_AND_DRINK_RESTAURANTS',
     }
-    expect(getEffectiveCategory(tx)).toEqual(['Shops', 'Sporting Goods'])
+    expect(getEffectiveCategory(tx)).toEqual({
+      kind: 'pfc',
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+    })
   })
 
-  it('falls through to PFC primary_display when no override and no legacy category', () => {
+  it('returns pfc override without detailed when only primary set', () => {
     const tx: Transaction = {
       ...baseTransaction,
-      personal_finance_category_data: {
-        primary: 'FOOD_AND_DRINK',
-        primary_display: 'Food And Drink',
-      },
+      category_override_kind: 'pfc',
+      pfc_primary_override: 'TRANSPORTATION',
     }
-    expect(getEffectiveCategory(tx)).toEqual(['Food And Drink'])
+    expect(getEffectiveCategory(tx)).toEqual({
+      kind: 'pfc',
+      pfc_primary: 'TRANSPORTATION',
+      pfc_detailed: undefined,
+    })
   })
 
-  it('returns empty array when all sources are absent', () => {
-    expect(getEffectiveCategory(baseTransaction)).toEqual([])
-  })
-
-  it('explicit-uncategorized guard: returns [] when category_source is manual and override is absent', () => {
+  it('falls through to pfc_primary when no override', () => {
     const tx: Transaction = {
       ...baseTransaction,
-      category: JSON.stringify(['Shops']),
-      category_source: 'manual',
-      category_override: null,
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: 'FOOD_AND_DRINK_GROCERIES',
     }
-    expect(getEffectiveCategory(tx)).toEqual([])
+    expect(getEffectiveCategory(tx)).toEqual({
+      kind: 'pfc',
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: 'FOOD_AND_DRINK_GROCERIES',
+    })
   })
 
-  it('explicit-uncategorized guard does NOT fire when override is present', () => {
+  it('returns pfc with only primary when pfc_detailed is absent', () => {
     const tx: Transaction = {
       ...baseTransaction,
-      category_source: 'manual',
-      category_override: JSON.stringify(['Food And Drink']),
+      pfc_primary: 'INCOME',
     }
-    expect(getEffectiveCategory(tx)).toEqual(['Food And Drink'])
+    expect(getEffectiveCategory(tx)).toEqual({
+      kind: 'pfc',
+      pfc_primary: 'INCOME',
+      pfc_detailed: undefined,
+    })
   })
 
-  it('override takes priority over legacy category', () => {
-    const tx: Transaction = {
-      ...baseTransaction,
-      category_override: JSON.stringify(['Transportation']),
-      category: JSON.stringify(['Shops']),
-    }
-    expect(getEffectiveCategory(tx)).toEqual(['Transportation'])
+  it('returns null when all sources are absent', () => {
+    expect(getEffectiveCategory(baseTransaction)).toBeNull()
   })
 
-  it('override takes priority over PFC data', () => {
+  it('override takes priority over pfc_primary', () => {
     const tx: Transaction = {
       ...baseTransaction,
-      category_override: JSON.stringify(['Transportation']),
-      personal_finance_category_data: {
-        primary: 'FOOD_AND_DRINK',
-        primary_display: 'Food And Drink',
-      },
+      category_override_kind: 'pfc',
+      pfc_primary_override: 'TRANSPORTATION',
+      pfc_primary: 'FOOD_AND_DRINK',
     }
-    expect(getEffectiveCategory(tx)).toEqual(['Transportation'])
+    expect(getEffectiveCategory(tx)).toEqual({
+      kind: 'pfc',
+      pfc_primary: 'TRANSPORTATION',
+      pfc_detailed: undefined,
+    })
   })
 
-  it('legacy category takes priority over PFC data', () => {
+  it('custom override takes priority over pfc_primary', () => {
     const tx: Transaction = {
       ...baseTransaction,
-      category: JSON.stringify(['Shops']),
-      personal_finance_category_data: {
-        primary: 'FOOD_AND_DRINK',
-        primary_display: 'Food And Drink',
-      },
+      category_override_kind: 'custom',
+      custom_category_override_id: 'custom-uuid',
+      pfc_primary: 'FOOD_AND_DRINK',
     }
-    expect(getEffectiveCategory(tx)).toEqual(['Shops'])
+    expect(getEffectiveCategory(tx)).toEqual({ kind: 'custom', custom_category_id: 'custom-uuid' })
   })
 
-  it('handles malformed override JSON gracefully', () => {
+  it('ignores pfc override when pfc_primary_override is absent', () => {
     const tx: Transaction = {
       ...baseTransaction,
-      category_override: 'not-json',
-      category: JSON.stringify(['Shops']),
+      category_override_kind: 'pfc',
+      pfc_primary_override: null,
+      pfc_primary: 'FOOD_AND_DRINK',
     }
-    expect(getEffectiveCategory(tx)).toEqual(['Shops'])
+    // No valid pfc_primary_override → falls through to pfc_primary
+    expect(getEffectiveCategory(tx)).toEqual({
+      kind: 'pfc',
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: undefined,
+    })
+  })
+})
+
+describe('getEffectiveCategoryLabel', () => {
+  it('returns "Uncategorized" for null', () => {
+    expect(getEffectiveCategoryLabel(null)).toBe('Uncategorized')
   })
 
-  it('handles empty override array — falls through to legacy category when source is not manual', () => {
-    const tx: Transaction = {
-      ...baseTransaction,
-      category_override: JSON.stringify([]),
-      category: JSON.stringify(['Shops']),
-    }
-    expect(getEffectiveCategory(tx)).toEqual(['Shops'])
+  it('returns custom_category_id for custom kind', () => {
+    expect(getEffectiveCategoryLabel({ kind: 'custom', custom_category_id: 'my-id' })).toBe('my-id')
   })
 
-  it('explicit-uncategorized guard fires with empty JSON array override when source is manual', () => {
-    // category_override='[]' means user explicitly cleared — must NOT fall through to legacy category
-    const tx: Transaction = {
-      ...baseTransaction,
-      category_source: 'manual',
-      category_override: JSON.stringify([]),
-      category: JSON.stringify(['Shops']),
-    }
-    expect(getEffectiveCategory(tx)).toEqual([])
+  it('returns pfc_detailed when present', () => {
+    expect(getEffectiveCategoryLabel({
+      kind: 'pfc',
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+    })).toBe('FOOD_AND_DRINK_RESTAURANTS')
   })
 
-  it('handles null override — falls through to legacy category', () => {
-    const tx: Transaction = {
-      ...baseTransaction,
-      category_override: null,
-      category: JSON.stringify(['Shops']),
-    }
-    expect(getEffectiveCategory(tx)).toEqual(['Shops'])
+  it('returns pfc_primary when no pfc_detailed', () => {
+    expect(getEffectiveCategoryLabel({ kind: 'pfc', pfc_primary: 'INCOME' })).toBe('INCOME')
   })
 })

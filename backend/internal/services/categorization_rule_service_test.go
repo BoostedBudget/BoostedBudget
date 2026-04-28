@@ -110,9 +110,10 @@ func createTestRuleRequest() *domain.CreateCategorizationRuleRequest {
 		Conditions: []domain.RuleCondition{
 			{Type: domain.ConditionMerchantContains, Value: "starbucks"},
 		},
-		ConditionLogic: "AND",
-		TargetCategory: []string{"Food & Drink", "Coffee"},
-		TagBehavior:    "add",
+		ConditionLogic:   "AND",
+		TargetKind:       ptrStr("pfc"),
+		TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		TagBehavior:      "add",
 	}
 }
 
@@ -233,16 +234,17 @@ func TestCategorizationRuleService_UpdateRule(t *testing.T) {
 	ruleID := "rule-123"
 
 	existingRule := &domain.CategorizationRule{
-		ID:             ruleID,
-		UserID:         userID,
-		Name:           "Old Name",
-		Enabled:        true,
-		Priority:       5,
-		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "test"}},
-		ConditionLogic: "AND",
-		TargetCategory: []string{"Test"},
-		TagBehavior:    "add",
-		Source:         "manual",
+		ID:               ruleID,
+		UserID:           userID,
+		Name:             "Old Name",
+		Enabled:          true,
+		Priority:         5,
+		Conditions:       []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "test"}},
+		ConditionLogic:   "AND",
+		TargetKind:       ptrStr("pfc"),
+		TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		TagBehavior:      "add",
+		Source:           "manual",
 	}
 
 	mockRepo.On("GetByID", ctx, ruleID).Return(existingRule, nil)
@@ -291,14 +293,15 @@ func TestCategorizationRuleService_ToggleRule(t *testing.T) {
 	ruleID := "rule-123"
 
 	existingRule := &domain.CategorizationRule{
-		ID:             ruleID,
-		UserID:         userID,
-		Enabled:        true,
-		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "test"}},
-		ConditionLogic: "AND",
-		TargetCategory: []string{"Test"},
-		TagBehavior:    "add",
-		Source:         "manual",
+		ID:               ruleID,
+		UserID:           userID,
+		Enabled:          true,
+		Conditions:       []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "test"}},
+		ConditionLogic:   "AND",
+		TargetKind:       ptrStr("pfc"),
+		TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		TagBehavior:      "add",
+		Source:           "manual",
 	}
 
 	mockRepo.On("GetByID", ctx, ruleID).Return(existingRule, nil)

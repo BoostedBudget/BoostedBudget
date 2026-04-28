@@ -72,9 +72,9 @@ type TransactionRepository interface {
 	// Used when manually editing transaction tags
 	UpdateTags(ctx context.Context, id string, userID string, tags []string, tagsSource []domain.TagSource) error
 
-	// UpdateCategory updates the category override for a transaction
-	// Used when manually editing transaction category
-	UpdateCategory(ctx context.Context, id string, userID string, categoryOverride []string, categorySource domain.CategorySource) error
+	// UpdateCategory updates the category override for a transaction using the PFC v2 discriminated union.
+	// Pass overrideKind=nil to clear all overrides (kind=clear semantics).
+	UpdateCategory(ctx context.Context, id string, userID string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) error
 
 	// GetDistinctPlaidCategories returns distinct Plaid category names for a user's transactions
 	// Prefers secondary category (index 1) when available for better granularity
@@ -95,35 +95,24 @@ type TransactionRepository interface {
 
 	// Issue #493: Budget Category Matching Service
 
-	// GetSpentSumForBudgetCategory returns the sum of expenses (negative amount) transactions
-	// matching the given category and/or tags based on match logic.
-	// Supports four match logic types:
-	//   - category_only: Match transactions where category contains the budget category
-	//   - tag_only: Match transactions where tags contain ANY of the budget tags
-	//   - and: Match transactions where BOTH category AND tags match
-	//   - or: Match transactions where EITHER category OR tags match
-	// Checks both category and category_override fields for category matching.
-	GetSpentSumForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (float64, error)
+	// GetSpentSumForBudgetCategory returns the sum of expenses matching a budget category.
+	// Uses the budget category's discriminated union (pfc/custom) to match against the
+	// transaction's effective category. Supports all four match logic types.
+	GetSpentSumForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time) (float64, error)
 
 	// Issue #497: Category Preview Feature
 
-	// GetMatchingTransactionStats returns the count and sum of expenses (negative amount) transactions
-	// matching the given categories and/or tags based on match logic.
-	// Supports multiple categories (OR across categories) and four match logic types:
-	//   - category_only: Match transactions where category contains ANY of the provided categories
-	//   - tag_only: Match transactions where tags contain ANY of the budget tags
-	//   - and: Match transactions where BOTH category AND tags match
-	//   - or: Match transactions where EITHER category OR tags match
+	// GetMatchingTransactionStats returns the count and sum of expenses matching the given
+	// category configuration (discriminated union fields) and/or tags.
 	// Used for previewing how many transactions would match a budget category configuration.
-	GetMatchingTransactionStats(ctx context.Context, userID string, categories [][]string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (count int, totalAmount float64, err error)
+	GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (count int, totalAmount float64, err error)
 
 	// Issue #499: Transaction-Budget Linking UI
 
-	// GetTransactionsForBudgetCategory returns paginated transactions matching the given category
-	// and/or tags based on match logic, along with total count and amount.
-	// Uses the same matching logic as GetSpentSumForBudgetCategory.
+	// GetTransactionsForBudgetCategory returns paginated transactions matching a budget category.
+	// Uses the budget category's discriminated union to match against effective category.
 	// Returns transactions ordered by date DESC.
-	GetTransactionsForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time, limit, offset int) (transactions []domain.Transaction, totalCount int, totalAmount float64, err error)
+	GetTransactionsForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) (transactions []domain.Transaction, totalCount int, totalAmount float64, err error)
 
 	// Issue #171: Re-Link Handling
 
@@ -207,9 +196,9 @@ func (r *transactionRepository) Create(ctx context.Context, transaction *domain.
 		INSERT INTO transactions
 		(id, user_id, account_id, linked_item_id, source, external_transaction_id,
 		 external_transaction_id_blind_idx, external_metadata, amount, date, authorized_date,
-		 name, merchant_name, category, personal_finance_category, payment_channel, pending,
-		 user_notes, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		 name, merchant_name, pfc_primary, pfc_detailed, pfc_confidence_level,
+		 payment_channel, pending, user_notes, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 	`
 
 	_, err = r.db.Exec(ctx, query,
@@ -226,8 +215,9 @@ func (r *transactionRepository) Create(ctx context.Context, transaction *domain.
 		transaction.AuthorizedDate,
 		transaction.Name,
 		transaction.MerchantName,
-		transaction.Category,
-		transaction.PersonalFinanceCategory,
+		transaction.PFCPrimary,
+		transaction.PFCDetailed,
+		transaction.PFCConfidenceLevel,
 		transaction.PaymentChannel,
 		transaction.Pending,
 		transaction.UserNotes,
@@ -261,8 +251,8 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 	}
 
 	// Build multi-row INSERT query
-	// Issue #171: Added user_account_id field; encryption adds external_transaction_id_blind_idx (21 fields)
-	const numFields = 21
+	// Issue #171: Added user_account_id field; encryption adds external_transaction_id_blind_idx (23 fields)
+	const numFields = 23
 	valueStrings := make([]string, 0, len(transactions))
 	valueArgs := make([]interface{}, 0, len(transactions)*numFields)
 
@@ -306,8 +296,9 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			transactions[i].AuthorizedDate,
 			transactions[i].Name,
 			transactions[i].MerchantName,
-			transactions[i].Category,
-			transactions[i].PersonalFinanceCategory,
+			transactions[i].PFCPrimary,
+			transactions[i].PFCDetailed,
+			transactions[i].PFCConfidenceLevel,
 			transactions[i].PaymentChannel,
 			transactions[i].Pending,
 			transactions[i].UserNotes,
@@ -321,13 +312,13 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 	// - UPDATE: FKs (account_id, linked_item_id, user_account_id) - changes on re-link
 	// - UPDATE: Plaid fields (amount, date, name, merchant_name, pending, etc.) - may change
 	// - UPDATE: external_transaction_id_blind_idx in case it was previously NULL
-	// - PRESERVE: User enrichments (user_notes, category_override, tags, tags_source)
+	// - PRESERVE: User enrichments (user_notes, category_override_kind, tags, tags_source)
 	query := fmt.Sprintf(`
 		INSERT INTO transactions
 		(id, user_id, account_id, linked_item_id, user_account_id,
 		 source, external_transaction_id, external_transaction_id_blind_idx, external_metadata,
 		 amount, date, authorized_date, name, merchant_name,
-		 category, personal_finance_category, payment_channel, pending, user_notes,
+		 pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending, user_notes,
 		 created_at, updated_at)
 		VALUES %s
 		ON CONFLICT (source, external_transaction_id_blind_idx, user_id) DO UPDATE SET
@@ -341,13 +332,14 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			authorized_date = EXCLUDED.authorized_date,
 			name = EXCLUDED.name,
 			merchant_name = EXCLUDED.merchant_name,
-			category = EXCLUDED.category,
-			personal_finance_category = EXCLUDED.personal_finance_category,
+			pfc_primary = EXCLUDED.pfc_primary,
+			pfc_detailed = EXCLUDED.pfc_detailed,
+			pfc_confidence_level = EXCLUDED.pfc_confidence_level,
 			payment_channel = EXCLUDED.payment_channel,
 			pending = EXCLUDED.pending,
 			updated_at = NOW()
 	`, strings.Join(valueStrings, ", "))
-	// Note: user_notes, category_override, tags, tags_source are NOT in the SET clause
+	// Note: user_notes, category_override_kind, tags, tags_source are NOT in the SET clause
 	// so they will be PRESERVED on conflict
 
 	_, err := r.db.Exec(ctx, query, valueArgs...)
@@ -371,10 +363,10 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 	query := `
 		UPDATE transactions
 		SET amount = $1, date = $2, authorized_date = $3, name = $4,
-		    merchant_name = $5, category = $6, personal_finance_category = $7,
-		    payment_channel = $8, pending = $9, external_metadata = $10,
-		    user_notes = $11, updated_at = $12
-		WHERE id = $13
+		    merchant_name = $5, pfc_primary = $6, pfc_detailed = $7, pfc_confidence_level = $8,
+		    payment_channel = $9, pending = $10, external_metadata = $11,
+		    user_notes = $12, updated_at = $13
+		WHERE id = $14
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -383,8 +375,9 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 		transaction.AuthorizedDate,
 		transaction.Name,
 		transaction.MerchantName,
-		transaction.Category,
-		transaction.PersonalFinanceCategory,
+		transaction.PFCPrimary,
+		transaction.PFCDetailed,
+		transaction.PFCConfidenceLevel,
 		transaction.PaymentChannel,
 		transaction.Pending,
 		encMeta,
@@ -428,8 +421,11 @@ func (r *transactionRepository) GetByUserID(ctx context.Context, userID string, 
 	query := `
 		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
 		       external_metadata, amount, date, authorized_date, name, merchant_name,
-		       category, personal_finance_category, payment_channel, pending,
-		       user_notes, created_at, updated_at
+		       pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending,
+		       user_notes, created_at, updated_at,
+		       tags, tags_source,
+		       category_override_kind, pfc_primary_override, pfc_detailed_override,
+		       custom_category_override_id, category_source, category_override_date
 		FROM transactions
 		WHERE user_id = $1
 		ORDER BY date DESC, created_at DESC
@@ -450,8 +446,11 @@ func (r *transactionRepository) GetByAccountID(ctx context.Context, accountID st
 	query := `
 		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
 		       external_metadata, amount, date, authorized_date, name, merchant_name,
-		       category, personal_finance_category, payment_channel, pending,
-		       user_notes, created_at, updated_at
+		       pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending,
+		       user_notes, created_at, updated_at,
+		       tags, tags_source,
+		       category_override_kind, pfc_primary_override, pfc_detailed_override,
+		       custom_category_override_id, category_source, category_override_date
 		FROM transactions
 		WHERE account_id = $1
 		ORDER BY date DESC, created_at DESC
@@ -471,8 +470,11 @@ func (r *transactionRepository) GetBySource(ctx context.Context, source domain.T
 	query := `
 		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
 		       external_metadata, amount, date, authorized_date, name, merchant_name,
-		       category, personal_finance_category, payment_channel, pending,
-		       user_notes, created_at, updated_at
+		       pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending,
+		       user_notes, created_at, updated_at,
+		       tags, tags_source,
+		       category_override_kind, pfc_primary_override, pfc_detailed_override,
+		       custom_category_override_id, category_source, category_override_date
 		FROM transactions
 		WHERE source = $1 AND user_id = $2
 		ORDER BY date DESC, created_at DESC
@@ -499,10 +501,14 @@ func (r *transactionRepository) GetByUserIDWithFilters(ctx context.Context, user
 	query := fmt.Sprintf(`
 		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
 		       external_metadata, amount, date, authorized_date, name, merchant_name,
-		       category, personal_finance_category, payment_channel, pending,
+		       pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending,
 		       user_notes, created_at, updated_at,
 		       tags, tags_source,
-		       category_override, category_source, category_override_date, original_category
+		       category_override_kind, pfc_primary_override, pfc_detailed_override,
+		       custom_category_override_id, category_source, category_override_date,
+		       tags, tags_source,
+		       category_override_kind, pfc_primary_override, pfc_detailed_override,
+		       custom_category_override_id, category_source, category_override_date
 		FROM transactions
 		%s
 		ORDER BY date DESC, created_at DESC
@@ -545,11 +551,13 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 	query := `
 		SELECT id, user_id, account_id, linked_item_id, source,
 		       external_transaction_id, external_metadata, amount, date,
-		       authorized_date, name, merchant_name, category,
-		       personal_finance_category, payment_channel, pending,
+		       authorized_date, name, merchant_name,
+		       pfc_primary, pfc_detailed, pfc_confidence_level,
+		       payment_channel, pending,
 		       user_notes, created_at, updated_at,
 		       tags, tags_source,
-		       category_override, category_source, category_override_date, original_category
+		       category_override_kind, pfc_primary_override, pfc_detailed_override,
+		       custom_category_override_id, category_source, category_override_date
 		FROM transactions
 		WHERE source = $1 AND external_transaction_id_blind_idx = $2 AND user_id = $3
 	`
@@ -574,8 +582,9 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 		&tx.AuthorizedDate,
 		&tx.Name,
 		&tx.MerchantName,
-		&tx.Category,
-		&tx.PersonalFinanceCategory,
+		&tx.PFCPrimary,
+		&tx.PFCDetailed,
+		&tx.PFCConfidenceLevel,
 		&tx.PaymentChannel,
 		&tx.Pending,
 		&tx.UserNotes,
@@ -583,10 +592,12 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 		&tx.UpdatedAt,
 		&tagsJSON,
 		&tagsSourceJSON,
-		&tx.CategoryOverride,
+		&tx.CategoryOverrideKind,
+		&tx.PFCPrimaryOverride,
+		&tx.PFCDetailedOverride,
+		&tx.CustomCategoryOverrideID,
 		&categorySource,
 		&tx.CategoryOverrideDate,
-		&tx.OriginalCategory,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -671,30 +682,34 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		argIndex++
 	}
 
-	// Optional filter: category (JSONB text search, deprecated)
-	if filters.Category != nil {
-		conditions = append(conditions, fmt.Sprintf("category::text ILIKE $%d", argIndex))
-		args = append(args, "%"+*filters.Category+"%")
-		argIndex++
-	}
-
-	// Optional filter: categories (multi-value, Issue #529)
-	// Searches in both category_override and original category fields
-	if len(filters.Categories) > 0 {
-		var categoryConditions []string
-		for _, cat := range filters.Categories {
-			// Check category_override first (user-set category)
-			categoryConditions = append(categoryConditions,
-				fmt.Sprintf("(category_override IS NOT NULL AND category_override::text ILIKE $%d)", argIndex))
-			args = append(args, "%"+cat+"%")
-			argIndex++
-			// Also check original category
-			categoryConditions = append(categoryConditions,
-				fmt.Sprintf("category::text ILIKE $%d", argIndex))
-			args = append(args, "%"+cat+"%")
+	// Optional filter: pfc_primaries (multi-value) — matches effective PFC primary
+	// Effective PFC primary = pfc_primary_override if kind='pfc', else pfc_primary
+	if len(filters.PFCPrimaries) > 0 {
+		placeholders := make([]string, len(filters.PFCPrimaries))
+		for i, p := range filters.PFCPrimaries {
+			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+			args = append(args, p)
 			argIndex++
 		}
-		conditions = append(conditions, "("+strings.Join(categoryConditions, " OR ")+")")
+		inClause := strings.Join(placeholders, ", ")
+		conditions = append(conditions, fmt.Sprintf(
+			"(CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override ELSE pfc_primary END) IN (%s)",
+			inClause,
+		))
+	}
+
+	// Optional filter: custom_category_ids (multi-value) — matches effective custom category
+	if len(filters.CustomCategoryIDs) > 0 {
+		placeholders := make([]string, len(filters.CustomCategoryIDs))
+		for i, id := range filters.CustomCategoryIDs {
+			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+			args = append(args, id)
+			argIndex++
+		}
+		conditions = append(conditions, fmt.Sprintf(
+			"(category_override_kind = 'custom' AND custom_category_override_id::text IN (%s))",
+			strings.Join(placeholders, ", "),
+		))
 	}
 
 	// Optional filter: search (name OR merchant_name)
@@ -771,8 +786,9 @@ func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transa
 			&tx.AuthorizedDate,
 			&tx.Name,
 			&tx.MerchantName,
-			&tx.Category,
-			&tx.PersonalFinanceCategory,
+			&tx.PFCPrimary,
+			&tx.PFCDetailed,
+			&tx.PFCConfidenceLevel,
 			&tx.PaymentChannel,
 			&tx.Pending,
 			&tx.UserNotes,
@@ -780,10 +796,12 @@ func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transa
 			&tx.UpdatedAt,
 			&tagsJSON,
 			&tagsSourceJSON,
-			&tx.CategoryOverride,
+			&tx.CategoryOverrideKind,
+			&tx.PFCPrimaryOverride,
+			&tx.PFCDetailedOverride,
+			&tx.CustomCategoryOverrideID,
 			&categorySource,
 			&tx.CategoryOverrideDate,
-			&tx.OriginalCategory,
 		)
 
 		if err != nil {
@@ -832,9 +850,10 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 	query := `
 		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
 			   external_metadata, amount, date, authorized_date, name, merchant_name,
-			   category, personal_finance_category, payment_channel, pending, user_notes,
+			   pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending, user_notes,
 			   created_at, updated_at, tags, tags_source,
-			   category_override, category_source, category_override_date, original_category
+			   category_override_kind, pfc_primary_override, pfc_detailed_override,
+			   custom_category_override_id, category_source, category_override_date
 		FROM transactions
 		WHERE id = $1
 	`
@@ -859,8 +878,9 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 		&tx.AuthorizedDate,
 		&tx.Name,
 		&tx.MerchantName,
-		&tx.Category,
-		&tx.PersonalFinanceCategory,
+		&tx.PFCPrimary,
+		&tx.PFCDetailed,
+		&tx.PFCConfidenceLevel,
 		&tx.PaymentChannel,
 		&tx.Pending,
 		&tx.UserNotes,
@@ -868,10 +888,12 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 		&tx.UpdatedAt,
 		&tagsJSON,
 		&tagsSourceJSON,
-		&tx.CategoryOverride,
+		&tx.CategoryOverrideKind,
+		&tx.PFCPrimaryOverride,
+		&tx.PFCDetailedOverride,
+		&tx.CustomCategoryOverrideID,
 		&categorySource,
 		&tx.CategoryOverrideDate,
-		&tx.OriginalCategory,
 	)
 
 	if err != nil {
@@ -943,24 +965,23 @@ func (r *transactionRepository) UpdateTags(ctx context.Context, id string, userI
 	return nil
 }
 
-// UpdateCategory updates the category override for a transaction
-func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, userID string, categoryOverride []string, categorySource domain.CategorySource) error {
-	// Serialize category override to JSON
-	categoryJSON, err := json.Marshal(categoryOverride)
-	if err != nil {
-		return fmt.Errorf("failed to marshal category override: %w", err)
-	}
-
+// UpdateCategory updates the category override for a transaction using the PFC v2 discriminated union.
+func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, userID string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) error {
 	now := time.Now()
 
 	query := `
 		UPDATE transactions
-		SET category_override = $1, category_source = $2, category_override_date = $3,
-		    original_category = COALESCE(original_category, category), updated_at = $4
-		WHERE id = $5 AND user_id = $6
+		SET category_override_kind = $1,
+		    pfc_primary_override = $2,
+		    pfc_detailed_override = $3,
+		    custom_category_override_id = $4,
+		    category_source = $5,
+		    category_override_date = $6,
+		    updated_at = $7
+		WHERE id = $8 AND user_id = $9
 	`
 
-	ct, err := r.db.Exec(ctx, query, categoryJSON, categorySource, now, now, id, userID)
+	ct, err := r.db.Exec(ctx, query, overrideKind, pfcPrimaryOverride, pfcDetailedOverride, customCategoryOverrideID, categorySource, now, now, id, userID)
 	if err != nil {
 		return fmt.Errorf("failed to update transaction category: %w", err)
 	}
@@ -975,16 +996,12 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 // GetDistinctPlaidCategories returns distinct Plaid category names for a user's transactions
 // Uses personal_finance_category.primary (Plaid v2 format) for consistency across the application
 func (r *transactionRepository) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) {
-	// Query extracts the primary category from personal_finance_category JSONB
-	// - Uses personal_finance_category->>'primary' (e.g., "FOOD_AND_DRINK")
-	// - Filters out NULL categories and empty strings
 	query := `
-		SELECT DISTINCT personal_finance_category->>'primary' as cat
+		SELECT DISTINCT pfc_primary as cat
 		FROM transactions
 		WHERE user_id = $1
-		  AND personal_finance_category IS NOT NULL
-		  AND personal_finance_category->>'primary' IS NOT NULL
-		  AND personal_finance_category->>'primary' != ''
+		  AND pfc_primary IS NOT NULL
+		  AND pfc_primary != ''
 		ORDER BY cat
 	`
 
@@ -1017,31 +1034,21 @@ func (r *transactionRepository) GetDistinctPlaidCategories(ctx context.Context, 
 // =============================================================================
 
 // GetIncomeSumByCategory returns the sum of income (positive amount) transactions
-// matching the given category within the date range.
-// Supports both legacy category arrays and PFCv2 primary enums for backward compatibility.
+// matching the given PFC primary enum value, using the effective category.
 func (r *transactionRepository) GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error) {
-	categoryJSONBytes, _ := json.Marshal([]string{category})
-	categoryJSON := string(categoryJSONBytes)
-
 	query := `
 		SELECT COALESCE(SUM(amount), 0)
 		FROM transactions
 		WHERE user_id = $1
 		  AND amount > 0
 		  AND date BETWEEN $2 AND $3
-		  AND (
-		      category @> $4::jsonb
-		      OR category_override @> $4::jsonb
-		      OR personal_finance_category->>'primary' = $5
-		  )
+		  AND (CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override ELSE pfc_primary END) = $4
 	`
 
 	var sum float64
-	err := r.db.QueryRow(ctx, query, userID, startDate, endDate, categoryJSON, category).Scan(&sum)
-	if err != nil {
+	if err := r.db.QueryRow(ctx, query, userID, startDate, endDate, category).Scan(&sum); err != nil {
 		return 0, fmt.Errorf("failed to get income sum by category: %w", err)
 	}
-
 	return sum, nil
 }
 
@@ -1071,112 +1078,146 @@ func (r *transactionRepository) GetIncomeSumByTag(ctx context.Context, userID st
 // Issue #493: Budget Category Matching Service
 // =============================================================================
 
+// buildEffectiveCategoryMatchClause returns the SQL fragment and args for matching
+// a transaction's effective category against a budget category discriminated union.
+// argStart is the starting positional parameter number (e.g. 4 when $1-$3 are already used).
+// Returns (clause string, args []interface{}, nextArgNum int).
+func buildEffectiveCategoryMatchClause(categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, argStart int) (string, []interface{}, int) {
+	switch categoryKind {
+	case "pfc":
+		if pfcPrimary == nil {
+			return "1=0", nil, argStart
+		}
+		clause := fmt.Sprintf(
+			`(CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override ELSE pfc_primary END) = $%d`,
+			argStart,
+		)
+		args := []interface{}{*pfcPrimary}
+		nextArg := argStart + 1
+		if pfcDetailed != nil {
+			clause += fmt.Sprintf(
+				` AND (CASE WHEN category_override_kind = 'pfc' THEN pfc_detailed_override ELSE pfc_detailed END) = $%d`,
+				nextArg,
+			)
+			args = append(args, *pfcDetailed)
+			nextArg++
+		}
+		return clause, args, nextArg
+	case "custom":
+		if customCategoryID == nil {
+			return "1=0", nil, argStart
+		}
+		clause := fmt.Sprintf(
+			`category_override_kind = 'custom' AND custom_category_override_id::text = $%d`,
+			argStart,
+		)
+		return clause, []interface{}{*customCategoryID}, argStart + 1
+	default:
+		return "1=0", nil, argStart
+	}
+}
+
 // GetSpentSumForBudgetCategory returns the sum of expenses (negative amount) transactions
-// matching the given category and/or tags based on match logic.
-// Supports four match logic types:
-//   - category_only: Match transactions where category contains the budget category
-//   - tag_only: Match transactions where tags contain ANY of the budget tags
-//   - and: Match transactions where BOTH category AND tags match
-//   - or: Match transactions where EITHER category OR tags match
-func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (float64, error) {
-	// Default to category_only if empty
+// matching the budget category's effective category and/or tags based on match logic.
+func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time) (float64, error) {
+	if budgetCat == nil {
+		return 0, nil
+	}
+	matchLogic := budgetCat.MatchLogic
 	if matchLogic == "" {
 		matchLogic = domain.MatchLogicCategoryOnly
 	}
+	tags := budgetCat.Tags
 
-	// Build query based on match logic
+	catClause, catArgs, nextArg := buildEffectiveCategoryMatchClause(
+		budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4,
+	)
+
 	var query string
 	var args []interface{}
-
-	// Marshal category to JSON for JSONB containment operator
-	categoryJSON, err := json.Marshal(category)
-	if err != nil {
-		return 0, fmt.Errorf("failed to marshal category: %w", err)
-	}
+	baseArgs := []interface{}{userID, startDate, endDate}
 
 	switch matchLogic {
 	case domain.MatchLogicCategoryOnly:
-		query = `
+		query = fmt.Sprintf(`
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
 			WHERE user_id = $1 AND amount < 0
 			  AND date BETWEEN $2 AND $3
-			  AND (category @> $4::jsonb OR category_override @> $4::jsonb)
-		`
-		args = []interface{}{userID, startDate, endDate, string(categoryJSON)}
+			  AND (%s)
+		`, catClause)
+		args = append(baseArgs, catArgs...)
 
 	case domain.MatchLogicTagOnly:
-		query = `
+		query = fmt.Sprintf(`
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
 			WHERE user_id = $1 AND amount < 0
 			  AND date BETWEEN $2 AND $3
 			  AND tags ?| $4
-		`
-		args = []interface{}{userID, startDate, endDate, pq.Array(tags)}
+		`)
+		args = append(baseArgs, pq.Array(tags))
 
 	case domain.MatchLogicAnd:
-		query = `
+		query = fmt.Sprintf(`
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
 			WHERE user_id = $1 AND amount < 0
 			  AND date BETWEEN $2 AND $3
-			  AND (category @> $4::jsonb OR category_override @> $4::jsonb)
-			  AND tags ?| $5
-		`
-		args = []interface{}{userID, startDate, endDate, string(categoryJSON), pq.Array(tags)}
+			  AND (%s)
+			  AND tags ?| $%d
+		`, catClause, nextArg)
+		args = append(baseArgs, catArgs...)
+		args = append(args, pq.Array(tags))
 
 	case domain.MatchLogicOr:
-		query = `
+		query = fmt.Sprintf(`
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
 			WHERE user_id = $1 AND amount < 0
 			  AND date BETWEEN $2 AND $3
 			  AND (
-				(category @> $4::jsonb OR category_override @> $4::jsonb)
-				OR tags ?| $5
+				(%s)
+				OR tags ?| $%d
 			  )
-		`
-		args = []interface{}{userID, startDate, endDate, string(categoryJSON), pq.Array(tags)}
+		`, catClause, nextArg)
+		args = append(baseArgs, catArgs...)
+		args = append(args, pq.Array(tags))
 
 	default:
 		return 0, fmt.Errorf("unsupported match logic: %s", matchLogic)
 	}
 
 	var sum float64
-	err = r.db.QueryRow(ctx, query, args...).Scan(&sum)
-	if err != nil {
+	if err := r.db.QueryRow(ctx, query, args...).Scan(&sum); err != nil {
 		return 0, fmt.Errorf("failed to get spent sum for budget category: %w", err)
 	}
-
 	return sum, nil
 }
 
-// GetMatchingTransactionStats returns the count and sum of expenses (negative amount) transactions
-// matching the given categories and/or tags based on match logic.
-// Issue #497: Transaction preview feature
-func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context, userID string, categories [][]string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) {
-	// Default to category_only if empty
+// GetMatchingTransactionStats returns the count and sum of expenses matching the given
+// category configuration and/or tags based on match logic. Issue #497: preview feature.
+func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) {
 	if matchLogic == "" {
 		matchLogic = domain.MatchLogicCategoryOnly
 	}
 
-	// Build query based on match logic
+	catClause, catArgs, nextArg := buildEffectiveCategoryMatchClause(categoryKind, pfcPrimary, pfcDetailed, customCategoryID, 4)
+	baseArgs := []interface{}{userID, startDate, endDate}
+
 	var query string
 	var args []interface{}
 
 	switch matchLogic {
 	case domain.MatchLogicCategoryOnly:
-		// Build OR clause for multiple categories
-		categoryConditions, categoryArgs := r.buildCategoryConditions(categories)
-		query = `
+		query = fmt.Sprintf(`
 			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
 			WHERE user_id = $1 AND amount < 0
 			  AND date BETWEEN $2 AND $3
-			  AND (` + categoryConditions + `)
-		`
-		args = append([]interface{}{userID, startDate, endDate}, categoryArgs...)
+			  AND (%s)
+		`, catClause)
+		args = append(baseArgs, catArgs...)
 
 	case domain.MatchLogicTagOnly:
 		query = `
@@ -1186,12 +1227,9 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 			  AND date BETWEEN $2 AND $3
 			  AND tags ?| $4
 		`
-		args = []interface{}{userID, startDate, endDate, pq.Array(tags)}
+		args = append(baseArgs, pq.Array(tags))
 
 	case domain.MatchLogicAnd:
-		// Build OR clause for multiple categories
-		categoryConditions, categoryArgs := r.buildCategoryConditions(categories)
-		nextArgNum := 4 + len(categoryArgs)
 		query = fmt.Sprintf(`
 			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
@@ -1199,14 +1237,11 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 			  AND date BETWEEN $2 AND $3
 			  AND (%s)
 			  AND tags ?| $%d
-		`, categoryConditions, nextArgNum)
-		args = append([]interface{}{userID, startDate, endDate}, categoryArgs...)
+		`, catClause, nextArg)
+		args = append(baseArgs, catArgs...)
 		args = append(args, pq.Array(tags))
 
 	case domain.MatchLogicOr:
-		// Build OR clause for multiple categories
-		categoryConditions, categoryArgs := r.buildCategoryConditions(categories)
-		nextArgNum := 4 + len(categoryArgs)
 		query = fmt.Sprintf(`
 			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
@@ -1216,8 +1251,8 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 				(%s)
 				OR tags ?| $%d
 			  )
-		`, categoryConditions, nextArgNum)
-		args = append([]interface{}{userID, startDate, endDate}, categoryArgs...)
+		`, catClause, nextArg)
+		args = append(baseArgs, catArgs...)
 		args = append(args, pq.Array(tags))
 
 	default:
@@ -1226,40 +1261,10 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 
 	var count int
 	var sum float64
-	err := r.db.QueryRow(ctx, query, args...).Scan(&count, &sum)
-	if err != nil {
+	if err := r.db.QueryRow(ctx, query, args...).Scan(&count, &sum); err != nil {
 		return 0, 0, fmt.Errorf("failed to get matching transaction stats: %w", err)
 	}
-
 	return count, sum, nil
-}
-
-// buildCategoryConditions builds SQL OR conditions for multiple categories
-// Returns the condition string and the arguments for the query
-func (r *transactionRepository) buildCategoryConditions(categories [][]string) (string, []interface{}) {
-	if len(categories) == 0 {
-		return "1=0", nil // No categories means no matches
-	}
-
-	var conditions []string
-	var args []interface{}
-	argNum := 4 // Start after $1, $2, $3 (userID, startDate, endDate)
-
-	for _, category := range categories {
-		categoryJSON, err := json.Marshal(category)
-		if err != nil {
-			continue // Skip invalid categories
-		}
-		conditions = append(conditions, fmt.Sprintf("(category @> $%d::jsonb OR category_override @> $%d::jsonb)", argNum, argNum))
-		args = append(args, string(categoryJSON))
-		argNum++
-	}
-
-	if len(conditions) == 0 {
-		return "1=0", nil
-	}
-
-	return strings.Join(conditions, " OR "), args
 }
 
 // =============================================================================
@@ -1268,86 +1273,73 @@ func (r *transactionRepository) buildCategoryConditions(categories [][]string) (
 
 // GetTransactionsForBudgetCategory returns paginated transactions matching the given category
 // and/or tags based on match logic, along with total count and amount.
-// Uses the same matching logic as GetSpentSumForBudgetCategory.
+// Uses the budget category's discriminated union to match against effective category.
 // Returns transactions ordered by date DESC.
-func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
-	// Default to category_only if empty
+func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
+	if budgetCat == nil {
+		return []domain.Transaction{}, 0, 0, nil
+	}
+	matchLogic := budgetCat.MatchLogic
 	if matchLogic == "" {
 		matchLogic = domain.MatchLogicCategoryOnly
 	}
+	tags := budgetCat.Tags
 
-	// Marshal category to JSON for JSONB containment operator
-	categoryJSON, err := json.Marshal(category)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("failed to marshal category: %w", err)
-	}
+	catClause, catArgs, nextArg := buildEffectiveCategoryMatchClause(
+		budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4,
+	)
+	baseArgs := []interface{}{userID, startDate, endDate}
 
-	// Build WHERE clause based on match logic
 	var whereClause string
-	var baseArgs []interface{}
+	var allBaseArgs []interface{}
 
 	switch matchLogic {
 	case domain.MatchLogicCategoryOnly:
-		whereClause = `user_id = $1 AND amount < 0
-			  AND date BETWEEN $2 AND $3
-			  AND (category @> $4::jsonb OR category_override @> $4::jsonb)`
-		baseArgs = []interface{}{userID, startDate, endDate, string(categoryJSON)}
+		whereClause = fmt.Sprintf(`user_id = $1 AND amount < 0 AND date BETWEEN $2 AND $3 AND (%s)`, catClause)
+		allBaseArgs = append(baseArgs, catArgs...)
 
 	case domain.MatchLogicTagOnly:
-		whereClause = `user_id = $1 AND amount < 0
-			  AND date BETWEEN $2 AND $3
-			  AND tags ?| $4`
-		baseArgs = []interface{}{userID, startDate, endDate, pq.Array(tags)}
+		whereClause = `user_id = $1 AND amount < 0 AND date BETWEEN $2 AND $3 AND tags ?| $4`
+		allBaseArgs = append(baseArgs, pq.Array(tags))
 
 	case domain.MatchLogicAnd:
-		whereClause = `user_id = $1 AND amount < 0
-			  AND date BETWEEN $2 AND $3
-			  AND (category @> $4::jsonb OR category_override @> $4::jsonb)
-			  AND tags ?| $5`
-		baseArgs = []interface{}{userID, startDate, endDate, string(categoryJSON), pq.Array(tags)}
+		whereClause = fmt.Sprintf(`user_id = $1 AND amount < 0 AND date BETWEEN $2 AND $3 AND (%s) AND tags ?| $%d`, catClause, nextArg)
+		allBaseArgs = append(baseArgs, catArgs...)
+		allBaseArgs = append(allBaseArgs, pq.Array(tags))
 
 	case domain.MatchLogicOr:
-		whereClause = `user_id = $1 AND amount < 0
-			  AND date BETWEEN $2 AND $3
-			  AND (
-				(category @> $4::jsonb OR category_override @> $4::jsonb)
-				OR tags ?| $5
-			  )`
-		baseArgs = []interface{}{userID, startDate, endDate, string(categoryJSON), pq.Array(tags)}
+		whereClause = fmt.Sprintf(`user_id = $1 AND amount < 0 AND date BETWEEN $2 AND $3 AND ((%s) OR tags ?| $%d)`, catClause, nextArg)
+		allBaseArgs = append(baseArgs, catArgs...)
+		allBaseArgs = append(allBaseArgs, pq.Array(tags))
 
 	default:
 		return nil, 0, 0, fmt.Errorf("unsupported match logic: %s", matchLogic)
 	}
 
-	// First, get total count and sum
-	countQuery := fmt.Sprintf(`
-		SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
-		FROM transactions
-		WHERE %s
-	`, whereClause)
-
+	// Get total count and sum
+	countQuery := fmt.Sprintf(`SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0) FROM transactions WHERE %s`, whereClause)
 	var totalCount int
 	var totalAmount float64
-	err = r.db.QueryRow(ctx, countQuery, baseArgs...).Scan(&totalCount, &totalAmount)
-	if err != nil {
+	if err := r.db.QueryRow(ctx, countQuery, allBaseArgs...).Scan(&totalCount, &totalAmount); err != nil {
 		return nil, 0, 0, fmt.Errorf("failed to get transaction count: %w", err)
 	}
 
-	// Then, get the paginated transactions
-	nextArgNum := len(baseArgs) + 1
+	// Get paginated transactions
+	pagArgOffset := len(allBaseArgs) + 1
 	selectQuery := fmt.Sprintf(`
 		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
 			   external_metadata, amount, date, authorized_date, name, merchant_name,
-			   category, personal_finance_category, payment_channel, pending, user_notes,
+			   pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending, user_notes,
 			   created_at, updated_at, tags, tags_source,
-			   category_override, category_source, category_override_date, original_category
+			   category_override_kind, pfc_primary_override, pfc_detailed_override,
+			   custom_category_override_id, category_source, category_override_date
 		FROM transactions
 		WHERE %s
 		ORDER BY date DESC, created_at DESC
 		LIMIT $%d OFFSET $%d
-	`, whereClause, nextArgNum, nextArgNum+1)
+	`, whereClause, pagArgOffset, pagArgOffset+1)
 
-	selectArgs := append(baseArgs, limit, offset)
+	selectArgs := append(allBaseArgs, limit, offset)
 	rows, err := r.db.Query(ctx, selectQuery, selectArgs...)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("failed to query transactions: %w", err)
@@ -1358,7 +1350,6 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 	if err != nil {
 		return nil, 0, 0, err
 	}
-
 	return transactions, totalCount, totalAmount, nil
 }
 
@@ -1370,9 +1361,10 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 		SELECT id, user_id, account_id, linked_item_id, user_account_id,
 			   source, external_transaction_id, external_metadata,
 			   amount, date, authorized_date, name, merchant_name,
-			   category, personal_finance_category, payment_channel, pending, user_notes,
+			   pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending, user_notes,
 			   created_at, updated_at, tags, tags_source,
-			   category_override, category_source, category_override_date, original_category
+			   category_override_kind, pfc_primary_override, pfc_detailed_override,
+			   custom_category_override_id, category_source, category_override_date
 		FROM transactions
 		WHERE user_id = $1 AND user_account_id = $2
 		ORDER BY date DESC, created_at DESC
@@ -1408,8 +1400,9 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 			&tx.AuthorizedDate,
 			&tx.Name,
 			&tx.MerchantName,
-			&tx.Category,
-			&tx.PersonalFinanceCategory,
+			&tx.PFCPrimary,
+			&tx.PFCDetailed,
+			&tx.PFCConfidenceLevel,
 			&tx.PaymentChannel,
 			&tx.Pending,
 			&tx.UserNotes,
@@ -1417,10 +1410,12 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 			&tx.UpdatedAt,
 			&tagsJSON,
 			&tagsSourceJSON,
-			&tx.CategoryOverride,
+			&tx.CategoryOverrideKind,
+			&tx.PFCPrimaryOverride,
+			&tx.PFCDetailedOverride,
+			&tx.CustomCategoryOverrideID,
 			&categorySource,
 			&tx.CategoryOverrideDate,
-			&tx.OriginalCategory,
 		)
 
 		if err != nil {

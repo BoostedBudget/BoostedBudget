@@ -33,11 +33,13 @@ export interface BudgetCategory {
   readonly $schema?: string;
   allocated_amount: number;
   budget_id: string;
-  /** @nullable */
-  category: string[] | null;
+  category_kind: string;
   created_at: string;
+  custom_category_id?: string;
   id: string;
   match_logic: string;
+  pfc_detailed?: string;
+  pfc_primary?: string;
   spent_amount: number;
   /** @nullable */
   tags: string[] | null;

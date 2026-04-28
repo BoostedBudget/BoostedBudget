@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -61,7 +60,7 @@ func (s *budgetIncomeService) CalculateBudgetIncome(ctx context.Context, budget 
 
 	for _, source := range budget.IncomeSources {
 		switch source.Type {
-		case domain.IncomeSourceTypePlaidCategory:
+		case domain.IncomeSourceTypePFCPrimary:
 			sum, err := s.transactionRepo.GetIncomeSumByCategory(ctx, budget.UserID, source.Value, startDate, endDate)
 			if err != nil {
 				s.logger.Error("failed to get income by category",
@@ -157,24 +156,17 @@ func (s *budgetIncomeService) GetMatchingIncomeTransactions(ctx context.Context,
 	return result, nil
 }
 
-// transactionMatchesSource checks if a transaction matches an income source
+// transactionMatchesSource checks if a transaction matches an income source.
 func (s *budgetIncomeService) transactionMatchesSource(tx domain.Transaction, source domain.IncomeSource) bool {
 	switch source.Type {
-	case domain.IncomeSourceTypePlaidCategory:
-		if s.categoryContains(tx.Category, source.Value) {
-			return true
+	case domain.IncomeSourceTypePFCPrimary:
+		effective := tx.GetEffectiveCategory()
+		if effective == nil || effective.Kind != domain.EffectiveCategoryKindPFC || effective.PFCPrimary == nil {
+			return false
 		}
-		if s.categoryContains(tx.CategoryOverride, source.Value) {
-			return true
-		}
-		// Fall back to PFC primary enum for transactions with display names in legacy category field
-		if pfc := ParsePersonalFinanceCategoryJSON(tx.PersonalFinanceCategory); pfc != nil {
-			return pfc.Primary == source.Value
-		}
-		return false
+		return *effective.PFCPrimary == source.Value
 
 	case domain.IncomeSourceTypeTag:
-		// Check if transaction has the tag
 		for _, tag := range tx.Tags {
 			if tag == source.Value {
 				return true
@@ -183,27 +175,9 @@ func (s *budgetIncomeService) transactionMatchesSource(tx domain.Transaction, so
 		return false
 
 	case domain.IncomeSourceTypeManual:
-		// Manual sources don't match transactions
 		return false
 
 	default:
 		return false
 	}
-}
-
-// categoryContains checks if a JSON category array contains the given value
-func (s *budgetIncomeService) categoryContains(categoryJSON *string, value string) bool {
-	if categoryJSON == nil {
-		return false
-	}
-	var categories []string
-	if err := json.Unmarshal([]byte(*categoryJSON), &categories); err != nil {
-		return false
-	}
-	for _, cat := range categories {
-		if cat == value {
-			return true
-		}
-	}
-	return false
 }

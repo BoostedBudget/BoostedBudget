@@ -60,7 +60,7 @@ func (m *mockTransactionService) UpdateTransactionTags(ctx context.Context, user
 	return tx, nil
 }
 
-func (m *mockTransactionService) UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error) {
+func (m *mockTransactionService) UpdateTransactionCategory(ctx context.Context, userID, transactionID string, overrideKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string) (*domain.Transaction, error) {
 	if m.updateCategoryErr != nil {
 		return nil, m.updateCategoryErr
 	}
@@ -145,7 +145,7 @@ func TestGetTransactions_WithFilters(t *testing.T) {
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
 		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
 		AccountIDs:         "acc-1,acc-2,acc-3",
-		Categories:         "Food,Shopping",
+		PFCPrimaries:       "FOOD_AND_DRINK,SHOPPING",
 		Search:             "coffee",
 		Pending:            "true",
 		MinAmount:          "10.00",
@@ -349,11 +349,13 @@ func TestUpdateTransactionCategory_Success(t *testing.T) {
 
 	handler := NewTransactionHandler(mockService)
 
+	pfcPrimary := "FOOD_AND_DRINK"
 	input := &UpdateTransactionCategoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
 		ID:                 "tx-123",
 		Body: UpdateTransactionCategoryBody{
-			Category: []string{"Food and Drink", "Restaurants"},
+			Kind:       "pfc",
+			PFCPrimary: &pfcPrimary,
 		},
 	}
 
@@ -371,11 +373,13 @@ func TestUpdateTransactionCategory_NotFound(t *testing.T) {
 
 	handler := NewTransactionHandler(mockService)
 
+	pfcPrimary := "FOOD_AND_DRINK"
 	input := &UpdateTransactionCategoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		ID:                 "nonexistent",
 		Body: UpdateTransactionCategoryBody{
-			Category: []string{"Food"},
+			Kind:       "pfc",
+			PFCPrimary: &pfcPrimary,
 		},
 	}
 

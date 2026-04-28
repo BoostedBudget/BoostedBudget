@@ -13,7 +13,7 @@ import { ReadOnlyGuard } from '@/auth'
 import type { Transaction } from '../types'
 import type { Account } from '../../accounts/types'
 import { getCategoryColor } from '@/lib/category-colors'
-import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
+import { getEffectiveCategory, getEffectiveCategoryLabel } from '@/shared/categories/getEffectiveCategory'
 import {
   ColumnFilterDropdown,
   type FilterOption,
@@ -272,7 +272,7 @@ export function TransactionTable({
           )
           const displayName = transaction.merchant_name || transaction.name
           const effective = getEffectiveCategory(transaction)
-          const categoryLabel = effective.length > 0 ? effective[0] : 'Uncategorized'
+          const categoryLabel = getEffectiveCategoryLabel(effective)
           const categoryColor = getCategoryColor(categoryLabel)
           const accountDisplayName = account
             ? account.nickname || account.name

@@ -12,7 +12,9 @@ function createBudgetCategory(
   return {
     id: 'cat-1',
     budget_id: 'budget-1',
-    category: ['Food and Drink', 'Restaurants'],
+    category_kind: 'pfc',
+    pfc_primary: 'FOOD_AND_DRINK',
+    pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
     allocated_amount: 500,
     spent_amount: 250,
     created_at: '2025-01-01T00:00:00Z',
@@ -63,39 +65,40 @@ describe('TransactionBudgetBadge - rendering', () => {
     const match = createMatch('category')
     renderWithRouter(<TransactionBudgetBadge match={match} />)
 
-    // Should show primary category
-    expect(screen.getByText('Food and Drink')).toBeInTheDocument()
+    // Shows pfc_detailed when present
+    expect(screen.getByText('FOOD_AND_DRINK_RESTAURANTS')).toBeInTheDocument()
   })
 
-  it('should show primary category only (not full path)', () => {
+  it('should show pfc_primary when pfc_detailed is absent', () => {
     const match = createMatch('category', {
-      category: ['Food and Drink', 'Restaurants', 'Fast Food'],
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: undefined,
     })
     renderWithRouter(<TransactionBudgetBadge match={match} />)
 
-    // Should show only primary category
-    expect(screen.getByText('Food and Drink')).toBeInTheDocument()
-    // Should NOT show full path
-    expect(screen.queryByText(/Restaurants/)).not.toBeInTheDocument()
+    expect(screen.getByText('FOOD_AND_DRINK')).toBeInTheDocument()
   })
 
-  it('should handle single-element category', () => {
+  it('should handle pfc_primary-only category', () => {
     const match = createMatch('category', {
-      category: ['Shopping'],
+      pfc_primary: 'GENERAL_MERCHANDISE',
+      pfc_detailed: undefined,
     })
     renderWithRouter(<TransactionBudgetBadge match={match} />)
 
-    expect(screen.getByText('Shopping')).toBeInTheDocument()
+    expect(screen.getByText('GENERAL_MERCHANDISE')).toBeInTheDocument()
   })
 
-  it('should handle empty category array gracefully', () => {
+  it('should handle missing pfc fields gracefully', () => {
     const match = createMatch('category', {
-      category: [],
+      category_kind: 'pfc',
+      pfc_primary: undefined,
+      pfc_detailed: undefined,
     })
     renderWithRouter(<TransactionBudgetBadge match={match} />)
 
     // Should render fallback text
-    expect(screen.getByText('Budget')).toBeInTheDocument()
+    expect(screen.getByText('Uncategorized')).toBeInTheDocument()
   })
 
   it('should apply correct CSS class', () => {
@@ -157,7 +160,7 @@ describe('TransactionBudgetBadge - interaction', () => {
     const badge = screen.getByRole('link')
     expect(badge).toHaveAttribute(
       'aria-label',
-      'Budget: Food and Drink (Matched by category)'
+      'Budget: FOOD_AND_DRINK_RESTAURANTS (Matched by category)'
     )
   })
 
@@ -174,36 +177,34 @@ describe('TransactionBudgetBadge - interaction', () => {
     const link = screen.getByRole('link')
     expect(link).toBeVisible()
 
-    // Focus should work
     await user.tab()
     expect(link).toHaveFocus()
   })
 })
 
 describe('TransactionBudgetBadge - edge cases', () => {
-  it('should handle very long category names with truncation', () => {
+  it('should handle very long pfc enum names', () => {
     const match = createMatch('category', {
-      category: [
-        'Very Long Category Name That Should Be Truncated',
-        'Subcategory',
-      ],
+      category_kind: 'pfc',
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
     })
     renderWithRouter(<TransactionBudgetBadge match={match} />)
 
     const badge = screen.getByRole('link')
-    // Badge should still render (CSS handles truncation)
     expect(badge).toBeInTheDocument()
-    expect(
-      screen.getByText('Very Long Category Name That Should Be Truncated')
-    ).toBeInTheDocument()
+    expect(screen.getByText('FOOD_AND_DRINK_COFFEE')).toBeInTheDocument()
   })
 
-  it('should work with special characters in category name', () => {
+  it('should work with custom category', () => {
     const match = createMatch('category', {
-      category: ['Food & Drink', "Sam's Club"],
+      category_kind: 'custom',
+      custom_category_id: 'my-custom-uuid',
+      pfc_primary: undefined,
+      pfc_detailed: undefined,
     })
     renderWithRouter(<TransactionBudgetBadge match={match} />)
 
-    expect(screen.getByText('Food & Drink')).toBeInTheDocument()
+    expect(screen.getByText('my-custom-uuid')).toBeInTheDocument()
   })
 })

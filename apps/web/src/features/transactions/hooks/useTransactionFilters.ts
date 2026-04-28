@@ -35,10 +35,27 @@ export interface UseTransactionFiltersResult {
 }
 
 // URL param names for array filters
-const ARRAY_PARAMS = ['account_ids', 'categories'] as const
+const ARRAY_PARAMS = ['account_ids', 'pfc_primaries'] as const
 
 // URL param names for numeric filters
 const NUMERIC_PARAMS = ['min_amount', 'max_amount'] as const
+
+/**
+ * Helper function to convert a value to its URL representation
+ */
+function valueToUrlParam(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') {
+    return null
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return null
+    return value.join(',')
+  }
+  if (typeof value === 'boolean' || typeof value === 'number') {
+    return String(value)
+  }
+  return value as string
+}
 
 /**
  * Hook for managing transaction filters with URL state synchronization
@@ -106,22 +123,12 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev)
+          const urlValue = valueToUrlParam(value)
 
-          // Handle undefined/null/empty values - remove from URL
-          if (value === undefined || value === null || value === '') {
+          if (urlValue === null) {
             next.delete(key)
-          } else if (Array.isArray(value)) {
-            if (value.length === 0) {
-              next.delete(key)
-            } else {
-              next.set(key, value.join(','))
-            }
-          } else if (typeof value === 'boolean') {
-            next.set(key, String(value))
-          } else if (typeof value === 'number') {
-            next.set(key, String(value))
           } else {
-            next.set(key, value as string)
+            next.set(key, urlValue)
           }
 
           // Reset offset when filters change (back to first page)
@@ -143,20 +150,11 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
           const next = new URLSearchParams(prev)
 
           for (const [key, value] of Object.entries(updates)) {
-            if (value === undefined || value === null || value === '') {
+            const urlValue = valueToUrlParam(value)
+            if (urlValue === null) {
               next.delete(key)
-            } else if (Array.isArray(value)) {
-              if (value.length === 0) {
-                next.delete(key)
-              } else {
-                next.set(key, value.join(','))
-              }
-            } else if (typeof value === 'boolean') {
-              next.set(key, String(value))
-            } else if (typeof value === 'number') {
-              next.set(key, String(value))
             } else {
-              next.set(key, value as string)
+              next.set(key, urlValue)
             }
           }
 
@@ -197,7 +195,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
     let count = 0
 
     if (filters.account_ids && filters.account_ids.length > 0) count++
-    if (filters.categories && filters.categories.length > 0) count++
+    if (filters.pfc_primaries && filters.pfc_primaries.length > 0) count++
     if (filters.start_date || filters.end_date) count++
     if (filters.search) count++
     if (filters.pending !== undefined) count++

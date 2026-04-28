@@ -10,7 +10,6 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/events"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
-	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/plaid/plaid-go/v23/plaid"
 )
 
@@ -279,31 +278,24 @@ func (p *plaidSyncProvider) convertPlaidTransaction(linkedItem *domain.LinkedIte
 		return nil, fmt.Errorf("failed to serialize external metadata: %w", err)
 	}
 
-	// Serialize category array as JSON. When Plaid sends no legacy category but does send
-	// personal_finance_category (PFC v2), synthesize a display-friendly array from PFC.
-	var categoryJSON *string
-	if len(plaidTxn.Category) > 0 {
-		catBytes, _ := json.Marshal(plaidTxn.Category)
-		catStr := string(catBytes)
-		categoryJSON = &catStr
-	} else if plaidTxn.PersonalFinanceCategory.IsSet() {
-		pfc := plaidTxn.PersonalFinanceCategory.Get()
-		if pfc != nil && pfc.Primary != "" {
-			derived := services.PFCToCategoryArray(pfc.Primary, pfc.Detailed)
-			if derived != nil {
-				catBytes, _ := json.Marshal(derived)
-				catStr := string(catBytes)
-				categoryJSON = &catStr
+	// Extract PFC v2 fields — canonical categorization source.
+	var pfcPrimary, pfcDetailed, pfcConfidenceLevel *string
+	if plaidTxn.PersonalFinanceCategory.IsSet() {
+		pfcData := plaidTxn.PersonalFinanceCategory.Get()
+		if pfcData != nil {
+			if pfcData.Primary != "" {
+				p := pfcData.Primary
+				pfcPrimary = &p
+			}
+			if pfcData.Detailed != "" {
+				d := pfcData.Detailed
+				pfcDetailed = &d
+			}
+			if pfcData.ConfidenceLevel.IsSet() && pfcData.ConfidenceLevel.Get() != nil && *pfcData.ConfidenceLevel.Get() != "" {
+				c := *pfcData.ConfidenceLevel.Get()
+				pfcConfidenceLevel = &c
 			}
 		}
-	}
-
-	// Serialize personal finance category as JSON
-	var pfCategoryJSON *string
-	if plaidTxn.PersonalFinanceCategory.IsSet() {
-		pfBytes, _ := json.Marshal(plaidTxn.PersonalFinanceCategory.Get())
-		pfStr := string(pfBytes)
-		pfCategoryJSON = &pfStr
 	}
 
 	// Get payment channel
@@ -321,22 +313,23 @@ func (p *plaidSyncProvider) convertPlaidTransaction(linkedItem *domain.LinkedIte
 	externalID := plaidTxn.GetTransactionId()
 
 	return &domain.Transaction{
-		UserID:                  linkedItem.UserID,
-		AccountID:               plaidTxn.AccountId, // This should be mapped from Plaid account ID to our account UUID
-		LinkedItemID:            linkedItem.ID,
-		Source:                  domain.SourcePlaid,
-		ExternalTransactionID:   &externalID,
-		ExternalMetadata:        externalMetadata,
-		Amount:                  plaidTxn.Amount,
-		Date:                    date,
-		AuthorizedDate:          authorizedDate,
-		Name:                    plaidTxn.Name,
-		MerchantName:            merchantName,
-		Category:                categoryJSON,
-		PersonalFinanceCategory: pfCategoryJSON,
-		PaymentChannel:          paymentChannel,
-		Pending:                 plaidTxn.GetPending(),
-		UserNotes:               nil,
+		UserID:                linkedItem.UserID,
+		AccountID:             plaidTxn.AccountId,
+		LinkedItemID:          linkedItem.ID,
+		Source:                domain.SourcePlaid,
+		ExternalTransactionID: &externalID,
+		ExternalMetadata:      externalMetadata,
+		Amount:                plaidTxn.Amount,
+		Date:                  date,
+		AuthorizedDate:        authorizedDate,
+		Name:                  plaidTxn.Name,
+		MerchantName:          merchantName,
+		PFCPrimary:            pfcPrimary,
+		PFCDetailed:           pfcDetailed,
+		PFCConfidenceLevel:    pfcConfidenceLevel,
+		PaymentChannel:        paymentChannel,
+		Pending:               plaidTxn.GetPending(),
+		UserNotes:             nil,
 	}, nil
 }
 

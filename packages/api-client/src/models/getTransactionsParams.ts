@@ -58,13 +58,13 @@ export type GetTransactionsParams = {
    */
   end_date?: string;
   /**
-   * Filter by category (deprecated: use categories)
+   * Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)
    */
-  category?: string;
+  pfc_primaries?: string;
   /**
-   * Filter by multiple categories (comma-separated)
+   * Filter by custom category UUIDs (comma-separated)
    */
-  categories?: string;
+  custom_category_ids?: string;
   /**
    * Search in merchant name or transaction name
    */

@@ -64,7 +64,7 @@ func (r *customCategoryRepository) Create(ctx context.Context, category *domain.
 	category.UpdatedAt = now
 
 	query := `
-		INSERT INTO custom_categories (id, user_id, name, parent_category, icon, color, usage_count, created_at, updated_at)
+		INSERT INTO custom_categories (id, user_id, name, parent_pfc_primary, icon, color, usage_count, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 
@@ -72,7 +72,7 @@ func (r *customCategoryRepository) Create(ctx context.Context, category *domain.
 		category.ID,
 		category.UserID,
 		category.Name,
-		category.ParentCategory,
+		category.ParentPFCPrimary,
 		category.Icon,
 		category.Color,
 		category.UsageCount,
@@ -95,7 +95,7 @@ func (r *customCategoryRepository) Create(ctx context.Context, category *domain.
 // GetByID retrieves a category by its ID
 func (r *customCategoryRepository) GetByID(ctx context.Context, id string) (*domain.CustomCategory, error) {
 	query := `
-		SELECT id, user_id, name, parent_category, icon, color, usage_count, created_at, updated_at
+		SELECT id, user_id, name, parent_pfc_primary, icon, color, usage_count, created_at, updated_at
 		FROM custom_categories
 		WHERE id = $1
 	`
@@ -105,7 +105,7 @@ func (r *customCategoryRepository) GetByID(ctx context.Context, id string) (*dom
 		&category.ID,
 		&category.UserID,
 		&category.Name,
-		&category.ParentCategory,
+		&category.ParentPFCPrimary,
 		&category.Icon,
 		&category.Color,
 		&category.UsageCount,
@@ -126,7 +126,7 @@ func (r *customCategoryRepository) GetByID(ctx context.Context, id string) (*dom
 // GetByUserID retrieves all categories for a specific user
 func (r *customCategoryRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.CustomCategory, error) {
 	query := `
-		SELECT id, user_id, name, parent_category, icon, color, usage_count, created_at, updated_at
+		SELECT id, user_id, name, parent_pfc_primary, icon, color, usage_count, created_at, updated_at
 		FROM custom_categories
 		WHERE user_id = $1
 		ORDER BY name ASC
@@ -145,7 +145,7 @@ func (r *customCategoryRepository) GetByUserID(ctx context.Context, userID strin
 			&category.ID,
 			&category.UserID,
 			&category.Name,
-			&category.ParentCategory,
+			&category.ParentPFCPrimary,
 			&category.Icon,
 			&category.Color,
 			&category.UsageCount,
@@ -168,7 +168,7 @@ func (r *customCategoryRepository) GetByUserID(ctx context.Context, userID strin
 // GetByName retrieves a category by user ID and name
 func (r *customCategoryRepository) GetByName(ctx context.Context, userID, name string) (*domain.CustomCategory, error) {
 	query := `
-		SELECT id, user_id, name, parent_category, icon, color, usage_count, created_at, updated_at
+		SELECT id, user_id, name, parent_pfc_primary, icon, color, usage_count, created_at, updated_at
 		FROM custom_categories
 		WHERE user_id = $1 AND name = $2
 	`
@@ -178,7 +178,7 @@ func (r *customCategoryRepository) GetByName(ctx context.Context, userID, name s
 		&category.ID,
 		&category.UserID,
 		&category.Name,
-		&category.ParentCategory,
+		&category.ParentPFCPrimary,
 		&category.Icon,
 		&category.Color,
 		&category.UsageCount,
@@ -202,13 +202,13 @@ func (r *customCategoryRepository) Update(ctx context.Context, category *domain.
 
 	query := `
 		UPDATE custom_categories
-		SET name = $1, parent_category = $2, icon = $3, color = $4, usage_count = $5, updated_at = $6
+		SET name = $1, parent_pfc_primary = $2, icon = $3, color = $4, usage_count = $5, updated_at = $6
 		WHERE id = $7
 	`
 
 	ct, err := r.db.Exec(ctx, query,
 		category.Name,
-		category.ParentCategory,
+		category.ParentPFCPrimary,
 		category.Icon,
 		category.Color,
 		category.UsageCount,

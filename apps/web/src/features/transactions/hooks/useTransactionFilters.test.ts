@@ -54,7 +54,7 @@ describe('useTransactionFilters', () => {
       window.history.replaceState(
         {},
         '',
-        '/?account_ids=acc-1,acc-2&categories=Food,Travel'
+        '/?account_ids=acc-1,acc-2&pfc_primaries=Food,Travel'
       )
 
       const { result } = renderHook(() => useTransactionFilters(), {
@@ -62,7 +62,7 @@ describe('useTransactionFilters', () => {
       })
 
       expect(result.current.filters.account_ids).toEqual(['acc-1', 'acc-2'])
-      expect(result.current.filters.categories).toEqual(['Food', 'Travel'])
+      expect(result.current.filters.pfc_primaries).toEqual(['Food', 'Travel'])
     })
 
     it('should parse boolean pending filter from URL', () => {
@@ -97,11 +97,11 @@ describe('useTransactionFilters', () => {
       })
 
       act(() => {
-        result.current.setFilter('categories', ['Food', 'Shopping'])
+        result.current.setFilter('pfc_primaries', ['Food', 'Shopping'])
       })
 
-      expect(result.current.filters.categories).toEqual(['Food', 'Shopping'])
-      expect(window.location.search).toContain('categories=Food%2CShopping')
+      expect(result.current.filters.pfc_primaries).toEqual(['Food', 'Shopping'])
+      expect(window.location.search).toContain('pfc_primaries=Food%2CShopping')
     })
 
     it('should remove param from URL when value is undefined', () => {
@@ -120,18 +120,18 @@ describe('useTransactionFilters', () => {
     })
 
     it('should remove param from URL when array is empty', () => {
-      window.history.replaceState({}, '', '/?categories=Food,Travel')
+      window.history.replaceState({}, '', '/?pfc_primaries=Food,Travel')
 
       const { result } = renderHook(() => useTransactionFilters(), {
         wrapper: createWrapper(),
       })
 
       act(() => {
-        result.current.setFilter('categories', [])
+        result.current.setFilter('pfc_primaries', [])
       })
 
-      expect(result.current.filters.categories).toBeUndefined()
-      expect(window.location.search).not.toContain('categories')
+      expect(result.current.filters.pfc_primaries).toBeUndefined()
+      expect(window.location.search).not.toContain('pfc_primaries')
     })
   })
 
@@ -159,7 +159,7 @@ describe('useTransactionFilters', () => {
       window.history.replaceState(
         {},
         '',
-        '/?search=coffee&min_amount=10&categories=Food'
+        '/?search=coffee/?search=coffee&min_amount=10&categories=Foodmin_amount=10/?search=coffee&min_amount=10&categories=Foodpfc_primaries=FOOD_AND_DRINK'
       )
 
       const { result } = renderHook(() => useTransactionFilters(), {
@@ -181,14 +181,14 @@ describe('useTransactionFilters', () => {
       window.history.replaceState(
         {},
         '',
-        '/?search=coffee&categories=Food&min_amount=10'
+        '/?search=coffee&pfc_primaries=FOOD_AND_DRINK&min_amount=10'
       )
 
       const { result } = renderHook(() => useTransactionFilters(), {
         wrapper: createWrapper(),
       })
 
-      // search=1, categories=1, amount range=1 = 3
+      // search=1, pfc_primaries=1, amount range=1 = 3
       expect(result.current.activeFilterCount).toBe(3)
       expect(result.current.hasActiveFilters).toBe(true)
     })
@@ -394,13 +394,13 @@ describe('useTransactionFilters', () => {
         result.current.setFilters({
           search: 'coffee',
           min_amount: 10,
-          categories: ['Food'],
+          pfc_primaries: ['FOOD_AND_DRINK'],
         })
       })
 
       expect(result.current.filters.search).toBe('coffee')
       expect(result.current.filters.min_amount).toBe(10)
-      expect(result.current.filters.categories).toEqual(['Food'])
+      expect(result.current.filters.pfc_primaries).toEqual(['FOOD_AND_DRINK'])
     })
   })
 

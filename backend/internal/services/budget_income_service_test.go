@@ -62,7 +62,7 @@ func TestBudgetIncomeService_CalculateBudgetIncome_PlaidCategory(t *testing.T) {
 	budget := &domain.Budget{
 		UserID: "user-123",
 		IncomeSources: []domain.IncomeSource{
-			{Type: domain.IncomeSourceTypePlaidCategory, Value: "Paycheck"},
+			{Type: domain.IncomeSourceTypePFCPrimary, Value: "Paycheck"},
 		},
 	}
 
@@ -142,7 +142,7 @@ func TestBudgetIncomeService_CalculateBudgetIncome_MixedSources(t *testing.T) {
 	budget := &domain.Budget{
 		UserID: "user-123",
 		IncomeSources: []domain.IncomeSource{
-			{Type: domain.IncomeSourceTypePlaidCategory, Value: "Paycheck"},
+			{Type: domain.IncomeSourceTypePFCPrimary, Value: "Paycheck"},
 			{Type: domain.IncomeSourceTypeTag, Value: "bonus"},
 			{Type: domain.IncomeSourceTypeManual, Value: "500.00"},
 		},
@@ -242,7 +242,7 @@ func TestBudgetIncomeService_CalculateBudgetIncome_RepositoryError(t *testing.T)
 	budget := &domain.Budget{
 		UserID: "user-123",
 		IncomeSources: []domain.IncomeSource{
-			{Type: domain.IncomeSourceTypePlaidCategory, Value: "Paycheck"},
+			{Type: domain.IncomeSourceTypePFCPrimary, Value: "Paycheck"},
 		},
 	}
 
@@ -296,8 +296,8 @@ func TestBudgetIncomeService_CalculateBudgetIncome_ManualSourceStillSums(t *test
 // GetMatchingIncomeTransactions Tests
 // =============================================================================
 
-// TestBudgetIncomeService_GetMatchingIncomeTransactions_PlaidCategory tests matching by category
-func TestBudgetIncomeService_GetMatchingIncomeTransactions_PlaidCategory(t *testing.T) {
+// TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimaryMatch tests matching by PFC primary
+func TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimaryMatch(t *testing.T) {
 	mockRepo := new(MockIncomeTransactionGetter)
 	logger := testIncomeServiceLogger()
 	service := NewBudgetIncomeService(mockRepo, logger)
@@ -307,15 +307,22 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_PlaidCategory(t *test
 	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
 
 	incomeSources := []domain.IncomeSource{
-		{Type: domain.IncomeSourceTypePlaidCategory, Value: "Paycheck"},
+		{Type: domain.IncomeSourceTypePFCPrimary, Value: "INCOME"},
 	}
 
-	paycheckCategory := `["Paycheck"]`
 	transactions := []domain.Transaction{
-		{ID: "tx-1", UserID: "user-123", Amount: 5000.00, Category: &paycheckCategory},        // Match
-		{ID: "tx-2", UserID: "user-123", Amount: -50.00, Category: &paycheckCategory},         // Negative, excluded
-		{ID: "tx-3", UserID: "user-123", Amount: 100.00, Category: incomeTestStrPtr(`["Other"]`)}, // Wrong category
-		{ID: "tx-4", UserID: "user-123", Amount: 2500.00, CategoryOverride: &paycheckCategory}, // Match via override
+		{ID: "tx-1", UserID: "user-123", Amount: 5000.00, PFCPrimary: incomeTestStrPtr("INCOME")},        // Match
+		{ID: "tx-2", UserID: "user-123", Amount: -50.00, PFCPrimary: incomeTestStrPtr("INCOME")},         // Negative, excluded
+		{ID: "tx-3", UserID: "user-123", Amount: 100.00, PFCPrimary: incomeTestStrPtr("FOOD_AND_DRINK")}, // Wrong category
+		// Match via PFC override
+		{
+			ID:                   "tx-4",
+			UserID:               "user-123",
+			Amount:               2500.00,
+			PFCPrimary:           incomeTestStrPtr("FOOD_AND_DRINK"),
+			CategoryOverrideKind: incomeTestStrPtr("pfc"),
+			PFCPrimaryOverride:   incomeTestStrPtr("INCOME"),
+		},
 	}
 
 	mockRepo.On("GetByUserIDWithFilters", ctx, "user-123", mock.Anything, 10000, 0).
@@ -398,14 +405,13 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_Deduplication(t *test
 	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
 
 	incomeSources := []domain.IncomeSource{
-		{Type: domain.IncomeSourceTypePlaidCategory, Value: "Paycheck"},
+		{Type: domain.IncomeSourceTypePFCPrimary, Value: "INCOME"},
 		{Type: domain.IncomeSourceTypeTag, Value: "salary"},
 	}
 
-	paycheckCategory := `["Paycheck"]`
 	transactions := []domain.Transaction{
-		// This transaction matches BOTH category and tag sources
-		{ID: "tx-1", UserID: "user-123", Amount: 5000.00, Category: &paycheckCategory, Tags: []string{"salary"}},
+		// This transaction matches BOTH PFC primary and tag sources
+		{ID: "tx-1", UserID: "user-123", Amount: 5000.00, PFCPrimary: incomeTestStrPtr("INCOME"), Tags: []string{"salary"}},
 	}
 
 	mockRepo.On("GetByUserIDWithFilters", ctx, "user-123", mock.Anything, 10000, 0).
@@ -429,7 +435,7 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_RepositoryError(t *te
 	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
 
 	incomeSources := []domain.IncomeSource{
-		{Type: domain.IncomeSourceTypePlaidCategory, Value: "Paycheck"},
+		{Type: domain.IncomeSourceTypePFCPrimary, Value: "Paycheck"},
 	}
 
 	mockRepo.On("GetByUserIDWithFilters", ctx, "user-123", mock.Anything, 10000, 0).
@@ -453,7 +459,7 @@ func incomeTestStrPtr(s string) *string {
 // =============================================================================
 
 // TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimary tests that transactions
-// matched via personal_finance_category.primary are included in the result.
+// matched via pfc_primary are included in the result.
 func TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimary(t *testing.T) {
 	mockRepo := new(MockIncomeTransactionGetter)
 	logger := testIncomeServiceLogger()
@@ -464,52 +470,46 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimary(t *testing
 	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
 
 	incomeSources := []domain.IncomeSource{
-		{Type: domain.IncomeSourceTypePlaidCategory, Value: "INCOME"},
+		{Type: domain.IncomeSourceTypePFCPrimary, Value: "INCOME"},
 	}
 
 	transactions := []domain.Transaction{
-		// PFC-only transaction: no legacy category, primary enum matches — must be included
+		// PFC primary matches — must be included
 		{
-			ID:                      "tx-pfc-match",
-			UserID:                  "user-123",
-			Amount:                  4200.00,
-			PersonalFinanceCategory: incomeTestStrPtr(`{"primary":"INCOME","detailed":"INCOME_WAGES"}`),
+			ID:         "tx-pfc-match",
+			UserID:     "user-123",
+			Amount:     4200.00,
+			PFCPrimary: incomeTestStrPtr("INCOME"),
 		},
 		// PFC mismatch: primary is TRANSFER_IN, source expects INCOME — must be excluded
 		{
-			ID:                      "tx-pfc-mismatch",
-			UserID:                  "user-123",
-			Amount:                  1000.00,
-			PersonalFinanceCategory: incomeTestStrPtr(`{"primary":"TRANSFER_IN","detailed":"TRANSFER_IN_ACCOUNT_TRANSFER"}`),
+			ID:         "tx-pfc-mismatch",
+			UserID:     "user-123",
+			Amount:     1000.00,
+			PFCPrimary: incomeTestStrPtr("TRANSFER_IN"),
 		},
-		// Legacy category + PFC both present; source matches legacy — must be included (regression guard)
+		// PFC override matches INCOME — must be included
 		{
-			ID:                      "tx-legacy-match",
-			UserID:                  "user-123",
-			Amount:                  3000.00,
-			Category:                incomeTestStrPtr(`["Income"]`),
-			PersonalFinanceCategory: incomeTestStrPtr(`{"primary":"INCOME"}`),
+			ID:                   "tx-pfc-override-match",
+			UserID:               "user-123",
+			Amount:               3000.00,
+			PFCPrimary:           incomeTestStrPtr("FOOD_AND_DRINK"),
+			CategoryOverrideKind: incomeTestStrPtr("pfc"),
+			PFCPrimaryOverride:   incomeTestStrPtr("INCOME"),
 		},
 		// Negative amount with matching PFC primary — must be excluded (not income)
 		{
-			ID:                      "tx-negative",
-			UserID:                  "user-123",
-			Amount:                  -100.00,
-			PersonalFinanceCategory: incomeTestStrPtr(`{"primary":"INCOME"}`),
+			ID:         "tx-negative",
+			UserID:     "user-123",
+			Amount:     -100.00,
+			PFCPrimary: incomeTestStrPtr("INCOME"),
 		},
-		// Malformed PFC JSON — must not panic, must be excluded
+		// Nil PFC primary — must be excluded (uncategorized)
 		{
-			ID:                      "tx-bad-pfc",
-			UserID:                  "user-123",
-			Amount:                  500.00,
-			PersonalFinanceCategory: incomeTestStrPtr(`{not valid json`),
-		},
-		// Empty primary field — must be excluded
-		{
-			ID:                      "tx-empty-primary",
-			UserID:                  "user-123",
-			Amount:                  500.00,
-			PersonalFinanceCategory: incomeTestStrPtr(`{"primary":""}`),
+			ID:         "tx-nil-pfc",
+			UserID:     "user-123",
+			Amount:     500.00,
+			PFCPrimary: nil,
 		},
 	}
 
@@ -519,14 +519,14 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimary(t *testing
 	result, err := service.GetMatchingIncomeTransactions(ctx, "user-123", incomeSources, startDate, endDate)
 
 	assert.NoError(t, err)
-	// tx-pfc-match and tx-legacy-match should be included; all others excluded
+	// tx-pfc-match and tx-pfc-override-match should be included; all others excluded
 	assert.Len(t, result, 2)
 	ids := make([]string, len(result))
 	for i, tx := range result {
 		ids[i] = tx.ID
 	}
 	assert.Contains(t, ids, "tx-pfc-match")
-	assert.Contains(t, ids, "tx-legacy-match")
+	assert.Contains(t, ids, "tx-pfc-override-match")
 	mockRepo.AssertExpectations(t)
 }
 
@@ -544,7 +544,7 @@ func TestBudgetIncomeService_CalculateBudgetIncome_PFCPrimary(t *testing.T) {
 	budget := &domain.Budget{
 		UserID: "user-123",
 		IncomeSources: []domain.IncomeSource{
-			{Type: domain.IncomeSourceTypePlaidCategory, Value: "INCOME"},
+			{Type: domain.IncomeSourceTypePFCPrimary, Value: "INCOME"},
 		},
 	}
 

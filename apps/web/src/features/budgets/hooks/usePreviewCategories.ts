@@ -2,6 +2,7 @@
  * usePreviewCategories Hook
  * Issue #497: Budget Category Manager + Match Config UI
  * Issue #564: Migrated to generated React Query hooks
+ * Issue #1073: Updated for PFC v2 canonical schema
  *
  * Hook for fetching category preview (transaction count and total amount)
  * with debouncing and request cancellation support.
@@ -22,7 +23,6 @@ export interface UsePreviewCategoriesResult {
 
 const DEBOUNCE_MS = 300;
 
-// Empty state to return when disabled or no categories
 const EMPTY_STATE: UsePreviewCategoriesResult = {
   preview: null,
   loading: false,
@@ -32,16 +32,21 @@ const EMPTY_STATE: UsePreviewCategoriesResult = {
 /**
  * Hook to fetch category preview with debouncing.
  *
- * @param categories - Array of category paths to match
+ * @param categoryKind - 'pfc' or 'custom'
+ * @param pfcPrimary - PFC primary enum (required when kind=pfc)
+ * @param pfcDetailed - PFC detailed enum (optional when kind=pfc)
+ * @param customCategoryId - Custom category UUID (required when kind=custom)
  * @param tags - Array of tag names to match
  * @param matchLogic - How to combine category and tag matching
  * @param startDate - Start of date range (YYYY-MM-DD)
  * @param endDate - End of date range (YYYY-MM-DD)
  * @param enabled - Whether to enable preview fetching
- * @returns Preview result, loading state, and error
  */
 export function usePreviewCategories(
-  categories: string[][],
+  categoryKind: string,
+  pfcPrimary: string | undefined,
+  pfcDetailed: string | undefined,
+  customCategoryId: string | undefined,
   tags: string[],
   matchLogic: MatchLogic,
   startDate: string,
@@ -52,43 +57,40 @@ export function usePreviewCategories(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  // Use the generated mutation hook
   const mutation = usePreviewCategoryMatches();
 
-  // Track the current request to handle cancellation
   const requestIdRef = useRef(0);
   const debounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Determine if we should skip fetching (used to return early state without effect)
+  const hasCategory = categoryKind === 'pfc' ? !!pfcPrimary : !!customCategoryId;
+
   const shouldSkip = useMemo(
-    () => !enabled || categories.length === 0,
-    [enabled, categories.length]
+    () => !enabled || !categoryKind || !hasCategory,
+    [enabled, categoryKind, hasCategory]
   );
 
   useEffect(() => {
-    // Clear any pending debounce
     if (debounceTimeoutRef.current) {
       clearTimeout(debounceTimeoutRef.current);
       debounceTimeoutRef.current = null;
     }
 
-    // Skip if disabled or no categories - early return without setting state
     if (shouldSkip) {
       return;
     }
 
-    // Increment request ID to invalidate any in-flight requests
     requestIdRef.current += 1;
     const currentRequestId = requestIdRef.current;
 
-    // Capture current values for the async function
-    const capturedCategories = categories;
+    const capturedKind = categoryKind;
+    const capturedPfcPrimary = pfcPrimary;
+    const capturedPfcDetailed = pfcDetailed;
+    const capturedCustomId = customCategoryId;
     const capturedTags = tags;
     const capturedMatchLogic = matchLogic;
     const capturedStartDate = startDate;
     const capturedEndDate = endDate;
 
-    // Debounce the API call
     debounceTimeoutRef.current = setTimeout(async () => {
       setLoading(true);
       setError(null);
@@ -96,7 +98,10 @@ export function usePreviewCategories(
       try {
         const result = await mutation.mutateAsync({
           data: {
-            categories: capturedCategories,
+            category_kind: capturedKind,
+            pfc_primary: capturedPfcPrimary,
+            pfc_detailed: capturedPfcDetailed,
+            custom_category_id: capturedCustomId,
             tags: capturedTags.length > 0 ? capturedTags : undefined,
             match_logic: capturedMatchLogic,
             start_date: capturedStartDate,
@@ -104,14 +109,12 @@ export function usePreviewCategories(
           },
         });
 
-        // Only update state if this is still the current request
         if (currentRequestId === requestIdRef.current) {
           setPreview(result);
           setError(null);
           setLoading(false);
         }
       } catch (err) {
-        // Only update state if this is still the current request
         if (currentRequestId === requestIdRef.current) {
           setError(err instanceof Error ? err : new Error('Failed to fetch preview'));
           setPreview(null);
@@ -127,9 +130,8 @@ export function usePreviewCategories(
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [categories, tags, matchLogic, startDate, endDate, shouldSkip]);
+  }, [categoryKind, pfcPrimary, pfcDetailed, customCategoryId, tags, matchLogic, startDate, endDate, shouldSkip]);
 
-  // Return empty state when skipping (avoids setState in effect)
   if (shouldSkip) {
     return EMPTY_STATE;
   }

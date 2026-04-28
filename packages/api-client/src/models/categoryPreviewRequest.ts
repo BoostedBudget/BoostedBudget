@@ -31,10 +31,12 @@ Multi-region support planned for Phase 7+.
 export interface CategoryPreviewRequest {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
-  /** @nullable */
-  categories: (string[] | null)[] | null;
+  category_kind: string;
+  custom_category_id?: string;
   end_date: string;
   match_logic: string;
+  pfc_detailed?: string;
+  pfc_primary?: string;
   start_date: string;
   /** @nullable */
   tags?: string[] | null;

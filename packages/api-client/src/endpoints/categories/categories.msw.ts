@@ -51,7 +51,7 @@ export const getGetUserCategoriesResponseMock = (): CustomCategory[] | null =>
     ]),
     id: faker.string.alpha({ length: { min: 10, max: 20 } }),
     name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    parent_category: faker.helpers.arrayElement([
+    parent_pfc_primary: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),
@@ -75,7 +75,7 @@ export const getCreateCategoryResponseMock = (
   ]),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  parent_category: faker.helpers.arrayElement([
+  parent_pfc_primary: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
@@ -128,7 +128,7 @@ export const getGetCategoryByIDResponseMock = (
   ]),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  parent_category: faker.helpers.arrayElement([
+  parent_pfc_primary: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
@@ -153,7 +153,7 @@ export const getUpdateCategoryResponseMock = (
   ]),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  parent_category: faker.helpers.arrayElement([
+  parent_pfc_primary: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),

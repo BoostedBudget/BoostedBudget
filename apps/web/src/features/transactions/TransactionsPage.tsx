@@ -106,7 +106,7 @@ export function TransactionsPage() {
 
   const handleCategoryFilterChange = useCallback(
     (value: string[]) => {
-      setFilter('categories', value.length > 0 ? value : undefined)
+      setFilter('pfc_primaries', value.length > 0 ? value : undefined)
     },
     [setFilter]
   )
@@ -154,7 +154,7 @@ export function TransactionsPage() {
     currentPage,
   } = useTransactions({ filters, limit: 50 })
 
-  // Category filter options: union of curated PFC primaries + observed transaction categories
+  // Category filter options: union of curated PFC primaries + observed transaction pfc_primary values
   const categoryOptions = useMemo<FilterOption[]>(() => {
     const categorySet = new Set<string>()
 
@@ -163,18 +163,9 @@ export function TransactionsPage() {
 
     const transactions = data?.transactions ?? []
     transactions.forEach((t) => {
-      const category = t.category_override || t.category
-      if (category) {
-        try {
-          const parsed = JSON.parse(category)
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            categorySet.add(parsed[0])
-          }
-        } catch {
-          categorySet.add(category)
-        }
-      } else if (t.personal_finance_category_data?.primary_display) {
-        categorySet.add(t.personal_finance_category_data.primary_display)
+      const effectivePrimary = t.pfc_primary_override ?? t.pfc_primary
+      if (effectivePrimary) {
+        categorySet.add(effectivePrimary)
       }
     })
 
@@ -190,16 +181,16 @@ export function TransactionsPage() {
   }
 
   // Handle closing the editor
-  const handleEditorClose = () => {
+  const handleEditorClose = useCallback(() => {
     setIsEditorOpen(false)
     setSelectedTransaction(null)
-  }
+  }, [])
 
   // Handle successful save - update transaction in place for immediate display
-  const handleEditorSave = (updatedTransaction: Transaction) => {
+  const handleEditorSave = useCallback((updatedTransaction: Transaction) => {
     updateTransaction(updatedTransaction)
     handleEditorClose()
-  }
+  }, [updateTransaction, handleEditorClose])
 
   // Handle tag creation - invalidate query to refetch tags
   const handleTagCreated = useCallback(
@@ -271,13 +262,8 @@ export function TransactionsPage() {
           break
         }
         case 'category': {
-          const resolveCat = (t: Transaction) => {
-            const raw = t.category_override || t.category
-            if (raw) {
-              try { return (JSON.parse(raw) as string[])[0] ?? '' } catch { return raw }
-            }
-            return t.personal_finance_category_data?.primary_display ?? ''
-          }
+          const resolveCat = (t: Transaction) =>
+            t.pfc_primary_override ?? t.pfc_primary ?? ''
           comparison = resolveCat(a).localeCompare(resolveCat(b))
           break
         }
@@ -402,7 +388,7 @@ export function TransactionsPage() {
               accountFilter={filters.account_ids}
               onAccountFilterChange={handleAccountFilterChange}
               categoryOptions={categoryOptions}
-              categoryFilter={filters.categories}
+              categoryFilter={filters.pfc_primaries}
               onCategoryFilterChange={handleCategoryFilterChange}
               amountRange={currentAmountRange}
               onAmountRangeChange={handleAmountRangeChange}

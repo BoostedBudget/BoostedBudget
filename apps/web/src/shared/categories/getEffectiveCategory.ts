@@ -1,45 +1,51 @@
 import type { Transaction } from '@/features/transactions/types'
 
 /**
- * Parse a JSON string to a category array.
- * Returns empty array if invalid.
+ * The resolved effective category for a transaction.
+ * Discriminated union: either a PFC primary (+ optional detailed) or a custom category UUID.
  */
-function parseCategoryJson(json: string | null | undefined): string[] {
-  if (!json) return []
-  try {
-    const parsed = JSON.parse(json)
-    return Array.isArray(parsed) && parsed.length > 0 ? (parsed as string[]) : []
-  } catch {
-    return []
+export type EffectiveCategory =
+  | { kind: 'pfc'; pfc_primary: string; pfc_detailed?: string }
+  | { kind: 'custom'; custom_category_id: string }
+
+/**
+ * Returns the effective category for a transaction as a discriminated union.
+ *
+ * Priority:
+ *   1. category_override_kind = 'custom' → custom category
+ *   2. category_override_kind = 'pfc'    → pfc override
+ *   3. pfc_primary (Plaid-assigned)      → pfc source
+ *   4. null                              → uncategorized
+ */
+export function getEffectiveCategory(transaction: Transaction): EffectiveCategory | null {
+  if (transaction.category_override_kind === 'custom' && transaction.custom_category_override_id) {
+    return { kind: 'custom', custom_category_id: transaction.custom_category_override_id }
   }
+
+  if (transaction.category_override_kind === 'pfc' && transaction.pfc_primary_override) {
+    return {
+      kind: 'pfc',
+      pfc_primary: transaction.pfc_primary_override,
+      pfc_detailed: transaction.pfc_detailed_override ?? undefined,
+    }
+  }
+
+  if (transaction.pfc_primary) {
+    return {
+      kind: 'pfc',
+      pfc_primary: transaction.pfc_primary,
+      pfc_detailed: transaction.pfc_detailed ?? undefined,
+    }
+  }
+
+  return null
 }
 
 /**
- * Returns the effective display category path for a transaction as a string array.
- *
- * Fallback chain:
- *   category_override → legacy category → personal_finance_category_data.primary_display → []
- *
- * The explicit-uncategorized guard: when category_source is 'manual' and there is no
- * category_override, the user deliberately cleared the category — return [] rather than
- * falling back to the legacy category field.
+ * Returns the display label for an effective category.
  */
-export function getEffectiveCategory(transaction: Transaction): string[] {
-  const override = parseCategoryJson(transaction.category_override)
-
-  // Explicit-uncategorized guard: manual source with no non-empty override means the user
-  // deliberately cleared the category (category_override is absent or '[]') — return [] instead
-  // of falling through to legacy category or PFC.
-  if (transaction.category_source === 'manual' && override.length === 0) {
-    return []
-  }
-
-  if (override.length > 0) return override
-
-  const legacy = parseCategoryJson(transaction.category)
-  if (legacy.length > 0) return legacy
-
-  return transaction.personal_finance_category_data?.primary_display
-    ? [transaction.personal_finance_category_data.primary_display]
-    : []
+export function getEffectiveCategoryLabel(effective: EffectiveCategory | null): string {
+  if (!effective) return 'Uncategorized'
+  if (effective.kind === 'custom') return effective.custom_category_id
+  return effective.pfc_detailed ?? effective.pfc_primary
 }

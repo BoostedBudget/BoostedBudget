@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
@@ -73,20 +72,29 @@ func (s *ruleApplicationService) ApplyRulesToTransaction(ctx context.Context, tx
 	}
 
 	// No rules matched
-	// Issue #404: Changed from len()==0 to ==nil to support empty array [] as "clear category" action
-	if result == nil || (result.Category == nil && len(result.Tags) == 0) {
+	if result == nil || (result.TargetKind == nil && len(result.Tags) == 0) {
 		return nil
 	}
 
-	// Apply category if matched (first-match-wins)
-	// Issue #404: Changed from len()>0 to !=nil to apply empty array [] as "clear category"
-	if result.Category != nil {
-		categoryJSON, err := json.Marshal(result.Category)
-		if err != nil {
-			return err
+	// Apply category override if matched (first-match-wins)
+	if result.TargetKind != nil {
+		switch *result.TargetKind {
+		case "pfc":
+			tx.CategoryOverrideKind = result.TargetKind
+			tx.PFCPrimaryOverride = result.TargetPFCPrimary
+			tx.PFCDetailedOverride = result.TargetPFCDetailed
+			tx.CustomCategoryOverrideID = nil
+		case "custom":
+			tx.CategoryOverrideKind = result.TargetKind
+			tx.CustomCategoryOverrideID = result.TargetCustomCategoryID
+			tx.PFCPrimaryOverride = nil
+			tx.PFCDetailedOverride = nil
+		case "clear":
+			tx.CategoryOverrideKind = nil
+			tx.PFCPrimaryOverride = nil
+			tx.PFCDetailedOverride = nil
+			tx.CustomCategoryOverrideID = nil
 		}
-		categoryStr := string(categoryJSON)
-		tx.CategoryOverride = &categoryStr
 		tx.CategorySourceField = domain.CategorySourceRule
 
 		if s.analytics != nil && len(result.MatchedRuleIDs) > 0 {
@@ -194,20 +202,29 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 		}
 
 		// No rules matched
-		// Issue #404: Changed from len()==0 to ==nil to support empty array [] as "clear category" action
-		if result == nil || (result.Category == nil && len(result.Tags) == 0) {
+		if result == nil || (result.TargetKind == nil && len(result.Tags) == 0) {
 			continue
 		}
 
-		// Apply category if matched
-		// Issue #404: Changed from len()>0 to !=nil to apply empty array [] as "clear category"
-		if result.Category != nil {
-			categoryJSON, err := json.Marshal(result.Category)
-			if err != nil {
-				continue
+		// Apply category override if matched
+		if result.TargetKind != nil {
+			switch *result.TargetKind {
+			case "pfc":
+				tx.CategoryOverrideKind = result.TargetKind
+				tx.PFCPrimaryOverride = result.TargetPFCPrimary
+				tx.PFCDetailedOverride = result.TargetPFCDetailed
+				tx.CustomCategoryOverrideID = nil
+			case "custom":
+				tx.CategoryOverrideKind = result.TargetKind
+				tx.CustomCategoryOverrideID = result.TargetCustomCategoryID
+				tx.PFCPrimaryOverride = nil
+				tx.PFCDetailedOverride = nil
+			case "clear":
+				tx.CategoryOverrideKind = nil
+				tx.PFCPrimaryOverride = nil
+				tx.PFCDetailedOverride = nil
+				tx.CustomCategoryOverrideID = nil
 			}
-			categoryStr := string(categoryJSON)
-			tx.CategoryOverride = &categoryStr
 			tx.CategorySourceField = domain.CategorySourceRule
 
 			if s.analytics != nil && len(result.MatchedRuleIDs) > 0 {

@@ -50,9 +50,9 @@ type TransactionService interface {
 	// Returns the updated transaction
 	UpdateTransactionTags(ctx context.Context, userID, transactionID string, tags []string) (*domain.Transaction, error)
 
-	// UpdateTransactionCategory updates the category override on a transaction
-	// Returns the updated transaction
-	UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error)
+	// UpdateTransactionCategory updates the category override on a transaction using the PFC v2 discriminated union.
+	// overrideKind must be "pfc", "custom", or "clear".
+	UpdateTransactionCategory(ctx context.Context, userID, transactionID string, overrideKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string) (*domain.Transaction, error)
 
 	// GetDistinctPlaidCategories returns raw `personal_finance_category->>'primary'` enums
 	// observed in user transactions (e.g., "FOOD_AND_DRINK"). NOT a legacy Category[0] source.
@@ -150,11 +150,6 @@ func (s *transactionService) ListTransactions(
 	// hasMore is true if there are more results beyond current page
 	hasMore := (offset + len(transactions)) < totalCount
 
-	// Populate parsed PFC data for each transaction
-	for i := range transactions {
-		transactions[i].PersonalFinanceCategoryData = ParsePersonalFinanceCategoryJSON(transactions[i].PersonalFinanceCategory)
-	}
-
 	return &TransactionListResponse{
 		Transactions: transactions,
 		TotalCount:   totalCount,
@@ -228,7 +223,6 @@ func (s *transactionService) GetTransactionByID(ctx context.Context, userID, tra
 		return nil, repository.ErrTransactionNotFound
 	}
 
-	tx.PersonalFinanceCategoryData = ParsePersonalFinanceCategoryJSON(tx.PersonalFinanceCategory)
 	return tx, nil
 }
 
@@ -261,22 +255,23 @@ func (s *transactionService) UpdateTransactionTags(ctx context.Context, userID, 
 	return tx, nil
 }
 
-// UpdateTransactionCategory updates the category override on a transaction
-func (s *transactionService) UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error) {
+// UpdateTransactionCategory updates the category override on a transaction using the PFC v2 discriminated union.
+func (s *transactionService) UpdateTransactionCategory(ctx context.Context, userID, transactionID string, overrideKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string) (*domain.Transaction, error) {
 	// Verify ownership before update
 	if _, err := s.GetTransactionByID(ctx, userID, transactionID); err != nil {
 		return nil, err
 	}
 
-	// Update category in database
-	// Note: The repo UPDATE sets original_category = COALESCE(original_category, category)
-	// to preserve the original Plaid category on first manual edit
-	if err := s.repo.UpdateCategory(ctx, transactionID, userID, category, domain.CategorySourceManual); err != nil {
+	// Map kind to nullable for clear semantics
+	var kindPtr *string
+	if overrideKind != "clear" {
+		kindPtr = &overrideKind
+	}
+
+	if err := s.repo.UpdateCategory(ctx, transactionID, userID, kindPtr, pfcPrimary, pfcDetailed, customCategoryID, domain.CategorySourceManual); err != nil {
 		return nil, fmt.Errorf("failed to update transaction category: %w", err)
 	}
 
-	// Re-fetch the transaction to get all updated fields including original_category
-	// This ensures the API response includes the original_category set by the DB update
 	return s.GetTransactionByID(ctx, userID, transactionID)
 }
 

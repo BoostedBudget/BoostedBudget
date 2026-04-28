@@ -1,5 +1,3 @@
-// Issue #1058: TransactionEditor PFC fallback and explicit-uncategorized tests
-
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { ReadOnlyProvider } from '@/auth/ReadOnlyContext'
@@ -36,85 +34,64 @@ function renderEditor(transaction: Transaction) {
 }
 
 describe('TransactionEditor', () => {
-  describe('getEffectiveCategory — PFC fallback', () => {
-    it('shows PFC primary_display as initial category when no legacy category or override', () => {
+  describe('getEffectiveCategory — PFC v2 fields', () => {
+    it('shows pfc_primary as initial category (CategoryEditor shows selectedCategory[0])', () => {
       const txn: Transaction = {
         ...baseTransaction,
-        category: null,
-        category_override: null,
-        personal_finance_category_data: {
-          primary: 'FOOD_AND_DRINK',
-          primary_display: 'Food And Drink',
-          detailed: 'FOOD_AND_DRINK_FAST_FOOD',
-          detailed_display: 'Fast Food',
-        },
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD',
       }
       renderEditor(txn)
-      expect(screen.getByText('Food And Drink')).toBeInTheDocument()
+      // CategoryEditor renders selectedCategory[0] which is pfc_primary
+      expect(screen.getByText('FOOD_AND_DRINK')).toBeInTheDocument()
     })
 
-    it('shows legacy category when present, ignoring PFC', () => {
+    it('shows pfc_primary when pfc_detailed is absent', () => {
       const txn: Transaction = {
         ...baseTransaction,
-        category: '["Food and Drink","Restaurants"]',
-        category_override: null,
-        personal_finance_category_data: {
-          primary: 'FOOD_AND_DRINK',
-          primary_display: 'Food And Drink',
-        },
+        pfc_primary: 'FOOD_AND_DRINK',
       }
       renderEditor(txn)
-      expect(screen.getByText('Food and Drink')).toBeInTheDocument()
+      expect(screen.getByText('FOOD_AND_DRINK')).toBeInTheDocument()
     })
 
-    it('shows category_override when present, ignoring both legacy and PFC', () => {
+    it('shows pfc_primary_override when category_override_kind is pfc', () => {
       const txn: Transaction = {
         ...baseTransaction,
-        category: '["Food and Drink","Restaurants"]',
-        category_override: '["Dining Out"]',
-        personal_finance_category_data: {
-          primary: 'FOOD_AND_DRINK',
-          primary_display: 'Food And Drink',
-        },
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+        category_override_kind: 'pfc',
+        pfc_primary_override: 'TRANSPORTATION',
+        pfc_detailed_override: 'TRANSPORTATION_GAS',
       }
       renderEditor(txn)
-      expect(screen.getByText('Dining Out')).toBeInTheDocument()
+      // Override takes precedence; CategoryEditor shows selectedCategory[0] = pfc_primary_override
+      expect(screen.getByText('TRANSPORTATION')).toBeInTheDocument()
     })
   })
 
   describe('getEffectiveCategory — explicit-uncategorized guard', () => {
-    it('shows Uncategorized (not PFC) when user manually cleared the category', () => {
-      // category_source='manual' + category_override=null = user explicitly cleared it
-      // Should NOT fall back to PFC even though primary_display is present
+    it('shows Uncategorized when no pfc_primary and no override', () => {
       const txn: Transaction = {
         ...baseTransaction,
-        category: null,
-        category_override: null,
-        category_source: 'manual',
-        personal_finance_category_data: {
-          primary: 'FOOD_AND_DRINK',
-          primary_display: 'Food And Drink',
-        },
+        pfc_primary: null,
+        category_override_kind: null,
       }
       renderEditor(txn)
-      // CategoryEditor renders italic "Uncategorized" when selectedCategory is []
       expect(screen.getByText('Uncategorized')).toBeInTheDocument()
-      expect(screen.queryByText('Food And Drink')).not.toBeInTheDocument()
     })
 
-    it('still shows category_override when category_source is manual but override is set', () => {
+    it('shows pfc_primary when category_source is manual but pfc_primary is set', () => {
+      // In PFC v2, category_source='manual' does NOT suppress pfc_primary display.
+      // The transaction still has its Plaid-assigned pfc_primary.
       const txn: Transaction = {
         ...baseTransaction,
-        category: null,
-        category_override: '["Groceries"]',
+        pfc_primary: 'FOOD_AND_DRINK',
+        category_override_kind: null,
         category_source: 'manual',
-        personal_finance_category_data: {
-          primary: 'FOOD_AND_DRINK',
-          primary_display: 'Food And Drink',
-        },
       }
       renderEditor(txn)
-      expect(screen.getByText('Groceries')).toBeInTheDocument()
+      expect(screen.getByText('FOOD_AND_DRINK')).toBeInTheDocument()
     })
   })
 })

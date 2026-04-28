@@ -38,16 +38,17 @@ func TestRuleApplicationService_ApplyRulesToTransaction(t *testing.T) {
 	// Setup rules
 	rules := []*domain.CategorizationRule{
 		{
-			ID:             "rule-1",
-			UserID:         userID,
-			Name:           "Coffee Rule",
-			Enabled:        true,
-			Priority:       10,
-			Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "starbucks"}},
-			ConditionLogic: "AND",
-			TargetCategory: []string{"Food & Drink", "Coffee"},
-			TagBehavior:    "add",
-			Source:         "manual",
+			ID:              "rule-1",
+			UserID:          userID,
+			Name:            "Coffee Rule",
+			Enabled:         true,
+			Priority:        10,
+			Conditions:      []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "starbucks"}},
+			ConditionLogic:  "AND",
+			TargetKind:      strPtr("pfc"),
+			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+			TagBehavior:     "add",
+			Source:          "manual",
 		},
 	}
 
@@ -66,9 +67,11 @@ func TestRuleApplicationService_ApplyRulesToTransaction(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.CategorySourceRule, tx.CategorySourceField)
-	// Category should be applied as JSON string
-	assert.NotNil(t, tx.CategoryOverride)
-	assert.Contains(t, *tx.CategoryOverride, "Coffee")
+	// Category override kind should be set to "pfc"
+	require.NotNil(t, tx.CategoryOverrideKind)
+	assert.Equal(t, "pfc", *tx.CategoryOverrideKind)
+	require.NotNil(t, tx.PFCPrimaryOverride)
+	assert.Equal(t, "FOOD_AND_DRINK", *tx.PFCPrimaryOverride)
 	mockRepo.AssertExpectations(t)
 }
 
@@ -81,16 +84,17 @@ func TestRuleApplicationService_SkipManualOverride(t *testing.T) {
 
 	rules := []*domain.CategorizationRule{
 		{
-			ID:             "rule-1",
-			UserID:         userID,
-			Name:           "Coffee Rule",
-			Enabled:        true,
-			Priority:       10,
-			Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "starbucks"}},
-			ConditionLogic: "AND",
-			TargetCategory: []string{"Food & Drink", "Coffee"},
-			TagBehavior:    "add",
-			Source:         "manual",
+			ID:              "rule-1",
+			UserID:          userID,
+			Name:            "Coffee Rule",
+			Enabled:         true,
+			Priority:        10,
+			Conditions:      []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "starbucks"}},
+			ConditionLogic:  "AND",
+			TargetKind:      strPtr("pfc"),
+			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+			TagBehavior:     "add",
+			Source:          "manual",
 		},
 	}
 
@@ -98,13 +102,15 @@ func TestRuleApplicationService_SkipManualOverride(t *testing.T) {
 
 	// Transaction with manual override - should NOT be changed
 	merchantName := "Starbucks Coffee"
-	userCategory := `["My Custom Category"]`
+	existingKind := "pfc"
+	existingPrimary := "GENERAL_MERCHANDISE"
 	tx := &domain.Transaction{
 		ID:                  "tx-123",
 		UserID:              userID,
 		MerchantName:        &merchantName,
 		CategorySourceField: domain.CategorySourceManual,
-		CategoryOverride:    &userCategory,
+		CategoryOverrideKind: &existingKind,
+		PFCPrimaryOverride:   &existingPrimary,
 	}
 
 	err := service.ApplyRulesToTransaction(ctx, tx)
@@ -112,7 +118,7 @@ func TestRuleApplicationService_SkipManualOverride(t *testing.T) {
 	require.NoError(t, err)
 	// Category should NOT be changed since it was manually set
 	assert.Equal(t, domain.CategorySourceManual, tx.CategorySourceField)
-	assert.Equal(t, `["My Custom Category"]`, *tx.CategoryOverride)
+	assert.Equal(t, "GENERAL_MERCHANDISE", *tx.PFCPrimaryOverride)
 	// IncrementMatchCount should NOT be called since we skipped the rule
 	mockRepo.AssertNotCalled(t, "IncrementMatchCount", mock.Anything, mock.Anything)
 }
@@ -126,17 +132,18 @@ func TestRuleApplicationService_ApplyTags(t *testing.T) {
 
 	rules := []*domain.CategorizationRule{
 		{
-			ID:             "rule-1",
-			UserID:         userID,
-			Name:           "Coffee Rule",
-			Enabled:        true,
-			Priority:       10,
-			Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
-			ConditionLogic: "AND",
-			TargetCategory: []string{"Food & Drink"},
-			TargetTags:     []string{"coffee", "morning"},
-			TagBehavior:    "add",
-			Source:         "manual",
+			ID:              "rule-1",
+			UserID:          userID,
+			Name:            "Coffee Rule",
+			Enabled:         true,
+			Priority:        10,
+			Conditions:      []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
+			ConditionLogic:  "AND",
+			TargetKind:      strPtr("pfc"),
+			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+			TargetTags:      []string{"coffee", "morning"},
+			TagBehavior:     "add",
+			Source:          "manual",
 		},
 		{
 			ID:             "rule-2",
@@ -184,16 +191,17 @@ func TestRuleApplicationService_ApplyRulesToBatch(t *testing.T) {
 
 	rules := []*domain.CategorizationRule{
 		{
-			ID:             "rule-1",
-			UserID:         userID,
-			Name:           "Coffee Rule",
-			Enabled:        true,
-			Priority:       10,
-			Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
-			ConditionLogic: "AND",
-			TargetCategory: []string{"Food & Drink", "Coffee"},
-			TagBehavior:    "add",
-			Source:         "manual",
+			ID:              "rule-1",
+			UserID:          userID,
+			Name:            "Coffee Rule",
+			Enabled:         true,
+			Priority:        10,
+			Conditions:      []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
+			ConditionLogic:  "AND",
+			TargetKind:      strPtr("pfc"),
+			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+			TagBehavior:     "add",
+			Source:          "manual",
 		},
 	}
 
@@ -236,7 +244,7 @@ func TestRuleApplicationService_NoRules(t *testing.T) {
 
 	require.NoError(t, err)
 	// Transaction should remain unchanged
-	assert.Nil(t, tx.CategoryOverride)
+	assert.Nil(t, tx.CategoryOverrideKind)
 }
 
 // TestRuleApplicationService_PreserveManualTags tests that manual tags are preserved
@@ -332,16 +340,16 @@ func strPtr(s string) *string {
 	return &s
 }
 
-// TestRuleApplicationService_ClearCategoryUncategorized tests that rules with empty
-// TargetCategory [] clear the category (set to uncategorized).
-// Issue #404: Empty array represents "clear category" action.
+// TestRuleApplicationService_ClearCategoryUncategorized tests that rules with
+// TargetKind="clear" remove the category override.
+// Issue #404: TargetKind="clear" represents "clear category" action.
 func TestRuleApplicationService_ClearCategoryUncategorized(t *testing.T) {
 	mockRepo := new(mockRuleApplicationRepository)
 	service := NewRuleApplicationService(mockRepo)
 	ctx := context.Background()
 	userID := "user-123"
 
-	// Rule with empty TargetCategory = "clear category" action
+	// Rule with TargetKind="clear" = "clear category" action
 	rules := []*domain.CategorizationRule{
 		{
 			ID:             "rule-clear",
@@ -351,7 +359,7 @@ func TestRuleApplicationService_ClearCategoryUncategorized(t *testing.T) {
 			Priority:       10,
 			Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "spam"}},
 			ConditionLogic: "AND",
-			TargetCategory: []string{}, // Empty array = clear category
+			TargetKind:     strPtr("clear"),
 			TargetTags:     []string{"cleared"},
 			TagBehavior:    "add",
 			Source:         "manual",
@@ -362,20 +370,22 @@ func TestRuleApplicationService_ClearCategoryUncategorized(t *testing.T) {
 	mockRepo.On("IncrementMatchCount", ctx, "rule-clear").Return(nil)
 
 	merchantName := "Spam Merchant"
-	existingCategory := `["Shopping","Electronics"]`
+	existingKind := "pfc"
+	existingPrimary := "GENERAL_MERCHANDISE"
 	tx := &domain.Transaction{
-		ID:               "tx-123",
-		UserID:           userID,
-		MerchantName:     &merchantName,
-		CategoryOverride: &existingCategory,
+		ID:                   "tx-123",
+		UserID:               userID,
+		MerchantName:         &merchantName,
+		CategoryOverrideKind: &existingKind,
+		PFCPrimaryOverride:   &existingPrimary,
 	}
 
 	err := service.ApplyRulesToTransaction(ctx, tx)
 
 	require.NoError(t, err)
-	// CategoryOverride should be set to empty JSON array "[]"
-	require.NotNil(t, tx.CategoryOverride, "CategoryOverride should not be nil")
-	assert.Equal(t, "[]", *tx.CategoryOverride, "Category should be cleared to empty array")
+	// CategoryOverrideKind should be cleared to nil
+	assert.Nil(t, tx.CategoryOverrideKind, "CategoryOverrideKind should be cleared")
+	assert.Nil(t, tx.PFCPrimaryOverride, "PFCPrimaryOverride should be cleared")
 	assert.Equal(t, domain.CategorySourceRule, tx.CategorySourceField)
 	// Tags should still be applied
 	assert.Contains(t, tx.Tags, "cleared")
@@ -384,14 +394,13 @@ func TestRuleApplicationService_ClearCategoryUncategorized(t *testing.T) {
 
 // TestRuleApplicationService_ClearCategoryUncategorized_Batch tests that batch
 // processing also handles clear category rules correctly.
-// Issue #404: Empty array represents "clear category" action.
 func TestRuleApplicationService_ClearCategoryUncategorized_Batch(t *testing.T) {
 	mockRepo := new(mockRuleApplicationRepository)
 	service := NewRuleApplicationService(mockRepo)
 	ctx := context.Background()
 	userID := "user-123"
 
-	// Rule with empty TargetCategory = "clear category" action
+	// Rule with TargetKind="clear" = "clear category" action
 	rules := []*domain.CategorizationRule{
 		{
 			ID:             "rule-clear",
@@ -401,7 +410,7 @@ func TestRuleApplicationService_ClearCategoryUncategorized_Batch(t *testing.T) {
 			Priority:       10,
 			Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "spam"}},
 			ConditionLogic: "AND",
-			TargetCategory: []string{}, // Empty array = clear category
+			TargetKind:     strPtr("clear"),
 			TagBehavior:    "add",
 			Source:         "manual",
 		},
@@ -412,33 +421,32 @@ func TestRuleApplicationService_ClearCategoryUncategorized_Batch(t *testing.T) {
 
 	merchant1 := "Spam Company"
 	merchant2 := "Normal Store"
-	existingCategory := `["Shopping"]`
+	existingKind := "pfc"
+	existingPrimary := "GENERAL_MERCHANDISE"
 	txns := []domain.Transaction{
-		{ID: "tx-1", UserID: userID, MerchantName: &merchant1, CategoryOverride: &existingCategory},
-		{ID: "tx-2", UserID: userID, MerchantName: &merchant2, CategoryOverride: &existingCategory},
+		{ID: "tx-1", UserID: userID, MerchantName: &merchant1, CategoryOverrideKind: &existingKind, PFCPrimaryOverride: &existingPrimary},
+		{ID: "tx-2", UserID: userID, MerchantName: &merchant2, CategoryOverrideKind: &existingKind, PFCPrimaryOverride: &existingPrimary},
 	}
 
 	err := service.ApplyRulesToBatch(ctx, txns, userID)
 
 	require.NoError(t, err)
 	// First transaction should have category cleared
-	require.NotNil(t, txns[0].CategoryOverride)
-	assert.Equal(t, "[]", *txns[0].CategoryOverride, "Category should be cleared to empty array")
+	assert.Nil(t, txns[0].CategoryOverrideKind, "CategoryOverrideKind should be cleared for matching transaction")
 	assert.Equal(t, domain.CategorySourceRule, txns[0].CategorySourceField)
 	// Second transaction should NOT match (no "spam" in name)
-	assert.Equal(t, `["Shopping"]`, *txns[1].CategoryOverride, "Non-matching transaction should keep original category")
+	assert.Equal(t, "GENERAL_MERCHANDISE", *txns[1].PFCPrimaryOverride, "Non-matching transaction should keep original category")
 }
 
 // TestRuleApplicationService_NoCategoryActionNil tests that rules with nil
-// TargetCategory (not empty array) do not modify the category at all.
-// Issue #404: Distinguish nil (no action) from [] (clear action).
+// TargetKind (no category action) do not modify the category at all.
 func TestRuleApplicationService_NoCategoryActionNil(t *testing.T) {
 	mockRepo := new(mockRuleApplicationRepository)
 	service := NewRuleApplicationService(mockRepo)
 	ctx := context.Background()
 	userID := "user-123"
 
-	// Rule with nil TargetCategory = no category action
+	// Rule with nil TargetKind = no category action
 	rules := []*domain.CategorizationRule{
 		{
 			ID:             "rule-tags-only",
@@ -448,7 +456,6 @@ func TestRuleApplicationService_NoCategoryActionNil(t *testing.T) {
 			Priority:       10,
 			Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "store"}},
 			ConditionLogic: "AND",
-			TargetCategory: nil, // nil = no category action
 			TargetTags:     []string{"tagged"},
 			TagBehavior:    "add",
 			Source:         "manual",
@@ -459,34 +466,35 @@ func TestRuleApplicationService_NoCategoryActionNil(t *testing.T) {
 	mockRepo.On("IncrementMatchCount", ctx, "rule-tags-only").Return(nil)
 
 	merchantName := "Some Store"
-	existingCategory := `["Shopping"]`
+	existingKind := "pfc"
+	existingPrimary := "GENERAL_MERCHANDISE"
 	tx := &domain.Transaction{
-		ID:               "tx-123",
-		UserID:           userID,
-		MerchantName:     &merchantName,
-		CategoryOverride: &existingCategory,
+		ID:                   "tx-123",
+		UserID:               userID,
+		MerchantName:         &merchantName,
+		CategoryOverrideKind: &existingKind,
+		PFCPrimaryOverride:   &existingPrimary,
 	}
 
 	err := service.ApplyRulesToTransaction(ctx, tx)
 
 	require.NoError(t, err)
-	// Category should NOT be modified (nil = no action)
-	assert.Equal(t, `["Shopping"]`, *tx.CategoryOverride, "Category should remain unchanged with nil TargetCategory")
+	// Category should NOT be modified (nil TargetKind = no action)
+	assert.Equal(t, "GENERAL_MERCHANDISE", *tx.PFCPrimaryOverride, "Category should remain unchanged with nil TargetKind")
 	// Tags should still be applied
 	assert.Contains(t, tx.Tags, "tagged")
 	mockRepo.AssertExpectations(t)
 }
 
 // TestRuleApplicationService_ClearCategoryOnlyAction tests that a rule with only
-// empty TargetCategory (no tags) still works as a valid action.
-// Issue #404: Empty array [] is a valid action even without tags.
+// TargetKind="clear" (no tags) still works as a valid action.
 func TestRuleApplicationService_ClearCategoryOnlyAction(t *testing.T) {
 	mockRepo := new(mockRuleApplicationRepository)
 	service := NewRuleApplicationService(mockRepo)
 	ctx := context.Background()
 	userID := "user-123"
 
-	// Rule with ONLY empty TargetCategory, no tags
+	// Rule with ONLY TargetKind="clear", no tags
 	rules := []*domain.CategorizationRule{
 		{
 			ID:             "rule-clear-only",
@@ -496,8 +504,7 @@ func TestRuleApplicationService_ClearCategoryOnlyAction(t *testing.T) {
 			Priority:       10,
 			Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "junk"}},
 			ConditionLogic: "AND",
-			TargetCategory: []string{}, // Empty array = clear category
-			TargetTags:     nil,        // No tag action
+			TargetKind:     strPtr("clear"),
 			TagBehavior:    "add",
 			Source:         "manual",
 		},
@@ -507,20 +514,22 @@ func TestRuleApplicationService_ClearCategoryOnlyAction(t *testing.T) {
 	mockRepo.On("IncrementMatchCount", ctx, "rule-clear-only").Return(nil)
 
 	merchantName := "Junk Mail Inc"
-	existingCategory := `["Entertainment"]`
+	existingKind := "pfc"
+	existingPrimary := "ENTERTAINMENT"
 	tx := &domain.Transaction{
-		ID:               "tx-123",
-		UserID:           userID,
-		MerchantName:     &merchantName,
-		CategoryOverride: &existingCategory,
+		ID:                   "tx-123",
+		UserID:               userID,
+		MerchantName:         &merchantName,
+		CategoryOverrideKind: &existingKind,
+		PFCPrimaryOverride:   &existingPrimary,
 	}
 
 	err := service.ApplyRulesToTransaction(ctx, tx)
 
 	require.NoError(t, err)
-	// CategoryOverride should be set to empty JSON array "[]"
-	require.NotNil(t, tx.CategoryOverride, "CategoryOverride should not be nil")
-	assert.Equal(t, "[]", *tx.CategoryOverride, "Category should be cleared to empty array")
+	// CategoryOverrideKind should be cleared to nil
+	assert.Nil(t, tx.CategoryOverrideKind, "CategoryOverrideKind should be cleared")
+	assert.Nil(t, tx.PFCPrimaryOverride, "PFCPrimaryOverride should be cleared")
 	assert.Equal(t, domain.CategorySourceRule, tx.CategorySourceField)
 	mockRepo.AssertExpectations(t)
 }
