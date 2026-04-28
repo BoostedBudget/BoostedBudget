@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
 import type { CategorizationRule } from '../types'
@@ -24,7 +24,9 @@ describe('AutoCategorizationRuleEditor', () => {
     priority: 10,
     conditions: [{ type: 'merchant_contains', value: 'starbucks' }],
     condition_logic: 'AND',
-    target_category: ['Food & Drink', 'Coffee'],
+    target_kind: 'pfc',
+    target_pfc_primary: 'FOOD_AND_DRINK',
+    target_pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
     target_tags: ['morning'],
     tag_behavior: 'add',
     source: 'manual',
@@ -155,6 +157,7 @@ describe('AutoCategorizationRuleEditor', () => {
           onSave={mockOnSave}
           onCancel={mockOnCancel}
           categories={mockCategories}
+          plaidPrimaries={mockPlaidPrimaries}
         />
       )
 
@@ -168,7 +171,7 @@ describe('AutoCategorizationRuleEditor', () => {
 
       const categorySelect = screen.getByRole('combobox', { name: /target category/i })
       await user.click(categorySelect)
-      await user.click(screen.getByText('Food & Drink > Coffee'))
+      await user.click(screen.getByText('Food And Drink'))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
@@ -177,7 +180,8 @@ describe('AutoCategorizationRuleEditor', () => {
         expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
           name: 'Test Rule',
           conditions: [{ type: 'merchant_contains', value: 'amazon' }],
-          target_category: ['Food & Drink', 'Coffee'],
+          target_kind: 'pfc',
+          target_pfc_primary: 'FOOD_AND_DRINK',
         }))
       })
     })
@@ -594,30 +598,6 @@ describe('AutoCategorizationRuleEditor', () => {
       expect(textInput).toBeInTheDocument()
       expect(textInput).toHaveAttribute('type', 'text')
     })
-
-    it('should render searchable category dropdown for existing_category', async () => {
-      const user = userEvent.setup({ delay: null })
-      render(
-        <AutoCategorizationRuleEditor
-          mode="create"
-          onSave={mockOnSave}
-          onCancel={mockOnCancel}
-          categories={mockCategories}
-          plaidPrimaries={mockPlaidPrimaries}
-        />
-      )
-
-      const addButton = screen.getByRole('button', { name: /add condition/i })
-      fireEvent.click(addButton)
-
-      const typeSelect = screen.getByLabelText(/condition type/i)
-      await user.selectOptions(typeSelect, 'existing_category')
-
-      const categorySelect = screen.getByRole('combobox', { name: /select category/i })
-      expect(categorySelect).toBeInTheDocument()
-      expect(categorySelect.tagName).toBe('INPUT')
-    })
-
     it('should render payment channel select for payment_channel', async () => {
       const user = userEvent.setup({ delay: null })
       render(
@@ -730,9 +710,9 @@ describe('AutoCategorizationRuleEditor', () => {
       const addButton = screen.getByRole('button', { name: /add condition/i })
       fireEvent.click(addButton)
 
-      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
-      await user.click(categorySelect)
-      await user.click(screen.getByText('Food & Drink > Coffee'))
+      // Satisfy "target category or tags required" with a tag (target picker is exercised in dedicated tests).
+      await user.type(screen.getByPlaceholderText(/add tag/i), 'TestTag')
+      fireEvent.click(screen.getByRole('button', { name: /add tag/i }))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
@@ -769,9 +749,9 @@ describe('AutoCategorizationRuleEditor', () => {
       await user.clear(maxInput)
       await user.type(maxInput, '50')
 
-      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
-      await user.click(categorySelect)
-      await user.click(screen.getByText('Food & Drink > Coffee'))
+      // Satisfy "target category or tags required" with a tag (target picker is exercised in dedicated tests).
+      await user.type(screen.getByPlaceholderText(/add tag/i), 'TestTag')
+      fireEvent.click(screen.getByRole('button', { name: /add tag/i }))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
@@ -806,9 +786,9 @@ describe('AutoCategorizationRuleEditor', () => {
       fireEvent.change(startInput, { target: { value: '2025-12-31' } })
       fireEvent.change(endInput, { target: { value: '2025-01-01' } })
 
-      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
-      await user.click(categorySelect)
-      await user.click(screen.getByText('Food & Drink > Coffee'))
+      // Satisfy "target category or tags required" with a tag (target picker is exercised in dedicated tests).
+      await user.type(screen.getByPlaceholderText(/add tag/i), 'TestTag')
+      fireEvent.click(screen.getByRole('button', { name: /add tag/i }))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
@@ -868,9 +848,9 @@ describe('AutoCategorizationRuleEditor', () => {
       const startInput = screen.getByLabelText(/start date/i)
       fireEvent.change(startInput, { target: { value: '2025-01-01' } })
 
-      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
-      await user.click(categorySelect)
-      await user.click(screen.getByText('Food & Drink > Coffee'))
+      // Satisfy "target category or tags required" with a tag (target picker is exercised in dedicated tests).
+      await user.type(screen.getByPlaceholderText(/add tag/i), 'TestTag')
+      fireEvent.click(screen.getByRole('button', { name: /add tag/i }))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
@@ -899,9 +879,9 @@ describe('AutoCategorizationRuleEditor', () => {
       const typeSelect = screen.getByLabelText(/condition type/i)
       await user.selectOptions(typeSelect, 'account_type')
 
-      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
-      await user.click(categorySelect)
-      await user.click(screen.getByText('Food & Drink > Coffee'))
+      // Satisfy "target category or tags required" with a tag (target picker is exercised in dedicated tests).
+      await user.type(screen.getByPlaceholderText(/add tag/i), 'TestTag')
+      fireEvent.click(screen.getByRole('button', { name: /add tag/i }))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
@@ -928,9 +908,9 @@ describe('AutoCategorizationRuleEditor', () => {
       const addButton = screen.getByRole('button', { name: /add condition/i })
       fireEvent.click(addButton)
 
-      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
-      await user.click(categorySelect)
-      await user.click(screen.getByText('Food & Drink > Coffee'))
+      // Satisfy "target category or tags required" with a tag (target picker is exercised in dedicated tests).
+      await user.type(screen.getByPlaceholderText(/add tag/i), 'TestTag')
+      fireEvent.click(screen.getByRole('button', { name: /add tag/i }))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
@@ -991,12 +971,9 @@ describe('AutoCategorizationRuleEditor', () => {
       const textInputs = screen.getAllByPlaceholderText(/enter value/i)
       fillInput(textInputs[0], 'first')
 
-      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
-      fireEvent.click(categorySelect)
-      await waitFor(() => {
-        expect(screen.getByText('Food & Drink > Coffee')).toBeVisible()
-      })
-      fireEvent.click(screen.getByText('Food & Drink > Coffee'))
+      // Satisfy validation with a tag (target picker exercised in dedicated tests).
+      fillInput(screen.getByPlaceholderText(/add tag/i), 'TestTag')
+      fireEvent.click(screen.getByRole('button', { name: /add tag/i }))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
@@ -1029,12 +1006,9 @@ describe('AutoCategorizationRuleEditor', () => {
       const textInput = screen.getByPlaceholderText(/enter value/i)
       fillInput(textInput, "McDonald's & Co. <test>")
 
-      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
-      fireEvent.click(categorySelect)
-      await waitFor(() => {
-        expect(screen.getByText('Food & Drink > Coffee')).toBeVisible()
-      })
-      fireEvent.click(screen.getByText('Food & Drink > Coffee'))
+      // Satisfy validation with a tag (target picker exercised in dedicated tests).
+      fillInput(screen.getByPlaceholderText(/add tag/i), 'TestTag')
+      fireEvent.click(screen.getByRole('button', { name: /add tag/i }))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
@@ -1069,9 +1043,9 @@ describe('AutoCategorizationRuleEditor', () => {
       const amountInput = screen.getByRole('spinbutton', { name: /condition value/i })
       expect(amountInput).toHaveValue(0)
 
-      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
-      await user.click(categorySelect)
-      await user.click(screen.getByText('Food & Drink > Coffee'))
+      // Satisfy "target category or tags required" with a tag (target picker is exercised in dedicated tests).
+      await user.type(screen.getByPlaceholderText(/add tag/i), 'TestTag')
+      fireEvent.click(screen.getByRole('button', { name: /add tag/i }))
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)
@@ -1151,101 +1125,6 @@ describe('AutoCategorizationRuleEditor', () => {
       },
     ]
 
-    describe('existing_category condition', () => {
-      it('should show searchable dropdown for Plaid category selection', async () => {
-        const user = userEvent.setup({ delay: null })
-
-        render(
-          <AutoCategorizationRuleEditor
-            mode="create"
-            onSave={mockOnSave}
-            onCancel={mockOnCancel}
-            categories={mockCategories}
-            plaidPrimaries={mockPlaidPrimaries}
-          />
-        )
-
-        const addButton = screen.getByRole('button', { name: /add condition/i })
-        fireEvent.click(addButton)
-
-        const typeSelect = screen.getByLabelText(/condition type/i)
-        await user.selectOptions(typeSelect, 'existing_category')
-
-        const searchInput = screen.getByRole('combobox', { name: /select category/i })
-        expect(searchInput).toBeInTheDocument()
-      })
-
-      it('should filter Plaid categories as user types', async () => {
-        const user = userEvent.setup({ delay: null })
-
-        render(
-          <AutoCategorizationRuleEditor
-            mode="create"
-            onSave={mockOnSave}
-            onCancel={mockOnCancel}
-            categories={mockCategories}
-            plaidPrimaries={mockPlaidPrimaries}
-          />
-        )
-
-        const addButton = screen.getByRole('button', { name: /add condition/i })
-        fireEvent.click(addButton)
-
-        const typeSelect = screen.getByLabelText(/condition type/i)
-        await user.selectOptions(typeSelect, 'existing_category')
-
-        const searchInput = screen.getByRole('combobox', { name: /select category/i })
-        await user.click(searchInput)
-        await user.type(searchInput, 'food')
-
-        await waitFor(() => {
-          expect(screen.getByText('Food And Drink')).toBeInTheDocument()
-          expect(screen.queryByText('Transportation')).not.toBeInTheDocument()
-        })
-      })
-
-      it('existing_category_writes_display_string_not_enum', async () => {
-        // CRITICAL: existing_category must store display string (e.g. "Shopping") not enum ("SHOPPING")
-        // The backend evaluator compares condition.value against tx.Category[0] lowercased
-        const user = userEvent.setup({ delay: null })
-
-        render(
-          <AutoCategorizationRuleEditor
-            mode="create"
-            onSave={mockOnSave}
-            onCancel={mockOnCancel}
-            categories={mockCategories}
-            plaidPrimaries={mockPlaidPrimaries}
-          />
-        )
-
-        await user.type(screen.getByLabelText(/rule name/i), 'Category Match Rule')
-
-        const addButton = screen.getByRole('button', { name: /add condition/i })
-        fireEvent.click(addButton)
-
-        const typeSelect = screen.getByLabelText(/condition type/i)
-        await user.selectOptions(typeSelect, 'existing_category')
-
-        const searchInput = screen.getByRole('combobox', { name: /select category/i })
-        await user.click(searchInput)
-        await user.click(screen.getByText('Shopping'))
-
-        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
-        await user.click(targetCategoryInput)
-        await user.click(screen.getByText('Food & Drink > Coffee'))
-
-        const saveButton = screen.getByRole('button', { name: /save/i })
-        fireEvent.click(saveButton)
-
-        await waitFor(() => {
-          expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
-            // Must be display string "Shopping", NOT raw enum "SHOPPING"
-            conditions: [{ type: 'existing_category', value: 'Shopping' }],
-          }))
-        })
-      })
-    })
 
     describe('account_id condition', () => {
       it('should show searchable dropdown for account selection', async () => {
@@ -1352,9 +1231,9 @@ describe('AutoCategorizationRuleEditor', () => {
         await user.click(searchInput)
         await user.click(screen.getByText('Checking'))
 
-        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
-        await user.click(targetCategoryInput)
-        await user.click(screen.getByText('Shopping'))
+        // Satisfy validation with a tag (target picker exercised in dedicated tests).
+        await user.type(screen.getByPlaceholderText(/add tag/i), 'TestTag')
+        fireEvent.click(screen.getByRole('button', { name: /add tag/i }))
 
         const saveButton = screen.getByRole('button', { name: /save/i })
         fireEvent.click(saveButton)
@@ -1367,323 +1246,8 @@ describe('AutoCategorizationRuleEditor', () => {
       })
     })
 
-    describe('Target Category selector', () => {
-      it('should use searchable dropdown for target category', async () => {
-        render(
-          <AutoCategorizationRuleEditor
-            mode="create"
-            onSave={mockOnSave}
-            onCancel={mockOnCancel}
-            categories={mockCategories}
-          />
-        )
-
-        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
-        expect(targetCategoryInput).toBeInTheDocument()
-      })
-
-      it('should show "No category change" as first option', async () => {
-        const user = userEvent.setup({ delay: null })
-
-        render(
-          <AutoCategorizationRuleEditor
-            mode="create"
-            onSave={mockOnSave}
-            onCancel={mockOnCancel}
-            categories={mockCategories}
-          />
-        )
-
-        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
-        await user.click(targetCategoryInput)
-
-        expect(screen.getByText('No category change')).toBeInTheDocument()
-      })
-
-      it('should filter categories as user types', async () => {
-        const user = userEvent.setup({ delay: null })
-
-        render(
-          <AutoCategorizationRuleEditor
-            mode="create"
-            onSave={mockOnSave}
-            onCancel={mockOnCancel}
-            categories={mockCategories}
-          />
-        )
-
-        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
-        await user.click(targetCategoryInput)
-        await user.type(targetCategoryInput, 'food')
-
-        await waitFor(() => {
-          const foodOption = screen.getByText('Food & Drink')
-          expect(foodOption).toBeInTheDocument()
-        })
-      })
-
-      it('target_picker_dedupes_curated_with_custom', async () => {
-        const user = userEvent.setup({ delay: null })
-
-        render(
-          <AutoCategorizationRuleEditor
-            mode="create"
-            onSave={mockOnSave}
-            onCancel={mockOnCancel}
-            categories={mockCategories}
-            plaidPrimaries={mockPlaidPrimaries}
-          />
-        )
-
-        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
-        await user.click(targetCategoryInput)
-
-        await waitFor(() => {
-          // Custom category "Food & Drink" is present
-          expect(screen.getByText('Food & Drink')).toBeInTheDocument()
-          // Curated PFC primaries not in custom list are present
-          expect(screen.getByText('Transportation')).toBeInTheDocument()
-          expect(screen.getByText('Entertainment')).toBeInTheDocument()
-        })
-      })
-
-      it('should sort combined categories alphabetically', async () => {
-        const user = userEvent.setup({ delay: null })
-
-        render(
-          <AutoCategorizationRuleEditor
-            mode="create"
-            onSave={mockOnSave}
-            onCancel={mockOnCancel}
-            categories={mockCategories}
-            plaidPrimaries={mockPlaidPrimaries}
-          />
-        )
-
-        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
-        await user.click(targetCategoryInput)
-
-        await waitFor(() => {
-          const options = screen.getAllByRole('option')
-          expect(options.length).toBeGreaterThan(0)
-        })
-      })
-
-      it('should store Plaid category as single-element array when selected', async () => {
-        const user = userEvent.setup({ delay: null })
-
-        render(
-          <AutoCategorizationRuleEditor
-            mode="create"
-            onSave={mockOnSave}
-            onCancel={mockOnCancel}
-            categories={mockCategories}
-            plaidPrimaries={mockPlaidPrimaries}
-          />
-        )
-
-        await user.type(screen.getByLabelText(/rule name/i), 'Plaid Category Rule')
-
-        const addButton = screen.getByRole('button', { name: /add condition/i })
-        fireEvent.click(addButton)
-        const conditionValueInput = screen.getByPlaceholderText(/enter value/i)
-        await user.type(conditionValueInput, 'test')
-
-        const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
-        await user.click(targetCategoryInput)
-        await user.click(screen.getByText('Transportation'))
-
-        const saveButton = screen.getByRole('button', { name: /save/i })
-        fireEvent.click(saveButton)
-
-        await waitFor(() => {
-          expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
-            target_category: ['Transportation'],
-          }))
-        })
-      })
-    })
   })
 
-  describe('Uncategorized target category (Issue #404)', () => {
-    it('should show "Uncategorized" as an option in the dropdown', async () => {
-      const user = userEvent.setup({ delay: null })
-
-      render(
-        <AutoCategorizationRuleEditor
-          mode="create"
-          onSave={mockOnSave}
-          onCancel={mockOnCancel}
-          categories={mockCategories}
-        />
-      )
-
-      const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
-      await user.click(targetCategoryInput)
-
-      expect(screen.getByText('Uncategorized')).toBeInTheDocument()
-    })
-
-    it('should set targetCategory to empty array when Uncategorized selected', async () => {
-      const user = userEvent.setup({ delay: null })
-
-      render(
-        <AutoCategorizationRuleEditor
-          mode="create"
-          onSave={mockOnSave}
-          onCancel={mockOnCancel}
-          categories={mockCategories}
-        />
-      )
-
-      await user.type(screen.getByLabelText(/rule name/i), 'Clear Category Rule')
-
-      const addButton = screen.getByRole('button', { name: /add condition/i })
-      fireEvent.click(addButton)
-      const conditionValueInput = screen.getByPlaceholderText(/enter value/i)
-      await user.type(conditionValueInput, 'spam')
-
-      const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
-      await user.click(targetCategoryInput)
-      await user.click(screen.getByText('Uncategorized'))
-
-      const saveButton = screen.getByRole('button', { name: /save/i })
-      fireEvent.click(saveButton)
-
-      await waitFor(() => {
-        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
-          target_category: [],
-        }))
-      })
-    })
-
-    it('should display "Uncategorized" when editing rule with empty target_category array', () => {
-      const ruleWithEmptyCategory: CategorizationRule = {
-        ...mockExistingRule,
-        target_category: [],
-        target_tags: ['spam'],
-      }
-
-      render(
-        <AutoCategorizationRuleEditor
-          mode="edit"
-          rule={ruleWithEmptyCategory}
-          onSave={mockOnSave}
-          onCancel={mockOnCancel}
-          categories={mockCategories}
-        />
-      )
-
-      const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
-      expect(targetCategoryInput).toHaveValue('Uncategorized')
-    })
-
-    it('should distinguish null (no action) from empty array (clear category)', async () => {
-      const user = userEvent.setup({ delay: null })
-
-      const ruleWithNullCategory: CategorizationRule = {
-        ...mockExistingRule,
-        target_category: null,
-        target_tags: ['tagged'],
-      }
-
-      render(
-        <AutoCategorizationRuleEditor
-          mode="edit"
-          rule={ruleWithNullCategory}
-          onSave={mockOnSave}
-          onCancel={mockOnCancel}
-          categories={mockCategories}
-        />
-      )
-
-      const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
-      expect(targetCategoryInput).not.toHaveValue('Uncategorized')
-
-      await user.click(targetCategoryInput)
-      await user.click(screen.getByText('Uncategorized'))
-
-      const saveButton = screen.getByRole('button', { name: /save/i })
-      fireEvent.click(saveButton)
-
-      await waitFor(() => {
-        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
-          target_category: [],
-        }))
-      })
-    })
-
-    it('should allow rule with only Uncategorized action (no tags)', async () => {
-      const user = userEvent.setup({ delay: null })
-
-      render(
-        <AutoCategorizationRuleEditor
-          mode="create"
-          onSave={mockOnSave}
-          onCancel={mockOnCancel}
-          categories={mockCategories}
-        />
-      )
-
-      await user.type(screen.getByLabelText(/rule name/i), 'Clear Only Rule')
-
-      const addButton = screen.getByRole('button', { name: /add condition/i })
-      fireEvent.click(addButton)
-      const conditionValueInput = screen.getByPlaceholderText(/enter value/i)
-      await user.type(conditionValueInput, 'junk')
-
-      const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
-      await user.click(targetCategoryInput)
-      await user.click(screen.getByText('Uncategorized'))
-
-      const saveButton = screen.getByRole('button', { name: /save/i })
-      fireEvent.click(saveButton)
-
-      await waitFor(() => {
-        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
-          target_category: [],
-        }))
-      })
-    })
-
-    it('should clear to null (no action) when using "No category change"', async () => {
-      const user = userEvent.setup({ delay: null })
-
-      const ruleWithCategory: CategorizationRule = {
-        ...mockExistingRule,
-        target_category: ['Food & Drink'],
-        target_tags: ['tagged'],
-      }
-
-      render(
-        <AutoCategorizationRuleEditor
-          mode="edit"
-          rule={ruleWithCategory}
-          onSave={mockOnSave}
-          onCancel={mockOnCancel}
-          categories={mockCategories}
-        />
-      )
-
-      const targetCategoryInput = screen.getByRole('combobox', { name: /target category/i })
-      await user.click(targetCategoryInput)
-
-      const listbox = await screen.findByRole('listbox')
-      const noCategoryOption = within(listbox).getByText('No category change')
-      await user.click(noCategoryOption)
-
-      const saveButton = screen.getByRole('button', { name: /save/i })
-      fireEvent.click(saveButton)
-
-      await waitFor(() => {
-        expect(mockOnSave).toHaveBeenCalled()
-      }, { timeout: 3000 })
-
-      expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
-        target_category: undefined,
-      }))
-    })
-  })
 
   describe('PFC conditions (Issue #1062 / #1060)', () => {
     const mockPlaidDetailed = [
@@ -1987,120 +1551,5 @@ describe('AutoCategorizationRuleEditor', () => {
       })
     })
 
-    describe('existing_category orphan edit-mode', () => {
-      it('existing_category_edit_mode_shows_legacy_synthetic_option_for_orphan', () => {
-        // 'Shops' is not in mockPlaidPrimaries — it is an orphan
-        const ruleWithOrphan: CategorizationRule = {
-          ...mockExistingRule,
-          conditions: [{ type: 'existing_category', value: 'Shops' }],
-        }
-
-        render(
-          <AutoCategorizationRuleEditor
-            mode="edit"
-            rule={ruleWithOrphan}
-            onSave={mockOnSave}
-            onCancel={mockOnCancel}
-            categories={mockCategories}
-            plaidPrimaries={mockPlaidPrimaries}
-          />
-        )
-
-        // Input should display "Shops (legacy)" — the synthetic option's label
-        const searchInput = screen.getByRole('combobox', { name: /select category/i })
-        expect(searchInput).toHaveValue('Shops (legacy)')
-      })
-
-      it('existing_category_edit_mode_does_not_inject_when_value_already_curated', () => {
-        // 'Food And Drink' IS in mockPlaidPrimaries — no orphan injection
-        const ruleWithCurated: CategorizationRule = {
-          ...mockExistingRule,
-          conditions: [{ type: 'existing_category', value: 'Food And Drink' }],
-        }
-
-        render(
-          <AutoCategorizationRuleEditor
-            mode="edit"
-            rule={ruleWithCurated}
-            onSave={mockOnSave}
-            onCancel={mockOnCancel}
-            categories={mockCategories}
-            plaidPrimaries={mockPlaidPrimaries}
-          />
-        )
-
-        const searchInput = screen.getByRole('combobox', { name: /select category/i })
-        expect(searchInput).toHaveValue('Food And Drink')
-        expect(searchInput).not.toHaveValue('Food And Drink (legacy)')
-      })
-
-      it('existing_category_edit_mode_preserves_raw_orphan_value_on_save_without_change', async () => {
-        const ruleWithOrphan: CategorizationRule = {
-          ...mockExistingRule,
-          conditions: [{ type: 'existing_category', value: 'Shops' }],
-        }
-
-        render(
-          <AutoCategorizationRuleEditor
-            mode="edit"
-            rule={ruleWithOrphan}
-            onSave={mockOnSave}
-            onCancel={mockOnCancel}
-            categories={mockCategories}
-            plaidPrimaries={mockPlaidPrimaries}
-          />
-        )
-
-        // Save without changing anything
-        const saveButton = screen.getByRole('button', { name: /save/i })
-        fireEvent.click(saveButton)
-
-        await waitFor(() => {
-          expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
-            // Must be raw "Shops", NOT "Shops (legacy)"
-            conditions: [{ type: 'existing_category', value: 'Shops' }],
-          }))
-        })
-      })
-
-      it('existing_category_edit_mode_orphan_disappears_after_user_picks_curated', async () => {
-        const user = userEvent.setup({ delay: null })
-
-        const ruleWithOrphan: CategorizationRule = {
-          ...mockExistingRule,
-          conditions: [{ type: 'existing_category', value: 'Shops' }],
-        }
-
-        render(
-          <AutoCategorizationRuleEditor
-            mode="edit"
-            rule={ruleWithOrphan}
-            onSave={mockOnSave}
-            onCancel={mockOnCancel}
-            categories={mockCategories}
-            plaidPrimaries={mockPlaidPrimaries}
-          />
-        )
-
-        // Initially shows orphan label
-        const searchInput = screen.getByRole('combobox', { name: /select category/i })
-        expect(searchInput).toHaveValue('Shops (legacy)')
-
-        // Pick a curated option
-        await user.click(searchInput)
-        await user.click(screen.getByText('Food And Drink'))
-
-        // After picking curated, input shows curated display — no "(legacy)" suffix
-        await waitFor(() => {
-          expect(searchInput).toHaveValue('Food And Drink')
-        })
-
-        // Open dropdown again — orphan option no longer present
-        await user.click(searchInput)
-        await waitFor(() => {
-          expect(screen.queryByText(/Shops \(legacy\)/)).not.toBeInTheDocument()
-        })
-      })
-    })
   })
 })

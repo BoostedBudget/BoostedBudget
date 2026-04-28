@@ -55,8 +55,8 @@ function createWrapper() {
 
 describe('AutoCategorizationPageWrapper', () => {
   const mockCategories: CustomCategory[] = [
-    { id: '1', user_id: 'user-1', name: 'Coffee', parent_category: 'Food & Drink', color: null, icon: null, usage_count: 5, created_at: '2025-01-01', updated_at: '2025-01-01' },
-    { id: '2', user_id: 'user-1', name: 'Groceries', parent_category: null, color: null, icon: null, usage_count: 10, created_at: '2025-01-01', updated_at: '2025-01-01' },
+    { id: '1', user_id: 'user-1', name: 'Coffee', parent_pfc_primary: 'FOOD_AND_DRINK', color: null, icon: null, usage_count: 5, created_at: '2025-01-01', updated_at: '2025-01-01' },
+    { id: '2', user_id: 'user-1', name: 'Groceries', parent_pfc_primary: null, color: null, icon: null, usage_count: 10, created_at: '2025-01-01', updated_at: '2025-01-01' },
   ]
 
   const mockAccounts: Account[] = [

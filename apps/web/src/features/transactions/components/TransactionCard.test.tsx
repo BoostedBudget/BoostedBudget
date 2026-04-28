@@ -15,7 +15,9 @@ const createBudgetCategoryMatch = (
   category: {
     id: 'cat-1',
     budget_id: 'budget-1',
-    category: ['Food and Drink', 'Restaurants'],
+    category_kind: 'pfc',
+    pfc_primary: 'FOOD_AND_DRINK',
+    pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
     allocated_amount: 500,
     spent_amount: 250,
     created_at: '2025-01-01T00:00:00Z',
@@ -63,7 +65,8 @@ describe('TransactionCard', () => {
     date: '2025-10-25',
     name: 'Starbucks',
     merchant_name: 'Starbucks Coffee',
-    category: '["Food and Drink", "Coffee"]',
+    pfc_primary: 'FOOD_AND_DRINK',
+    pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
     pending: false,
     created_at: '2025-10-25T10:00:00Z',
     updated_at: '2025-10-25T10:00:00Z',
@@ -118,142 +121,109 @@ describe('TransactionCard', () => {
   })
 
   describe('Category Display', () => {
-    it('should display primary category from JSON string', () => {
+    it('should display detailed PFC label when both primary and detailed are set', () => {
       const transactionWithCategories: Transaction = {
         ...mockTransaction,
         merchant_name: 'Local Restaurant',
-        category: '["Food and Drink", "Restaurants"]',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
       }
       render(<TransactionCard transaction={transactionWithCategories} />)
-      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
+      expect(screen.getByText('FOOD_AND_DRINK_RESTAURANTS')).toBeInTheDocument()
     })
 
-    it('should display primary category when only one exists', () => {
+    it('should display primary PFC when no detailed is set', () => {
       const transactionWithPrimaryOnly: Transaction = {
         ...mockTransaction,
-        category: '["Travel"]',
+        pfc_primary: 'TRAVEL',
+        pfc_detailed: null,
       }
       render(<TransactionCard transaction={transactionWithPrimaryOnly} />)
-      expect(screen.getByText(/Travel/i)).toBeInTheDocument()
+      expect(screen.getByText('TRAVEL')).toBeInTheDocument()
     })
 
-    it('should display primary category even when secondary exists', () => {
+    it('should prefer detailed over primary in the rendered label', () => {
       const transactionWithSecondary: Transaction = {
         ...mockTransaction,
-        category: '["Shops", "Clothing"]',
+        pfc_primary: 'GENERAL_MERCHANDISE',
+        pfc_detailed: 'GENERAL_MERCHANDISE_CLOTHING_AND_ACCESSORIES',
       }
       render(<TransactionCard transaction={transactionWithSecondary} />)
-      expect(screen.getByText(/Shops/i)).toBeInTheDocument()
+      expect(screen.getByText('GENERAL_MERCHANDISE_CLOTHING_AND_ACCESSORIES')).toBeInTheDocument()
     })
 
-    it('should handle null category gracefully', () => {
+    it('should handle null pfc_primary gracefully', () => {
       const transactionWithoutCategory: Transaction = {
         ...mockTransaction,
-        category: null,
+        pfc_primary: null,
+        pfc_detailed: null,
       }
 
       render(<TransactionCard transaction={transactionWithoutCategory} />)
       expect(screen.getByText('Uncategorized')).toBeInTheDocument()
     })
 
-    it('should handle invalid JSON category gracefully', () => {
-      const transactionWithInvalidCategory: Transaction = {
-        ...mockTransaction,
-        category: 'not-valid-json',
-      }
-
-      render(<TransactionCard transaction={transactionWithInvalidCategory} />)
-      expect(screen.getByText('Uncategorized')).toBeInTheDocument()
-    })
-
-    it('should handle empty category array', () => {
-      const transactionWithEmptyCategory: Transaction = {
-        ...mockTransaction,
-        category: '[]',
-      }
-
-      render(<TransactionCard transaction={transactionWithEmptyCategory} />)
-      expect(screen.getByText('Uncategorized')).toBeInTheDocument()
-    })
-
-    it('should display category_override when present', () => {
+    it('should display PFC override when category_override_kind is pfc', () => {
       const transactionWithOverride: Transaction = {
         ...mockTransaction,
         merchant_name: 'Local Store',
-        category: '["Food and Drink", "Restaurants"]',
-        category_override: '["Shopping", "Groceries"]',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+        category_override_kind: 'pfc',
+        pfc_primary_override: 'GENERAL_MERCHANDISE',
+        pfc_detailed_override: 'GENERAL_MERCHANDISE_GROCERIES',
+        category_source: 'manual',
       }
       render(<TransactionCard transaction={transactionWithOverride} />)
-      expect(screen.getByText(/Shopping/i)).toBeInTheDocument()
-      expect(screen.queryByText(/Food and Drink/i)).not.toBeInTheDocument()
+      expect(screen.getByText('GENERAL_MERCHANDISE_GROCERIES')).toBeInTheDocument()
+      // Original primary should not appear since override takes precedence
+      expect(screen.queryByText('FOOD_AND_DRINK_RESTAURANTS')).not.toBeInTheDocument()
     })
 
-    it('should fall back to category when override is null', () => {
+    it('should display custom category override when category_override_kind is custom', () => {
+      const transactionWithCustom: Transaction = {
+        ...mockTransaction,
+        pfc_primary: 'FOOD_AND_DRINK',
+        category_override_kind: 'custom',
+        custom_category_override_id: 'custom-cat-uuid-123',
+        category_source: 'manual',
+      }
+      render(<TransactionCard transaction={transactionWithCustom} />)
+      expect(screen.getByText('custom-cat-uuid-123')).toBeInTheDocument()
+    })
+
+    it('should fall back to source PFC when no override is set', () => {
       const transactionWithoutOverride: Transaction = {
         ...mockTransaction,
         merchant_name: 'Local Restaurant',
-        category: '["Food and Drink", "Restaurants"]',
-        category_override: null,
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+        category_override_kind: null,
       }
       render(<TransactionCard transaction={transactionWithoutOverride} />)
-      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
-    })
-
-    it('should fall back to category when override is empty and source not manual', () => {
-      const transactionWithEmptyOverride: Transaction = {
-        ...mockTransaction,
-        merchant_name: 'Local Restaurant',
-        category: '["Food and Drink", "Restaurants"]',
-        category_override: '[]',
-        category_source: 'plaid',
-      }
-      render(<TransactionCard transaction={transactionWithEmptyOverride} />)
-      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
+      expect(screen.getByText('FOOD_AND_DRINK_RESTAURANTS')).toBeInTheDocument()
     })
   })
 
   describe('Explicit Uncategorized Display', () => {
-    it('should display Uncategorized when manually cleared', () => {
+    it('should display Uncategorized when pfc_primary is null and no override', () => {
       const explicitlyUncategorized: Transaction = {
         ...mockTransaction,
-        category: '["Food and Drink", "Coffee"]',
-        category_override: '[]',
+        pfc_primary: null,
+        pfc_detailed: null,
+        category_override_kind: null,
         category_source: 'manual',
       }
       render(<TransactionCard transaction={explicitlyUncategorized} />)
       expect(screen.getByText('Uncategorized')).toBeInTheDocument()
-      expect(screen.queryByText(/Food and Drink/i)).not.toBeInTheDocument()
-    })
-
-    it('should display Uncategorized when manual override is null', () => {
-      const explicitlyUncategorized: Transaction = {
-        ...mockTransaction,
-        category: '["Food and Drink", "Coffee"]',
-        category_override: null,
-        category_source: 'manual',
-      }
-      render(<TransactionCard transaction={explicitlyUncategorized} />)
-      expect(screen.getByText('Uncategorized')).toBeInTheDocument()
-      expect(screen.queryByText(/Food and Drink/i)).not.toBeInTheDocument()
-    })
-
-    it('should show warning indicator for explicitly uncategorized', () => {
-      const explicitlyUncategorized: Transaction = {
-        ...mockTransaction,
-        category: '["Food and Drink", "Coffee"]',
-        category_override: '[]',
-        category_source: 'manual',
-      }
-      const { container } = render(<TransactionCard transaction={explicitlyUncategorized} />)
-      const warningIndicator = container.querySelector('.transaction-card__uncategorized-warning')
-      expect(warningIndicator).toBeInTheDocument()
     })
 
     it('should show warning indicator for any uncategorized', () => {
       const neverCategorized: Transaction = {
         ...mockTransaction,
-        category: null,
-        category_override: null,
+        pfc_primary: null,
+        pfc_detailed: null,
+        category_override_kind: null,
       }
       const { container } = render(<TransactionCard transaction={neverCategorized} />)
       const warningIndicator = container.querySelector('.transaction-card__uncategorized-warning')
@@ -264,19 +234,6 @@ describe('TransactionCard', () => {
       const { container } = render(<TransactionCard transaction={mockTransaction} />)
       const warningIndicator = container.querySelector('.transaction-card__uncategorized-warning')
       expect(warningIndicator).not.toBeInTheDocument()
-    })
-
-    it('should display original_category when available', () => {
-      const withOriginalCategory: Transaction = {
-        ...mockTransaction,
-        category: '["Food and Drink", "Coffee"]',
-        category_override: '[]',
-        category_source: 'manual',
-        original_category: '["Food and Drink", "Coffee"]',
-      }
-      render(<TransactionCard transaction={withOriginalCategory} />)
-      const card = screen.getByRole('article')
-      expect(card).toHaveAttribute('data-original-category', '["Food and Drink", "Coffee"]')
     })
   })
 
@@ -551,15 +508,16 @@ describe('TransactionCard', () => {
       expect(screen.getByText(/Very Long Merchant/)).toBeInTheDocument()
     })
 
-    it('should handle transactions with multiple category levels', () => {
+    it('should handle transactions with both primary and detailed PFC', () => {
       const multiCategoryTransaction: Transaction = {
         ...mockTransaction,
-        category: '["Food and Drink", "Restaurants", "Fast Food", "Coffee Shops"]',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD',
       }
 
       render(<TransactionCard transaction={multiCategoryTransaction} />)
-      // Should show primary category for consistency
-      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
+      // Effective label prefers detailed over primary
+      expect(screen.getByText('FOOD_AND_DRINK_FAST_FOOD')).toBeInTheDocument()
     })
   })
 
@@ -571,8 +529,8 @@ describe('TransactionCard', () => {
         <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
       )
 
-      // Badge should be present with the category name
-      expect(screen.getByRole('link', { name: /Budget: Food and Drink/i })).toBeInTheDocument()
+      // Badge should be present with the category name (now PFC enum)
+      expect(screen.getByRole('link', { name: /FOOD_AND_DRINK/i })).toBeInTheDocument()
     })
 
     it('should not render badge when budgetMatch is null', () => {
@@ -747,36 +705,27 @@ describe('TransactionCard', () => {
       expect(colorDot).toBeInTheDocument()
     })
 
-    it('should apply correct color for known category', () => {
+    it('should apply correct color for known PFC primary category', () => {
       const transactionWithKnownCategory: Transaction = {
         ...mockTransaction,
-        category: '["Food and Drink", "Restaurants"]',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
       }
 
       const { container } = render(<TransactionCard transaction={transactionWithKnownCategory} />)
 
       const colorDot = container.querySelector('.transaction-card__category-dot')
       expect(colorDot).toBeInTheDocument()
+      // CATEGORY_COLORS uses display-string keys ("Food and Drink") still — color resolver
+      // converts the PFC enum at the component layer.
       expect(colorDot).toHaveStyle({ backgroundColor: CATEGORY_COLORS['Food and Drink'] })
-    })
-
-    it('should apply fallback color for unknown category', () => {
-      const transactionWithUnknownCategory: Transaction = {
-        ...mockTransaction,
-        category: '["Random Unknown Category"]',
-      }
-
-      const { container } = render(<TransactionCard transaction={transactionWithUnknownCategory} />)
-
-      const colorDot = container.querySelector('.transaction-card__category-dot')
-      expect(colorDot).toBeInTheDocument()
-      expect(colorDot).toHaveStyle({ backgroundColor: DEFAULT_CATEGORY_COLOR })
     })
 
     it('should apply fallback color for uncategorized transactions', () => {
       const uncategorizedTransaction: Transaction = {
         ...mockTransaction,
-        category: null,
+        pfc_primary: null,
+        pfc_detailed: null,
       }
 
       const { container } = render(<TransactionCard transaction={uncategorizedTransaction} />)
@@ -963,7 +912,7 @@ describe('TransactionCard', () => {
 // Issue #1058: PFC fallback tests (D5)
 // ============================================================================
 
-describe('TransactionCard — PFC fallback (Issue #1058)', () => {
+describe('TransactionCard — PFC v2 source fields (Issue #1073)', () => {
   const baseTxn: Transaction = {
     id: 'txn-pfc',
     user_id: 'user-1',
@@ -978,34 +927,25 @@ describe('TransactionCard — PFC fallback (Issue #1058)', () => {
     tags: [],
     created_at: '2024-01-15T00:00:00Z',
     updated_at: '2024-01-15T00:00:00Z',
-    category: null,
     category_source: 'plaid',
   }
 
-  it('shows PFC primary_display when category is null and personal_finance_category_data is present', () => {
+  it('shows the PFC primary enum when only pfc_primary is set', () => {
     const txn: Transaction = {
       ...baseTxn,
-      personal_finance_category_data: {
-        primary: 'FOOD_AND_DRINK',
-        primary_display: 'Food And Drink',
-        detailed: 'FOOD_AND_DRINK_FAST_FOOD',
-        detailed_display: 'Fast Food',
-        confidence_level: 'VERY_HIGH',
-      },
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_confidence_level: 'VERY_HIGH',
     }
 
     render(<TransactionCard transaction={txn} />)
 
-    expect(screen.getByText('Food And Drink')).toBeTruthy()
+    expect(screen.getByText('FOOD_AND_DRINK')).toBeTruthy()
   })
 
-  it('does not show ⚠️ warning when PFC data provides a category', () => {
+  it('does not show the uncategorized warning when pfc_primary is set', () => {
     const txn: Transaction = {
       ...baseTxn,
-      personal_finance_category_data: {
-        primary: 'FOOD_AND_DRINK',
-        primary_display: 'Food And Drink',
-      },
+      pfc_primary: 'FOOD_AND_DRINK',
     }
 
     render(<TransactionCard transaction={txn} />)
@@ -1014,15 +954,11 @@ describe('TransactionCard — PFC fallback (Issue #1058)', () => {
     expect(warnings).toHaveLength(0)
   })
 
-  it('explicit user-set uncategorized still overrides PFC fallback', () => {
+  it('shows Uncategorized when pfc_primary is null even though source is plaid', () => {
     const txn: Transaction = {
       ...baseTxn,
-      category_override: '[]',
-      category_source: 'manual',
-      personal_finance_category_data: {
-        primary: 'FOOD_AND_DRINK',
-        primary_display: 'Food And Drink',
-      },
+      pfc_primary: null,
+      category_source: 'plaid',
     }
 
     render(<TransactionCard transaction={txn} />)

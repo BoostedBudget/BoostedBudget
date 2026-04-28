@@ -41,12 +41,13 @@ export function AutoCategorizationPageWrapper() {
   const { data: accountsData } = useGetAccounts()
   const { data: userTagsData } = useGetUserTags()
 
-  // Convert CustomCategory[] to string[][] format for AutoCategorizationPage
+  // Convert CustomCategory[] to string[][] format for AutoCategorizationPage.
+  // PFC v2 (#1073): use parent_pfc_primary hint when present.
   const categories = useMemo(() => {
     const customCategories = (customCategoriesData as unknown as CustomCategory[]) ?? []
     return customCategories.map((cat: CustomCategory) =>
-      cat.parent_category
-        ? [cat.parent_category, cat.name]
+      cat.parent_pfc_primary
+        ? [cat.parent_pfc_primary, cat.name]
         : [cat.name]
     )
   }, [customCategoriesData])

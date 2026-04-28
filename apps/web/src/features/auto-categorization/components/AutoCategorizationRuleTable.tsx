@@ -265,7 +265,17 @@ export function AutoCategorizationRuleTable({
             rule.conditions,
             rule.condition_logic
           )
-          const categoryLabel = rule.target_category?.[0] || 'No category'
+          // PFC v2 (#1073): derive label from discriminated target.
+          const categoryLabel =
+            rule.target_kind === 'pfc' && rule.target_pfc_primary
+              ? (rule.target_pfc_detailed
+                  ? `${rule.target_pfc_primary} › ${rule.target_pfc_detailed}`
+                  : rule.target_pfc_primary)
+              : rule.target_kind === 'custom' && rule.target_custom_category_id
+                ? rule.target_custom_category_id
+                : rule.target_kind === 'clear'
+                  ? 'Clear override'
+                  : 'No category'
           const sourceLabel = getSourceLabel(rule.source)
 
           return (

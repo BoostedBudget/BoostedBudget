@@ -9,7 +9,7 @@ export interface CustomCategory {
   id: string
   user_id: string
   name: string
-  parent_category?: string | null // For hierarchical categories
+  parent_pfc_primary?: string | null // PFC v2 hint for icon/color fallback (#1073)
   color?: string | null // Hex color code (e.g., "#FF5733")
   icon?: string | null // Icon identifier
   usage_count: number
@@ -22,7 +22,7 @@ export interface CustomCategory {
  */
 export interface CreateCategoryRequest {
   name: string
-  parent_category?: string // Parent category for hierarchy
+  parent_pfc_primary?: string // PFC v2 primary enum hint for icon/color fallback (#1073)
   color?: string // Hex color code (e.g., "#FF5733")
   icon?: string // Icon identifier
 }
@@ -32,7 +32,7 @@ export interface CreateCategoryRequest {
  */
 export interface UpdateCategoryRequest {
   name?: string
-  parent_category?: string // Parent category for hierarchy
+  parent_pfc_primary?: string // PFC v2 primary enum hint for icon/color fallback (#1073)
   color?: string // Hex color code (e.g., "#FF5733")
   icon?: string // Icon identifier
 }
