@@ -109,20 +109,17 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
       offset,
     };
 
-    // Legacy single-value filters (backward compatibility)
     if (filters.account_id) params.account_id = filters.account_id;
     if (filters.start_date) params.start_date = filters.start_date;
     if (filters.end_date) params.end_date = filters.end_date;
-    if (filters.category) params.category = filters.category;
     if (debouncedSearch) params.search = debouncedSearch;
     if (filters.pending !== undefined) params.pending = filters.pending;
 
-    // Issue #529: New multi-value and range filters
     if (filters.account_ids && filters.account_ids.length > 0) {
       params.account_ids = filters.account_ids.join(',');
     }
-    if (filters.categories && filters.categories.length > 0) {
-      params.categories = filters.categories.join(',');
+    if (filters.pfc_primaries && filters.pfc_primaries.length > 0) {
+      params.pfc_primaries = filters.pfc_primaries.join(',');
     }
     if (filters.min_amount !== undefined) {
       params.min_amount = filters.min_amount;

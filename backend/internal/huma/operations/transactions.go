@@ -32,17 +32,17 @@ type GetTransactionsInput struct {
 	inputs.PaginationInput
 
 	// Filter parameters (all optional - empty string means not set)
-	AccountID  string `query:"account_id" doc:"Filter by specific account ID (deprecated: use account_ids)"`
-	AccountIDs string `query:"account_ids" doc:"Filter by multiple account IDs (comma-separated UUIDs)"`
-	StartDate  string `query:"start_date" doc:"Filter transactions on or after this date (YYYY-MM-DD)"`
-	EndDate    string `query:"end_date" doc:"Filter transactions on or before this date (YYYY-MM-DD)"`
-	Category   string `query:"category" doc:"Filter by category (deprecated: use categories)"`
-	Categories string `query:"categories" doc:"Filter by multiple categories (comma-separated)"`
-	Search     string `query:"search" doc:"Search in merchant name or transaction name"`
-	Pending    string `query:"pending" doc:"Filter by pending status (true/false)"`
-	MinAmount  string `query:"min_amount" doc:"Filter by minimum absolute amount"`
-	MaxAmount  string `query:"max_amount" doc:"Filter by maximum absolute amount"`
-	AmountType string `query:"amount_type" enum:"income,expense,all" doc:"Filter by transaction type"`
+	AccountID        string `query:"account_id" doc:"Filter by specific account ID (deprecated: use account_ids)"`
+	AccountIDs       string `query:"account_ids" doc:"Filter by multiple account IDs (comma-separated UUIDs)"`
+	StartDate        string `query:"start_date" doc:"Filter transactions on or after this date (YYYY-MM-DD)"`
+	EndDate          string `query:"end_date" doc:"Filter transactions on or before this date (YYYY-MM-DD)"`
+	PFCPrimaries     string `query:"pfc_primaries" doc:"Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)"`
+	CustomCategoryIDs string `query:"custom_category_ids" doc:"Filter by custom category UUIDs (comma-separated)"`
+	Search           string `query:"search" doc:"Search in merchant name or transaction name"`
+	Pending          string `query:"pending" doc:"Filter by pending status (true/false)"`
+	MinAmount        string `query:"min_amount" doc:"Filter by minimum absolute amount"`
+	MaxAmount        string `query:"max_amount" doc:"Filter by maximum absolute amount"`
+	AmountType       string `query:"amount_type" enum:"income,expense,all" doc:"Filter by transaction type"`
 }
 
 // GetTransactionsOutput represents the response for listing transactions.
@@ -86,8 +86,15 @@ type UpdateTransactionCategoryInput struct {
 }
 
 // UpdateTransactionCategoryBody represents the request body for updating category.
+// kind must be "pfc", "custom", or "clear".
+// When kind=pfc: pfc_primary is required, pfc_detailed is optional.
+// When kind=custom: custom_category_id is required.
+// When kind=clear: all override fields are removed.
 type UpdateTransactionCategoryBody struct {
-	Category []string `json:"category" doc:"Category hierarchy as string array"`
+	Kind             string  `json:"kind" enum:"pfc,custom,clear" doc:"Category override kind"`
+	PFCPrimary       *string `json:"pfc_primary,omitempty" doc:"PFC primary enum (required when kind=pfc)"`
+	PFCDetailed      *string `json:"pfc_detailed,omitempty" doc:"PFC detailed enum (optional when kind=pfc)"`
+	CustomCategoryID *string `json:"custom_category_id,omitempty" doc:"Custom category UUID (required when kind=custom)"`
 }
 
 // UpdateTransactionCategoryOutput represents the response for updating category.
@@ -134,16 +141,19 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 	filters.StartDate = startDate
 	filters.EndDate = endDate
 
-	// Category filter (single, deprecated)
-	if input.Category != "" {
-		filters.Category = &input.Category
+	// PFC primary filter (comma-separated enum values)
+	if input.PFCPrimaries != "" {
+		primaries := parseCommaSeparated(input.PFCPrimaries)
+		if len(primaries) > 0 {
+			filters.PFCPrimaries = primaries
+		}
 	}
 
-	// Categories filter (comma-separated)
-	if input.Categories != "" {
-		cats := parseCommaSeparated(input.Categories)
-		if len(cats) > 0 {
-			filters.Categories = cats
+	// Custom category ID filter (comma-separated UUIDs)
+	if input.CustomCategoryIDs != "" {
+		ids := parseCommaSeparated(input.CustomCategoryIDs)
+		if len(ids) > 0 {
+			filters.CustomCategoryIDs = ids
 		}
 	}
 
@@ -222,15 +232,9 @@ func (h *TransactionHandler) UpdateTransactionTags(ctx context.Context, input *U
 }
 
 // UpdateTransactionCategory handles PUT /api/v1/transactions/:id/category requests.
-// Updates the category override on a specific transaction.
+// Updates the category override on a specific transaction using the PFC v2 discriminated union.
 func (h *TransactionHandler) UpdateTransactionCategory(ctx context.Context, input *UpdateTransactionCategoryInput) (*UpdateTransactionCategoryOutput, error) {
-	// Ensure category is not nil
-	category := input.Body.Category
-	if category == nil {
-		category = []string{}
-	}
-
-	tx, err := h.service.UpdateTransactionCategory(ctx, input.UserID, input.ID, category)
+	tx, err := h.service.UpdateTransactionCategory(ctx, input.UserID, input.ID, input.Body.Kind, input.Body.PFCPrimary, input.Body.PFCDetailed, input.Body.CustomCategoryID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}

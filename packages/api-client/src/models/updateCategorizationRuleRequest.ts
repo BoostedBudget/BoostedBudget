@@ -39,6 +39,9 @@ export interface UpdateCategorizationRuleRequest {
   name?: string;
   priority?: number;
   tag_behavior?: string;
-  target_category?: string[];
+  target_custom_category_id?: string;
+  target_kind?: string;
+  target_pfc_detailed?: string;
+  target_pfc_primary?: string;
   target_tags?: string[];
 }

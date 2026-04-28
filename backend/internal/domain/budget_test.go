@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// ptrStr is a helper to get a pointer to a string literal in tests.
+func ptrStr(s string) *string { return &s }
+
 // TestBudget_Validate tests that Budget validates required fields
 func TestBudget_Validate(t *testing.T) {
 	validStartDate := time.Now()
@@ -497,7 +500,8 @@ func TestBudgetCategory_Validate(t *testing.T) {
 			name: "valid category",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink", "Coffee Shops"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				SpentAmount:     50.00,
 			},
@@ -506,36 +510,38 @@ func TestBudgetCategory_Validate(t *testing.T) {
 		{
 			name: "missing budget_id",
 			category: BudgetCategory{
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 			},
 			wantErr: true,
 			errMsg:  "budget_id is required",
 		},
 		{
-			name: "missing category",
+			name: "missing pfc_primary",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
+				CategoryKind:    "pfc",
 				AllocatedAmount: 100.00,
 			},
 			wantErr: true,
-			errMsg:  "category is required",
+			errMsg:  "pfc_primary is required when category_kind is pfc",
 		},
 		{
-			name: "empty category array",
+			name: "missing category_kind",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{},
 				AllocatedAmount: 100.00,
 			},
 			wantErr: true,
-			errMsg:  "category is required",
+			errMsg:  "category_kind must be pfc or custom",
 		},
 		{
 			name: "negative allocated_amount",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: -50.00,
 			},
 			wantErr: true,
@@ -545,7 +551,8 @@ func TestBudgetCategory_Validate(t *testing.T) {
 			name: "negative spent_amount",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				SpentAmount:     -25.00,
 			},
@@ -727,7 +734,8 @@ func TestBudget_JSONMarshaling(t *testing.T) {
 			{
 				ID:              "cat-1",
 				BudgetID:        "budget-550e8400-e29b-41d4-a716-446655440000",
-				Category:        []string{"Food & Drink", "Groceries"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 300.00,
 				SpentAmount:     150.00,
 			},
@@ -783,8 +791,8 @@ func TestIncomeSourceType_IsValid(t *testing.T) {
 		want       bool
 	}{
 		{
-			name:       "plaid_category valid",
-			sourceType: IncomeSourceTypePlaidCategory,
+			name:       "pfc_primary valid",
+			sourceType: IncomeSourceTypePFCPrimary,
 			want:       true,
 		},
 		{
@@ -827,10 +835,10 @@ func TestIncomeSource_Validate(t *testing.T) {
 		errMsg  string
 	}{
 		{
-			name: "valid plaid_category source",
+			name: "valid pfc_primary source",
 			source: IncomeSource{
-				Type:  IncomeSourceTypePlaidCategory,
-				Value: "Payroll",
+				Type:  IncomeSourceTypePFCPrimary,
+				Value: "INCOME",
 			},
 			wantErr: false,
 		},
@@ -1185,7 +1193,7 @@ func TestBudget_Validate_IncomeFields(t *testing.T) {
 				CurrencyCode:   "USD",
 				IncomeAmount:   5000.00,
 				IncomeSources: []IncomeSource{
-					{Type: IncomeSourceTypePlaidCategory, Value: "Payroll"},
+					{Type: IncomeSourceTypePFCPrimary, Value: "Payroll"},
 				},
 			},
 			wantErr: false,
@@ -1294,7 +1302,8 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "valid category_only (default)",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicCategoryOnly,
 			},
@@ -1304,7 +1313,8 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "valid empty match_logic defaults to category_only",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      "", // Empty is valid, defaults to category_only
 			},
@@ -1314,7 +1324,6 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "valid tag_only with tags",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{}, // Can be empty for tag_only
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicTagOnly,
 				Tags:            []string{"groceries", "food"},
@@ -1325,7 +1334,8 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "valid 'and' logic with both category and tags",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicAnd,
 				Tags:            []string{"essential"},
@@ -1336,7 +1346,8 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "valid 'or' logic with both category and tags",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicOr,
 				Tags:            []string{"groceries"},
@@ -1347,7 +1358,8 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "invalid match_logic value",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogic("invalid"),
 			},
@@ -1358,7 +1370,6 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "tag_only without tags",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{},
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicTagOnly,
 				Tags:            []string{},
@@ -1370,7 +1381,8 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "'and' logic without tags",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicAnd,
 				Tags:            []string{},
@@ -1382,7 +1394,8 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "category_only with tags is valid (tags ignored)",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicCategoryOnly,
 				Tags:            []string{"groceries"}, // Tags present but match_logic is category_only
@@ -1421,14 +1434,15 @@ func TestBudget_JSONMarshaling_WithIncomeFields(t *testing.T) {
 		IsActive:     true,
 		IncomeAmount: 5000.00,
 		IncomeSources: []IncomeSource{
-			{Type: IncomeSourceTypePlaidCategory, Value: "Payroll", Description: "Main job"},
+			{Type: IncomeSourceTypePFCPrimary, Value: "Payroll", Description: "Main job"},
 			{Type: IncomeSourceTypeTag, Value: "freelance"},
 		},
 		Categories: []BudgetCategory{
 			{
 				ID:              "cat-1",
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 500.00,
 				Tags:            []string{"groceries", "essential"},
 				MatchLogic:      MatchLogicOr,

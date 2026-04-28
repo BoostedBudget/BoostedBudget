@@ -71,7 +71,9 @@ const mockAvailableTags: UserTag[] = [
 const createMockCategory = (overrides?: Partial<BudgetCategory>): BudgetCategory => ({
   id: 'cat-1',
   budget_id: 'budget-1',
-  category: ['Food and Drink', 'Restaurants'],
+  category_kind: 'pfc',
+  pfc_primary: 'FOOD_AND_DRINK',
+  pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
   allocated_amount: 500,
   spent_amount: 250,
   tags: [],
@@ -115,13 +117,12 @@ describe('BudgetCategoryManager', () => {
 
   it('should render BudgetCategoryCard for each category', () => {
     const categories = [
-      createMockCategory({ id: 'cat-1', category: ['Food and Drink', 'Restaurants'] }),
-      createMockCategory({ id: 'cat-2', category: ['Transportation', 'Gas'] }),
+      createMockCategory({ id: 'cat-1', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS' }),
+      createMockCategory({ id: 'cat-2', pfc_primary: 'TRANSPORTATION', pfc_detailed: 'TRANSPORTATION_GAS' }),
     ]
     renderManager({ categories })
-    // Issue #575: Using real component - query by heading text
-    expect(screen.getByRole('heading', { name: 'Food and Drink > Restaurants' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Transportation > Gas' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'FOOD_AND_DRINK_RESTAURANTS' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'TRANSPORTATION_GAS' })).toBeInTheDocument()
   })
 
   it('should render add category button', () => {
@@ -169,8 +170,7 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    // Issue #575: Real component uses aria-label like "Edit Food and Drink > Restaurants"
-    await user.click(screen.getByRole('button', { name: /^Edit Food and Drink > Restaurants$/i }))
+    await user.click(screen.getByRole('button', { name: /^Edit FOOD_AND_DRINK_RESTAURANTS$/i }))
 
     // Issue #575: Real form uses dialog role and title
     await waitFor(() => {
@@ -190,7 +190,7 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    await user.click(screen.getByRole('button', { name: /^Delete Food and Drink > Restaurants$/i }))
+    await user.click(screen.getByRole('button', { name: /^Delete FOOD_AND_DRINK_RESTAURANTS$/i }))
 
     await waitFor(() => {
       expect(screen.getByRole('alertdialog')).toBeInTheDocument()
@@ -202,7 +202,7 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    await user.click(screen.getByRole('button', { name: /^Delete Food and Drink > Restaurants$/i }))
+    await user.click(screen.getByRole('button', { name: /^Delete FOOD_AND_DRINK_RESTAURANTS$/i }))
     await user.click(screen.getByRole('button', { name: /^delete$/i }))
 
     await waitFor(() => {
@@ -215,7 +215,7 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    await user.click(screen.getByRole('button', { name: /^Delete Food and Drink > Restaurants$/i }))
+    await user.click(screen.getByRole('button', { name: /^Delete FOOD_AND_DRINK_RESTAURANTS$/i }))
     await user.click(screen.getByRole('button', { name: /cancel/i }))
 
     await waitFor(() => {
@@ -234,8 +234,8 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
     renderManager({ categories, disabled: true })
     // Issue #575: Real component uses aria-label for buttons
-    expect(screen.getByRole('button', { name: /^Edit Food and Drink > Restaurants$/i })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /^Delete Food and Drink > Restaurants$/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Edit FOOD_AND_DRINK_RESTAURANTS$/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Delete FOOD_AND_DRINK_RESTAURANTS$/i })).toBeDisabled()
   })
 
   it('should pass correct props to AllocationBreakdown', () => {

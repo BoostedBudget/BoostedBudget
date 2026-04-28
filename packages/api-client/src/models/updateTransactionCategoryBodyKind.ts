@@ -28,10 +28,14 @@ Multi-region support planned for Phase 7+.
  * OpenAPI spec version: 1.0.0
  */
 
-export interface ParsedPersonalFinanceCategoryData {
-  confidence_level?: string;
-  detailed?: string;
-  detailed_display?: string;
-  primary: string;
-  primary_display: string;
-}
+/**
+ * Category override kind
+ */
+export type UpdateTransactionCategoryBodyKind =
+  (typeof UpdateTransactionCategoryBodyKind)[keyof typeof UpdateTransactionCategoryBodyKind];
+
+export const UpdateTransactionCategoryBodyKind = {
+  pfc: "pfc",
+  custom: "custom",
+  clear: "clear",
+} as const;

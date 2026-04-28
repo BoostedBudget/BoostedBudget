@@ -1663,11 +1663,9 @@ func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
 	// ✓ Nil user notes preserved as nil (gas)
 }
 
-// TestProcessAddedTransactions_SetsOriginalCategory tests that OriginalCategory is set
-// to the same value as Category when transactions are first synced from Plaid
-// TDD RED: This test will FAIL until mapPlaidTransaction sets OriginalCategory
-func TestProcessAddedTransactions_SetsOriginalCategory(t *testing.T) {
-	// Setup
+// TestProcessAddedTransactions_SetsPFCFields tests that PFC v2 typed fields are
+// populated from Plaid's PersonalFinanceCategory when transactions are synced.
+func TestProcessAddedTransactions_SetsPFCFields(t *testing.T) {
 	mockTransactionRepo := new(MockTransactionRepository)
 
 	service := NewTransactionSyncService(
@@ -1686,51 +1684,47 @@ func TestProcessAddedTransactions_SetsOriginalCategory(t *testing.T) {
 	).(*transactionSyncService)
 
 	ctx := context.Background()
-	linkedItemID := "linked-item-123"
-	userID := "user-456"
-
-	accountMap := map[string]string{
-		"plaid-acc-1": "account-uuid-1",
-	}
-
 	linkedItem := &domain.LinkedItem{
-		ID:     linkedItemID,
-		UserID: userID,
+		ID:     "linked-item-123",
+		UserID: "user-456",
 	}
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
 
-	// Plaid transaction with category
-	added := []plaid.Transaction{
-		{TransactionId: "plaid-txn-with-category", AccountId: "plaid-acc-1", Amount: 100.00, Date: "2024-01-15", Name: "Grocery Store", Category: []string{"Food and Drink", "Groceries"}, Pending: false},
+	// Build Plaid transaction with PFC v2 data
+	pfcPrimary := "FOOD_AND_DRINK"
+	pfcDetailed := "FOOD_AND_DRINK_GROCERIES"
+	confidenceLevel := "HIGH"
+	pfc := plaid.NewPersonalFinanceCategory(pfcPrimary, pfcDetailed)
+	pfc.ConfidenceLevel = *plaid.NewNullableString(&confidenceLevel)
+	plaidTxn := plaid.Transaction{
+		TransactionId: "plaid-txn-pfc",
+		AccountId:     "plaid-acc-1",
+		Amount:        50.00,
+		Date:          "2024-01-15",
+		Name:          "Whole Foods",
+		Pending:       false,
 	}
+	plaidTxn.PersonalFinanceCategory.Set(pfc)
 
-	// Mock: CreateBatch should be called with transactions that have OriginalCategory set
+	added := []plaid.Transaction{plaidTxn}
+
 	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
 		if len(txns) != 1 {
 			return false
 		}
-		// Verify Category is set
-		if txns[0].Category == nil {
-			t.Errorf("Category should be set")
+		if txns[0].PFCPrimary == nil || *txns[0].PFCPrimary != pfcPrimary {
+			t.Errorf("PFCPrimary should be %q, got %v", pfcPrimary, txns[0].PFCPrimary)
 			return false
 		}
-		// Verify OriginalCategory is set to same value as Category
-		if txns[0].OriginalCategory == nil {
-			t.Errorf("OriginalCategory should be set when transaction has category")
-			return false
-		}
-		// Both should have the same JSON value
-		if *txns[0].Category != *txns[0].OriginalCategory {
-			t.Errorf("OriginalCategory should match Category, got %s vs %s",
-				*txns[0].OriginalCategory, *txns[0].Category)
+		if txns[0].PFCDetailed == nil || *txns[0].PFCDetailed != pfcDetailed {
+			t.Errorf("PFCDetailed should be %q, got %v", pfcDetailed, txns[0].PFCDetailed)
 			return false
 		}
 		return true
 	})).Return(nil)
 
-	// Execute
 	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
 
-	// Assert
 	assert.NoError(t, err)
 	mockTransactionRepo.AssertExpectations(t)
 }

@@ -9,7 +9,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v4"
-	"github.com/lib/pq"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,7 +35,7 @@ func TestTransactionRepository_Create_Success(t *testing.T) {
 		Name:                  "Starbucks",
 	}
 
-	// Expect INSERT query (20 args: added external_transaction_id_blind_idx)
+	// Expect INSERT query (21 args: added pfc_confidence_level)
 	mock.ExpectExec("INSERT INTO transactions").
 		WithArgs(
 			pgxmock.AnyArg(), // id (UUID generated)
@@ -52,8 +51,9 @@ func TestTransactionRepository_Create_Success(t *testing.T) {
 			pgxmock.AnyArg(), // authorized_date
 			transaction.Name,
 			pgxmock.AnyArg(), // merchant_name
-			pgxmock.AnyArg(), // category
-			pgxmock.AnyArg(), // personal_finance_category
+			pgxmock.AnyArg(), // pfc_primary
+			pgxmock.AnyArg(), // pfc_detailed
+			pgxmock.AnyArg(), // pfc_confidence_level
 			pgxmock.AnyArg(), // payment_channel
 			transaction.Pending,
 			pgxmock.AnyArg(), // user_notes
@@ -106,9 +106,9 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with multiple value sets (21 fields per transaction * 2 transactions = 42 args)
+	// Expect batch INSERT with multiple value sets (22 fields per transaction * 2 transactions = 44 args)
 	// Issue #171: Added user_account_id as the 5th field; encryption adds external_transaction_id_blind_idx
-	args := make([]interface{}, 42)
+	args := make([]interface{}, 44)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -154,8 +154,9 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 			pgxmock.AnyArg(), // authorized_date
 			transaction.Name,
 			pgxmock.AnyArg(), // merchant_name
-			pgxmock.AnyArg(), // category
-			pgxmock.AnyArg(), // personal_finance_category
+			pgxmock.AnyArg(), // pfc_primary
+			pgxmock.AnyArg(), // pfc_detailed
+			pgxmock.AnyArg(), // pfc_confidence_level
 			pgxmock.AnyArg(), // payment_channel
 			transaction.Pending,
 			pgxmock.AnyArg(), // external_metadata
@@ -219,28 +220,29 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID1, nil,
 			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, now, now,
+			nil, false, nil, now, now,
 			nil, nil,
-			nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
 		).
 		AddRow(
 			"tx-2", userID, "account-2", "item-1",
 			"plaid", &extID2, nil,
 			-25.00, now, nil, "Transaction 2", nil,
 			nil, nil, nil,
-			false, nil, now, now,
+			nil, false, nil, now, now,
 			nil, nil,
-			nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query
@@ -278,19 +280,20 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			"tx-1", "user-1", accountID, "item-1",
 			"plaid", &extID, nil,
 			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, now, now,
+			nil, false, nil, now, now,
 			nil, nil,
-			nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query
@@ -328,19 +331,20 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
 			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, now, now,
+			nil, false, nil, now, now,
 			nil, nil,
-			nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query (source is passed as string, not domain type)
@@ -380,19 +384,20 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
 			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, now, now,
+			nil, false, nil, now, now,
 			nil, nil,
-			nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with only user_id filter
@@ -437,19 +442,20 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
 			-50.00, txDate, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, now, now,
+			nil, false, nil, now, now,
 			nil, nil,
-			nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with date range filter
@@ -491,19 +497,20 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			"tx-1", userID, accountID, "item-1",
 			"plaid", &extID, nil,
 			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, now, now,
+			nil, false, nil, now, now,
 			nil, nil,
-			nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with account_id filter
@@ -547,19 +554,20 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
 			-5.49, now, nil, "Starbucks", &merchantName,
 			nil, nil, nil,
-			false, nil, now, now,
+			nil, false, nil, now, now,
 			nil, nil,
-			nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with ILIKE search (case-insensitive)
@@ -577,8 +585,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestTransactionRepository_GetByUserIDWithFilters_Category tests filtering by category
-func TestTransactionRepository_GetByUserIDWithFilters_Category(t *testing.T) {
+// TestTransactionRepository_GetByUserIDWithFilters_PFCPrimaries tests filtering by PFC primary enum(s)
+func TestTransactionRepository_GetByUserIDWithFilters_PFCPrimaries(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mock.Close()
@@ -587,41 +595,39 @@ func TestTransactionRepository_GetByUserIDWithFilters_Category(t *testing.T) {
 	ctx := context.Background()
 
 	userID := "user-123"
-	categoryFilter := "Food and Drink"
 	limit := 10
 	offset := 0
 	filters := domain.TransactionFilters{
-		Category: &categoryFilter,
+		PFCPrimaries: []string{"FOOD_AND_DRINK"},
 	}
 
-	// Use pointers for nullable columns (pgxmock v4 requirement)
-	categoryJSON := `["Food and Drink", "Restaurants"]`
 	extID := "plaid_tx_1"
 	now := time.Now()
+	pfcPrimary := "FOOD_AND_DRINK"
 
-	// Mock result rows
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
 			-25.00, now, nil, "Restaurant", nil,
-			&categoryJSON, nil, nil,
+			&pfcPrimary, nil, nil, nil,
 			false, nil, now, now,
 			nil, nil,
-			nil, nil, nil, nil,
+			nil, nil, nil,
+			nil, nil, nil,
 		)
 
-	// Expect SELECT query with category filter (JSON contains check)
-	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id(.+)AND category::text ILIKE").
-		WithArgs(userID, "%"+categoryFilter+"%", limit, offset).
+	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
+		WithArgs(userID, pgxmock.AnyArg(), limit, offset).
 		WillReturnRows(rows)
 
 	transactions, err := repo.GetByUserIDWithFilters(ctx, userID, filters, limit, offset)
@@ -658,19 +664,20 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
 			-100.00, now, nil, "Pending Transaction", nil,
 			nil, nil, nil,
-			true, nil, now, now,
+			nil, true, nil, now, now,
 			nil, nil,
-			nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with pending filter
@@ -718,19 +725,20 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			"tx-1", userID, accountID, "item-1",
 			"plaid", &extID, nil,
 			-50.00, txDate, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, now, now,
+			nil, false, nil, now, now,
 			nil, nil,
-			nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with multiple filters (account_id AND date >= AND pending)
@@ -832,19 +840,20 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			"tx-uuid-123", userID, "account-456", "item-789",
 			"plaid", &externalID, nil,
 			-25.50, now, nil, "Starbucks", &merchantName,
-			&categoryJSON, nil, nil,
+			&categoryJSON, nil, nil, nil,
 			false, nil, now, now,
 			nil, nil,
-			nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
 		)
 
 	// Expect SELECT query with WHERE source = $1 AND external_transaction_id_blind_idx = $2 AND user_id = $3
@@ -915,19 +924,20 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
 			-50.00, now, nil, "Transaction 1", nil,
 			nil, nil, nil,
-			false, nil, now, now,
+			nil, false, nil, now, now,
 			[]byte(`["Food", "Shopping"]`), []byte(`[{"tag":"Food","source":"user"},{"tag":"Shopping","source":"user"}]`),
-			nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
@@ -946,8 +956,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 	assert.NoError(t, err)
 }
 
-// TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride tests category_override fields
-// TDD RED: This test will FAIL until GetByUserIDWithFilters includes category_override in SELECT
+// TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride tests PFC v2 override fields
+// are included in SELECT and properly scanned.
 func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -961,32 +971,32 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 	offset := 0
 	filters := domain.TransactionFilters{}
 
-	// Use pointers for nullable columns (pgxmock v4 requirement)
 	extID := "plaid_tx_1"
 	now := time.Now()
 	overrideDate := now
-	categoryJSON := `["Food and Drink"]`
-	categoryOverride := `["Custom Category"]`
-	originalCategory := `["Food and Drink"]`
+	pfcPrimary := "FOOD_AND_DRINK"
+	overrideKind := "pfc"
+	pfcPrimaryOverride := "GENERAL_MERCHANDISE"
 
-	// Mock result rows including category_override fields
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
 			-50.00, now, nil, "Transaction 1", nil,
-			&categoryJSON, nil, nil,
+			&pfcPrimary, nil, nil, nil,
 			false, nil, now, now,
 			nil, nil,
-			&categoryOverride, "user", &overrideDate, &originalCategory,
+			&overrideKind, &pfcPrimaryOverride, nil,
+			nil, "manual", &overrideDate,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
@@ -997,20 +1007,19 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 	assert.NoError(t, err)
 	require.Len(t, transactions, 1)
 
-	// Assert category_override fields are returned
-	assert.NotNil(t, transactions[0].CategoryOverride)
-	assert.Equal(t, `["Custom Category"]`, *transactions[0].CategoryOverride)
-	assert.Equal(t, domain.CategorySource("user"), transactions[0].CategorySourceField)
+	assert.NotNil(t, transactions[0].CategoryOverrideKind)
+	assert.Equal(t, "pfc", *transactions[0].CategoryOverrideKind)
+	assert.NotNil(t, transactions[0].PFCPrimaryOverride)
+	assert.Equal(t, "GENERAL_MERCHANDISE", *transactions[0].PFCPrimaryOverride)
+	assert.Equal(t, domain.CategorySource("manual"), transactions[0].CategorySourceField)
 	assert.NotNil(t, transactions[0].CategoryOverrideDate)
-	assert.NotNil(t, transactions[0].OriginalCategory)
-	assert.Equal(t, `["Food and Drink"]`, *transactions[0].OriginalCategory)
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
 }
 
 // TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields tests GetByID returns all category fields
-// TDD RED: This test will FAIL until GetByID includes category_override fields in SELECT
+// TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields tests GetByID returns PFC v2 override fields.
 func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -1020,29 +1029,28 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 	ctx := context.Background()
 
 	txID := "tx-123"
-
-	// Use pointers for nullable columns (pgxmock v4 requirement)
 	extID := "plaid_tx_1"
 	now := time.Now()
 	overrideDate := now
-	categoryJSON := `["Food and Drink"]`
-	categoryOverride := `["Custom Category"]`
-	originalCategory := `["Food and Drink"]`
+	pfcPrimary := "FOOD_AND_DRINK"
+	overrideKind := "pfc"
+	pfcPrimaryOverride := "GENERAL_MERCHANDISE"
 
-	// Mock result row including all fields
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id", "source", "external_transaction_id",
 		"external_metadata", "amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel", "pending", "user_notes",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel", "pending", "user_notes",
 		"created_at", "updated_at", "tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			txID, "user-123", "account-1", "item-1", "plaid", &extID,
 			nil, -50.00, now, nil, "Transaction 1", nil,
-			&categoryJSON, nil, nil, false, nil,
+			&pfcPrimary, nil, nil, nil, false, nil,
 			now, now, []byte(`["Food"]`), []byte(`[{"tag":"Food","source":"user"}]`),
-			&categoryOverride, "user", &overrideDate, &originalCategory,
+			&overrideKind, &pfcPrimaryOverride, nil,
+			nil, "manual", &overrideDate,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE id").
@@ -1053,25 +1061,21 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 	assert.NoError(t, err)
 	require.NotNil(t, transaction)
 
-	// Assert tags are returned
 	assert.Equal(t, []string{"Food"}, transaction.Tags)
-
-	// Assert category_override fields are returned
-	assert.NotNil(t, transaction.CategoryOverride)
-	assert.Equal(t, `["Custom Category"]`, *transaction.CategoryOverride)
-	assert.Equal(t, domain.CategorySource("user"), transaction.CategorySourceField)
+	assert.NotNil(t, transaction.CategoryOverrideKind)
+	assert.Equal(t, "pfc", *transaction.CategoryOverrideKind)
+	assert.NotNil(t, transaction.PFCPrimaryOverride)
+	assert.Equal(t, "GENERAL_MERCHANDISE", *transaction.PFCPrimaryOverride)
+	assert.Equal(t, domain.CategorySource("manual"), transaction.CategorySourceField)
 	assert.NotNil(t, transaction.CategoryOverrideDate)
-	assert.NotNil(t, transaction.OriginalCategory)
-	assert.Equal(t, `["Food and Drink"]`, *transaction.OriginalCategory)
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
 }
 
-// TestTransactionRepository_UpdateCategory_PreservesOriginalCategory tests that UpdateCategory
-// preserves original_category using COALESCE when it's NULL
-// TDD RED: This test will FAIL until UpdateCategory SQL includes COALESCE for original_category
-func TestTransactionRepository_UpdateCategory_PreservesOriginalCategory(t *testing.T) {
+// TestTransactionRepository_UpdateCategory_PFCOverride tests that UpdateCategory
+// correctly writes the PFC v2 discriminated union override columns.
+func TestTransactionRepository_UpdateCategory_PFCOverride(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mock.Close()
@@ -1081,14 +1085,16 @@ func TestTransactionRepository_UpdateCategory_PreservesOriginalCategory(t *testi
 
 	txID := "tx-123"
 	userID := "user-123"
-	categoryOverride := []string{"Custom", "Category"}
+	kind := "pfc"
+	primary := "FOOD_AND_DRINK"
 
-	// Expect the UPDATE query with COALESCE for original_category
-	// This ensures the first manual edit preserves the original Plaid category
-	mock.ExpectExec("UPDATE transactions SET category_override.*original_category = COALESCE\\(original_category, category\\)").
+	mock.ExpectExec("UPDATE transactions").
 		WithArgs(
-			pgxmock.AnyArg(), // category_override JSON
-			domain.CategorySource("user"),
+			&kind,
+			&primary,
+			(*string)(nil), // pfc_detailed_override
+			(*string)(nil), // custom_category_override_id
+			domain.CategorySourceManual,
 			pgxmock.AnyArg(), // category_override_date
 			pgxmock.AnyArg(), // updated_at
 			txID,
@@ -1096,7 +1102,40 @@ func TestTransactionRepository_UpdateCategory_PreservesOriginalCategory(t *testi
 		).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	err = repo.UpdateCategory(ctx, txID, userID, categoryOverride, domain.CategorySource("user"))
+	err = repo.UpdateCategory(ctx, txID, userID, &kind, &primary, nil, nil, domain.CategorySourceManual)
+	assert.NoError(t, err)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_UpdateCategory_ClearOverride tests that passing nil kind clears overrides.
+func TestTransactionRepository_UpdateCategory_ClearOverride(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	txID := "tx-clear"
+	userID := "user-123"
+
+	mock.ExpectExec("UPDATE transactions").
+		WithArgs(
+			(*string)(nil), // category_override_kind
+			(*string)(nil), // pfc_primary_override
+			(*string)(nil), // pfc_detailed_override
+			(*string)(nil), // custom_category_override_id
+			domain.CategorySourceManual,
+			pgxmock.AnyArg(), // category_override_date
+			pgxmock.AnyArg(), // updated_at
+			txID,
+			userID,
+		).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err = repo.UpdateCategory(ctx, txID, userID, nil, nil, nil, nil, domain.CategorySourceManual)
 	assert.NoError(t, err)
 
 	err = mock.ExpectationsWereMet()
@@ -1186,7 +1225,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_Success(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Paycheck"]`, category).
+		WithArgs(userID, startDate, endDate, category).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetIncomeSumByCategory(ctx, userID, category, startDate, endDate)
@@ -1215,7 +1254,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_NoMatches(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(0.0)
 
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["NonExistentCategory"]`, category).
+		WithArgs(userID, startDate, endDate, category).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetIncomeSumByCategory(ctx, userID, category, startDate, endDate)
@@ -1241,7 +1280,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_DBError(t *testing.T) {
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Paycheck"]`, category).
+		WithArgs(userID, startDate, endDate, category).
 		WillReturnError(errors.New("connection done"))
 
 	sum, err := repo.GetIncomeSumByCategory(ctx, userID, category, startDate, endDate)
@@ -1271,9 +1310,9 @@ func TestTransactionRepository_GetIncomeSumByCategory_PFCPrimary(t *testing.T) {
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	// $4 is the JSONB array form, $5 is the raw enum string for personal_finance_category->>'primary'
+	// $4 is the PFC primary enum matched against the effective category
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["INCOME"]`, category).
+		WithArgs(userID, startDate, endDate, category).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetIncomeSumByCategory(ctx, userID, category, startDate, endDate)
@@ -1369,11 +1408,11 @@ func TestTransactionRepository_GetIncomeSumByTag_DBError(t *testing.T) {
 }
 
 // =============================================================================
-// Issue #493: GetSpentSumForBudgetCategory Tests
+// GetSpentSumForBudgetCategory Tests (PFC v2 discriminated union)
 // =============================================================================
 
 // TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly tests
-// category_only match logic - matches transactions by category containment
+// category_only match logic using a PFC budget category.
 func TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -1382,22 +1421,24 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly(t *test
 	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
+	pfcPrimary := "FOOD_AND_DRINK"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		PFCPrimary:   &pfcPrimary,
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+	}
 	userID := "user-123"
-	category := []string{"Food and Drink"}
-	tags := []string{} // Not used for category_only
-	matchLogic := domain.MatchLogicCategoryOnly
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 250.50
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	// Match the category_only SQL query pattern
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Food and Drink"]`).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedSum, sum)
 
@@ -1406,7 +1447,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly(t *test
 }
 
 // TestTransactionRepository_GetSpentSumForBudgetCategory_TagOnly tests
-// tag_only match logic - matches transactions by tag existence
+// tag_only match logic - matches transactions by tag existence regardless of category
 func TestTransactionRepository_GetSpentSumForBudgetCategory_TagOnly(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -1416,21 +1457,22 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_TagOnly(t *testing.T
 	ctx := context.Background()
 
 	userID := "user-123"
-	category := []string{} // Not used for tag_only
-	tags := []string{"groceries", "food"}
-	matchLogic := domain.MatchLogicTagOnly
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		Tags:         []string{"groceries", "food"},
+		MatchLogic:   domain.MatchLogicTagOnly,
+	}
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 175.25
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	// Match the tag_only SQL query pattern with pq.Array
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()). // pq.Array produces custom type
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedSum, sum)
 
@@ -1449,21 +1491,26 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_And(t *testing.T) {
 	ctx := context.Background()
 
 	userID := "user-123"
-	category := []string{"Food and Drink", "Restaurants"}
-	tags := []string{"dinner", "date-night"}
-	matchLogic := domain.MatchLogicAnd
+	pfcPrimary := "FOOD_AND_DRINK"
+	pfcDetailed := "FOOD_AND_DRINK_RESTAURANTS"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		PFCPrimary:   &pfcPrimary,
+		PFCDetailed:  &pfcDetailed,
+		Tags:         []string{"dinner", "date-night"},
+		MatchLogic:   domain.MatchLogicAnd,
+	}
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 125.00
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	// Match the and SQL query pattern with both category and tags
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`, pgxmock.AnyArg()). // category JSON + pq.Array
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedSum, sum)
 
@@ -1482,21 +1529,24 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_Or(t *testing.T) {
 	ctx := context.Background()
 
 	userID := "user-123"
-	category := []string{"Entertainment"}
-	tags := []string{"streaming", "subscriptions"}
-	matchLogic := domain.MatchLogicOr
+	pfcPrimary := "ENTERTAINMENT"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		PFCPrimary:   &pfcPrimary,
+		Tags:         []string{"streaming", "subscriptions"},
+		MatchLogic:   domain.MatchLogicOr,
+	}
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 89.97
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	// Match the or SQL query pattern with both category and tags
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Entertainment"]`, pgxmock.AnyArg()). // category JSON + pq.Array
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedSum, sum)
 
@@ -1515,21 +1565,23 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_EmptyMatchLogic(t *t
 	ctx := context.Background()
 
 	userID := "user-123"
-	category := []string{"Shopping"}
-	tags := []string{}
-	matchLogic := domain.MatchLogic("") // Empty defaults to category_only
+	pfcPrimary := "GENERAL_MERCHANDISE"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		PFCPrimary:   &pfcPrimary,
+		MatchLogic:   domain.MatchLogic(""), // empty defaults to category_only
+	}
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 500.00
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	// Should use category_only query pattern
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Shopping"]`).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedSum, sum)
 
@@ -1548,20 +1600,22 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_NoMatches(t *testing
 	ctx := context.Background()
 
 	userID := "user-123"
-	category := []string{"NonExistentCategory"}
-	tags := []string{}
-	matchLogic := domain.MatchLogicCategoryOnly
+	pfcPrimary := "FOOD_AND_DRINK"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		PFCPrimary:   &pfcPrimary,
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+	}
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	// COALESCE ensures 0 is returned for no matches
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(0.0)
 
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["NonExistentCategory"]`).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, 0.0, sum)
 
@@ -1580,17 +1634,20 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_DBError(t *testing.T
 	ctx := context.Background()
 
 	userID := "user-123"
-	category := []string{"Food and Drink"}
-	tags := []string{}
-	matchLogic := domain.MatchLogicCategoryOnly
+	pfcPrimary := "FOOD_AND_DRINK"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		PFCPrimary:   &pfcPrimary,
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+	}
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Food and Drink"]`).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
 		WillReturnError(errors.New("connection done"))
 
-	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
 	assert.Error(t, err)
 	assert.Equal(t, 0.0, sum)
 	assert.Contains(t, err.Error(), "failed to get spent sum for budget category")
@@ -1600,7 +1657,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_DBError(t *testing.T
 }
 
 // TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory tests
-// that hierarchical categories (e.g., ["Food and Drink", "Restaurants"]) work correctly
+// that PFC primary + detailed combination works correctly
 func TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -1610,22 +1667,25 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory
 	ctx := context.Background()
 
 	userID := "user-123"
-	// Budget category with full hierarchy
-	category := []string{"Food and Drink", "Restaurants"}
-	tags := []string{}
-	matchLogic := domain.MatchLogicCategoryOnly
+	pfcPrimary := "FOOD_AND_DRINK"
+	pfcDetailed := "FOOD_AND_DRINK_RESTAURANTS"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		PFCPrimary:   &pfcPrimary,
+		PFCDetailed:  &pfcDetailed,
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+	}
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 350.00
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	// Category should be marshaled as full JSON array
 	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, category, tags, matchLogic, startDate, endDate)
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedSum, sum)
 
@@ -1638,7 +1698,7 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory
 // =============================================================================
 
 // TestTransactionRepository_GetMatchingTransactionStats_SingleCategory tests
-// preview with a single category using category_only match logic
+// preview with a PFC primary+detailed category using category_only match logic
 func TestTransactionRepository_GetMatchingTransactionStats_SingleCategory(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -1648,7 +1708,8 @@ func TestTransactionRepository_GetMatchingTransactionStats_SingleCategory(t *tes
 	ctx := context.Background()
 
 	userID := "user-123"
-	categories := [][]string{{"Food and Drink", "Restaurants"}}
+	pfcPrimary := "FOOD_AND_DRINK"
+	pfcDetailed := "FOOD_AND_DRINK_RESTAURANTS"
 	tags := []string{}
 	matchLogic := domain.MatchLogicCategoryOnly
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -1659,10 +1720,10 @@ func TestTransactionRepository_GetMatchingTransactionStats_SingleCategory(t *tes
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, &pfcDetailed, nil, tags, matchLogic, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedCount, count)
 	assert.Equal(t, expectedSum, sum)
@@ -1671,9 +1732,9 @@ func TestTransactionRepository_GetMatchingTransactionStats_SingleCategory(t *tes
 	assert.NoError(t, err)
 }
 
-// TestTransactionRepository_GetMatchingTransactionStats_MultipleCategories tests
-// preview with multiple categories (OR across categories)
-func TestTransactionRepository_GetMatchingTransactionStats_MultipleCategories(t *testing.T) {
+// TestTransactionRepository_GetMatchingTransactionStats_CustomCategory tests
+// preview with a custom category override
+func TestTransactionRepository_GetMatchingTransactionStats_CustomCategory(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mock.Close()
@@ -1682,10 +1743,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_MultipleCategories(t 
 	ctx := context.Background()
 
 	userID := "user-123"
-	categories := [][]string{
-		{"Food and Drink", "Restaurants"},
-		{"Food and Drink", "Groceries"},
-	}
+	customCategoryID := "custom-cat-uuid-456"
 	tags := []string{}
 	matchLogic := domain.MatchLogicCategoryOnly
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -1695,12 +1753,11 @@ func TestTransactionRepository_GetMatchingTransactionStats_MultipleCategories(t 
 
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
-	// Expect query with OR for multiple categories
 	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "custom", nil, nil, &customCategoryID, tags, matchLogic, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedCount, count)
 	assert.Equal(t, expectedSum, sum)
@@ -1720,7 +1777,6 @@ func TestTransactionRepository_GetMatchingTransactionStats_TagOnly(t *testing.T)
 	ctx := context.Background()
 
 	userID := "user-123"
-	categories := [][]string{}
 	tags := []string{"Essential", "groceries"}
 	matchLogic := domain.MatchLogicTagOnly
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -1731,10 +1787,10 @@ func TestTransactionRepository_GetMatchingTransactionStats_TagOnly(t *testing.T)
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pq.Array(tags)).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "", nil, nil, nil, tags, matchLogic, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedCount, count)
 	assert.Equal(t, expectedSum, sum)
@@ -1754,7 +1810,8 @@ func TestTransactionRepository_GetMatchingTransactionStats_And(t *testing.T) {
 	ctx := context.Background()
 
 	userID := "user-123"
-	categories := [][]string{{"Food and Drink", "Restaurants"}}
+	pfcPrimary := "FOOD_AND_DRINK"
+	pfcDetailed := "FOOD_AND_DRINK_RESTAURANTS"
 	tags := []string{"Essential"}
 	matchLogic := domain.MatchLogicAnd
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -1765,10 +1822,10 @@ func TestTransactionRepository_GetMatchingTransactionStats_And(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`, pq.Array(tags)).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, &pfcDetailed, nil, tags, matchLogic, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedCount, count)
 	assert.Equal(t, expectedSum, sum)
@@ -1788,7 +1845,8 @@ func TestTransactionRepository_GetMatchingTransactionStats_Or(t *testing.T) {
 	ctx := context.Background()
 
 	userID := "user-123"
-	categories := [][]string{{"Food and Drink", "Restaurants"}}
+	pfcPrimary := "FOOD_AND_DRINK"
+	pfcDetailed := "FOOD_AND_DRINK_RESTAURANTS"
 	tags := []string{"Essential"}
 	matchLogic := domain.MatchLogicOr
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -1799,10 +1857,10 @@ func TestTransactionRepository_GetMatchingTransactionStats_Or(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Food and Drink","Restaurants"]`, pq.Array(tags)).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, &pfcDetailed, nil, tags, matchLogic, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedCount, count)
 	assert.Equal(t, expectedSum, sum)
@@ -1822,7 +1880,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_NoMatches(t *testing.
 	ctx := context.Background()
 
 	userID := "user-123"
-	categories := [][]string{{"Nonexistent", "Category"}}
+	pfcPrimary := "FOOD_AND_DRINK"
 	tags := []string{}
 	matchLogic := domain.MatchLogicCategoryOnly
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -1831,10 +1889,10 @@ func TestTransactionRepository_GetMatchingTransactionStats_NoMatches(t *testing.
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(0, 0)
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Nonexistent","Category"]`).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, nil, nil, tags, matchLogic, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, count)
 	assert.Equal(t, 0.0, sum)
@@ -1854,17 +1912,17 @@ func TestTransactionRepository_GetMatchingTransactionStats_DBError(t *testing.T)
 	ctx := context.Background()
 
 	userID := "user-123"
-	categories := [][]string{{"Food and Drink"}}
+	pfcPrimary := "FOOD_AND_DRINK"
 	tags := []string{}
 	matchLogic := domain.MatchLogicCategoryOnly
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, `["Food and Drink"]`).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
 		WillReturnError(errors.New("connection done"))
 
-	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, nil, nil, tags, matchLogic, startDate, endDate)
 	assert.Error(t, err)
 	assert.Equal(t, 0, count)
 	assert.Equal(t, 0.0, sum)
@@ -1904,9 +1962,9 @@ func TestTransactionRepository_CreateBatch_WithUserAccountID(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with user_account_id and external_transaction_id_blind_idx (21 fields now)
-	// Build arguments for 21 fields per transaction
-	args := make([]interface{}, 21)
+	// Expect batch INSERT with user_account_id and external_transaction_id_blind_idx (22 fields now)
+	// Build arguments for 22 fields per transaction
+	args := make([]interface{}, 22)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -1949,8 +2007,8 @@ func TestTransactionRepository_CreateBatch_DOUpdateBehavior(t *testing.T) {
 		},
 	}
 
-	// Build arguments for 21 fields per transaction (includes external_transaction_id_blind_idx)
-	args := make([]interface{}, 21)
+	// Build arguments for 22 fields per transaction (includes external_transaction_id_blind_idx)
+	args := make([]interface{}, 22)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -1991,25 +2049,26 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id", "user_account_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"category", "personal_finance_category", "payment_channel", "pending", "user_notes",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel", "pending", "user_notes",
 		"created_at", "updated_at", "tags", "tags_source",
-		"category_override", "category_source", "category_override_date", "original_category",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
 	}).
 		AddRow(
 			"tx-uuid-1", userID, "account-old", "item-old", &userAccountID,
 			"plaid", &externalID1, nil,
 			-50.00, now, nil, "Starbucks", ptrStr("Starbucks Corp"),
-			nil, nil, nil, false, nil,
+			nil, nil, nil, nil, false, nil,
 			now, now, []byte(`[]`), []byte(`[]`),
-			nil, "plaid", nil, nil, // category_source as raw string for sql.NullString
+			nil, nil, nil, nil, "plaid", nil,
 		).
 		AddRow(
 			"tx-uuid-2", userID, "account-new", "item-new", &userAccountID,
 			"plaid", &externalID2, nil,
 			-25.00, now, nil, "Coffee", nil,
-			nil, nil, nil, false, nil,
+			nil, nil, nil, nil, false, nil,
 			now, now, []byte(`[]`), []byte(`[]`),
-			nil, "plaid", nil, nil, // category_source as raw string for sql.NullString
+			nil, nil, nil, nil, "plaid", nil,
 		)
 
 	mock.ExpectQuery("SELECT.*FROM transactions.*WHERE user_id.*AND user_account_id").

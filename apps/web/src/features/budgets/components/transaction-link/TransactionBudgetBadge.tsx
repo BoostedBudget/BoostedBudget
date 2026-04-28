@@ -10,6 +10,7 @@ import { Link } from 'react-router-dom'
 import { FolderIcon, TagIcon, SparklesIcon } from 'lucide-react'
 import { getBudgetDetailPath } from '../../constants'
 import type { BudgetCategoryMatch, MatchReason } from '../../utils/transactionBudgetMatcher'
+import { formatBudgetCategoryLabel } from '../../types'
 
 export interface TransactionBudgetBadgeProps {
   /** Match result from transactionBudgetMatcher, or null/undefined if no match */
@@ -17,21 +18,12 @@ export interface TransactionBudgetBadgeProps {
 }
 
 /**
- * Icons for each match reason type
+ * Match reason metadata: icon and tooltip text
  */
-const MATCH_REASON_ICONS: Record<MatchReason, typeof FolderIcon> = {
-  category: FolderIcon,
-  tag: TagIcon,
-  both: SparklesIcon,
-}
-
-/**
- * Tooltip text for each match reason type
- */
-const MATCH_REASON_TOOLTIPS: Record<MatchReason, string> = {
-  category: 'Matched by category',
-  tag: 'Matched by tag',
-  both: 'Matched by category and tag',
+const MATCH_REASON_CONFIG: Record<MatchReason, { Icon: typeof FolderIcon; tooltip: string }> = {
+  category: { Icon: FolderIcon, tooltip: 'Matched by category' },
+  tag: { Icon: TagIcon, tooltip: 'Matched by tag' },
+  both: { Icon: SparklesIcon, tooltip: 'Matched by category and tag' },
 }
 
 /**
@@ -48,11 +40,8 @@ export function TransactionBudgetBadge({ match }: TransactionBudgetBadgeProps) {
   if (!match) return null
 
   const { category, matchReason } = match
-  const Icon = MATCH_REASON_ICONS[matchReason]
-  const tooltip = MATCH_REASON_TOOLTIPS[matchReason]
-
-  // Display primary category only (first element), with fallback
-  const displayName = category.category[0] || 'Budget'
+  const { Icon, tooltip } = MATCH_REASON_CONFIG[matchReason]
+  const displayName = formatBudgetCategoryLabel(category)
 
   return (
     <Link

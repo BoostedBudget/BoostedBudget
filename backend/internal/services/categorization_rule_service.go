@@ -49,17 +49,20 @@ func NewCategorizationRuleService(
 func (s *categorizationRuleService) CreateRule(ctx context.Context, userID string, req *domain.CreateCategorizationRuleRequest) (*domain.CategorizationRule, error) {
 	// Create the rule
 	rule := &domain.CategorizationRule{
-		UserID:         userID,
-		Name:           req.Name,
-		Description:    req.Description,
-		Enabled:        true, // Default enabled
-		Priority:       req.Priority,
-		Conditions:     req.Conditions,
-		ConditionLogic: req.ConditionLogic,
-		TargetCategory: req.TargetCategory,
-		TargetTags:     req.TargetTags,
-		TagBehavior:    req.TagBehavior,
-		Source:         "manual",
+		UserID:                 userID,
+		Name:                   req.Name,
+		Description:            req.Description,
+		Enabled:                true, // Default enabled
+		Priority:               req.Priority,
+		Conditions:             req.Conditions,
+		ConditionLogic:         req.ConditionLogic,
+		TargetKind:             req.TargetKind,
+		TargetPFCPrimary:       req.TargetPFCPrimary,
+		TargetPFCDetailed:      req.TargetPFCDetailed,
+		TargetCustomCategoryID: req.TargetCustomCategoryID,
+		TargetTags:             req.TargetTags,
+		TagBehavior:            req.TagBehavior,
+		Source:                 "manual",
 	}
 
 	// Set defaults
@@ -135,8 +138,17 @@ func (s *categorizationRuleService) UpdateRule(ctx context.Context, userID, rule
 	if req.ConditionLogic != nil {
 		rule.ConditionLogic = *req.ConditionLogic
 	}
-	if req.TargetCategory != nil {
-		rule.TargetCategory = *req.TargetCategory
+	if req.TargetKind != nil {
+		rule.TargetKind = req.TargetKind
+	}
+	if req.TargetPFCPrimary != nil {
+		rule.TargetPFCPrimary = req.TargetPFCPrimary
+	}
+	if req.TargetPFCDetailed != nil {
+		rule.TargetPFCDetailed = req.TargetPFCDetailed
+	}
+	if req.TargetCustomCategoryID != nil {
+		rule.TargetCustomCategoryID = req.TargetCustomCategoryID
 	}
 	if req.TargetTags != nil {
 		rule.TargetTags = *req.TargetTags

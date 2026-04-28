@@ -132,20 +132,20 @@ export const getGetTransactionsResponseMock = (
         faker.date.past().toISOString().slice(0, 19) + "Z",
         undefined,
       ]),
-      category: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
-      category_override: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
       category_override_date: faker.helpers.arrayElement([
         faker.date.past().toISOString().slice(0, 19) + "Z",
         undefined,
       ]),
+      category_override_kind: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       category_source: faker.string.alpha({ length: { min: 10, max: 20 } }),
       created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      custom_category_override_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       date: faker.date.past().toISOString().slice(0, 19) + "Z",
       external_metadata: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -162,36 +162,29 @@ export const getGetTransactionsResponseMock = (
         undefined,
       ]),
       name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      original_category: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
       payment_channel: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
       pending: faker.datatype.boolean(),
-      personal_finance_category: faker.helpers.arrayElement([
+      pfc_confidence_level: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
-      personal_finance_category_data: faker.helpers.arrayElement([
-        {
-          confidence_level: faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            undefined,
-          ]),
-          detailed: faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            undefined,
-          ]),
-          detailed_display: faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            undefined,
-          ]),
-          primary: faker.string.alpha({ length: { min: 10, max: 20 } }),
-          primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        },
+      pfc_detailed: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_detailed_override: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary_override: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
       source: faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -318,20 +311,20 @@ export const getGetTransactionByIDResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
-  category: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  category_override: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
   category_override_date: faker.helpers.arrayElement([
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
+  category_override_kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   category_source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  custom_category_override_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   date: faker.date.past().toISOString().slice(0, 19) + "Z",
   external_metadata: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -348,36 +341,29 @@ export const getGetTransactionByIDResponseMock = (
     undefined,
   ]),
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  original_category: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
   payment_channel: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   pending: faker.datatype.boolean(),
-  personal_finance_category: faker.helpers.arrayElement([
+  pfc_confidence_level: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
-  personal_finance_category_data: faker.helpers.arrayElement([
-    {
-      confidence_level: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
-      detailed: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
-      detailed_display: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
-      primary: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    },
+  pfc_detailed: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  pfc_detailed_override: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  pfc_primary_override: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -501,20 +487,20 @@ export const getUpdateTransactionCategoryResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
-  category: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  category_override: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
   category_override_date: faker.helpers.arrayElement([
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
+  category_override_kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   category_source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  custom_category_override_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   date: faker.date.past().toISOString().slice(0, 19) + "Z",
   external_metadata: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -531,36 +517,29 @@ export const getUpdateTransactionCategoryResponseMock = (
     undefined,
   ]),
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  original_category: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
   payment_channel: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   pending: faker.datatype.boolean(),
-  personal_finance_category: faker.helpers.arrayElement([
+  pfc_confidence_level: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
-  personal_finance_category_data: faker.helpers.arrayElement([
-    {
-      confidence_level: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
-      detailed: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
-      detailed_display: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
-      primary: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    },
+  pfc_detailed: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  pfc_detailed_override: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  pfc_primary_override: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -684,20 +663,20 @@ export const getUpdateTransactionTagsResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
-  category: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  category_override: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
   category_override_date: faker.helpers.arrayElement([
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
+  category_override_kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   category_source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  custom_category_override_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   date: faker.date.past().toISOString().slice(0, 19) + "Z",
   external_metadata: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -714,36 +693,29 @@ export const getUpdateTransactionTagsResponseMock = (
     undefined,
   ]),
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  original_category: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
   payment_channel: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   pending: faker.datatype.boolean(),
-  personal_finance_category: faker.helpers.arrayElement([
+  pfc_confidence_level: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
-  personal_finance_category_data: faker.helpers.arrayElement([
-    {
-      confidence_level: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
-      detailed: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
-      detailed_display: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
-      primary: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    },
+  pfc_detailed: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  pfc_detailed_override: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  pfc_primary_override: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),

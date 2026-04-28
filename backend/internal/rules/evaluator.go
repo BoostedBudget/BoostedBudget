@@ -1,7 +1,6 @@
 package rules
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -44,7 +43,6 @@ func NewConditionRegistry() *ConditionRegistry {
 	r.evaluators[domain.ConditionPaymentChannel] = &PaymentChannelEvaluator{}
 	r.evaluators[domain.ConditionAccountID] = &AccountIDEvaluator{}
 	r.evaluators[domain.ConditionAccountType] = &AccountTypeEvaluator{}
-	r.evaluators[domain.ConditionExistingCategory] = &ExistingCategoryEvaluator{}
 	r.evaluators[domain.ConditionDateRange] = &DateRangeEvaluator{}
 	r.evaluators[domain.ConditionExistingPFCPrimary] = &ExistingPFCPrimaryEvaluator{}
 	r.evaluators[domain.ConditionExistingPFCDetailed] = &ExistingPFCDetailedEvaluator{}
@@ -72,16 +70,16 @@ func (r *ConditionRegistry) Register(conditionType domain.ConditionType, evaluat
 // Merchant Evaluators
 // ============================================================================
 
-// MerchantContainsEvaluator checks if merchant name contains a substring.
-type MerchantContainsEvaluator struct{}
+// merchantMatchFunc defines a function that checks if a merchant matches a value.
+type merchantMatchFunc func(merchant, value string) bool
 
-func (e *MerchantContainsEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
+// evaluateMerchantCondition is a helper that evaluates merchant conditions with custom match logic.
+func evaluateMerchantCondition(tx *domain.Transaction, condition domain.RuleCondition, matchFn merchantMatchFunc) (bool, error) {
 	merchantName := getMerchantName(tx)
 	if merchantName == "" {
 		return false, nil
 	}
 
-	// Handle both single string and array of strings
 	values := matching.ExtractStringValues(condition.Value)
 	if len(values) == 0 {
 		return false, nil
@@ -89,126 +87,85 @@ func (e *MerchantContainsEvaluator) Evaluate(tx *domain.Transaction, condition d
 
 	merchantLower := strings.ToLower(merchantName)
 	for _, v := range values {
-		if strings.Contains(merchantLower, strings.ToLower(v)) {
+		if matchFn(merchantLower, strings.ToLower(v)) {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+// MerchantContainsEvaluator checks if merchant name contains a substring.
+type MerchantContainsEvaluator struct{}
+
+func (e *MerchantContainsEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
+	return evaluateMerchantCondition(tx, condition, strings.Contains)
 }
 
 // MerchantEqualsEvaluator checks if merchant name exactly matches.
 type MerchantEqualsEvaluator struct{}
 
 func (e *MerchantEqualsEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	merchantName := getMerchantName(tx)
-	if merchantName == "" {
-		return false, nil
-	}
-
-	values := matching.ExtractStringValues(condition.Value)
-	if len(values) == 0 {
-		return false, nil
-	}
-
-	merchantLower := strings.ToLower(merchantName)
-	for _, v := range values {
-		if merchantLower == strings.ToLower(v) {
-			return true, nil
-		}
-	}
-	return false, nil
+	return evaluateMerchantCondition(tx, condition, func(merchant, value string) bool {
+		return merchant == value
+	})
 }
 
 // MerchantStartsWithEvaluator checks if merchant name starts with prefix.
 type MerchantStartsWithEvaluator struct{}
 
 func (e *MerchantStartsWithEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	merchantName := getMerchantName(tx)
-	if merchantName == "" {
-		return false, nil
-	}
-
-	values := matching.ExtractStringValues(condition.Value)
-	if len(values) == 0 {
-		return false, nil
-	}
-
-	merchantLower := strings.ToLower(merchantName)
-	for _, v := range values {
-		if strings.HasPrefix(merchantLower, strings.ToLower(v)) {
-			return true, nil
-		}
-	}
-	return false, nil
+	return evaluateMerchantCondition(tx, condition, strings.HasPrefix)
 }
 
 // MerchantEndsWithEvaluator checks if merchant name ends with suffix.
 type MerchantEndsWithEvaluator struct{}
 
 func (e *MerchantEndsWithEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	merchantName := getMerchantName(tx)
-	if merchantName == "" {
-		return false, nil
-	}
-
-	values := matching.ExtractStringValues(condition.Value)
-	if len(values) == 0 {
-		return false, nil
-	}
-
-	merchantLower := strings.ToLower(merchantName)
-	for _, v := range values {
-		if strings.HasSuffix(merchantLower, strings.ToLower(v)) {
-			return true, nil
-		}
-	}
-	return false, nil
+	return evaluateMerchantCondition(tx, condition, strings.HasSuffix)
 }
 
 // ============================================================================
 // Amount Evaluators
 // ============================================================================
 
+// amountCompareFn defines a function that compares an absolute amount against a threshold.
+type amountCompareFn func(absAmount, threshold float64) bool
+
+// evaluateAmountCondition is a helper that evaluates amount conditions.
+func evaluateAmountCondition(tx *domain.Transaction, condition domain.RuleCondition, compareFn amountCompareFn) (bool, error) {
+	threshold, ok := extractFloat(condition.Value)
+	if !ok {
+		return false, fmt.Errorf("invalid amount: %v", condition.Value)
+	}
+	return compareFn(math.Abs(tx.Amount), threshold), nil
+}
+
 // AmountGreaterThanEvaluator checks if absolute amount exceeds threshold.
 type AmountGreaterThanEvaluator struct{}
 
 func (e *AmountGreaterThanEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	threshold, ok := extractFloat(condition.Value)
-	if !ok {
-		return false, fmt.Errorf("invalid amount threshold: %v", condition.Value)
-	}
-
-	// Use absolute value (transactions can be negative for debits)
-	absAmount := math.Abs(tx.Amount)
-	return absAmount > threshold, nil
+	return evaluateAmountCondition(tx, condition, func(absAmount, threshold float64) bool {
+		return absAmount > threshold
+	})
 }
 
 // AmountLessThanEvaluator checks if absolute amount is below threshold.
 type AmountLessThanEvaluator struct{}
 
 func (e *AmountLessThanEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	threshold, ok := extractFloat(condition.Value)
-	if !ok {
-		return false, fmt.Errorf("invalid amount threshold: %v", condition.Value)
-	}
-
-	absAmount := math.Abs(tx.Amount)
-	return absAmount < threshold, nil
+	return evaluateAmountCondition(tx, condition, func(absAmount, threshold float64) bool {
+		return absAmount < threshold
+	})
 }
 
 // AmountEqualsEvaluator checks if absolute amount equals value (with small epsilon).
 type AmountEqualsEvaluator struct{}
 
 func (e *AmountEqualsEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	target, ok := extractFloat(condition.Value)
-	if !ok {
-		return false, fmt.Errorf("invalid amount value: %v", condition.Value)
-	}
-
-	absAmount := math.Abs(tx.Amount)
-	// Use small epsilon for float comparison
 	const epsilon = 0.001
-	return math.Abs(absAmount-target) < epsilon, nil
+	return evaluateAmountCondition(tx, condition, func(absAmount, threshold float64) bool {
+		return math.Abs(absAmount-threshold) < epsilon
+	})
 }
 
 // AmountRangeEvaluator checks if absolute amount is within range (inclusive).
@@ -298,60 +255,13 @@ func (e *AccountTypeEvaluator) Evaluate(tx *domain.Transaction, condition domain
 	return false, nil
 }
 
-// ExistingCategoryEvaluator checks transaction's existing (Plaid) category.
-// Only matches against the primary category (index 0) for consistency.
-type ExistingCategoryEvaluator struct{}
-
-func (e *ExistingCategoryEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	if tx.Category == nil {
-		return false, nil
-	}
-
-	// Parse the category JSON
-	var categories []string
-	if err := json.Unmarshal([]byte(*tx.Category), &categories); err != nil {
-		return false, nil
-	}
-
-	// Must have at least one category (primary)
-	if len(categories) == 0 {
-		return false, nil
-	}
-
-	values := matching.ExtractStringValues(condition.Value)
-	if len(values) == 0 {
-		return false, nil
-	}
-
-	// Only check primary category (index 0) for consistency
-	primaryCategory := strings.ToLower(categories[0])
-	for _, v := range values {
-		if primaryCategory == strings.ToLower(v) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// parsePFCField safely extracts a single field from the PersonalFinanceCategory JSON.
-// Returns empty string if JSON is missing, malformed, or field is absent.
-func parsePFCField(pfcJSON *string, field string) string {
-	if pfcJSON == nil {
-		return ""
-	}
-	var pfc map[string]string
-	if err := json.Unmarshal([]byte(*pfcJSON), &pfc); err != nil {
-		return ""
-	}
-	return pfc[field]
-}
-
 // ExistingPFCPrimaryEvaluator checks against the Plaid PFC primary field (e.g. "FOOD_AND_DRINK").
+// Uses the effective category: override if set, else source pfc_primary.
 type ExistingPFCPrimaryEvaluator struct{}
 
 func (e *ExistingPFCPrimaryEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	primary := parsePFCField(tx.PersonalFinanceCategory, "primary")
-	if primary == "" {
+	effective := tx.GetEffectiveCategory()
+	if effective == nil || effective.Kind != domain.EffectiveCategoryKindPFC || effective.PFCPrimary == nil {
 		return false, nil
 	}
 
@@ -360,7 +270,7 @@ func (e *ExistingPFCPrimaryEvaluator) Evaluate(tx *domain.Transaction, condition
 		return false, nil
 	}
 
-	primary = strings.ToLower(primary)
+	primary := strings.ToLower(*effective.PFCPrimary)
 	for _, v := range values {
 		if primary == strings.ToLower(v) {
 			return true, nil
@@ -370,11 +280,12 @@ func (e *ExistingPFCPrimaryEvaluator) Evaluate(tx *domain.Transaction, condition
 }
 
 // ExistingPFCDetailedEvaluator checks against the Plaid PFC detailed field (e.g. "FOOD_AND_DRINK_FAST_FOOD").
+// Uses the effective category: override if set, else source pfc_detailed.
 type ExistingPFCDetailedEvaluator struct{}
 
 func (e *ExistingPFCDetailedEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	detailed := parsePFCField(tx.PersonalFinanceCategory, "detailed")
-	if detailed == "" {
+	effective := tx.GetEffectiveCategory()
+	if effective == nil || effective.Kind != domain.EffectiveCategoryKindPFC || effective.PFCDetailed == nil {
 		return false, nil
 	}
 
@@ -383,7 +294,7 @@ func (e *ExistingPFCDetailedEvaluator) Evaluate(tx *domain.Transaction, conditio
 		return false, nil
 	}
 
-	detailed = strings.ToLower(detailed)
+	detailed := strings.ToLower(*effective.PFCDetailed)
 	for _, v := range values {
 		if detailed == strings.ToLower(v) {
 			return true, nil

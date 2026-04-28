@@ -9,7 +9,7 @@ import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import type { BudgetCategory } from '../../types';
 import { Alert } from '@/components/ui/alert';
-import { formatCategoryPath } from '../../types';
+import { formatBudgetCategoryLabel } from '../../types';
 
 export interface AllocationBreakdownProps {
   /** Budget categories with their allocations */
@@ -81,7 +81,7 @@ export function AllocationBreakdown({
       const percent = (cat.allocated_amount / totalIncome) * 100;
       result.push({
         id: cat.id,
-        name: formatCategoryPath(cat.category),
+        name: formatBudgetCategoryLabel(cat),
         amount: cat.allocated_amount,
         percent: Math.min(percent, 100), // Cap at 100%
         color: getCategoryColor(index),
@@ -175,7 +175,7 @@ export function AllocationBreakdown({
               style={{ backgroundColor: getCategoryColor(index) }}
             />
             <span className="text-foreground whitespace-nowrap overflow-hidden text-ellipsis max-w-[150px]">
-              {formatCategoryPath(cat.category)}
+              {formatBudgetCategoryLabel(cat)}
             </span>
             <span className="text-muted-foreground font-medium whitespace-nowrap">
               {formatCurrency(cat.allocated_amount)}
@@ -213,7 +213,6 @@ export function AllocationBreakdown({
             </span>
           </div>
         </div>
-        {/* Keep legacy for backwards compatibility */}
         <span className="sr-only">Total Income: {formatCurrency(totalIncome)}</span>
       </div>
     </div>

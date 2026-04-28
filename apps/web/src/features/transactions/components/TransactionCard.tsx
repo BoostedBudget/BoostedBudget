@@ -4,7 +4,7 @@ import { ReadOnlyGuard, useReadOnly } from '@/auth'
 import { TransactionBudgetBadge } from '../../budgets/components/transaction-link'
 import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetMatcher'
 import { getCategoryColor } from '@/lib/category-colors'
-import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
+import { getEffectiveCategory, getEffectiveCategoryLabel } from '@/shared/categories/getEffectiveCategory'
 import { ArrowUpRight, ArrowDownRight, Clock, Pencil, Tag } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -104,7 +104,6 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
     amount,
     date,
     authorized_date,
-    original_category,
     tags,
     pending,
   } = transaction
@@ -124,7 +123,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
   const displayName = merchant_name || name
 
   const effective = getEffectiveCategory(transaction)
-  const categoryLabel = effective.length > 0 ? effective[0] : 'Uncategorized'
+  const categoryLabel = getEffectiveCategoryLabel(effective)
 
   // Check if should show warning indicator — no warning when PFC provides a fallback
   const showUncategorizedWarning = categoryLabel === 'Uncategorized'
@@ -166,7 +165,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
       )}
       data-transaction-id={id}
       data-pending={pending}
-      data-original-category={original_category || undefined}
+      data-pfc-primary={transaction.pfc_primary || undefined}
       aria-label={ariaLabel}
       onClick={onEdit ? handleClick : undefined}
       onKeyDown={onEdit ? handleKeyDown : undefined}

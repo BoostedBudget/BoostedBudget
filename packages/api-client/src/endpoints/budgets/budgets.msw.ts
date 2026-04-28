@@ -53,16 +53,22 @@ export const getGetBudgetsResponseMock = (): Budget[] | null =>
         $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
         allocated_amount: faker.number.float({ fractionDigits: 2 }),
         budget_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        category: faker.helpers.arrayElement([
-          Array.from(
-            { length: faker.number.int({ min: 1, max: 10 }) },
-            (_, i) => i + 1,
-          ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-          null,
-        ]),
+        category_kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
         created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+        custom_category_id: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
         id: faker.string.alpha({ length: { min: 10, max: 20 } }),
         match_logic: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        pfc_detailed: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        pfc_primary: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
         spent_amount: faker.number.float({ fractionDigits: 2 }),
         tags: faker.helpers.arrayElement([
           Array.from(
@@ -123,16 +129,22 @@ export const getCreateBudgetResponseMock = (
       $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
       allocated_amount: faker.number.float({ fractionDigits: 2 }),
       budget_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      category: faker.helpers.arrayElement([
-        Array.from(
-          { length: faker.number.int({ min: 1, max: 10 }) },
-          (_, i) => i + 1,
-        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-        null,
-      ]),
+      category_kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
       created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      custom_category_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       id: faker.string.alpha({ length: { min: 10, max: 20 } }),
       match_logic: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      pfc_detailed: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       spent_amount: faker.number.float({ fractionDigits: 2 }),
       tags: faker.helpers.arrayElement([
         Array.from(
@@ -200,16 +212,22 @@ export const getGetCurrentBudgetResponseMock = (
       $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
       allocated_amount: faker.number.float({ fractionDigits: 2 }),
       budget_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      category: faker.helpers.arrayElement([
-        Array.from(
-          { length: faker.number.int({ min: 1, max: 10 }) },
-          (_, i) => i + 1,
-        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-        null,
-      ]),
+      category_kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
       created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      custom_category_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       id: faker.string.alpha({ length: { min: 10, max: 20 } }),
       match_logic: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      pfc_detailed: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       spent_amount: faker.number.float({ fractionDigits: 2 }),
       tags: faker.helpers.arrayElement([
         Array.from(
@@ -271,16 +289,22 @@ export const getGetBudgetResponseMock = (
       $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
       allocated_amount: faker.number.float({ fractionDigits: 2 }),
       budget_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      category: faker.helpers.arrayElement([
-        Array.from(
-          { length: faker.number.int({ min: 1, max: 10 }) },
-          (_, i) => i + 1,
-        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-        null,
-      ]),
+      category_kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
       created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      custom_category_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       id: faker.string.alpha({ length: { min: 10, max: 20 } }),
       match_logic: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      pfc_detailed: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       spent_amount: faker.number.float({ fractionDigits: 2 }),
       tags: faker.helpers.arrayElement([
         Array.from(
@@ -342,16 +366,22 @@ export const getUpdateBudgetResponseMock = (
       $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
       allocated_amount: faker.number.float({ fractionDigits: 2 }),
       budget_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      category: faker.helpers.arrayElement([
-        Array.from(
-          { length: faker.number.int({ min: 1, max: 10 }) },
-          (_, i) => i + 1,
-        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-        null,
-      ]),
+      category_kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
       created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      custom_category_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       id: faker.string.alpha({ length: { min: 10, max: 20 } }),
       match_logic: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      pfc_detailed: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       spent_amount: faker.number.float({ fractionDigits: 2 }),
       tags: faker.helpers.arrayElement([
         Array.from(
@@ -406,16 +436,22 @@ export const getAddBudgetCategoryResponseMock = (
   $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
   allocated_amount: faker.number.float({ fractionDigits: 2 }),
   budget_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  category: faker.helpers.arrayElement([
-    Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-    null,
-  ]),
+  category_kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  custom_category_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   match_logic: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  pfc_detailed: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   spent_amount: faker.number.float({ fractionDigits: 2 }),
   tags: faker.helpers.arrayElement([
     Array.from(
@@ -434,16 +470,22 @@ export const getUpdateBudgetCategoryResponseMock = (
   $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
   allocated_amount: faker.number.float({ fractionDigits: 2 }),
   budget_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  category: faker.helpers.arrayElement([
-    Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-    null,
-  ]),
+  category_kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  custom_category_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   match_logic: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  pfc_detailed: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   spent_amount: faker.number.float({ fractionDigits: 2 }),
   tags: faker.helpers.arrayElement([
     Array.from(
@@ -553,20 +595,20 @@ export const getGetCategoryTransactionsResponseMock = (
         faker.date.past().toISOString().slice(0, 19) + "Z",
         undefined,
       ]),
-      category: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
-      category_override: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
       category_override_date: faker.helpers.arrayElement([
         faker.date.past().toISOString().slice(0, 19) + "Z",
         undefined,
       ]),
+      category_override_kind: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       category_source: faker.string.alpha({ length: { min: 10, max: 20 } }),
       created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      custom_category_override_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       date: faker.date.past().toISOString().slice(0, 19) + "Z",
       external_metadata: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -583,36 +625,29 @@ export const getGetCategoryTransactionsResponseMock = (
         undefined,
       ]),
       name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      original_category: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
       payment_channel: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
       pending: faker.datatype.boolean(),
-      personal_finance_category: faker.helpers.arrayElement([
+      pfc_confidence_level: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
-      personal_finance_category_data: faker.helpers.arrayElement([
-        {
-          confidence_level: faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            undefined,
-          ]),
-          detailed: faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            undefined,
-          ]),
-          detailed_display: faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            undefined,
-          ]),
-          primary: faker.string.alpha({ length: { min: 10, max: 20 } }),
-          primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        },
+      pfc_detailed: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_detailed_override: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary_override: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
       source: faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -666,16 +701,22 @@ export const getSyncBudgetResponseMock = (
       $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
       allocated_amount: faker.number.float({ fractionDigits: 2 }),
       budget_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      category: faker.helpers.arrayElement([
-        Array.from(
-          { length: faker.number.int({ min: 1, max: 10 }) },
-          (_, i) => i + 1,
-        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-        null,
-      ]),
+      category_kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
       created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      custom_category_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       id: faker.string.alpha({ length: { min: 10, max: 20 } }),
       match_logic: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      pfc_detailed: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       spent_amount: faker.number.float({ fractionDigits: 2 }),
       tags: faker.helpers.arrayElement([
         Array.from(

@@ -14,7 +14,7 @@ import type {
   CreateBudgetCategoryRequest,
   UpdateBudgetCategoryRequest,
 } from '../../types';
-import { formatCategoryPath } from '../../types';
+import { formatBudgetCategoryLabel } from '../../types';
 import type { UserTag } from '@/features/tags/types';
 import { BudgetCategoryCard } from './BudgetCategoryCard';
 import { BudgetCategoryForm } from './BudgetCategoryForm';
@@ -86,11 +86,9 @@ export function BudgetCategoryManager({
 
   // Filter out already-used categories for the form dropdown
   const filteredAvailableCategories = useMemo(() => {
-    const usedCategoryPaths = new Set(
-      categories.map((cat) => formatCategoryPath(cat.category))
-    );
+    const usedLabels = new Set(categories.map(formatBudgetCategoryLabel));
     return availableCategories.filter(
-      (cat) => !usedCategoryPaths.has(formatCategoryPath(cat))
+      (cat) => !usedLabels.has(cat.join(' > '))
     );
   }, [availableCategories, categories]);
 
@@ -190,6 +188,16 @@ export function BudgetCategoryManager({
 
   const hasCategories = categories.length > 0;
 
+  // Calculate total allocated excluding current category for edit mode
+  const totalAllocatedExcludingCurrent = useMemo(() => {
+    if (formDialog.mode === 'create' || !formDialog.category) {
+      return categories.reduce((sum, c) => sum + c.allocated_amount, 0)
+    }
+    return categories
+      .filter((c) => c.id !== formDialog.category!.id)
+      .reduce((sum, c) => sum + c.allocated_amount, 0)
+  }, [formDialog.mode, formDialog.category, categories])
+
   return (
     <div className="flex flex-col gap-6">
       {/* Header with add button */}
@@ -257,13 +265,7 @@ export function BudgetCategoryManager({
         }
         availableTags={availableTags}
         expectedIncome={totalIncome}
-        totalAllocatedExcludingCurrent={
-          formDialog.mode === 'edit' && formDialog.category
-            ? categories
-                .filter((c) => c.id !== formDialog.category!.id)
-                .reduce((sum, c) => sum + c.allocated_amount, 0)
-            : categories.reduce((sum, c) => sum + c.allocated_amount, 0)
-        }
+        totalAllocatedExcludingCurrent={totalAllocatedExcludingCurrent}
       />
 
       {/* Delete Confirmation Dialog — Issue #960 */}
@@ -272,7 +274,7 @@ export function BudgetCategoryManager({
         onOpenChange={(open) => !open && handleCloseDeleteDialog()}
         onConfirm={handleConfirmDelete}
         title="Delete Category"
-        description={deleteDialog.category ? `Are you sure you want to delete the category "${formatCategoryPath(deleteDialog.category.category)}"? This action cannot be undone.` : ''}
+        description={deleteDialog.category ? `Are you sure you want to delete the category "${formatBudgetCategoryLabel(deleteDialog.category)}"? This action cannot be undone.` : ''}
         variant="destructive"
         loading={isDeleting}
       />

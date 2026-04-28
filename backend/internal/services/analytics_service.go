@@ -207,7 +207,7 @@ func (s *analyticsService) GetSpendingByCategory(ctx context.Context, userID str
 	merged := make(map[string]*domain.SpendingByCategory)
 	var order []string
 	for _, c := range categories {
-		displayName := pfc.NormalizePrimaryDisplay(c.Category)
+		displayName := pfc.PrimaryDisplayName(c.Category)
 		if existing, ok := merged[displayName]; ok {
 			existing.Total += c.Total
 			existing.TransactionCount += c.TransactionCount

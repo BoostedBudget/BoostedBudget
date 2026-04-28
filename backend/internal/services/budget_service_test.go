@@ -97,8 +97,8 @@ func (m *MockBudgetRepository) DeleteCategory(ctx context.Context, id, budgetID 
 	return args.Error(0)
 }
 
-func (m *MockBudgetRepository) GetCategoriesMatchingTransaction(ctx context.Context, userID string, transactionCategory []string) ([]domain.BudgetCategory, error) {
-	args := m.Called(ctx, userID, transactionCategory)
+func (m *MockBudgetRepository) GetCategoriesMatchingTransaction(ctx context.Context, userID string, effective *domain.EffectiveCategory) ([]domain.BudgetCategory, error) {
+	args := m.Called(ctx, userID, effective)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -567,7 +567,8 @@ func TestBudgetService_AddCategory_Success(t *testing.T) {
 	existingBudget := createTestBudgetForService(userID)
 
 	req := &domain.CreateBudgetCategoryRequest{
-		Category:        []string{"Food And Drink"},
+		CategoryKind:    "pfc",
+		PFCPrimary:      strPtr("FOOD_AND_DRINK"),
 		AllocatedAmount: 300.00,
 	}
 
@@ -604,7 +605,8 @@ func TestBudgetService_UpdateCategory_Success(t *testing.T) {
 		{
 			ID:              categoryID,
 			BudgetID:        budgetID,
-			Category:        []string{"Food And Drink"},
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
 			AllocatedAmount: 300.00,
 		},
 	}
@@ -642,9 +644,9 @@ func TestBudgetService_DeleteCategory_Success(t *testing.T) {
 	existingBudget := createTestBudgetForService(userID)
 	existingBudget.Categories = []domain.BudgetCategory{
 		{
-			ID:       categoryID,
-			BudgetID: budgetID,
-			Category: []string{"Food And Drink"},
+			ID:           categoryID,
+			BudgetID:     budgetID,
+			CategoryKind: "pfc",
 		},
 	}
 
@@ -677,7 +679,7 @@ func TestBudgetService_GetAvailableCategories_Success(t *testing.T) {
 	// Custom categories
 	customCats := []*domain.CustomCategory{
 		{ID: "cat-1", UserID: userID, Name: "Groceries"},
-		{ID: "cat-2", UserID: userID, Name: "Dining", ParentCategory: strPtr("Food")},
+		{ID: "cat-2", UserID: userID, Name: "Dining", ParentPFCPrimary: strPtr("FOOD_AND_DRINK")},
 	}
 
 	// Setup mocks — no GetDistinctPlaidCategories call expected (replaced by pfc.AllPrimaries())
@@ -691,7 +693,7 @@ func TestBudgetService_GetAvailableCategories_Success(t *testing.T) {
 	assert.NotNil(t, categories)
 	// Custom categories
 	assert.Contains(t, categories, "Groceries")
-	assert.Contains(t, categories, "Food > Dining")
+	assert.Contains(t, categories, "Dining")
 	// Curated PFCv2 primaries present
 	assert.Contains(t, categories, "Food And Drink")
 	assert.Contains(t, categories, "Transportation")

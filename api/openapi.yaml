@@ -737,18 +737,20 @@ components:
           type: number
         budget_id:
           type: string
-        category:
-          items:
-            type: string
-          type:
-            - array
-            - "null"
+        category_kind:
+          type: string
         created_at:
           format: date-time
+          type: string
+        custom_category_id:
           type: string
         id:
           type: string
         match_logic:
+          type: string
+        pfc_detailed:
+          type: string
+        pfc_primary:
           type: string
         spent_amount:
           format: double
@@ -765,7 +767,7 @@ components:
       required:
         - id
         - budget_id
-        - category
+        - category_kind
         - allocated_amount
         - spent_amount
         - created_at
@@ -1005,12 +1007,14 @@ components:
           type: string
         tag_behavior:
           type: string
-        target_category:
-          items:
-            type: string
-          type:
-            - array
-            - "null"
+        target_custom_category_id:
+          type: string
+        target_kind:
+          type: string
+        target_pfc_detailed:
+          type: string
+        target_pfc_primary:
+          type: string
         target_tags:
           items:
             type: string
@@ -1047,19 +1051,17 @@ components:
           format: uri
           readOnly: true
           type: string
-        categories:
-          items:
-            items:
-              type: string
-            type:
-              - array
-              - "null"
-          type:
-            - array
-            - "null"
+        category_kind:
+          type: string
+        custom_category_id:
+          type: string
         end_date:
           type: string
         match_logic:
+          type: string
+        pfc_detailed:
+          type: string
+        pfc_primary:
           type: string
         start_date:
           type: string
@@ -1070,7 +1072,7 @@ components:
             - array
             - "null"
       required:
-        - categories
+        - category_kind
         - match_logic
         - start_date
         - end_date
@@ -1268,13 +1270,15 @@ components:
         allocated_amount:
           format: double
           type: number
-        category:
-          items:
-            type: string
-          type:
-            - array
-            - "null"
+        category_kind:
+          type: string
+        custom_category_id:
+          type: string
         match_logic:
+          type: string
+        pfc_detailed:
+          type: string
+        pfc_primary:
           type: string
         tags:
           items:
@@ -1283,7 +1287,7 @@ components:
             - array
             - "null"
       required:
-        - category
+        - category_kind
         - allocated_amount
       type: object
     CreateBudgetRequest:
@@ -1364,12 +1368,14 @@ components:
           type: integer
         tag_behavior:
           type: string
-        target_category:
-          items:
-            type: string
-          type:
-            - array
-            - "null"
+        target_custom_category_id:
+          type: string
+        target_kind:
+          type: string
+        target_pfc_detailed:
+          type: string
+        target_pfc_primary:
+          type: string
         target_tags:
           items:
             type: string
@@ -1424,7 +1430,7 @@ components:
           type: string
         name:
           type: string
-        parent_category:
+        parent_pfc_primary:
           type: string
       required:
         - name
@@ -1499,7 +1505,7 @@ components:
           type: string
         name:
           type: string
-        parent_category:
+        parent_pfc_primary:
           type: string
         updated_at:
           format: date-time
@@ -2569,23 +2575,6 @@ components:
         - status
         - message
       type: object
-    ParsedPersonalFinanceCategoryData:
-      additionalProperties: false
-      properties:
-        confidence_level:
-          type: string
-        detailed:
-          type: string
-        detailed_display:
-          type: string
-        primary:
-          type: string
-        primary_display:
-          type: string
-      required:
-        - primary
-        - primary_display
-      type: object
     PeriodComparisonData:
       additionalProperties: false
       properties:
@@ -3611,17 +3600,17 @@ components:
         authorized_date:
           format: date-time
           type: string
-        category:
-          type: string
-        category_override:
-          type: string
         category_override_date:
           format: date-time
+          type: string
+        category_override_kind:
           type: string
         category_source:
           type: string
         created_at:
           format: date-time
+          type: string
+        custom_category_override_id:
           type: string
         date:
           format: date-time
@@ -3638,16 +3627,20 @@ components:
           type: string
         name:
           type: string
-        original_category:
-          type: string
         payment_channel:
           type: string
         pending:
           type: boolean
-        personal_finance_category:
+        pfc_confidence_level:
           type: string
-        personal_finance_category_data:
-          $ref: "#/components/schemas/ParsedPersonalFinanceCategoryData"
+        pfc_detailed:
+          type: string
+        pfc_detailed_override:
+          type: string
+        pfc_primary:
+          type: string
+        pfc_primary_override:
+          type: string
         source:
           type: string
         tags:
@@ -3975,10 +3968,14 @@ components:
           type: integer
         tag_behavior:
           type: string
-        target_category:
-          items:
-            type: string
-          type: array
+        target_custom_category_id:
+          type: string
+        target_kind:
+          type: string
+        target_pfc_detailed:
+          type: string
+        target_pfc_primary:
+          type: string
         target_tags:
           items:
             type: string
@@ -4000,7 +3997,7 @@ components:
           type: string
         name:
           type: string
-        parent_category:
+        parent_pfc_primary:
           type: string
       type: object
     UpdatePrivacySettingsRequest:
@@ -4154,15 +4151,24 @@ components:
           format: uri
           readOnly: true
           type: string
-        category:
-          description: Category hierarchy as string array
-          items:
-            type: string
-          type:
-            - array
-            - "null"
+        custom_category_id:
+          description: Custom category UUID (required when kind=custom)
+          type: string
+        kind:
+          description: Category override kind
+          enum:
+            - pfc
+            - custom
+            - clear
+          type: string
+        pfc_detailed:
+          description: PFC detailed enum (optional when kind=pfc)
+          type: string
+        pfc_primary:
+          description: PFC primary enum (required when kind=pfc)
+          type: string
       required:
-        - category
+        - kind
       type: object
     UpdateTransactionTagsBody:
       additionalProperties: false
@@ -8148,19 +8154,19 @@ paths:
           schema:
             description: Filter transactions on or before this date (YYYY-MM-DD)
             type: string
-        - description: "Filter by category (deprecated: use categories)"
+        - description: Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)
           explode: false
           in: query
-          name: category
+          name: pfc_primaries
           schema:
-            description: "Filter by category (deprecated: use categories)"
+            description: Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)
             type: string
-        - description: Filter by multiple categories (comma-separated)
+        - description: Filter by custom category UUIDs (comma-separated)
           explode: false
           in: query
-          name: categories
+          name: custom_category_ids
           schema:
-            description: Filter by multiple categories (comma-separated)
+            description: Filter by custom category UUIDs (comma-separated)
             type: string
         - description: Search in merchant name or transaction name
           explode: false

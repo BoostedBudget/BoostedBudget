@@ -1,10 +1,7 @@
 import { describe, it, expect } from 'bun:test'
 import type { Transaction } from '../../transactions/types'
 import type { BudgetCategory } from '../types'
-import {
-  parseTransactionCategory,
-  matchTransactionToBudgetCategories,
-} from './transactionBudgetMatcher'
+import { matchTransactionToBudgetCategories } from './transactionBudgetMatcher'
 
 function createTransaction(overrides: Partial<Transaction> = {}): Transaction {
   return {
@@ -27,7 +24,8 @@ function createBudgetCategory(overrides: Partial<BudgetCategory> = {}): BudgetCa
   return {
     id: 'cat-1',
     budget_id: 'budget-1',
-    category: ['Food and Drink'],
+    category_kind: 'pfc',
+    pfc_primary: 'FOOD_AND_DRINK',
     allocated_amount: 500,
     spent_amount: 250,
     created_at: '2025-01-01T00:00:00Z',
@@ -39,84 +37,26 @@ function createBudgetCategory(overrides: Partial<BudgetCategory> = {}): BudgetCa
 }
 
 // =============================================================================
-// parseTransactionCategory Tests
-// =============================================================================
-
-describe('parseTransactionCategory', () => {
-  it('should parse valid JSON category string to array', () => {
-    const result = parseTransactionCategory('["Food and Drink", "Restaurants"]')
-    expect(result).toEqual(['Food and Drink', 'Restaurants'])
-  })
-
-  it('should return empty array for null category', () => {
-    const result = parseTransactionCategory(null)
-    expect(result).toEqual([])
-  })
-
-  it('should return empty array for undefined category', () => {
-    const result = parseTransactionCategory(undefined)
-    expect(result).toEqual([])
-  })
-
-  it('should return empty array for empty string', () => {
-    const result = parseTransactionCategory('')
-    expect(result).toEqual([])
-  })
-
-  it('should return empty array for invalid JSON', () => {
-    const result = parseTransactionCategory('not valid json')
-    expect(result).toEqual([])
-  })
-
-  it('should return empty array for non-array JSON', () => {
-    const result = parseTransactionCategory('{"foo": "bar"}')
-    expect(result).toEqual([])
-  })
-
-  it('should handle single category in array', () => {
-    const result = parseTransactionCategory('["Shopping"]')
-    expect(result).toEqual(['Shopping'])
-  })
-
-  it('should handle deeply nested categories', () => {
-    const result = parseTransactionCategory('["Food and Drink", "Restaurants", "Fast Food"]')
-    expect(result).toEqual(['Food and Drink', 'Restaurants', 'Fast Food'])
-  })
-})
-
-// =============================================================================
 // matchTransactionToBudgetCategories - No Match Cases
 // =============================================================================
 
 describe('matchTransactionToBudgetCategories - no match cases', () => {
   it('should return null when categories array is empty', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink", "Restaurants"]',
-    })
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK' })
     const result = matchTransactionToBudgetCategories(transaction, [])
     expect(result).toBeNull()
   })
 
-  it('should return null when transaction has null category and no tags', () => {
-    const transaction = createTransaction({
-      category: null,
-      tags: [],
-    })
+  it('should return null when transaction has no pfc_primary and no override and no tags', () => {
+    const transaction = createTransaction({ pfc_primary: null, tags: [] })
     const categories = [createBudgetCategory()]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).toBeNull()
   })
 
-  it('should return null when transaction category does not match any budget category', () => {
-    const transaction = createTransaction({
-      category: '["Shopping", "Clothing"]',
-    })
-    const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        match_logic: 'category_only',
-      }),
-    ]
+  it('should return null when transaction pfc_primary does not match any budget category', () => {
+    const transaction = createTransaction({ pfc_primary: 'SHOPPING', pfc_detailed: 'SHOPPING_CLOTHING' })
+    const categories = [createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', match_logic: 'category_only' })]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).toBeNull()
   })
@@ -127,29 +67,21 @@ describe('matchTransactionToBudgetCategories - no match cases', () => {
 // =============================================================================
 
 describe('matchTransactionToBudgetCategories - category_only match logic', () => {
-  it('should match when transaction category contains budget category', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink", "Restaurants"]',
-    })
-    const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        match_logic: 'category_only',
-      }),
-    ]
+  it('should match when transaction pfc_primary matches budget pfc_primary', () => {
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS' })
+    const categories = [createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', match_logic: 'category_only' })]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).not.toBeNull()
     expect(result?.category.id).toBe('cat-1')
     expect(result?.matchReason).toBe('category')
   })
 
-  it('should match when transaction category exactly matches budget category', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink", "Restaurants"]',
-    })
+  it('should match when both pfc_primary and pfc_detailed match exactly', () => {
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS' })
     const categories = [
       createBudgetCategory({
-        category: ['Food and Drink', 'Restaurants'],
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
         match_logic: 'category_only',
       }),
     ]
@@ -158,16 +90,12 @@ describe('matchTransactionToBudgetCategories - category_only match logic', () =>
     expect(result?.matchReason).toBe('category')
   })
 
-  it('should NOT match when budget category is more specific than transaction', () => {
-    // Transaction: ["Food and Drink"]
-    // Budget: ["Food and Drink", "Restaurants"]
-    // Should NOT match because transaction doesn't have "Restaurants"
-    const transaction = createTransaction({
-      category: '["Food and Drink"]',
-    })
+  it('should NOT match when budget pfc_detailed is more specific than transaction', () => {
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK' })
     const categories = [
       createBudgetCategory({
-        category: ['Food and Drink', 'Restaurants'],
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
         match_logic: 'category_only',
       }),
     ]
@@ -175,56 +103,62 @@ describe('matchTransactionToBudgetCategories - category_only match logic', () =>
     expect(result).toBeNull()
   })
 
-  it('should match using category_override when present', () => {
+  it('should match using pfc_primary_override when category_override_kind is pfc', () => {
     const transaction = createTransaction({
-      category: '["Shopping"]', // Original category
-      category_override: '["Food and Drink", "Restaurants"]', // User override
+      pfc_primary: 'SHOPPING',
+      category_override_kind: 'pfc',
+      pfc_primary_override: 'FOOD_AND_DRINK',
+      pfc_detailed_override: 'FOOD_AND_DRINK_RESTAURANTS',
     })
-    const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        match_logic: 'category_only',
-      }),
-    ]
+    const categories = [createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', match_logic: 'category_only' })]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).not.toBeNull()
     expect(result?.matchReason).toBe('category')
   })
 
-  it('should prefer category_override over category when both exist', () => {
+  it('should prefer pfc_primary_override over pfc_primary when override is set', () => {
     const transaction = createTransaction({
-      category: '["Food and Drink"]', // Would match food budget
-      category_override: '["Shopping"]', // Override to shopping
+      pfc_primary: 'FOOD_AND_DRINK',
+      category_override_kind: 'pfc',
+      pfc_primary_override: 'SHOPPING',
     })
-    const foodCategory = createBudgetCategory({
-      id: 'cat-food',
-      category: ['Food and Drink'],
-      match_logic: 'category_only',
-    })
-    const shoppingCategory = createBudgetCategory({
-      id: 'cat-shopping',
-      category: ['Shopping'],
-      match_logic: 'category_only',
-    })
+    const foodCategory = createBudgetCategory({ id: 'cat-food', pfc_primary: 'FOOD_AND_DRINK', match_logic: 'category_only' })
+    const shoppingCategory = createBudgetCategory({ id: 'cat-shopping', pfc_primary: 'SHOPPING', match_logic: 'category_only' })
     const result = matchTransactionToBudgetCategories(transaction, [foodCategory, shoppingCategory])
     expect(result).not.toBeNull()
     expect(result?.category.id).toBe('cat-shopping')
   })
 
   it('should ignore tags when match_logic is category_only', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink"]',
-      tags: ['dining'], // Has matching tag, but should be ignored
-    })
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'] })
     const categories = [
       createBudgetCategory({
-        category: ['Shopping'], // Different category
+        pfc_primary: 'SHOPPING',
         tags: ['dining'],
-        match_logic: 'category_only', // Only match on category
+        match_logic: 'category_only',
       }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
-    expect(result).toBeNull() // Should not match because category doesn't match
+    expect(result).toBeNull()
+  })
+
+  it('should match custom category when category_override_kind is custom', () => {
+    const transaction = createTransaction({
+      pfc_primary: 'FOOD_AND_DRINK',
+      category_override_kind: 'custom',
+      custom_category_override_id: 'custom-uuid-abc',
+    })
+    const categories = [
+      createBudgetCategory({
+        category_kind: 'custom',
+        pfc_primary: undefined,
+        custom_category_id: 'custom-uuid-abc',
+        match_logic: 'category_only',
+      }),
+    ]
+    const result = matchTransactionToBudgetCategories(transaction, categories)
+    expect(result).not.toBeNull()
+    expect(result?.matchReason).toBe('category')
   })
 })
 
@@ -234,16 +168,9 @@ describe('matchTransactionToBudgetCategories - category_only match logic', () =>
 
 describe('matchTransactionToBudgetCategories - tag_only match logic', () => {
   it('should match when transaction has any budget tag', () => {
-    const transaction = createTransaction({
-      category: '["Shopping"]',
-      tags: ['dining', 'work'],
-    })
+    const transaction = createTransaction({ pfc_primary: 'SHOPPING', tags: ['dining', 'work'] })
     const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        tags: ['dining'],
-        match_logic: 'tag_only',
-      }),
+      createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'], match_logic: 'tag_only' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).not.toBeNull()
@@ -251,79 +178,46 @@ describe('matchTransactionToBudgetCategories - tag_only match logic', () => {
   })
 
   it('should NOT match when transaction has no matching tags', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink"]', // Matches category, but using tag_only
-      tags: ['entertainment'],
-    })
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', tags: ['entertainment'] })
     const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        tags: ['dining'],
-        match_logic: 'tag_only',
-      }),
+      createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'], match_logic: 'tag_only' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).toBeNull()
   })
 
   it('should NOT match when transaction has no tags', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink"]',
-      tags: [],
-    })
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', tags: [] })
     const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        tags: ['dining'],
-        match_logic: 'tag_only',
-      }),
+      createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'], match_logic: 'tag_only' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).toBeNull()
   })
 
   it('should NOT match when transaction has undefined tags', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink"]',
-      tags: undefined,
-    })
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', tags: undefined })
     const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        tags: ['dining'],
-        match_logic: 'tag_only',
-      }),
+      createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'], match_logic: 'tag_only' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).toBeNull()
   })
 
   it('should ignore category when match_logic is tag_only', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink"]', // Matches category
-      tags: ['dining'],
-    })
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'] })
     const categories = [
-      createBudgetCategory({
-        category: ['Shopping'], // Different category
-        tags: ['dining'], // Same tag
-        match_logic: 'tag_only',
-      }),
+      createBudgetCategory({ pfc_primary: 'SHOPPING', tags: ['dining'], match_logic: 'tag_only' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
-    expect(result).not.toBeNull() // Should match on tag only
+    expect(result).not.toBeNull()
     expect(result?.matchReason).toBe('tag')
   })
 
   it('should match when any of multiple budget tags overlap', () => {
-    const transaction = createTransaction({
-      tags: ['groceries'],
-    })
+    const transaction = createTransaction({ tags: ['groceries'] })
     const categories = [
-      createBudgetCategory({
-        tags: ['dining', 'groceries', 'takeout'],
-        match_logic: 'tag_only',
-      }),
+      createBudgetCategory({ tags: ['dining', 'groceries', 'takeout'], match_logic: 'tag_only' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).not.toBeNull()
@@ -337,16 +231,9 @@ describe('matchTransactionToBudgetCategories - tag_only match logic', () => {
 
 describe('matchTransactionToBudgetCategories - and match logic', () => {
   it('should match when BOTH category AND tags match', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink", "Restaurants"]',
-      tags: ['dining'],
-    })
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'] })
     const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        tags: ['dining'],
-        match_logic: 'and',
-      }),
+      createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'], match_logic: 'and' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).not.toBeNull()
@@ -354,48 +241,27 @@ describe('matchTransactionToBudgetCategories - and match logic', () => {
   })
 
   it('should NOT match when only category matches', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink", "Restaurants"]',
-      tags: ['entertainment'], // Different tag
-    })
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', tags: ['entertainment'] })
     const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        tags: ['dining'],
-        match_logic: 'and',
-      }),
+      createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'], match_logic: 'and' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).toBeNull()
   })
 
   it('should NOT match when only tags match', () => {
-    const transaction = createTransaction({
-      category: '["Shopping"]', // Different category
-      tags: ['dining'],
-    })
+    const transaction = createTransaction({ pfc_primary: 'SHOPPING', tags: ['dining'] })
     const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        tags: ['dining'],
-        match_logic: 'and',
-      }),
+      createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'], match_logic: 'and' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).toBeNull()
   })
 
   it('should NOT match when budget has no tags configured', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink"]',
-      tags: ['dining'],
-    })
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'] })
     const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        tags: [], // No tags configured
-        match_logic: 'and',
-      }),
+      createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', tags: [], match_logic: 'and' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).toBeNull()
@@ -408,16 +274,9 @@ describe('matchTransactionToBudgetCategories - and match logic', () => {
 
 describe('matchTransactionToBudgetCategories - or match logic', () => {
   it('should match when category matches (tags do not)', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink", "Restaurants"]',
-      tags: ['entertainment'], // Different tag
-    })
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', tags: ['entertainment'] })
     const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        tags: ['dining'],
-        match_logic: 'or',
-      }),
+      createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'], match_logic: 'or' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).not.toBeNull()
@@ -425,16 +284,9 @@ describe('matchTransactionToBudgetCategories - or match logic', () => {
   })
 
   it('should match when tags match (category does not)', () => {
-    const transaction = createTransaction({
-      category: '["Shopping"]', // Different category
-      tags: ['dining'],
-    })
+    const transaction = createTransaction({ pfc_primary: 'SHOPPING', tags: ['dining'] })
     const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        tags: ['dining'],
-        match_logic: 'or',
-      }),
+      createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'], match_logic: 'or' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).not.toBeNull()
@@ -442,16 +294,9 @@ describe('matchTransactionToBudgetCategories - or match logic', () => {
   })
 
   it('should match with "both" reason when both category and tags match', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink", "Restaurants"]',
-      tags: ['dining'],
-    })
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'] })
     const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        tags: ['dining'],
-        match_logic: 'or',
-      }),
+      createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'], match_logic: 'or' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).not.toBeNull()
@@ -459,16 +304,9 @@ describe('matchTransactionToBudgetCategories - or match logic', () => {
   })
 
   it('should NOT match when neither category nor tags match', () => {
-    const transaction = createTransaction({
-      category: '["Shopping"]',
-      tags: ['entertainment'],
-    })
+    const transaction = createTransaction({ pfc_primary: 'SHOPPING', tags: ['entertainment'] })
     const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        tags: ['dining'],
-        match_logic: 'or',
-      }),
+      createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'], match_logic: 'or' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).toBeNull()
@@ -481,151 +319,56 @@ describe('matchTransactionToBudgetCategories - or match logic', () => {
 
 describe('matchTransactionToBudgetCategories - edge cases', () => {
   it('should return first matching category when multiple match', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink", "Restaurants"]',
-    })
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS' })
     const categories = [
-      createBudgetCategory({
-        id: 'cat-1',
-        category: ['Food and Drink'],
-        match_logic: 'category_only',
-      }),
-      createBudgetCategory({
-        id: 'cat-2',
-        category: ['Food and Drink', 'Restaurants'],
-        match_logic: 'category_only',
-      }),
+      createBudgetCategory({ id: 'cat-1', pfc_primary: 'FOOD_AND_DRINK', match_logic: 'category_only' }),
+      createBudgetCategory({ id: 'cat-2', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS', match_logic: 'category_only' }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).not.toBeNull()
-    expect(result?.category.id).toBe('cat-1') // First match
+    expect(result?.category.id).toBe('cat-1')
   })
 
   it('should handle transaction with empty tags array', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink"]',
-      tags: [],
-    })
-    const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        tags: [],
-        match_logic: 'category_only',
-      }),
-    ]
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', tags: [] })
+    const categories = [createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', tags: [], match_logic: 'category_only' })]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).not.toBeNull()
     expect(result?.matchReason).toBe('category')
   })
 
   it('should handle budget category with empty tags array', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink"]',
-      tags: ['dining'],
-    })
-    const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        tags: [], // Empty tags
-        match_logic: 'category_only',
-      }),
-    ]
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK', tags: ['dining'] })
+    const categories = [createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', tags: [], match_logic: 'category_only' })]
     const result = matchTransactionToBudgetCategories(transaction, categories)
-    expect(result).not.toBeNull() // Category matches
+    expect(result).not.toBeNull()
   })
 
-  it('should handle budget category with empty category array', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink"]',
-      tags: ['dining'],
-    })
+  it('should default to category matching when match_logic is invalid', () => {
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK' })
     const categories = [
-      createBudgetCategory({
-        category: [], // Empty category
-        tags: ['dining'],
-        match_logic: 'tag_only',
-      }),
-    ]
-    const result = matchTransactionToBudgetCategories(transaction, categories)
-    expect(result).not.toBeNull() // Tags match
-    expect(result?.matchReason).toBe('tag')
-  })
-
-  it('should handle malformed category JSON gracefully', () => {
-    const transaction = createTransaction({
-      category: '{not valid}',
-    })
-    const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        match_logic: 'category_only',
-      }),
-    ]
-    const result = matchTransactionToBudgetCategories(transaction, categories)
-    expect(result).toBeNull()
-  })
-
-  it('should default to category_only when match_logic is undefined/empty', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink"]',
-    })
-    const categories = [
-      createBudgetCategory({
-        category: ['Food and Drink'],
-        match_logic: '' as never, // Simulate invalid/empty value
-      }),
+      createBudgetCategory({ pfc_primary: 'FOOD_AND_DRINK', match_logic: '' as never }),
     ]
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).not.toBeNull()
     expect(result?.matchReason).toBe('category')
   })
 
-  it('should work with case-sensitive category matching', () => {
-    const transaction = createTransaction({
-      category: '["Food and Drink"]',
-    })
+  it('should work with case-sensitive pfc_primary matching', () => {
+    const transaction = createTransaction({ pfc_primary: 'FOOD_AND_DRINK' })
     const categories = [
-      createBudgetCategory({
-        category: ['food and drink'], // Different case
-        match_logic: 'category_only',
-      }),
+      createBudgetCategory({ pfc_primary: 'food_and_drink', match_logic: 'category_only' }),
     ]
-    // Categories are case-sensitive (matching backend behavior)
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).toBeNull()
   })
 
   it('should work with case-sensitive tag matching', () => {
-    const transaction = createTransaction({
-      category: null,
-      tags: ['Dining'], // Capital D
-    })
+    const transaction = createTransaction({ pfc_primary: null, tags: ['Dining'] })
     const categories = [
-      createBudgetCategory({
-        category: [],
-        tags: ['dining'], // Lowercase
-        match_logic: 'tag_only',
-      }),
+      createBudgetCategory({ tags: ['dining'], match_logic: 'tag_only' }),
     ]
-    // Tags are case-sensitive (matching backend behavior)
     const result = matchTransactionToBudgetCategories(transaction, categories)
     expect(result).toBeNull()
-  })
-
-  it('matches_pfc_primary_when_legacy_category_and_override_are_empty', () => {
-    const transaction = createTransaction({
-      category: null,
-      category_override: null,
-      personal_finance_category_data: {
-        primary: 'FOOD_AND_DRINK',
-        primary_display: 'Food And Drink',
-      },
-    })
-    const categories = [
-      createBudgetCategory({ category: ['Food And Drink'], match_logic: 'category_only' }),
-    ]
-    const result = matchTransactionToBudgetCategories(transaction, categories)
-    expect(result).not.toBeNull()
-    expect(result!.matchReason).toBe('category')
   })
 })

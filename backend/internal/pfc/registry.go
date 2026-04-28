@@ -81,7 +81,7 @@ var pfcDetailedByPrimary = map[string][]string{
 		"GENERAL_MERCHANDISE_PET_SUPPLIES",
 		"GENERAL_MERCHANDISE_SPORTING_GOODS",
 		"GENERAL_MERCHANDISE_SUPERSTORES",
-		"GENERAL_MERCHANDISE_TOBACCO_AND_VAPING",
+		"GENERAL_MERCHANDISE_TOBACCO_AND_VAPE",
 	},
 	"GENERAL_SERVICES": {
 		"GENERAL_SERVICES_ACCOUNTING_AND_FINANCIAL_PLANNING",
@@ -96,7 +96,7 @@ var pfcDetailedByPrimary = map[string][]string{
 	},
 	"GOVERNMENT_AND_NON_PROFIT": {
 		"GOVERNMENT_AND_NON_PROFIT_DONATIONS",
-		"GOVERNMENT_AND_NON_PROFIT_GOVERNMENT_DEPARTMENTS",
+		"GOVERNMENT_AND_NON_PROFIT_GOVERNMENT_DEPARTMENTS_AND_AGENCIES",
 		"GOVERNMENT_AND_NON_PROFIT_OTHER_GOVERNMENT_AND_NON_PROFIT",
 		"GOVERNMENT_AND_NON_PROFIT_TAX_PAYMENT",
 	},
@@ -160,7 +160,7 @@ var pfcDetailedByPrimary = map[string][]string{
 		"PERSONAL_CARE_OTHER_PERSONAL_CARE",
 	},
 	"RENT_AND_UTILITIES": {
-		"RENT_AND_UTILITIES_GAS_AND_FUEL",
+		"RENT_AND_UTILITIES_GAS_AND_ELECTRICITY",
 		"RENT_AND_UTILITIES_INTERNET_AND_CABLE",
 		"RENT_AND_UTILITIES_OTHER_UTILITIES",
 		"RENT_AND_UTILITIES_RENT",
@@ -186,6 +186,7 @@ var pfcDetailedByPrimary = map[string][]string{
 		"TRANSFER_OUT_OTHER_TRANSFER_OUT",
 		"TRANSFER_OUT_SAVINGS",
 		"TRANSFER_OUT_WIRE",                 // PFCv2 addition
+		"TRANSFER_OUT_WITHDRAWAL",
 	},
 	"TRANSPORTATION": {
 		"TRANSPORTATION_BIKES_AND_SCOOTERS",
@@ -195,14 +196,12 @@ var pfcDetailedByPrimary = map[string][]string{
 		"TRANSPORTATION_PUBLIC_TRANSIT",
 		"TRANSPORTATION_TAXIS_AND_RIDE_SHARES",
 		"TRANSPORTATION_TOLLS",
-		"TRANSPORTATION_VEHICLES_AND_BOATS",
 	},
 	"TRAVEL": {
-		"TRAVEL_FLIGHTS",          // PFCv2 addition
-		"TRAVEL_HOTELS_AND_MOTELS",
+		"TRAVEL_FLIGHTS",     // PFCv2 addition
+		"TRAVEL_LODGING",
 		"TRAVEL_OTHER_TRAVEL",
 		"TRAVEL_RENTAL_CARS",
-		"TRAVEL_TRAVEL_AGENCIES",
 	},
 }
 
@@ -265,26 +264,6 @@ func PrimaryDisplayName(primary string) string {
 	return enumToTitleCase(primary)
 }
 
-// NormalizePrimaryDisplay accepts either a PFC primary enum (e.g. "FOOD_AND_DRINK") or its
-// display string (e.g. "Food And Drink") and returns the canonical curated display name.
-// This normalizes the heterogeneous values produced by effectiveCategoryExpr, which returns
-// display strings from category_override->>0 and raw enums from personal_finance_category->>'primary'.
-// For unknown values, returns the input as-is.
-func NormalizePrimaryDisplay(s string) string {
-	// Fast path: direct enum lookup
-	if display, ok := pfcPrimaryDisplayNames[s]; ok {
-		return display
-	}
-	// Reverse lookup: check if s is already a known display name (case-insensitive)
-	lower := strings.ToLower(s)
-	for _, display := range pfcPrimaryDisplayNames {
-		if strings.ToLower(display) == lower {
-			return display // return canonical casing
-		}
-	}
-	return s
-}
-
 // DetailedDisplayName derives a short display name for a Plaid PFC detailed enum by
 // stripping the primary prefix. e.g. ("FOOD_AND_DRINK", "FOOD_AND_DRINK_FAST_FOOD") → "Fast Food".
 func DetailedDisplayName(primary, detailed string) string {
@@ -293,20 +272,6 @@ func DetailedDisplayName(primary, detailed string) string {
 		suffix = detailed[len(primary)+1:]
 	}
 	return enumToTitleCase(suffix)
-}
-
-// PFCToCategoryArray builds the []string stored in transactions.category when Plaid returns
-// no legacy category but does return personal_finance_category. Returns nil when primary is
-// empty so callers can treat partial PFC as absent.
-func PFCToCategoryArray(primary, detailed string) []string {
-	if primary == "" {
-		return nil
-	}
-	result := []string{PrimaryDisplayName(primary)}
-	if detailed != "" {
-		result = append(result, DetailedDisplayName(primary, detailed))
-	}
-	return result
 }
 
 // enumToTitleCase converts SCREAMING_SNAKE_CASE to "Title Case With Spaces".
