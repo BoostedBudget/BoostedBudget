@@ -705,11 +705,30 @@ describe('TransactionCard', () => {
   })
 
   describe('Category Color Dot', () => {
-    it('should render category color dot before category text', () => {
+    it('should render category color dot when no icon URL is present', () => {
       const { container } = render(<TransactionCard transaction={mockTransaction} />)
 
       const colorDot = container.querySelector('.transaction-card__category-dot')
       expect(colorDot).toBeInTheDocument()
+    })
+
+    it('should render category icon img when pfc_category_icon_url is set', () => {
+      const iconURL = 'https://plaid-category-icons.plaid.com/PFC_FOOD_AND_DRINK.png'
+      const txWithIcon: Transaction = { ...mockTransaction, pfc_category_icon_url: iconURL }
+      const { container } = render(<TransactionCard transaction={txWithIcon} />)
+
+      const icon = container.querySelector('.transaction-card__category-icon') as HTMLImageElement | null
+      expect(icon).toBeInTheDocument()
+      expect(icon?.src).toBe(iconURL)
+      expect(container.querySelector('.transaction-card__category-dot')).not.toBeInTheDocument()
+    })
+
+    it('should show color dot (not icon) when pfc_category_icon_url is null', () => {
+      const txNoIcon: Transaction = { ...mockTransaction, pfc_category_icon_url: null }
+      const { container } = render(<TransactionCard transaction={txNoIcon} />)
+
+      expect(container.querySelector('.transaction-card__category-dot')).toBeInTheDocument()
+      expect(container.querySelector('.transaction-card__category-icon')).not.toBeInTheDocument()
     })
 
     it('should apply correct color for known PFC primary category', () => {

@@ -54,6 +54,7 @@ func TestTransactionRepository_Create_Success(t *testing.T) {
 			pgxmock.AnyArg(), // pfc_primary
 			pgxmock.AnyArg(), // pfc_detailed
 			pgxmock.AnyArg(), // pfc_confidence_level
+			pgxmock.AnyArg(), // pfc_category_icon_url
 			pgxmock.AnyArg(), // payment_channel
 			transaction.Pending,
 			pgxmock.AnyArg(), // user_notes
@@ -106,9 +107,9 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with multiple value sets (22 fields per transaction * 2 transactions = 44 args)
+	// Expect batch INSERT with multiple value sets (23 fields per transaction * 2 transactions = 46 args)
 	// Issue #171: Added user_account_id as the 5th field; encryption adds external_transaction_id_blind_idx
-	args := make([]interface{}, 44)
+	args := make([]interface{}, 46)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -157,6 +158,7 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 			pgxmock.AnyArg(), // pfc_primary
 			pgxmock.AnyArg(), // pfc_detailed
 			pgxmock.AnyArg(), // pfc_confidence_level
+			pgxmock.AnyArg(), // pfc_category_icon_url
 			pgxmock.AnyArg(), // payment_channel
 			transaction.Pending,
 			pgxmock.AnyArg(), // external_metadata
@@ -220,7 +222,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
@@ -230,7 +232,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID1, nil,
 			-50.00, now, nil, "Transaction 1", nil,
-			nil, nil, nil,
+			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
@@ -239,7 +241,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 			"tx-2", userID, "account-2", "item-1",
 			"plaid", &extID2, nil,
 			-25.00, now, nil, "Transaction 2", nil,
-			nil, nil, nil,
+			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
@@ -280,7 +282,7 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
@@ -290,7 +292,7 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 			"tx-1", "user-1", accountID, "item-1",
 			"plaid", &extID, nil,
 			-50.00, now, nil, "Transaction 1", nil,
-			nil, nil, nil,
+			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
@@ -331,7 +333,7 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
@@ -341,7 +343,7 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
 			-50.00, now, nil, "Transaction 1", nil,
-			nil, nil, nil,
+			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
@@ -384,7 +386,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
@@ -394,7 +396,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
 			-50.00, now, nil, "Transaction 1", nil,
-			nil, nil, nil,
+			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
@@ -442,7 +444,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
@@ -452,7 +454,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
 			-50.00, txDate, nil, "Transaction 1", nil,
-			nil, nil, nil,
+			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
@@ -497,7 +499,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
@@ -507,7 +509,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 			"tx-1", userID, accountID, "item-1",
 			"plaid", &extID, nil,
 			-50.00, now, nil, "Transaction 1", nil,
-			nil, nil, nil,
+			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
@@ -554,7 +556,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
@@ -564,7 +566,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
 			-5.49, now, nil, "Starbucks", &merchantName,
-			nil, nil, nil,
+			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
@@ -609,7 +611,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_PFCPrimaries(t *testing.T)
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
@@ -620,10 +622,9 @@ func TestTransactionRepository_GetByUserIDWithFilters_PFCPrimaries(t *testing.T)
 			"plaid", &extID, nil,
 			-25.00, now, nil, "Restaurant", nil,
 			&pfcPrimary, nil, nil, nil,
-			false, nil, now, now,
+			nil, false, nil, now, now,
 			nil, nil,
-			nil, nil, nil,
-			nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
@@ -664,7 +665,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
@@ -674,7 +675,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
 			-100.00, now, nil, "Pending Transaction", nil,
-			nil, nil, nil,
+			nil, nil, nil, nil,
 			nil, true, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
@@ -725,7 +726,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
@@ -735,7 +736,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 			"tx-1", userID, accountID, "item-1",
 			"plaid", &extID, nil,
 			-50.00, txDate, nil, "Transaction 1", nil,
-			nil, nil, nil,
+			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
@@ -840,7 +841,7 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
@@ -851,7 +852,7 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 			"plaid", &externalID, nil,
 			-25.50, now, nil, "Starbucks", &merchantName,
 			&categoryJSON, nil, nil, nil,
-			false, nil, now, now,
+			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 		)
@@ -924,7 +925,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
@@ -934,7 +935,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
 			-50.00, now, nil, "Transaction 1", nil,
-			nil, nil, nil,
+			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			[]byte(`["Food", "Shopping"]`), []byte(`[{"tag":"Food","source":"user"},{"tag":"Shopping","source":"user"}]`),
 			nil, nil, nil, nil, nil, nil,
@@ -982,7 +983,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
 		"pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
@@ -993,7 +994,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 			"plaid", &extID, nil,
 			-50.00, now, nil, "Transaction 1", nil,
 			&pfcPrimary, nil, nil, nil,
-			false, nil, now, now,
+			nil, false, nil, now, now,
 			nil, nil,
 			&overrideKind, &pfcPrimaryOverride, nil,
 			nil, "manual", &overrideDate,
@@ -1039,7 +1040,7 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id", "source", "external_transaction_id",
 		"external_metadata", "amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel", "pending", "user_notes",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel", "pending", "user_notes",
 		"created_at", "updated_at", "tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
 		"custom_category_override_id", "category_source", "category_override_date",
@@ -1047,7 +1048,7 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 		AddRow(
 			txID, "user-123", "account-1", "item-1", "plaid", &extID,
 			nil, -50.00, now, nil, "Transaction 1", nil,
-			&pfcPrimary, nil, nil, nil, false, nil,
+			&pfcPrimary, nil, nil, nil, nil, false, nil,
 			now, now, []byte(`["Food"]`), []byte(`[{"tag":"Food","source":"user"}]`),
 			&overrideKind, &pfcPrimaryOverride, nil,
 			nil, "manual", &overrideDate,
@@ -1962,9 +1963,9 @@ func TestTransactionRepository_CreateBatch_WithUserAccountID(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with user_account_id and external_transaction_id_blind_idx (22 fields now)
-	// Build arguments for 22 fields per transaction
-	args := make([]interface{}, 22)
+	// Expect batch INSERT with user_account_id and external_transaction_id_blind_idx (23 fields now)
+	// Build arguments for 23 fields per transaction
+	args := make([]interface{}, 23)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -2007,8 +2008,8 @@ func TestTransactionRepository_CreateBatch_DOUpdateBehavior(t *testing.T) {
 		},
 	}
 
-	// Build arguments for 22 fields per transaction (includes external_transaction_id_blind_idx)
-	args := make([]interface{}, 22)
+	// Build arguments for 23 fields per transaction (includes external_transaction_id_blind_idx and pfc_category_icon_url)
+	args := make([]interface{}, 23)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -2049,7 +2050,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 		"id", "user_id", "account_id", "linked_item_id", "user_account_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "payment_channel", "pending", "user_notes",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel", "pending", "user_notes",
 		"created_at", "updated_at", "tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
 		"custom_category_override_id", "category_source", "category_override_date",
@@ -2058,7 +2059,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 			"tx-uuid-1", userID, "account-old", "item-old", &userAccountID,
 			"plaid", &externalID1, nil,
 			-50.00, now, nil, "Starbucks", ptrStr("Starbucks Corp"),
-			nil, nil, nil, nil, false, nil,
+			nil, nil, nil, nil, nil, false, nil,
 			now, now, []byte(`[]`), []byte(`[]`),
 			nil, nil, nil, nil, "plaid", nil,
 		).
@@ -2066,7 +2067,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 			"tx-uuid-2", userID, "account-new", "item-new", &userAccountID,
 			"plaid", &externalID2, nil,
 			-25.00, now, nil, "Coffee", nil,
-			nil, nil, nil, nil, false, nil,
+			nil, nil, nil, nil, nil, false, nil,
 			now, now, []byte(`[]`), []byte(`[]`),
 			nil, nil, nil, nil, "plaid", nil,
 		)

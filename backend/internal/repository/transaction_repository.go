@@ -196,9 +196,9 @@ func (r *transactionRepository) Create(ctx context.Context, transaction *domain.
 		INSERT INTO transactions
 		(id, user_id, account_id, linked_item_id, source, external_transaction_id,
 		 external_transaction_id_blind_idx, external_metadata, amount, date, authorized_date,
-		 name, merchant_name, pfc_primary, pfc_detailed, pfc_confidence_level,
+		 name, merchant_name, pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url,
 		 payment_channel, pending, user_notes, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
 	`
 
 	_, err = r.db.Exec(ctx, query,
@@ -218,6 +218,7 @@ func (r *transactionRepository) Create(ctx context.Context, transaction *domain.
 		transaction.PFCPrimary,
 		transaction.PFCDetailed,
 		transaction.PFCConfidenceLevel,
+		transaction.PFCCategoryIconURL,
 		transaction.PaymentChannel,
 		transaction.Pending,
 		transaction.UserNotes,
@@ -299,6 +300,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			transactions[i].PFCPrimary,
 			transactions[i].PFCDetailed,
 			transactions[i].PFCConfidenceLevel,
+			transactions[i].PFCCategoryIconURL,
 			transactions[i].PaymentChannel,
 			transactions[i].Pending,
 			transactions[i].UserNotes,
@@ -318,7 +320,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		(id, user_id, account_id, linked_item_id, user_account_id,
 		 source, external_transaction_id, external_transaction_id_blind_idx, external_metadata,
 		 amount, date, authorized_date, name, merchant_name,
-		 pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending, user_notes,
+		 pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending, user_notes,
 		 created_at, updated_at)
 		VALUES %s
 		ON CONFLICT (source, external_transaction_id_blind_idx, user_id) DO UPDATE SET
@@ -335,6 +337,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			pfc_primary = EXCLUDED.pfc_primary,
 			pfc_detailed = EXCLUDED.pfc_detailed,
 			pfc_confidence_level = EXCLUDED.pfc_confidence_level,
+			pfc_category_icon_url = EXCLUDED.pfc_category_icon_url,
 			payment_channel = EXCLUDED.payment_channel,
 			pending = EXCLUDED.pending,
 			updated_at = NOW()
@@ -364,9 +367,9 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 		UPDATE transactions
 		SET amount = $1, date = $2, authorized_date = $3, name = $4,
 		    merchant_name = $5, pfc_primary = $6, pfc_detailed = $7, pfc_confidence_level = $8,
-		    payment_channel = $9, pending = $10, external_metadata = $11,
-		    user_notes = $12, updated_at = $13
-		WHERE id = $14
+		    pfc_category_icon_url = $9, payment_channel = $10, pending = $11, external_metadata = $12,
+		    user_notes = $13, updated_at = $14
+		WHERE id = $15
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -378,6 +381,7 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 		transaction.PFCPrimary,
 		transaction.PFCDetailed,
 		transaction.PFCConfidenceLevel,
+		transaction.PFCCategoryIconURL,
 		transaction.PaymentChannel,
 		transaction.Pending,
 		encMeta,
@@ -421,7 +425,7 @@ func (r *transactionRepository) GetByUserID(ctx context.Context, userID string, 
 	query := `
 		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
 		       external_metadata, amount, date, authorized_date, name, merchant_name,
-		       pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending,
+		       pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending,
 		       user_notes, created_at, updated_at,
 		       tags, tags_source,
 		       category_override_kind, pfc_primary_override, pfc_detailed_override,
@@ -446,7 +450,7 @@ func (r *transactionRepository) GetByAccountID(ctx context.Context, accountID st
 	query := `
 		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
 		       external_metadata, amount, date, authorized_date, name, merchant_name,
-		       pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending,
+		       pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending,
 		       user_notes, created_at, updated_at,
 		       tags, tags_source,
 		       category_override_kind, pfc_primary_override, pfc_detailed_override,
@@ -470,7 +474,7 @@ func (r *transactionRepository) GetBySource(ctx context.Context, source domain.T
 	query := `
 		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
 		       external_metadata, amount, date, authorized_date, name, merchant_name,
-		       pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending,
+		       pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending,
 		       user_notes, created_at, updated_at,
 		       tags, tags_source,
 		       category_override_kind, pfc_primary_override, pfc_detailed_override,
@@ -501,7 +505,7 @@ func (r *transactionRepository) GetByUserIDWithFilters(ctx context.Context, user
 	query := fmt.Sprintf(`
 		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
 		       external_metadata, amount, date, authorized_date, name, merchant_name,
-		       pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending,
+		       pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending,
 		       user_notes, created_at, updated_at,
 		       tags, tags_source,
 		       category_override_kind, pfc_primary_override, pfc_detailed_override,
@@ -552,7 +556,7 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 		SELECT id, user_id, account_id, linked_item_id, source,
 		       external_transaction_id, external_metadata, amount, date,
 		       authorized_date, name, merchant_name,
-		       pfc_primary, pfc_detailed, pfc_confidence_level,
+		       pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url,
 		       payment_channel, pending,
 		       user_notes, created_at, updated_at,
 		       tags, tags_source,
@@ -585,6 +589,7 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 		&tx.PFCPrimary,
 		&tx.PFCDetailed,
 		&tx.PFCConfidenceLevel,
+		&tx.PFCCategoryIconURL,
 		&tx.PaymentChannel,
 		&tx.Pending,
 		&tx.UserNotes,
@@ -789,6 +794,7 @@ func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transa
 			&tx.PFCPrimary,
 			&tx.PFCDetailed,
 			&tx.PFCConfidenceLevel,
+			&tx.PFCCategoryIconURL,
 			&tx.PaymentChannel,
 			&tx.Pending,
 			&tx.UserNotes,
@@ -850,7 +856,7 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 	query := `
 		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
 			   external_metadata, amount, date, authorized_date, name, merchant_name,
-			   pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending, user_notes,
+			   pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending, user_notes,
 			   created_at, updated_at, tags, tags_source,
 			   category_override_kind, pfc_primary_override, pfc_detailed_override,
 			   custom_category_override_id, category_source, category_override_date
@@ -881,6 +887,7 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 		&tx.PFCPrimary,
 		&tx.PFCDetailed,
 		&tx.PFCConfidenceLevel,
+		&tx.PFCCategoryIconURL,
 		&tx.PaymentChannel,
 		&tx.Pending,
 		&tx.UserNotes,
@@ -1329,7 +1336,7 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 	selectQuery := fmt.Sprintf(`
 		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
 			   external_metadata, amount, date, authorized_date, name, merchant_name,
-			   pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending, user_notes,
+			   pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending, user_notes,
 			   created_at, updated_at, tags, tags_source,
 			   category_override_kind, pfc_primary_override, pfc_detailed_override,
 			   custom_category_override_id, category_source, category_override_date
@@ -1361,7 +1368,7 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 		SELECT id, user_id, account_id, linked_item_id, user_account_id,
 			   source, external_transaction_id, external_metadata,
 			   amount, date, authorized_date, name, merchant_name,
-			   pfc_primary, pfc_detailed, pfc_confidence_level, payment_channel, pending, user_notes,
+			   pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending, user_notes,
 			   created_at, updated_at, tags, tags_source,
 			   category_override_kind, pfc_primary_override, pfc_detailed_override,
 			   custom_category_override_id, category_source, category_override_date
@@ -1403,6 +1410,7 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 			&tx.PFCPrimary,
 			&tx.PFCDetailed,
 			&tx.PFCConfidenceLevel,
+			&tx.PFCCategoryIconURL,
 			&tx.PaymentChannel,
 			&tx.Pending,
 			&tx.UserNotes,

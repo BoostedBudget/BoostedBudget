@@ -42,6 +42,7 @@ export interface Transaction {
   pfc_primary?: string | null
   pfc_detailed?: string | null
   pfc_confidence_level?: string | null
+  pfc_category_icon_url?: string | null
   payment_channel?: string | null // 'online', 'in store', 'other'
   pending: boolean
   user_notes?: string | null

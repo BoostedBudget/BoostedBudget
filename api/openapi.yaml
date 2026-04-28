@@ -3631,6 +3631,8 @@ components:
           type: string
         pending:
           type: boolean
+        pfc_category_icon_url:
+          type: string
         pfc_confidence_level:
           type: string
         pfc_detailed:
