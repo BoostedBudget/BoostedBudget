@@ -533,6 +533,8 @@ func (s *budgetService) GetAvailableCategories(ctx context.Context, userID strin
 	}
 
 	// Merge curated PFCv2 primaries; skip entries already covered by a custom category.
+	// Return enum values (e.g. "FOOD_AND_DRINK") so BudgetCategoryForm can pass them
+	// directly as pfc_primary to the API without a display→enum conversion step.
 	const uncategorizedNorm = "uncategorized"
 	for _, primary := range pfc.AllPrimaries() {
 		norm := strings.ToLower(strings.TrimSpace(primary.Display))
@@ -540,7 +542,7 @@ func (s *budgetService) GetAvailableCategories(ctx context.Context, userID strin
 			continue
 		}
 		if _, exists := customNorms[norm]; !exists {
-			result = append(result, primary.Display)
+			result = append(result, primary.Enum)
 		}
 	}
 

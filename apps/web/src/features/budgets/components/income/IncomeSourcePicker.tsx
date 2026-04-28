@@ -31,7 +31,7 @@ export interface IncomeSourcePickerProps {
 // category and tag sources. The manual render path in IncomeSourceItem.tsx is
 // preserved for existing budgets that already have manual sources in the DB.
 const SOURCE_TYPE_OPTIONS: { value: IncomeSourceType; label: string }[] = [
-  { value: 'plaid_category', label: 'Category' },
+  { value: 'pfc_primary', label: 'Category' },
   { value: 'tag', label: 'Tag' },
 ];
 
@@ -42,13 +42,13 @@ export function IncomeSourcePicker({
   onAdd,
   disabled = false,
 }: IncomeSourcePickerProps) {
-  const [sourceType, setSourceType] = useState<IncomeSourceType>('plaid_category');
+  const [sourceType, setSourceType] = useState<IncomeSourceType>('pfc_primary');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [selectedTag, setSelectedTag] = useState('');
 
-  // Filter out already selected categories
+  // Filter out already selected categories (match both canonical and legacy type)
   const existingCategoryValues = existingSources
-    .filter((s) => s.type === 'plaid_category')
+    .filter((s) => s.type === 'pfc_primary' || s.type === 'plaid_category')
     .map((s) => s.value);
   const availableCategoriesFiltered = availableCategories.filter(
     (primary) => !existingCategoryValues.includes(primary.enum)
@@ -65,7 +65,7 @@ export function IncomeSourcePicker({
   // Determine if add button should be enabled
   const isAddEnabled =
     !disabled &&
-    ((sourceType === 'plaid_category' && selectedCategory !== '') ||
+    ((sourceType === 'pfc_primary' && selectedCategory !== '') ||
       (sourceType === 'tag' && selectedTag !== ''));
 
   // Handle type change
@@ -84,8 +84,8 @@ export function IncomeSourcePicker({
     let source: IncomeSource | undefined;
 
     switch (sourceType) {
-      case 'plaid_category':
-        source = { type: 'plaid_category', value: selectedCategory };
+      case 'pfc_primary':
+        source = { type: 'pfc_primary', value: selectedCategory };
         break;
       case 'tag':
         source = { type: 'tag', value: selectedTag };
@@ -127,7 +127,7 @@ export function IncomeSourcePicker({
       </div>
 
       {/* Category Picker */}
-      {sourceType === 'plaid_category' && (
+      {sourceType === 'pfc_primary' && (
         <div className="flex flex-col gap-1">
           <label htmlFor="category-select" className="text-xs font-medium text-muted-foreground">
             Category

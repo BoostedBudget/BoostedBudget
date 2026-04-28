@@ -19,6 +19,7 @@ import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
+import { formatPFCPrimary } from '@/shared/categories/formatPfc'
 
 /**
  * Transactions Page
@@ -154,24 +155,27 @@ export function TransactionsPage() {
     currentPage,
   } = useTransactions({ filters, limit: 50 })
 
-  // Category filter options: union of curated PFC primaries + observed transaction pfc_primary values
+  // Category filter options: curated PFC primaries + observed effective primaries.
+  // Values are raw enum strings (e.g. "FOOD_AND_DRINK") so they match the pfc_primary
+  // column; labels are human-readable display strings.
   const categoryOptions = useMemo<FilterOption[]>(() => {
-    const categorySet = new Set<string>()
+    const enumToDisplay = new Map<string, string>()
 
-    // Seed with curated PFC primaries so brand-new users see all 18 buckets
-    plaidPrimaries.forEach(p => categorySet.add(p.display))
+    // Seed with curated PFC primaries (enum → display)
+    plaidPrimaries.forEach(p => enumToDisplay.set(p.enum, p.display))
 
+    // Add any observed effective primaries not already in the curated list
     const transactions = data?.transactions ?? []
     transactions.forEach((t) => {
       const effectivePrimary = t.pfc_primary_override ?? t.pfc_primary
-      if (effectivePrimary) {
-        categorySet.add(effectivePrimary)
+      if (effectivePrimary && !enumToDisplay.has(effectivePrimary)) {
+        enumToDisplay.set(effectivePrimary, formatPFCPrimary(effectivePrimary))
       }
     })
 
-    return Array.from(categorySet)
-      .sort()
-      .map((cat) => ({ value: cat, label: cat }))
+    return Array.from(enumToDisplay.entries())
+      .sort(([, a], [, b]) => a.localeCompare(b))
+      .map(([value, label]) => ({ value, label }))
   }, [data?.transactions, plaidPrimaries])
 
   // Handle opening the transaction editor

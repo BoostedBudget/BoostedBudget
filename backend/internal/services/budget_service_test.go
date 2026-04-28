@@ -691,13 +691,14 @@ func TestBudgetService_GetAvailableCategories_Success(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, categories)
-	// Custom categories
+	// Custom categories returned as-is (user-entered names)
 	assert.Contains(t, categories, "Groceries")
 	assert.Contains(t, categories, "Dining")
-	// Curated PFCv2 primaries present
-	assert.Contains(t, categories, "Food And Drink")
-	assert.Contains(t, categories, "Transportation")
-	assert.Contains(t, categories, "Entertainment")
+	// Curated PFCv2 primaries returned as enum values, not display strings
+	assert.Contains(t, categories, "FOOD_AND_DRINK")
+	assert.Contains(t, categories, "TRANSPORTATION")
+	assert.Contains(t, categories, "ENTERTAINMENT")
+	assert.NotContains(t, categories, "Food And Drink")
 	mockCategoryRepo.AssertExpectations(t)
 }
 
@@ -717,11 +718,11 @@ func TestGetAvailableCategories_IncludesCuratedPrimariesEvenWithoutObserved(t *t
 	categories, err := service.GetAvailableCategories(ctx, userID)
 
 	assert.NoError(t, err)
-	// All 18 PFCv2 primaries must be present
-	assert.Contains(t, categories, "Food And Drink")
-	assert.Contains(t, categories, "Income")
-	assert.Contains(t, categories, "Loan Disbursements")
-	assert.Contains(t, categories, "Other")
+	// All 18 PFCv2 primaries must be present as enum values
+	assert.Contains(t, categories, "FOOD_AND_DRINK")
+	assert.Contains(t, categories, "INCOME")
+	assert.Contains(t, categories, "LOAN_DISBURSEMENTS")
+	assert.Contains(t, categories, "OTHER")
 	assert.GreaterOrEqual(t, len(categories), 18)
 }
 
@@ -744,10 +745,10 @@ func TestGetAvailableCategories_DedupesCustomVsCuratedCaseInsensitive(t *testing
 	categories, err := service.GetAvailableCategories(ctx, userID)
 
 	assert.NoError(t, err)
-	// Custom entry wins — curated display version dropped
+	// Custom entry wins — curated enum version dropped (deduped by display-name match)
 	assert.Contains(t, categories, "food and drink")
-	// Curated "Food And Drink" must NOT appear (deduped by custom)
-	assert.NotContains(t, categories, "Food And Drink")
+	// Curated "FOOD_AND_DRINK" enum must NOT appear (deduped by custom's display match)
+	assert.NotContains(t, categories, "FOOD_AND_DRINK")
 }
 
 // ============================================================================

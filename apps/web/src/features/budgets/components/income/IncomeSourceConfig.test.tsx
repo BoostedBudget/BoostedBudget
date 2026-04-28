@@ -20,7 +20,7 @@ describe('IncomeSourceConfig', () => {
   ]
 
   const mockSources: IncomeSource[] = [
-    { type: 'plaid_category', value: 'INCOME' },
+    { type: 'pfc_primary', value: 'INCOME' },
     { type: 'tag', value: 'Freelance' },
     { type: 'manual', value: '500', description: 'Side gig' },
   ]
@@ -99,7 +99,7 @@ describe('IncomeSourceConfig', () => {
 
       // Should call onChange with the new source
       expect(mockOnChange).toHaveBeenCalledWith([
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
       ]);
     });
 
@@ -128,7 +128,7 @@ describe('IncomeSourceConfig', () => {
       // Should append to existing sources
       expect(mockOnChange).toHaveBeenCalledWith([
         { type: 'tag', value: 'Salary' },
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
       ]);
     });
   });
@@ -141,7 +141,7 @@ describe('IncomeSourceConfig', () => {
     it('removes source from list when item remove clicked', async () => {
       const user = userEvent.setup({ delay: null });
       const sources: IncomeSource[] = [
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
         { type: 'tag', value: 'Freelance' },
       ];
 
@@ -167,7 +167,7 @@ describe('IncomeSourceConfig', () => {
     it('calls onChange with filtered sources array when non-manual sources are removed', async () => {
       const user = userEvent.setup({ delay: null });
       const sources: IncomeSource[] = [
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
         { type: 'tag', value: 'Salary' },
         { type: 'tag', value: 'Freelance' },
       ];
@@ -187,7 +187,7 @@ describe('IncomeSourceConfig', () => {
 
       // Should have first and third
       expect(mockOnChange).toHaveBeenCalledWith([
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
         { type: 'tag', value: 'Freelance' },
       ]);
     });
@@ -238,7 +238,7 @@ describe('IncomeSourceConfig', () => {
 
     it('calculates total from manual sources only', () => {
       const sources: IncomeSource[] = [
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
         { type: 'tag', value: 'Freelance' },
         { type: 'manual', value: '1000' },
         { type: 'manual', value: '500.50' },
@@ -280,7 +280,7 @@ describe('IncomeSourceConfig', () => {
 
     it('shows $0.00 when no manual sources', () => {
       const sources: IncomeSource[] = [
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
         { type: 'tag', value: 'Freelance' },
       ];
 
