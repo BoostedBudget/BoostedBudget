@@ -51,6 +51,7 @@ export interface Transaction {
   name: string;
   payment_channel?: string;
   pending: boolean;
+  pfc_category_icon_url?: string;
   pfc_confidence_level?: string;
   pfc_detailed?: string;
   pfc_detailed_override?: string;

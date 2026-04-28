@@ -167,6 +167,10 @@ export const getGetTransactionsResponseMock = (
         undefined,
       ]),
       pending: faker.datatype.boolean(),
+      pfc_category_icon_url: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       pfc_confidence_level: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
@@ -346,6 +350,10 @@ export const getGetTransactionByIDResponseMock = (
     undefined,
   ]),
   pending: faker.datatype.boolean(),
+  pfc_category_icon_url: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   pfc_confidence_level: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -522,6 +530,10 @@ export const getUpdateTransactionCategoryResponseMock = (
     undefined,
   ]),
   pending: faker.datatype.boolean(),
+  pfc_category_icon_url: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   pfc_confidence_level: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -698,6 +710,10 @@ export const getUpdateTransactionTagsResponseMock = (
     undefined,
   ]),
   pending: faker.datatype.boolean(),
+  pfc_category_icon_url: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   pfc_confidence_level: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,

@@ -2769,3 +2769,50 @@ func TestTransactionSyncService_ModifiedTransactions_SetsUserAccountID(t *testin
 	mockTransactionRepo.AssertExpectations(t)
 	t.Log("✓ Modified transactions also have UserAccountID set")
 }
+
+// TestTransactionSyncService_MapPlaidTransaction_SetsIconURL verifies that
+// personal_finance_category_icon_url from Plaid is mapped to PFCCategoryIconURL.
+func TestTransactionSyncService_MapPlaidTransaction_SetsIconURL(t *testing.T) {
+	svc := &transactionSyncService{}
+	ctx := context.Background()
+
+	iconURL := "https://plaid-category-icons.plaid.com/PFC_FOOD_AND_DRINK.png"
+	plaidTxn := plaid.Transaction{
+		TransactionId:                  "txn-icon-test",
+		AccountId:                      "acct-plaid-1",
+		Amount:                         12.50,
+		Date:                           "2024-03-01",
+		Name:                           "Coffee Shop",
+		Pending:                        false,
+		PersonalFinanceCategoryIconUrl: &iconURL,
+	}
+	accountMap := map[string]string{"acct-plaid-1": "acct-internal-1"}
+	userAccountMap := map[string]string{"acct-plaid-1": "user-acct-1"}
+
+	tx, err := svc.mapPlaidTransaction(ctx, plaidTxn, "linked-item-1", "user-1", accountMap, userAccountMap)
+	require.NoError(t, err)
+	require.NotNil(t, tx.PFCCategoryIconURL)
+	assert.Equal(t, iconURL, *tx.PFCCategoryIconURL)
+}
+
+// TestTransactionSyncService_MapPlaidTransaction_NilIconURL verifies that
+// a nil icon URL from Plaid results in a nil PFCCategoryIconURL on the domain object.
+func TestTransactionSyncService_MapPlaidTransaction_NilIconURL(t *testing.T) {
+	svc := &transactionSyncService{}
+	ctx := context.Background()
+
+	plaidTxn := plaid.Transaction{
+		TransactionId: "txn-no-icon",
+		AccountId:     "acct-plaid-1",
+		Amount:        5.00,
+		Date:          "2024-03-01",
+		Name:          "Test Store",
+		Pending:       false,
+	}
+	accountMap := map[string]string{"acct-plaid-1": "acct-internal-1"}
+	userAccountMap := map[string]string{"acct-plaid-1": "user-acct-1"}
+
+	tx, err := svc.mapPlaidTransaction(ctx, plaidTxn, "linked-item-1", "user-1", accountMap, userAccountMap)
+	require.NoError(t, err)
+	assert.Nil(t, tx.PFCCategoryIconURL)
+}

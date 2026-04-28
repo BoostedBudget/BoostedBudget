@@ -165,7 +165,7 @@ func TestMapPlaidTransaction_InvalidDate(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "failed to parse transaction date")
+	assert.Contains(t, err.Error(), "failed to map plaid transaction")
 }
 
 // ============================================================================

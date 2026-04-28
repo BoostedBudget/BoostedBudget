@@ -38,6 +38,7 @@ ALTER TABLE transactions
     DROP COLUMN IF EXISTS pfc_detailed_override,
     DROP COLUMN IF EXISTS pfc_primary_override,
     DROP COLUMN IF EXISTS category_override_kind,
+    DROP COLUMN IF EXISTS pfc_category_icon_url,
     DROP COLUMN IF EXISTS pfc_confidence_level,
     DROP COLUMN IF EXISTS pfc_detailed,
     DROP COLUMN IF EXISTS pfc_primary;

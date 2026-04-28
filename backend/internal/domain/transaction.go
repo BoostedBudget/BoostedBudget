@@ -92,9 +92,10 @@ type Transaction struct {
 	MerchantName   *string    `json:"merchant_name,omitempty" db:"merchant_name"`                     // Merchant name if available
 
 	// PFCv2 source columns (from Plaid). NULL for manual transactions and rare responses without PFC.
-	PFCPrimary         *string `json:"pfc_primary,omitempty" db:"pfc_primary"`
-	PFCDetailed        *string `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
-	PFCConfidenceLevel *string `json:"pfc_confidence_level,omitempty" db:"pfc_confidence_level"`
+	PFCPrimary           *string `json:"pfc_primary,omitempty" db:"pfc_primary"`
+	PFCDetailed          *string `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
+	PFCConfidenceLevel   *string `json:"pfc_confidence_level,omitempty" db:"pfc_confidence_level"`
+	PFCCategoryIconURL   *string `json:"pfc_category_icon_url,omitempty" db:"pfc_category_icon_url"`
 
 	// Payment details
 	PaymentChannel *string `json:"payment_channel,omitempty" db:"payment_channel"` // online, in store, other

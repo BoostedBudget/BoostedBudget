@@ -40,6 +40,9 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'pfc_confidence_level') THEN
         ALTER TABLE transactions ADD COLUMN pfc_confidence_level TEXT;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'pfc_category_icon_url') THEN
+        ALTER TABLE transactions ADD COLUMN pfc_category_icon_url TEXT;
+    END IF;
 END $$;
 
 -- 1c. Add override discriminator columns
