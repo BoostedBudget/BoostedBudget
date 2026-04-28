@@ -62,6 +62,26 @@ export const CATEGORY_COLORS: Record<string, string> = {
   'Transfer Out': '#0EA5E9',          // Sky-500 - Money out
   'Other': '#9CA3AF',                 // Gray-400 - Catch-all (distinct from #6B7280 default)
 
+  // PFCv2 raw enum keys — getEffectiveCategoryLabel returns these directly
+  'BANK_FEES': '#64748B',
+  'ENTERTAINMENT': '#F43F5E',
+  'FOOD_AND_DRINK': '#F97316',
+  'GENERAL_MERCHANDISE': '#A855F7',
+  'GENERAL_SERVICES': '#6366F1',
+  'GOVERNMENT_AND_NON_PROFIT': '#4F46E5',
+  'HOME_IMPROVEMENT': '#14B8A6',
+  'INCOME': '#10B981',
+  'LOAN_DISBURSEMENTS': '#DC2626',
+  'LOAN_PAYMENTS': '#EF4444',
+  'MEDICAL': '#EF4444',
+  'OTHER': '#9CA3AF',
+  'PERSONAL_CARE': '#D946EF',
+  'RENT_AND_UTILITIES': '#64748B',
+  'TRANSFER_IN': '#06B6D4',
+  'TRANSFER_OUT': '#0EA5E9',
+  'TRANSPORTATION': '#0EA5E9',
+  'TRAVEL': '#3B82F6',
+
   // Other
   'Subscriptions': '#8B5CF6',       // Violet-500 - Recurring
   'Community': '#F472B6',           // Pink-400 - Social

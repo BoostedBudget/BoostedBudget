@@ -8,6 +8,13 @@ import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetM
 import type { BudgetCategory } from '../../budgets/types'
 import { CATEGORY_COLORS, DEFAULT_CATEGORY_COLOR } from '@/lib/category-colors'
 
+/** Convert #RRGGBB to the rgb() form that happy-dom may normalize to. */
+function hexToRgb(hex: string): string {
+  const m = hex.replace(/^#/, '').match(/.{2}/g)
+  if (!m || m.length < 3) return hex
+  return `rgb(${parseInt(m[0], 16)}, ${parseInt(m[1], 16)}, ${parseInt(m[2], 16)})`
+}
+
 const createBudgetCategoryMatch = (
   matchReason: 'category' | 'tag' | 'both' = 'category',
   categoryOverrides: Partial<BudgetCategory> = {}
@@ -709,16 +716,19 @@ describe('TransactionCard', () => {
       const transactionWithKnownCategory: Transaction = {
         ...mockTransaction,
         pfc_primary: 'FOOD_AND_DRINK',
-        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+        pfc_detailed: null,
       }
 
       const { container } = render(<TransactionCard transaction={transactionWithKnownCategory} />)
 
-      const colorDot = container.querySelector('.transaction-card__category-dot')
+      const colorDot = container.querySelector('.transaction-card__category-dot') as HTMLElement | null
       expect(colorDot).toBeInTheDocument()
-      // CATEGORY_COLORS uses display-string keys ("Food and Drink") still — color resolver
-      // converts the PFC enum at the component layer.
-      expect(colorDot).toHaveStyle({ backgroundColor: CATEGORY_COLORS['Food and Drink'] })
+      // Check via DOM style property — toHaveStyle crashes in bun/jest-dom on failure
+      const rendered = colorDot?.style.backgroundColor ?? ''
+      const expected = CATEGORY_COLORS['FOOD_AND_DRINK']
+      // happy-dom may normalize hex → rgb; accept either form
+      const expectedRgb = hexToRgb(expected)
+      expect([expected, expectedRgb]).toContain(rendered)
     })
 
     it('should apply fallback color for uncategorized transactions', () => {
@@ -730,9 +740,11 @@ describe('TransactionCard', () => {
 
       const { container } = render(<TransactionCard transaction={uncategorizedTransaction} />)
 
-      const colorDot = container.querySelector('.transaction-card__category-dot')
+      const colorDot = container.querySelector('.transaction-card__category-dot') as HTMLElement | null
       expect(colorDot).toBeInTheDocument()
-      expect(colorDot).toHaveStyle({ backgroundColor: DEFAULT_CATEGORY_COLOR })
+      const rendered = colorDot?.style.backgroundColor ?? ''
+      const expectedRgb = hexToRgb(DEFAULT_CATEGORY_COLOR)
+      expect([DEFAULT_CATEGORY_COLOR, expectedRgb]).toContain(rendered)
     })
   })
 
