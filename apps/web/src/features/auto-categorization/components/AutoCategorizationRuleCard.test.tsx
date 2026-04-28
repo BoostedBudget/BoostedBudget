@@ -21,7 +21,9 @@ describe('AutoCategorizationRuleCard', () => {
       { type: 'amount_greater_than', value: 5 },
     ],
     condition_logic: 'AND',
-    target_category: ['Food & Drink', 'Coffee'],
+    target_kind: 'pfc',
+    target_pfc_primary: 'FOOD_AND_DRINK',
+    target_pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
     target_tags: ['morning', 'caffeine'],
     tag_behavior: 'add',
     source: 'manual',
@@ -83,10 +85,10 @@ describe('AutoCategorizationRuleCard', () => {
       expect(screen.getByText('Conditions (AND)')).toBeInTheDocument()
     })
 
-    it('should render target category as breadcrumb', () => {
+    it('should render target category in PFC primary › detailed format', () => {
       renderCard()
 
-      expect(screen.getByText('Food & Drink > Coffee')).toBeInTheDocument()
+      expect(screen.getByText('FOOD_AND_DRINK › FOOD_AND_DRINK_COFFEE')).toBeInTheDocument()
     })
 
     it('should render target tags', () => {
@@ -357,14 +359,15 @@ describe('AutoCategorizationRuleCard', () => {
       expect(screen.getByText('online')).toBeInTheDocument()
     })
 
-    it('should display existing_category condition', () => {
+    it('should display existing_pfc_primary condition', () => {
       renderCard({
         ...mockRule,
-        conditions: [{ type: 'existing_category' as const, value: 'Food & Drink' }],
+        conditions: [{ type: 'existing_pfc_primary' as const, value: 'FOOD_AND_DRINK' }],
       })
 
-      expect(screen.getByText('Existing Category (legacy text — matches transaction.Category[0])')).toBeInTheDocument()
-      expect(screen.getByText('Food & Drink')).toBeInTheDocument()
+      expect(screen.getByText('PFC Primary')).toBeInTheDocument()
+      // formatPFCPrimary converts enum → "Food And Drink" display string
+      expect(screen.getByText('Food And Drink')).toBeInTheDocument()
     })
 
     it('formatConditionValue_renders_pfc_primary_with_curated_display', () => {

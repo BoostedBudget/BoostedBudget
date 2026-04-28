@@ -6,6 +6,10 @@
 --
 -- Pre-production only: no data backfill, no transition period.
 -- Issue #1073
+--
+-- squawk-ignore-file ban-drop-column
+-- ban-drop-column is suppressed for this migration: pre-production with no data
+-- preservation per #1073. Dropping legacy v1 columns is the intent of the change.
 
 -- ==============================================================================
 -- PART 0: Drop pfc_enum_to_title_case() helper from migration 000064
