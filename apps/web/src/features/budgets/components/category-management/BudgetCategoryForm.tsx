@@ -23,6 +23,7 @@ import { DEFAULT_MATCH_LOGIC } from '@boostedbudget/shared-types/matching';
 import type { UserTag } from '@/features/tags/types';
 import { CategoryMatchConfig } from './CategoryMatchConfig';
 import { usePreviewCategories } from '../../hooks/usePreviewCategories';
+import { formatPFCPrimary } from '@/shared/categories/formatPfc';
 
 export interface BudgetCategoryFormProps {
   isOpen: boolean;
@@ -104,12 +105,17 @@ export function BudgetCategoryForm({
     }
   }, [isOpen, mode, initialData]);
 
-  // Build dropdown options from string[][] availableCategories
+  // Build dropdown options from string[][] availableCategories.
+  // PFC primaries are returned as enum values (e.g. "FOOD_AND_DRINK") — format them
+  // for display. Custom category names are plain strings and pass through unchanged.
   const categoryOptions = useMemo(() => {
+    const formatLabel = (s: string) => /^[A-Z_]+$/.test(s) ? formatPFCPrimary(s) : s
     return availableCategories.map((cat) => {
       const pfc_primary = cat[0] || '';
       const pfc_detailed = cat[1] || '';
-      const label = pfc_detailed ? `${pfc_primary} > ${pfc_detailed}` : pfc_primary;
+      const primaryLabel = formatLabel(pfc_primary);
+      const detailedLabel = pfc_detailed ? formatLabel(pfc_detailed) : '';
+      const label = detailedLabel ? `${primaryLabel} > ${detailedLabel}` : primaryLabel;
       const value = pfc_detailed ? `${pfc_primary}|${pfc_detailed}` : pfc_primary;
       return { value, label, pfc_primary, pfc_detailed };
     });

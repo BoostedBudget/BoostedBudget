@@ -46,7 +46,7 @@ describe('IncomeSourcePicker', () => {
       expect(options).not.toContain('manual');
     });
 
-    it('defaults to plaid_category type', () => {
+    it('defaults to pfc_primary type', () => {
       render(
         <IncomeSourcePicker
           availableCategories={mockCategories}
@@ -57,10 +57,10 @@ describe('IncomeSourcePicker', () => {
       );
 
       const typeSelector = screen.getByRole('combobox', { name: /source type/i }) as HTMLSelectElement;
-      expect(typeSelector.value).toBe('plaid_category');
+      expect(typeSelector.value).toBe('pfc_primary');
     });
 
-    it('shows category dropdown when plaid_category selected', () => {
+    it('shows category dropdown when pfc_primary selected', () => {
       render(
         <IncomeSourcePicker
           availableCategories={mockCategories}
@@ -119,9 +119,9 @@ describe('IncomeSourcePicker', () => {
       expect(screen.getByRole('option', { name: /transfer in/i })).toBeInTheDocument();
     });
 
-    it('filters out already selected categories', () => {
+    it('filters out already selected categories (pfc_primary type)', () => {
       const existingSources: IncomeSource[] = [
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
       ];
 
       render(
@@ -250,7 +250,7 @@ describe('IncomeSourcePicker', () => {
       await user.click(addButton);
 
       expect(mockOnAdd).toHaveBeenCalledWith({
-        type: 'plaid_category',
+        type: 'pfc_primary',
         value: 'INCOME',
       });
     });

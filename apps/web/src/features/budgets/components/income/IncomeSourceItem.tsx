@@ -8,7 +8,7 @@
 
 import { XIcon, TagIcon, DollarSignIcon, FolderIcon } from 'lucide-react';
 import type { IncomeSource } from '../../types';
-import { formatPlaidCategory } from '@/features/auto-categorization/utils/categoryUtils';
+import { formatPFCPrimary } from '@/shared/categories/formatPfc';
 import { Badge } from '@/components/ui/badge';
 
 export interface IncomeSourceItemProps {
@@ -31,8 +31,9 @@ function formatCurrency(value: string): string {
 
 function getDisplayValue(source: IncomeSource): string {
   switch (source.type) {
+    case 'pfc_primary':
     case 'plaid_category':
-      return formatPlaidCategory(source.value);
+      return formatPFCPrimary(source.value);
     case 'tag':
       return source.value;
     case 'manual':
@@ -42,6 +43,7 @@ function getDisplayValue(source: IncomeSource): string {
 
 function getIcon(type: IncomeSource['type']): React.ReactNode {
   switch (type) {
+    case 'pfc_primary':
     case 'plaid_category':
       return <FolderIcon className="w-4 h-4 text-muted-foreground" />;
     case 'tag':
