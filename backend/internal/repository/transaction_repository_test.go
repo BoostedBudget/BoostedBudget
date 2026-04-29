@@ -950,14 +950,7 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 	overrideKind := "pfc"
 	pfcPrimaryOverride := "GENERAL_MERCHANDISE"
 
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id", "source", "external_transaction_id",
-		"external_metadata", "amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel", "pending", "user_notes",
-		"created_at", "updated_at", "tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			txID, "user-123", "account-1", "item-1", "plaid", &extID,
 			nil, -50.00, now, nil, "Transaction 1", nil,
