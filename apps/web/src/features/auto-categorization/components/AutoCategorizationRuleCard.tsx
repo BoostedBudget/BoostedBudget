@@ -105,12 +105,26 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
         <div className="mb-3">
           <h4 className="m-0 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Actions</h4>
           <div className="flex flex-col gap-2">
-            {rule.target_category && rule.target_category.length > 0 && (
+            {rule.target_kind === 'pfc' && rule.target_pfc_primary && (
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-muted-foreground">Set category:</span>
                 <span className="text-foreground font-medium flex flex-wrap gap-1">
-                  {rule.target_category.join(' > ')}
+                  {rule.target_pfc_detailed
+                    ? `${rule.target_pfc_primary} › ${rule.target_pfc_detailed}`
+                    : rule.target_pfc_primary}
                 </span>
+              </div>
+            )}
+            {rule.target_kind === 'custom' && rule.target_custom_category_id && (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-muted-foreground">Set custom category:</span>
+                <span className="text-foreground font-medium">{rule.target_custom_category_id}</span>
+              </div>
+            )}
+            {rule.target_kind === 'clear' && (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-muted-foreground">Action:</span>
+                <span className="text-foreground font-medium">Clear category override</span>
               </div>
             )}
             {rule.target_tags && rule.target_tags.length > 0 && (

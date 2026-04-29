@@ -34,21 +34,26 @@ declare -a CATEGORIES=(
   "Travel" "Personal Care" "Recreation" "Subscriptions"
 )
 
-# Map user-facing category to Plaid primary category enum
-# Used to populate personal_finance_category JSONB field
+# Map user-facing category to PFC v2 primary enum (#1073: pfc_primary column).
+# Pass-through PFC v2 enums unchanged so scenarios with `pfc_primary: FOOD_AND_DRINK`
+# don't fall through to the default mapping (which would return GENERAL_MERCHANDISE).
 get_plaid_primary_category() {
   local category="$1"
   case "$category" in
-    "Food and Drink"|"Groceries") echo "FOOD_AND_DRINK" ;;
-    "Shopping") echo "SHOPPING" ;;
+    BANK_FEES|ENTERTAINMENT|FOOD_AND_DRINK|GENERAL_MERCHANDISE|GENERAL_SERVICES|GOVERNMENT_AND_NON_PROFIT|HOME_IMPROVEMENT|INCOME|LOAN_DISBURSEMENTS|LOAN_PAYMENTS|MEDICAL|OTHER|PERSONAL_CARE|RENT_AND_UTILITIES|TRANSFER_IN|TRANSFER_OUT|TRANSPORTATION|TRAVEL)
+      echo "$category"
+      return
+      ;;
+  esac
+  case "$category" in
+    "Food and Drink") echo "FOOD_AND_DRINK" ;;
+    "Groceries"|"Shopping") echo "GENERAL_MERCHANDISE" ;;
     "Transportation"|"Gas") echo "TRANSPORTATION" ;;
     "Entertainment"|"Recreation") echo "ENTERTAINMENT" ;;
-    "Healthcare") echo "HEALTHCARE" ;;
-    "Utilities") echo "UTILITIES" ;;
-    "Home") echo "HOME_IMPROVEMENT" ;;
+    "Healthcare") echo "MEDICAL" ;;
+    "Utilities"|"Home"|"Subscriptions") echo "RENT_AND_UTILITIES" ;;
     "Travel") echo "TRAVEL" ;;
     "Personal Care") echo "PERSONAL_CARE" ;;
-    "Subscriptions") echo "RENT_AND_UTILITIES" ;;
     "Income") echo "INCOME" ;;
     *) echo "GENERAL_MERCHANDISE" ;;
   esac
@@ -135,16 +140,16 @@ generate_fake_transaction() {
   # Escape SQL special characters
   local escaped_merchant=$(sql_escape "$merchant")
 
-  # Get Plaid primary category for personal_finance_category JSONB
-  local plaid_cat
-  plaid_cat=$(get_plaid_primary_category "$category")
+  # Map user-facing category → PFC v2 primary enum (pfc_primary column).
+  local pfc_primary
+  pfc_primary=$(get_plaid_primary_category "$category")
 
-  # Insert transaction
+  # Insert transaction (PFC v2 canonical, #1073)
   local sql="
     INSERT INTO transactions (
       id, user_id, account_id, linked_item_id, source,
       external_transaction_id, amount, date, authorized_date, name,
-      category, personal_finance_category, pending, created_at, updated_at
+      pfc_primary, pfc_confidence_level, pending, created_at, updated_at
     )
     VALUES (
       '$txn_id',
@@ -157,8 +162,8 @@ generate_fake_transaction() {
       '$date',
       '$date',
       '$escaped_merchant',
-      to_jsonb(ARRAY['$category']),
-      jsonb_build_object('primary', '$plaid_cat'),
+      '$pfc_primary',
+      'HIGH',
       $pending,
       NOW(),
       NOW()
@@ -228,16 +233,16 @@ insert_manual_transaction() {
   local escaped_name=$(sql_escape "$name")
   local escaped_notes=$(sql_escape "$user_notes")
 
-  # Get Plaid primary category for personal_finance_category JSONB
-  local plaid_cat
-  plaid_cat=$(get_plaid_primary_category "$category")
+  # Map user-facing category → PFC v2 primary enum (pfc_primary column).
+  local pfc_primary
+  pfc_primary=$(get_plaid_primary_category "$category")
 
-  # Build SQL with optional user_notes
+  # Build SQL with optional user_notes (PFC v2 canonical, #1073)
   local sql="
     INSERT INTO transactions (
       id, user_id, account_id, linked_item_id, source,
       external_transaction_id, amount, date, authorized_date, name,
-      category, personal_finance_category, pending, user_notes, created_at, updated_at
+      pfc_primary, pfc_confidence_level, pending, user_notes, created_at, updated_at
     )
     VALUES (
       '$txn_id',
@@ -250,8 +255,8 @@ insert_manual_transaction() {
       '$date',
       '$date',
       '$escaped_name',
-      to_jsonb(ARRAY['$category']),
-      jsonb_build_object('primary', '$plaid_cat'),
+      '$pfc_primary',
+      'HIGH',
       $pending,
       $([ -n "$user_notes" ] && echo "'$escaped_notes'" || echo "NULL"),
       NOW(),

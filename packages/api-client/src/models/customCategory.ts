@@ -36,7 +36,7 @@ export interface CustomCategory {
   icon?: string;
   id: string;
   name: string;
-  parent_category?: string;
+  parent_pfc_primary?: string;
   updated_at: string;
   usage_count: number;
   user_id: string;

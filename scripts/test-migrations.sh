@@ -396,16 +396,16 @@ VALUES
     ('00000000-0000-0000-0000-000000000022'::uuid, '00000000-0000-0000-0000-000000000012'::uuid, 'plaid-acc-002', 'Savings', 'High Yield Savings', 'depository', 'savings', NOW(), NOW()),
     ('00000000-0000-0000-0000-000000000023'::uuid, '00000000-0000-0000-0000-000000000013'::uuid, 'plaid-acc-003', 'Credit Card', 'Premium Rewards Card', 'credit', 'credit card', NOW(), NOW());
 
--- Transactions
-INSERT INTO transactions (id, account_id, external_transaction_id, amount, date, name, category, pending, created_at, updated_at)
+-- Transactions (PFC v2 canonical, #1073 — `category` column dropped in migration 000065)
+INSERT INTO transactions (id, account_id, external_transaction_id, amount, date, name, pfc_primary, pfc_detailed, pending, created_at, updated_at)
 VALUES
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000021'::uuid, 'txn-001', -50.00, '2025-11-01', 'Grocery Store', 'Food and Drink', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000021'::uuid, 'txn-002', -25.50, '2025-11-02', 'Gas Station', 'Transportation', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000021'::uuid, 'txn-003', 2500.00, '2025-11-05', 'Paycheck', 'Income', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000022'::uuid, 'txn-004', -100.00, '2025-11-03', 'Online Shopping', 'Shopping', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000022'::uuid, 'txn-005', 100.00, '2025-11-01', 'Transfer from Checking', 'Transfer', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000023'::uuid, 'txn-006', -200.00, '2025-11-04', 'Restaurant', 'Food and Drink', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000023'::uuid, 'txn-007', -75.00, '2025-11-06', 'Utilities', 'Bills', false, NOW(), NOW());
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000021'::uuid, 'txn-001', -50.00, '2025-11-01', 'Grocery Store', 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_GROCERIES', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000021'::uuid, 'txn-002', -25.50, '2025-11-02', 'Gas Station', 'TRANSPORTATION', 'TRANSPORTATION_GAS', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000021'::uuid, 'txn-003', 2500.00, '2025-11-05', 'Paycheck', 'INCOME', 'INCOME_WAGES', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000022'::uuid, 'txn-004', -100.00, '2025-11-03', 'Online Shopping', 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_ONLINE_MARKETPLACES', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000022'::uuid, 'txn-005', 100.00, '2025-11-01', 'Transfer from Checking', 'TRANSFER_IN', 'TRANSFER_IN_ACCOUNT_TRANSFER', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000023'::uuid, 'txn-006', -200.00, '2025-11-04', 'Restaurant', 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANTS', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000023'::uuid, 'txn-007', -75.00, '2025-11-06', 'Utilities', 'RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY', false, NOW(), NOW());
 EOF
 
     if [ $? -ne 0 ]; then

@@ -43,10 +43,12 @@ func createTestBudget(userID string) *domain.Budget {
 
 // createTestBudgetCategory creates a test budget category
 func createTestBudgetCategory(budgetID string) *domain.BudgetCategory {
+	pfcPrimary := "FOOD_AND_DRINK"
 	return &domain.BudgetCategory{
 		ID:              uuid.New().String(),
 		BudgetID:        budgetID,
-		Category:        []string{"Food & Drink", "Groceries"},
+		CategoryKind:    "pfc",
+		PFCPrimary:      &pfcPrimary,
 		AllocatedAmount: 300.00,
 		SpentAmount:     150.00,
 	}
@@ -155,24 +157,28 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 			0.00,   // expected_income (Issue #1048)
 		))
 
-	// Mock the categories query (Issue #491: added tags, match_logic)
+	// Mock the categories query (PFC v2: category_kind + discriminated union fields)
 	categoryColumns := []string{
-		"id", "budget_id", "category", "allocated_amount", "spent_amount",
-		"created_at", "updated_at", "tags", "match_logic",
+		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed", "custom_category_id",
+		"allocated_amount", "spent_amount", "created_at", "updated_at", "tags", "match_logic",
 	}
 
+	pfcPrimary := "FOOD_AND_DRINK"
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(budgetID).
 		WillReturnRows(pgxmock.NewRows(categoryColumns).AddRow(
 			uuid.New().String(),
 			budgetID,
-			`["Food & Drink", "Groceries"]`,
+			"pfc",
+			&pfcPrimary,
+			nil, // pfc_detailed
+			nil, // custom_category_id
 			300.00,
 			150.00,
 			now,
 			now,
-			`[]`,            // tags (Issue #491)
-			"category_only", // match_logic (Issue #491)
+			`[]`,            // tags
+			"category_only", // match_logic
 		))
 
 	budget, err := repo.GetByID(ctx, budgetID)
@@ -454,17 +460,19 @@ func TestBudgetRepository_CreateCategory(t *testing.T) {
 	budgetID := uuid.New().String()
 	category := createTestBudgetCategory(budgetID)
 
-	// Issue #491: added tags, match_logic
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO budget_categories`)).WithArgs(
-		pgxmock.AnyArg(), // id
-		category.BudgetID,
-		pgxmock.AnyArg(), // category JSON
-		category.AllocatedAmount,
-		category.SpentAmount,
-		pgxmock.AnyArg(), // created_at
-		pgxmock.AnyArg(), // updated_at
-		pgxmock.AnyArg(), // tags JSON
-		pgxmock.AnyArg(), // match_logic
+		pgxmock.AnyArg(),         // id
+		category.BudgetID,        // budget_id
+		category.CategoryKind,    // category_kind
+		category.PFCPrimary,      // pfc_primary
+		category.PFCDetailed,     // pfc_detailed
+		category.CustomCategoryID, // custom_category_id
+		category.AllocatedAmount, // allocated_amount
+		category.SpentAmount,     // spent_amount
+		pgxmock.AnyArg(),         // created_at
+		pgxmock.AnyArg(),         // updated_at
+		pgxmock.AnyArg(),         // tags JSON
+		pgxmock.AnyArg(),         // match_logic
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.CreateCategory(ctx, category)
@@ -483,43 +491,50 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 	budgetID := uuid.New().String()
 	now := time.Now()
 
-	// Issue #491: added tags, match_logic
 	columns := []string{
-		"id", "budget_id", "category", "allocated_amount", "spent_amount",
+		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
+		"custom_category_id", "allocated_amount", "spent_amount",
 		"created_at", "updated_at", "tags", "match_logic",
 	}
 
+	pfcPrimary := "FOOD_AND_DRINK"
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(budgetID).
 		WillReturnRows(pgxmock.NewRows(columns).
 			AddRow(
 				uuid.New().String(),
 				budgetID,
-				`["Food & Drink", "Groceries"]`,
+				"pfc",
+				&pfcPrimary,
+				nil,
+				nil,
 				300.00,
 				150.00,
 				now,
 				now,
-				`[]`,            // tags
-				"category_only", // match_logic
+				`[]`,
+				"category_only",
 			).
 			AddRow(
 				uuid.New().String(),
 				budgetID,
-				`["Food & Drink", "Coffee"]`,
+				"pfc",
+				&pfcPrimary,
+				nil,
+				nil,
 				50.00,
 				25.00,
 				now,
 				now,
-				`[]`,            // tags
-				"category_only", // match_logic
+				`[]`,
+				"category_only",
 			))
 
 	categories, err := repo.GetCategoriesByBudgetID(ctx, budgetID)
 
 	assert.NoError(t, err)
 	assert.Len(t, categories, 2)
-	assert.Equal(t, []string{"Food & Drink", "Groceries"}, categories[0].Category)
+	assert.Equal(t, "pfc", categories[0].CategoryKind)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -533,15 +548,17 @@ func TestBudgetRepository_UpdateCategory(t *testing.T) {
 	category.ID = uuid.New().String()
 	category.AllocatedAmount = 400.00
 
-	// Issue #491: added tags, match_logic
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
 		WithArgs(
-			pgxmock.AnyArg(), // category JSON
-			category.AllocatedAmount,
-			category.SpentAmount,
-			pgxmock.AnyArg(), // updated_at
-			pgxmock.AnyArg(), // tags JSON
-			pgxmock.AnyArg(), // match_logic
+			category.CategoryKind,     // category_kind
+			category.PFCPrimary,       // pfc_primary
+			category.PFCDetailed,      // pfc_detailed
+			category.CustomCategoryID, // custom_category_id
+			category.AllocatedAmount,  // allocated_amount
+			category.SpentAmount,      // spent_amount
+			pgxmock.AnyArg(),          // updated_at
+			pgxmock.AnyArg(),          // tags JSON
+			pgxmock.AnyArg(),          // match_logic
 			category.ID,
 			category.BudgetID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -561,15 +578,17 @@ func TestBudgetRepository_UpdateCategory_NotFound(t *testing.T) {
 	category := createTestBudgetCategory(uuid.New().String())
 	category.ID = uuid.New().String()
 
-	// Issue #491: added tags, match_logic
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
 		WithArgs(
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
-			pgxmock.AnyArg(), // tags JSON
-			pgxmock.AnyArg(), // match_logic
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
 			category.ID,
 			category.BudgetID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
@@ -658,41 +677,48 @@ func TestBudgetRepository_DeleteCategory_NotFound(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestBudgetRepository_GetCategoriesMatchingTransaction tests finding matching categories
+// TestBudgetRepository_GetCategoriesMatchingTransaction tests finding matching categories by PFC primary
 func TestBudgetRepository_GetCategoriesMatchingTransaction(t *testing.T) {
 	mock, repo := setupBudgetMockDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
 	userID := uuid.New().String()
-	transactionCategory := []string{"Food & Drink", "Coffee"}
+	pfcPrimary := "FOOD_AND_DRINK"
+	effective := &domain.EffectiveCategory{
+		Kind:       domain.EffectiveCategoryKindPFC,
+		PFCPrimary: &pfcPrimary,
+	}
 	now := time.Now()
 
-	// Issue #491: added tags, match_logic columns
 	columns := []string{
-		"id", "budget_id", "category", "allocated_amount", "spent_amount",
+		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
+		"custom_category_id", "allocated_amount", "spent_amount",
 		"created_at", "updated_at", "tags", "match_logic",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT bc.id`)).
-		WithArgs(userID, pgxmock.AnyArg()). // userID and category JSON
+		WithArgs(userID, &pfcPrimary).
 		WillReturnRows(pgxmock.NewRows(columns).AddRow(
 			uuid.New().String(),
 			uuid.New().String(),
-			`["Food & Drink", "Coffee"]`,
+			"pfc",
+			&pfcPrimary,
+			nil,
+			nil,
 			100.00,
 			50.00,
 			now,
 			now,
-			`[]`,             // tags JSON
-			"category_only", // match_logic
+			`[]`,
+			"category_only",
 		))
 
-	categories, err := repo.GetCategoriesMatchingTransaction(ctx, userID, transactionCategory)
+	categories, err := repo.GetCategoriesMatchingTransaction(ctx, userID, effective)
 
 	assert.NoError(t, err)
 	assert.Len(t, categories, 1)
-	assert.Equal(t, []string{"Food & Drink", "Coffee"}, categories[0].Category)
+	assert.Equal(t, "pfc", categories[0].CategoryKind)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -703,19 +729,23 @@ func TestBudgetRepository_GetCategoriesMatchingTransaction_NoMatches(t *testing.
 
 	ctx := context.Background()
 	userID := uuid.New().String()
-	transactionCategory := []string{"Entertainment"}
+	pfcPrimary := "ENTERTAINMENT"
+	effective := &domain.EffectiveCategory{
+		Kind:       domain.EffectiveCategoryKindPFC,
+		PFCPrimary: &pfcPrimary,
+	}
 
-	// Issue #491: added tags, match_logic columns
 	columns := []string{
-		"id", "budget_id", "category", "allocated_amount", "spent_amount",
+		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
+		"custom_category_id", "allocated_amount", "spent_amount",
 		"created_at", "updated_at", "tags", "match_logic",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT bc.id`)).
-		WithArgs(userID, pgxmock.AnyArg()).
+		WithArgs(userID, &pfcPrimary).
 		WillReturnRows(pgxmock.NewRows(columns))
 
-	categories, err := repo.GetCategoriesMatchingTransaction(ctx, userID, transactionCategory)
+	categories, err := repo.GetCategoriesMatchingTransaction(ctx, userID, effective)
 
 	assert.NoError(t, err)
 	assert.Empty(t, categories)
@@ -897,10 +927,10 @@ func TestBudgetRepository_GetByID_ReturnsExpectedIncome(t *testing.T) {
 			500.00, // expected_income (#1048)
 		))
 
-	// Mock categories query
+	// Mock categories query (PFC v2 columns)
 	categoryColumns := []string{
-		"id", "budget_id", "category", "allocated_amount", "spent_amount",
-		"created_at", "updated_at", "tags", "match_logic",
+		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed", "custom_category_id",
+		"allocated_amount", "spent_amount", "created_at", "updated_at", "tags", "match_logic",
 	}
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(budgetID).

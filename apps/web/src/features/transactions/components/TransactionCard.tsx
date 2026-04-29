@@ -3,8 +3,8 @@ import type { Account } from '../../accounts/types'
 import { ReadOnlyGuard, useReadOnly } from '@/auth'
 import { TransactionBudgetBadge } from '../../budgets/components/transaction-link'
 import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetMatcher'
-import { getCategoryColor } from '@/lib/category-colors'
-import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
+import { getCategoryColor } from '@/shared/categories/pfcColors'
+import { getEffectiveCategory, getEffectiveCategoryLabel } from '@/shared/categories/getEffectiveCategory'
 import { ArrowUpRight, ArrowDownRight, Clock, Pencil, Tag } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -104,7 +104,6 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
     amount,
     date,
     authorized_date,
-    original_category,
     tags,
     pending,
   } = transaction
@@ -124,7 +123,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
   const displayName = merchant_name || name
 
   const effective = getEffectiveCategory(transaction)
-  const categoryLabel = effective.length > 0 ? effective[0] : 'Uncategorized'
+  const categoryLabel = getEffectiveCategoryLabel(effective)
 
   // Check if should show warning indicator — no warning when PFC provides a fallback
   const showUncategorizedWarning = categoryLabel === 'Uncategorized'
@@ -166,7 +165,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
       )}
       data-transaction-id={id}
       data-pending={pending}
-      data-original-category={original_category || undefined}
+      data-pfc-primary={transaction.pfc_primary || undefined}
       aria-label={ariaLabel}
       onClick={onEdit ? handleClick : undefined}
       onKeyDown={onEdit ? handleKeyDown : undefined}
@@ -191,11 +190,19 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
           <div className="transaction-card__meta flex gap-3 text-sm text-muted-foreground mt-1">
             <TransactionBudgetBadge match={budgetMatch} />
             <span className="transaction-card__category inline-flex items-center gap-1">
-              {/* Issue #531: Category color dot */}
-              <span
-                className="transaction-card__category-dot w-2 h-2 rounded-full shrink-0 mr-1"
-                style={{ backgroundColor: categoryColor }}
-              />
+              {transaction.pfc_category_icon_url ? (
+                <img
+                  src={transaction.pfc_category_icon_url}
+                  alt=""
+                  className="transaction-card__category-icon w-4 h-4 shrink-0 mr-0.5"
+                  aria-hidden="true"
+                />
+              ) : (
+                <span
+                  className="transaction-card__category-dot w-2 h-2 rounded-full shrink-0 mr-1"
+                  style={{ backgroundColor: categoryColor }}
+                />
+              )}
               {showUncategorizedWarning && (
                 <span className="transaction-card__uncategorized-warning text-xs leading-none" title="Uncategorized">⚠️</span>
               )}

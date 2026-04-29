@@ -23,10 +23,11 @@ func TestRuleEngine_EvaluateRules_FirstMatchWins_Category(t *testing.T) {
 			Conditions: []domain.RuleCondition{
 				{Type: domain.ConditionMerchantContains, Value: "starbucks"},
 			},
-			ConditionLogic: "AND",
-			TargetCategory: []string{"Food & Drink", "Coffee"},
-			TagBehavior:    "add",
-			Source:         "manual",
+			ConditionLogic:  "AND",
+			TargetKind:      strPtr("pfc"),
+			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+			TagBehavior:     "add",
+			Source:          "manual",
 		},
 		{
 			ID:       "rule-2",
@@ -36,10 +37,11 @@ func TestRuleEngine_EvaluateRules_FirstMatchWins_Category(t *testing.T) {
 			Conditions: []domain.RuleCondition{
 				{Type: domain.ConditionMerchantContains, Value: "starbucks"},
 			},
-			ConditionLogic: "AND",
-			TargetCategory: []string{"Expenses", "Premium Coffee"},
-			TagBehavior:    "add",
-			Source:         "manual",
+			ConditionLogic:  "AND",
+			TargetKind:      strPtr("pfc"),
+			TargetPFCPrimary: strPtr("GENERAL_MERCHANDISE"),
+			TagBehavior:     "add",
+			Source:          "manual",
 		},
 	}
 
@@ -51,8 +53,11 @@ func TestRuleEngine_EvaluateRules_FirstMatchWins_Category(t *testing.T) {
 	}
 
 	// Higher priority rule should win for category
-	if len(result.Category) != 2 || result.Category[0] != "Expenses" {
-		t.Errorf("Expected category [Expenses, Premium Coffee], got %v", result.Category)
+	if result.TargetKind == nil || *result.TargetKind != "pfc" {
+		t.Errorf("Expected TargetKind = pfc, got %v", result.TargetKind)
+	}
+	if result.TargetPFCPrimary == nil || *result.TargetPFCPrimary != "GENERAL_MERCHANDISE" {
+		t.Errorf("Expected TargetPFCPrimary = GENERAL_MERCHANDISE, got %v", result.TargetPFCPrimary)
 	}
 
 	if result.CategoryRuleID != "rule-2" {
@@ -131,10 +136,11 @@ func TestRuleEngine_EvaluateRules_ConditionLogic_AND(t *testing.T) {
 				{Type: domain.ConditionMerchantContains, Value: "starbucks"},
 				{Type: domain.ConditionAmountGreaterThan, Value: float64(20)},
 			},
-			ConditionLogic: "AND",
-			TargetCategory: []string{"Premium Coffee"},
-			TagBehavior:    "add",
-			Source:         "manual",
+			ConditionLogic:  "AND",
+			TargetKind:      strPtr("pfc"),
+			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+			TagBehavior:     "add",
+			Source:          "manual",
 		},
 	}
 
@@ -147,8 +153,8 @@ func TestRuleEngine_EvaluateRules_ConditionLogic_AND(t *testing.T) {
 	}
 
 	// Rule should NOT match (AND requires all conditions)
-	if result.Category != nil {
-		t.Errorf("Expected no category match, got %v", result.Category)
+	if result.TargetKind != nil {
+		t.Errorf("Expected no category match, got TargetKind=%v", result.TargetKind)
 	}
 }
 
@@ -166,10 +172,11 @@ func TestRuleEngine_EvaluateRules_ConditionLogic_OR(t *testing.T) {
 				{Type: domain.ConditionMerchantContains, Value: "starbucks"},
 				{Type: domain.ConditionMerchantContains, Value: "tea"},
 			},
-			ConditionLogic: "OR",
-			TargetCategory: []string{"Beverages"},
-			TagBehavior:    "add",
-			Source:         "manual",
+			ConditionLogic:  "OR",
+			TargetKind:      strPtr("pfc"),
+			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+			TagBehavior:     "add",
+			Source:          "manual",
 		},
 	}
 
@@ -181,8 +188,11 @@ func TestRuleEngine_EvaluateRules_ConditionLogic_OR(t *testing.T) {
 	}
 
 	// Rule should match (OR only requires one condition)
-	if len(result.Category) != 1 || result.Category[0] != "Beverages" {
-		t.Errorf("Expected category [Beverages], got %v", result.Category)
+	if result.TargetKind == nil || *result.TargetKind != "pfc" {
+		t.Errorf("Expected TargetKind = pfc, got %v", result.TargetKind)
+	}
+	if result.TargetPFCPrimary == nil || *result.TargetPFCPrimary != "FOOD_AND_DRINK" {
+		t.Errorf("Expected TargetPFCPrimary = FOOD_AND_DRINK, got %v", result.TargetPFCPrimary)
 	}
 }
 
@@ -198,10 +208,11 @@ func TestRuleEngine_EvaluateRules_DisabledRulesSkipped(t *testing.T) {
 			Conditions: []domain.RuleCondition{
 				{Type: domain.ConditionMerchantContains, Value: "starbucks"},
 			},
-			ConditionLogic: "AND",
-			TargetCategory: []string{"Should Not Match"},
-			TagBehavior:    "add",
-			Source:         "manual",
+			ConditionLogic:  "AND",
+			TargetKind:      strPtr("pfc"),
+			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+			TagBehavior:     "add",
+			Source:          "manual",
 		},
 	}
 
@@ -213,8 +224,8 @@ func TestRuleEngine_EvaluateRules_DisabledRulesSkipped(t *testing.T) {
 	}
 
 	// Disabled rule should not match
-	if result.Category != nil {
-		t.Errorf("Expected no category match for disabled rule, got %v", result.Category)
+	if result.TargetKind != nil {
+		t.Errorf("Expected no category match for disabled rule, got TargetKind=%v", result.TargetKind)
 	}
 }
 
@@ -230,10 +241,11 @@ func TestRuleEngine_EvaluateRules_NoMatchingRules(t *testing.T) {
 			Conditions: []domain.RuleCondition{
 				{Type: domain.ConditionMerchantContains, Value: "pizza"},
 			},
-			ConditionLogic: "AND",
-			TargetCategory: []string{"Food"},
-			TagBehavior:    "add",
-			Source:         "manual",
+			ConditionLogic:  "AND",
+			TargetKind:      strPtr("pfc"),
+			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+			TagBehavior:     "add",
+			Source:          "manual",
 		},
 	}
 
@@ -245,8 +257,8 @@ func TestRuleEngine_EvaluateRules_NoMatchingRules(t *testing.T) {
 	}
 
 	// No rules should match
-	if result.Category != nil {
-		t.Errorf("Expected no category match, got %v", result.Category)
+	if result.TargetKind != nil {
+		t.Errorf("Expected no category match, got TargetKind=%v", result.TargetKind)
 	}
 	if len(result.Tags) != 0 {
 		t.Errorf("Expected no tags, got %v", result.Tags)
@@ -269,11 +281,12 @@ func TestRuleEngine_EvaluateRules_CategoryAndTags(t *testing.T) {
 			Conditions: []domain.RuleCondition{
 				{Type: domain.ConditionMerchantContains, Value: "starbucks"},
 			},
-			ConditionLogic: "AND",
-			TargetCategory: []string{"Food & Drink", "Coffee"},
-			TargetTags:     []string{"coffee", "recurring"},
-			TagBehavior:    "add",
-			Source:         "manual",
+			ConditionLogic:  "AND",
+			TargetKind:      strPtr("pfc"),
+			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+			TargetTags:      []string{"coffee", "recurring"},
+			TagBehavior:     "add",
+			Source:          "manual",
 		},
 	}
 
@@ -285,8 +298,8 @@ func TestRuleEngine_EvaluateRules_CategoryAndTags(t *testing.T) {
 	}
 
 	// Should have both category and tags
-	if len(result.Category) != 2 {
-		t.Errorf("Expected 2-level category, got %v", result.Category)
+	if result.TargetKind == nil || *result.TargetKind != "pfc" {
+		t.Errorf("Expected TargetKind = pfc, got %v", result.TargetKind)
 	}
 	if len(result.Tags) != 2 {
 		t.Errorf("Expected 2 tags, got %v", result.Tags)
@@ -349,7 +362,7 @@ func TestRuleEngine_EvaluateRules_EmptyRules(t *testing.T) {
 		t.Fatalf("EvaluateRules() error = %v", err)
 	}
 
-	if result.Category != nil || len(result.Tags) != 0 {
+	if result.TargetKind != nil || len(result.Tags) != 0 {
 		t.Errorf("Expected empty result for empty rules")
 	}
 }
@@ -460,12 +473,12 @@ func TestRuleEngine_RuleMatches(t *testing.T) {
 }
 
 // TestRuleEngine_EvaluateRules_ClearCategory_Uncategorized tests that rules with
-// empty array TargetCategory correctly set result.Category to empty array.
-// Issue #404: Empty array [] represents "clear category" / "uncategorized".
+// TargetKind="clear" correctly signal a clear-category action.
+// Issue #404: TargetKind="clear" represents "clear category" / "uncategorized".
 func TestRuleEngine_EvaluateRules_ClearCategory_Uncategorized(t *testing.T) {
 	engine := NewRuleEngine()
 
-	// Rule with empty TargetCategory = "clear to uncategorized"
+	// Rule with TargetKind="clear" = "clear to uncategorized"
 	rules := []*domain.CategorizationRule{
 		{
 			ID:       "rule-clear",
@@ -476,7 +489,7 @@ func TestRuleEngine_EvaluateRules_ClearCategory_Uncategorized(t *testing.T) {
 				{Type: domain.ConditionMerchantContains, Value: "refund"},
 			},
 			ConditionLogic: "AND",
-			TargetCategory: []string{}, // Empty array = clear/uncategorized
+			TargetKind:     strPtr("clear"), // clear to uncategorized
 			TagBehavior:    "add",
 			Source:         "manual",
 		},
@@ -494,13 +507,9 @@ func TestRuleEngine_EvaluateRules_ClearCategory_Uncategorized(t *testing.T) {
 		t.Errorf("Expected 1 matched rule, got %d", len(result.MatchedRuleIDs))
 	}
 
-	// Category should be set to empty array (not nil)
-	if result.Category == nil {
-		t.Error("Expected Category to be empty array [], got nil")
-	}
-
-	if len(result.Category) != 0 {
-		t.Errorf("Expected empty Category [], got %v", result.Category)
+	// TargetKind should be set to "clear"
+	if result.TargetKind == nil || *result.TargetKind != "clear" {
+		t.Errorf("Expected TargetKind = clear, got %v", result.TargetKind)
 	}
 
 	// CategoryRuleID should be set
@@ -524,7 +533,7 @@ func TestRuleEngine_EvaluateRules_ClearCategory_FirstMatchWins(t *testing.T) {
 				{Type: domain.ConditionMerchantContains, Value: "amazon"},
 			},
 			ConditionLogic: "AND",
-			TargetCategory: []string{}, // Clear to uncategorized
+			TargetKind:     strPtr("clear"), // Clear to uncategorized
 			TagBehavior:    "add",
 			Source:         "manual",
 		},
@@ -536,10 +545,11 @@ func TestRuleEngine_EvaluateRules_ClearCategory_FirstMatchWins(t *testing.T) {
 			Conditions: []domain.RuleCondition{
 				{Type: domain.ConditionMerchantContains, Value: "amazon"},
 			},
-			ConditionLogic: "AND",
-			TargetCategory: []string{"Shopping"},
-			TagBehavior:    "add",
-			Source:         "manual",
+			ConditionLogic:  "AND",
+			TargetKind:      strPtr("pfc"),
+			TargetPFCPrimary: strPtr("GENERAL_MERCHANDISE"),
+			TagBehavior:     "add",
+			Source:          "manual",
 		},
 	}
 
@@ -551,12 +561,8 @@ func TestRuleEngine_EvaluateRules_ClearCategory_FirstMatchWins(t *testing.T) {
 	}
 
 	// Higher priority "clear" rule should win
-	if result.Category == nil {
-		t.Error("Expected Category to be empty array [], got nil")
-	}
-
-	if len(result.Category) != 0 {
-		t.Errorf("Expected empty Category [] from clear rule, got %v", result.Category)
+	if result.TargetKind == nil || *result.TargetKind != "clear" {
+		t.Errorf("Expected TargetKind = clear from high-priority rule, got %v", result.TargetKind)
 	}
 
 	if result.CategoryRuleID != "rule-clear" {

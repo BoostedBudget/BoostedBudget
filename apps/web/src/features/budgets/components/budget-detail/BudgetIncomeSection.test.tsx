@@ -213,7 +213,28 @@ describe('BudgetIncomeSection', () => {
       expect(container.querySelector('.income-section__sources')).not.toBeInTheDocument();
     });
 
-    it('should show source type indicator for plaid_category sources', () => {
+    it('should show source type indicator for pfc_primary sources', () => {
+      const pfcSources: IncomeSource[] = [
+        {
+          type: 'pfc_primary',
+          value: 'INCOME',
+          description: 'Payroll deposits',
+        },
+      ];
+
+      render(
+        <BudgetIncomeSection
+          expectedIncome={5000}
+          actualIncome={5000}
+          incomeSources={pfcSources}
+          currencyCode="USD"
+        />
+      );
+
+      expect(screen.getByText(/auto-tracked/i)).toBeInTheDocument();
+    });
+
+    it('should show source type indicator for plaid_category sources (backward compat)', () => {
       const plaidSources: IncomeSource[] = [
         {
           type: 'plaid_category',

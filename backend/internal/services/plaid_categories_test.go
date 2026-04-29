@@ -6,31 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestPFCToCategoryArray_PrimaryAndDetailed(t *testing.T) {
-	result := PFCToCategoryArray("FOOD_AND_DRINK", "FOOD_AND_DRINK_FAST_FOOD")
-	assert.Equal(t, []string{"Food And Drink", "Fast Food"}, result)
-}
-
-func TestPFCToCategoryArray_PrimaryOnly(t *testing.T) {
-	result := PFCToCategoryArray("TRANSPORTATION", "")
-	assert.Equal(t, []string{"Transportation"}, result)
-}
-
-func TestPFCToCategoryArray_EmptyPrimary_ReturnsNil(t *testing.T) {
-	result := PFCToCategoryArray("", "FOOD_AND_DRINK_FAST_FOOD")
-	assert.Nil(t, result)
-}
-
-func TestPFCToCategoryArray_BothEmpty_ReturnsNil(t *testing.T) {
-	result := PFCToCategoryArray("", "")
-	assert.Nil(t, result)
-}
-
-func TestPFCToCategoryArray_UnknownPrimary_TitleCaseFallback(t *testing.T) {
-	result := PFCToCategoryArray("SOME_NEW_CATEGORY", "SOME_NEW_CATEGORY_DETAIL")
-	assert.Equal(t, "Some New Category", result[0])
-	assert.Equal(t, "Detail", result[1])
-}
 
 func TestPFCPrimaryDisplayName_CuratedValues(t *testing.T) {
 	cases := map[string]string{

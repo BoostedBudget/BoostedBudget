@@ -250,82 +250,82 @@ BEGIN
     -- Clear existing test transactions for this user
     DELETE FROM transactions WHERE user_id = v_user_id AND source = 'plaid' AND external_transaction_id LIKE 'e2e-%';
 
-    -- Insert diverse transactions for testing
+    -- Insert diverse transactions for testing (PFC v2 canonical, #1073)
     INSERT INTO transactions (
         user_id, account_id, linked_item_id, source, external_transaction_id,
-        amount, date, name, merchant_name, category, payment_channel, pending,
+        amount, date, name, merchant_name, pfc_primary, pfc_detailed, payment_channel, pending,
         tags, category_source
     ) VALUES
     -- Groceries
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-001',
      -125.50, CURRENT_DATE - INTERVAL '1 day', 'Whole Foods Market', 'Whole Foods',
-     '["Food and Drink", "Groceries"]'::jsonb, 'in store', false,
+     'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_GROCERIES', 'in store', false,
      '["groceries", "essentials"]'::jsonb, 'plaid'),
 
     -- Restaurants
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-002',
      -45.00, CURRENT_DATE - INTERVAL '2 days', 'Chipotle Mexican Grill', 'Chipotle',
-     '["Food and Drink", "Restaurants"]'::jsonb, 'in store', false,
+     'FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANTS', 'in store', false,
      '["dining"]'::jsonb, 'plaid'),
 
     -- Online Shopping
     (v_user_id, v_credit_id, v_linked_item_id, 'plaid', 'e2e-txn-003',
      -89.99, CURRENT_DATE - INTERVAL '3 days', 'Amazon.com', 'Amazon',
-     '["Shops", "Online Marketplaces"]'::jsonb, 'online', false,
+     'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_ONLINE_MARKETPLACES', 'online', false,
      '["shopping"]'::jsonb, 'plaid'),
 
     -- Gas
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-004',
      -55.00, CURRENT_DATE - INTERVAL '4 days', 'Shell Gas Station', 'Shell',
-     '["Travel", "Gas Stations"]'::jsonb, 'in store', false,
+     'TRANSPORTATION', 'TRANSPORTATION_GAS', 'in store', false,
      '["transportation"]'::jsonb, 'plaid'),
 
     -- Paycheck (income)
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-005',
      3500.00, CURRENT_DATE - INTERVAL '7 days', 'ACME Corp Payroll', 'ACME Corp',
-     '["Transfer", "Payroll"]'::jsonb, 'other', false,
+     'INCOME', 'INCOME_WAGES', 'other', false,
      '["income", "salary"]'::jsonb, 'plaid'),
 
     -- Utilities
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-006',
      -120.00, CURRENT_DATE - INTERVAL '10 days', 'Electric Company', 'Electric Co',
-     '["Service", "Utilities"]'::jsonb, 'online', false,
+     'RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY', 'online', false,
      '["bills", "utilities"]'::jsonb, 'plaid'),
 
     -- Subscription
     (v_user_id, v_credit_id, v_linked_item_id, 'plaid', 'e2e-txn-007',
      -15.99, CURRENT_DATE - INTERVAL '12 days', 'Netflix', 'Netflix',
-     '["Service", "Subscription"]'::jsonb, 'online', false,
+     'ENTERTAINMENT', 'ENTERTAINMENT_TV_AND_MOVIES', 'online', false,
      '["entertainment", "subscriptions"]'::jsonb, 'plaid'),
 
     -- Coffee Shop
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-008',
      -6.50, CURRENT_DATE - INTERVAL '1 day', 'Starbucks', 'Starbucks',
-     '["Food and Drink", "Coffee Shop"]'::jsonb, 'in store', false,
+     'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE', 'in store', false,
      '["coffee"]'::jsonb, 'plaid'),
 
     -- Transfer to Savings
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-009',
      -500.00, CURRENT_DATE - INTERVAL '15 days', 'Transfer to Savings', NULL,
-     '["Transfer", "Internal Account Transfer"]'::jsonb, 'other', false,
+     'TRANSFER_OUT', 'TRANSFER_OUT_SAVINGS', 'other', false,
      '["savings"]'::jsonb, 'plaid'),
 
     -- Credit Card Payment
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-010',
      -250.00, CURRENT_DATE - INTERVAL '5 days', 'Credit Card Payment', NULL,
-     '["Transfer", "Credit Card"]'::jsonb, 'other', false,
+     'LOAN_PAYMENTS', 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT', 'other', false,
      '["bills"]'::jsonb, 'plaid'),
 
     -- Pending Transaction
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-011',
      -35.00, CURRENT_DATE, 'Uber Eats', 'Uber Eats',
-     '["Food and Drink", "Restaurants"]'::jsonb, 'online', true,
+     'FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANTS', 'online', true,
      '["dining"]'::jsonb, 'plaid'),
 
     -- Healthcare
     (v_user_id, v_credit_id, v_linked_item_id, 'plaid', 'e2e-txn-012',
      -75.00, CURRENT_DATE - INTERVAL '20 days', 'CVS Pharmacy', 'CVS',
-     '["Healthcare", "Pharmacies"]'::jsonb, 'in store', false,
+     'MEDICAL', 'MEDICAL_PHARMACIES_AND_SUPPLEMENTS', 'in store', false,
      '["health"]'::jsonb, 'plaid');
 
     -- =============================================================================
@@ -353,11 +353,11 @@ BEGIN
     -- =============================================================================
     -- Step 6: Create custom categories
     -- =============================================================================
-    INSERT INTO custom_categories (user_id, name, parent_category, icon, color, usage_count)
+    INSERT INTO custom_categories (user_id, name, parent_pfc_primary, icon, color, usage_count)
     VALUES
-        (v_user_id, 'Work Expenses', 'Transfer', 'briefcase', '#607D8B', 0),
-        (v_user_id, 'Side Hustle', 'Transfer', 'trending-up', '#00BCD4', 0),
-        (v_user_id, 'Pet Supplies', 'Shops', 'heart', '#E91E63', 0)
+        (v_user_id, 'Work Expenses', 'GENERAL_SERVICES', 'briefcase', '#607D8B', 0),
+        (v_user_id, 'Side Hustle', 'INCOME', 'trending-up', '#00BCD4', 0),
+        (v_user_id, 'Pet Supplies', 'GENERAL_MERCHANDISE', 'heart', '#E91E63', 0)
     ON CONFLICT (user_id, name) DO NOTHING;
 
     RAISE NOTICE 'E2E test data seeded successfully for user %', v_user_id;

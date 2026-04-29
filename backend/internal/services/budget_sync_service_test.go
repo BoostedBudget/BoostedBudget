@@ -308,8 +308,8 @@ func TestRecalculateBudget_Success(t *testing.T) {
 	}
 
 	categories := []domain.BudgetCategory{
-		{ID: "cat-1", BudgetID: "budget-123", Category: []string{"Food"}},
-		{ID: "cat-2", BudgetID: "budget-123", Category: []string{"Transport"}},
+		{ID: "cat-1", BudgetID: "budget-123", CategoryKind: "pfc", PFCPrimary: ptrStr("FOOD_AND_DRINK")},
+		{ID: "cat-2", BudgetID: "budget-123", CategoryKind: "pfc", PFCPrimary: ptrStr("TRANSPORTATION")},
 	}
 
 	// Setup expectations - use mock.Anything for time parameters since they depend on time.Now()
@@ -375,8 +375,8 @@ func TestRecalculateBudget_CategoryError(t *testing.T) {
 	}
 
 	categories := []domain.BudgetCategory{
-		{ID: "cat-1", BudgetID: "budget-123", Category: []string{"Food"}},
-		{ID: "cat-2", BudgetID: "budget-123", Category: []string{"Transport"}},
+		{ID: "cat-1", BudgetID: "budget-123", CategoryKind: "pfc", PFCPrimary: ptrStr("FOOD_AND_DRINK")},
+		{ID: "cat-2", BudgetID: "budget-123", CategoryKind: "pfc", PFCPrimary: ptrStr("TRANSPORTATION")},
 	}
 
 	mockIncomeCalc.On("CalculateBudgetIncome", ctx, budget, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(5000.0, nil)

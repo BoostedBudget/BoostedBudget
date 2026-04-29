@@ -21,8 +21,8 @@ type MockTransactionStatsCalculator struct {
 	mock.Mock
 }
 
-func (m *MockTransactionStatsCalculator) GetMatchingTransactionStats(ctx context.Context, userID string, categories [][]string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) {
-	args := m.Called(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+func (m *MockTransactionStatsCalculator) GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) {
+	args := m.Called(ctx, userID, categoryKind, pfcPrimary, pfcDetailed, customCategoryID, tags, matchLogic, startDate, endDate)
 	return args.Int(0), args.Get(1).(float64), args.Error(2)
 }
 
@@ -34,56 +34,23 @@ func TestCategoryPreviewService_PreviewCategoryMatches_Success(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-123"
 	req := &domain.CategoryPreviewRequest{
-		Categories: [][]string{{"Food and Drink", "Restaurants"}},
-		Tags:       []string{},
-		MatchLogic: domain.MatchLogicCategoryOnly,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{},
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
-	expectedStartDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	expectedEndDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
-
 	mockCalc.On("GetMatchingTransactionStats",
-		ctx, userID, req.Categories, req.Tags, req.MatchLogic,
-		expectedStartDate, expectedEndDate,
+		ctx, userID, "pfc", ptrStr("FOOD_AND_DRINK"), (*string)(nil), (*string)(nil), []string{}, domain.MatchLogicCategoryOnly,
+		mock.Anything, mock.Anything,
 	).Return(5, 250.50, nil)
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
 	require.NoError(t, err)
 	assert.Equal(t, 5, resp.TransactionCount)
 	assert.Equal(t, 250.50, resp.TotalAmount)
-
-	mockCalc.AssertExpectations(t)
-}
-
-// TestCategoryPreviewService_PreviewCategoryMatches_MultipleCategories tests multiple categories
-func TestCategoryPreviewService_PreviewCategoryMatches_MultipleCategories(t *testing.T) {
-	mockCalc := new(MockTransactionStatsCalculator)
-	service := NewCategoryPreviewService(mockCalc)
-
-	ctx := context.Background()
-	userID := "user-123"
-	req := &domain.CategoryPreviewRequest{
-		Categories: [][]string{
-			{"Food and Drink", "Restaurants"},
-			{"Food and Drink", "Groceries"},
-		},
-		Tags:       []string{},
-		MatchLogic: domain.MatchLogicCategoryOnly,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
-	}
-
-	mockCalc.On("GetMatchingTransactionStats",
-		ctx, userID, req.Categories, req.Tags, req.MatchLogic,
-		mock.Anything, mock.Anything,
-	).Return(12, 650.00, nil)
-
-	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
-	require.NoError(t, err)
-	assert.Equal(t, 12, resp.TransactionCount)
-	assert.Equal(t, 650.00, resp.TotalAmount)
 
 	mockCalc.AssertExpectations(t)
 }
@@ -96,15 +63,15 @@ func TestCategoryPreviewService_PreviewCategoryMatches_TagOnly(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-123"
 	req := &domain.CategoryPreviewRequest{
-		Categories: [][]string{},
-		Tags:       []string{"Essential", "groceries"},
-		MatchLogic: domain.MatchLogicTagOnly,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "",
+		Tags:         []string{"Essential", "groceries"},
+		MatchLogic:   domain.MatchLogicTagOnly,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
 	mockCalc.On("GetMatchingTransactionStats",
-		ctx, userID, req.Categories, req.Tags, req.MatchLogic,
+		ctx, userID, "", (*string)(nil), (*string)(nil), (*string)(nil), []string{"Essential", "groceries"}, domain.MatchLogicTagOnly,
 		mock.Anything, mock.Anything,
 	).Return(8, 400.00, nil)
 
@@ -124,15 +91,16 @@ func TestCategoryPreviewService_PreviewCategoryMatches_AndLogic(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-123"
 	req := &domain.CategoryPreviewRequest{
-		Categories: [][]string{{"Food and Drink", "Restaurants"}},
-		Tags:       []string{"Essential"},
-		MatchLogic: domain.MatchLogicAnd,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{"Essential"},
+		MatchLogic:   domain.MatchLogicAnd,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
 	mockCalc.On("GetMatchingTransactionStats",
-		ctx, userID, req.Categories, req.Tags, req.MatchLogic,
+		ctx, userID, "pfc", ptrStr("FOOD_AND_DRINK"), (*string)(nil), (*string)(nil), []string{"Essential"}, domain.MatchLogicAnd,
 		mock.Anything, mock.Anything,
 	).Return(3, 150.00, nil)
 
@@ -152,15 +120,16 @@ func TestCategoryPreviewService_PreviewCategoryMatches_OrLogic(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-123"
 	req := &domain.CategoryPreviewRequest{
-		Categories: [][]string{{"Food and Drink", "Restaurants"}},
-		Tags:       []string{"Essential"},
-		MatchLogic: domain.MatchLogicOr,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{"Essential"},
+		MatchLogic:   domain.MatchLogicOr,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
 	mockCalc.On("GetMatchingTransactionStats",
-		ctx, userID, req.Categories, req.Tags, req.MatchLogic,
+		ctx, userID, "pfc", ptrStr("FOOD_AND_DRINK"), (*string)(nil), (*string)(nil), []string{"Essential"}, domain.MatchLogicOr,
 		mock.Anything, mock.Anything,
 	).Return(10, 500.00, nil)
 
@@ -194,11 +163,12 @@ func TestCategoryPreviewService_PreviewCategoryMatches_InvalidMatchLogic(t *test
 	ctx := context.Background()
 	userID := "user-123"
 	req := &domain.CategoryPreviewRequest{
-		Categories: [][]string{{"Food"}},
-		Tags:       []string{},
-		MatchLogic: "invalid_logic",
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{},
+		MatchLogic:   "invalid_logic",
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
@@ -215,11 +185,12 @@ func TestCategoryPreviewService_PreviewCategoryMatches_InvalidStartDate(t *testi
 	ctx := context.Background()
 	userID := "user-123"
 	req := &domain.CategoryPreviewRequest{
-		Categories: [][]string{{"Food"}},
-		Tags:       []string{},
-		MatchLogic: domain.MatchLogicCategoryOnly,
-		StartDate:  "invalid-date",
-		EndDate:    "2024-01-31",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{},
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+		StartDate:    "invalid-date",
+		EndDate:      "2024-01-31",
 	}
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
@@ -236,11 +207,12 @@ func TestCategoryPreviewService_PreviewCategoryMatches_InvalidEndDate(t *testing
 	ctx := context.Background()
 	userID := "user-123"
 	req := &domain.CategoryPreviewRequest{
-		Categories: [][]string{{"Food"}},
-		Tags:       []string{},
-		MatchLogic: domain.MatchLogicCategoryOnly,
-		StartDate:  "2024-01-01",
-		EndDate:    "invalid-date",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{},
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+		StartDate:    "2024-01-01",
+		EndDate:      "invalid-date",
 	}
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
@@ -249,25 +221,25 @@ func TestCategoryPreviewService_PreviewCategoryMatches_InvalidEndDate(t *testing
 	assert.Contains(t, err.Error(), "end_date")
 }
 
-// TestCategoryPreviewService_PreviewCategoryMatches_NoCategoriesForCategoryOnly tests validation
-func TestCategoryPreviewService_PreviewCategoryMatches_NoCategoriesForCategoryOnly(t *testing.T) {
+// TestCategoryPreviewService_PreviewCategoryMatches_NoCategoryKindForCategoryOnly tests validation
+func TestCategoryPreviewService_PreviewCategoryMatches_NoCategoryKindForCategoryOnly(t *testing.T) {
 	mockCalc := new(MockTransactionStatsCalculator)
 	service := NewCategoryPreviewService(mockCalc)
 
 	ctx := context.Background()
 	userID := "user-123"
 	req := &domain.CategoryPreviewRequest{
-		Categories: [][]string{},
-		Tags:       []string{},
-		MatchLogic: domain.MatchLogicCategoryOnly,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "",
+		Tags:         []string{},
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "at least one category is required")
+	assert.Contains(t, err.Error(), "category_kind is required")
 }
 
 // TestCategoryPreviewService_PreviewCategoryMatches_NoTagsForTagOnly tests validation
@@ -278,11 +250,11 @@ func TestCategoryPreviewService_PreviewCategoryMatches_NoTagsForTagOnly(t *testi
 	ctx := context.Background()
 	userID := "user-123"
 	req := &domain.CategoryPreviewRequest{
-		Categories: [][]string{},
-		Tags:       []string{},
-		MatchLogic: domain.MatchLogicTagOnly,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "",
+		Tags:         []string{},
+		MatchLogic:   domain.MatchLogicTagOnly,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
@@ -299,27 +271,28 @@ func TestCategoryPreviewService_PreviewCategoryMatches_AndLogicValidation(t *tes
 	ctx := context.Background()
 	userID := "user-123"
 
-	// Test missing categories
+	// Test missing category_kind
 	req1 := &domain.CategoryPreviewRequest{
-		Categories: [][]string{},
-		Tags:       []string{"Essential"},
-		MatchLogic: domain.MatchLogicAnd,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "",
+		Tags:         []string{"Essential"},
+		MatchLogic:   domain.MatchLogicAnd,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req1)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "at least one category is required")
+	assert.Contains(t, err.Error(), "category_kind is required")
 
 	// Test missing tags
 	req2 := &domain.CategoryPreviewRequest{
-		Categories: [][]string{{"Food"}},
-		Tags:       []string{},
-		MatchLogic: domain.MatchLogicAnd,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{},
+		MatchLogic:   domain.MatchLogicAnd,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
 	resp, err = service.PreviewCategoryMatches(ctx, userID, req2)
@@ -336,15 +309,16 @@ func TestCategoryPreviewService_PreviewCategoryMatches_RepositoryError(t *testin
 	ctx := context.Background()
 	userID := "user-123"
 	req := &domain.CategoryPreviewRequest{
-		Categories: [][]string{{"Food"}},
-		Tags:       []string{},
-		MatchLogic: domain.MatchLogicCategoryOnly,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{},
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
 	mockCalc.On("GetMatchingTransactionStats",
-		ctx, userID, req.Categories, req.Tags, req.MatchLogic,
+		ctx, userID, "pfc", ptrStr("FOOD_AND_DRINK"), (*string)(nil), (*string)(nil), []string{}, domain.MatchLogicCategoryOnly,
 		mock.Anything, mock.Anything,
 	).Return(0, 0.0, errors.New("database error"))
 
@@ -364,15 +338,16 @@ func TestCategoryPreviewService_PreviewCategoryMatches_ZeroResults(t *testing.T)
 	ctx := context.Background()
 	userID := "user-123"
 	req := &domain.CategoryPreviewRequest{
-		Categories: [][]string{{"Nonexistent", "Category"}},
-		Tags:       []string{},
-		MatchLogic: domain.MatchLogicCategoryOnly,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("TRANSFER_IN"),
+		Tags:         []string{},
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
 	mockCalc.On("GetMatchingTransactionStats",
-		ctx, userID, req.Categories, req.Tags, req.MatchLogic,
+		ctx, userID, "pfc", ptrStr("TRANSFER_IN"), (*string)(nil), (*string)(nil), []string{}, domain.MatchLogicCategoryOnly,
 		mock.Anything, mock.Anything,
 	).Return(0, 0.0, nil)
 

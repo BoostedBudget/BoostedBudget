@@ -505,7 +505,7 @@ func TestPlaidSyncProvider_ConvertPlaidTransaction_InvalidDate(t *testing.T) {
 	// Assert
 	assert.Error(t, err)
 	assert.Nil(t, domainTxn)
-	assert.Contains(t, err.Error(), "failed to parse transaction date")
+	assert.Contains(t, err.Error(), "failed to map plaid transaction")
 }
 
 // TestPlaidSyncProvider_SyncForLinkedItem_TenPagePagination tests 10+ page sync

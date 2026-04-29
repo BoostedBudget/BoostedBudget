@@ -60,7 +60,8 @@ const mockTransactions: Transaction[] = [
     authorized_date: '2025-01-14',
     name: 'AMAZON.COM',
     merchant_name: 'Amazon',
-    category: '["Shopping", "Online"]',
+    pfc_primary: 'SHOPPING',
+    pfc_detailed: 'SHOPPING_GENERAL_MERCHANDISE',
     pending: false,
     tags: ['subscription', 'household'],
     created_at: '2025-01-15T00:00:00Z',
@@ -76,7 +77,8 @@ const mockTransactions: Transaction[] = [
     date: '2025-01-10',
     name: 'DIRECT DEPOSIT - PAYROLL',
     merchant_name: null,
-    category: '["Income", "Salary"]',
+    pfc_primary: 'INCOME',
+    pfc_detailed: 'INCOME_WAGES',
     pending: false,
     created_at: '2025-01-10T00:00:00Z',
     updated_at: '2025-01-10T00:00:00Z',
@@ -91,7 +93,8 @@ const mockTransactions: Transaction[] = [
     date: '2025-01-12',
     name: 'UBER EATS',
     merchant_name: 'Uber Eats',
-    category: '["Food and Drink", "Restaurants"]',
+    pfc_primary: 'FOOD_AND_DRINK',
+    pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
     pending: true,
     created_at: '2025-01-12T00:00:00Z',
     updated_at: '2025-01-12T00:00:00Z',
@@ -156,9 +159,9 @@ describe('TransactionTable', () => {
     it('should display category labels', () => {
       renderTable()
 
-      expect(screen.getByText('Shopping')).toBeInTheDocument()
-      expect(screen.getByText('Income')).toBeInTheDocument()
-      expect(screen.getByText('Food and Drink')).toBeInTheDocument()
+      expect(screen.getByText('SHOPPING_GENERAL_MERCHANDISE')).toBeInTheDocument()
+      expect(screen.getByText('INCOME_WAGES')).toBeInTheDocument()
+      expect(screen.getByText('FOOD_AND_DRINK_RESTAURANTS')).toBeInTheDocument()
     })
 
     it('should display pending badge for pending transactions', () => {

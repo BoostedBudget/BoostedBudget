@@ -1,9 +1,9 @@
 /**
  * BudgetCategoryForm
  * Issue #497: Budget Category Manager + Match Config UI
+ * Issue #1073: Updated for PFC v2 canonical schema
  *
  * Modal dialog for creating and editing budget categories with match configuration.
- * Uses shadcn/ui Dialog for accessibility.
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
@@ -18,42 +18,34 @@ import {
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import type { BudgetCategory, CreateBudgetCategoryRequest, UpdateBudgetCategoryRequest } from '../../types';
-import { formatCategoryPath } from '../../types';
 import type { MatchLogic } from '@boostedbudget/shared-types/matching';
 import { DEFAULT_MATCH_LOGIC } from '@boostedbudget/shared-types/matching';
 import type { UserTag } from '@/features/tags/types';
 import { CategoryMatchConfig } from './CategoryMatchConfig';
 import { usePreviewCategories } from '../../hooks/usePreviewCategories';
+import { formatPFCPrimary, isPFCPrimary } from '@/shared/categories/formatPfc';
 
 export interface BudgetCategoryFormProps {
-  /** Whether the dialog is open */
   isOpen: boolean;
-  /** Callback when dialog should close */
   onClose: () => void;
-  /** Callback when form is submitted */
   onSubmit: (data: CreateBudgetCategoryRequest | UpdateBudgetCategoryRequest) => Promise<void>;
-  /** Whether in create or edit mode */
   mode: 'create' | 'edit';
-  /** Initial data for edit mode */
   initialData?: BudgetCategory;
-  /** Available Plaid categories for selection */
+  /** Available Plaid categories for selection (string[][] for backward compat) */
   availableCategories: string[][];
-  /** Available user tags for selection */
   availableTags: UserTag[];
-  /** Categories already used in this budget (to filter from dropdown) */
   existingCategories?: string[][];
-  /** Budget start date for preview (YYYY-MM-DD) */
   budgetStartDate?: string;
-  /** Budget end date for preview (YYYY-MM-DD) */
   budgetEndDate?: string;
-  /** Expected income for the budget (used for soft over-allocation warning) */
   expectedIncome?: number;
-  /** Sum of all other categories' allocations excluding the one being edited */
   totalAllocatedExcludingCurrent?: number;
 }
 
 interface FormData {
-  category: string[];
+  category_kind: string;
+  pfc_primary: string;
+  pfc_detailed: string;
+  custom_category_id: string;
   allocated_amount: string;
   tags: string[];
   match_logic: MatchLogic;
@@ -66,7 +58,10 @@ interface FormErrors {
 }
 
 const initialFormData: FormData = {
-  category: [],
+  category_kind: 'pfc',
+  pfc_primary: '',
+  pfc_detailed: '',
+  custom_category_id: '',
   allocated_amount: '',
   tags: [],
   match_logic: DEFAULT_MATCH_LOGIC,
@@ -90,12 +85,14 @@ export function BudgetCategoryForm({
   const [apiError, setApiError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Reset/initialize form when dialog opens or mode changes
   useEffect(() => {
     if (isOpen) {
       if (mode === 'edit' && initialData) {
         setFormData({
-          category: initialData.category,
+          category_kind: initialData.category_kind || 'pfc',
+          pfc_primary: initialData.pfc_primary || '',
+          pfc_detailed: initialData.pfc_detailed || '',
+          custom_category_id: initialData.custom_category_id || '',
           allocated_amount: initialData.allocated_amount.toString(),
           tags: initialData.tags || [],
           match_logic: initialData.match_logic || DEFAULT_MATCH_LOGIC,
@@ -108,31 +105,39 @@ export function BudgetCategoryForm({
     }
   }, [isOpen, mode, initialData]);
 
-  // Format categories for dropdown
+  // Build dropdown options from string[][] availableCategories.
+  // PFC primaries are returned as enum values (e.g. "FOOD_AND_DRINK") — format them
+  // for display. Custom category names are plain strings and pass through unchanged.
   const categoryOptions = useMemo(() => {
-    return availableCategories.map((cat) => ({
-      value: cat.join(' > '),
-      label: formatCategoryPath(cat),
-      category: cat,
-    }));
+    const formatLabel = (s: string) => isPFCPrimary(s) ? formatPFCPrimary(s) : s
+    return availableCategories.map((cat) => {
+      const pfc_primary = cat[0] || '';
+      const pfc_detailed = cat[1] || '';
+      const primaryLabel = formatLabel(pfc_primary);
+      const detailedLabel = pfc_detailed ? formatLabel(pfc_detailed) : '';
+      const label = detailedLabel ? `${primaryLabel} > ${detailedLabel}` : primaryLabel;
+      const value = pfc_detailed ? `${pfc_primary}|${pfc_detailed}` : pfc_primary;
+      return { value, label, pfc_primary, pfc_detailed };
+    });
   }, [availableCategories]);
 
-  // Check if tags should be shown based on match_logic
   const showTagPicker = useMemo(() => {
     return formData.match_logic !== 'category_only';
   }, [formData.match_logic]);
 
-  // Issue #497: Category preview - show matching transaction count and total
-  const previewEnabled = useMemo(() => {
-    return isOpen && formData.category.length > 0 && !!budgetStartDate && !!budgetEndDate;
-  }, [isOpen, formData.category, budgetStartDate, budgetEndDate]);
+  const hasCategory = formData.category_kind === 'pfc'
+    ? !!formData.pfc_primary
+    : !!formData.custom_category_id;
 
-  const previewCategories = useMemo(() => {
-    return formData.category.length > 0 ? [formData.category] : [];
-  }, [formData.category]);
+  const previewEnabled = useMemo(() => {
+    return isOpen && hasCategory && !!budgetStartDate && !!budgetEndDate;
+  }, [isOpen, hasCategory, budgetStartDate, budgetEndDate]);
 
   const { preview, loading: previewLoading, error: previewError } = usePreviewCategories(
-    previewCategories,
+    formData.category_kind,
+    formData.pfc_primary || undefined,
+    formData.pfc_detailed || undefined,
+    formData.custom_category_id || undefined,
     formData.tags,
     formData.match_logic,
     budgetStartDate || '',
@@ -140,7 +145,6 @@ export function BudgetCategoryForm({
     previewEnabled
   );
 
-  // Compute soft over-allocation warning
   const allocationOverage = useMemo(() => {
     if (expectedIncome == null || expectedIncome <= 0) return null;
     const newAmount = parseFloat(formData.allocated_amount);
@@ -149,7 +153,6 @@ export function BudgetCategoryForm({
     return projected > expectedIncome ? projected - expectedIncome : null;
   }, [expectedIncome, totalAllocatedExcludingCurrent, formData.allocated_amount]);
 
-  // Format currency for preview display
   const formatCurrency = (amount: number): string => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -163,9 +166,9 @@ export function BudgetCategoryForm({
       const selectedOption = categoryOptions.find((opt) => opt.value === selectedValue);
       setFormData((prev) => ({
         ...prev,
-        category: selectedOption ? selectedOption.category : [],
+        pfc_primary: selectedOption ? selectedOption.pfc_primary : '',
+        pfc_detailed: selectedOption ? selectedOption.pfc_detailed : '',
       }));
-      // Clear error for this field
       if (errors.category) {
         setErrors((prev) => ({ ...prev, category: undefined }));
       }
@@ -177,7 +180,6 @@ export function BudgetCategoryForm({
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const value = e.target.value;
       setFormData((prev) => ({ ...prev, allocated_amount: value }));
-      // Clear error for this field
       if (errors.allocated_amount) {
         setErrors((prev) => ({ ...prev, allocated_amount: undefined }));
       }
@@ -187,7 +189,6 @@ export function BudgetCategoryForm({
 
   const handleMatchLogicChange = useCallback((logic: MatchLogic) => {
     setFormData((prev) => ({ ...prev, match_logic: logic }));
-    // Clear tag error when switching away from tag-required modes
     if (logic === 'category_only') {
       setErrors((prev) => ({ ...prev, tags: undefined }));
     }
@@ -202,7 +203,6 @@ export function BudgetCategoryForm({
           : [...prev.tags, tagName];
         return { ...prev, tags: newTags };
       });
-      // Clear error for tags
       if (errors.tags) {
         setErrors((prev) => ({ ...prev, tags: undefined }));
       }
@@ -213,18 +213,15 @@ export function BudgetCategoryForm({
   const validate = useCallback((): boolean => {
     const newErrors: FormErrors = {};
 
-    // Validate category selection
-    if (formData.category.length === 0) {
+    if (!hasCategory) {
       newErrors.category = 'Category is required';
     }
 
-    // Validate amount
     const amount = parseFloat(formData.allocated_amount);
     if (isNaN(amount) || amount <= 0) {
       newErrors.allocated_amount = 'Amount must be greater than 0';
     }
 
-    // Validate tags when match_logic requires them
     if (
       (formData.match_logic === 'tag_only' ||
         formData.match_logic === 'and' ||
@@ -236,7 +233,7 @@ export function BudgetCategoryForm({
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
-  }, [formData]);
+  }, [formData, hasCategory]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -254,7 +251,10 @@ export function BudgetCategoryForm({
 
         if (mode === 'create') {
           const request: CreateBudgetCategoryRequest = {
-            category: formData.category,
+            category_kind: formData.category_kind,
+            pfc_primary: formData.pfc_primary || undefined,
+            pfc_detailed: formData.pfc_detailed || undefined,
+            custom_category_id: formData.custom_category_id || undefined,
             allocated_amount: amount,
             tags: formData.tags.length > 0 ? formData.tags : undefined,
             match_logic: formData.match_logic,
@@ -279,26 +279,20 @@ export function BudgetCategoryForm({
     [formData, mode, validate, onSubmit, onClose]
   );
 
-  // Handle dialog open state changes
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      if (!open) {
-        onClose();
-      }
-    },
-    [onClose]
-  );
-
   const dialogTitle = mode === 'create' ? 'Add Category' : 'Edit Category';
   const submitButtonText = mode === 'create' ? 'Add' : 'Save';
 
-  // Shared input classes
   const inputBase =
     'w-full py-2.5 px-3 text-sm border border-input rounded-lg bg-card text-foreground transition-[border-color,box-shadow] duration-150 focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-ring/15 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed';
   const inputError = 'border-destructive focus:ring-destructive/15';
 
+  // Current selected value for the dropdown
+  const selectedCategoryValue = formData.pfc_detailed
+    ? `${formData.pfc_primary}|${formData.pfc_detailed}`
+    : formData.pfc_primary;
+
   return (
-    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         className="budget-category-form w-full max-w-md p-6 bg-card rounded-2xl"
         onInteractOutside={(e) => e.preventDefault()}
@@ -329,7 +323,7 @@ export function BudgetCategoryForm({
             </label>
             <select
               id="category"
-              value={formData.category.join(' > ')}
+              value={selectedCategoryValue}
               onChange={handleCategoryChange}
               disabled={mode === 'edit'}
               className={cn(inputBase, errors.category && inputError)}
@@ -385,7 +379,7 @@ export function BudgetCategoryForm({
             disabled={isSubmitting}
           />
 
-          {/* Tags Field - shown based on match_logic */}
+          {/* Tags Field */}
           {showTagPicker && (
             <div>
               <label className="block text-sm font-medium text-foreground mb-2">
@@ -425,7 +419,7 @@ export function BudgetCategoryForm({
             </div>
           )}
 
-          {/* Issue #497: Transaction Preview */}
+          {/* Transaction Preview */}
           {previewEnabled && (
             <Alert
               variant="info"
@@ -463,12 +457,10 @@ export function BudgetCategoryForm({
             </Alert>
           )}
 
-          {/* API Error */}
           {apiError && (
             <Alert variant="destructive">{apiError}</Alert>
           )}
 
-          {/* Actions */}
           <div className="flex justify-end gap-3 pt-4">
             <Button variant="outline" type="button" onClick={onClose}>
               Cancel

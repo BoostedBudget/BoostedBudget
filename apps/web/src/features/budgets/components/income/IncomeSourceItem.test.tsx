@@ -12,7 +12,19 @@ describe('IncomeSourceItem', () => {
   })
 
   describe('Rendering', () => {
-    it('renders plaid_category source with category icon and value', () => {
+    it('renders pfc_primary source with category icon and formatted value', () => {
+      const source: IncomeSource = {
+        type: 'pfc_primary',
+        value: 'INCOME',
+      };
+
+      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
+
+      expect(screen.getByText('Income')).toBeInTheDocument();
+      expect(screen.getByTestId('income-source-icon')).toBeInTheDocument();
+    });
+
+    it('renders plaid_category source (backward compat) with category icon and value', () => {
       const source: IncomeSource = {
         type: 'plaid_category',
         value: 'INCOME',
@@ -148,7 +160,19 @@ describe('IncomeSourceItem', () => {
       expect(removeButton).toBeInTheDocument();
     });
 
-    it('has accessible remove button for plaid_category with formatted name', () => {
+    it('has accessible remove button for pfc_primary with formatted name', () => {
+      const source: IncomeSource = {
+        type: 'pfc_primary',
+        value: 'INCOME',
+      };
+
+      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
+
+      const removeButton = screen.getByRole('button', { name: /remove.*income/i });
+      expect(removeButton).toBeInTheDocument();
+    });
+
+    it('has accessible remove button for plaid_category (backward compat) with formatted name', () => {
       const source: IncomeSource = {
         type: 'plaid_category',
         value: 'INCOME',

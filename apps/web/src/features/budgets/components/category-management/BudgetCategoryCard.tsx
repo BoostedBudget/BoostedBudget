@@ -12,7 +12,7 @@ import { useState, useMemo } from 'react';
 import { PencilIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { BudgetCategory } from '../../types';
-import { formatCategoryPath } from '../../types';
+import { formatBudgetCategoryLabel } from '../../types';
 import { MATCH_LOGIC_LABELS } from '@boostedbudget/shared-types/matching';
 import { BudgetProgressBar } from '../BudgetProgressBar';
 import { BudgetTransactionList } from '../transaction-link/BudgetTransactionList';
@@ -50,8 +50,8 @@ export function BudgetCategoryCard({
   const [isTransactionsExpanded, setIsTransactionsExpanded] = useState(false);
 
   const categoryPath = useMemo(
-    () => formatCategoryPath(category.category),
-    [category.category]
+    () => formatBudgetCategoryLabel(category),
+    [category]
   );
 
   const isOverBudget = category.spent_amount > category.allocated_amount;

@@ -2,7 +2,6 @@ package workers
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -160,10 +159,9 @@ func makeTestProvider() *plaidSyncProvider {
 	).(*plaidSyncProvider)
 }
 
-// TestConvertPlaidTransaction_PFCFallback_NoLegacyCategory verifies that when Plaid returns no
-// legacy category but does return personal_finance_category, the worker path synthesizes Category
-// from PFC primary + detailed. Mirrors TestMapPlaidTransaction_PFCFallback_NoLegacyCategory.
-func TestConvertPlaidTransaction_PFCFallback_NoLegacyCategory(t *testing.T) {
+// TestConvertPlaidTransaction_PFCFields_Populated verifies that when Plaid returns
+// personal_finance_category, the worker stores PFCPrimary, PFCDetailed, and PFCConfidenceLevel.
+func TestConvertPlaidTransaction_PFCFields_Populated(t *testing.T) {
 	provider := makeTestProvider()
 	linkedItem := makeTestLinkedItem()
 
@@ -179,24 +177,23 @@ func TestConvertPlaidTransaction_PFCFallback_NoLegacyCategory(t *testing.T) {
 		Amount:                  12.45,
 		Date:                    "2024-01-15",
 		Name:                    "KFC",
-		Category:                nil,
 		PersonalFinanceCategory: *plaid.NewNullablePersonalFinanceCategory(&pfc),
 	}
 
 	result, err := provider.convertPlaidTransaction(linkedItem, plaidTxn)
 
 	require.NoError(t, err)
-	require.NotNil(t, result.Category, "Category should be synthesized from PFC when legacy is absent")
-
-	var categories []string
-	require.NoError(t, json.Unmarshal([]byte(*result.Category), &categories))
-	assert.Equal(t, "Food And Drink", categories[0], "Primary display name should be curated")
-	assert.Equal(t, "Fast Food", categories[1], "Detailed display name should strip primary prefix")
+	require.NotNil(t, result.PFCPrimary, "PFCPrimary should be populated from personal_finance_category")
+	assert.Equal(t, "FOOD_AND_DRINK", *result.PFCPrimary)
+	require.NotNil(t, result.PFCDetailed)
+	assert.Equal(t, "FOOD_AND_DRINK_FAST_FOOD", *result.PFCDetailed)
+	require.NotNil(t, result.PFCConfidenceLevel)
+	assert.Equal(t, "VERY_HIGH", *result.PFCConfidenceLevel)
 }
 
-// TestConvertPlaidTransaction_LegacyCategoryTakesPriority verifies that the legacy category wins
-// over PFC when Plaid sends both. Mirrors TestMapPlaidTransaction_LegacyCategoryTakesPriority.
-func TestConvertPlaidTransaction_LegacyCategoryTakesPriority(t *testing.T) {
+// TestConvertPlaidTransaction_PFCAndLegacy_BothPresent verifies that when Plaid sends both
+// legacy category and PFC, the PFCv2 fields are still stored correctly.
+func TestConvertPlaidTransaction_PFCAndLegacy_BothPresent(t *testing.T) {
 	provider := makeTestProvider()
 	linkedItem := makeTestLinkedItem()
 
@@ -218,15 +215,12 @@ func TestConvertPlaidTransaction_LegacyCategoryTakesPriority(t *testing.T) {
 	result, err := provider.convertPlaidTransaction(linkedItem, plaidTxn)
 
 	require.NoError(t, err)
-	require.NotNil(t, result.Category)
-
-	var categories []string
-	require.NoError(t, json.Unmarshal([]byte(*result.Category), &categories))
-	assert.Equal(t, "Food and Drink", categories[0], "Legacy category should take priority over synthesized PFC")
+	require.NotNil(t, result.PFCPrimary, "PFCPrimary should be populated from PFC data")
+	assert.Equal(t, "FOOD_AND_DRINK", *result.PFCPrimary)
 }
 
 // TestConvertPlaidTransaction_PartialPFC_EmptyPrimary verifies that PFC with empty Primary
-// is treated as absent and Category stays nil. Mirrors TestMapPlaidTransaction_PartialPFC_EmptyPrimary.
+// leaves PFCPrimary nil.
 func TestConvertPlaidTransaction_PartialPFC_EmptyPrimary(t *testing.T) {
 	provider := makeTestProvider()
 	linkedItem := makeTestLinkedItem()
@@ -242,18 +236,17 @@ func TestConvertPlaidTransaction_PartialPFC_EmptyPrimary(t *testing.T) {
 		Amount:                  12.45,
 		Date:                    "2024-01-15",
 		Name:                    "Unknown",
-		Category:                nil,
 		PersonalFinanceCategory: *plaid.NewNullablePersonalFinanceCategory(&pfc),
 	}
 
 	result, err := provider.convertPlaidTransaction(linkedItem, plaidTxn)
 
 	require.NoError(t, err)
-	assert.Nil(t, result.Category, "Category must remain nil when PFC Primary is empty")
+	assert.Nil(t, result.PFCPrimary, "PFCPrimary must remain nil when PFC Primary is empty")
 }
 
 // TestConvertPlaidTransaction_PFCOnly_NoDetailed verifies PFC with only primary (no detailed)
-// synthesizes a single-element category array. Mirrors TestMapPlaidTransaction_PFCOnly_NoDetailed.
+// stores PFCPrimary but leaves PFCDetailed nil.
 func TestConvertPlaidTransaction_PFCOnly_NoDetailed(t *testing.T) {
 	provider := makeTestProvider()
 	linkedItem := makeTestLinkedItem()
@@ -269,16 +262,13 @@ func TestConvertPlaidTransaction_PFCOnly_NoDetailed(t *testing.T) {
 		Amount:                  25.00,
 		Date:                    "2024-01-15",
 		Name:                    "Transit",
-		Category:                nil,
 		PersonalFinanceCategory: *plaid.NewNullablePersonalFinanceCategory(&pfc),
 	}
 
 	result, err := provider.convertPlaidTransaction(linkedItem, plaidTxn)
 
 	require.NoError(t, err)
-	require.NotNil(t, result.Category)
-
-	var categories []string
-	require.NoError(t, json.Unmarshal([]byte(*result.Category), &categories))
-	assert.Equal(t, []string{"Transportation"}, categories)
+	require.NotNil(t, result.PFCPrimary)
+	assert.Equal(t, "TRANSPORTATION", *result.PFCPrimary)
+	assert.Nil(t, result.PFCDetailed, "PFCDetailed should be nil when Plaid sends empty detailed")
 }

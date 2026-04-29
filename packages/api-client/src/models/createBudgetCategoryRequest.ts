@@ -32,9 +32,11 @@ export interface CreateBudgetCategoryRequest {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   allocated_amount: number;
-  /** @nullable */
-  category: string[] | null;
+  category_kind: string;
+  custom_category_id?: string;
   match_logic?: string;
+  pfc_detailed?: string;
+  pfc_primary?: string;
   /** @nullable */
   tags?: string[] | null;
 }

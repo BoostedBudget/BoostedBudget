@@ -75,11 +75,10 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
-	// Optional filter: exclude transfers (based on personal_finance_category)
-	// Transfers typically have primary category like "TRANSFER_IN" or "TRANSFER_OUT"
+	// Exclude transfers using effective PFC primary (respects category overrides).
+	// A user who overrides TRANSFER_IN → FOOD_AND_DRINK expresses intent that it is spending.
 	if !filters.IncludeTransfers {
-		query += ` AND (t.personal_finance_category IS NULL OR
-			COALESCE(t.personal_finance_category->>'primary', '') NOT LIKE 'TRANSFER%')`
+		query += ` AND ` + effectiveTransferExpr() + ` NOT LIKE 'TRANSFER%'`
 	}
 
 	var agg domain.CashFlowAggregation
@@ -143,10 +142,8 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
-	// Optional filter: exclude transfers
 	if !filters.IncludeTransfers {
-		query += ` AND (t.personal_finance_category IS NULL OR
-			COALESCE(t.personal_finance_category->>'primary', '') NOT LIKE 'TRANSFER%')`
+		query += ` AND ` + effectiveTransferExpr() + ` NOT LIKE 'TRANSFER%'`
 	}
 
 	// Group and order
@@ -269,16 +266,33 @@ func advancePeriod(t time.Time, grouping string) time.Time {
 	}
 }
 
-// effectiveCategoryExpr returns the SQL expression for computing effective category.
-// category_override is a JSON array (["Food And Drink"] or ["Food And Drink","Groceries"]),
-// NOT a JSON object — element access uses ->>0 (primary) and ->>1 (subcategory).
-// When category_override is a single-element array, ->>1 returns NULL and COALESCE falls
-// through to personal_finance_category->>'detailed' and finally 'UNCATEGORIZED'.
+// effectiveCategoryExpr returns the SQL expression for the effective PFC category.
+// Priority: pfc override → raw pfc → 'UNCATEGORIZED'. Custom overrides are expressed
+// as 'custom:<uuid>' so they group separately from PFC categories.
 func effectiveCategoryExpr(subcategory bool) string {
 	if subcategory {
-		return `COALESCE(t.category_override->>1, t.personal_finance_category->>'detailed', 'UNCATEGORIZED')`
+		return `CASE
+			WHEN t.category_override_kind = 'custom' THEN 'custom:' || t.custom_category_override_id::text
+			WHEN t.category_override_kind = 'pfc'    THEN COALESCE(t.pfc_detailed_override, t.pfc_primary_override, 'UNCATEGORIZED')
+			ELSE                                          COALESCE(t.pfc_detailed, t.pfc_primary, 'UNCATEGORIZED')
+		END`
 	}
-	return `COALESCE(t.category_override->>0, t.personal_finance_category->>'primary', 'UNCATEGORIZED')`
+	return `CASE
+		WHEN t.category_override_kind = 'custom' THEN 'custom:' || t.custom_category_override_id::text
+		WHEN t.category_override_kind = 'pfc'    THEN COALESCE(t.pfc_primary_override, 'UNCATEGORIZED')
+		ELSE                                          COALESCE(t.pfc_primary, 'UNCATEGORIZED')
+	END`
+}
+
+// effectiveTransferExpr returns the SQL expression for the effective PFC primary used
+// in transfer filtering. Custom overrides always return '' (never match TRANSFER%).
+// PFC overrides: use pfc_primary_override; otherwise use raw pfc_primary.
+func effectiveTransferExpr() string {
+	return `CASE
+		WHEN t.category_override_kind = 'pfc'    THEN COALESCE(t.pfc_primary_override, '')
+		WHEN t.category_override_kind = 'custom' THEN ''
+		ELSE                                          COALESCE(t.pfc_primary, '')
+	END`
 }
 
 // spendingBaseQuery returns the common WHERE clause args and starting argIndex for spending queries.
@@ -298,8 +312,7 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 	}
 
 	if !filters.IncludeTransfers {
-		clause += ` AND (t.personal_finance_category IS NULL OR
-			COALESCE(t.personal_finance_category->>'primary', '') NOT LIKE 'TRANSFER%')`
+		clause += ` AND ` + effectiveTransferExpr() + ` NOT LIKE 'TRANSFER%'`
 	}
 
 	return clause, args, argIndex

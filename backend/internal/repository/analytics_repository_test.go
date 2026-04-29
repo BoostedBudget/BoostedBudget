@@ -237,44 +237,56 @@ func TestFillMissingPeriods(t *testing.T) {
 	}
 }
 
-// TestEffectiveCategoryExpr_OverrideBranchFires_Primary verifies that category_override array
-// element [0] (primary) is selected by effectiveCategoryExpr when subcategory=false.
+// TestEffectiveCategoryExpr_OverrideBranchFires_Primary verifies the PFC v2 discriminated
+// effective-category expression for primary grouping.
 func TestEffectiveCategoryExpr_OverrideBranchFires_Primary(t *testing.T) {
 	expr := effectiveCategoryExpr(false)
-	// The expression must use array indexing (->>0), not object key access (->>'primary').
-	// category_override is a JSON array, not an object.
 	if expr == "" {
 		t.Fatal("effectiveCategoryExpr returned empty string")
 	}
-	// Must use ->>0 for primary (array element 0) on category_override
-	if !contains(expr, "category_override->>0") {
-		t.Errorf("primary expr should use 'category_override->>0' array indexing, got: %s", expr)
+	// Must use category_override_kind discriminator
+	if !contains(expr, "category_override_kind") {
+		t.Errorf("primary expr should use 'category_override_kind' discriminator, got: %s", expr)
 	}
-	// Must NOT use category_override->>'primary' (object key — returns NULL for array values)
-	if contains(expr, "category_override->>'primary'") {
-		t.Errorf("primary expr must NOT use 'category_override->>primary' object key: %s", expr)
+	// Must use pfc_primary_override for pfc overrides
+	if !contains(expr, "pfc_primary_override") {
+		t.Errorf("primary expr must reference 'pfc_primary_override', got: %s", expr)
 	}
-	// Personal finance category fallback must use ->>'primary'
-	if !contains(expr, "personal_finance_category->>'primary'") {
-		t.Errorf("primary expr must fall through to personal_finance_category->>'primary': %s", expr)
+	// Must fall through to pfc_primary
+	if !contains(expr, "pfc_primary") {
+		t.Errorf("primary expr must fall through to 'pfc_primary', got: %s", expr)
+	}
+	// Must NOT reference dropped legacy columns
+	if contains(expr, "personal_finance_category") {
+		t.Errorf("primary expr must NOT reference legacy 'personal_finance_category', got: %s", expr)
+	}
+	if contains(expr, "category_override->>") {
+		t.Errorf("primary expr must NOT reference legacy 'category_override' JSON array, got: %s", expr)
 	}
 }
 
-// TestEffectiveCategoryExpr_OverrideBranchFires_Subcategory verifies that category_override array
-// element [1] (subcategory) is selected by effectiveCategoryExpr when subcategory=true.
+// TestEffectiveCategoryExpr_OverrideBranchFires_Subcategory verifies the PFC v2 discriminated
+// effective-category expression for detailed (subcategory) grouping.
 func TestEffectiveCategoryExpr_OverrideBranchFires_Subcategory(t *testing.T) {
 	expr := effectiveCategoryExpr(true)
-	// Must use ->>1 for subcategory (array element 1) on category_override
-	if !contains(expr, "category_override->>1") {
-		t.Errorf("subcategory expr should use 'category_override->>1' array indexing, got: %s", expr)
+	// Must use category_override_kind discriminator
+	if !contains(expr, "category_override_kind") {
+		t.Errorf("subcategory expr should use 'category_override_kind' discriminator, got: %s", expr)
 	}
-	// Must NOT use category_override->>'detailed' (object key — returns NULL for array values)
-	if contains(expr, "category_override->>'detailed'") {
-		t.Errorf("subcategory expr must NOT use 'category_override->>detailed' object key: %s", expr)
+	// Must use pfc_detailed_override for pfc overrides
+	if !contains(expr, "pfc_detailed_override") {
+		t.Errorf("subcategory expr must reference 'pfc_detailed_override', got: %s", expr)
 	}
-	// Personal finance category fallback must still use ->>'detailed'
-	if !contains(expr, "personal_finance_category->>'detailed'") {
-		t.Errorf("subcategory expr must fall through to personal_finance_category->>'detailed': %s", expr)
+	// Must fall through to pfc_detailed
+	if !contains(expr, "pfc_detailed") {
+		t.Errorf("subcategory expr must fall through to 'pfc_detailed', got: %s", expr)
+	}
+	// Must NOT reference dropped legacy columns
+	if contains(expr, "personal_finance_category") {
+		t.Errorf("subcategory expr must NOT reference legacy 'personal_finance_category', got: %s", expr)
+	}
+	if contains(expr, "category_override->>") {
+		t.Errorf("subcategory expr must NOT reference legacy 'category_override' JSON array, got: %s", expr)
 	}
 }
 
