@@ -23,6 +23,23 @@ var (
 	ErrDuplicateTransaction = errors.New("transaction already exists for this source and external ID")
 )
 
+// transactionSelectColumns is the canonical ordered list of columns for SELECT queries
+// that feed scanTransactions. Order must exactly match the Scan() destinations in
+// scanTransactions. Every method calling scanTransactions MUST use transactionSelectExpr.
+// Adding or removing a column requires updating both this slice and scanTransactions.Scan().
+var transactionSelectColumns = []string{
+	"id", "user_id", "account_id", "linked_item_id",
+	"source", "external_transaction_id", "external_metadata",
+	"amount", "date", "authorized_date", "name", "merchant_name",
+	"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url",
+	"payment_channel", "pending", "user_notes", "created_at", "updated_at",
+	"tags", "tags_source",
+	"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+	"custom_category_override_id", "category_source", "category_override_date",
+}
+
+var transactionSelectExpr = strings.Join(transactionSelectColumns, ", ")
+
 // TransactionRepository defines the interface for transaction data access.
 // Supports transactions from all providers (Plaid, manual, Teller, etc.)
 type TransactionRepository interface {
@@ -422,19 +439,13 @@ func (r *transactionRepository) DeleteByExternalID(ctx context.Context, source d
 
 // GetByUserID retrieves transactions for a specific user with pagination
 func (r *transactionRepository) GetByUserID(ctx context.Context, userID string, limit, offset int) ([]domain.Transaction, error) {
-	query := `
-		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
-		       external_metadata, amount, date, authorized_date, name, merchant_name,
-		       pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending,
-		       user_notes, created_at, updated_at,
-		       tags, tags_source,
-		       category_override_kind, pfc_primary_override, pfc_detailed_override,
-		       custom_category_override_id, category_source, category_override_date
+	query := fmt.Sprintf(`
+		SELECT %s
 		FROM transactions
 		WHERE user_id = $1
 		ORDER BY date DESC, created_at DESC
 		LIMIT $2 OFFSET $3
-	`
+	`, transactionSelectExpr)
 
 	rows, err := r.db.Query(ctx, query, userID, limit, offset)
 	if err != nil {
@@ -447,18 +458,12 @@ func (r *transactionRepository) GetByUserID(ctx context.Context, userID string, 
 
 // GetByAccountID retrieves all transactions for a specific account
 func (r *transactionRepository) GetByAccountID(ctx context.Context, accountID string) ([]domain.Transaction, error) {
-	query := `
-		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
-		       external_metadata, amount, date, authorized_date, name, merchant_name,
-		       pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending,
-		       user_notes, created_at, updated_at,
-		       tags, tags_source,
-		       category_override_kind, pfc_primary_override, pfc_detailed_override,
-		       custom_category_override_id, category_source, category_override_date
+	query := fmt.Sprintf(`
+		SELECT %s
 		FROM transactions
 		WHERE account_id = $1
 		ORDER BY date DESC, created_at DESC
-	`
+	`, transactionSelectExpr)
 
 	rows, err := r.db.Query(ctx, query, accountID)
 	if err != nil {
@@ -471,18 +476,12 @@ func (r *transactionRepository) GetByAccountID(ctx context.Context, accountID st
 
 // GetBySource retrieves all transactions from a specific source for a user
 func (r *transactionRepository) GetBySource(ctx context.Context, source domain.TransactionSource, userID string) ([]domain.Transaction, error) {
-	query := `
-		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
-		       external_metadata, amount, date, authorized_date, name, merchant_name,
-		       pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending,
-		       user_notes, created_at, updated_at,
-		       tags, tags_source,
-		       category_override_kind, pfc_primary_override, pfc_detailed_override,
-		       custom_category_override_id, category_source, category_override_date
+	query := fmt.Sprintf(`
+		SELECT %s
 		FROM transactions
 		WHERE source = $1 AND user_id = $2
 		ORDER BY date DESC, created_at DESC
-	`
+	`, transactionSelectExpr)
 
 	rows, err := r.db.Query(ctx, query, string(source), userID)
 	if err != nil {
@@ -503,21 +502,12 @@ func (r *transactionRepository) GetByUserIDWithFilters(ctx context.Context, user
 
 	// Build complete query with dynamic WHERE clause
 	query := fmt.Sprintf(`
-		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
-		       external_metadata, amount, date, authorized_date, name, merchant_name,
-		       pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending,
-		       user_notes, created_at, updated_at,
-		       tags, tags_source,
-		       category_override_kind, pfc_primary_override, pfc_detailed_override,
-		       custom_category_override_id, category_source, category_override_date,
-		       tags, tags_source,
-		       category_override_kind, pfc_primary_override, pfc_detailed_override,
-		       custom_category_override_id, category_source, category_override_date
+		SELECT %s
 		FROM transactions
 		%s
 		ORDER BY date DESC, created_at DESC
 		LIMIT $%d OFFSET $%d
-	`, whereClause, len(args)-1, len(args))
+	`, transactionSelectExpr, whereClause, len(args)-1, len(args))
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -552,19 +542,11 @@ func (r *transactionRepository) CountByUserID(ctx context.Context, userID string
 // GetByExternalID retrieves a transaction by its provider-specific external ID
 // Used during transaction sync to lookup existing transactions for updates
 func (r *transactionRepository) GetByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) (*domain.Transaction, error) {
-	query := `
-		SELECT id, user_id, account_id, linked_item_id, source,
-		       external_transaction_id, external_metadata, amount, date,
-		       authorized_date, name, merchant_name,
-		       pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url,
-		       payment_channel, pending,
-		       user_notes, created_at, updated_at,
-		       tags, tags_source,
-		       category_override_kind, pfc_primary_override, pfc_detailed_override,
-		       custom_category_override_id, category_source, category_override_date
+	query := fmt.Sprintf(`
+		SELECT %s
 		FROM transactions
 		WHERE source = $1 AND external_transaction_id_blind_idx = $2 AND user_id = $3
-	`
+	`, transactionSelectExpr)
 
 	var tx domain.Transaction
 	var sourceStr string
@@ -853,16 +835,11 @@ func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transa
 
 // GetByID retrieves a transaction by its internal ID
 func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain.Transaction, error) {
-	query := `
-		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
-			   external_metadata, amount, date, authorized_date, name, merchant_name,
-			   pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending, user_notes,
-			   created_at, updated_at, tags, tags_source,
-			   category_override_kind, pfc_primary_override, pfc_detailed_override,
-			   custom_category_override_id, category_source, category_override_date
+	query := fmt.Sprintf(`
+		SELECT %s
 		FROM transactions
 		WHERE id = $1
-	`
+	`, transactionSelectExpr)
 
 	var tx domain.Transaction
 	var source string
@@ -1334,17 +1311,12 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 	// Get paginated transactions
 	pagArgOffset := len(allBaseArgs) + 1
 	selectQuery := fmt.Sprintf(`
-		SELECT id, user_id, account_id, linked_item_id, source, external_transaction_id,
-			   external_metadata, amount, date, authorized_date, name, merchant_name,
-			   pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending, user_notes,
-			   created_at, updated_at, tags, tags_source,
-			   category_override_kind, pfc_primary_override, pfc_detailed_override,
-			   custom_category_override_id, category_source, category_override_date
+		SELECT %s
 		FROM transactions
 		WHERE %s
 		ORDER BY date DESC, created_at DESC
 		LIMIT $%d OFFSET $%d
-	`, whereClause, pagArgOffset, pagArgOffset+1)
+	`, transactionSelectExpr, whereClause, pagArgOffset, pagArgOffset+1)
 
 	selectArgs := append(allBaseArgs, limit, offset)
 	rows, err := r.db.Query(ctx, selectQuery, selectArgs...)
@@ -1363,6 +1335,11 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 // GetByUserAccountID retrieves all transactions for a specific user_account.
 // Issue #171: Provides stable queries across re-links since user_account_id survives
 // when a user re-links a bank (which assigns new item_id and account_id values).
+//
+// NOTE: This SELECT intentionally includes user_account_id at position 5, producing
+// 30 columns instead of the standard 29 in transactionSelectColumns. Columns 1-4 and
+// 6-30 must stay in sync with transactionSelectColumns. If you add a column to
+// transactionSelectColumns, update this SELECT and its Scan() below to match.
 func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error) {
 	query := `
 		SELECT id, user_id, account_id, linked_item_id, user_account_id,
