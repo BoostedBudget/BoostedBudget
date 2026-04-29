@@ -59,6 +59,7 @@ function formatDifference(amount: number, currencyCode: string): string {
  */
 function getSourceTypeLabel(type: IncomeSource['type']): string {
   switch (type) {
+    case 'pfc_primary':
     case 'plaid_category':
       return 'Auto-tracked';
     case 'tag':
@@ -218,7 +219,7 @@ export function BudgetIncomeSection({
                         {source.description || getSourceTypeLabel(source.type)}
                       </span>
                       <span className="text-xs text-muted-foreground">
-                        {source.type === 'plaid_category' && 'Auto-tracked'}
+                        {(source.type === 'pfc_primary' || source.type === 'plaid_category') && 'Auto-tracked'}
                         {source.type === 'tag' && `Tag: ${source.value}`}
                         {source.type === 'manual' && 'Manual'}
                       </span>

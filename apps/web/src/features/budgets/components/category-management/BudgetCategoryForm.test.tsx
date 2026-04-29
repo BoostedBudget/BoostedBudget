@@ -51,7 +51,9 @@ describe('BudgetCategoryForm', () => {
   const createMockCategory = (overrides?: Partial<BudgetCategory>): BudgetCategory => ({
     id: 'cat-1',
     budget_id: 'budget-1',
-    category: ['Food and Drink', 'Restaurants'],
+    category_kind: 'pfc',
+    pfc_primary: 'Food and Drink',
+    pfc_detailed: 'Restaurants',
     allocated_amount: 500,
     spent_amount: 250,
     tags: ['Essential'],
@@ -142,7 +144,7 @@ describe('BudgetCategoryForm', () => {
       )
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      fireEvent.change(categorySelect, { target: { value: 'Food and Drink > Restaurants' } })
+      fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
 
       const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
       fireEvent.change(amountInput, { target: { value: '500' } })
@@ -154,7 +156,9 @@ describe('BudgetCategoryForm', () => {
         expect(mockOnSubmit).toHaveBeenCalledTimes(1)
         expect(mockOnSubmit).toHaveBeenCalledWith(
           expect.objectContaining({
-            category: ['Food and Drink', 'Restaurants'],
+            category_kind: 'pfc',
+            pfc_primary: 'Food and Drink',
+            pfc_detailed: 'Restaurants',
             allocated_amount: 500,
             match_logic: 'category_only',
           })
@@ -247,7 +251,7 @@ describe('BudgetCategoryForm', () => {
       )
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      await user.selectOptions(categorySelect, 'Food and Drink > Restaurants')
+      await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
 
       const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
       await user.clear(amountInput)
@@ -299,7 +303,7 @@ describe('BudgetCategoryForm', () => {
       )
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      fireEvent.change(categorySelect, { target: { value: 'Food and Drink > Restaurants' } })
+      fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
 
       const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
       fireEvent.change(amountInput, { target: { value: '100' } })
@@ -347,7 +351,7 @@ describe('BudgetCategoryForm', () => {
   describe('Submit Behavior', () => {
     const fillFormBasic = () => {
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      fireEvent.change(categorySelect, { target: { value: 'Food and Drink > Restaurants' } })
+      fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
 
       const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
       fireEvent.change(amountInput, { target: { value: '100' } })
@@ -464,7 +468,7 @@ describe('BudgetCategoryForm', () => {
       )
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      fireEvent.change(categorySelect, { target: { value: 'Food and Drink > Restaurants' } })
+      fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
 
       const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
       fireEvent.change(amountInput, { target: { value: '200' } })
@@ -492,7 +496,7 @@ describe('BudgetCategoryForm', () => {
       )
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      fireEvent.change(categorySelect, { target: { value: 'Food and Drink > Restaurants' } })
+      fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
 
       const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
       fireEvent.change(amountInput, { target: { value: '50' } })
@@ -525,7 +529,7 @@ describe('BudgetCategoryForm', () => {
       )
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      await user.selectOptions(categorySelect, 'Food and Drink > Restaurants')
+      await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
 
       await waitFor(() => {
         expect(screen.getByTestId('category-preview')).toBeInTheDocument()
@@ -557,7 +561,7 @@ describe('BudgetCategoryForm', () => {
       )
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      await user.selectOptions(categorySelect, 'Food and Drink > Restaurants')
+      await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
 
       await waitFor(() => {
         expect(screen.getByText(/calculating/i)).toBeInTheDocument()
@@ -586,7 +590,7 @@ describe('BudgetCategoryForm', () => {
       )
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      await user.selectOptions(categorySelect, 'Food and Drink > Restaurants')
+      await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
 
       await waitFor(() => {
         expect(screen.getByText(/unable to load preview/i)).toBeInTheDocument()
@@ -636,7 +640,7 @@ describe('BudgetCategoryForm', () => {
       )
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      await user.selectOptions(categorySelect, 'Food and Drink > Restaurants')
+      await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
 
       expect(screen.queryByTestId('category-preview')).not.toBeInTheDocument()
     })
@@ -663,7 +667,7 @@ describe('BudgetCategoryForm', () => {
       )
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      await user.selectOptions(categorySelect, 'Food and Drink > Restaurants')
+      await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
 
       await waitFor(() => {
         const preview = screen.getByTestId('category-preview')

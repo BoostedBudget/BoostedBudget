@@ -19,6 +19,7 @@ import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
+import { formatPFCPrimary } from '@/shared/categories/formatPfc'
 
 /**
  * Transactions Page
@@ -106,7 +107,7 @@ export function TransactionsPage() {
 
   const handleCategoryFilterChange = useCallback(
     (value: string[]) => {
-      setFilter('categories', value.length > 0 ? value : undefined)
+      setFilter('pfc_primaries', value.length > 0 ? value : undefined)
     },
     [setFilter]
   )
@@ -154,33 +155,27 @@ export function TransactionsPage() {
     currentPage,
   } = useTransactions({ filters, limit: 50 })
 
-  // Category filter options: union of curated PFC primaries + observed transaction categories
+  // Category filter options: curated PFC primaries + observed effective primaries.
+  // Values are raw enum strings (e.g. "FOOD_AND_DRINK") so they match the pfc_primary
+  // column; labels are human-readable display strings.
   const categoryOptions = useMemo<FilterOption[]>(() => {
-    const categorySet = new Set<string>()
+    const enumToDisplay = new Map<string, string>()
 
-    // Seed with curated PFC primaries so brand-new users see all 18 buckets
-    plaidPrimaries.forEach(p => categorySet.add(p.display))
+    // Seed with curated PFC primaries (enum → display)
+    plaidPrimaries.forEach(p => enumToDisplay.set(p.enum, p.display))
 
+    // Add any observed effective primaries not already in the curated list
     const transactions = data?.transactions ?? []
     transactions.forEach((t) => {
-      const category = t.category_override || t.category
-      if (category) {
-        try {
-          const parsed = JSON.parse(category)
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            categorySet.add(parsed[0])
-          }
-        } catch {
-          categorySet.add(category)
-        }
-      } else if (t.personal_finance_category_data?.primary_display) {
-        categorySet.add(t.personal_finance_category_data.primary_display)
+      const effectivePrimary = t.pfc_primary_override ?? t.pfc_primary
+      if (effectivePrimary && !enumToDisplay.has(effectivePrimary)) {
+        enumToDisplay.set(effectivePrimary, formatPFCPrimary(effectivePrimary))
       }
     })
 
-    return Array.from(categorySet)
-      .sort()
-      .map((cat) => ({ value: cat, label: cat }))
+    return Array.from(enumToDisplay.entries())
+      .sort(([, a], [, b]) => a.localeCompare(b))
+      .map(([value, label]) => ({ value, label }))
   }, [data?.transactions, plaidPrimaries])
 
   // Handle opening the transaction editor
@@ -190,16 +185,16 @@ export function TransactionsPage() {
   }
 
   // Handle closing the editor
-  const handleEditorClose = () => {
+  const handleEditorClose = useCallback(() => {
     setIsEditorOpen(false)
     setSelectedTransaction(null)
-  }
+  }, [])
 
   // Handle successful save - update transaction in place for immediate display
-  const handleEditorSave = (updatedTransaction: Transaction) => {
+  const handleEditorSave = useCallback((updatedTransaction: Transaction) => {
     updateTransaction(updatedTransaction)
     handleEditorClose()
-  }
+  }, [updateTransaction, handleEditorClose])
 
   // Handle tag creation - invalidate query to refetch tags
   const handleTagCreated = useCallback(
@@ -271,13 +266,8 @@ export function TransactionsPage() {
           break
         }
         case 'category': {
-          const resolveCat = (t: Transaction) => {
-            const raw = t.category_override || t.category
-            if (raw) {
-              try { return (JSON.parse(raw) as string[])[0] ?? '' } catch { return raw }
-            }
-            return t.personal_finance_category_data?.primary_display ?? ''
-          }
+          const resolveCat = (t: Transaction) =>
+            t.pfc_primary_override ?? t.pfc_primary ?? ''
           comparison = resolveCat(a).localeCompare(resolveCat(b))
           break
         }
@@ -402,7 +392,7 @@ export function TransactionsPage() {
               accountFilter={filters.account_ids}
               onAccountFilterChange={handleAccountFilterChange}
               categoryOptions={categoryOptions}
-              categoryFilter={filters.categories}
+              categoryFilter={filters.pfc_primaries}
               onCategoryFilterChange={handleCategoryFilterChange}
               amountRange={currentAmountRange}
               onAmountRangeChange={handleAmountRangeChange}

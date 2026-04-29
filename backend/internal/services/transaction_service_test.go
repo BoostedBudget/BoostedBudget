@@ -96,8 +96,8 @@ func (m *MockTransactionRepository) UpdateTags(ctx context.Context, id string, u
 	return args.Error(0)
 }
 
-func (m *MockTransactionRepository) UpdateCategory(ctx context.Context, id string, userID string, categoryOverride []string, categorySource domain.CategorySource) error {
-	args := m.Called(ctx, id, userID, categoryOverride, categorySource)
+func (m *MockTransactionRepository) UpdateCategory(ctx context.Context, id string, userID string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) error {
+	args := m.Called(ctx, id, userID, overrideKind, pfcPrimaryOverride, pfcDetailedOverride, customCategoryOverrideID, categorySource)
 	return args.Error(0)
 }
 
@@ -120,19 +120,18 @@ func (m *MockTransactionRepository) GetIncomeSumByTag(ctx context.Context, userI
 	return args.Get(0).(float64), args.Error(1)
 }
 
-func (m *MockTransactionRepository) GetSpentSumForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (float64, error) {
-	args := m.Called(ctx, userID, category, tags, matchLogic, startDate, endDate)
+func (m *MockTransactionRepository) GetSpentSumForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time) (float64, error) {
+	args := m.Called(ctx, userID, budgetCat, startDate, endDate)
 	return args.Get(0).(float64), args.Error(1)
 }
 
-func (m *MockTransactionRepository) GetMatchingTransactionStats(ctx context.Context, userID string, categories [][]string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) {
-	args := m.Called(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+func (m *MockTransactionRepository) GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) {
+	args := m.Called(ctx, userID, categoryKind, pfcPrimary, pfcDetailed, customCategoryID, tags, matchLogic, startDate, endDate)
 	return args.Int(0), args.Get(1).(float64), args.Error(2)
 }
 
-// Issue #499: Transaction-Budget Linking UI
-func (m *MockTransactionRepository) GetTransactionsForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
-	args := m.Called(ctx, userID, category, tags, matchLogic, startDate, endDate, limit, offset)
+func (m *MockTransactionRepository) GetTransactionsForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
+	args := m.Called(ctx, userID, budgetCat, startDate, endDate, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Int(1), args.Get(2).(float64), args.Error(3)
 	}
@@ -503,62 +502,64 @@ func TestTransactionService_GetDistinctPlaidCategories_Error(t *testing.T) {
 }
 
 // ============================================================================
-// Issue #1058: D2 — Parsed PFC data in API responses
+// PFC v2 typed fields in API responses
 // ============================================================================
 
 func ptrStr(s string) *string { return &s }
 
-func TestGetTransactionByID_PopulatesParsedPFC(t *testing.T) {
+func TestGetTransactionByID_ReturnsPFCFields(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockTransactionRepository)
 	service := NewTransactionService(mockRepo)
 
-	pfcJSON := `{"primary":"FOOD_AND_DRINK","detailed":"FOOD_AND_DRINK_FAST_FOOD","confidence_level":"VERY_HIGH"}`
+	primary := "FOOD_AND_DRINK"
+	detailed := "FOOD_AND_DRINK_FAST_FOOD"
+	confidence := "VERY_HIGH"
 	txn := &domain.Transaction{
-		ID:                      "txn-1",
-		UserID:                  "user-1",
-		PersonalFinanceCategory: ptrStr(pfcJSON),
+		ID:                 "txn-1",
+		UserID:             "user-1",
+		PFCPrimary:         &primary,
+		PFCDetailed:        &detailed,
+		PFCConfidenceLevel: &confidence,
 	}
 	mockRepo.On("GetByID", ctx, "txn-1").Return(txn, nil)
 
 	result, err := service.GetTransactionByID(ctx, "user-1", "txn-1")
 	require.NoError(t, err)
-	require.NotNil(t, result.PersonalFinanceCategoryData, "parsed PFC should be populated")
-	assert.Equal(t, "FOOD_AND_DRINK", result.PersonalFinanceCategoryData.Primary)
-	assert.Equal(t, "Food And Drink", result.PersonalFinanceCategoryData.PrimaryDisplay)
-	assert.Equal(t, "FOOD_AND_DRINK_FAST_FOOD", result.PersonalFinanceCategoryData.Detailed)
-	assert.Equal(t, "Fast Food", result.PersonalFinanceCategoryData.DetailedDisplay)
-	assert.Equal(t, "VERY_HIGH", result.PersonalFinanceCategoryData.ConfidenceLevel)
+	require.NotNil(t, result.PFCPrimary)
+	assert.Equal(t, "FOOD_AND_DRINK", *result.PFCPrimary)
+	assert.Equal(t, "FOOD_AND_DRINK_FAST_FOOD", *result.PFCDetailed)
+	assert.Equal(t, "VERY_HIGH", *result.PFCConfidenceLevel)
 	mockRepo.AssertExpectations(t)
 }
 
-func TestGetTransactionByID_NilPFC_NoParsedData(t *testing.T) {
+func TestGetTransactionByID_NilPFC(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockTransactionRepository)
 	service := NewTransactionService(mockRepo)
 
 	txn := &domain.Transaction{
-		ID:                      "txn-1",
-		UserID:                  "user-1",
-		PersonalFinanceCategory: nil,
+		ID:     "txn-1",
+		UserID: "user-1",
 	}
 	mockRepo.On("GetByID", ctx, "txn-1").Return(txn, nil)
 
 	result, err := service.GetTransactionByID(ctx, "user-1", "txn-1")
 	require.NoError(t, err)
-	assert.Nil(t, result.PersonalFinanceCategoryData, "no PFC data should be populated when raw JSON is nil")
+	assert.Nil(t, result.PFCPrimary)
 	mockRepo.AssertExpectations(t)
 }
 
-func TestListTransactions_PopulatesParsedPFC(t *testing.T) {
+func TestListTransactions_ReturnsPFCFields(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockTransactionRepository)
 	service := NewTransactionService(mockRepo)
 
-	pfcJSON := `{"primary":"TRANSPORTATION","detailed":"TRANSPORTATION_TAXIS_AND_RIDE_SHARES","confidence_level":"HIGH"}`
+	primary1 := "TRANSPORTATION"
+	detailed1 := "TRANSPORTATION_TAXIS_AND_RIDE_SHARES"
 	transactions := []domain.Transaction{
-		{ID: "txn-1", UserID: "user-1", PersonalFinanceCategory: ptrStr(pfcJSON)},
-		{ID: "txn-2", UserID: "user-1", PersonalFinanceCategory: nil},
+		{ID: "txn-1", UserID: "user-1", PFCPrimary: &primary1, PFCDetailed: &detailed1},
+		{ID: "txn-2", UserID: "user-1"},
 	}
 	mockRepo.On("GetByUserIDWithFilters", ctx, "user-1", mock.Anything, 50, 0).Return(transactions, nil)
 	mockRepo.On("CountByUserID", ctx, "user-1", mock.Anything).Return(2, nil)
@@ -567,11 +568,9 @@ func TestListTransactions_PopulatesParsedPFC(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, resp.Transactions, 2)
 
-	require.NotNil(t, resp.Transactions[0].PersonalFinanceCategoryData, "PFC data should be populated for txn-1")
-	assert.Equal(t, "TRANSPORTATION", resp.Transactions[0].PersonalFinanceCategoryData.Primary)
-	assert.Equal(t, "Transportation", resp.Transactions[0].PersonalFinanceCategoryData.PrimaryDisplay)
-	assert.Equal(t, "Taxis And Ride Shares", resp.Transactions[0].PersonalFinanceCategoryData.DetailedDisplay)
-
-	assert.Nil(t, resp.Transactions[1].PersonalFinanceCategoryData, "PFC data should be nil when raw JSON is nil")
+	require.NotNil(t, resp.Transactions[0].PFCPrimary)
+	assert.Equal(t, "TRANSPORTATION", *resp.Transactions[0].PFCPrimary)
+	assert.Equal(t, "TRANSPORTATION_TAXIS_AND_RIDE_SHARES", *resp.Transactions[0].PFCDetailed)
+	assert.Nil(t, resp.Transactions[1].PFCPrimary)
 	mockRepo.AssertExpectations(t)
 }

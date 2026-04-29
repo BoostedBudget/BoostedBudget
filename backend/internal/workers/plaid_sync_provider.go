@@ -2,7 +2,6 @@ package workers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -258,119 +257,16 @@ func (p *plaidSyncProvider) processRemoved(ctx context.Context, linkedItem *doma
 
 // convertPlaidTransaction converts a Plaid transaction to domain.Transaction
 func (p *plaidSyncProvider) convertPlaidTransaction(linkedItem *domain.LinkedItem, plaidTxn plaid.Transaction) (*domain.Transaction, error) {
-	// Parse date
-	date, err := time.Parse("2006-01-02", plaidTxn.Date)
+	tx, err := services.MapPlaidTransactionBase(plaidTxn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse transaction date: %w", err)
-	}
-
-	// Parse authorized_date if present
-	var authorizedDate *time.Time
-	if plaidTxn.AuthorizedDate.Get() != nil {
-		ad, err := time.Parse("2006-01-02", *plaidTxn.AuthorizedDate.Get())
-		if err == nil {
-			authorizedDate = &ad
-		}
-	}
-
-	// Serialize external metadata as JSON
-	externalMetadata, err := p.buildExternalMetadata(plaidTxn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize external metadata: %w", err)
-	}
-
-	// Serialize category array as JSON. When Plaid sends no legacy category but does send
-	// personal_finance_category (PFC v2), synthesize a display-friendly array from PFC.
-	var categoryJSON *string
-	if len(plaidTxn.Category) > 0 {
-		catBytes, _ := json.Marshal(plaidTxn.Category)
-		catStr := string(catBytes)
-		categoryJSON = &catStr
-	} else if plaidTxn.PersonalFinanceCategory.IsSet() {
-		pfc := plaidTxn.PersonalFinanceCategory.Get()
-		if pfc != nil && pfc.Primary != "" {
-			derived := services.PFCToCategoryArray(pfc.Primary, pfc.Detailed)
-			if derived != nil {
-				catBytes, _ := json.Marshal(derived)
-				catStr := string(catBytes)
-				categoryJSON = &catStr
-			}
-		}
-	}
-
-	// Serialize personal finance category as JSON
-	var pfCategoryJSON *string
-	if plaidTxn.PersonalFinanceCategory.IsSet() {
-		pfBytes, _ := json.Marshal(plaidTxn.PersonalFinanceCategory.Get())
-		pfStr := string(pfBytes)
-		pfCategoryJSON = &pfStr
-	}
-
-	// Get payment channel
-	var paymentChannel *string
-	if plaidTxn.PaymentChannel != "" {
-		paymentChannel = &plaidTxn.PaymentChannel
-	}
-
-	// Get merchant name
-	var merchantName *string
-	if plaidTxn.MerchantName.Get() != nil {
-		merchantName = plaidTxn.MerchantName.Get()
+		return nil, fmt.Errorf("failed to map plaid transaction %s: %w", plaidTxn.GetTransactionId(), err)
 	}
 
 	externalID := plaidTxn.GetTransactionId()
+	tx.UserID = linkedItem.UserID
+	tx.AccountID = plaidTxn.AccountId
+	tx.LinkedItemID = linkedItem.ID
+	tx.ExternalTransactionID = &externalID
 
-	return &domain.Transaction{
-		UserID:                  linkedItem.UserID,
-		AccountID:               plaidTxn.AccountId, // This should be mapped from Plaid account ID to our account UUID
-		LinkedItemID:            linkedItem.ID,
-		Source:                  domain.SourcePlaid,
-		ExternalTransactionID:   &externalID,
-		ExternalMetadata:        externalMetadata,
-		Amount:                  plaidTxn.Amount,
-		Date:                    date,
-		AuthorizedDate:          authorizedDate,
-		Name:                    plaidTxn.Name,
-		MerchantName:            merchantName,
-		Category:                categoryJSON,
-		PersonalFinanceCategory: pfCategoryJSON,
-		PaymentChannel:          paymentChannel,
-		Pending:                 plaidTxn.GetPending(),
-		UserNotes:               nil,
-	}, nil
-}
-
-// buildExternalMetadata creates JSON metadata from Plaid-specific fields
-func (p *plaidSyncProvider) buildExternalMetadata(plaidTxn plaid.Transaction) (*string, error) {
-	metadata := make(map[string]interface{})
-
-	// Include Plaid-specific fields that don't have direct domain equivalents
-	if plaidTxn.Website.Get() != nil {
-		metadata["website"] = *plaidTxn.Website.Get()
-	}
-
-	// Location is a struct, check if it has meaningful data
-	location := plaidTxn.Location
-	if location.City.Get() != nil || location.Region.Get() != nil {
-		metadata["location"] = location
-	}
-
-	// PaymentMeta is a struct, check if it has meaningful data
-	paymentMeta := plaidTxn.PaymentMeta
-	if paymentMeta.ReferenceNumber.Get() != nil || paymentMeta.PpdId.Get() != nil {
-		metadata["payment_meta"] = paymentMeta
-	}
-
-	// Only serialize if we have data
-	if len(metadata) == 0 {
-		return nil, nil
-	}
-
-	bytes, err := json.Marshal(metadata)
-	if err != nil {
-		return nil, err
-	}
-
-	metadataStr := string(bytes)
-	return &metadataStr, nil
+	return tx, nil
 }

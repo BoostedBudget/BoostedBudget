@@ -13,9 +13,11 @@ export type BudgetPeriod = 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'cust
 // =============================================================================
 
 /**
- * Income source type - matches backend domain.IncomeSourceType
+ * Income source type - matches backend domain.IncomeSourceType.
+ * 'pfc_primary' is the canonical backend value; 'plaid_category' is kept for
+ * backward compatibility with any existing saved budget data that uses the old name.
  */
-export type IncomeSourceType = 'plaid_category' | 'tag' | 'manual';
+export type IncomeSourceType = 'pfc_primary' | 'plaid_category' | 'tag' | 'manual';
 
 /**
  * Income source configuration - matches backend domain.IncomeSource
@@ -26,16 +28,18 @@ export interface IncomeSource {
   description?: string; // Optional user-friendly label
 }
 
-// Budget category allocation within a budget
+// Budget category allocation within a budget (PFC v2 canonical)
 export interface BudgetCategory {
   id: string;
   budget_id: string;
-  category: string[]; // Hierarchical category array e.g., ["Food and Drink", "Restaurants"]
+  category_kind: string; // 'pfc' | 'custom'
+  pfc_primary?: string;
+  pfc_detailed?: string;
+  custom_category_id?: string;
   allocated_amount: number;
   spent_amount: number;
   created_at: string;
   updated_at: string;
-  // Issue #495: Envelope budgeting - flexible matching
   tags: string[];
   match_logic: MatchLogic;
 }
@@ -124,9 +128,11 @@ export interface UpdateBudgetRequest {
 }
 
 export interface CreateBudgetCategoryRequest {
-  category: string[];
+  category_kind: string; // 'pfc' | 'custom'
+  pfc_primary?: string;
+  pfc_detailed?: string;
+  custom_category_id?: string;
   allocated_amount: number;
-  // Issue #495: Envelope budgeting
   tags?: string[];
   match_logic?: MatchLogic;
 }
@@ -197,9 +203,19 @@ export function computeSavingsRemaining(goal: SavingsGoal): number {
   return remaining < 0 ? 0 : remaining;
 }
 
-// Format category hierarchy for display
+/** @deprecated Use formatBudgetCategoryLabel instead */
 export function formatCategoryPath(category: string[]): string {
   return category.join(' > ');
+}
+
+// Format a budget category for display (PFC v2 canonical)
+export function formatBudgetCategoryLabel(cat: Pick<BudgetCategory, 'category_kind' | 'pfc_primary' | 'pfc_detailed' | 'custom_category_id'>): string {
+  if (cat.category_kind === 'custom') {
+    return cat.custom_category_id || 'Custom'
+  }
+  if (cat.pfc_detailed) return cat.pfc_detailed
+  if (cat.pfc_primary) return cat.pfc_primary
+  return 'Uncategorized'
 }
 
 // =============================================================================

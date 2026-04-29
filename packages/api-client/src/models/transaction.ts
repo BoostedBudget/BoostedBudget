@@ -28,7 +28,6 @@ Multi-region support planned for Phase 7+.
  * OpenAPI spec version: 1.0.0
  */
 import type { Account } from "./account";
-import type { ParsedPersonalFinanceCategoryData } from "./parsedPersonalFinanceCategoryData";
 import type { TagSource } from "./tagSource";
 
 export interface Transaction {
@@ -38,11 +37,11 @@ export interface Transaction {
   account_id: string;
   amount: number;
   authorized_date?: string;
-  category?: string;
-  category_override?: string;
   category_override_date?: string;
+  category_override_kind?: string;
   category_source: string;
   created_at: string;
+  custom_category_override_id?: string;
   date: string;
   external_metadata?: string;
   external_transaction_id?: string;
@@ -50,11 +49,14 @@ export interface Transaction {
   linked_item_id: string;
   merchant_name?: string;
   name: string;
-  original_category?: string;
   payment_channel?: string;
   pending: boolean;
-  personal_finance_category?: string;
-  personal_finance_category_data?: ParsedPersonalFinanceCategoryData;
+  pfc_category_icon_url?: string;
+  pfc_confidence_level?: string;
+  pfc_detailed?: string;
+  pfc_detailed_override?: string;
+  pfc_primary?: string;
+  pfc_primary_override?: string;
   source: string;
   /** @nullable */
   tags: string[] | null;

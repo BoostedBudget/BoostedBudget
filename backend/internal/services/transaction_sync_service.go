@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -397,13 +396,11 @@ func (s *transactionSyncService) mapPlaidTransaction(
 	accountMap map[string]string,
 	userAccountMap map[string]string,
 ) (*domain.Transaction, error) {
-	// Map Plaid account_id to internal account UUID
 	internalAccountID, found := accountMap[plaidTxn.AccountId]
 	if !found {
 		return nil, fmt.Errorf("account not found for plaid_account_id %s", plaidTxn.AccountId)
 	}
 
-	// Map to stable UserAccountID if available
 	var userAccountID *string
 	if len(userAccountMap) > 0 {
 		if uaID, found := userAccountMap[plaidTxn.AccountId]; found {
@@ -411,132 +408,19 @@ func (s *transactionSyncService) mapPlaidTransaction(
 		}
 	}
 
-	// Parse transaction date (required)
-	date, err := time.Parse("2006-01-02", plaidTxn.Date)
+	tx, err := MapPlaidTransactionBase(plaidTxn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse transaction date %s: %w", plaidTxn.Date, err)
-	}
-
-	// Parse authorized_date (optional)
-	var authorizedDate *time.Time
-	if plaidTxn.AuthorizedDate.Get() != nil {
-		ad, err := time.Parse("2006-01-02", *plaidTxn.AuthorizedDate.Get())
-		if err == nil { // Ignore parse errors for optional field
-			authorizedDate = &ad
-		}
-	}
-
-	// Serialize external metadata (Plaid-specific fields)
-	externalMetadata, err := s.buildExternalMetadata(plaidTxn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize external metadata: %w", err)
-	}
-
-	// Serialize category array as JSON. When Plaid sends no legacy category but does send
-	// personal_finance_category (PFC v2), synthesize a display-friendly array from PFC so
-	// downstream consumers (rule engine, budget matcher, display) never see a NULL.
-	var categoryJSON *string
-	if len(plaidTxn.Category) > 0 {
-		catBytes, _ := json.Marshal(plaidTxn.Category)
-		catStr := string(catBytes)
-		categoryJSON = &catStr
-	} else if plaidTxn.PersonalFinanceCategory.IsSet() {
-		pfc := plaidTxn.PersonalFinanceCategory.Get()
-		if pfc != nil && pfc.Primary != "" {
-			derived := PFCToCategoryArray(pfc.Primary, pfc.Detailed)
-			if derived != nil {
-				catBytes, _ := json.Marshal(derived)
-				catStr := string(catBytes)
-				categoryJSON = &catStr
-			}
-		}
-	}
-
-	// OriginalCategory faithfully mirrors the legacy Plaid category array only.
-	// It is intentionally NOT set from synthesized PFC data so that "reset to original"
-	// semantics remain meaningful (NULL = Plaid never sent a legacy category).
-	var originalCategoryJSON *string
-	if len(plaidTxn.Category) > 0 {
-		originalCategoryJSON = categoryJSON
-	}
-
-	// Serialize personal finance category as JSON
-	var pfCategoryJSON *string
-	if plaidTxn.PersonalFinanceCategory.IsSet() {
-		pfBytes, _ := json.Marshal(plaidTxn.PersonalFinanceCategory.Get())
-		pfStr := string(pfBytes)
-		pfCategoryJSON = &pfStr
-	}
-
-	// Extract optional fields
-	var paymentChannel *string
-	if plaidTxn.PaymentChannel != "" {
-		paymentChannel = &plaidTxn.PaymentChannel
-	}
-
-	var merchantName *string
-	if plaidTxn.MerchantName.Get() != nil {
-		merchantName = plaidTxn.MerchantName.Get()
+		return nil, fmt.Errorf("failed to map plaid transaction %s: %w", plaidTxn.GetTransactionId(), err)
 	}
 
 	externalID := plaidTxn.GetTransactionId()
+	tx.UserID = userID
+	tx.AccountID = internalAccountID
+	tx.LinkedItemID = linkedItemID
+	tx.UserAccountID = userAccountID
+	tx.ExternalTransactionID = &externalID
 
-	return &domain.Transaction{
-		UserID:                  userID,
-		AccountID:               internalAccountID,
-		LinkedItemID:            linkedItemID,
-		UserAccountID:           userAccountID,
-		Source:                  domain.SourcePlaid,
-		ExternalTransactionID:   &externalID,
-		ExternalMetadata:        externalMetadata,
-		Amount:                  plaidTxn.Amount,
-		Date:                    date,
-		AuthorizedDate:          authorizedDate,
-		Name:                    plaidTxn.Name,
-		MerchantName:            merchantName,
-		Category:                categoryJSON,
-		OriginalCategory:        originalCategoryJSON,
-		PersonalFinanceCategory: pfCategoryJSON,
-		PaymentChannel:          paymentChannel,
-		Pending:                 plaidTxn.GetPending(),
-		UserNotes:               nil,
-	}, nil
-}
-
-// buildExternalMetadata creates JSON metadata from Plaid-specific fields
-// that don't have direct domain equivalents.
-func (s *transactionSyncService) buildExternalMetadata(plaidTxn plaid.Transaction) (*string, error) {
-	metadata := make(map[string]interface{})
-
-	// Include Plaid-specific fields
-	if plaidTxn.Website.Get() != nil {
-		metadata["website"] = *plaidTxn.Website.Get()
-	}
-
-	// Location data
-	location := plaidTxn.Location
-	if location.City.Get() != nil || location.Region.Get() != nil {
-		metadata["location"] = location
-	}
-
-	// Payment metadata
-	paymentMeta := plaidTxn.PaymentMeta
-	if paymentMeta.ReferenceNumber.Get() != nil || paymentMeta.PpdId.Get() != nil {
-		metadata["payment_meta"] = paymentMeta
-	}
-
-	// Only serialize if we have data
-	if len(metadata) == 0 {
-		return nil, nil
-	}
-
-	bytes, err := json.Marshal(metadata)
-	if err != nil {
-		return nil, err
-	}
-
-	metadataStr := string(bytes)
-	return &metadataStr, nil
+	return tx, nil
 }
 
 // processAddedTransactions stores newly added transactions in the database.

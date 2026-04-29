@@ -16,7 +16,7 @@ import (
 // TransactionStatsCalculator is a minimal interface for calculating transaction stats.
 // This follows the minimal dependency interface pattern used throughout the codebase.
 type TransactionStatsCalculator interface {
-	GetMatchingTransactionStats(ctx context.Context, userID string, categories [][]string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (count int, totalAmount float64, err error)
+	GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (count int, totalAmount float64, err error)
 }
 
 // CategoryPreviewService provides transaction preview functionality for budget category configuration.
@@ -58,25 +58,26 @@ func (s *categoryPreviewService) PreviewCategoryMatches(ctx context.Context, use
 	// Set end date to end of day for inclusive range
 	endDate = endDate.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
 
-	// Validate that we have categories or tags depending on match logic
+	// Validate that we have a category or tags depending on match logic
+	hasCategoryKind := req.CategoryKind != ""
 	switch req.MatchLogic {
 	case domain.MatchLogicCategoryOnly:
-		if len(req.Categories) == 0 {
-			return nil, errors.New("at least one category is required for category_only match logic")
+		if !hasCategoryKind {
+			return nil, errors.New("category_kind is required for category_only match logic")
 		}
 	case domain.MatchLogicTagOnly:
 		if len(req.Tags) == 0 {
 			return nil, errors.New("at least one tag is required for tag_only match logic")
 		}
 	case domain.MatchLogicAnd:
-		if len(req.Categories) == 0 {
-			return nil, errors.New("at least one category is required for and match logic")
+		if !hasCategoryKind {
+			return nil, errors.New("category_kind is required for and match logic")
 		}
 		if len(req.Tags) == 0 {
 			return nil, errors.New("at least one tag is required for and match logic")
 		}
 	case domain.MatchLogicOr:
-		if len(req.Categories) == 0 && len(req.Tags) == 0 {
+		if !hasCategoryKind && len(req.Tags) == 0 {
 			return nil, errors.New("at least one category or tag is required for or match logic")
 		}
 	}
@@ -84,7 +85,10 @@ func (s *categoryPreviewService) PreviewCategoryMatches(ctx context.Context, use
 	count, totalAmount, err := s.statsCalculator.GetMatchingTransactionStats(
 		ctx,
 		userID,
-		req.Categories,
+		req.CategoryKind,
+		req.PFCPrimary,
+		req.PFCDetailed,
+		req.CustomCategoryID,
 		req.Tags,
 		req.MatchLogic,
 		startDate,

@@ -155,8 +155,10 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
   const categoryOptions = useMemo<FilterOption[]>(() => {
     const cats = new Set<string>()
     rules.forEach((rule) => {
-      if (rule.target_category?.[0]) {
-        cats.add(rule.target_category[0])
+      if (rule.target_kind === 'pfc' && rule.target_pfc_primary) {
+        cats.add(rule.target_pfc_primary)
+      } else if (rule.target_kind === 'custom' && rule.target_custom_category_id) {
+        cats.add(rule.target_custom_category_id)
       }
     })
     return Array.from(cats)
@@ -179,11 +181,17 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
       })
     }
 
-    // Apply category filter
+    // Apply category filter — match either PFC primary or custom category id
     if (categoryFilter.length > 0) {
-      filtered = filtered.filter((rule) =>
-        rule.target_category?.[0] && categoryFilter.includes(rule.target_category[0])
-      )
+      filtered = filtered.filter((rule) => {
+        if (rule.target_kind === 'pfc' && rule.target_pfc_primary) {
+          return categoryFilter.includes(rule.target_pfc_primary)
+        }
+        if (rule.target_kind === 'custom' && rule.target_custom_category_id) {
+          return categoryFilter.includes(rule.target_custom_category_id)
+        }
+        return false
+      })
     }
 
     // Apply priority range filter
@@ -220,9 +228,12 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
           break
         }
         case 'category': {
-          const catA = a.target_category?.[0] || ''
-          const catB = b.target_category?.[0] || ''
-          comparison = catA.localeCompare(catB)
+          const ruleTargetKey = (r: typeof a): string => {
+            if (r.target_kind === 'pfc' && r.target_pfc_primary) return r.target_pfc_primary
+            if (r.target_kind === 'custom' && r.target_custom_category_id) return r.target_custom_category_id
+            return ''
+          }
+          comparison = ruleTargetKey(a).localeCompare(ruleTargetKey(b))
           break
         }
       }

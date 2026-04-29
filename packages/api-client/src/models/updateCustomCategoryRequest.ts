@@ -34,5 +34,5 @@ export interface UpdateCustomCategoryRequest {
   color?: string;
   icon?: string;
   name?: string;
-  parent_category?: string;
+  parent_pfc_primary?: string;
 }

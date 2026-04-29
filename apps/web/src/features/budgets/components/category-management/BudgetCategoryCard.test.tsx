@@ -30,7 +30,9 @@ describe('BudgetCategoryCard', () => {
   const createMockCategory = (overrides?: Partial<BudgetCategory>): BudgetCategory => ({
     id: 'cat-1',
     budget_id: 'budget-1',
-    category: ['Food and Drink', 'Restaurants'],
+    category_kind: 'pfc',
+    pfc_primary: 'FOOD_AND_DRINK',
+    pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
     allocated_amount: 500,
     spent_amount: 250,
     tags: [],
@@ -50,14 +52,14 @@ describe('BudgetCategoryCard', () => {
       const category = createMockCategory()
       render(<BudgetCategoryCard category={category} />)
 
-      expect(screen.getByText('Food and Drink > Restaurants')).toBeInTheDocument()
+      expect(screen.getByText('FOOD_AND_DRINK_RESTAURANTS')).toBeInTheDocument()
     })
 
     it('should render single-level category path correctly', () => {
-      const category = createMockCategory({ category: ['Shopping'] })
+      const category = createMockCategory({ pfc_primary: 'GENERAL_MERCHANDISE', pfc_detailed: undefined })
       render(<BudgetCategoryCard category={category} />)
 
-      expect(screen.getByText('Shopping')).toBeInTheDocument()
+      expect(screen.getByText('GENERAL_MERCHANDISE')).toBeInTheDocument()
     })
 
     it('should render allocated amount formatted as currency', () => {
@@ -172,7 +174,7 @@ describe('BudgetCategoryCard', () => {
       )
 
       expect(screen.getByRole('article')).toBeInTheDocument()
-      expect(screen.getByRole('heading')).toHaveTextContent('Food and Drink > Restaurants')
+      expect(screen.getByRole('heading')).toHaveTextContent('FOOD_AND_DRINK_RESTAURANTS')
       expect(screen.getByRole('button', { name: /edit/i })).toHaveAttribute('aria-label')
       expect(screen.getByRole('button', { name: /delete/i })).toHaveAttribute('aria-label')
     })

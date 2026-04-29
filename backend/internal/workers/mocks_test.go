@@ -238,8 +238,8 @@ func (m *MockTransactionRepository) UpdateTags(ctx context.Context, id string, u
 	return args.Error(0)
 }
 
-func (m *MockTransactionRepository) UpdateCategory(ctx context.Context, id string, userID string, categoryOverride []string, categorySource domain.CategorySource) error {
-	args := m.Called(ctx, id, userID, categoryOverride, categorySource)
+func (m *MockTransactionRepository) UpdateCategory(ctx context.Context, id string, userID string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) error {
+	args := m.Called(ctx, id, userID, overrideKind, pfcPrimaryOverride, pfcDetailedOverride, customCategoryOverrideID, categorySource)
 	return args.Error(0)
 }
 
@@ -263,20 +263,20 @@ func (m *MockTransactionRepository) GetIncomeSumByTag(ctx context.Context, userI
 }
 
 // Issue #493: Budget Category Matching Service method
-func (m *MockTransactionRepository) GetSpentSumForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (float64, error) {
-	args := m.Called(ctx, userID, category, tags, matchLogic, startDate, endDate)
+func (m *MockTransactionRepository) GetSpentSumForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time) (float64, error) {
+	args := m.Called(ctx, userID, budgetCat, startDate, endDate)
 	return args.Get(0).(float64), args.Error(1)
 }
 
 // Issue #497: Category Preview Service method
-func (m *MockTransactionRepository) GetMatchingTransactionStats(ctx context.Context, userID string, categories [][]string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) {
-	args := m.Called(ctx, userID, categories, tags, matchLogic, startDate, endDate)
+func (m *MockTransactionRepository) GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) {
+	args := m.Called(ctx, userID, categoryKind, pfcPrimary, pfcDetailed, customCategoryID, tags, matchLogic, startDate, endDate)
 	return args.Int(0), args.Get(1).(float64), args.Error(2)
 }
 
 // Issue #499: Transaction-Budget Linking UI
-func (m *MockTransactionRepository) GetTransactionsForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
-	args := m.Called(ctx, userID, category, tags, matchLogic, startDate, endDate, limit, offset)
+func (m *MockTransactionRepository) GetTransactionsForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
+	args := m.Called(ctx, userID, budgetCat, startDate, endDate, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Int(1), args.Get(2).(float64), args.Error(3)
 	}

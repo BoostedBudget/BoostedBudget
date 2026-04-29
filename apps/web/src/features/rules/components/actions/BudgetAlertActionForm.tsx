@@ -9,7 +9,7 @@
 import { useCallback, useMemo } from 'react'
 import { useBudgets } from '../../../budgets/hooks/useBudgets'
 import type { AlertAction, NotificationChannel, ThresholdType } from '../../types'
-import { formatCategoryPath } from '../../../budgets/types'
+import { formatBudgetCategoryLabel } from '../../../budgets/types'
 
 export interface BudgetAlertActionFormProps {
   /** Current action configuration */
@@ -183,7 +183,7 @@ export function BudgetAlertActionForm({
             <option value="">All Categories</option>
             {categories.map((category) => (
               <option key={category.id} value={category.id}>
-                {formatCategoryPath(category.category)}
+                {formatBudgetCategoryLabel(category)}
               </option>
             ))}
           </select>

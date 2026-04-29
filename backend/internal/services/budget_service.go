@@ -123,16 +123,18 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 	// Create categories if provided
 	for _, catReq := range req.Categories {
 		category := &domain.BudgetCategory{
-			ID:              uuid.New().String(),
-			BudgetID:        budget.ID,
-			Category:        catReq.Category,
-			AllocatedAmount: catReq.AllocatedAmount,
-			SpentAmount:     0,
-			CreatedAt:       time.Now(),
-			UpdatedAt:       time.Now(),
-			// Flexible matching fields (Issue #491)
-			Tags:       catReq.Tags,
-			MatchLogic: catReq.MatchLogic,
+			ID:               uuid.New().String(),
+			BudgetID:         budget.ID,
+			CategoryKind:     catReq.CategoryKind,
+			PFCPrimary:       catReq.PFCPrimary,
+			PFCDetailed:      catReq.PFCDetailed,
+			CustomCategoryID: catReq.CustomCategoryID,
+			AllocatedAmount:  catReq.AllocatedAmount,
+			SpentAmount:      0,
+			CreatedAt:        time.Now(),
+			UpdatedAt:        time.Now(),
+			Tags:             catReq.Tags,
+			MatchLogic:       catReq.MatchLogic,
 		}
 
 		if err := s.budgetRepo.CreateCategory(ctx, category); err != nil {
@@ -363,16 +365,18 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 
 	// Create the category
 	category := &domain.BudgetCategory{
-		ID:              uuid.New().String(),
-		BudgetID:        budgetID,
-		Category:        req.Category,
-		AllocatedAmount: req.AllocatedAmount,
-		SpentAmount:     0,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
-		// Flexible matching fields (Issue #491)
-		Tags:       req.Tags,
-		MatchLogic: req.MatchLogic,
+		ID:               uuid.New().String(),
+		BudgetID:         budgetID,
+		CategoryKind:     req.CategoryKind,
+		PFCPrimary:       req.PFCPrimary,
+		PFCDetailed:      req.PFCDetailed,
+		CustomCategoryID: req.CustomCategoryID,
+		AllocatedAmount:  req.AllocatedAmount,
+		SpentAmount:      0,
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+		Tags:             req.Tags,
+		MatchLogic:       req.MatchLogic,
 	}
 
 	// Validate
@@ -524,25 +528,26 @@ func (s *budgetService) GetAvailableCategories(ctx context.Context, userID strin
 	var result []string
 
 	for _, cat := range customCats {
-		var display string
-		if cat.ParentCategory != nil && *cat.ParentCategory != "" {
-			display = *cat.ParentCategory + " > " + cat.Name
-		} else {
-			display = cat.Name
-		}
-		result = append(result, display)
-		customNorms[strings.ToLower(strings.TrimSpace(display))] = struct{}{}
+		result = append(result, cat.Name)
+		customNorms[strings.ToLower(strings.TrimSpace(cat.Name))] = struct{}{}
 	}
 
 	// Merge curated PFCv2 primaries; skip entries already covered by a custom category.
+	// Return enum values (e.g. "FOOD_AND_DRINK") so BudgetCategoryForm can pass them
+	// directly as pfc_primary to the API without a display→enum conversion step.
+	// Check both the display form ("food and drink") and the enum form ("food_and_drink")
+	// so a custom category named either way suppresses the curated duplicate.
 	const uncategorizedNorm = "uncategorized"
 	for _, primary := range pfc.AllPrimaries() {
-		norm := strings.ToLower(strings.TrimSpace(primary.Display))
-		if norm == uncategorizedNorm {
+		displayNorm := strings.ToLower(strings.TrimSpace(primary.Display))
+		enumNorm := strings.ToLower(strings.TrimSpace(primary.Enum))
+		if displayNorm == uncategorizedNorm || enumNorm == uncategorizedNorm {
 			continue
 		}
-		if _, exists := customNorms[norm]; !exists {
-			result = append(result, primary.Display)
+		_, displayExists := customNorms[displayNorm]
+		_, enumExists := customNorms[enumNorm]
+		if !displayExists && !enumExists {
+			result = append(result, primary.Enum)
 		}
 	}
 

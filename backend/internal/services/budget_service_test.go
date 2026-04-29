@@ -97,8 +97,8 @@ func (m *MockBudgetRepository) DeleteCategory(ctx context.Context, id, budgetID 
 	return args.Error(0)
 }
 
-func (m *MockBudgetRepository) GetCategoriesMatchingTransaction(ctx context.Context, userID string, transactionCategory []string) ([]domain.BudgetCategory, error) {
-	args := m.Called(ctx, userID, transactionCategory)
+func (m *MockBudgetRepository) GetCategoriesMatchingTransaction(ctx context.Context, userID string, effective *domain.EffectiveCategory) ([]domain.BudgetCategory, error) {
+	args := m.Called(ctx, userID, effective)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -567,7 +567,8 @@ func TestBudgetService_AddCategory_Success(t *testing.T) {
 	existingBudget := createTestBudgetForService(userID)
 
 	req := &domain.CreateBudgetCategoryRequest{
-		Category:        []string{"Food And Drink"},
+		CategoryKind:    "pfc",
+		PFCPrimary:      strPtr("FOOD_AND_DRINK"),
 		AllocatedAmount: 300.00,
 	}
 
@@ -604,7 +605,8 @@ func TestBudgetService_UpdateCategory_Success(t *testing.T) {
 		{
 			ID:              categoryID,
 			BudgetID:        budgetID,
-			Category:        []string{"Food And Drink"},
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
 			AllocatedAmount: 300.00,
 		},
 	}
@@ -642,9 +644,9 @@ func TestBudgetService_DeleteCategory_Success(t *testing.T) {
 	existingBudget := createTestBudgetForService(userID)
 	existingBudget.Categories = []domain.BudgetCategory{
 		{
-			ID:       categoryID,
-			BudgetID: budgetID,
-			Category: []string{"Food And Drink"},
+			ID:           categoryID,
+			BudgetID:     budgetID,
+			CategoryKind: "pfc",
 		},
 	}
 
@@ -677,7 +679,7 @@ func TestBudgetService_GetAvailableCategories_Success(t *testing.T) {
 	// Custom categories
 	customCats := []*domain.CustomCategory{
 		{ID: "cat-1", UserID: userID, Name: "Groceries"},
-		{ID: "cat-2", UserID: userID, Name: "Dining", ParentCategory: strPtr("Food")},
+		{ID: "cat-2", UserID: userID, Name: "Dining", ParentPFCPrimary: strPtr("FOOD_AND_DRINK")},
 	}
 
 	// Setup mocks — no GetDistinctPlaidCategories call expected (replaced by pfc.AllPrimaries())
@@ -689,13 +691,14 @@ func TestBudgetService_GetAvailableCategories_Success(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, categories)
-	// Custom categories
+	// Custom categories returned as-is (user-entered names)
 	assert.Contains(t, categories, "Groceries")
-	assert.Contains(t, categories, "Food > Dining")
-	// Curated PFCv2 primaries present
-	assert.Contains(t, categories, "Food And Drink")
-	assert.Contains(t, categories, "Transportation")
-	assert.Contains(t, categories, "Entertainment")
+	assert.Contains(t, categories, "Dining")
+	// Curated PFCv2 primaries returned as enum values, not display strings
+	assert.Contains(t, categories, "FOOD_AND_DRINK")
+	assert.Contains(t, categories, "TRANSPORTATION")
+	assert.Contains(t, categories, "ENTERTAINMENT")
+	assert.NotContains(t, categories, "Food And Drink")
 	mockCategoryRepo.AssertExpectations(t)
 }
 
@@ -715,11 +718,11 @@ func TestGetAvailableCategories_IncludesCuratedPrimariesEvenWithoutObserved(t *t
 	categories, err := service.GetAvailableCategories(ctx, userID)
 
 	assert.NoError(t, err)
-	// All 18 PFCv2 primaries must be present
-	assert.Contains(t, categories, "Food And Drink")
-	assert.Contains(t, categories, "Income")
-	assert.Contains(t, categories, "Loan Disbursements")
-	assert.Contains(t, categories, "Other")
+	// All 18 PFCv2 primaries must be present as enum values
+	assert.Contains(t, categories, "FOOD_AND_DRINK")
+	assert.Contains(t, categories, "INCOME")
+	assert.Contains(t, categories, "LOAN_DISBURSEMENTS")
+	assert.Contains(t, categories, "OTHER")
 	assert.GreaterOrEqual(t, len(categories), 18)
 }
 
@@ -742,10 +745,41 @@ func TestGetAvailableCategories_DedupesCustomVsCuratedCaseInsensitive(t *testing
 	categories, err := service.GetAvailableCategories(ctx, userID)
 
 	assert.NoError(t, err)
-	// Custom entry wins — curated display version dropped
+	// Custom entry wins — curated enum version dropped (deduped by display-name match)
 	assert.Contains(t, categories, "food and drink")
-	// Curated "Food And Drink" must NOT appear (deduped by custom)
-	assert.NotContains(t, categories, "Food And Drink")
+	// Curated "FOOD_AND_DRINK" enum must NOT appear (deduped by custom's display match)
+	assert.NotContains(t, categories, "FOOD_AND_DRINK")
+}
+
+func TestGetAvailableCategories_DedupesCustomVsCuratedByEnumName(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	// Custom category named exactly like the PFC enum string
+	customCats := []*domain.CustomCategory{
+		{ID: "cat-1", UserID: userID, Name: "FOOD_AND_DRINK"},
+	}
+	mockCategoryRepo.On("GetByUserID", ctx, userID).Return(customCats, nil)
+
+	categories, err := service.GetAvailableCategories(ctx, userID)
+
+	assert.NoError(t, err)
+	// Custom entry stays
+	assert.Contains(t, categories, "FOOD_AND_DRINK")
+	// Curated enum must NOT appear as a second entry
+	occurrences := 0
+	for _, c := range categories {
+		if c == "FOOD_AND_DRINK" {
+			occurrences++
+		}
+	}
+	assert.Equal(t, 1, occurrences, "FOOD_AND_DRINK should appear exactly once")
 }
 
 // ============================================================================

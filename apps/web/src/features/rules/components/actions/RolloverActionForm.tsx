@@ -9,7 +9,7 @@
 import { useCallback, useMemo } from 'react'
 import { useBudgets } from '../../../budgets/hooks/useBudgets'
 import type { RolloverAction, RolloverType } from '../../types'
-import { formatCategoryPath } from '../../../budgets/types'
+import { formatBudgetCategoryLabel } from '../../../budgets/types'
 
 export interface RolloverActionFormProps {
   /** Current action configuration */
@@ -191,7 +191,7 @@ export function RolloverActionForm({
               <option value="">Select a category...</option>
               {sourceBudget?.categories?.map((category) => (
                 <option key={category.id} value={category.id}>
-                  {formatCategoryPath(category.category)}
+                  {formatBudgetCategoryLabel(category)}
                 </option>
               ))}
             </select>
@@ -238,7 +238,7 @@ export function RolloverActionForm({
               <option value="">Unallocated Funds</option>
               {targetBudget?.categories?.map((category) => (
                 <option key={category.id} value={category.id}>
-                  {formatCategoryPath(category.category)}
+                  {formatBudgetCategoryLabel(category)}
                 </option>
               ))}
             </select>

@@ -16,6 +16,7 @@ import type {
   TagBehavior,
   AmountRangeValue,
   DateRangeValue,
+  RuleTargetKind,
 } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
 import { SearchableSelect } from '../../../shared/components/SearchableSelect'
@@ -53,8 +54,6 @@ function getInputTypeForCondition(conditionType: ConditionType): string {
       return 'amount_range'
     case 'date_range':
       return 'date_range'
-    case 'existing_category':
-      return 'category_select'
     case 'existing_pfc_primary':
       return 'pfc_primary_select'
     case 'existing_pfc_detailed':
@@ -137,7 +136,8 @@ export interface AutoCategorizationRuleEditorProps {
   rule?: CategorizationRule
   onSave: (data: CreateRuleRequest | UpdateRuleRequest) => Promise<void>
   onCancel: () => void
-  categories: string[][]
+  /** Legacy prop kept for parent compatibility; PFC v2 picker uses `plaidPrimaries` instead. */
+  categories?: string[][]
   plaidPrimaries?: Primary[]
   accounts?: Account[] // Optional accounts list for account_id dropdown
   tags?: { id: string; name: string }[] // User tags for target tags autocomplete
@@ -158,7 +158,7 @@ const DEFAULT_CONDITION: RuleCondition = {
   value: '',
 }
 
-export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, categories, plaidPrimaries = [], accounts = [], tags = [] }: AutoCategorizationRuleEditorProps) {
+export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, plaidPrimaries = [], accounts = [], tags = [] }: AutoCategorizationRuleEditorProps) {
   // Form state
   const [name, setName] = useState(rule?.name || '')
   const [description, setDescription] = useState(rule?.description || '')
@@ -169,8 +169,21 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
   const [conditionLogic, setConditionLogic] = useState<ConditionLogic>(
     rule?.condition_logic || 'AND'
   )
-  const [targetCategory, setTargetCategory] = useState<string[] | null>(
-    rule?.target_category || null
+  // PFC v2 discriminated target. Custom-target editing is not yet exposed in the picker
+  // UI; we still hydrate `targetCustomCategoryId` from the rule so edits to other fields
+  // round-trip a custom-target rule without dropping its id.
+  const [targetKind, setTargetKind] = useState<RuleTargetKind | null>(
+    rule?.target_kind ?? null
+  )
+  const [targetPfcPrimary, setTargetPfcPrimary] = useState<string | null>(
+    rule?.target_pfc_primary ?? null
+  )
+  const [targetPfcDetailed, setTargetPfcDetailed] = useState<string | null>(
+    rule?.target_pfc_detailed ?? null
+  )
+  // setTargetCustomCategoryId is reserved for the deferred custom-target picker.
+  const [targetCustomCategoryId] = useState<string | null>(
+    rule?.target_custom_category_id ?? null
   )
   const [targetTags, setTargetTags] = useState<string[]>(rule?.target_tags || [])
   const [tagBehavior, setTagBehavior] = useState<TagBehavior>(rule?.tag_behavior || 'add')
@@ -183,51 +196,46 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
   // Per-condition primary selection for pfc_detailed_select stage-1 (index → primary enum)
   const [pfcDetailedPrimarySelections, setPfcDetailedPrimarySelections] = useState<Record<number, string>>({})
 
-  // Lazy-load detailed categories only when an existing_pfc_detailed condition is present
-  const hasPFCDetailedCondition = useMemo(
-    () => conditions.some(c => c.type === 'existing_pfc_detailed'),
-    [conditions]
+  // Lazy-load detailed categories when either a pfc_detailed condition exists OR the target uses PFC.
+  const needsPlaidDetailed = useMemo(
+    () => conditions.some(c => c.type === 'existing_pfc_detailed') || targetKind === 'pfc',
+    [conditions, targetKind]
   )
-  const { data: plaidDetailedData } = useGetPlaidDetailedCategories({ query: { enabled: hasPFCDetailedCondition } })
-  const plaidDetailed = (plaidDetailedData as unknown as Detailed[]) ?? []
+  const { data: plaidDetailedData } = useGetPlaidDetailedCategories({ query: { enabled: needsPlaidDetailed } })
+  const plaidDetailed = useMemo(
+    () => (plaidDetailedData as unknown as Detailed[]) ?? [],
+    [plaidDetailedData]
+  )
 
-  // Flatten categories for the searchable dropdown
-  const flatCategories = useMemo(() => {
-    return categories.map(cat => cat.join(' > '))
-  }, [categories])
+  // PFC v2 (#1073): target picker option set.
+  // - PFC primaries (display label, value = enum)
+  // - Synthetic "Uncategorized" entry → targetKind='clear'
+  // Custom-category target picker is deferred (requires fetching CustomCategory[] with ids).
+  const CLEAR_VALUE = '__CLEAR__'
+  const CLEAR_LABEL = 'Uncategorized (clear override)'
 
-  // Issue #404: Special value for "Uncategorized" (clear category) option
-  const UNCATEGORIZED_VALUE = '__UNCATEGORIZED__'
-  const UNCATEGORIZED_LABEL = 'Uncategorized'
+  const targetPrimaryOptions = useMemo(() => {
+    const pfcOptions = plaidPrimaries
+      .map(p => ({ value: p.enum, label: p.display }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+    return [{ value: CLEAR_VALUE, label: CLEAR_LABEL }, ...pfcOptions]
+  }, [plaidPrimaries])
 
-  // Combined category options for target category dropdown (custom + Plaid)
-  // Issue #402: Merge custom categories with Plaid categories in a flat, sorted list
-  // Issue #404: Add "Uncategorized" option at the top to allow clearing category
-  const allTargetCategoryOptions = useMemo(() => {
-    // Issue #404: "Uncategorized" option first - clears category to empty array
-    const uncategorizedOption = {
-      value: UNCATEGORIZED_VALUE,
-      label: UNCATEGORIZED_LABEL,
-    }
+  // Detailed children of the currently selected primary (cascading sub-picker)
+  const detailedChildrenOptions = useMemo(() => {
+    if (targetKind !== 'pfc' || !targetPfcPrimary) return []
+    return plaidDetailed
+      .filter(d => d.primary_enum === targetPfcPrimary)
+      .map(d => ({ value: d.enum, label: d.display }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [targetKind, targetPfcPrimary, plaidDetailed])
 
-    // Custom categories (keep as-is)
-    const customOptions = flatCategories.map(cat => ({ value: cat, label: cat }))
-
-    // Track existing values for deduplication (custom wins)
-    const existingValues = new Set(customOptions.map(opt => opt.value.trim().toLowerCase()))
-
-    // Curated PFC primaries — display string as both value and label
-    const plaidOptions = plaidPrimaries
-      .map(p => ({ value: p.display, label: p.display }))
-      .filter(opt => !existingValues.has(opt.value.trim().toLowerCase()))
-
-    // Merge and sort alphabetically, then add Uncategorized at the top
-    const sortedCategories = [...customOptions, ...plaidOptions].sort((a, b) =>
-      a.label.localeCompare(b.label)
-    )
-
-    return [uncategorizedOption, ...sortedCategories]
-  }, [flatCategories, plaidPrimaries])
+  // Display value for the primary combobox: maps targetKind/targetPfcPrimary back to option.value.
+  const targetPrimaryComboboxValue = useMemo(() => {
+    if (targetKind === 'clear') return CLEAR_VALUE
+    if (targetKind === 'pfc' && targetPfcPrimary) return targetPfcPrimary
+    return null
+  }, [targetKind, targetPfcPrimary])
 
   // Validate a single condition and update error state
   const validateSingleCondition = useCallback((index: number, condition: RuleCondition): string | null => {
@@ -262,16 +270,23 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       }
     }
 
-    // Issue #404: Empty array [] is a valid action (clear category), only null means no action
-    // null = no category action, [] = clear category action, ['Food'] = assign category action
-    if (targetCategory === null && targetTags.length === 0) {
+    // PFC v2: targetKind discriminator — null means no category action.
+    // 'pfc' requires a primary; 'custom' requires a custom_category_id (currently
+    // only hydrated on edit; picker support is deferred); 'clear' requires no further fields.
+    if (targetKind === null && targetTags.length === 0) {
       newErrors.target = 'Target category or tags required'
+    }
+    if (targetKind === 'pfc' && !targetPfcPrimary) {
+      newErrors.target = 'PFC primary is required for a PFC target'
+    }
+    if (targetKind === 'custom' && !targetCustomCategoryId) {
+      newErrors.target = 'Custom category id is required for a custom target'
     }
 
     setErrors(newErrors)
     setConditionErrors(newConditionErrors)
     return Object.keys(newErrors).length === 0
-  }, [name, conditions, targetCategory, targetTags])
+  }, [name, conditions, targetKind, targetPfcPrimary, targetCustomCategoryId, targetTags])
 
   // Handlers
   const handleSubmit = async (e: React.FormEvent) => {
@@ -289,9 +304,13 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         priority,
         conditions,
         condition_logic: conditionLogic,
-        // Issue #404: Preserve null (no action) vs [] (clear category) distinction
-        // null/undefined = no category action, [] = clear category, ['Food'] = assign category
-        target_category: targetCategory === null ? undefined : (targetCategory || undefined),
+        // PFC v2: discriminated target. undefined = no category action.
+        // Custom-target rules round-trip the hydrated custom_category_id even though the
+        // picker UI for it is not yet exposed (#1073 Phase 2 scope deferral).
+        target_kind: targetKind ?? undefined,
+        target_pfc_primary: targetKind === 'pfc' ? (targetPfcPrimary ?? undefined) : undefined,
+        target_pfc_detailed: targetKind === 'pfc' ? (targetPfcDetailed ?? undefined) : undefined,
+        target_custom_category_id: targetKind === 'custom' ? (targetCustomCategoryId ?? undefined) : undefined,
         target_tags: targetTags.length > 0 ? targetTags : undefined,
         tag_behavior: tagBehavior,
       }
@@ -388,16 +407,23 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
     updateCondition(index, { value: newTypes })
   }
 
-  // Issue #404: Handle category change including Uncategorized option
-  const handleCategoryChange = (value: string) => {
+  // PFC v2 (#1073): map combobox selection back to discriminated state.
+  const handleTargetPrimaryChange = (value: string) => {
     if (value === '' || value === null) {
-      // "No category change" selected (via allowClear) - null means no action
-      setTargetCategory(null)
-    } else if (value === UNCATEGORIZED_VALUE) {
-      // "Uncategorized" selected - empty array means clear category
-      setTargetCategory([])
+      // No selection — clear all target fields (rule has no category action).
+      setTargetKind(null)
+      setTargetPfcPrimary(null)
+      setTargetPfcDetailed(null)
+    } else if (value === CLEAR_VALUE) {
+      // User explicitly wants the rule to clear any existing override.
+      setTargetKind('clear')
+      setTargetPfcPrimary(null)
+      setTargetPfcDetailed(null)
     } else {
-      setTargetCategory(value.split(' > '))
+      // PFC primary enum selected — switch detailed back to null (forces user to re-pick).
+      setTargetKind('pfc')
+      setTargetPfcPrimary(value)
+      setTargetPfcDetailed(null)
     }
   }
 
@@ -412,19 +438,6 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
   const removeTag = (tag: string) => {
     setTargetTags(targetTags.filter((t) => t !== tag))
   }
-
-  // Issue #404: Display "Uncategorized" when targetCategory is empty array
-  // null = no selection (placeholder), [] = Uncategorized selected, ['Food'] = category selected
-  // Note: SearchableSelect matches on value, then displays label, so we return UNCATEGORIZED_VALUE
-  const categoryValue = useMemo(() => {
-    if (targetCategory === null) {
-      return null // Shows placeholder "Search categories..."
-    }
-    if (targetCategory.length === 0) {
-      return UNCATEGORIZED_VALUE // SearchableSelect will display "Uncategorized" label
-    }
-    return targetCategory.join(' > ')
-  }, [targetCategory])
 
   // Render the appropriate input for a condition based on its type
   const renderConditionValueInput = (condition: RuleCondition, index: number) => {
@@ -508,31 +521,6 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
               aria-label="End date"
             />
           </div>
-        )
-      }
-
-      case 'category_select': {
-        // existing_category: writes display string; evaluator matches tx.Category[0] case-insensitively
-        const curatedOptions = plaidPrimaries.map(p => ({ value: p.display, label: p.display }))
-        // Legacy orphan: saved value not in curated 18 → inject synthetic option
-        const savedValue = String(condition.value || '')
-        const isOrphan = savedValue !== '' && !plaidPrimaries.some(
-          p => p.display.trim().toLowerCase() === savedValue.trim().toLowerCase()
-        )
-        const options = isOrphan
-          ? [{ value: savedValue, label: `${savedValue} (legacy)`, sublabel: 'Saved value not in current Plaid taxonomy — keep as-is or pick a curated primary.' }, ...curatedOptions]
-          : curatedOptions
-        return (
-          <SearchableSelect
-            options={options}
-            value={savedValue || null}
-            onChange={(value) => updateCondition(index, { value: value || '' })}
-            placeholder="Search categories..."
-            disabled={saving}
-            aria-label="Select category"
-            allowClear
-            clearLabel="Select a category"
-          />
         )
       }
 
@@ -826,17 +814,53 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
           <label htmlFor="target-category" className={labelClass}>
             Target Category
           </label>
-          {/* Issue #402: Combined custom + Plaid categories in a flat, sorted list */}
-          <SearchableSelect
-            options={allTargetCategoryOptions}
-            value={categoryValue || null}
-            onChange={(value) => handleCategoryChange(value || '')}
-            placeholder="Search categories..."
-            disabled={saving}
-            aria-label="Target category"
-            allowClear
-            clearLabel="No category change"
-          />
+          {targetKind === 'custom' ? (
+            // PFC v2 (#1073): the custom-target picker UI is deferred. Existing rules with a
+            // custom target are shown read-only so users can edit other fields without
+            // accidentally clearing the target. Editing the custom target itself is unsupported
+            // in this version — track in a follow-up.
+            <div
+              className="px-3 py-2 text-sm border border-input rounded bg-muted text-muted-foreground"
+              data-testid="target-custom-readonly"
+              aria-label="Custom category target (read-only)"
+            >
+              Custom category: <code className="font-mono text-xs">{targetCustomCategoryId}</code>
+              <span className="block text-xs mt-1 text-muted-foreground/80">
+                Editing the custom-category target is not yet supported in this UI.
+              </span>
+            </div>
+          ) : (
+            <>
+              {/* PFC v2 (#1073): primary picker + optional detailed cascade. */}
+              <SearchableSelect
+                options={targetPrimaryOptions}
+                value={targetPrimaryComboboxValue}
+                onChange={(value) => handleTargetPrimaryChange(value || '')}
+                placeholder="Search PFC primaries..."
+                disabled={saving}
+                aria-label="Target category"
+                allowClear
+                clearLabel="No category change"
+              />
+            </>
+          )}
+          {targetKind === 'pfc' && targetPfcPrimary && (
+            <div className="mt-2">
+              <label htmlFor="target-detailed" className={labelClass}>
+                Detailed (optional)
+              </label>
+              <SearchableSelect
+                options={detailedChildrenOptions}
+                value={targetPfcDetailed}
+                onChange={(value) => setTargetPfcDetailed(value || null)}
+                placeholder="Search detailed categories..."
+                disabled={saving || detailedChildrenOptions.length === 0}
+                aria-label="Target detailed category"
+                allowClear
+                clearLabel="No detailed refinement"
+              />
+            </div>
+          )}
         </div>
 
         {/* Tags */}

@@ -16,6 +16,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// ptrStr is a test helper to get a pointer to a string literal.
+func ptrStr(s string) *string { return &s }
+
 // mockBudgetService is a mock implementation of services.BudgetService
 type mockBudgetService struct {
 	budget             *domain.Budget
@@ -127,7 +130,7 @@ type mockTransactionRepoForBudget struct {
 	err          error
 }
 
-func (m *mockTransactionRepoForBudget) GetTransactionsForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
+func (m *mockTransactionRepoForBudget) GetTransactionsForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
 	if m.err != nil {
 		return nil, 0, 0, m.err
 	}
@@ -147,12 +150,12 @@ func (m *mockTransactionRepoForBudget) CountByUserID(ctx context.Context, userID
 func (m *mockTransactionRepoForBudget) GetByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) (*domain.Transaction, error) { return nil, nil }
 func (m *mockTransactionRepoForBudget) GetByID(ctx context.Context, id string) (*domain.Transaction, error) { return nil, nil }
 func (m *mockTransactionRepoForBudget) UpdateTags(ctx context.Context, id string, userID string, tags []string, tagsSource []domain.TagSource) error { return nil }
-func (m *mockTransactionRepoForBudget) UpdateCategory(ctx context.Context, id string, userID string, categoryOverride []string, categorySource domain.CategorySource) error { return nil }
+func (m *mockTransactionRepoForBudget) UpdateCategory(ctx context.Context, id string, userID string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) error { return nil }
 func (m *mockTransactionRepoForBudget) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) { return nil, nil }
 func (m *mockTransactionRepoForBudget) GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error) { return 0, nil }
 func (m *mockTransactionRepoForBudget) GetIncomeSumByTag(ctx context.Context, userID string, tag string, startDate, endDate time.Time) (float64, error) { return 0, nil }
-func (m *mockTransactionRepoForBudget) GetSpentSumForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (float64, error) { return 0, nil }
-func (m *mockTransactionRepoForBudget) GetMatchingTransactionStats(ctx context.Context, userID string, categories [][]string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) { return 0, 0, nil }
+func (m *mockTransactionRepoForBudget) GetSpentSumForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time) (float64, error) { return 0, nil }
+func (m *mockTransactionRepoForBudget) GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) { return 0, 0, nil }
 
 // GetByUserAccountID retrieves all transactions for a user_account.
 // Issue #171 - Plaid Re-Link Handling
@@ -178,7 +181,8 @@ func createTestBudget() *domain.Budget {
 			{
 				ID:              "cat-123",
 				BudgetID:        "budget-123",
-				Category:        []string{"Food", "Groceries"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 500.00,
 				SpentAmount:     250.00,
 			},
@@ -396,7 +400,8 @@ func TestAddCategory_Success(t *testing.T) {
 		category: &domain.BudgetCategory{
 			ID:              "cat-new",
 			BudgetID:        "budget-123",
-			Category:        []string{"Food"},
+			CategoryKind:    "pfc",
+			PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 			AllocatedAmount: 300.00,
 		},
 	}
@@ -410,7 +415,8 @@ func TestAddCategory_Success(t *testing.T) {
 		ID:                 "budget-123",
 	}
 	input.Body = domain.CreateBudgetCategoryRequest{
-		Category:        []string{"Food"},
+		CategoryKind:    "pfc",
+		PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 		AllocatedAmount: 300.00,
 	}
 
@@ -427,7 +433,8 @@ func TestUpdateBudgetCategory_Success(t *testing.T) {
 		category: &domain.BudgetCategory{
 			ID:              "cat-123",
 			BudgetID:        "budget-123",
-			Category:        []string{"Food"},
+			CategoryKind:    "pfc",
+			PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 			AllocatedAmount: 400.00,
 		},
 	}

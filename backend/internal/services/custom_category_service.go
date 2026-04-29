@@ -46,12 +46,12 @@ func NewCustomCategoryService(
 func (s *customCategoryService) CreateCategory(ctx context.Context, userID string, req *domain.CreateCustomCategoryRequest) (*domain.CustomCategory, error) {
 	// Create the category
 	category := &domain.CustomCategory{
-		UserID:         userID,
-		Name:           req.Name,
-		ParentCategory: req.ParentCategory,
-		Icon:           req.Icon,
-		Color:          req.Color,
-		UsageCount:     0,
+		UserID:           userID,
+		Name:             req.Name,
+		ParentPFCPrimary: req.ParentPFCPrimary,
+		Icon:             req.Icon,
+		Color:            req.Color,
+		UsageCount:       0,
 	}
 
 	// Validate
@@ -94,8 +94,8 @@ func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, cate
 	if req.Name != nil {
 		category.Name = *req.Name
 	}
-	if req.ParentCategory != nil {
-		category.ParentCategory = req.ParentCategory
+	if req.ParentPFCPrimary != nil {
+		category.ParentPFCPrimary = req.ParentPFCPrimary
 	}
 	if req.Icon != nil {
 		category.Icon = req.Icon

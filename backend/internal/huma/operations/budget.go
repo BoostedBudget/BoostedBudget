@@ -334,9 +334,7 @@ func (h *BudgetHandler) GetCategoryTransactions(ctx context.Context, input *GetC
 	transactions, totalCount, totalAmount, err := h.transactionRepo.GetTransactionsForBudgetCategory(
 		ctx,
 		input.UserID,
-		category.Category,
-		category.Tags,
-		category.MatchLogic,
+		category,
 		budget.StartDate,
 		endDate,
 		input.Limit,
