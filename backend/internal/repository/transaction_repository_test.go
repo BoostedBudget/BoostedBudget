@@ -3,16 +3,46 @@ package repository
 import (
 	"context"
 	"errors"
-	
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v4"
-	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
+
+// TestTransactionSelectColumns guards against duplicate, missing, or reordered columns
+// in the transactionSelectColumns slice that feeds scanTransactions.
+// scanTransactions.Scan() is positional — order matters as much as count.
+func TestTransactionSelectColumns(t *testing.T) {
+	// Canonical expected order must exactly match the Scan() destinations in scanTransactions.
+	expectedColumns := []string{
+		"id", "user_id", "account_id", "linked_item_id",
+		"source", "external_transaction_id", "external_metadata",
+		"amount", "date", "authorized_date", "name", "merchant_name",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url",
+		"payment_channel", "pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
+	}
+
+	t.Run("exact order and count match scanTransactions destinations", func(t *testing.T) {
+		assert.Equal(t, expectedColumns, transactionSelectColumns,
+			"transactionSelectColumns order must match the positional Scan() in scanTransactions")
+	})
+
+	t.Run("no duplicate column names", func(t *testing.T) {
+		seen := make(map[string]bool, len(transactionSelectColumns))
+		for _, col := range transactionSelectColumns {
+			assert.False(t, seen[col], "duplicate column in transactionSelectColumns: %q", col)
+			seen[col] = true
+		}
+	})
+}
 
 // TestTransactionRepository_Create_Success tests successful transaction creation
 func TestTransactionRepository_Create_Success(t *testing.T) {
@@ -218,16 +248,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 	now := time.Now()
 
 	// Mock result rows
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id",
-		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
-		"pending", "user_notes", "created_at", "updated_at",
-		"tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID1, nil,
@@ -278,16 +299,7 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 	now := time.Now()
 
 	// Mock result rows
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id",
-		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
-		"pending", "user_notes", "created_at", "updated_at",
-		"tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			"tx-1", "user-1", accountID, "item-1",
 			"plaid", &extID, nil,
@@ -329,16 +341,7 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 	now := time.Now()
 
 	// Mock result rows
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id",
-		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
-		"pending", "user_notes", "created_at", "updated_at",
-		"tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
@@ -382,16 +385,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 	now := time.Now()
 
 	// Mock result rows
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id",
-		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
-		"pending", "user_notes", "created_at", "updated_at",
-		"tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
@@ -440,16 +434,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 	now := time.Now()
 
 	// Mock result rows
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id",
-		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
-		"pending", "user_notes", "created_at", "updated_at",
-		"tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
@@ -495,16 +480,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 	now := time.Now()
 
 	// Mock result rows
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id",
-		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
-		"pending", "user_notes", "created_at", "updated_at",
-		"tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			"tx-1", userID, accountID, "item-1",
 			"plaid", &extID, nil,
@@ -552,16 +528,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 	now := time.Now()
 
 	// Mock result rows
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id",
-		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
-		"pending", "user_notes", "created_at", "updated_at",
-		"tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
@@ -607,16 +574,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_PFCPrimaries(t *testing.T)
 	now := time.Now()
 	pfcPrimary := "FOOD_AND_DRINK"
 
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id",
-		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
-		"pending", "user_notes", "created_at", "updated_at",
-		"tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
@@ -661,16 +619,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 	now := time.Now()
 
 	// Mock result rows
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id",
-		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
-		"pending", "user_notes", "created_at", "updated_at",
-		"tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
@@ -722,16 +671,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 	now := time.Now()
 
 	// Mock result rows
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id",
-		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
-		"pending", "user_notes", "created_at", "updated_at",
-		"tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			"tx-1", userID, accountID, "item-1",
 			"plaid", &extID, nil,
@@ -837,16 +777,7 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 	now := time.Now()
 
 	// Mock result row
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id",
-		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
-		"pending", "user_notes", "created_at", "updated_at",
-		"tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			"tx-uuid-123", userID, "account-456", "item-789",
 			"plaid", &externalID, nil,
@@ -921,16 +852,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 	now := time.Now()
 
 	// Mock result rows including tags and tags_source
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id",
-		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
-		"pending", "user_notes", "created_at", "updated_at",
-		"tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
@@ -979,16 +901,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 	overrideKind := "pfc"
 	pfcPrimaryOverride := "GENERAL_MERCHANDISE"
 
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id",
-		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel",
-		"pending", "user_notes", "created_at", "updated_at",
-		"tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
@@ -1037,14 +950,7 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 	overrideKind := "pfc"
 	pfcPrimaryOverride := "GENERAL_MERCHANDISE"
 
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id", "source", "external_transaction_id",
-		"external_metadata", "amount", "date", "authorized_date", "name", "merchant_name",
-		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel", "pending", "user_notes",
-		"created_at", "updated_at", "tags", "tags_source",
-		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
-		"custom_category_override_id", "category_source", "category_override_date",
-	}).
+	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			txID, "user-123", "account-1", "item-1", "plaid", &extID,
 			nil, -50.00, now, nil, "Transaction 1", nil,
