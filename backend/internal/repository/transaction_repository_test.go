@@ -2001,3 +2001,370 @@ func ptrStr(s string) *string {
 	return &s
 }
 
+// =============================================================================
+// Issue #1078: GetTransactionsForBudgetCategory Tests
+//
+// Two queries per call: count+sum first (via QueryRow), then paginated SELECT
+// (via Query). The WHERE clause is a single inline string, so .+ wildcards
+// work safely after pgxmock whitespace normalization. Count regex always
+// includes COUNT(*) to prevent FIFO ambiguity with the paginated SELECT.
+//
+// The Or test pins "OR tags" vs the And test's "AND tags" — a missing outer
+// paren in ((<catClause>) OR tags ?| $N) would silently rebind precedence
+// and OR the date filter with tags instead of the compound expression.
+// =============================================================================
+
+// expectGetTxForBudgetCategoryQueries registers the FIFO count + paginated SELECT
+// expectations for GetTransactionsForBudgetCategory. Returns the rows builders
+// so the caller can AddRow before invoking the function under test.
+func expectGetTxForBudgetCategoryQueries(
+	mock pgxmock.PgxPoolIface,
+	countSQLPattern, selectSQLPattern string,
+	countArgs, selectArgs []interface{},
+) (*pgxmock.Rows, *pgxmock.Rows) {
+	countRows := pgxmock.NewRows([]string{"count", "sum"})
+	selectRows := pgxmock.NewRows(transactionSelectColumns)
+	mock.ExpectQuery(countSQLPattern).WithArgs(countArgs...).WillReturnRows(countRows)
+	mock.ExpectQuery(selectSQLPattern).WithArgs(selectArgs...).WillReturnRows(selectRows)
+	return countRows, selectRows
+}
+
+// testTxRow returns a complete transaction row for test purposes.
+// All fields match transactionSelectColumns order.
+func testTxRow(id, userID, accountID, itemID, name string, amount float64, now time.Time) []interface{} {
+	return []interface{}{
+		id, userID, accountID, itemID,
+		"plaid", nil, nil,
+		amount, now, nil, name, nil,
+		nil, nil, nil, nil,
+		nil, false, nil, now, now,
+		nil, nil,
+		nil, nil, nil, nil, nil, nil,
+	}
+}
+
+func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_PFC(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	pfcPrimary := "FOOD_AND_DRINK"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		PFCPrimary:   &pfcPrimary,
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+	}
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	limit, offset := 20, 0
+	now := time.Now()
+
+	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
+		mock,
+		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override`,
+		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+LIMIT \$5 OFFSET \$6`,
+		[]interface{}{userID, startDate, endDate, pfcPrimary},
+		[]interface{}{userID, startDate, endDate, pfcPrimary, limit, offset},
+	)
+	countRows.AddRow(2, 50.00)
+	selectRows.
+		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Coffee", -25.00, now)...).
+		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Restaurant", -25.00, now)...)
+
+	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
+	assert.NoError(t, err)
+	assert.Len(t, transactions, 2)
+	assert.Equal(t, 2, totalCount)
+	assert.Equal(t, 50.00, totalAmount)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_EmptyMatchLogic(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	pfcPrimary := "FOOD_AND_DRINK"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		PFCPrimary:   &pfcPrimary,
+		MatchLogic:   "", // empty string defaults to category_only
+	}
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	limit, offset := 20, 0
+	now := time.Now()
+
+	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
+		mock,
+		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override`,
+		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+LIMIT \$5 OFFSET \$6`,
+		[]interface{}{userID, startDate, endDate, pfcPrimary},
+		[]interface{}{userID, startDate, endDate, pfcPrimary, limit, offset},
+	)
+	countRows.AddRow(1, 12.00)
+	selectRows.AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Lunch", -12.00, now)...)
+
+	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
+	assert.NoError(t, err)
+	assert.Len(t, transactions, 1)
+	assert.Equal(t, 1, totalCount)
+	assert.Equal(t, 12.00, totalAmount)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_HierarchicalPFC(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	pfcPrimary := "FOOD_AND_DRINK"
+	pfcDetailed := "FOOD_AND_DRINK_COFFEE"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		PFCPrimary:   &pfcPrimary,
+		PFCDetailed:  &pfcDetailed,
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+	}
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	limit, offset := 20, 0
+	now := time.Now()
+
+	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
+		mock,
+		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+pfc_detailed_override`,
+		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_detailed_override.+LIMIT \$6 OFFSET \$7`,
+		[]interface{}{userID, startDate, endDate, pfcPrimary, pfcDetailed},
+		[]interface{}{userID, startDate, endDate, pfcPrimary, pfcDetailed, limit, offset},
+	)
+	countRows.AddRow(1, 8.50)
+	selectRows.AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Starbucks", -8.50, now)...)
+
+	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
+	assert.NoError(t, err)
+	assert.Len(t, transactions, 1)
+	assert.Equal(t, 1, totalCount)
+	assert.Equal(t, 8.50, totalAmount)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_Custom(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	customCategoryID := "550e8400-e29b-41d4-a716-446655440000"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind:     "custom",
+		CustomCategoryID: &customCategoryID,
+		MatchLogic:       domain.MatchLogicCategoryOnly,
+	}
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	limit, offset := 20, 0
+	now := time.Now()
+
+	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
+		mock,
+		`SELECT COUNT\(\*\).+category_override_kind = 'custom' AND custom_category_override_id`,
+		`SELECT (.+) FROM transactions WHERE.+category_override_kind = 'custom' AND custom_category_override_id.+LIMIT \$5 OFFSET \$6`,
+		[]interface{}{userID, startDate, endDate, customCategoryID},
+		[]interface{}{userID, startDate, endDate, customCategoryID, limit, offset},
+	)
+	countRows.AddRow(3, 120.00)
+	selectRows.
+		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Groceries", -40.00, now)...).
+		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Produce", -40.00, now)...).
+		AddRow(testTxRow("tx-3", userID, "account-1", "item-1", "Bakery", -40.00, now)...)
+
+	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
+	assert.NoError(t, err)
+	assert.Len(t, transactions, 3)
+	assert.Equal(t, 3, totalCount)
+	assert.Equal(t, 120.00, totalAmount)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTransactionRepository_GetTransactionsForBudgetCategory_TagOnly(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		Tags:         []string{"essential", "groceries"},
+		MatchLogic:   domain.MatchLogicTagOnly,
+	}
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	limit, offset := 20, 0
+	now := time.Now()
+
+	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
+		mock,
+		`SELECT COUNT\(\*\).+tags \?\| \$4`,
+		`SELECT (.+) FROM transactions WHERE.+tags \?\| \$4.+LIMIT \$5 OFFSET \$6`,
+		[]interface{}{userID, startDate, endDate, pgxmock.AnyArg()},
+		[]interface{}{userID, startDate, endDate, pgxmock.AnyArg(), limit, offset},
+	)
+	countRows.AddRow(2, 75.00)
+	selectRows.
+		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Supermarket", -35.00, now)...).
+		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Pharmacy", -40.00, now)...)
+
+	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
+	assert.NoError(t, err)
+	assert.Len(t, transactions, 2)
+	assert.Equal(t, 2, totalCount)
+	assert.Equal(t, 75.00, totalAmount)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTransactionRepository_GetTransactionsForBudgetCategory_And_PFC(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	pfcPrimary := "FOOD_AND_DRINK"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		PFCPrimary:   &pfcPrimary,
+		Tags:         []string{"essential"},
+		MatchLogic:   domain.MatchLogicAnd,
+	}
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	limit, offset := 20, 0
+	now := time.Now()
+
+	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
+		mock,
+		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+AND tags \?\| \$5`,
+		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+AND tags \?\| \$5.+LIMIT \$6 OFFSET \$7`,
+		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg()},
+		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg(), limit, offset},
+	)
+	countRows.AddRow(1, 22.50)
+	selectRows.AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Tagged Food", -22.50, now)...)
+
+	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
+	assert.NoError(t, err)
+	assert.Len(t, transactions, 1)
+	assert.Equal(t, 1, totalCount)
+	assert.Equal(t, 22.50, totalAmount)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTransactionRepository_GetTransactionsForBudgetCategory_Or_PFC(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	pfcPrimary := "ENTERTAINMENT"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		PFCPrimary:   &pfcPrimary,
+		Tags:         []string{"streaming"},
+		MatchLogic:   domain.MatchLogicOr,
+	}
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	limit, offset := 20, 0
+	now := time.Now()
+
+	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
+		mock,
+		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+\) OR tags \?\| \$5\)`,
+		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+\) OR tags \?\| \$5\).+LIMIT \$6 OFFSET \$7`,
+		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg()},
+		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg(), limit, offset},
+	)
+	countRows.AddRow(2, 30.00)
+	selectRows.
+		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Netflix", -15.00, now)...).
+		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Spotify", -15.00, now)...)
+
+	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
+	assert.NoError(t, err)
+	assert.Len(t, transactions, 2)
+	assert.Equal(t, 2, totalCount)
+	assert.Equal(t, 30.00, totalAmount)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTransactionRepository_GetTransactionsForBudgetCategory_NilBudgetCategory_NoSQL(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+
+	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(
+		ctx, "user-123", nil, startDate, endDate, 20, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, []domain.Transaction{}, transactions)
+	assert.Equal(t, 0, totalCount)
+	assert.Equal(t, 0.0, totalAmount)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTransactionRepository_GetTransactionsForBudgetCategory_UnsupportedMatchLogic_ReturnsError(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	pfcPrimary := "FOOD_AND_DRINK"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		PFCPrimary:   &pfcPrimary,
+		MatchLogic:   domain.MatchLogic("weird"),
+	}
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+
+	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(
+		ctx, "user-123", budgetCat, startDate, endDate, 20, 0)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported match logic")
+	assert.Empty(t, transactions)
+	assert.Equal(t, 0, totalCount)
+	assert.Equal(t, 0.0, totalAmount)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
