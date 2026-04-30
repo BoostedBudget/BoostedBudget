@@ -1131,7 +1131,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_Success(t *testing.T) {
 	// Category is formatted as JSON array: ["Paycheck"]
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, category).
 		WillReturnRows(rows)
 
@@ -1160,7 +1160,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_NoMatches(t *testing.T) {
 	// COALESCE ensures 0 is returned for no matches
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(0.0)
 
-	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, category).
 		WillReturnRows(rows)
 
@@ -1186,7 +1186,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_DBError(t *testing.T) {
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, category).
 		WillReturnError(errors.New("connection done"))
 
@@ -1218,7 +1218,7 @@ func TestTransactionRepository_GetIncomeSumByCategory_PFCPrimary(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
 	// $4 is the PFC primary enum matched against the effective category
-	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, category).
 		WillReturnRows(rows)
 
@@ -1247,7 +1247,7 @@ func TestTransactionRepository_GetIncomeSumByTag_Success(t *testing.T) {
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, tag).
 		WillReturnRows(rows)
 
@@ -1275,7 +1275,7 @@ func TestTransactionRepository_GetIncomeSumByTag_NoMatches(t *testing.T) {
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(0.0)
 
-	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, tag).
 		WillReturnRows(rows)
 
@@ -1301,7 +1301,7 @@ func TestTransactionRepository_GetIncomeSumByTag_DBError(t *testing.T) {
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount\), 0\)`).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
 		WithArgs(userID, startDate, endDate, tag).
 		WillReturnError(errors.New("connection done"))
 
@@ -2072,8 +2072,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_PFC
 	)
 	countRows.AddRow(2, 50.00)
 	selectRows.
-		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Coffee", -25.00, now)...).
-		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Restaurant", -25.00, now)...)
+		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Coffee", 25.00, now)...).
+		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Restaurant", 25.00, now)...)
 
 	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
 	assert.NoError(t, err)
@@ -2111,7 +2111,7 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_Emp
 		[]interface{}{userID, startDate, endDate, pfcPrimary, limit, offset},
 	)
 	countRows.AddRow(1, 12.00)
-	selectRows.AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Lunch", -12.00, now)...)
+	selectRows.AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Lunch", 12.00, now)...)
 
 	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
 	assert.NoError(t, err)
@@ -2151,7 +2151,7 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_Hie
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pfcDetailed, limit, offset},
 	)
 	countRows.AddRow(1, 8.50)
-	selectRows.AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Starbucks", -8.50, now)...)
+	selectRows.AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Starbucks", 8.50, now)...)
 
 	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
 	assert.NoError(t, err)
@@ -2190,9 +2190,9 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_Cus
 	)
 	countRows.AddRow(3, 120.00)
 	selectRows.
-		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Groceries", -40.00, now)...).
-		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Produce", -40.00, now)...).
-		AddRow(testTxRow("tx-3", userID, "account-1", "item-1", "Bakery", -40.00, now)...)
+		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Groceries", 40.00, now)...).
+		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Produce", 40.00, now)...).
+		AddRow(testTxRow("tx-3", userID, "account-1", "item-1", "Bakery", 40.00, now)...)
 
 	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
 	assert.NoError(t, err)
@@ -2230,8 +2230,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_TagOnly(t *testi
 	)
 	countRows.AddRow(2, 75.00)
 	selectRows.
-		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Supermarket", -35.00, now)...).
-		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Pharmacy", -40.00, now)...)
+		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Supermarket", 35.00, now)...).
+		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Pharmacy", 40.00, now)...)
 
 	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
 	assert.NoError(t, err)
@@ -2270,7 +2270,7 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_And_PFC(t *testi
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg(), limit, offset},
 	)
 	countRows.AddRow(1, 22.50)
-	selectRows.AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Tagged Food", -22.50, now)...)
+	selectRows.AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Tagged Food", 22.50, now)...)
 
 	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
 	assert.NoError(t, err)
@@ -2310,8 +2310,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_Or_PFC(t *testin
 	)
 	countRows.AddRow(2, 30.00)
 	selectRows.
-		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Netflix", -15.00, now)...).
-		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Spotify", -15.00, now)...)
+		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Netflix", 15.00, now)...).
+		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Spotify", 15.00, now)...)
 
 	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
 	assert.NoError(t, err)
