@@ -6,8 +6,8 @@ require (
 	github.com/PaddleHQ/paddle-go-sdk/v4 v4.2.0
 	github.com/clerk/clerk-sdk-go/v2 v2.5.1
 	github.com/danielgtaylor/huma/v2 v2.37.3
-	github.com/getsentry/sentry-go v0.44.1
-	github.com/getsentry/sentry-go/echo v0.44.1
+	github.com/getsentry/sentry-go v0.46.1
+	github.com/getsentry/sentry-go/echo v0.46.1
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-jose/go-jose/v3 v3.0.5
 	github.com/go-playground/validator/v10 v10.30.2
@@ -18,12 +18,12 @@ require (
 	github.com/lib/pq v1.12.3
 	github.com/pashagolub/pgxmock/v4 v4.9.0
 	github.com/plaid/plaid-go/v23 v23.0.0
-	github.com/posthog/posthog-go v1.11.2
+	github.com/posthog/posthog-go v1.12.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/common v0.67.5
-	github.com/riverqueue/river v0.33.0
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.33.0
-	github.com/riverqueue/river/rivertype v0.33.0
+	github.com/riverqueue/river v0.35.1
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.35.1
+	github.com/riverqueue/river/rivertype v0.35.1
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/slog-sentry/v2 v2.10.3
 	github.com/sendgrid/sendgrid-go v3.16.1+incompatible
@@ -57,6 +57,7 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/labstack/echo/v5 v5.0.3 // indirect
 	github.com/labstack/gommon v0.4.2 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
@@ -65,8 +66,8 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
-	github.com/riverqueue/river/riverdriver v0.33.0 // indirect
-	github.com/riverqueue/river/rivershared v0.33.0 // indirect
+	github.com/riverqueue/river/riverdriver v0.35.1 // indirect
+	github.com/riverqueue/river/rivershared v0.35.1 // indirect
 	github.com/samber/lo v1.53.0 // indirect
 	github.com/samber/slog-common v0.21.0 // indirect
 	github.com/sendgrid/rest v2.6.9+incompatible // indirect
@@ -89,7 +90,7 @@ require (
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/grpc v1.80.0 // indirect
