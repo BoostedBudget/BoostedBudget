@@ -68,7 +68,7 @@ describe('TransactionCard', () => {
     linked_item_id: 'item-789',
     source: 'plaid',
     external_transaction_id: 'plaid-txn-abc',
-    amount: -25.50,
+    amount: 25.50, // PFCv2: positive = outflow (spending)
     date: '2025-10-25',
     name: 'Starbucks',
     merchant_name: 'Starbucks Coffee',
@@ -86,20 +86,22 @@ describe('TransactionCard', () => {
       expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
     })
 
-    it('should render transaction amount as debit (negative)', () => {
+    it('should render transaction amount as outflow/spending (positive = -$X under PFCv2)', () => {
       render(<TransactionCard transaction={mockTransaction} />)
+      // PFCv2: positive amount = outflow, displayed as -$
       expect(screen.getByText('-$25.50')).toBeInTheDocument()
     })
 
-    it('should render transaction amount as credit (positive)', () => {
-      const creditTransaction: Transaction = {
+    it('should render transaction amount as outflow/spending (positive = -$X under PFCv2)', () => {
+      const outflowTransaction: Transaction = {
         ...mockTransaction,
         amount: 1000.00,
-        name: 'Salary Deposit',
+        name: 'Grocery Purchase',
       }
 
-      render(<TransactionCard transaction={creditTransaction} />)
-      expect(screen.getByText('+$1,000.00')).toBeInTheDocument()
+      render(<TransactionCard transaction={outflowTransaction} />)
+      // PFCv2: positive amount = outflow, displayed as -$
+      expect(screen.getByText('-$1,000.00')).toBeInTheDocument()
     })
 
     it('should render transaction date in readable format', () => {
@@ -333,24 +335,24 @@ describe('TransactionCard', () => {
   })
 
   describe('Amount Formatting', () => {
-    it('should format small amounts with 2 decimals', () => {
+    it('should format small inflow amounts with 2 decimals (negative = +$ under PFCv2)', () => {
       const smallTransaction: Transaction = {
         ...mockTransaction,
-        amount: -1.23,
+        amount: -1.23, // PFCv2: negative = inflow
       }
 
       render(<TransactionCard transaction={smallTransaction} />)
-      expect(screen.getByText('-$1.23')).toBeInTheDocument()
+      expect(screen.getByText('+$1.23')).toBeInTheDocument()
     })
 
-    it('should format large amounts with comma separators', () => {
+    it('should format large inflow amounts with comma separators (negative = +$ under PFCv2)', () => {
       const largeTransaction: Transaction = {
         ...mockTransaction,
-        amount: -123456.78,
+        amount: -123456.78, // PFCv2: negative = inflow
       }
 
       render(<TransactionCard transaction={largeTransaction} />)
-      expect(screen.getByText('-$123,456.78')).toBeInTheDocument()
+      expect(screen.getByText('+$123,456.78')).toBeInTheDocument()
     })
 
     it('should handle zero amount', () => {
@@ -363,29 +365,29 @@ describe('TransactionCard', () => {
       expect(screen.getByText('$0.00')).toBeInTheDocument()
     })
 
-    it('should apply debit styling to negative', () => {
-      render(<TransactionCard transaction={mockTransaction} />)
-      const amountElement = screen.getByText('-$25.50')
+    it('should apply inflow/success styling to negative amount (PFCv2: negative = inflow)', () => {
+      const inflowTransaction: Transaction = {
+        ...mockTransaction,
+        amount: -25.50, // PFCv2: negative = inflow
+      }
+      render(<TransactionCard transaction={inflowTransaction} />)
+      const amountElement = screen.getByText('+$25.50')
       expect(
-        amountElement.classList.contains('debit') ||
-        amountElement.classList.contains('negative') ||
-        amountElement.classList.contains('text-red-600') ||
-        amountElement.classList.contains('text-destructive')
+        amountElement.classList.contains('text-success') ||
+        amountElement.classList.contains('text-green-600')
       ).toBe(true)
     })
 
-    it('should apply credit styling to positive', () => {
-      const creditTransaction: Transaction = {
+    it('should apply outflow/destructive styling to positive amount (PFCv2: positive = outflow)', () => {
+      const outflowTransaction: Transaction = {
         ...mockTransaction,
-        amount: 100.00,
+        amount: 100.00, // PFCv2: positive = outflow/spending
       }
-      render(<TransactionCard transaction={creditTransaction} />)
-      const amountElement = screen.getByText('+$100.00')
+      render(<TransactionCard transaction={outflowTransaction} />)
+      const amountElement = screen.getByText('-$100.00')
       expect(
-        amountElement.classList.contains('credit') ||
-        amountElement.classList.contains('positive') ||
-        amountElement.classList.contains('text-green-600') ||
-        amountElement.classList.contains('text-success')
+        amountElement.classList.contains('text-destructive') ||
+        amountElement.classList.contains('text-red-600')
       ).toBe(true)
     })
   })
@@ -768,22 +770,26 @@ describe('TransactionCard', () => {
   })
 
   describe('Income/Expense Arrows', () => {
-    it('should display up arrow for income', () => {
-      const incomeTransaction: Transaction = {
+    it('should display expense arrow for outflow (positive amount under PFCv2)', () => {
+      const outflowTransaction: Transaction = {
         ...mockTransaction,
-        amount: 1000.00,
+        amount: 25.50, // PFCv2: positive = outflow/spending
       }
-      render(<TransactionCard transaction={incomeTransaction} />)
-
-      expect(screen.getByTestId('income-arrow')).toBeInTheDocument()
-      expect(screen.queryByTestId('expense-arrow')).not.toBeInTheDocument()
-    })
-
-    it('should display down arrow for expense', () => {
-      render(<TransactionCard transaction={mockTransaction} />)
+      render(<TransactionCard transaction={outflowTransaction} />)
 
       expect(screen.getByTestId('expense-arrow')).toBeInTheDocument()
       expect(screen.queryByTestId('income-arrow')).not.toBeInTheDocument()
+    })
+
+    it('should display income arrow for inflow (negative amount under PFCv2)', () => {
+      const inflowTransaction: Transaction = {
+        ...mockTransaction,
+        amount: -25.50, // PFCv2: negative = inflow/refund
+      }
+      render(<TransactionCard transaction={inflowTransaction} />)
+
+      expect(screen.getByTestId('income-arrow')).toBeInTheDocument()
+      expect(screen.queryByTestId('expense-arrow')).not.toBeInTheDocument()
     })
 
     it('should not display any arrow for zero amount', () => {

@@ -311,14 +311,14 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimaryMatch(t *te
 	}
 
 	transactions := []domain.Transaction{
-		{ID: "tx-1", UserID: "user-123", Amount: 5000.00, PFCPrimary: incomeTestStrPtr("INCOME")},        // Match
-		{ID: "tx-2", UserID: "user-123", Amount: -50.00, PFCPrimary: incomeTestStrPtr("INCOME")},         // Negative, excluded
-		{ID: "tx-3", UserID: "user-123", Amount: 100.00, PFCPrimary: incomeTestStrPtr("FOOD_AND_DRINK")}, // Wrong category
+		{ID: "tx-1", UserID: "user-123", Amount: -5000.00, PFCPrimary: incomeTestStrPtr("INCOME")},        // Match - inflow under PFCv2
+		{ID: "tx-2", UserID: "user-123", Amount: 50.00, PFCPrimary: incomeTestStrPtr("INCOME")},           // Outflow (positive), excluded by IsInflow check
+		{ID: "tx-3", UserID: "user-123", Amount: 100.00, PFCPrimary: incomeTestStrPtr("FOOD_AND_DRINK")}, // Outflow, wrong category
 		// Match via PFC override
 		{
 			ID:                   "tx-4",
 			UserID:               "user-123",
-			Amount:               2500.00,
+			Amount:               -2500.00,
 			PFCPrimary:           incomeTestStrPtr("FOOD_AND_DRINK"),
 			CategoryOverrideKind: incomeTestStrPtr("pfc"),
 			PFCPrimaryOverride:   incomeTestStrPtr("INCOME"),
@@ -350,10 +350,10 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_Tag(t *testing.T) {
 	}
 
 	transactions := []domain.Transaction{
-		{ID: "tx-1", UserID: "user-123", Amount: 5000.00, Tags: []string{"salary"}},         // Match
-		{ID: "tx-2", UserID: "user-123", Amount: -50.00, Tags: []string{"salary"}},          // Negative, excluded
-		{ID: "tx-3", UserID: "user-123", Amount: 100.00, Tags: []string{"bonus"}},           // Wrong tag
-		{ID: "tx-4", UserID: "user-123", Amount: 2500.00, Tags: []string{"salary", "main"}}, // Match with multiple tags
+		{ID: "tx-1", UserID: "user-123", Amount: -5000.00, Tags: []string{"salary"}},         // Match - inflow under PFCv2
+		{ID: "tx-2", UserID: "user-123", Amount: 50.00, Tags: []string{"salary"}},            // Outflow (positive), excluded by IsInflow check
+		{ID: "tx-3", UserID: "user-123", Amount: 100.00, Tags: []string{"bonus"}},            // Outflow, wrong tag
+		{ID: "tx-4", UserID: "user-123", Amount: -2500.00, Tags: []string{"salary", "main"}}, // Match with multiple tags - inflow
 	}
 
 	mockRepo.On("GetByUserIDWithFilters", ctx, "user-123", mock.Anything, 10000, 0).
@@ -381,7 +381,7 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_ManualSourceIgnored(t
 	}
 
 	transactions := []domain.Transaction{
-		{ID: "tx-1", UserID: "user-123", Amount: 5000.00, Tags: []string{"salary"}},
+		{ID: "tx-1", UserID: "user-123", Amount: -5000.00, Tags: []string{"salary"}}, // Inflow, but excluded because source is manual
 	}
 
 	mockRepo.On("GetByUserIDWithFilters", ctx, "user-123", mock.Anything, 10000, 0).
@@ -410,8 +410,8 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_Deduplication(t *test
 	}
 
 	transactions := []domain.Transaction{
-		// This transaction matches BOTH PFC primary and tag sources
-		{ID: "tx-1", UserID: "user-123", Amount: 5000.00, PFCPrimary: incomeTestStrPtr("INCOME"), Tags: []string{"salary"}},
+		// This transaction matches BOTH PFC primary and tag sources (inflow under PFCv2)
+		{ID: "tx-1", UserID: "user-123", Amount: -5000.00, PFCPrimary: incomeTestStrPtr("INCOME"), Tags: []string{"salary"}},
 	}
 
 	mockRepo.On("GetByUserIDWithFilters", ctx, "user-123", mock.Anything, 10000, 0).
@@ -474,41 +474,41 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimary(t *testing
 	}
 
 	transactions := []domain.Transaction{
-		// PFC primary matches — must be included
+		// PFC primary matches — must be included (inflow = negative under PFCv2)
 		{
 			ID:         "tx-pfc-match",
 			UserID:     "user-123",
-			Amount:     4200.00,
+			Amount:     -4200.00,
 			PFCPrimary: incomeTestStrPtr("INCOME"),
 		},
-		// PFC mismatch: primary is TRANSFER_IN, source expects INCOME — must be excluded
+		// PFC mismatch: primary is TRANSFER_IN, source expects INCOME — excluded by category
 		{
 			ID:         "tx-pfc-mismatch",
 			UserID:     "user-123",
-			Amount:     1000.00,
+			Amount:     -1000.00,
 			PFCPrimary: incomeTestStrPtr("TRANSFER_IN"),
 		},
-		// PFC override matches INCOME — must be included
+		// PFC override matches INCOME — must be included (inflow = negative under PFCv2)
 		{
 			ID:                   "tx-pfc-override-match",
 			UserID:               "user-123",
-			Amount:               3000.00,
+			Amount:               -3000.00,
 			PFCPrimary:           incomeTestStrPtr("FOOD_AND_DRINK"),
 			CategoryOverrideKind: incomeTestStrPtr("pfc"),
 			PFCPrimaryOverride:   incomeTestStrPtr("INCOME"),
 		},
-		// Negative amount with matching PFC primary — must be excluded (not income)
+		// Positive amount (outflow/spending) with matching PFC primary — excluded by IsInflow check
 		{
-			ID:         "tx-negative",
+			ID:         "tx-positive",
 			UserID:     "user-123",
-			Amount:     -100.00,
+			Amount:     100.00,
 			PFCPrimary: incomeTestStrPtr("INCOME"),
 		},
-		// Nil PFC primary — must be excluded (uncategorized)
+		// Nil PFC primary — must be excluded (uncategorized), even though it's an inflow
 		{
 			ID:         "tx-nil-pfc",
 			UserID:     "user-123",
-			Amount:     500.00,
+			Amount:     -500.00,
 			PFCPrimary: nil,
 		},
 	}

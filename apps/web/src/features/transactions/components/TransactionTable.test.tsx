@@ -55,7 +55,7 @@ const mockTransactions: Transaction[] = [
     account_id: 'acc-1',
     linked_item_id: 'item-1',
     source: 'plaid',
-    amount: -45.99,
+    amount: 45.99, // PFCv2: positive = outflow (spending)
     date: '2025-01-15',
     authorized_date: '2025-01-14',
     name: 'AMAZON.COM',
@@ -73,7 +73,7 @@ const mockTransactions: Transaction[] = [
     account_id: 'acc-2',
     linked_item_id: 'item-1',
     source: 'plaid',
-    amount: 2500.0,
+    amount: -2500.0, // PFCv2: negative = inflow (payroll income)
     date: '2025-01-10',
     name: 'DIRECT DEPOSIT - PAYROLL',
     merchant_name: null,
@@ -89,7 +89,7 @@ const mockTransactions: Transaction[] = [
     account_id: 'acc-1',
     linked_item_id: 'item-1',
     source: 'plaid',
-    amount: -12.5,
+    amount: 12.5, // PFCv2: positive = outflow (food purchase)
     date: '2025-01-12',
     name: 'UBER EATS',
     merchant_name: 'Uber Eats',
@@ -203,14 +203,16 @@ describe('TransactionTable', () => {
   })
 
   describe('Amount Styling', () => {
-    it('should apply credit class to positive amounts', () => {
+    it('should apply debit class to outflows (positive amounts under PFCv2)', () => {
       renderTable()
-      expect(screen.getByText('+$2,500.00')).toHaveClass('transaction-table__amount--credit')
+      // txn-1 amount=45.99 is an outflow: displays as '-$45.99' with debit styling
+      expect(screen.getByText('-$45.99')).toHaveClass('transaction-table__amount--debit')
     })
 
-    it('should apply debit class to negative amounts', () => {
+    it('should apply credit class to inflows (negative amounts under PFCv2)', () => {
       renderTable()
-      expect(screen.getByText('-$45.99')).toHaveClass('transaction-table__amount--debit')
+      // txn-2 amount=-2500.0 is an inflow: displays as '+$2,500.00' with credit styling
+      expect(screen.getByText('+$2,500.00')).toHaveClass('transaction-table__amount--credit')
     })
   })
 

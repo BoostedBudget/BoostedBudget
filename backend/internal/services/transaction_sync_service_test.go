@@ -1554,17 +1554,17 @@ func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
 	existingPendingRestaurant := &domain.Transaction{
 		ID: "txn-pending-restaurant", UserID: userID, AccountID: "account-uuid-restaurant",
 		LinkedItemID: linkedItemID, ExternalTransactionID: strPtrHelper("plaid-txn-restaurant"),
-		Amount: -45.00, Pending: true, UserNotes: &notesRestaurant,
+		Amount: 45.00, Pending: true, UserNotes: &notesRestaurant,
 	}
 	existingPendingHotel := &domain.Transaction{
 		ID: "txn-pending-hotel", UserID: userID, AccountID: "account-uuid-hotel",
 		LinkedItemID: linkedItemID, ExternalTransactionID: strPtrHelper("plaid-txn-hotel"),
-		Amount: -200.00, Pending: true, UserNotes: &notesHotel,
+		Amount: 200.00, Pending: true, UserNotes: &notesHotel,
 	}
 	existingPendingGas := &domain.Transaction{
 		ID: "txn-pending-gas", UserID: userID, AccountID: "account-uuid-gas",
 		LinkedItemID: linkedItemID, ExternalTransactionID: strPtrHelper("plaid-txn-gas"),
-		Amount: -55.00, Pending: true, UserNotes: nil,
+		Amount: 55.00, Pending: true, UserNotes: nil,
 	}
 
 	// Modified transactions from Plaid (posted versions)
