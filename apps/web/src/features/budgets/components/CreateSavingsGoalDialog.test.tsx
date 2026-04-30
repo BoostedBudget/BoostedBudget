@@ -380,6 +380,37 @@ describe('CreateSavingsGoalDialog', () => {
       })
     })
 
+    it('converts deadline from YYYY-MM-DD to RFC3339 before submission', async () => {
+      const newGoal = { id: 'goal-1', name: 'Vacation Fund', target_amount: 5000 }
+      mockMutateAsync.mockResolvedValueOnce(newGoal)
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Vacation Fund' } })
+      fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '5000' } })
+      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-1' } })
+      fireEvent.change(screen.getByLabelText('Deadline (optional)'), { target: { value: '2026-12-31' } })
+
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      await waitFor(() => {
+        expect(mockMutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              deadline: '2026-12-31T00:00:00.000Z',
+            }),
+          })
+        )
+      })
+    })
+
     it('should show API error on submission failure', async () => {
       mockMutateAsync.mockRejectedValueOnce(new Error('Network error'))
 
@@ -532,7 +563,7 @@ describe('CreateSavingsGoalDialog', () => {
             description: 'Beach trip',
             target_amount: 2000,
             account_id: 'acc-2',
-            deadline: '2030-12-31',
+            deadline: '2030-12-31T00:00:00.000Z',
           },
         })
       })
