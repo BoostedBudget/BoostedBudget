@@ -104,6 +104,13 @@ describe('SavingsGoalCard', () => {
       const deadlineElement = document.querySelector('.savings-goal-card__deadline');
       expect(deadlineElement).not.toBeInTheDocument();
     });
+
+    it('renders the deadline as a local-day formatted date', () => {
+      // Guards against the timezone off-by-one: `new Date('2025-07-01T00:00:00Z')`
+      // renders "Jun 30" in timezones west of UTC. Fix parses the date portion only.
+      render(<SavingsGoalCard goal={{ ...mockGoal, deadline: '2025-07-01T00:00:00Z' }} />);
+      expect(screen.getByText(/Due:.*Jul 1, 2025/)).toBeInTheDocument();
+    });
   });
 
   describe('Interactions', () => {

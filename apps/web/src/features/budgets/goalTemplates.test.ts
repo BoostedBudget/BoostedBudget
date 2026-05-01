@@ -219,5 +219,15 @@ describe('goalTemplates', () => {
       // June 2025 + 24 months = June 2027
       expect(deadline).toBe('2027-06-15');
     });
+
+    it('uses the local calendar day even when system clock is late UTC', () => {
+      // Pre-fix used `.toISOString().split('T')[0]`, which returns the next day
+      // for UTC-negative timezones in the evening (e.g. 23:30 UTC = local June 15
+      // but ISO string is still "2025-06-15" — this guards a future regression).
+      setSystemTime(new Date('2025-06-15T23:30:00Z'));
+      const template = getGoalTemplate('vacation')!;
+      // Local June 15 + 6 months = local December 15, never December 16.
+      expect(calculateDeadlineFromTemplate(template)).toBe('2025-12-15');
+    });
   });
 });

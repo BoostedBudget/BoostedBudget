@@ -72,5 +72,8 @@ export function calculateDeadlineFromTemplate(template: GoalTemplate): string | 
   }
   const deadline = new Date();
   deadline.setMonth(deadline.getMonth() + template.suggestedDeadlineMonths);
-  return deadline.toISOString().split('T')[0]; // YYYY-MM-DD format
+  const y = deadline.getFullYear();
+  const m = String(deadline.getMonth() + 1).padStart(2, '0');
+  const d = String(deadline.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
