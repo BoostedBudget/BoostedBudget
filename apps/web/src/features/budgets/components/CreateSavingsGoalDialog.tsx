@@ -145,7 +145,7 @@ export function CreateSavingsGoalDialog({
           description: formData.description.trim() || undefined,
           target_amount: parseFloat(formData.target_amount),
           account_id: formData.account_id,
-          deadline: formData.deadline || undefined,
+          deadline: formData.deadline ? new Date(formData.deadline).toISOString() : undefined,
         };
 
         const newGoal = await createSavingsGoalMutation.mutateAsync({ data: request });
