@@ -41,6 +41,8 @@ export interface Transaction {
   // PFC v2 canonical fields
   pfc_primary?: string | null
   pfc_detailed?: string | null
+  pfc_primary_display?: string | null
+  pfc_detailed_display?: string | null
   pfc_confidence_level?: string | null
   pfc_category_icon_url?: string | null
   payment_channel?: string | null // 'online', 'in store', 'other'
@@ -50,6 +52,8 @@ export interface Transaction {
   category_override_kind?: string | null // null | 'pfc' | 'custom'
   pfc_primary_override?: string | null
   pfc_detailed_override?: string | null
+  pfc_primary_override_display?: string | null
+  pfc_detailed_override_display?: string | null
   custom_category_override_id?: string | null
   category_source?: CategorySource
   category_override_date?: string | null // ISO 8601 date-time

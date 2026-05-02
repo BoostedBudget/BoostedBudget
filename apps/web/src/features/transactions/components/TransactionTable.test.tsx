@@ -159,9 +159,10 @@ describe('TransactionTable', () => {
     it('should display category labels', () => {
       renderTable()
 
-      expect(screen.getByText('SHOPPING_GENERAL_MERCHANDISE')).toBeInTheDocument()
-      expect(screen.getByText('INCOME_WAGES')).toBeInTheDocument()
-      expect(screen.getByText('FOOD_AND_DRINK_RESTAURANTS')).toBeInTheDocument()
+      // No display fields on these test transactions — formatPFCEnum fallback is used
+      expect(screen.getByText('Shopping › General Merchandise')).toBeInTheDocument()
+      expect(screen.getByText('Income › Wages')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument()
     })
 
     it('should display pending badge for pending transactions', () => {

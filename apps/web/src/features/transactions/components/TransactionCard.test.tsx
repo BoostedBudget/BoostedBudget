@@ -136,9 +136,10 @@ describe('TransactionCard', () => {
         merchant_name: 'Local Restaurant',
         pfc_primary: 'FOOD_AND_DRINK',
         pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+        // No display fields — falls back to formatPFCEnum
       }
       render(<TransactionCard transaction={transactionWithCategories} />)
-      expect(screen.getByText('FOOD_AND_DRINK_RESTAURANTS')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument()
     })
 
     it('should display primary PFC when no detailed is set', () => {
@@ -146,9 +147,10 @@ describe('TransactionCard', () => {
         ...mockTransaction,
         pfc_primary: 'TRAVEL',
         pfc_detailed: null,
+        // No display fields — falls back to formatPFCEnum
       }
       render(<TransactionCard transaction={transactionWithPrimaryOnly} />)
-      expect(screen.getByText('TRAVEL')).toBeInTheDocument()
+      expect(screen.getByText('Travel')).toBeInTheDocument()
     })
 
     it('should prefer detailed over primary in the rendered label', () => {
@@ -156,9 +158,10 @@ describe('TransactionCard', () => {
         ...mockTransaction,
         pfc_primary: 'GENERAL_MERCHANDISE',
         pfc_detailed: 'GENERAL_MERCHANDISE_CLOTHING_AND_ACCESSORIES',
+        // No display fields — falls back to formatPFCEnum
       }
       render(<TransactionCard transaction={transactionWithSecondary} />)
-      expect(screen.getByText('GENERAL_MERCHANDISE_CLOTHING_AND_ACCESSORIES')).toBeInTheDocument()
+      expect(screen.getByText('General Merchandise › Clothing And Accessories')).toBeInTheDocument()
     })
 
     it('should handle null pfc_primary gracefully', () => {
@@ -182,11 +185,12 @@ describe('TransactionCard', () => {
         pfc_primary_override: 'GENERAL_MERCHANDISE',
         pfc_detailed_override: 'GENERAL_MERCHANDISE_GROCERIES',
         category_source: 'manual',
+        // No display fields — falls back to formatPFCEnum
       }
       render(<TransactionCard transaction={transactionWithOverride} />)
-      expect(screen.getByText('GENERAL_MERCHANDISE_GROCERIES')).toBeInTheDocument()
+      expect(screen.getByText('General Merchandise › Groceries')).toBeInTheDocument()
       // Original primary should not appear since override takes precedence
-      expect(screen.queryByText('FOOD_AND_DRINK_RESTAURANTS')).not.toBeInTheDocument()
+      expect(screen.queryByText('Food And Drink › Restaurants')).not.toBeInTheDocument()
     })
 
     it('should display custom category override when category_override_kind is custom', () => {
@@ -208,9 +212,10 @@ describe('TransactionCard', () => {
         pfc_primary: 'FOOD_AND_DRINK',
         pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
         category_override_kind: null,
+        // No display fields — falls back to formatPFCEnum
       }
       render(<TransactionCard transaction={transactionWithoutOverride} />)
-      expect(screen.getByText('FOOD_AND_DRINK_RESTAURANTS')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument()
     })
   })
 
@@ -522,11 +527,12 @@ describe('TransactionCard', () => {
         ...mockTransaction,
         pfc_primary: 'FOOD_AND_DRINK',
         pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD',
+        // No display fields — falls back to formatPFCEnum
       }
 
       render(<TransactionCard transaction={multiCategoryTransaction} />)
       // Effective label prefers detailed over primary
-      expect(screen.getByText('FOOD_AND_DRINK_FAST_FOOD')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink › Fast Food')).toBeInTheDocument()
     })
   })
 
@@ -538,8 +544,9 @@ describe('TransactionCard', () => {
         <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
       )
 
-      // Badge should be present with the category name (now PFC enum)
-      expect(screen.getByRole('link', { name: /FOOD_AND_DRINK/i })).toBeInTheDocument()
+      // Badge should be present with the budget category name
+      // The BudgetCategory in the mock has no display fields, so formatPFCEnum is used
+      expect(screen.getByRole('link', { name: /Food And Drink/i })).toBeInTheDocument()
     })
 
     it('should not render badge when budgetMatch is null', () => {
@@ -967,16 +974,17 @@ describe('TransactionCard — PFC v2 source fields (Issue #1073)', () => {
     category_source: 'plaid',
   }
 
-  it('shows the PFC primary enum when only pfc_primary is set', () => {
+  it('shows humanized PFC primary when only pfc_primary is set (no display fields)', () => {
     const txn: Transaction = {
       ...baseTxn,
       pfc_primary: 'FOOD_AND_DRINK',
       pfc_confidence_level: 'VERY_HIGH',
+      // No display field — formatPFCEnum fallback
     }
 
     render(<TransactionCard transaction={txn} />)
 
-    expect(screen.getByText('FOOD_AND_DRINK')).toBeTruthy()
+    expect(screen.getByText('Food And Drink')).toBeTruthy()
   })
 
   it('does not show the uncategorized warning when pfc_primary is set', () => {
