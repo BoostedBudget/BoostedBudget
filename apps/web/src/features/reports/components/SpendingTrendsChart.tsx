@@ -16,6 +16,7 @@ import {
   DEFAULT_CONFIG,
   CATEGORY_COLORS,
 } from '@/shared/charts'
+import { formatPFCPrimary } from '@/shared/categories/formatPfc'
 import type { SpendingTrendsResponse } from '@boostedbudget/api-client/models'
 
 interface SpendingTrendsChartProps {
@@ -33,7 +34,6 @@ export function SpendingTrendsChart({ data, loading, className }: SpendingTrends
 
     if (periods.length === 0 || topCategories.length === 0) return []
 
-    // Build one trace per category (top categories + Other if present)
     const allCategories = [...topCategories]
     const hasOther = periods.some((p) =>
       p.categories?.some((c) => c.category === 'OTHER')
@@ -48,15 +48,13 @@ export function SpendingTrendsChart({ data, loading, className }: SpendingTrends
       }
     })
 
-    // Scan all periods for a display name (not just first period, in case a category
-    // only appears in later periods)
     const findDisplayName = (cat: string) => {
       if (cat === 'OTHER') return 'Other'
       for (const p of periods) {
         const found = p.categories?.find((c) => c.category === cat)
         if (found?.pfc_primary_display) return found.pfc_primary_display
       }
-      return cat
+      return formatPFCPrimary(cat)
     }
 
     return allCategories.map((cat, i) => {
