@@ -217,11 +217,7 @@ export function formatBudgetCategoryLabel(cat: Pick<BudgetCategory, 'category_ki
   if (cat.category_kind === 'custom') {
     return cat.custom_category_id || 'Custom'
   }
-  if (cat.pfc_detailed_display) return cat.pfc_detailed_display
-  if (cat.pfc_primary_display) return cat.pfc_primary_display
-  if (cat.pfc_detailed) return formatPFCEnum(cat.pfc_detailed)
-  if (cat.pfc_primary) return formatPFCEnum(cat.pfc_primary)
-  return 'Uncategorized'
+  return cat.pfc_detailed_display || cat.pfc_primary_display || formatPFCEnum(cat.pfc_detailed ?? cat.pfc_primary ?? '') || 'Uncategorized'
 }
 
 // =============================================================================
