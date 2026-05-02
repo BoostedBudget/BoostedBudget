@@ -84,7 +84,7 @@ func createTestTransaction(userID string) *domain.Transaction {
 		AccountID:    "acc-123",
 		LinkedItemID: "item-123",
 		Source:       domain.SourcePlaid,
-		Amount:       -42.50,
+		Amount:       42.50,
 		Date:         now,
 		Name:         "Test Transaction",
 		MerchantName: &merchantName,

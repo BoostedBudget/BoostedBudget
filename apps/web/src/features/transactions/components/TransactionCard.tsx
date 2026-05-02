@@ -5,6 +5,7 @@ import { TransactionBudgetBadge } from '../../budgets/components/transaction-lin
 import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetMatcher'
 import { getCategoryColor } from '@/shared/categories/pfcColors'
 import { getEffectiveCategory, getEffectiveCategoryLabel } from '@/shared/categories/getEffectiveCategory'
+import { formatTransactionAmount } from '@/shared/transactions/amount'
 import { ArrowUpRight, ArrowDownRight, Clock, Pencil, Tag } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -17,23 +18,6 @@ interface TransactionCardProps {
   onCategorize?: (transaction: Transaction) => void
   /** Issue #499: Budget category match for displaying budget badge */
   budgetMatch?: BudgetCategoryMatch | null
-}
-
-/**
- * Format transaction amount with sign and currency
- */
-function formatAmount(amount: number): string {
-  const absAmount = Math.abs(amount)
-  const formatted = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(absAmount)
-
-  if (amount === 0) return formatted
-  if (amount > 0) return `+${formatted}`
-  return `-${formatted}`
 }
 
 /**
@@ -127,14 +111,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
 
   // Check if should show warning indicator — no warning when PFC provides a fallback
   const showUncategorizedWarning = categoryLabel === 'Uncategorized'
-  const amountFormatted = formatAmount(amount)
-
-  // Determine amount styling
-  const amountClass = amount > 0
-    ? 'text-success'
-    : amount < 0
-      ? 'text-destructive'
-      : 'text-foreground'
+  const { text: amountFormatted, signClass: amountClass, arrow, testId: arrowTestId } = formatTransactionAmount(amount)
 
   const ariaLabel = `${displayName}, ${amountFormatted}, ${displayDate}${pending ? ', pending' : ''}`
 
@@ -222,11 +199,11 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
         </div>
         <div className="flex flex-col items-end gap-1">
           <div className={cn('text-lg font-bold whitespace-nowrap inline-flex items-center', amountClass)} data-ph-mask>
-            {/* Issue #531: Income/Expense arrows */}
-            {amount > 0 ? (
-              <ArrowUpRight className="w-4 h-4 mr-0.5 inline-block align-middle" data-testid="income-arrow" />
-            ) : amount < 0 ? (
-              <ArrowDownRight className="w-4 h-4 mr-0.5 inline-block align-middle" data-testid="expense-arrow" />
+            {/* PFCv2: outflow = expense arrow down, inflow = income arrow up */}
+            {arrow === 'down' ? (
+              <ArrowDownRight className="w-4 h-4 mr-0.5 inline-block align-middle" data-testid={arrowTestId} />
+            ) : arrow === 'up' ? (
+              <ArrowUpRight className="w-4 h-4 mr-0.5 inline-block align-middle" data-testid={arrowTestId} />
             ) : null}
             {amountFormatted}
           </div>

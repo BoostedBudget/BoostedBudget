@@ -554,11 +554,11 @@ func TestGetCategoryTransactions_Success(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{
 		transactions: []domain.Transaction{
-			{ID: "tx-1", Amount: -50.00},
-			{ID: "tx-2", Amount: -30.00},
+			{ID: "tx-1", Amount: 50.00},
+			{ID: "tx-2", Amount: 30.00},
 		},
 		totalCount:  2,
-		totalAmount: -80.00,
+		totalAmount: 80.00,
 	}
 
 	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
@@ -577,7 +577,7 @@ func TestGetCategoryTransactions_Success(t *testing.T) {
 	require.NotNil(t, output)
 	assert.Len(t, output.Body.Transactions, 2)
 	assert.Equal(t, 2, output.Body.TotalCount)
-	assert.Equal(t, -80.00, output.Body.TotalAmount)
+	assert.Equal(t, 80.00, output.Body.TotalAmount)
 }
 
 // TestGetCategoryTransactions_CategoryNotFound tests error when category is not found.

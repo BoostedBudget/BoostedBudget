@@ -85,7 +85,7 @@ type Transaction struct {
 	ExternalMetadata *string `json:"external_metadata,omitempty" db:"external_metadata"`
 
 	// Core transaction fields (standardized across all providers)
-	Amount         float64    `json:"amount" db:"amount"`                                             // Positive=credit, Negative=debit (Plaid convention)
+	Amount         float64    `json:"amount" db:"amount"`                                             // Positive=outflow (debit/spending), Negative=inflow (credit/refund) — Plaid PFCv2 convention
 	Date           time.Time  `json:"date" db:"date"`                                                 // Transaction date
 	AuthorizedDate *time.Time `json:"authorized_date,omitempty" db:"authorized_date"`                 // Authorization date (may differ from settlement)
 	Name           string     `json:"name" db:"name"`                                                 // Transaction description
@@ -202,6 +202,30 @@ func (t *Transaction) Validate() error {
 	return nil
 }
 
+// IsOutflow returns true when the transaction is an outflow (positive amount = spending/debit under Plaid PFCv2).
+func (t Transaction) IsOutflow() bool { return t.Amount > 0 }
+
+// IsInflow returns true when the transaction is an inflow (negative amount = refund/income under Plaid PFCv2).
+func (t Transaction) IsInflow() bool { return t.Amount < 0 }
+
+// ExpenseAmount returns the transaction amount when it is an outflow, and 0 otherwise.
+// Always non-negative.
+func (t Transaction) ExpenseAmount() float64 {
+	if t.Amount > 0 {
+		return t.Amount
+	}
+	return 0
+}
+
+// IncomeAmount returns the absolute transaction amount when it is an inflow, and 0 otherwise.
+// Always non-negative.
+func (t Transaction) IncomeAmount() float64 {
+	if t.Amount < 0 {
+		return -t.Amount
+	}
+	return 0
+}
+
 // TransactionFilters represents optional filters for querying transactions.
 // All fields are optional pointers - nil means no filter applied for that field.
 // Used by repository layer to build dynamic WHERE clauses.
@@ -242,7 +266,7 @@ type TransactionFilters struct {
 	// Issue #529: Amount range filter support
 	MaxAmount *float64
 
-	// AmountType filters transactions by direction: "income" (positive), "expense" (negative), or nil for both
+	// AmountType filters transactions by direction: "income" (amount < 0, inflow), "expense" (amount > 0, outflow), or nil for both
 	// Issue #529: Transaction type filter support
 	AmountType *string
 }

@@ -14,6 +14,7 @@ import type { Transaction } from '../types'
 import type { Account } from '../../accounts/types'
 import { getCategoryColor } from '@/lib/category-colors'
 import { getEffectiveCategory, getEffectiveCategoryLabel } from '@/shared/categories/getEffectiveCategory'
+import { formatTransactionAmount, isOutflow } from '@/shared/transactions/amount'
 import {
   ColumnFilterDropdown,
   type FilterOption,
@@ -67,24 +68,6 @@ export interface TransactionTableProps {
   /** Called when amount range filter changes */
   onAmountRangeChange?: (value: RangeValue | null) => void
 }
-
-/**
- * Format transaction amount with sign and currency
- */
-function formatAmount(amount: number): string {
-  const absAmount = Math.abs(amount)
-  const formatted = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(absAmount)
-
-  if (amount === 0) return formatted
-  if (amount > 0) return `+${formatted}`
-  return `-${formatted}`
-}
-
 
 /**
  * Format date for display
@@ -278,7 +261,7 @@ export function TransactionTable({
             ? account.nickname || account.name
             : 'Unknown'
           const accountBackgroundColor = account?.custom_color || '#E5E7EB'
-          const amountFormatted = formatAmount(transaction.amount)
+          const { text: amountFormatted } = formatTransactionAmount(transaction.amount)
 
           return (
             <tr
@@ -329,10 +312,10 @@ export function TransactionTable({
                 <div className="flex flex-col items-end gap-1">
                   <span
                     className={`font-semibold tabular-nums ${
-                      transaction.amount > 0
-                        ? 'transaction-table__amount--credit text-green-600 dark:text-green-400'
+                      isOutflow(transaction.amount)
+                        ? 'transaction-table__amount--debit text-red-600 dark:text-red-400'
                         : transaction.amount < 0
-                          ? 'transaction-table__amount--debit text-red-600 dark:text-red-400'
+                          ? 'transaction-table__amount--credit text-green-600 dark:text-green-400'
                           : 'text-foreground'
                     }`}
                     data-ph-mask

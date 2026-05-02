@@ -26,8 +26,8 @@ type IncomeTransactionGetter interface {
 type BudgetIncomeService interface {
 	// CalculateBudgetIncome calculates total income for a budget from all configured income sources.
 	// Returns the sum of:
-	// - plaid_category sources: Sum of positive transactions matching the category
-	// - tag sources: Sum of positive transactions with the matching tag
+	// - plaid_category sources: Sum of inflow (negative amount under PFCv2) transactions matching the category
+	// - tag sources: Sum of inflow transactions with the matching tag
 	// - manual sources: Parsed float value from IncomeSource.Value
 	//
 	// Note: Overlapping sources (same transaction matching multiple sources) may result in double-counting.
@@ -133,8 +133,8 @@ func (s *budgetIncomeService) GetMatchingIncomeTransactions(ctx context.Context,
 	transactionMap := make(map[string]domain.Transaction)
 
 	for _, tx := range transactions {
-		// Only consider income transactions (positive amounts)
-		if tx.Amount <= 0 {
+		// Only consider inflow transactions (negative amounts under PFCv2)
+		if !tx.IsInflow() {
 			continue
 		}
 
