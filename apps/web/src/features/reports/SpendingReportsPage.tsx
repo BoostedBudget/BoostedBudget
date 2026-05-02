@@ -29,9 +29,8 @@ export function SpendingReportsPage() {
   const [preset, setPreset] = useState<DatePreset>('last_3_months')
   const [customStartDate, setCustomStartDate] = useState('')
   const [customEndDate, setCustomEndDate] = useState('')
-  const [drilldownCategory, setDrilldownCategory] = useState<string | undefined>(undefined)
+  const [drilldown, setDrilldown] = useState<{ category: string; displayLabel: string } | undefined>()
 
-  // Derive dates from preset or custom input — no effect needed
   const derivedRange = preset !== 'custom' ? getDateRange(preset) : null
   const startDate = preset === 'custom' ? customStartDate : (derivedRange?.startDate ?? '')
   const endDate = preset === 'custom' ? customEndDate : (derivedRange?.endDate ?? '')
@@ -45,7 +44,7 @@ export function SpendingReportsPage() {
   const enabled = Boolean(startDate && endDate)
 
   const { data: categoryData, loading: categoryLoading } = useSpendingByCategory({
-    filters: { ...filters, category: drilldownCategory },
+    filters: { ...filters, category: drilldown?.category },
     enabled,
   })
 
@@ -61,22 +60,22 @@ export function SpendingReportsPage() {
 
   const handlePresetChange = (newPreset: DatePreset) => {
     setPreset(newPreset)
-    setDrilldownCategory(undefined)
+    setDrilldown(undefined)
     trackEvent(ANALYTICS_EVENTS.REPORT_DATE_CHANGED, { preset: newPreset })
   }
 
   const handleCustomRange = (start: string, end: string) => {
     setCustomStartDate(start)
     setCustomEndDate(end)
-    setDrilldownCategory(undefined)
+    setDrilldown(undefined)
     trackEvent(ANALYTICS_EVENTS.REPORT_DATE_CHANGED, { preset: 'custom' })
   }
 
-  const handleCategoryClick = (category: string) => {
-    if (drilldownCategory === category) {
-      setDrilldownCategory(undefined)
+  const handleCategoryClick = (category: string, displayLabel: string) => {
+    if (drilldown?.category === category) {
+      setDrilldown(undefined)
     } else {
-      setDrilldownCategory(category)
+      setDrilldown({ category, displayLabel })
       trackEvent(ANALYTICS_EVENTS.REPORT_CATEGORY_CLICKED, { category })
     }
   }
@@ -124,11 +123,11 @@ export function SpendingReportsPage() {
             <div className="mb-4">
               <h2 id="category-heading" className="text-lg font-semibold">
                 Spending by Category
-                {drilldownCategory && (
+                {drilldown && (
                   <span className="ml-2 text-sm font-normal text-muted-foreground">
-                    — {drilldownCategory}{' '}
+                    — {drilldown.displayLabel}{' '}
                     <button
-                      onClick={() => setDrilldownCategory(undefined)}
+                      onClick={() => setDrilldown(undefined)}
                       className="underline hover:no-underline"
                     >
                       (back)
@@ -137,7 +136,7 @@ export function SpendingReportsPage() {
                 )}
               </h2>
               <p className="text-sm text-muted-foreground">
-                {drilldownCategory
+                {drilldown
                   ? 'Click a subcategory to view its transactions.'
                   : 'Click a category to drill into subcategories.'}
               </p>

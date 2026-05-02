@@ -1,9 +1,18 @@
 import { describe, it, expect, mock } from 'bun:test'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import React from 'react'
 import { MemoryRouter } from 'react-router-dom'
 
 import '@/test/mocks/shared-charts'
+
+// Mock CategoryBreakdownChart to expose onCategoryClick in a testable way
+mock.module('./components/CategoryBreakdownChart', () => ({
+  CategoryBreakdownChart: ({ onCategoryClick }: { onCategoryClick?: (cat: string, label: string) => void }) =>
+    React.createElement('div', {
+      'data-testid': 'category-chart',
+      onClick: () => onCategoryClick?.('FOOD_AND_DRINK', 'Food And Drink'),
+    }),
+}))
 
 // Mock toggle-group for DateRangePicker
 mock.module('@/components/ui/toggle-group', () => ({
@@ -58,5 +67,14 @@ describe('SpendingReportsPage', () => {
     expect(screen.getByTestId('category-chart')).toBeDefined()
     expect(screen.getByTestId('trends-chart')).toBeDefined()
     expect(screen.getByTestId('merchants-table')).toBeDefined()
+  })
+
+  it('shows humanized display label in drilldown breadcrumb after category click', () => {
+    const { container } = renderPage()
+    const chart = screen.getByTestId('category-chart')
+    fireEvent.click(chart)
+    const heading = container.querySelector('#category-heading')
+    expect(heading?.textContent).toContain('Food And Drink')
+    expect(heading?.textContent).not.toContain('FOOD_AND_DRINK')
   })
 })

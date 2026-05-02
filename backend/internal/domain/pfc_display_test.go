@@ -309,6 +309,53 @@ func TestCustomCategory_PopulatePFCDisplay_NilFieldsNoOp(t *testing.T) {
 // EffectiveCategory display fields via GetEffectiveCategory
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Stale-clearing: display field cleared when source enum is set to nil
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestTransaction_PopulatePFCDisplay_ClearsStaleDisplayWhenPrimaryCleared(t *testing.T) {
+	primary := "FOOD_AND_DRINK"
+	tx := &Transaction{PFCPrimary: &primary}
+	tx.PopulatePFCDisplay()
+	require.NotNil(t, tx.PFCPrimaryDisplay)
+
+	tx.PFCPrimary = nil
+	tx.PopulatePFCDisplay()
+	assert.Nil(t, tx.PFCPrimaryDisplay, "stale PFCPrimaryDisplay must be cleared when PFCPrimary becomes nil")
+}
+
+func TestBudgetCategory_PopulatePFCDisplay_ClearsStaleDisplayWhenPrimaryCleared(t *testing.T) {
+	primary := "FOOD_AND_DRINK"
+	bc := &BudgetCategory{PFCPrimary: &primary}
+	bc.PopulatePFCDisplay()
+	require.NotNil(t, bc.PFCPrimaryDisplay)
+
+	bc.PFCPrimary = nil
+	bc.PopulatePFCDisplay()
+	assert.Nil(t, bc.PFCPrimaryDisplay, "stale PFCPrimaryDisplay must be cleared when PFCPrimary becomes nil")
+}
+
+func TestCategorizationRule_PopulatePFCDisplay_ClearsStaleDisplayWhenTargetCleared(t *testing.T) {
+	primary := "FOOD_AND_DRINK"
+	r := &CategorizationRule{TargetPFCPrimary: &primary}
+	r.PopulatePFCDisplay()
+	require.NotNil(t, r.TargetPFCPrimaryDisplay)
+
+	r.TargetPFCPrimary = nil
+	r.PopulatePFCDisplay()
+	assert.Nil(t, r.TargetPFCPrimaryDisplay, "stale TargetPFCPrimaryDisplay must be cleared when TargetPFCPrimary becomes nil")
+}
+
+func TestIncomeSource_PopulatePFCDisplay_ClearsStaleDisplayWhenValueCleared(t *testing.T) {
+	is := &IncomeSource{Type: IncomeSourceTypePFCPrimary, Value: "INCOME"}
+	is.PopulatePFCDisplay()
+	require.NotEmpty(t, is.ValueDisplay)
+
+	is.Value = ""
+	is.PopulatePFCDisplay()
+	assert.Empty(t, is.ValueDisplay, "stale ValueDisplay must be cleared when Value becomes empty")
+}
+
 func TestGetEffectiveCategory_PopulatesPFCDisplayFields(t *testing.T) {
 	primary := "FOOD_AND_DRINK"
 	detailed := "FOOD_AND_DRINK_FAST_FOOD"

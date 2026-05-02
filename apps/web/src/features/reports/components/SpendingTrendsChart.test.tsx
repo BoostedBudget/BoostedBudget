@@ -59,4 +59,25 @@ describe('SpendingTrendsChart', () => {
     const chart = screen.getByTestId('plotly-chart')
     expect(chart.getAttribute('data-trace-count')).toBe('2')
   })
+
+  it('falls back to formatted display name when pfc_primary_display is absent', () => {
+    const sparseData: SpendingTrendsResponse = {
+      start_date: '2024-01-01',
+      end_date: '2024-01-31',
+      top_categories: ['LOAN_PAYMENTS'],
+      periods: [
+        {
+          period_start: '2024-01-01',
+          period_end: '2024-01-31',
+          total: 100,
+          categories: [{ category: 'LOAN_PAYMENTS', total: 100 } as SpendingTrendsResponse['periods'][0]['categories'][0]],
+        },
+      ],
+    }
+    render(<SpendingTrendsChart data={sparseData} loading={false} />)
+    const chart = screen.getByTestId('plotly-chart')
+    const names = JSON.parse(chart.getAttribute('data-trace-names') ?? '[]') as string[]
+    expect(names[0]).toBe('Loan Payments')
+    expect(names[0]).not.toBe('LOAN_PAYMENTS')
+  })
 })

@@ -2,8 +2,7 @@
  * Category Breakdown Chart
  * Issue #953: Spending Reports Page
  *
- * Donut chart showing spending distribution by category.
- * Click a category to drill into subcategories.
+ * Donut chart showing spending distribution by category with click-to-drill interaction.
  */
 
 import { useMemo } from 'react'
@@ -20,7 +19,7 @@ import type { SpendingByCategoryResponse } from '@boostedbudget/api-client/model
 interface CategoryBreakdownChartProps {
   data: SpendingByCategoryResponse | null
   loading: boolean
-  onCategoryClick?: (category: string) => void
+  onCategoryClick?: (category: string, displayLabel: string) => void
   className?: string
 }
 
@@ -112,7 +111,7 @@ export function CategoryBreakdownChart({
                 if (point) {
                   const idx = point.pointIndex
                   const cat = categories[idx]
-                  if (cat) onCategoryClick(cat.category)
+                  if (cat) onCategoryClick(cat.category, cat.pfc_primary_display ?? cat.category)
                 }
               }
             : undefined
