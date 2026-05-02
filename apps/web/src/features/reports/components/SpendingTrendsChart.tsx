@@ -54,7 +54,7 @@ export function SpendingTrendsChart({ data, loading, className }: SpendingTrends
       if (cat === 'OTHER') return 'Other'
       for (const p of periods) {
         const found = p.categories?.find((c) => c.category === cat)
-        if (found?.display_name) return found.display_name
+        if (found?.pfc_primary_display) return found.pfc_primary_display
       }
       return cat
     }

@@ -42,8 +42,8 @@ describe('TransactionEditor', () => {
         pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD',
       }
       renderEditor(txn)
-      // CategoryEditor renders selectedCategory[0] which is pfc_primary
-      expect(screen.getByText('FOOD_AND_DRINK')).toBeInTheDocument()
+      // CategoryEditor resolves raw enum to display label via formatPFCEnum
+      expect(screen.getByText('Food And Drink')).toBeInTheDocument()
     })
 
     it('shows pfc_primary when pfc_detailed is absent', () => {
@@ -52,7 +52,7 @@ describe('TransactionEditor', () => {
         pfc_primary: 'FOOD_AND_DRINK',
       }
       renderEditor(txn)
-      expect(screen.getByText('FOOD_AND_DRINK')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink')).toBeInTheDocument()
     })
 
     it('shows pfc_primary_override when category_override_kind is pfc', () => {
@@ -65,8 +65,8 @@ describe('TransactionEditor', () => {
         pfc_detailed_override: 'TRANSPORTATION_GAS',
       }
       renderEditor(txn)
-      // Override takes precedence; CategoryEditor shows selectedCategory[0] = pfc_primary_override
-      expect(screen.getByText('TRANSPORTATION')).toBeInTheDocument()
+      // Override takes precedence; CategoryEditor resolves override enum to display label
+      expect(screen.getByText('Transportation')).toBeInTheDocument()
     })
   })
 
@@ -91,7 +91,7 @@ describe('TransactionEditor', () => {
         category_source: 'manual',
       }
       renderEditor(txn)
-      expect(screen.getByText('FOOD_AND_DRINK')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink')).toBeInTheDocument()
     })
   })
 })

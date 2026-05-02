@@ -30,15 +30,12 @@ function formatCurrency(value: string): string {
 }
 
 function getDisplayValue(source: IncomeSource): string {
-  switch (source.type) {
-    case 'pfc_primary':
-    case 'plaid_category':
-      return formatPFCPrimary(source.value);
-    case 'tag':
-      return source.value;
-    case 'manual':
-      return formatCurrency(source.value);
+  if (source.type === 'pfc_primary' || source.type === 'plaid_category') {
+    return source.value_display || formatPFCPrimary(source.value)
   }
+  if (source.type === 'tag') return source.value
+  if (source.type === 'manual') return formatCurrency(source.value)
+  return ''
 }
 
 function getIcon(type: IncomeSource['type']): React.ReactNode {

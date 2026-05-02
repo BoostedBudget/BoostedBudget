@@ -57,6 +57,7 @@ export interface RuleCondition {
   type: ConditionType
   value: string | number | string[] | AmountRangeValue | DateRangeValue
   operator?: string // for amount comparisons
+  value_display?: string // populated by backend for PFC-typed conditions
 }
 
 /**

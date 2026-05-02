@@ -8,7 +8,7 @@
 import { useCallback } from 'react'
 import { Edit, Trash2, ChevronUp, ChevronDown } from 'lucide-react'
 import type { CategorizationRule } from '../types'
-import { formatPFCEnum } from '../utils/pfcFormat'
+import { formatPFCEnum } from '@/shared/categories/formatPfc'
 import {
   ColumnFilterDropdown,
   type FilterOption,

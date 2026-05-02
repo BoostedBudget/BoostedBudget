@@ -27,6 +27,7 @@ export interface IncomeSource {
   type: IncomeSourceType;
   value: string; // Category name, tag, or amount string
   description?: string; // Optional user-friendly label
+  value_display?: string; // Server-supplied humanized label for pfc_primary sources
 }
 
 // Budget category allocation within a budget (PFC v2 canonical)

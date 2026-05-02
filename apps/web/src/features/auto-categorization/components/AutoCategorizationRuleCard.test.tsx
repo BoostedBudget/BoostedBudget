@@ -380,6 +380,26 @@ describe('AutoCategorizationRuleCard', () => {
       expect(screen.getByText('Food And Drink')).toBeInTheDocument()
     })
 
+    it('prefers server-supplied value_display over local formatter for pfc_primary condition', () => {
+      renderCard({
+        ...mockRule,
+        conditions: [{ type: 'existing_pfc_primary' as const, value: 'FOOD_AND_DRINK', value_display: 'Food & Drink (server)' }],
+      })
+
+      expect(screen.getByText('Food & Drink (server)')).toBeInTheDocument()
+      expect(screen.queryByText('Food And Drink')).not.toBeInTheDocument()
+    })
+
+    it('prefers server-supplied value_display over local formatter for pfc_detailed condition', () => {
+      renderCard({
+        ...mockRule,
+        conditions: [{ type: 'existing_pfc_detailed' as const, value: 'FOOD_AND_DRINK_GROCERIES', value_display: 'Groceries (server)' }],
+      })
+
+      expect(screen.getByText('Groceries (server)')).toBeInTheDocument()
+      expect(screen.queryByText('Food And Drink › Groceries')).not.toBeInTheDocument()
+    })
+
     it('formatConditionValue_renders_pfc_detailed_with_breadcrumb', () => {
       renderCard({
         ...mockRule,

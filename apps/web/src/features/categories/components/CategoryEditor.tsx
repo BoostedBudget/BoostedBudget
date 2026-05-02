@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { CustomCategory } from '../types'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
+import { formatPFCEnum } from '@/shared/categories/formatPfc'
 import { useCreateCategory } from '@boostedbudget/api-client/endpoints/categories/categories'
 import { ReadOnlyGuard } from '@/auth'
 
@@ -52,7 +53,10 @@ export function CategoryEditor({
   }, [availableCategories, plaidPrimaries])
 
   const currentCategory = selectedCategory[0] || null
-  const currentCategoryObj = mergedCategories.find((cat) => cat.name === currentCategory)
+  const currentCategoryObj = mergedCategories.find(
+    (cat) => cat.key === `pfc:${currentCategory}` || cat.name === currentCategory
+  )
+  const currentLabel = currentCategoryObj?.name || (currentCategory ? formatPFCEnum(currentCategory) : null)
 
   const handleSelectCategory = (categoryName: string) => {
     onChange([categoryName])
@@ -98,14 +102,14 @@ export function CategoryEditor({
   return (
     <div className="flex items-center gap-3">
       <div className="flex items-center gap-2 flex-1">
-        {currentCategory ? (
+        {currentLabel ? (
           <>
             <span
               className="w-3 h-3 rounded-full shrink-0"
               data-testid="category-color"
               style={{ backgroundColor: currentCategoryObj?.color || '#6B7280' }}
             />
-            <span className="text-sm text-foreground">{currentCategory}</span>
+            <span className="text-sm text-foreground">{currentLabel}</span>
             <button
               type="button"
               className="inline-flex items-center justify-center w-5 h-5 p-0 border-none bg-muted rounded-full text-muted-foreground cursor-pointer text-sm leading-none hover:bg-border hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"

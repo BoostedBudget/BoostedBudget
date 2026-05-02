@@ -76,9 +76,10 @@ func validatePFCValue(val string, isDetailed bool) error {
 
 // RuleCondition represents a single condition within a categorization rule.
 type RuleCondition struct {
-	Type     ConditionType `json:"type"`
-	Value    interface{}   `json:"value"`              // string, number, or object depending on type
-	Operator string        `json:"operator,omitempty"` // for amount comparisons
+	Type         ConditionType `json:"type"`
+	Value        interface{}   `json:"value"`                    // string, number, or object depending on type
+	Operator     string        `json:"operator,omitempty"`       // for amount comparisons
+	ValueDisplay string        `json:"value_display,omitempty"` // populated by PopulatePFCDisplay for PFC-typed conditions
 }
 
 // CategorizationRule represents a user-defined rule for automatic transaction categorization.
