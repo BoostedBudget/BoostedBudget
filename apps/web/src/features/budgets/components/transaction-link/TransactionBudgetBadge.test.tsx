@@ -65,8 +65,8 @@ describe('TransactionBudgetBadge - rendering', () => {
     const match = createMatch('category')
     renderWithRouter(<TransactionBudgetBadge match={match} />)
 
-    // Shows pfc_detailed when present
-    expect(screen.getByText('FOOD_AND_DRINK_RESTAURANTS')).toBeInTheDocument()
+    // Shows formatted display string for pfc_detailed (no display fields → formatPFCEnum fallback)
+    expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument()
   })
 
   it('should show pfc_primary when pfc_detailed is absent', () => {
@@ -76,7 +76,7 @@ describe('TransactionBudgetBadge - rendering', () => {
     })
     renderWithRouter(<TransactionBudgetBadge match={match} />)
 
-    expect(screen.getByText('FOOD_AND_DRINK')).toBeInTheDocument()
+    expect(screen.getByText('Food And Drink')).toBeInTheDocument()
   })
 
   it('should handle pfc_primary-only category', () => {
@@ -86,7 +86,7 @@ describe('TransactionBudgetBadge - rendering', () => {
     })
     renderWithRouter(<TransactionBudgetBadge match={match} />)
 
-    expect(screen.getByText('GENERAL_MERCHANDISE')).toBeInTheDocument()
+    expect(screen.getByText('General Merchandise')).toBeInTheDocument()
   })
 
   it('should handle missing pfc fields gracefully', () => {
@@ -160,7 +160,7 @@ describe('TransactionBudgetBadge - interaction', () => {
     const badge = screen.getByRole('link')
     expect(badge).toHaveAttribute(
       'aria-label',
-      'Budget: FOOD_AND_DRINK_RESTAURANTS (Matched by category)'
+      'Budget: Food And Drink › Restaurants (Matched by category)'
     )
   })
 
@@ -193,7 +193,8 @@ describe('TransactionBudgetBadge - edge cases', () => {
 
     const badge = screen.getByRole('link')
     expect(badge).toBeInTheDocument()
-    expect(screen.getByText('FOOD_AND_DRINK_COFFEE')).toBeInTheDocument()
+    // No display fields → formatPFCEnum fallback
+    expect(screen.getByText('Food And Drink › Coffee')).toBeInTheDocument()
   })
 
   it('should work with custom category', () => {
