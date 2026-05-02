@@ -731,13 +731,13 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 	}
 
 	// Optional filter: amount_type (Issue #529)
-	// income = positive amounts, expense = negative amounts
+	// PFCv2 sign convention: income = inflow (negative amount), expense = outflow (positive amount)
 	if filters.AmountType != nil {
 		switch *filters.AmountType {
 		case "income":
-			conditions = append(conditions, "amount > 0")
-		case "expense":
 			conditions = append(conditions, "amount < 0")
+		case "expense":
+			conditions = append(conditions, "amount > 0")
 		// "all" means no filter - handled in handler by not setting AmountType
 		}
 	}
@@ -1017,14 +1017,14 @@ func (r *transactionRepository) GetDistinctPlaidCategories(ctx context.Context, 
 // Issue #492: Income Source Matching Service
 // =============================================================================
 
-// GetIncomeSumByCategory returns the sum of income (positive amount) transactions
-// matching the given PFC primary enum value, using the effective category.
+// GetIncomeSumByCategory returns the sum of income (inflow/negative amount under PFCv2) transactions
+// matching the given category within the date range, using the effective category.
 func (r *transactionRepository) GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error) {
 	query := `
-		SELECT COALESCE(SUM(amount), 0)
+		SELECT COALESCE(ABS(SUM(amount)), 0)
 		FROM transactions
 		WHERE user_id = $1
-		  AND amount > 0
+		  AND amount < 0
 		  AND date BETWEEN $2 AND $3
 		  AND (CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override ELSE pfc_primary END) = $4
 	`
@@ -1036,15 +1036,15 @@ func (r *transactionRepository) GetIncomeSumByCategory(ctx context.Context, user
 	return sum, nil
 }
 
-// GetIncomeSumByTag returns the sum of income (positive amount) transactions
+// GetIncomeSumByTag returns the sum of income (inflow/negative amount under PFCv2) transactions
 // with the given tag within the date range.
 // Uses JSONB ? operator to check if tags array contains the tag.
 func (r *transactionRepository) GetIncomeSumByTag(ctx context.Context, userID string, tag string, startDate, endDate time.Time) (float64, error) {
 	query := `
-		SELECT COALESCE(SUM(amount), 0)
+		SELECT COALESCE(ABS(SUM(amount)), 0)
 		FROM transactions
 		WHERE user_id = $1
-		  AND amount > 0
+		  AND amount < 0
 		  AND date BETWEEN $2 AND $3
 		  AND tags ? $4
 	`
@@ -1101,7 +1101,7 @@ func buildEffectiveCategoryMatchClause(categoryKind string, pfcPrimary *string, 
 	}
 }
 
-// GetSpentSumForBudgetCategory returns the sum of expenses (negative amount) transactions
+// GetSpentSumForBudgetCategory returns the sum of expenses (outflow/positive amount under PFCv2) transactions
 // matching the budget category's effective category and/or tags based on match logic.
 func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time) (float64, error) {
 	if budgetCat == nil {
@@ -1126,7 +1126,7 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 		query = fmt.Sprintf(`
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
-			WHERE user_id = $1 AND amount < 0
+			WHERE user_id = $1 AND amount > 0
 			  AND date BETWEEN $2 AND $3
 			  AND (%s)
 		`, catClause)
@@ -1136,7 +1136,7 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 		query = fmt.Sprintf(`
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
-			WHERE user_id = $1 AND amount < 0
+			WHERE user_id = $1 AND amount > 0
 			  AND date BETWEEN $2 AND $3
 			  AND tags ?| $4
 		`)
@@ -1146,7 +1146,7 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 		query = fmt.Sprintf(`
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
-			WHERE user_id = $1 AND amount < 0
+			WHERE user_id = $1 AND amount > 0
 			  AND date BETWEEN $2 AND $3
 			  AND (%s)
 			  AND tags ?| $%d
@@ -1158,7 +1158,7 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 		query = fmt.Sprintf(`
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
-			WHERE user_id = $1 AND amount < 0
+			WHERE user_id = $1 AND amount > 0
 			  AND date BETWEEN $2 AND $3
 			  AND (
 				(%s)
@@ -1197,7 +1197,7 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 		query = fmt.Sprintf(`
 			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
-			WHERE user_id = $1 AND amount < 0
+			WHERE user_id = $1 AND amount > 0
 			  AND date BETWEEN $2 AND $3
 			  AND (%s)
 		`, catClause)
@@ -1207,7 +1207,7 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 		query = `
 			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
-			WHERE user_id = $1 AND amount < 0
+			WHERE user_id = $1 AND amount > 0
 			  AND date BETWEEN $2 AND $3
 			  AND tags ?| $4
 		`
@@ -1217,7 +1217,7 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 		query = fmt.Sprintf(`
 			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
-			WHERE user_id = $1 AND amount < 0
+			WHERE user_id = $1 AND amount > 0
 			  AND date BETWEEN $2 AND $3
 			  AND (%s)
 			  AND tags ?| $%d
@@ -1229,7 +1229,7 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 		query = fmt.Sprintf(`
 			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
-			WHERE user_id = $1 AND amount < 0
+			WHERE user_id = $1 AND amount > 0
 			  AND date BETWEEN $2 AND $3
 			  AND (
 				(%s)
@@ -1279,20 +1279,20 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 
 	switch matchLogic {
 	case domain.MatchLogicCategoryOnly:
-		whereClause = fmt.Sprintf(`user_id = $1 AND amount < 0 AND date BETWEEN $2 AND $3 AND (%s)`, catClause)
+		whereClause = fmt.Sprintf(`user_id = $1 AND amount > 0 AND date BETWEEN $2 AND $3 AND (%s)`, catClause)
 		allBaseArgs = append(baseArgs, catArgs...)
 
 	case domain.MatchLogicTagOnly:
-		whereClause = `user_id = $1 AND amount < 0 AND date BETWEEN $2 AND $3 AND tags ?| $4`
+		whereClause = `user_id = $1 AND amount > 0 AND date BETWEEN $2 AND $3 AND tags ?| $4`
 		allBaseArgs = append(baseArgs, pq.Array(tags))
 
 	case domain.MatchLogicAnd:
-		whereClause = fmt.Sprintf(`user_id = $1 AND amount < 0 AND date BETWEEN $2 AND $3 AND (%s) AND tags ?| $%d`, catClause, nextArg)
+		whereClause = fmt.Sprintf(`user_id = $1 AND amount > 0 AND date BETWEEN $2 AND $3 AND (%s) AND tags ?| $%d`, catClause, nextArg)
 		allBaseArgs = append(baseArgs, catArgs...)
 		allBaseArgs = append(allBaseArgs, pq.Array(tags))
 
 	case domain.MatchLogicOr:
-		whereClause = fmt.Sprintf(`user_id = $1 AND amount < 0 AND date BETWEEN $2 AND $3 AND ((%s) OR tags ?| $%d)`, catClause, nextArg)
+		whereClause = fmt.Sprintf(`user_id = $1 AND amount > 0 AND date BETWEEN $2 AND $3 AND ((%s) OR tags ?| $%d)`, catClause, nextArg)
 		allBaseArgs = append(baseArgs, catArgs...)
 		allBaseArgs = append(allBaseArgs, pq.Array(tags))
 
@@ -1301,7 +1301,7 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 	}
 
 	// Get total count and sum
-	countQuery := fmt.Sprintf(`SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0) FROM transactions WHERE %s`, whereClause)
+	countQuery := fmt.Sprintf(`SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM transactions WHERE %s`, whereClause)
 	var totalCount int
 	var totalAmount float64
 	if err := r.db.QueryRow(ctx, countQuery, allBaseArgs...).Scan(&totalCount, &totalAmount); err != nil {

@@ -40,8 +40,8 @@ func NewAnalyticsRepository(db DB) AnalyticsRepository {
 }
 
 // GetCashFlowAggregation returns aggregated income and expenses for a date range.
-// Income: transactions where amount > 0 (credits)
-// Expenses: transactions where amount < 0 (debits, returned as positive value)
+// Income: amount < 0 (inflow/credit)
+// Expenses: amount > 0 (outflow/debit, PFCv2)
 // Filters out pending transactions by default.
 // Can optionally filter by account types and include/exclude transfers.
 func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
@@ -52,10 +52,10 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 	// Base query - joins with accounts to filter by account type
 	query := `
 		SELECT
-			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) as income,
-			COUNT(CASE WHEN t.amount > 0 THEN 1 END) as income_count,
-			COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0) as expenses,
-			COUNT(CASE WHEN t.amount < 0 THEN 1 END) as expense_count
+			COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0) as income,
+			COUNT(CASE WHEN t.amount < 0 THEN 1 END) as income_count,
+			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) as expenses,
+			COUNT(CASE WHEN t.amount > 0 THEN 1 END) as expense_count
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
@@ -120,8 +120,8 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 	query := fmt.Sprintf(`
 		SELECT
 			DATE_TRUNC('%s', t.date)::date as period_start,
-			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) as income,
-			COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0) as expenses,
+			COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0) as income,
+			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) as expenses,
 			COUNT(*) as transaction_count
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
@@ -345,7 +345,7 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
-		  AND t.amount < 0
+		  AND t.amount > 0
 		  AND t.pending = false
 		%s%s
 		GROUP BY category
@@ -393,7 +393,7 @@ func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID 
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
-		  AND t.amount < 0
+		  AND t.amount > 0
 		  AND t.pending = false
 		%s
 		GROUP BY merchant_name
@@ -440,7 +440,7 @@ func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID stri
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
-		  AND t.amount < 0
+		  AND t.amount > 0
 		  AND t.pending = false
 		%s
 		GROUP BY period_start, category

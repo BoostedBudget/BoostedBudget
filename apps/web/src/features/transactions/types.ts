@@ -33,7 +33,7 @@ export interface Transaction {
   source: TransactionSource
   external_transaction_id?: string | null
   external_metadata?: string | null
-  amount: number // Positive=credit, Negative=debit
+  amount: number // PFCv2: Positive=outflow (spending), Negative=inflow (refund/income)
   date: string // ISO 8601 date (YYYY-MM-DD)
   authorized_date?: string | null // ISO 8601 date
   name: string

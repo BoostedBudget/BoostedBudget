@@ -74,16 +74,16 @@ get_random_category() {
   echo "${CATEGORIES[$RANDOM % ${#CATEGORIES[@]}]}"
 }
 
-# Generate random amount (expenses are negative)
+# Generate random amount (PFCv2: positive=outflow/expense, negative=inflow/income)
 generate_random_amount() {
   local is_income=$1
 
   if [ "$is_income" = "true" ]; then
-    # Income: $2000-$5000
-    awk 'BEGIN{srand(); printf "%.2f", 2000+rand()*3000}'
+    # Income (inflow): -$2000 to -$5000
+    awk 'BEGIN{srand(); printf "-%.2f", 2000+rand()*3000}'
   else
-    # Expense: -$5 to -$200
-    awk 'BEGIN{srand(); printf "-%.2f", 5+rand()*195}'
+    # Expense (outflow): $5 to $200
+    awk 'BEGIN{srand(); printf "%.2f", 5+rand()*195}'
   fi
 }
 

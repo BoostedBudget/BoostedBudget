@@ -258,73 +258,73 @@ BEGIN
     ) VALUES
     -- Groceries
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-001',
-     -125.50, CURRENT_DATE - INTERVAL '1 day', 'Whole Foods Market', 'Whole Foods',
+     125.50, CURRENT_DATE - INTERVAL '1 day', 'Whole Foods Market', 'Whole Foods',
      'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_GROCERIES', 'in store', false,
      '["groceries", "essentials"]'::jsonb, 'plaid'),
 
     -- Restaurants
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-002',
-     -45.00, CURRENT_DATE - INTERVAL '2 days', 'Chipotle Mexican Grill', 'Chipotle',
+     45.00, CURRENT_DATE - INTERVAL '2 days', 'Chipotle Mexican Grill', 'Chipotle',
      'FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANTS', 'in store', false,
      '["dining"]'::jsonb, 'plaid'),
 
     -- Online Shopping
     (v_user_id, v_credit_id, v_linked_item_id, 'plaid', 'e2e-txn-003',
-     -89.99, CURRENT_DATE - INTERVAL '3 days', 'Amazon.com', 'Amazon',
+     89.99, CURRENT_DATE - INTERVAL '3 days', 'Amazon.com', 'Amazon',
      'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_ONLINE_MARKETPLACES', 'online', false,
      '["shopping"]'::jsonb, 'plaid'),
 
     -- Gas
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-004',
-     -55.00, CURRENT_DATE - INTERVAL '4 days', 'Shell Gas Station', 'Shell',
+     55.00, CURRENT_DATE - INTERVAL '4 days', 'Shell Gas Station', 'Shell',
      'TRANSPORTATION', 'TRANSPORTATION_GAS', 'in store', false,
      '["transportation"]'::jsonb, 'plaid'),
 
     -- Paycheck (income)
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-005',
-     3500.00, CURRENT_DATE - INTERVAL '7 days', 'ACME Corp Payroll', 'ACME Corp',
+     -3500.00, CURRENT_DATE - INTERVAL '7 days', 'ACME Corp Payroll', 'ACME Corp',
      'INCOME', 'INCOME_WAGES', 'other', false,
      '["income", "salary"]'::jsonb, 'plaid'),
 
     -- Utilities
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-006',
-     -120.00, CURRENT_DATE - INTERVAL '10 days', 'Electric Company', 'Electric Co',
+     120.00, CURRENT_DATE - INTERVAL '10 days', 'Electric Company', 'Electric Co',
      'RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY', 'online', false,
      '["bills", "utilities"]'::jsonb, 'plaid'),
 
     -- Subscription
     (v_user_id, v_credit_id, v_linked_item_id, 'plaid', 'e2e-txn-007',
-     -15.99, CURRENT_DATE - INTERVAL '12 days', 'Netflix', 'Netflix',
+     15.99, CURRENT_DATE - INTERVAL '12 days', 'Netflix', 'Netflix',
      'ENTERTAINMENT', 'ENTERTAINMENT_TV_AND_MOVIES', 'online', false,
      '["entertainment", "subscriptions"]'::jsonb, 'plaid'),
 
     -- Coffee Shop
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-008',
-     -6.50, CURRENT_DATE - INTERVAL '1 day', 'Starbucks', 'Starbucks',
+     6.50, CURRENT_DATE - INTERVAL '1 day', 'Starbucks', 'Starbucks',
      'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE', 'in store', false,
      '["coffee"]'::jsonb, 'plaid'),
 
     -- Transfer to Savings
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-009',
-     -500.00, CURRENT_DATE - INTERVAL '15 days', 'Transfer to Savings', NULL,
+     500.00, CURRENT_DATE - INTERVAL '15 days', 'Transfer to Savings', NULL,
      'TRANSFER_OUT', 'TRANSFER_OUT_SAVINGS', 'other', false,
      '["savings"]'::jsonb, 'plaid'),
 
     -- Credit Card Payment
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-010',
-     -250.00, CURRENT_DATE - INTERVAL '5 days', 'Credit Card Payment', NULL,
+     250.00, CURRENT_DATE - INTERVAL '5 days', 'Credit Card Payment', NULL,
      'LOAN_PAYMENTS', 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT', 'other', false,
      '["bills"]'::jsonb, 'plaid'),
 
     -- Pending Transaction
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-011',
-     -35.00, CURRENT_DATE, 'Uber Eats', 'Uber Eats',
+     35.00, CURRENT_DATE, 'Uber Eats', 'Uber Eats',
      'FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANTS', 'online', true,
      '["dining"]'::jsonb, 'plaid'),
 
     -- Healthcare
     (v_user_id, v_credit_id, v_linked_item_id, 'plaid', 'e2e-txn-012',
-     -75.00, CURRENT_DATE - INTERVAL '20 days', 'CVS Pharmacy', 'CVS',
+     75.00, CURRENT_DATE - INTERVAL '20 days', 'CVS Pharmacy', 'CVS',
      'MEDICAL', 'MEDICAL_PHARMACIES_AND_SUPPLEMENTS', 'in store', false,
      '["health"]'::jsonb, 'plaid');
 

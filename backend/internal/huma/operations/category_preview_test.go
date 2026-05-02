@@ -32,7 +32,7 @@ func TestPreviewCategoryMatches_Success(t *testing.T) {
 	mockService := &mockCategoryPreviewService{
 		response: &domain.CategoryPreviewResponse{
 			TransactionCount: 15,
-			TotalAmount:      -250.50,
+			TotalAmount:      250.50,
 		},
 	}
 
@@ -54,7 +54,7 @@ func TestPreviewCategoryMatches_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	assert.Equal(t, 15, output.Body.TransactionCount)
-	assert.Equal(t, -250.50, output.Body.TotalAmount)
+	assert.Equal(t, 250.50, output.Body.TotalAmount)
 }
 
 // TestPreviewCategoryMatches_WithTags tests category preview with tags.
@@ -62,7 +62,7 @@ func TestPreviewCategoryMatches_WithTags(t *testing.T) {
 	mockService := &mockCategoryPreviewService{
 		response: &domain.CategoryPreviewResponse{
 			TransactionCount: 5,
-			TotalAmount:      -100.00,
+			TotalAmount:      100.00,
 		},
 	}
 
@@ -173,7 +173,7 @@ func TestCategoryPreviewRouteRegistration(t *testing.T) {
 	mockService := &mockCategoryPreviewService{
 		response: &domain.CategoryPreviewResponse{
 			TransactionCount: 10,
-			TotalAmount:      -150.00,
+			TotalAmount:      150.00,
 		},
 	}
 
