@@ -54,9 +54,13 @@ export interface Transaction {
   pfc_category_icon_url?: string;
   pfc_confidence_level?: string;
   pfc_detailed?: string;
+  pfc_detailed_display?: string;
   pfc_detailed_override?: string;
+  pfc_detailed_override_display?: string;
   pfc_primary?: string;
+  pfc_primary_display?: string;
   pfc_primary_override?: string;
+  pfc_primary_override_display?: string;
   source: string;
   /** @nullable */
   tags: string[] | null;

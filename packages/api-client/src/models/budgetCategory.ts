@@ -39,7 +39,9 @@ export interface BudgetCategory {
   id: string;
   match_logic: string;
   pfc_detailed?: string;
+  pfc_detailed_display?: string;
   pfc_primary?: string;
+  pfc_primary_display?: string;
   spent_amount: number;
   /** @nullable */
   tags: string[] | null;

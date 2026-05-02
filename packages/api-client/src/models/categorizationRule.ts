@@ -49,7 +49,9 @@ export interface CategorizationRule {
   target_custom_category_id?: string;
   target_kind?: string;
   target_pfc_detailed?: string;
+  target_pfc_detailed_display?: string;
   target_pfc_primary?: string;
+  target_pfc_primary_display?: string;
   /** @nullable */
   target_tags?: string[] | null;
   updated_at: string;
