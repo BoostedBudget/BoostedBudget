@@ -121,8 +121,9 @@ describe('BudgetCategoryManager', () => {
       createMockCategory({ id: 'cat-2', pfc_primary: 'TRANSPORTATION', pfc_detailed: 'TRANSPORTATION_GAS' }),
     ]
     renderManager({ categories })
-    expect(screen.getByRole('heading', { name: 'FOOD_AND_DRINK_RESTAURANTS' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'TRANSPORTATION_GAS' })).toBeInTheDocument()
+    // No display fields — formatPFCEnum fallback is used
+    expect(screen.getByRole('heading', { name: 'Food And Drink › Restaurants' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Transportation › Gas' })).toBeInTheDocument()
   })
 
   it('should render add category button', () => {
@@ -170,7 +171,7 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    await user.click(screen.getByRole('button', { name: /^Edit FOOD_AND_DRINK_RESTAURANTS$/i }))
+    await user.click(screen.getByRole('button', { name: /^Edit Food And Drink.*Restaurants$/i }))
 
     // Issue #575: Real form uses dialog role and title
     await waitFor(() => {
@@ -190,7 +191,7 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    await user.click(screen.getByRole('button', { name: /^Delete FOOD_AND_DRINK_RESTAURANTS$/i }))
+    await user.click(screen.getByRole('button', { name: /^Delete Food And Drink.*Restaurants$/i }))
 
     await waitFor(() => {
       expect(screen.getByRole('alertdialog')).toBeInTheDocument()
@@ -202,7 +203,7 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    await user.click(screen.getByRole('button', { name: /^Delete FOOD_AND_DRINK_RESTAURANTS$/i }))
+    await user.click(screen.getByRole('button', { name: /^Delete Food And Drink.*Restaurants$/i }))
     await user.click(screen.getByRole('button', { name: /^delete$/i }))
 
     await waitFor(() => {
@@ -215,7 +216,7 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    await user.click(screen.getByRole('button', { name: /^Delete FOOD_AND_DRINK_RESTAURANTS$/i }))
+    await user.click(screen.getByRole('button', { name: /^Delete Food And Drink.*Restaurants$/i }))
     await user.click(screen.getByRole('button', { name: /cancel/i }))
 
     await waitFor(() => {
@@ -234,8 +235,8 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
     renderManager({ categories, disabled: true })
     // Issue #575: Real component uses aria-label for buttons
-    expect(screen.getByRole('button', { name: /^Edit FOOD_AND_DRINK_RESTAURANTS$/i })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /^Delete FOOD_AND_DRINK_RESTAURANTS$/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Edit Food And Drink.*Restaurants$/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Delete Food And Drink.*Restaurants$/i })).toBeDisabled()
   })
 
   it('should pass correct props to AllocationBreakdown', () => {

@@ -85,10 +85,11 @@ describe('AutoCategorizationRuleCard', () => {
       expect(screen.getByText('Conditions (AND)')).toBeInTheDocument()
     })
 
-    it('should render target category in PFC primary › detailed format', () => {
+    it('should render target category using display fields when present', () => {
+      // When display fields are absent, formatPFCEnum fallback is used
       renderCard()
 
-      expect(screen.getByText('FOOD_AND_DRINK › FOOD_AND_DRINK_COFFEE')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink › Coffee')).toBeInTheDocument()
     })
 
     it('should render target tags', () => {

@@ -32,11 +32,15 @@ describe('getEffectiveCategory', () => {
       category_override_kind: 'pfc',
       pfc_primary_override: 'FOOD_AND_DRINK',
       pfc_detailed_override: 'FOOD_AND_DRINK_RESTAURANTS',
+      pfc_primary_override_display: 'Food And Drink',
+      pfc_detailed_override_display: 'Food And Drink › Restaurants',
     }
     expect(getEffectiveCategory(tx)).toEqual({
       kind: 'pfc',
       pfc_primary: 'FOOD_AND_DRINK',
       pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+      pfc_primary_display: 'Food And Drink',
+      pfc_detailed_display: 'Food And Drink › Restaurants',
     })
   })
 
@@ -45,11 +49,14 @@ describe('getEffectiveCategory', () => {
       ...baseTransaction,
       category_override_kind: 'pfc',
       pfc_primary_override: 'TRANSPORTATION',
+      pfc_primary_override_display: 'Transportation',
     }
     expect(getEffectiveCategory(tx)).toEqual({
       kind: 'pfc',
       pfc_primary: 'TRANSPORTATION',
       pfc_detailed: undefined,
+      pfc_primary_display: 'Transportation',
+      pfc_detailed_display: undefined,
     })
   })
 
@@ -58,11 +65,15 @@ describe('getEffectiveCategory', () => {
       ...baseTransaction,
       pfc_primary: 'FOOD_AND_DRINK',
       pfc_detailed: 'FOOD_AND_DRINK_GROCERIES',
+      pfc_primary_display: 'Food And Drink',
+      pfc_detailed_display: 'Food And Drink › Groceries',
     }
     expect(getEffectiveCategory(tx)).toEqual({
       kind: 'pfc',
       pfc_primary: 'FOOD_AND_DRINK',
       pfc_detailed: 'FOOD_AND_DRINK_GROCERIES',
+      pfc_primary_display: 'Food And Drink',
+      pfc_detailed_display: 'Food And Drink › Groceries',
     })
   })
 
@@ -70,11 +81,14 @@ describe('getEffectiveCategory', () => {
     const tx: Transaction = {
       ...baseTransaction,
       pfc_primary: 'INCOME',
+      pfc_primary_display: 'Income',
     }
     expect(getEffectiveCategory(tx)).toEqual({
       kind: 'pfc',
       pfc_primary: 'INCOME',
       pfc_detailed: undefined,
+      pfc_primary_display: 'Income',
+      pfc_detailed_display: undefined,
     })
   })
 
@@ -87,12 +101,15 @@ describe('getEffectiveCategory', () => {
       ...baseTransaction,
       category_override_kind: 'pfc',
       pfc_primary_override: 'TRANSPORTATION',
+      pfc_primary_override_display: 'Transportation',
       pfc_primary: 'FOOD_AND_DRINK',
     }
     expect(getEffectiveCategory(tx)).toEqual({
       kind: 'pfc',
       pfc_primary: 'TRANSPORTATION',
       pfc_detailed: undefined,
+      pfc_primary_display: 'Transportation',
+      pfc_detailed_display: undefined,
     })
   })
 
@@ -118,6 +135,8 @@ describe('getEffectiveCategory', () => {
       kind: 'pfc',
       pfc_primary: 'FOOD_AND_DRINK',
       pfc_detailed: undefined,
+      pfc_primary_display: undefined,
+      pfc_detailed_display: undefined,
     })
   })
 })
@@ -131,15 +150,33 @@ describe('getEffectiveCategoryLabel', () => {
     expect(getEffectiveCategoryLabel({ kind: 'custom', custom_category_id: 'my-id' })).toBe('my-id')
   })
 
-  it('returns pfc_detailed when present', () => {
+  it('returns pfc_detailed_display when present', () => {
     expect(getEffectiveCategoryLabel({
       kind: 'pfc',
       pfc_primary: 'FOOD_AND_DRINK',
       pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
-    })).toBe('FOOD_AND_DRINK_RESTAURANTS')
+      pfc_primary_display: 'Food And Drink',
+      pfc_detailed_display: 'Food And Drink › Restaurants',
+    })).toBe('Food And Drink › Restaurants')
   })
 
-  it('returns pfc_primary when no pfc_detailed', () => {
-    expect(getEffectiveCategoryLabel({ kind: 'pfc', pfc_primary: 'INCOME' })).toBe('INCOME')
+  it('returns pfc_primary_display when no pfc_detailed_display', () => {
+    expect(getEffectiveCategoryLabel({
+      kind: 'pfc',
+      pfc_primary: 'INCOME',
+      pfc_primary_display: 'Income',
+    })).toBe('Income')
+  })
+
+  it('falls back to formatPFCEnum(pfc_detailed) when no display fields', () => {
+    expect(getEffectiveCategoryLabel({
+      kind: 'pfc',
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+    })).toBe('Food And Drink › Restaurants')
+  })
+
+  it('falls back to formatPFCEnum(pfc_primary) when no display fields and no detailed', () => {
+    expect(getEffectiveCategoryLabel({ kind: 'pfc', pfc_primary: 'INCOME' })).toBe('Income')
   })
 })

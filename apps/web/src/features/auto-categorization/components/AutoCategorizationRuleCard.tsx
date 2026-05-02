@@ -9,7 +9,7 @@ import { useState } from 'react'
 import type { CategorizationRule, ConditionType } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
-import { formatPFCPrimary, formatPFCDetailed } from '../utils/pfcFormat'
+import { formatPFCPrimary, formatPFCDetailed, formatPFCEnum } from '../utils/pfcFormat'
 
 export interface AutoCategorizationRuleCardProps {
   rule: CategorizationRule
@@ -109,9 +109,9 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-muted-foreground">Set category:</span>
                 <span className="text-foreground font-medium flex flex-wrap gap-1">
-                  {rule.target_pfc_detailed
-                    ? `${rule.target_pfc_primary} › ${rule.target_pfc_detailed}`
-                    : rule.target_pfc_primary}
+                  {rule.target_pfc_detailed_display
+                    ?? rule.target_pfc_primary_display
+                    ?? formatPFCEnum(rule.target_pfc_detailed ?? rule.target_pfc_primary ?? '')}
                 </span>
               </div>
             )}
