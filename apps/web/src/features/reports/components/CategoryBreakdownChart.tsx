@@ -40,7 +40,7 @@ export function CategoryBreakdownChart({
       {
         type: 'pie',
         hole: 0.5,
-        labels: categories.map((c) => c.display_name),
+        labels: categories.map((c) => c.pfc_primary_display),
         values: categories.map((c) => c.total),
         marker: {
           colors: CATEGORY_COLORS.slice(0, categories.length) as string[],

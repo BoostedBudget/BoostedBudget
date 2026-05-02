@@ -236,6 +236,69 @@ func TestCategorizationRule_PopulatePFCDisplay_NilFieldsNoOp(t *testing.T) {
 	assert.Nil(t, r.TargetPFCDetailedDisplay)
 }
 
+// ───────────────────────────────────────────────────────────────────────────────
+// CategorizationRule – Condition.ValueDisplay for PFC-typed conditions
+// ───────────────────────────────────────────────────────────────────────────────
+
+func TestCategorizationRule_PopulatePFCDisplay_ConditionPrimaryValueDisplay(t *testing.T) {
+	for _, p := range pfc.AllPrimaries() {
+		p := p
+		t.Run(p.Enum, func(t *testing.T) {
+			rule := &CategorizationRule{
+				Conditions: []RuleCondition{
+					{Type: ConditionExistingPFCPrimary, Value: p.Enum},
+				},
+			}
+			rule.PopulatePFCDisplay()
+			expected := pfc.PrimaryDisplayName(p.Enum)
+			require.Equal(t, expected, rule.Conditions[0].ValueDisplay)
+			assert.NotEmpty(t, rule.Conditions[0].ValueDisplay)
+		})
+	}
+}
+
+func TestCategorizationRule_PopulatePFCDisplay_ConditionDetailedValueDisplay(t *testing.T) {
+	for _, d := range pfc.AllDetailed() {
+		d := d
+		t.Run(d.Enum, func(t *testing.T) {
+			rule := &CategorizationRule{
+				Conditions: []RuleCondition{
+					{Type: ConditionExistingPFCDetailed, Value: d.Enum},
+				},
+			}
+			rule.PopulatePFCDisplay()
+			expected := pfc.DetailedDisplayName(d.PrimaryEnum, d.Enum)
+			require.Equal(t, expected, rule.Conditions[0].ValueDisplay)
+			assert.NotEmpty(t, rule.Conditions[0].ValueDisplay)
+		})
+	}
+}
+
+func TestCategorizationRule_PopulatePFCDisplay_NonPFCConditionsNoValueDisplay(t *testing.T) {
+	rule := &CategorizationRule{
+		Conditions: []RuleCondition{
+			{Type: ConditionMerchantContains, Value: "starbucks"},
+			{Type: ConditionAmountGreaterThan, Value: 5.0},
+		},
+	}
+	rule.PopulatePFCDisplay()
+	assert.Empty(t, rule.Conditions[0].ValueDisplay, "merchant condition should have no ValueDisplay")
+	assert.Empty(t, rule.Conditions[1].ValueDisplay, "amount condition should have no ValueDisplay")
+}
+
+func TestCategorizationRule_PopulatePFCDisplay_ConditionValueDisplayIdempotent(t *testing.T) {
+	v := "FOOD_AND_DRINK"
+	rule := &CategorizationRule{
+		Conditions: []RuleCondition{
+			{Type: ConditionExistingPFCPrimary, Value: v},
+		},
+	}
+	rule.PopulatePFCDisplay()
+	first := rule.Conditions[0].ValueDisplay
+	rule.PopulatePFCDisplay()
+	assert.Equal(t, first, rule.Conditions[0].ValueDisplay, "second call should yield same condition ValueDisplay")
+}
+
 func TestCustomCategory_PopulatePFCDisplay_NilFieldsNoOp(t *testing.T) {
 	c := &CustomCategory{}
 	c.PopulatePFCDisplay()

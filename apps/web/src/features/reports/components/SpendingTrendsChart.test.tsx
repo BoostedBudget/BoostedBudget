@@ -16,8 +16,8 @@ const mockData: SpendingTrendsResponse = {
       period_end: '2024-01-31',
       total: 280,
       categories: [
-        { category: 'FOOD_AND_DRINK', display_name: 'Food & Drink', total: 200 },
-        { category: 'TRANSPORTATION', display_name: 'Transportation', total: 80 },
+        { category: 'FOOD_AND_DRINK', pfc_primary_display: 'Food And Drink', total: 200 },
+        { category: 'TRANSPORTATION', pfc_primary_display: 'Transportation', total: 80 },
       ],
     },
     {
@@ -25,8 +25,8 @@ const mockData: SpendingTrendsResponse = {
       period_end: '2024-02-29',
       total: 320,
       categories: [
-        { category: 'FOOD_AND_DRINK', display_name: 'Food & Drink', total: 230 },
-        { category: 'TRANSPORTATION', display_name: 'Transportation', total: 90 },
+        { category: 'FOOD_AND_DRINK', pfc_primary_display: 'Food And Drink', total: 230 },
+        { category: 'TRANSPORTATION', pfc_primary_display: 'Transportation', total: 90 },
       ],
     },
   ],

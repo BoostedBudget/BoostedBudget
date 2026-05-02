@@ -24,6 +24,31 @@ describe('IncomeSourceItem', () => {
       expect(screen.getByTestId('income-source-icon')).toBeInTheDocument();
     });
 
+    it('prefers server-supplied value_display over local formatter for pfc_primary', () => {
+      const source: IncomeSource = {
+        type: 'pfc_primary',
+        value: 'INCOME_WAGES',
+        value_display: 'Wages',
+      };
+
+      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
+
+      expect(screen.getByText('Wages')).toBeInTheDocument();
+      expect(screen.queryByText('Income Wages')).not.toBeInTheDocument();
+    });
+
+    it('prefers server-supplied value_display over local formatter for plaid_category', () => {
+      const source: IncomeSource = {
+        type: 'plaid_category',
+        value: 'INCOME_WAGES',
+        value_display: 'Wages (server)',
+      };
+
+      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
+
+      expect(screen.getByText('Wages (server)')).toBeInTheDocument();
+    });
+
     it('renders plaid_category source (backward compat) with category icon and value', () => {
       const source: IncomeSource = {
         type: 'plaid_category',

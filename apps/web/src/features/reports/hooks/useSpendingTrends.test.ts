@@ -35,7 +35,7 @@ describe('useSpendingTrends', () => {
           period_start: '2024-01-01',
           period_end: '2024-01-31',
           total: 280,
-          categories: [{ category: 'FOOD_AND_DRINK', display_name: 'Food & Drink', total: 280 }],
+          categories: [{ category: 'FOOD_AND_DRINK', pfc_primary_display: 'Food And Drink', total: 280 }],
         },
       ],
     }
