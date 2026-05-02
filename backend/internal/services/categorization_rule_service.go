@@ -83,12 +83,20 @@ func (s *categorizationRuleService) CreateRule(ctx context.Context, userID strin
 		return nil, err
 	}
 
+	rule.PopulatePFCDisplay()
 	return rule, nil
 }
 
 // GetUserRules retrieves all rules for a user, ordered by priority.
 func (s *categorizationRuleService) GetUserRules(ctx context.Context, userID string) ([]*domain.CategorizationRule, error) {
-	return s.ruleRepo.GetByUserID(ctx, userID)
+	rules, err := s.ruleRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rules {
+		r.PopulatePFCDisplay()
+	}
+	return rules, nil
 }
 
 // GetRuleByID retrieves a specific rule by ID.
@@ -103,6 +111,7 @@ func (s *categorizationRuleService) GetRuleByID(ctx context.Context, userID, rul
 		return nil, domain.ErrRuleNotFound
 	}
 
+	rule.PopulatePFCDisplay()
 	return rule, nil
 }
 
@@ -167,6 +176,7 @@ func (s *categorizationRuleService) UpdateRule(ctx context.Context, userID, rule
 		return nil, err
 	}
 
+	rule.PopulatePFCDisplay()
 	return rule, nil
 }
 
@@ -206,10 +216,18 @@ func (s *categorizationRuleService) ToggleRule(ctx context.Context, userID, rule
 		return nil, err
 	}
 
+	rule.PopulatePFCDisplay()
 	return rule, nil
 }
 
 // GetEnabledRules retrieves all enabled rules for a user.
 func (s *categorizationRuleService) GetEnabledRules(ctx context.Context, userID string) ([]*domain.CategorizationRule, error) {
-	return s.ruleRepo.GetEnabledByUserID(ctx, userID)
+	rules, err := s.ruleRepo.GetEnabledByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rules {
+		r.PopulatePFCDisplay()
+	}
+	return rules, nil
 }
