@@ -204,25 +204,17 @@ func isPFCPrimary(s string) bool {
 	return false
 }
 
-// detailedToPrimaryEnum builds a lookup map from detailed enum → primary enum.
-func detailedToPrimaryEnum() map[string]string {
-	m := make(map[string]string)
-	for _, d := range pfc.AllDetailed() {
-		m[d.Enum] = d.PrimaryEnum
-	}
-	return m
-}
-
 // pfcDisplayName returns the appropriate display name for a category enum.
 // Primary enums use PrimaryDisplayName; detailed enums use DetailedDisplayName.
 func pfcDisplayName(category string) string {
 	if isPFCPrimary(category) {
 		return pfc.PrimaryDisplayName(category)
 	}
-	// Detailed enum — look up the primary via the detail map.
-	detailMap := detailedToPrimaryEnum()
-	if primaryEnum, ok := detailMap[category]; ok {
-		return pfc.DetailedDisplayName(primaryEnum, category)
+	// Detailed enum — look up the primary from the registry.
+	for _, d := range pfc.AllDetailed() {
+		if d.Enum == category {
+			return pfc.DetailedDisplayName(d.PrimaryEnum, category)
+		}
 	}
 	// Unknown detailed: fall back to primary display (title-case fallback inside).
 	return pfc.PrimaryDisplayName(category)
@@ -372,7 +364,7 @@ func (s *analyticsService) GetSpendingTrends(ctx context.Context, userID string,
 			if spend, ok := catSpend[tc]; ok {
 				cats = append(cats, domain.CategorySpending{
 					Category:          tc,
-					PFCPrimaryDisplay: PFCPrimaryDisplayName(tc),
+					PFCPrimaryDisplay: pfcDisplayName(tc),
 					Total:             spend,
 				})
 				periodTotal += spend

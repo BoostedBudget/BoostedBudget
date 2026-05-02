@@ -6,23 +6,28 @@ package domain
 
 import "github.com/maxnussbaum/BoostedBudget/internal/pfc"
 
+// notEmpty reports whether a string pointer is non-nil and non-empty.
+func notEmpty(s *string) bool {
+	return s != nil && *s != ""
+}
+
 // PopulatePFCDisplay fills in PFCPrimaryDisplay, PFCDetailedDisplay,
 // PFCPrimaryOverrideDisplay, and PFCDetailedOverrideDisplay on the transaction
 // from the pfc registry. Safe to call multiple times (idempotent).
 func (t *Transaction) PopulatePFCDisplay() {
-	if t.PFCPrimary != nil && *t.PFCPrimary != "" {
+	if notEmpty(t.PFCPrimary) {
 		d := pfc.PrimaryDisplayName(*t.PFCPrimary)
 		t.PFCPrimaryDisplay = &d
 	}
-	if t.PFCPrimary != nil && *t.PFCPrimary != "" && t.PFCDetailed != nil && *t.PFCDetailed != "" {
+	if notEmpty(t.PFCPrimary) && notEmpty(t.PFCDetailed) {
 		d := pfc.DetailedDisplayName(*t.PFCPrimary, *t.PFCDetailed)
 		t.PFCDetailedDisplay = &d
 	}
-	if t.PFCPrimaryOverride != nil && *t.PFCPrimaryOverride != "" {
+	if notEmpty(t.PFCPrimaryOverride) {
 		d := pfc.PrimaryDisplayName(*t.PFCPrimaryOverride)
 		t.PFCPrimaryOverrideDisplay = &d
 	}
-	if t.PFCPrimaryOverride != nil && *t.PFCPrimaryOverride != "" && t.PFCDetailedOverride != nil && *t.PFCDetailedOverride != "" {
+	if notEmpty(t.PFCPrimaryOverride) && notEmpty(t.PFCDetailedOverride) {
 		d := pfc.DetailedDisplayName(*t.PFCPrimaryOverride, *t.PFCDetailedOverride)
 		t.PFCDetailedOverrideDisplay = &d
 	}
@@ -31,11 +36,11 @@ func (t *Transaction) PopulatePFCDisplay() {
 // PopulatePFCDisplay fills in PFCPrimaryDisplay and PFCDetailedDisplay on the
 // BudgetCategory from the pfc registry. Safe to call multiple times (idempotent).
 func (bc *BudgetCategory) PopulatePFCDisplay() {
-	if bc.PFCPrimary != nil && *bc.PFCPrimary != "" {
+	if notEmpty(bc.PFCPrimary) {
 		d := pfc.PrimaryDisplayName(*bc.PFCPrimary)
 		bc.PFCPrimaryDisplay = &d
 	}
-	if bc.PFCPrimary != nil && *bc.PFCPrimary != "" && bc.PFCDetailed != nil && *bc.PFCDetailed != "" {
+	if notEmpty(bc.PFCPrimary) && notEmpty(bc.PFCDetailed) {
 		d := pfc.DetailedDisplayName(*bc.PFCPrimary, *bc.PFCDetailed)
 		bc.PFCDetailedDisplay = &d
 	}
@@ -44,11 +49,11 @@ func (bc *BudgetCategory) PopulatePFCDisplay() {
 // PopulatePFCDisplay fills in TargetPFCPrimaryDisplay and TargetPFCDetailedDisplay
 // on the CategorizationRule from the pfc registry. Safe to call multiple times (idempotent).
 func (r *CategorizationRule) PopulatePFCDisplay() {
-	if r.TargetPFCPrimary != nil && *r.TargetPFCPrimary != "" {
+	if notEmpty(r.TargetPFCPrimary) {
 		d := pfc.PrimaryDisplayName(*r.TargetPFCPrimary)
 		r.TargetPFCPrimaryDisplay = &d
 	}
-	if r.TargetPFCPrimary != nil && *r.TargetPFCPrimary != "" && r.TargetPFCDetailed != nil && *r.TargetPFCDetailed != "" {
+	if notEmpty(r.TargetPFCPrimary) && notEmpty(r.TargetPFCDetailed) {
 		d := pfc.DetailedDisplayName(*r.TargetPFCPrimary, *r.TargetPFCDetailed)
 		r.TargetPFCDetailedDisplay = &d
 	}
@@ -57,7 +62,7 @@ func (r *CategorizationRule) PopulatePFCDisplay() {
 // PopulatePFCDisplay fills in ParentPFCPrimaryDisplay on the CustomCategory
 // from the pfc registry. Safe to call multiple times (idempotent).
 func (c *CustomCategory) PopulatePFCDisplay() {
-	if c.ParentPFCPrimary != nil && *c.ParentPFCPrimary != "" {
+	if notEmpty(c.ParentPFCPrimary) {
 		d := pfc.PrimaryDisplayName(*c.ParentPFCPrimary)
 		c.ParentPFCPrimaryDisplay = &d
 	}
