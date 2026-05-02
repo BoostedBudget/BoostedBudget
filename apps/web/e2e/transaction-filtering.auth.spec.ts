@@ -25,7 +25,7 @@ const mockTransactions = {
       linked_item_id: 'item-1',
       source: 'plaid',
       external_transaction_id: 'plaid-txn-1',
-      amount: -25.50,
+      amount: 25.50,
       date: '2025-11-15',
       name: 'Coffee Shop',
       merchant_name: 'Starbucks',
@@ -43,7 +43,7 @@ const mockTransactions = {
       linked_item_id: 'item-1',
       source: 'plaid',
       external_transaction_id: 'plaid-txn-2',
-      amount: -150.00,
+      amount: 150.00,
       date: '2025-11-14',
       name: 'Grocery Store',
       merchant_name: 'Whole Foods',
@@ -61,7 +61,7 @@ const mockTransactions = {
       linked_item_id: 'item-1',
       source: 'plaid',
       external_transaction_id: 'plaid-txn-3',
-      amount: 2500.00,
+      amount: -2500.00,
       date: '2025-11-10',
       name: 'Salary',
       merchant_name: null,
@@ -79,7 +79,7 @@ const mockTransactions = {
       linked_item_id: 'item-1',
       source: 'plaid',
       external_transaction_id: 'plaid-txn-4',
-      amount: -50.00,
+      amount: 50.00,
       date: '2025-11-16',
       name: 'Pending Transaction',
       merchant_name: 'Amazon',
@@ -201,9 +201,9 @@ async function mockFilteringAPIs(
       // Apply amount_type filter
       const amountType = url.searchParams.get('amount_type')
       if (amountType === 'income') {
-        filteredTransactions = filteredTransactions.filter((t) => t.amount > 0)
-      } else if (amountType === 'expense') {
         filteredTransactions = filteredTransactions.filter((t) => t.amount < 0)
+      } else if (amountType === 'expense') {
+        filteredTransactions = filteredTransactions.filter((t) => t.amount > 0)
       }
 
       // Apply pending filter
@@ -759,7 +759,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
           linked_item_id: 'item-1',
           source: 'plaid',
           external_transaction_id: `plaid-txn-${i}`,
-          amount: i % 3 === 0 ? 100 + i : -(50 + i),
+          amount: i % 3 === 0 ? -(100 + i) : 50 + i,
           date: `2025-${String((i % 12) + 1).padStart(2, '0')}-15`,
           name: `Transaction ${i}`,
           merchant_name: `Merchant ${i}`,
@@ -785,9 +785,9 @@ test.describe('Transaction Filtering - Authenticated User', () => {
         // Filter based on amount_type if provided
         let filtered = largeTransactionSet
         if (amountType === 'expense') {
-          filtered = largeTransactionSet.filter((t) => t.amount < 0)
-        } else if (amountType === 'income') {
           filtered = largeTransactionSet.filter((t) => t.amount > 0)
+        } else if (amountType === 'income') {
+          filtered = largeTransactionSet.filter((t) => t.amount < 0)
         }
 
         await route.fulfill({
