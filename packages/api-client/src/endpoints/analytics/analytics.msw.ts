@@ -102,8 +102,8 @@ export const getGetSpendingByCategoryResponseMock = (
       (_, i) => i + 1,
     ).map(() => ({
       category: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      display_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
       percentage: faker.number.float({ fractionDigits: 2 }),
+      pfc_primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
       total: faker.number.float({ fractionDigits: 2 }),
       transaction_count: faker.number.int(),
     })),
@@ -153,7 +153,9 @@ export const getGetSpendingTrendsResponseMock = (
           (_, i) => i + 1,
         ).map(() => ({
           category: faker.string.alpha({ length: { min: 10, max: 20 } }),
-          display_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          pfc_primary_display: faker.string.alpha({
+            length: { min: 10, max: 20 },
+          }),
           total: faker.number.float({ fractionDigits: 2 }),
         })),
         null,

@@ -750,7 +750,11 @@ components:
           type: string
         pfc_detailed:
           type: string
+        pfc_detailed_display:
+          type: string
         pfc_primary:
+          type: string
+        pfc_primary_display:
           type: string
         spent_amount:
           format: double
@@ -1013,7 +1017,11 @@ components:
           type: string
         target_pfc_detailed:
           type: string
+        target_pfc_detailed_display:
+          type: string
         target_pfc_primary:
+          type: string
+        target_pfc_primary_display:
           type: string
         target_tags:
           items:
@@ -1102,14 +1110,14 @@ components:
       properties:
         category:
           type: string
-        display_name:
+        pfc_primary_display:
           type: string
         total:
           format: double
           type: number
       required:
         - category
-        - display_name
+        - pfc_primary_display
         - total
       type: object
     CategoryTransactionsResponse:
@@ -1506,6 +1514,8 @@ components:
         name:
           type: string
         parent_pfc_primary:
+          type: string
+        parent_pfc_primary_display:
           type: string
         updated_at:
           format: date-time
@@ -2191,6 +2201,8 @@ components:
         type:
           type: string
         value:
+          type: string
+        value_display:
           type: string
       required:
         - type
@@ -3205,11 +3217,11 @@ components:
       properties:
         category:
           type: string
-        display_name:
-          type: string
         percentage:
           format: double
           type: number
+        pfc_primary_display:
+          type: string
         total:
           format: double
           type: number
@@ -3218,7 +3230,7 @@ components:
           type: integer
       required:
         - category
-        - display_name
+        - pfc_primary_display
         - total
         - percentage
         - transaction_count
@@ -3637,11 +3649,19 @@ components:
           type: string
         pfc_detailed:
           type: string
+        pfc_detailed_display:
+          type: string
         pfc_detailed_override:
+          type: string
+        pfc_detailed_override_display:
           type: string
         pfc_primary:
           type: string
+        pfc_primary_display:
+          type: string
         pfc_primary_override:
+          type: string
+        pfc_primary_override_display:
           type: string
         source:
           type: string

@@ -30,8 +30,8 @@ Multi-region support planned for Phase 7+.
 
 export interface SpendingByCategory {
   category: string;
-  display_name: string;
   percentage: number;
+  pfc_primary_display: string;
   total: number;
   transaction_count: number;
 }
