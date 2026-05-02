@@ -1,8 +1,21 @@
-import { describe, it, expect } from 'bun:test'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, beforeEach } from 'bun:test'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import { ReadOnlyProvider } from '@/auth/ReadOnlyContext'
 import { TransactionEditor } from './TransactionEditor'
 import type { Transaction } from '../types'
+import { mockUpdateTransactionCategoryMutateAsync } from '@/test/mocks/transactions-api'
+
+function createWrapper() {
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return (
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        {children}
+      </QueryClientProvider>
+    )
+  }
+}
 
 const baseTransaction: Transaction = {
   id: 'txn-1',
@@ -92,6 +105,51 @@ describe('TransactionEditor', () => {
       }
       renderEditor(txn)
       expect(screen.getByText('Food And Drink')).toBeInTheDocument()
+    })
+  })
+
+  describe('save category — Plaid primary encoding', () => {
+    const plaidPrimaries = [
+      { enum: 'FOOD_AND_DRINK', display: 'Food And Drink' },
+      { enum: 'TRANSPORTATION', display: 'Transportation' },
+    ]
+
+    beforeEach(() => {
+      mockUpdateTransactionCategoryMutateAsync.mockClear()
+      mockUpdateTransactionCategoryMutateAsync.mockResolvedValue({ ...baseTransaction })
+    })
+
+    it('sends PFC enum not display name when selecting a Plaid primary', async () => {
+      const txn: Transaction = { ...baseTransaction, pfc_primary: 'FOOD_AND_DRINK' }
+      const Wrapper = createWrapper()
+      render(
+        <ReadOnlyProvider isReadOnly={false}>
+          <TransactionEditor
+            transaction={txn}
+            availableTags={[]}
+            availableCategories={[]}
+            plaidPrimaries={plaidPrimaries}
+            isOpen={true}
+            onClose={() => {}}
+            onSave={() => {}}
+          />
+        </ReadOnlyProvider>,
+        { wrapper: Wrapper }
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /change category/i }))
+      await waitFor(() => expect(screen.getByRole('option', { name: 'Transportation' })).toBeInTheDocument())
+      fireEvent.click(screen.getByRole('option', { name: 'Transportation' }))
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /save/i })).not.toBeDisabled())
+      fireEvent.click(screen.getByRole('button', { name: /save/i }))
+
+      await waitFor(() => {
+        expect(mockUpdateTransactionCategoryMutateAsync).toHaveBeenCalledWith({
+          id: 'txn-1',
+          data: { kind: 'pfc', pfc_primary: 'TRANSPORTATION', pfc_detailed: undefined },
+        })
+      })
     })
   })
 })

@@ -19,7 +19,9 @@ export interface AutoCategorizationRuleCardProps {
 }
 
 function formatConditionValue(condition: { type: ConditionType; value: unknown; value_display?: string }): string {
-  if (condition.value_display) return condition.value_display
+  if (condition.value_display && (condition.type === 'existing_pfc_primary' || condition.type === 'existing_pfc_detailed')) {
+    return condition.value_display
+  }
 
   const { type, value } = condition
   if (typeof value === 'string') {
