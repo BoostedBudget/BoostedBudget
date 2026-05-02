@@ -153,6 +153,7 @@ func (s *customCategoryService) GetOrCreateCategory(ctx context.Context, userID,
 	// Try to get existing category
 	category, err := s.categoryRepo.GetByName(ctx, userID, categoryName)
 	if err == nil {
+		category.PopulatePFCDisplay()
 		return category, nil
 	}
 
