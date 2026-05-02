@@ -60,9 +60,10 @@ func (ist IncomeSourceType) IsValid() bool {
 
 // IncomeSource represents a tracked source of income for envelope budgeting.
 type IncomeSource struct {
-	Type        IncomeSourceType `json:"type"`
-	Value       string           `json:"value"`                 // Category name, tag name, or description
-	Description string           `json:"description,omitempty"` // Optional user-friendly label
+	Type         IncomeSourceType `json:"type"`
+	Value        string           `json:"value"`                  // Category name, tag name, or description
+	Description  string           `json:"description,omitempty"`  // Optional user-friendly label
+	ValueDisplay string           `json:"value_display,omitempty"` // Human-readable display for Value when Type is pfc_primary
 }
 
 // Validate checks that the IncomeSource has valid fields.
@@ -252,16 +253,20 @@ func (b *Budget) ExceedsExpectedIncome() bool {
 // Uses a discriminated union: category_kind='pfc' (pfc_primary required) or
 // category_kind='custom' (custom_category_id required).
 type BudgetCategory struct {
-	ID              string    `json:"id" db:"id"`
-	BudgetID        string    `json:"budget_id" db:"budget_id"`
-	CategoryKind    string    `json:"category_kind" db:"category_kind"` // "pfc" or "custom"
-	PFCPrimary      *string   `json:"pfc_primary,omitempty" db:"pfc_primary"`
-	PFCDetailed     *string   `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
-	CustomCategoryID *string  `json:"custom_category_id,omitempty" db:"custom_category_id"`
-	AllocatedAmount float64   `json:"allocated_amount" db:"allocated_amount"`
-	SpentAmount     float64   `json:"spent_amount" db:"spent_amount"`
-	CreatedAt       time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at" db:"updated_at"`
+	ID               string    `json:"id" db:"id"`
+	BudgetID         string    `json:"budget_id" db:"budget_id"`
+	CategoryKind     string    `json:"category_kind" db:"category_kind"` // "pfc" or "custom"
+	PFCPrimary       *string   `json:"pfc_primary,omitempty" db:"pfc_primary"`
+	PFCDetailed      *string   `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
+	CustomCategoryID *string   `json:"custom_category_id,omitempty" db:"custom_category_id"`
+	AllocatedAmount  float64   `json:"allocated_amount" db:"allocated_amount"`
+	SpentAmount      float64   `json:"spent_amount" db:"spent_amount"`
+	CreatedAt        time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at" db:"updated_at"`
+
+	// PFC display names (populated by PopulatePFCDisplay, not stored in DB)
+	PFCPrimaryDisplay  *string `json:"pfc_primary_display,omitempty" db:"-"`
+	PFCDetailedDisplay *string `json:"pfc_detailed_display,omitempty" db:"-"`
 
 	// Flexible matching fields (Issue #491)
 	Tags       []string   `json:"tags" db:"-"`
