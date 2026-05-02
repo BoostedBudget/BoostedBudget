@@ -252,7 +252,7 @@ func TestTransactionService_ListTransactions_ReturnsTransactionsArray(t *testing
 			LinkedItemID:          "item-1",
 			Source:                domain.SourcePlaid,
 			ExternalTransactionID: &externalID,
-			Amount:                -25.50,
+			Amount:                25.50,
 			Date:                  time.Now(),
 			Name:                  "Grocery Store",
 		},

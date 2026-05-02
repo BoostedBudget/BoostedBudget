@@ -24,7 +24,7 @@ const mockTransactions = {
       linked_item_id: 'item-1',
       source: 'plaid',
       external_transaction_id: 'plaid-txn-1',
-      amount: -25.50,
+      amount: 25.50,
       date: '2025-11-15',
       name: 'Starbucks',
       merchant_name: 'Starbucks',

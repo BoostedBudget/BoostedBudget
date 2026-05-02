@@ -58,7 +58,7 @@ func TestPlaidSyncProvider_ProcessModified_PendingToPosted(t *testing.T) {
 		LinkedItemID:          linkedItem.ID,
 		Source:                domain.SourcePlaid,
 		ExternalTransactionID: &externalTxnID,
-		Amount:                -25.50,
+		Amount:                25.50,
 		Pending:               true, // Was pending
 	}
 
