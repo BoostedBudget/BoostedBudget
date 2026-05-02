@@ -550,6 +550,48 @@ func TestGetTransactionByID_NilPFC(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
+// TestGetTransactionByID_PopulatesPFCDisplay asserts that service enriches display names.
+func TestGetTransactionByID_PopulatesPFCDisplay(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo)
+
+	primary := "FOOD_AND_DRINK"
+	txn := &domain.Transaction{
+		ID:         "txn-pfc",
+		UserID:     "user-1",
+		PFCPrimary: &primary,
+	}
+	mockRepo.On("GetByID", ctx, "txn-pfc").Return(txn, nil)
+
+	result, err := service.GetTransactionByID(ctx, "user-1", "txn-pfc")
+	require.NoError(t, err)
+	require.NotNil(t, result.PFCPrimaryDisplay, "PFCPrimaryDisplay should be populated")
+	assert.Equal(t, "Food And Drink", *result.PFCPrimaryDisplay)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestListTransactions_PopulatesPFCDisplay asserts that list results are enriched.
+func TestListTransactions_PopulatesPFCDisplay(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo)
+
+	primary := "TRANSPORTATION"
+	transactions := []domain.Transaction{
+		{ID: "txn-1", UserID: "user-1", PFCPrimary: &primary},
+	}
+	mockRepo.On("GetByUserIDWithFilters", ctx, "user-1", mock.Anything, 50, 0).Return(transactions, nil)
+	mockRepo.On("CountByUserID", ctx, "user-1", mock.Anything).Return(1, nil)
+
+	resp, err := service.ListTransactions(ctx, "user-1", domain.TransactionFilters{}, 50, 0)
+	require.NoError(t, err)
+	require.Len(t, resp.Transactions, 1)
+	require.NotNil(t, resp.Transactions[0].PFCPrimaryDisplay, "PFCPrimaryDisplay should be populated")
+	assert.Equal(t, "Transportation", *resp.Transactions[0].PFCPrimaryDisplay)
+	mockRepo.AssertExpectations(t)
+}
+
 func TestListTransactions_ReturnsPFCFields(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockTransactionRepository)

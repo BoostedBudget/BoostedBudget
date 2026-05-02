@@ -153,6 +153,7 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		slog.String("budget_id", budget.ID),
 	)
 
+	enrichBudgetPFCDisplay(budget)
 	return budget, nil
 }
 
@@ -168,17 +169,32 @@ func (s *budgetService) GetBudget(ctx context.Context, userID, budgetID string) 
 		return nil, domain.ErrBudgetNotFound
 	}
 
+	enrichBudgetPFCDisplay(budget)
 	return budget, nil
 }
 
 // GetBudgets retrieves all budgets for a user.
 func (s *budgetService) GetBudgets(ctx context.Context, userID string) ([]*domain.Budget, error) {
-	return s.budgetRepo.GetByUserID(ctx, userID)
+	budgets, err := s.budgetRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range budgets {
+		enrichBudgetPFCDisplay(b)
+	}
+	return budgets, nil
 }
 
 // GetActiveBudgets retrieves all active budgets for a user.
 func (s *budgetService) GetActiveBudgets(ctx context.Context, userID string) ([]*domain.Budget, error) {
-	return s.budgetRepo.GetActiveByUserID(ctx, userID)
+	budgets, err := s.budgetRepo.GetActiveByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range budgets {
+		enrichBudgetPFCDisplay(b)
+	}
+	return budgets, nil
 }
 
 // GetCurrentBudget retrieves the current active budget (where today is within the period).
@@ -214,17 +230,22 @@ func (s *budgetService) GetCurrentBudget(ctx context.Context, userID string) (*d
 				endDate = endDate.AddDate(0, 0, 7)
 			}
 			if now.After(budget.StartDate) {
+				enrichBudgetPFCDisplay(budget)
 				return budget, nil
 			}
 		case domain.BudgetPeriodMonthly:
 			// For monthly, the budget is current if we're in a valid month period
+			enrichBudgetPFCDisplay(budget)
 			return budget, nil
 		case domain.BudgetPeriodQuarterly:
+			enrichBudgetPFCDisplay(budget)
 			return budget, nil
 		case domain.BudgetPeriodYearly:
+			enrichBudgetPFCDisplay(budget)
 			return budget, nil
 		case domain.BudgetPeriodCustom:
 			// Already checked end date above
+			enrichBudgetPFCDisplay(budget)
 			return budget, nil
 		}
 	}
@@ -304,6 +325,7 @@ func (s *budgetService) UpdateBudget(ctx context.Context, userID, budgetID strin
 		slog.String("budget_id", budgetID),
 	)
 
+	enrichBudgetPFCDisplay(budget)
 	return budget, nil
 }
 
@@ -398,6 +420,7 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 		slog.String("category_id", category.ID),
 	)
 
+	category.PopulatePFCDisplay()
 	return category, nil
 }
 
@@ -463,6 +486,7 @@ func (s *budgetService) UpdateCategory(ctx context.Context, userID, budgetID, ca
 		slog.String("category_id", categoryID),
 	)
 
+	category.PopulatePFCDisplay()
 	return category, nil
 }
 
@@ -553,5 +577,16 @@ func (s *budgetService) GetAvailableCategories(ctx context.Context, userID strin
 
 	sort.Strings(result)
 	return result, nil
+}
+
+// enrichBudgetPFCDisplay populates PFC display names on all BudgetCategories and
+// IncomeSources within a Budget. Called after any Get/mutation that returns a Budget.
+func enrichBudgetPFCDisplay(b *domain.Budget) {
+	for i := range b.Categories {
+		b.Categories[i].PopulatePFCDisplay()
+	}
+	for i := range b.IncomeSources {
+		b.IncomeSources[i].PopulatePFCDisplay()
+	}
 }
 

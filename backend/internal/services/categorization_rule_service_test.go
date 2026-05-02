@@ -314,6 +314,60 @@ func TestCategorizationRuleService_ToggleRule(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
+// TestCategorizationRuleService_GetRuleByID_PopulatesPFCDisplay asserts that GetRuleByID
+// enriches TargetPFCPrimaryDisplay before returning.
+func TestCategorizationRuleService_GetRuleByID_PopulatesPFCDisplay(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	service := NewCategorizationRuleService(mockRepo)
+	ctx := context.Background()
+	userID := "user-123"
+	ruleID := "rule-pfc"
+
+	rule := &domain.CategorizationRule{
+		ID:               ruleID,
+		UserID:           userID,
+		Name:             "PFC Rule",
+		TargetKind:       ptrStr("pfc"),
+		TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		Conditions:       []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "test"}},
+		ConditionLogic:   "AND",
+		TagBehavior:      "add",
+		Source:           "manual",
+	}
+
+	mockRepo.On("GetByID", ctx, ruleID).Return(rule, nil)
+
+	result, err := service.GetRuleByID(ctx, userID, ruleID)
+
+	require.NoError(t, err)
+	require.NotNil(t, result.TargetPFCPrimaryDisplay, "TargetPFCPrimaryDisplay should be populated")
+	assert.Equal(t, "Food And Drink", *result.TargetPFCPrimaryDisplay)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestCategorizationRuleService_GetUserRules_PopulatesPFCDisplay asserts that GetUserRules
+// enriches each rule with display names.
+func TestCategorizationRuleService_GetUserRules_PopulatesPFCDisplay(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	service := NewCategorizationRuleService(mockRepo)
+	ctx := context.Background()
+	userID := "user-123"
+
+	rules := []*domain.CategorizationRule{
+		{ID: "rule-1", UserID: userID, Name: "Rule", TargetKind: ptrStr("pfc"), TargetPFCPrimary: ptrStr("TRANSPORTATION")},
+	}
+
+	mockRepo.On("GetByUserID", ctx, userID).Return(rules, nil)
+
+	result, err := service.GetUserRules(ctx, userID)
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.NotNil(t, result[0].TargetPFCPrimaryDisplay, "TargetPFCPrimaryDisplay should be populated")
+	assert.Equal(t, "Transportation", *result[0].TargetPFCPrimaryDisplay)
+	mockRepo.AssertExpectations(t)
+}
+
 // TestCategorizationRuleService_GetEnabledRules tests retrieving enabled rules only
 func TestCategorizationRuleService_GetEnabledRules(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
