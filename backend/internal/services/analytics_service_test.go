@@ -458,8 +458,8 @@ func TestAnalyticsService_GetSpendingByCategory(t *testing.T) {
 		if cat.Category != "FOOD_AND_DRINK" {
 			t.Errorf("expected FOOD_AND_DRINK, got %s", cat.Category)
 		}
-		if cat.DisplayName != "Food And Drink" {
-			t.Errorf("expected 'Food & Drink', got %s", cat.DisplayName)
+		if cat.PFCPrimaryDisplay != "Food And Drink" {
+			t.Errorf("expected 'Food And Drink', got %s", cat.PFCPrimaryDisplay)
 		}
 		// 300/500 * 100 = 60%
 		if cat.Percentage != 60.0 {
@@ -510,6 +510,80 @@ func TestAnalyticsService_GetSpendingByCategory(t *testing.T) {
 		}
 		if len(result.Categories) != 0 {
 			t.Errorf("expected 0 categories, got %d", len(result.Categories))
+		}
+	})
+
+	t.Run("primary enum gets PrimaryDisplayName", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				return []domain.SpendingByCategory{
+					{Category: "FOOD_AND_DRINK", Total: 200.0, TransactionCount: 10},
+				}, nil
+			},
+		}
+
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+			// No Category filter — top-level, primary enums expected
+		}
+
+		result, err := service.GetSpendingByCategory(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Categories) != 1 {
+			t.Fatalf("expected 1 category, got %d", len(result.Categories))
+		}
+		cat := result.Categories[0]
+		// Primary enum should use PrimaryDisplayName: "Food And Drink"
+		if cat.PFCPrimaryDisplay != "Food And Drink" {
+			t.Errorf("primary enum: expected PFCPrimaryDisplay 'Food And Drink', got %q", cat.PFCPrimaryDisplay)
+		}
+	})
+
+	t.Run("detailed enum drill-down gets DetailedDisplayName not PrimaryDisplayName", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				// Drill-down: repository returns detailed-level enums
+				return []domain.SpendingByCategory{
+					{Category: "FOOD_AND_DRINK_FAST_FOOD", Total: 120.0, TransactionCount: 8},
+					{Category: "FOOD_AND_DRINK_COFFEE", Total: 80.0, TransactionCount: 5},
+				}, nil
+			},
+		}
+
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+			Category:  "FOOD_AND_DRINK", // drill-down filter
+		}
+
+		result, err := service.GetSpendingByCategory(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Categories) != 2 {
+			t.Fatalf("expected 2 categories, got %d", len(result.Categories))
+		}
+
+		// Find FOOD_AND_DRINK_FAST_FOOD
+		var fastFood *domain.SpendingByCategory
+		for i := range result.Categories {
+			if result.Categories[i].Category == "FOOD_AND_DRINK_FAST_FOOD" {
+				fastFood = &result.Categories[i]
+			}
+		}
+		if fastFood == nil {
+			t.Fatal("FOOD_AND_DRINK_FAST_FOOD not found in results")
+		}
+		// Detailed enum should use DetailedDisplayName: "Fast Food", NOT the primary "Food And Drink"
+		if fastFood.PFCPrimaryDisplay != "Fast Food" {
+			t.Errorf("detailed enum: expected PFCPrimaryDisplay 'Fast Food', got %q", fastFood.PFCPrimaryDisplay)
 		}
 	})
 }
