@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -59,6 +60,9 @@ type TransactionService interface {
 	// DEPRECATED: Consumers should prefer pfc.AllPrimaries() for the curated list.
 	// This method is kept for backward compatibility until confirmed no external consumers remain.
 	GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error)
+
+	// ListByBudgetCategory returns transactions matching a budget category with PFC display enrichment.
+	ListByBudgetCategory(ctx context.Context, userID string, budgetCategory *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error)
 }
 
 // TransactionListResponse contains paginated transaction results with metadata
@@ -295,4 +299,16 @@ func (s *transactionService) GetDistinctPlaidCategories(ctx context.Context, use
 	}
 
 	return categories, nil
+}
+
+// ListByBudgetCategory returns transactions for a budget category, enriched with PFC display fields.
+func (s *transactionService) ListByBudgetCategory(ctx context.Context, userID string, budgetCategory *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
+	transactions, totalCount, totalAmount, err := s.repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCategory, startDate, endDate, limit, offset)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("list transactions for budget category: %w", err)
+	}
+	for i := range transactions {
+		transactions[i].PopulatePFCDisplay()
+	}
+	return transactions, totalCount, totalAmount, nil
 }
