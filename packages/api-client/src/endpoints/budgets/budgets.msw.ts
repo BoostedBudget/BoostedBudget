@@ -65,7 +65,15 @@ export const getGetBudgetsResponseMock = (): Budget[] | null =>
           faker.string.alpha({ length: { min: 10, max: 20 } }),
           undefined,
         ]),
+        pfc_detailed_display: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
         pfc_primary: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        pfc_primary_display: faker.helpers.arrayElement([
           faker.string.alpha({ length: { min: 10, max: 20 } }),
           undefined,
         ]),
@@ -105,6 +113,10 @@ export const getGetBudgetsResponseMock = (): Budget[] | null =>
         ]),
         type: faker.string.alpha({ length: { min: 10, max: 20 } }),
         value: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        value_display: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
       })),
       null,
     ]),
@@ -141,7 +153,15 @@ export const getCreateBudgetResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      pfc_detailed_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary_display: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
@@ -181,6 +201,10 @@ export const getCreateBudgetResponseMock = (
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),
@@ -224,7 +248,15 @@ export const getGetCurrentBudgetResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      pfc_detailed_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary_display: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
@@ -264,6 +296,10 @@ export const getGetCurrentBudgetResponseMock = (
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),
@@ -301,7 +337,15 @@ export const getGetBudgetResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      pfc_detailed_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary_display: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
@@ -341,6 +385,10 @@ export const getGetBudgetResponseMock = (
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),
@@ -378,7 +426,15 @@ export const getUpdateBudgetResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      pfc_detailed_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary_display: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
@@ -418,6 +474,10 @@ export const getUpdateBudgetResponseMock = (
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),
@@ -448,7 +508,15 @@ export const getAddBudgetCategoryResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  pfc_detailed_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  pfc_primary_display: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
@@ -482,7 +550,15 @@ export const getUpdateBudgetCategoryResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  pfc_detailed_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  pfc_primary_display: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
@@ -642,7 +718,15 @@ export const getGetCategoryTransactionsResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      pfc_detailed_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       pfc_detailed_override: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_detailed_override_display: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
@@ -650,7 +734,15 @@ export const getGetCategoryTransactionsResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      pfc_primary_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       pfc_primary_override: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary_override_display: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
@@ -717,7 +809,15 @@ export const getSyncBudgetResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      pfc_detailed_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      pfc_primary_display: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
@@ -757,6 +857,10 @@ export const getSyncBudgetResponseMock = (
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),

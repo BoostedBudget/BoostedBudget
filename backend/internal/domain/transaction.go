@@ -3,6 +3,8 @@ package domain
 import (
 	"errors"
 	"time"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/pfc"
 )
 
 // TransactionSource represents the source of a transaction data
@@ -97,6 +99,12 @@ type Transaction struct {
 	PFCConfidenceLevel   *string `json:"pfc_confidence_level,omitempty" db:"pfc_confidence_level"`
 	PFCCategoryIconURL   *string `json:"pfc_category_icon_url,omitempty" db:"pfc_category_icon_url"`
 
+	// PFC display names (populated by PopulatePFCDisplay, not stored in DB)
+	PFCPrimaryDisplay          *string `json:"pfc_primary_display,omitempty" db:"-"`
+	PFCDetailedDisplay         *string `json:"pfc_detailed_display,omitempty" db:"-"`
+	PFCPrimaryOverrideDisplay  *string `json:"pfc_primary_override_display,omitempty" db:"-"`
+	PFCDetailedOverrideDisplay *string `json:"pfc_detailed_override_display,omitempty" db:"-"`
+
 	// Payment details
 	PaymentChannel *string `json:"payment_channel,omitempty" db:"payment_channel"` // online, in store, other
 	Pending        bool    `json:"pending" db:"pending"`                           // Whether transaction is pending
@@ -135,25 +143,46 @@ const (
 
 // EffectiveCategory is the resolved category for a transaction — either PFC or custom, never both.
 type EffectiveCategory struct {
-	Kind             EffectiveCategoryKind `json:"kind"`
-	PFCPrimary       *string               `json:"pfc_primary,omitempty"`
-	PFCDetailed      *string               `json:"pfc_detailed,omitempty"`
-	CustomCategoryID *string               `json:"custom_category_id,omitempty"`
+	Kind               EffectiveCategoryKind `json:"kind"`
+	PFCPrimary         *string               `json:"pfc_primary,omitempty"`
+	PFCDetailed        *string               `json:"pfc_detailed,omitempty"`
+	PFCPrimaryDisplay  *string               `json:"pfc_primary_display,omitempty"`
+	PFCDetailedDisplay *string               `json:"pfc_detailed_display,omitempty"`
+	CustomCategoryID   *string               `json:"custom_category_id,omitempty"`
 }
 
 // GetEffectiveCategory resolves the active category for this transaction.
 // Priority: override (custom > pfc) > source PFC > nil (uncategorized).
+// Display fields on the returned EffectiveCategory are populated from the pfc registry.
 func (t *Transaction) GetEffectiveCategory() *EffectiveCategory {
 	if t.CategoryOverrideKind != nil {
 		switch *t.CategoryOverrideKind {
 		case "custom":
 			return &EffectiveCategory{Kind: EffectiveCategoryKindCustom, CustomCategoryID: t.CustomCategoryOverrideID}
 		case "pfc":
-			return &EffectiveCategory{Kind: EffectiveCategoryKindPFC, PFCPrimary: t.PFCPrimaryOverride, PFCDetailed: t.PFCDetailedOverride}
+			ec := &EffectiveCategory{Kind: EffectiveCategoryKindPFC, PFCPrimary: t.PFCPrimaryOverride, PFCDetailed: t.PFCDetailedOverride}
+			if t.PFCPrimaryOverride != nil && *t.PFCPrimaryOverride != "" {
+				d := pfc.PrimaryDisplayName(*t.PFCPrimaryOverride)
+				ec.PFCPrimaryDisplay = &d
+			}
+			if t.PFCPrimaryOverride != nil && t.PFCDetailedOverride != nil && *t.PFCDetailedOverride != "" {
+				d := pfc.DetailedDisplayName(*t.PFCPrimaryOverride, *t.PFCDetailedOverride)
+				ec.PFCDetailedDisplay = &d
+			}
+			return ec
 		}
 	}
 	if t.PFCPrimary != nil {
-		return &EffectiveCategory{Kind: EffectiveCategoryKindPFC, PFCPrimary: t.PFCPrimary, PFCDetailed: t.PFCDetailed}
+		ec := &EffectiveCategory{Kind: EffectiveCategoryKindPFC, PFCPrimary: t.PFCPrimary, PFCDetailed: t.PFCDetailed}
+		if *t.PFCPrimary != "" {
+			d := pfc.PrimaryDisplayName(*t.PFCPrimary)
+			ec.PFCPrimaryDisplay = &d
+		}
+		if t.PFCDetailed != nil && *t.PFCDetailed != "" {
+			d := pfc.DetailedDisplayName(*t.PFCPrimary, *t.PFCDetailed)
+			ec.PFCDetailedDisplay = &d
+		}
+		return ec
 	}
 	return nil
 }

@@ -371,7 +371,7 @@ func TestGetSpendingByCategory_Success(t *testing.T) {
 			EndDate:    "2024-01-31",
 			TotalSpent: 500.0,
 			Categories: []domain.SpendingByCategory{
-				{Category: "FOOD_AND_DRINK", DisplayName: "Food & Drink", Total: 300.0, Percentage: 60.0, TransactionCount: 20},
+				{Category: "FOOD_AND_DRINK", PFCPrimaryDisplay: "Food And Drink", Total: 300.0, Percentage: 60.0, TransactionCount: 20},
 			},
 		},
 	}
@@ -400,7 +400,7 @@ func TestGetSpendingByCategory_WithCategoryFilter(t *testing.T) {
 			EndDate:    "2024-01-31",
 			TotalSpent: 300.0,
 			Categories: []domain.SpendingByCategory{
-				{Category: "RESTAURANTS", DisplayName: "Restaurants", Total: 180.0, Percentage: 60.0},
+				{Category: "RESTAURANTS", PFCPrimaryDisplay: "Restaurants", Total: 180.0, Percentage: 60.0},
 			},
 		},
 	}
@@ -540,7 +540,7 @@ func TestGetSpendingTrends_Success(t *testing.T) {
 					PeriodEnd:   "2024-01-31",
 					Total:       280.0,
 					Categories: []domain.CategorySpending{
-						{Category: "FOOD_AND_DRINK", DisplayName: "Food & Drink", Total: 200.0},
+						{Category: "FOOD_AND_DRINK", PFCPrimaryDisplay: "Food And Drink", Total: 200.0},
 					},
 				},
 			},

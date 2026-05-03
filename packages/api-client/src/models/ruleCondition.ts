@@ -32,4 +32,5 @@ export interface RuleCondition {
   operator?: string;
   type: string;
   value: unknown;
+  value_display?: string;
 }

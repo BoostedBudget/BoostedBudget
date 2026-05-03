@@ -10,6 +10,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockBudgetRepository is a mock implementation of repository.BudgetRepository
@@ -963,6 +964,72 @@ func TestBudgetService_UpdateBudget_AmountFallback(t *testing.T) {
 	assert.NotNil(t, budget)
 	assert.Equal(t, 500.0, budget.Amount, "amount should be updated")
 	assert.Equal(t, 500.0, budget.ExpectedIncome, "expected_income should mirror amount")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// ============================================================================
+// PFC Display Enrichment Tests
+// ============================================================================
+
+// TestBudgetService_GetBudget_PopulatesPFCDisplay asserts that GetBudget enriches
+// BudgetCategory PFC display names before returning.
+func TestBudgetService_GetBudget_PopulatesPFCDisplay(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-pfc"
+
+	budget := createTestBudgetForService(userID)
+	budget.ID = budgetID
+	budget.Categories = []domain.BudgetCategory{
+		{ID: "cat-1", BudgetID: budgetID, CategoryKind: "pfc", PFCPrimary: strPtr("FOOD_AND_DRINK")},
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(budget, nil)
+
+	result, err := service.GetBudget(ctx, userID, budgetID)
+
+	require.NoError(t, err)
+	require.Len(t, result.Categories, 1)
+	require.NotNil(t, result.Categories[0].PFCPrimaryDisplay, "PFCPrimaryDisplay should be populated")
+	assert.Equal(t, "Food And Drink", *result.Categories[0].PFCPrimaryDisplay)
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_AddCategory_PopulatesPFCDisplay asserts that AddCategory enriches
+// the returned BudgetCategory with PFC display names.
+func TestBudgetService_AddCategory_PopulatesPFCDisplay(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+
+	req := &domain.CreateBudgetCategoryRequest{
+		CategoryKind:    "pfc",
+		PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+		AllocatedAmount: 200.00,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+
+	category, err := service.AddCategory(ctx, userID, budgetID, req)
+
+	require.NoError(t, err)
+	require.NotNil(t, category.PFCPrimaryDisplay, "PFCPrimaryDisplay should be populated")
+	assert.Equal(t, "Food And Drink", *category.PFCPrimaryDisplay)
 	mockBudgetRepo.AssertExpectations(t)
 }
 

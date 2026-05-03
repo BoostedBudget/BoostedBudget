@@ -7,6 +7,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockCustomCategoryRepository is a mock implementation of repository.CustomCategoryRepository
@@ -239,5 +240,57 @@ func TestCustomCategoryService_DeleteCategory(t *testing.T) {
 
 	// Assert
 	assert.NoError(t, err)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestCustomCategoryService_GetUserCategories_PopulatesPFCDisplay asserts that GetUserCategories
+// enriches each category with ParentPFCPrimaryDisplay before returning.
+func TestCustomCategoryService_GetUserCategories_PopulatesPFCDisplay(t *testing.T) {
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCustomCategoryService(mockCategoryRepo)
+
+	ctx := context.Background()
+	userID := "user-123"
+	parent := "FOOD_AND_DRINK"
+
+	categories := []*domain.CustomCategory{
+		{ID: "cat-1", UserID: userID, Name: "My Food", ParentPFCPrimary: &parent},
+	}
+
+	mockCategoryRepo.On("GetByUserID", ctx, userID).Return(categories, nil)
+
+	result, err := service.GetUserCategories(ctx, userID)
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.NotNil(t, result[0].ParentPFCPrimaryDisplay, "ParentPFCPrimaryDisplay should be populated")
+	assert.Equal(t, "Food And Drink", *result[0].ParentPFCPrimaryDisplay)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestCustomCategoryService_GetCategoryByID_PopulatesPFCDisplay asserts that GetCategoryByID
+// enriches the category with ParentPFCPrimaryDisplay before returning.
+func TestCustomCategoryService_GetCategoryByID_PopulatesPFCDisplay(t *testing.T) {
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCustomCategoryService(mockCategoryRepo)
+
+	ctx := context.Background()
+	categoryID := "cat-pfc"
+	parent := "TRANSPORTATION"
+
+	category := &domain.CustomCategory{
+		ID:               categoryID,
+		UserID:           "user-123",
+		Name:             "My Transport",
+		ParentPFCPrimary: &parent,
+	}
+
+	mockCategoryRepo.On("GetByID", ctx, categoryID).Return(category, nil)
+
+	result, err := service.GetCategoryByID(ctx, categoryID)
+
+	require.NoError(t, err)
+	require.NotNil(t, result.ParentPFCPrimaryDisplay, "ParentPFCPrimaryDisplay should be populated")
+	assert.Equal(t, "Transportation", *result.ParentPFCPrimaryDisplay)
 	mockCategoryRepo.AssertExpectations(t)
 }

@@ -8,6 +8,7 @@
 import { useCallback } from 'react'
 import { Edit, Trash2, ChevronUp, ChevronDown } from 'lucide-react'
 import type { CategorizationRule } from '../types'
+import { formatPFCEnum } from '@/shared/categories/formatPfc'
 import {
   ColumnFilterDropdown,
   type FilterOption,
@@ -265,12 +266,12 @@ export function AutoCategorizationRuleTable({
             rule.conditions,
             rule.condition_logic
           )
-          // PFC v2 (#1073): derive label from discriminated target.
+          // PFC v2 (#1073 + #1080): prefer server display fields for category label.
           const categoryLabel =
             rule.target_kind === 'pfc' && rule.target_pfc_primary
-              ? (rule.target_pfc_detailed
-                  ? `${rule.target_pfc_primary} › ${rule.target_pfc_detailed}`
-                  : rule.target_pfc_primary)
+              ? (rule.target_pfc_detailed_display
+                  ?? rule.target_pfc_primary_display
+                  ?? formatPFCEnum(rule.target_pfc_detailed ?? rule.target_pfc_primary))
               : rule.target_kind === 'custom' && rule.target_custom_category_id
                 ? rule.target_custom_category_id
                 : rule.target_kind === 'clear'

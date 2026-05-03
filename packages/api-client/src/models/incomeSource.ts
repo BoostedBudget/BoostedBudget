@@ -32,4 +32,5 @@ export interface IncomeSource {
   description?: string;
   type: string;
   value: string;
+  value_display?: string;
 }

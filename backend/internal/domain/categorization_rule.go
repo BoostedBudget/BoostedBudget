@@ -76,9 +76,10 @@ func validatePFCValue(val string, isDetailed bool) error {
 
 // RuleCondition represents a single condition within a categorization rule.
 type RuleCondition struct {
-	Type     ConditionType `json:"type"`
-	Value    interface{}   `json:"value"`              // string, number, or object depending on type
-	Operator string        `json:"operator,omitempty"` // for amount comparisons
+	Type         ConditionType `json:"type"`
+	Value        interface{}   `json:"value"`                    // string, number, or object depending on type
+	Operator     string        `json:"operator,omitempty"`       // for amount comparisons
+	ValueDisplay string        `json:"value_display,omitempty"` // populated by PopulatePFCDisplay for PFC-typed conditions
 }
 
 // CategorizationRule represents a user-defined rule for automatic transaction categorization.
@@ -92,10 +93,14 @@ type CategorizationRule struct {
 	Priority       int             `json:"priority" db:"priority"` // Higher = evaluated first
 	Conditions     []RuleCondition `json:"conditions" db:"conditions"`
 	ConditionLogic string          `json:"condition_logic" db:"condition_logic"` // "AND" or "OR"
-	TargetKind     *string         `json:"target_kind,omitempty" db:"target_kind"`
-	TargetPFCPrimary *string       `json:"target_pfc_primary,omitempty" db:"target_pfc_primary"`
-	TargetPFCDetailed *string      `json:"target_pfc_detailed,omitempty" db:"target_pfc_detailed"`
-	TargetCustomCategoryID *string `json:"target_custom_category_id,omitempty" db:"target_custom_category_id"`
+	TargetKind              *string `json:"target_kind,omitempty" db:"target_kind"`
+	TargetPFCPrimary        *string `json:"target_pfc_primary,omitempty" db:"target_pfc_primary"`
+	TargetPFCDetailed       *string `json:"target_pfc_detailed,omitempty" db:"target_pfc_detailed"`
+	TargetCustomCategoryID  *string `json:"target_custom_category_id,omitempty" db:"target_custom_category_id"`
+
+	// PFC display names (populated by PopulatePFCDisplay, not stored in DB)
+	TargetPFCPrimaryDisplay  *string `json:"target_pfc_primary_display,omitempty" db:"-"`
+	TargetPFCDetailedDisplay *string `json:"target_pfc_detailed_display,omitempty" db:"-"`
 	TargetTags     []string        `json:"target_tags,omitempty" db:"target_tags"`
 	TagBehavior    string          `json:"tag_behavior" db:"tag_behavior"` // "add" or "replace"
 	Source         string          `json:"source" db:"source"`             // "manual", "ai", or "template"

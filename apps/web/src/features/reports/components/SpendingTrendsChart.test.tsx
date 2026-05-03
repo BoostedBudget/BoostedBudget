@@ -16,8 +16,8 @@ const mockData: SpendingTrendsResponse = {
       period_end: '2024-01-31',
       total: 280,
       categories: [
-        { category: 'FOOD_AND_DRINK', display_name: 'Food & Drink', total: 200 },
-        { category: 'TRANSPORTATION', display_name: 'Transportation', total: 80 },
+        { category: 'FOOD_AND_DRINK', pfc_primary_display: 'Food And Drink', total: 200 },
+        { category: 'TRANSPORTATION', pfc_primary_display: 'Transportation', total: 80 },
       ],
     },
     {
@@ -25,8 +25,8 @@ const mockData: SpendingTrendsResponse = {
       period_end: '2024-02-29',
       total: 320,
       categories: [
-        { category: 'FOOD_AND_DRINK', display_name: 'Food & Drink', total: 230 },
-        { category: 'TRANSPORTATION', display_name: 'Transportation', total: 90 },
+        { category: 'FOOD_AND_DRINK', pfc_primary_display: 'Food And Drink', total: 230 },
+        { category: 'TRANSPORTATION', pfc_primary_display: 'Transportation', total: 90 },
       ],
     },
   ],
@@ -58,5 +58,26 @@ describe('SpendingTrendsChart', () => {
     render(<SpendingTrendsChart data={mockData} loading={false} />)
     const chart = screen.getByTestId('plotly-chart')
     expect(chart.getAttribute('data-trace-count')).toBe('2')
+  })
+
+  it('falls back to formatted display name when pfc_primary_display is absent', () => {
+    const sparseData: SpendingTrendsResponse = {
+      start_date: '2024-01-01',
+      end_date: '2024-01-31',
+      top_categories: ['LOAN_PAYMENTS'],
+      periods: [
+        {
+          period_start: '2024-01-01',
+          period_end: '2024-01-31',
+          total: 100,
+          categories: [{ category: 'LOAN_PAYMENTS', total: 100 } as SpendingTrendsResponse['periods'][0]['categories'][0]],
+        },
+      ],
+    }
+    render(<SpendingTrendsChart data={sparseData} loading={false} />)
+    const chart = screen.getByTestId('plotly-chart')
+    const names = JSON.parse(chart.getAttribute('data-trace-names') ?? '[]') as string[]
+    expect(names[0]).toBe('Loan Payments')
+    expect(names[0]).not.toBe('LOAN_PAYMENTS')
   })
 })

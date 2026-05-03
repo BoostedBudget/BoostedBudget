@@ -213,6 +213,27 @@ describe('BudgetIncomeSection', () => {
       expect(container.querySelector('.income-section__sources')).not.toBeInTheDocument();
     });
 
+    it('shows value_display in source name for pfc_primary without description', () => {
+      const pfcWithDisplay: IncomeSource[] = [
+        {
+          type: 'pfc_primary',
+          value: 'INCOME_WAGES',
+          value_display: 'Wages',
+        },
+      ];
+
+      render(
+        <BudgetIncomeSection
+          expectedIncome={5000}
+          actualIncome={5000}
+          incomeSources={pfcWithDisplay}
+          currencyCode="USD"
+        />
+      );
+
+      expect(screen.getByText('Wages')).toBeInTheDocument();
+    });
+
     it('should show source type indicator for pfc_primary sources', () => {
       const pfcSources: IncomeSource[] = [
         {

@@ -10,6 +10,7 @@
 
 import { useState } from 'react';
 import type { IncomeSource } from '../../types';
+import { getPFCIncomeSourceLabel } from '../../utils/incomeSourceLabel';
 
 export interface BudgetIncomeSectionProps {
   /** Expected total income for the budget period */
@@ -28,9 +29,6 @@ export interface BudgetIncomeSectionProps {
   defaultExpanded?: boolean;
 }
 
-/**
- * Format currency amount
- */
 function formatCurrency(amount: number, currencyCode: string): string {
   try {
     return new Intl.NumberFormat('en-US', {
@@ -44,9 +42,6 @@ function formatCurrency(amount: number, currencyCode: string): string {
   }
 }
 
-/**
- * Format difference with sign
- */
 function formatDifference(amount: number, currencyCode: string): string {
   const formatted = formatCurrency(Math.abs(amount), currencyCode);
   if (amount > 0) return `+${formatted}`;
@@ -54,36 +49,6 @@ function formatDifference(amount: number, currencyCode: string): string {
   return formatted;
 }
 
-/**
- * Get source type display label
- */
-function getSourceTypeLabel(type: IncomeSource['type']): string {
-  switch (type) {
-    case 'pfc_primary':
-    case 'plaid_category':
-      return 'Auto-tracked';
-    case 'tag':
-      return 'Tag:';
-    case 'manual':
-      return 'Manual';
-    default:
-      return type;
-  }
-}
-
-/**
- * BudgetIncomeSection component showing expected vs actual income
- *
- * @example
- * ```tsx
- * <BudgetIncomeSection
- *   expectedIncome={4000}
- *   actualIncome={3750}
- *   incomeSources={incomeSources}
- *   currencyCode="USD"
- * />
- * ```
- */
 export function BudgetIncomeSection({
   expectedIncome,
   actualIncome,
@@ -216,7 +181,10 @@ export function BudgetIncomeSection({
                   <li key={sourceKey} className="flex justify-between items-center p-3 bg-muted rounded-lg">
                     <div className="flex flex-col gap-0.5">
                       <span className="text-sm font-medium text-foreground">
-                        {source.description || getSourceTypeLabel(source.type)}
+                        {source.description ||
+                        ((source.type === 'pfc_primary' || source.type === 'plaid_category')
+                          ? getPFCIncomeSourceLabel(source)
+                          : source.type === 'tag' ? source.value : 'Manual')}
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {(source.type === 'pfc_primary' || source.type === 'plaid_category') && 'Auto-tracked'}

@@ -57,6 +57,7 @@ export interface RuleCondition {
   type: ConditionType
   value: string | number | string[] | AmountRangeValue | DateRangeValue
   operator?: string // for amount comparisons
+  value_display?: string // populated by backend for PFC-typed conditions
 }
 
 /**
@@ -108,6 +109,8 @@ export interface CategorizationRule {
   target_kind?: RuleTargetKind | null
   target_pfc_primary?: string | null
   target_pfc_detailed?: string | null
+  target_pfc_primary_display?: string | null
+  target_pfc_detailed_display?: string | null
   target_custom_category_id?: string | null
   target_tags?: string[] | null
   tag_behavior: TagBehavior

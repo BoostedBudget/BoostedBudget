@@ -52,6 +52,10 @@ export const getGetUserRulesResponseMock = (): CategorizationRule[] | null =>
         ]),
         type: faker.string.alpha({ length: { min: 10, max: 20 } }),
         value: {},
+        value_display: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
       })),
       null,
     ]),
@@ -84,7 +88,15 @@ export const getGetUserRulesResponseMock = (): CategorizationRule[] | null =>
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),
+    target_pfc_detailed_display: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
     target_pfc_primary: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    target_pfc_primary_display: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),
@@ -115,6 +127,10 @@ export const getCreateRuleResponseMock = (
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: {},
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),
@@ -147,7 +163,15 @@ export const getCreateRuleResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  target_pfc_detailed_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   target_pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_primary_display: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
@@ -179,6 +203,10 @@ export const getGetRuleByIDResponseMock = (
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: {},
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),
@@ -211,7 +239,15 @@ export const getGetRuleByIDResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  target_pfc_detailed_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   target_pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_primary_display: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
@@ -243,6 +279,10 @@ export const getUpdateRuleResponseMock = (
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: {},
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),
@@ -275,7 +315,15 @@ export const getUpdateRuleResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  target_pfc_detailed_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   target_pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_primary_display: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
@@ -307,6 +355,10 @@ export const getToggleRuleResponseMock = (
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: {},
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),
@@ -339,7 +391,15 @@ export const getToggleRuleResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  target_pfc_detailed_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   target_pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_primary_display: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),

@@ -344,9 +344,10 @@ func (h *BudgetHandler) GetCategoryTransactions(ctx context.Context, input *GetC
 		return nil, huma.Error500InternalServerError("Failed to get transactions")
 	}
 
-	// Convert to pointer slice for response
+	// Populate PFC display fields and convert to pointer slice
 	transactionPtrs := make([]*domain.Transaction, len(transactions))
 	for i := range transactions {
+		transactions[i].PopulatePFCDisplay()
 		transactionPtrs[i] = &transactions[i]
 	}
 

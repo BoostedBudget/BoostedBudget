@@ -146,6 +146,11 @@ func (s *transactionService) ListTransactions(
 		return nil, fmt.Errorf("failed to count transactions: %w", err)
 	}
 
+	// Enrich each transaction with PFC display names.
+	for i := range transactions {
+		transactions[i].PopulatePFCDisplay()
+	}
+
 	// Calculate has_more flag for pagination
 	// hasMore is true if there are more results beyond current page
 	hasMore := (offset + len(transactions)) < totalCount
@@ -223,6 +228,7 @@ func (s *transactionService) GetTransactionByID(ctx context.Context, userID, tra
 		return nil, repository.ErrTransactionNotFound
 	}
 
+	tx.PopulatePFCDisplay()
 	return tx, nil
 }
 
@@ -252,6 +258,7 @@ func (s *transactionService) UpdateTransactionTags(ctx context.Context, userID, 
 	tx.Tags = tags
 	tx.TagsSource = tagsSource
 
+	tx.PopulatePFCDisplay()
 	return tx, nil
 }
 

@@ -30,6 +30,6 @@ Multi-region support planned for Phase 7+.
 
 export interface CategorySpending {
   category: string;
-  display_name: string;
+  pfc_primary_display: string;
   total: number;
 }
