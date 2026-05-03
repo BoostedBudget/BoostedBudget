@@ -732,6 +732,67 @@ func TestListTransactions_PopulatesCustomCategoryDisplay(t *testing.T) {
 	mockCategoryRepo.AssertExpectations(t)
 }
 
+// TestUpdateTransactionTags_PopulatesCustomCategoryDisplay asserts that the returned transaction
+// has CustomCategoryOverrideDisplay populated after a tag update (enrichment is transitive via GetTransactionByID).
+func TestUpdateTransactionTags_PopulatesCustomCategoryDisplay(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewTransactionService(mockRepo, mockCategoryRepo)
+
+	catID := "cat-uuid-tags"
+	kind := "custom"
+	txn := &domain.Transaction{
+		ID: "txn-tags", UserID: "user-1",
+		CategoryOverrideKind:     &kind,
+		CustomCategoryOverrideID: &catID,
+	}
+	tags := []string{"groceries"}
+
+	mockRepo.On("GetByID", ctx, "txn-tags").Return(txn, nil)
+	mockRepo.On("UpdateTags", ctx, "txn-tags", "user-1", tags, mock.AnythingOfType("[]domain.TagSource")).Return(nil)
+	mockCategoryRepo.On("GetNamesByIDs", ctx, "user-1", []string{catID}).
+		Return(map[string]string{catID: "Food"}, nil)
+
+	result, err := service.UpdateTransactionTags(ctx, "user-1", "txn-tags", tags)
+	require.NoError(t, err)
+	require.NotNil(t, result.CustomCategoryOverrideDisplay)
+	assert.Equal(t, "Food", *result.CustomCategoryOverrideDisplay)
+	mockRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestUpdateTransactionCategory_PopulatesCustomCategoryDisplay asserts that the returned transaction
+// has CustomCategoryOverrideDisplay populated after a category update (enrichment is transitive via final GetTransactionByID).
+func TestUpdateTransactionCategory_PopulatesCustomCategoryDisplay(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewTransactionService(mockRepo, mockCategoryRepo)
+
+	catID := "cat-uuid-cat"
+	kind := "custom"
+	txn := &domain.Transaction{
+		ID: "txn-cat", UserID: "user-1",
+		CategoryOverrideKind:     &kind,
+		CustomCategoryOverrideID: &catID,
+	}
+
+	// GetTransactionByID is called twice: once for ownership check, once to return result.
+	mockRepo.On("GetByID", ctx, "txn-cat").Return(txn, nil).Times(2)
+	mockRepo.On("UpdateCategory", ctx, "txn-cat", "user-1",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockCategoryRepo.On("GetNamesByIDs", ctx, "user-1", []string{catID}).
+		Return(map[string]string{catID: "Household"}, nil).Times(2)
+
+	result, err := service.UpdateTransactionCategory(ctx, "user-1", "txn-cat", "custom", nil, nil, &catID)
+	require.NoError(t, err)
+	require.NotNil(t, result.CustomCategoryOverrideDisplay)
+	assert.Equal(t, "Household", *result.CustomCategoryOverrideDisplay)
+	mockRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
 // TestListByBudgetCategory_PopulatesCustomCategoryDisplay asserts enrichment via budget category path.
 func TestListByBudgetCategory_PopulatesCustomCategoryDisplay(t *testing.T) {
 	ctx := context.Background()
