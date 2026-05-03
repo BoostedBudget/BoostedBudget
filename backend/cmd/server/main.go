@@ -1123,7 +1123,7 @@ func main() {
 		appLogger.Info("Huma dashboard preferences routes registered")
 
 		// Register Huma budget routes (Issue #559: Huma migration)
-		humaBudgetHandler := operations.NewBudgetHandler(budgetService, budgetSyncService, transactionRepo)
+		humaBudgetHandler := operations.NewBudgetHandler(budgetService, budgetSyncService, transactionService)
 		operations.RegisterBudgetRoutes(humaAPI, humaBudgetHandler)
 		appLogger.Info("Huma budget routes registered")
 

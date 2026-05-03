@@ -74,6 +74,10 @@ func (m *mockTransactionService) GetDistinctPlaidCategories(ctx context.Context,
 	return m.categories, nil
 }
 
+func (m *mockTransactionService) ListByBudgetCategory(ctx context.Context, userID string, budgetCategory *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
+	return nil, 0, 0, nil
+}
+
 // Helper to create a test transaction
 func createTestTransaction(userID string) *domain.Transaction {
 	now := time.Now()
