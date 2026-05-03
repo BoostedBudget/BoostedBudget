@@ -416,3 +416,127 @@ func TestGetEffectiveCategory_NilWhenNoPFC(t *testing.T) {
 	ec := tx.GetEffectiveCategory()
 	assert.Nil(t, ec)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ConditionEvalResult.PopulatePFCDisplay — dry-run rule preview (#1090)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestConditionEvalResult_PopulatePFCDisplay_PrimaryFieldDottedForm(t *testing.T) {
+	for _, p := range pfc.AllPrimaries() {
+		p := p
+		t.Run(p.Enum, func(t *testing.T) {
+			r := &ConditionEvalResult{Field: "transaction.pfc_primary", Value: p.Enum, Actual: p.Enum}
+			r.PopulatePFCDisplay()
+			expected := pfc.PrimaryDisplayName(p.Enum)
+			require.Equal(t, expected, r.ValueDisplay)
+			require.Equal(t, expected, r.ActualDisplay)
+		})
+	}
+}
+
+func TestConditionEvalResult_PopulatePFCDisplay_PrimaryFieldBareForm(t *testing.T) {
+	r := &ConditionEvalResult{Field: "pfc_primary", Value: "FOOD_AND_DRINK", Actual: "FOOD_AND_DRINK"}
+	r.PopulatePFCDisplay()
+	assert.Equal(t, "Food And Drink", r.ValueDisplay)
+	assert.Equal(t, "Food And Drink", r.ActualDisplay)
+}
+
+func TestConditionEvalResult_PopulatePFCDisplay_DetailedFieldDottedForm(t *testing.T) {
+	for _, d := range pfc.AllDetailed() {
+		d := d
+		t.Run(d.Enum, func(t *testing.T) {
+			r := &ConditionEvalResult{Field: "transaction.pfc_detailed", Value: d.Enum, Actual: d.Enum}
+			r.PopulatePFCDisplay()
+			expected := pfc.DetailedDisplayName(d.PrimaryEnum, d.Enum)
+			require.Equal(t, expected, r.ValueDisplay)
+			require.Equal(t, expected, r.ActualDisplay)
+		})
+	}
+}
+
+func TestConditionEvalResult_PopulatePFCDisplay_DetailedFieldBareAndDottedForm(t *testing.T) {
+	// Consolidate tests for bare detailed field form
+	detailed := pfc.AllDetailed()[0]
+	expected := pfc.DetailedDisplayName(detailed.PrimaryEnum, detailed.Enum)
+
+	// Test bare form
+	r := &ConditionEvalResult{Field: "pfc_detailed", Value: detailed.Enum, Actual: detailed.Enum}
+	r.PopulatePFCDisplay()
+	assert.Equal(t, expected, r.ValueDisplay)
+	assert.Equal(t, expected, r.ActualDisplay)
+}
+
+func TestConditionEvalResult_PopulatePFCDisplay_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name         string
+		field        string
+		value        interface{}
+		actual       interface{}
+		expectValue  string
+		expectActual string
+	}{
+		{
+			name:         "non-PFC field returns empty",
+			field:        "amount",
+			value:        50.0,
+			actual:       75.0,
+			expectValue:  "",
+			expectActual: "",
+		},
+		{
+			name:         "non-string value returns empty",
+			field:        "transaction.pfc_primary",
+			value:        42,
+			actual:       nil,
+			expectValue:  "",
+			expectActual: "",
+		},
+		{
+			name:         "nil actual safe (no panic)",
+			field:        "transaction.pfc_primary",
+			value:        "FOOD_AND_DRINK",
+			actual:       nil,
+			expectValue:  "Food And Drink",
+			expectActual: "",
+		},
+		{
+			name:         "unknown detailed enum returns empty",
+			field:        "transaction.pfc_detailed",
+			value:        "BOGUS_DETAILED",
+			actual:       nil,
+			expectValue:  "",
+			expectActual: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &ConditionEvalResult{Field: tt.field, Value: tt.value, Actual: tt.actual}
+			r.PopulatePFCDisplay()
+			assert.Equal(t, tt.expectValue, r.ValueDisplay)
+			assert.Equal(t, tt.expectActual, r.ActualDisplay)
+		})
+	}
+}
+
+func TestConditionEvalResult_PopulatePFCDisplay_Idempotent(t *testing.T) {
+	r := &ConditionEvalResult{Field: "transaction.pfc_primary", Value: "FOOD_AND_DRINK", Actual: "FOOD_AND_DRINK"}
+	r.PopulatePFCDisplay()
+	first := r.ValueDisplay
+	r.PopulatePFCDisplay()
+	assert.Equal(t, first, r.ValueDisplay)
+}
+
+func TestRuleTestResult_PopulatePFCDisplay_PropagatesToAllConditions(t *testing.T) {
+	r := &RuleTestResult{
+		ConditionResults: []ConditionEvalResult{
+			{Field: "transaction.pfc_primary", Value: "FOOD_AND_DRINK"},
+			{Field: "amount", Value: 50.0},
+			{Field: "pfc_primary", Value: "TRANSPORTATION"},
+		},
+	}
+	r.PopulatePFCDisplay()
+	assert.Equal(t, "Food And Drink", r.ConditionResults[0].ValueDisplay)
+	assert.Empty(t, r.ConditionResults[1].ValueDisplay)
+	assert.Equal(t, "Transportation", r.ConditionResults[2].ValueDisplay)
+}

@@ -4,7 +4,11 @@
 // The display fields are computed on demand and are never stored in the database.
 package domain
 
-import "github.com/maxnussbaum/BoostedBudget/internal/pfc"
+import (
+	"strings"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/pfc"
+)
 
 // notEmpty reports whether a string pointer is non-nil and non-empty.
 func notEmpty(s *string) bool {
@@ -110,4 +114,43 @@ func (is *IncomeSource) PopulatePFCDisplay() {
 	} else {
 		is.ValueDisplay = ""
 	}
+}
+
+// PopulatePFCDisplay fills in ValueDisplay/ActualDisplay when Field references a
+// PFC-typed attribute. Both bare (`pfc_primary`) and dotted (`*.pfc_primary`) field
+// name forms are recognized — the rule engine and UI historically use both.
+func (c *ConditionEvalResult) PopulatePFCDisplay() {
+	c.ValueDisplay = pfcDisplayForConditionField(c.Field, c.Value)
+	c.ActualDisplay = pfcDisplayForConditionField(c.Field, c.Actual)
+}
+
+// PopulatePFCDisplay enriches every condition result in the dry-run response,
+// mirroring the aggregate-level pattern used by CategorizationRule.
+func (r *RuleTestResult) PopulatePFCDisplay() {
+	for i := range r.ConditionResults {
+		r.ConditionResults[i].PopulatePFCDisplay()
+	}
+}
+
+// pfcDisplayForConditionField returns the humanized display for a condition
+// field/value pair when the field is a PFC-typed attribute. Returns "" otherwise.
+func pfcDisplayForConditionField(field string, raw interface{}) string {
+	v, ok := raw.(string)
+	if !ok || v == "" {
+		return ""
+	}
+	isPrimary := field == "pfc_primary" || strings.HasSuffix(field, ".pfc_primary")
+	isDetailed := field == "pfc_detailed" || strings.HasSuffix(field, ".pfc_detailed")
+	if isPrimary {
+		return pfc.PrimaryDisplayName(v)
+	}
+	if isDetailed {
+		// For detailed, find the primary enum that pairs with it
+		for _, d := range pfc.AllDetailed() {
+			if d.Enum == v {
+				return pfc.DetailedDisplayName(d.PrimaryEnum, v)
+			}
+		}
+	}
+	return ""
 }

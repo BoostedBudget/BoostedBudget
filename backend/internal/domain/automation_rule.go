@@ -650,11 +650,13 @@ type RuleTestResult struct {
 
 // ConditionEvalResult represents the evaluation result of a single condition.
 type ConditionEvalResult struct {
-	Field    string      `json:"field"`
-	Operator string      `json:"operator"`
-	Value    interface{} `json:"value"`
-	Actual   interface{} `json:"actual"`
-	Met      bool        `json:"met"`
+	Field         string      `json:"field"`
+	Operator      string      `json:"operator"`
+	Value         interface{} `json:"value"`
+	ValueDisplay  string      `json:"value_display,omitempty"`
+	Actual        interface{} `json:"actual"`
+	ActualDisplay string      `json:"actual_display,omitempty"`
+	Met           bool        `json:"met"`
 }
 
 // =============================================================================
