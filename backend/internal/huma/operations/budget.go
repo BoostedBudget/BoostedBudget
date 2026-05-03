@@ -8,24 +8,23 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
-	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
 // BudgetHandler handles budget-related HTTP requests.
 // Issue #28: Budget management
 type BudgetHandler struct {
-	service         services.BudgetService
-	syncService     services.BudgetSyncService
-	transactionRepo repository.TransactionRepository
+	service            services.BudgetService
+	syncService        services.BudgetSyncService
+	transactionService services.TransactionService
 }
 
 // NewBudgetHandler creates a new BudgetHandler instance.
-func NewBudgetHandler(service services.BudgetService, syncService services.BudgetSyncService, transactionRepo repository.TransactionRepository) *BudgetHandler {
+func NewBudgetHandler(service services.BudgetService, syncService services.BudgetSyncService, transactionService services.TransactionService) *BudgetHandler {
 	return &BudgetHandler{
-		service:         service,
-		syncService:     syncService,
-		transactionRepo: transactionRepo,
+		service:            service,
+		syncService:        syncService,
+		transactionService: transactionService,
 	}
 }
 
@@ -331,7 +330,7 @@ func (h *BudgetHandler) GetCategoryTransactions(ctx context.Context, input *GetC
 	}
 
 	// Get transactions matching the category
-	transactions, totalCount, totalAmount, err := h.transactionRepo.GetTransactionsForBudgetCategory(
+	transactions, totalCount, totalAmount, err := h.transactionService.ListByBudgetCategory(
 		ctx,
 		input.UserID,
 		category,
@@ -341,13 +340,12 @@ func (h *BudgetHandler) GetCategoryTransactions(ctx context.Context, input *GetC
 		input.Offset,
 	)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("Failed to get transactions")
+		return nil, huma.Error500InternalServerError("failed to get category transactions")
 	}
 
-	// Populate PFC display fields and convert to pointer slice
+	// Convert to pointer slice (enrichment done by service)
 	transactionPtrs := make([]*domain.Transaction, len(transactions))
 	for i := range transactions {
-		transactions[i].PopulatePFCDisplay()
 		transactionPtrs[i] = &transactions[i]
 	}
 
