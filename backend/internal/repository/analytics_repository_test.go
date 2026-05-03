@@ -318,3 +318,19 @@ func contains(s, substr string) bool {
 			return false
 		}())
 }
+
+func TestEffectiveCategoryDisplayExpr_ReferencesCustomCategoryName(t *testing.T) {
+	expr := effectiveCategoryDisplayExpr()
+	if !contains(expr, "cc.name") {
+		t.Errorf("display expr must reference cc.name for custom categories, got: %s", expr)
+	}
+	if !contains(expr, "COALESCE") {
+		t.Errorf("display expr must use COALESCE to handle NULL cc.name, got: %s", expr)
+	}
+	if !contains(expr, "category_override_kind") {
+		t.Errorf("display expr must branch on category_override_kind, got: %s", expr)
+	}
+	if !contains(expr, "'custom'") {
+		t.Errorf("display expr must handle 'custom' override kind, got: %s", expr)
+	}
+}

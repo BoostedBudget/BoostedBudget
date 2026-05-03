@@ -37,29 +37,7 @@ describe('IncomeSourceItem', () => {
       expect(screen.queryByText('Income Wages')).not.toBeInTheDocument();
     });
 
-    it('prefers server-supplied value_display over local formatter for plaid_category', () => {
-      const source: IncomeSource = {
-        type: 'plaid_category',
-        value: 'INCOME_WAGES',
-        value_display: 'Wages (server)',
-      };
 
-      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
-
-      expect(screen.getByText('Wages (server)')).toBeInTheDocument();
-    });
-
-    it('renders plaid_category source (backward compat) with category icon and value', () => {
-      const source: IncomeSource = {
-        type: 'plaid_category',
-        value: 'INCOME',
-      };
-
-      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
-
-      expect(screen.getByText('Income')).toBeInTheDocument();
-      expect(screen.getByTestId('income-source-icon')).toBeInTheDocument();
-    });
 
     it('renders tag source with tag icon and value', () => {
       const source: IncomeSource = {
@@ -99,7 +77,7 @@ describe('IncomeSourceItem', () => {
 
     it('does not render description when not provided', () => {
       const source: IncomeSource = {
-        type: 'plaid_category',
+        type: 'pfc_primary',
         value: 'INCOME',
       };
 
@@ -197,17 +175,6 @@ describe('IncomeSourceItem', () => {
       expect(removeButton).toBeInTheDocument();
     });
 
-    it('has accessible remove button for plaid_category (backward compat) with formatted name', () => {
-      const source: IncomeSource = {
-        type: 'plaid_category',
-        value: 'INCOME',
-      };
-
-      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
-
-      const removeButton = screen.getByRole('button', { name: /remove.*income/i });
-      expect(removeButton).toBeInTheDocument();
-    });
 
     it('manual source has no remove button (legacy read-only, tested in Legacy manual read-only suite)', () => {
       const source: IncomeSource = {
@@ -306,3 +273,17 @@ describe('IncomeSourceItem', () => {
     });
   });
 });
+
+describe('Unknown type fallback', () => {
+  const mockOnRemove = mock(() => {})
+
+  it('renders "Unknown source type" label for unrecognized type', () => {
+    const source = {
+      type: 'stale_unknown_type' as never,
+      value: 'some_value',
+    } as IncomeSource
+
+    render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />)
+    expect(screen.getByText('Unknown source type')).toBeDefined()
+  })
+})

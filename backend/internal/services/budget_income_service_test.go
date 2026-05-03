@@ -531,7 +531,7 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimary(t *testing
 }
 
 // TestBudgetIncomeService_CalculateBudgetIncome_PFCPrimary confirms the service forwards
-// PFC enum values to the repository unchanged when source type is plaid_category.
+// PFC enum values to the repository unchanged for pfc_primary income sources.
 func TestBudgetIncomeService_CalculateBudgetIncome_PFCPrimary(t *testing.T) {
 	mockRepo := new(MockIncomeTransactionGetter)
 	logger := testIncomeServiceLogger()
