@@ -1584,3 +1584,35 @@ func TestTestRule(t *testing.T) {
 		assert.Len(t, result.ConditionResults, 2)
 	})
 }
+
+// TestTestRule_PFCConditionPopulatesDisplay verifies that TestRule wires up
+// PopulatePFCDisplay so value_display and actual_display appear in the response.
+func TestTestRule_PFCConditionPopulatesDisplay(t *testing.T) {
+	ctx := context.Background()
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	actions, _ := json.Marshal(RuleActions{})
+	rule := &domain.AutomationRule{
+		ID:   "rule-pfc-test",
+		Name: "PFC dry-run",
+		Conditions: []domain.AutomationRuleCondition{
+			{Field: "transaction.pfc_primary", Operator: domain.ConditionOperatorEq, Value: "FOOD_AND_DRINK"},
+		},
+		ConditionLogic: "AND",
+		Actions:        actions,
+	}
+	triggerData := map[string]interface{}{
+		"transaction.pfc_primary": "FOOD_AND_DRINK",
+	}
+
+	result, err := service.TestRule(ctx, rule, triggerData)
+	require.NoError(t, err)
+	require.Len(t, result.ConditionResults, 1)
+	assert.Equal(t, "Food And Drink", result.ConditionResults[0].ValueDisplay)
+	assert.Equal(t, "Food And Drink", result.ConditionResults[0].ActualDisplay)
+}
