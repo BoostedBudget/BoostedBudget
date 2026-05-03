@@ -11,8 +11,9 @@ type CustomCategory struct {
 	ID               string    `json:"id" db:"id"`
 	UserID           string    `json:"user_id" db:"user_id"`
 	Name             string    `json:"name" db:"name"`
-	ParentPFCPrimary *string   `json:"parent_pfc_primary,omitempty" db:"parent_pfc_primary"`
-	Icon             *string   `json:"icon,omitempty" db:"icon"`
+	ParentPFCPrimary        *string `json:"parent_pfc_primary,omitempty" db:"parent_pfc_primary"`
+	ParentPFCPrimaryDisplay *string `json:"parent_pfc_primary_display,omitempty" db:"-"` // populated by PopulatePFCDisplay
+	Icon                    *string `json:"icon,omitempty" db:"icon"`
 	Color            *string   `json:"color,omitempty" db:"color"` // Hex color like #FF5733
 	UsageCount       int       `json:"usage_count" db:"usage_count"`
 	CreatedAt        time.Time `json:"created_at" db:"created_at"`

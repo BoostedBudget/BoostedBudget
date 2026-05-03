@@ -83,11 +83,13 @@ export function TransactionEditor({
       // Save category changes
       if (hasCategoryChanges) {
         const customCat = availableCategories.find((c) => c.name === category[0])
+        // CategoryEditor emits display names for Plaid primaries -- resolve back to enum
+        const plaidMatch = !customCat ? plaidPrimaries?.find((p) => p.display === category[0]) : null
         const categoryRequest = category.length === 0
           ? { kind: 'clear' as const }
           : customCat
             ? { kind: 'custom' as const, custom_category_id: customCat.id }
-            : { kind: 'pfc' as const, pfc_primary: category[0], pfc_detailed: category[1] }
+            : { kind: 'pfc' as const, pfc_primary: plaidMatch?.enum ?? category[0], pfc_detailed: category[1] }
         updatedTransaction = (await updateCategoryMutation.mutateAsync({
           id: transaction.id,
           data: categoryRequest,

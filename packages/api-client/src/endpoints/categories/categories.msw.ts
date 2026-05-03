@@ -55,6 +55,10 @@ export const getGetUserCategoriesResponseMock = (): CustomCategory[] | null =>
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),
+    parent_pfc_primary_display: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
     updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     usage_count: faker.number.int(),
     user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -76,6 +80,10 @@ export const getCreateCategoryResponseMock = (
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
   parent_pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  parent_pfc_primary_display: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
@@ -132,6 +140,10 @@ export const getGetCategoryByIDResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  parent_pfc_primary_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   usage_count: faker.number.int(),
   user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -154,6 +166,10 @@ export const getUpdateCategoryResponseMock = (
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
   parent_pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  parent_pfc_primary_display: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),

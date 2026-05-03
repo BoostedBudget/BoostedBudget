@@ -9,7 +9,7 @@ import { useState } from 'react'
 import type { CategorizationRule, ConditionType } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
-import { formatPFCPrimary, formatPFCDetailed } from '../utils/pfcFormat'
+import { formatPFCPrimary, formatPFCDetailed, formatPFCEnum } from '@/shared/categories/formatPfc'
 
 export interface AutoCategorizationRuleCardProps {
   rule: CategorizationRule
@@ -18,16 +18,20 @@ export interface AutoCategorizationRuleCardProps {
   onDelete: () => Promise<void>
 }
 
-function formatConditionValue(conditionType: ConditionType, value: unknown): string {
-  if (conditionType === 'existing_pfc_primary' && typeof value === 'string') {
-    return formatPFCPrimary(value)
+function formatConditionValue(condition: { type: ConditionType; value: unknown; value_display?: string }): string {
+  if (condition.value_display && (condition.type === 'existing_pfc_primary' || condition.type === 'existing_pfc_detailed')) {
+    return condition.value_display
   }
-  if (conditionType === 'existing_pfc_detailed' && typeof value === 'string') {
-    return formatPFCDetailed(value)
+
+  const { type, value } = condition
+  if (typeof value === 'string') {
+    if (type === 'existing_pfc_primary') return formatPFCPrimary(value)
+    if (type === 'existing_pfc_detailed') return formatPFCDetailed(value)
+    return value
   }
-  if (Array.isArray(value)) {
-    return value.join(', ')
-  }
+
+  if (Array.isArray(value)) return value.join(', ')
+
   if (typeof value === 'object' && value !== null) {
     const obj = value as Record<string, unknown>
     if ('min' in obj && 'max' in obj) {
@@ -40,6 +44,7 @@ function formatConditionValue(conditionType: ConditionType, value: unknown): str
       return parts.join(' ')
     }
   }
+
   return String(value)
 }
 
@@ -94,7 +99,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
                   {CONDITION_TYPE_LABELS[condition.type] || condition.type}
                 </span>
                 <span className="text-foreground font-medium">
-                  {formatConditionValue(condition.type, condition.value)}
+                  {formatConditionValue(condition)}
                 </span>
               </li>
             ))}
@@ -109,9 +114,9 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-muted-foreground">Set category:</span>
                 <span className="text-foreground font-medium flex flex-wrap gap-1">
-                  {rule.target_pfc_detailed
-                    ? `${rule.target_pfc_primary} › ${rule.target_pfc_detailed}`
-                    : rule.target_pfc_primary}
+                  {rule.target_pfc_detailed_display
+                    ?? rule.target_pfc_primary_display
+                    ?? formatPFCEnum(rule.target_pfc_detailed ?? rule.target_pfc_primary ?? '')}
                 </span>
               </div>
             )}

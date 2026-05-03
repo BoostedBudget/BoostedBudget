@@ -64,17 +64,30 @@ func (s *customCategoryService) CreateCategory(ctx context.Context, userID strin
 		return nil, err
 	}
 
+	category.PopulatePFCDisplay()
 	return category, nil
 }
 
 // GetUserCategories retrieves all categories for a user
 func (s *customCategoryService) GetUserCategories(ctx context.Context, userID string) ([]*domain.CustomCategory, error) {
-	return s.categoryRepo.GetByUserID(ctx, userID)
+	categories, err := s.categoryRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range categories {
+		c.PopulatePFCDisplay()
+	}
+	return categories, nil
 }
 
 // GetCategoryByID retrieves a specific category by ID
 func (s *customCategoryService) GetCategoryByID(ctx context.Context, categoryID string) (*domain.CustomCategory, error) {
-	return s.categoryRepo.GetByID(ctx, categoryID)
+	c, err := s.categoryRepo.GetByID(ctx, categoryID)
+	if err != nil {
+		return nil, err
+	}
+	c.PopulatePFCDisplay()
+	return c, nil
 }
 
 // UpdateCategory updates a category's name, icon, or color
@@ -114,6 +127,7 @@ func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, cate
 		return nil, err
 	}
 
+	category.PopulatePFCDisplay()
 	return category, nil
 }
 
@@ -139,6 +153,7 @@ func (s *customCategoryService) GetOrCreateCategory(ctx context.Context, userID,
 	// Try to get existing category
 	category, err := s.categoryRepo.GetByName(ctx, userID, categoryName)
 	if err == nil {
+		category.PopulatePFCDisplay()
 		return category, nil
 	}
 

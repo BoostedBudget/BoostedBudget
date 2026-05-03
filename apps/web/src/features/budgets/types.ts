@@ -2,6 +2,7 @@
 
 // Re-export shared matching types for convenience
 import { MatchLogic } from '@boostedbudget/shared-types/matching';
+import { formatPFCEnum } from '@/shared/categories/formatPfc';
 import type { Transaction } from '../transactions/types';
 export type { MatchLogic } from '@boostedbudget/shared-types/matching';
 
@@ -26,6 +27,7 @@ export interface IncomeSource {
   type: IncomeSourceType;
   value: string; // Category name, tag, or amount string
   description?: string; // Optional user-friendly label
+  value_display?: string; // Server-supplied humanized label for pfc_primary sources
 }
 
 // Budget category allocation within a budget (PFC v2 canonical)
@@ -35,6 +37,8 @@ export interface BudgetCategory {
   category_kind: string; // 'pfc' | 'custom'
   pfc_primary?: string;
   pfc_detailed?: string;
+  pfc_primary_display?: string;
+  pfc_detailed_display?: string;
   custom_category_id?: string;
   allocated_amount: number;
   spent_amount: number;
@@ -209,12 +213,15 @@ export function formatCategoryPath(category: string[]): string {
 }
 
 // Format a budget category for display (PFC v2 canonical)
-export function formatBudgetCategoryLabel(cat: Pick<BudgetCategory, 'category_kind' | 'pfc_primary' | 'pfc_detailed' | 'custom_category_id'>): string {
+// Prefers server-supplied display fields, falls back to formatPFCEnum.
+export function formatBudgetCategoryLabel(cat: Pick<BudgetCategory, 'category_kind' | 'pfc_primary' | 'pfc_detailed' | 'pfc_primary_display' | 'pfc_detailed_display' | 'custom_category_id'>): string {
   if (cat.category_kind === 'custom') {
     return cat.custom_category_id || 'Custom'
   }
-  if (cat.pfc_detailed) return cat.pfc_detailed
-  if (cat.pfc_primary) return cat.pfc_primary
+  if (cat.pfc_detailed_display) return cat.pfc_detailed_display
+  if (cat.pfc_primary_display) return cat.pfc_primary_display
+  if (cat.pfc_detailed) return formatPFCEnum(cat.pfc_detailed)
+  if (cat.pfc_primary) return formatPFCEnum(cat.pfc_primary)
   return 'Uncategorized'
 }
 

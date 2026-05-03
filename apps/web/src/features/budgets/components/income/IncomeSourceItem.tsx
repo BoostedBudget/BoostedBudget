@@ -2,13 +2,12 @@
  * IncomeSourceItem
  * Issue #496: Income Source Configuration UI for Envelope Budgeting
  *
- * Displays a single configured income source with type icon,
- * value display, optional description, and remove button.
+ * Displays a single configured income source with type icon, value, description, and remove button.
  */
 
 import { XIcon, TagIcon, DollarSignIcon, FolderIcon } from 'lucide-react';
 import type { IncomeSource } from '../../types';
-import { formatPFCPrimary } from '@/shared/categories/formatPfc';
+import { getPFCIncomeSourceLabel } from '../../utils/incomeSourceLabel';
 import { Badge } from '@/components/ui/badge';
 
 export interface IncomeSourceItemProps {
@@ -30,15 +29,11 @@ function formatCurrency(value: string): string {
 }
 
 function getDisplayValue(source: IncomeSource): string {
-  switch (source.type) {
-    case 'pfc_primary':
-    case 'plaid_category':
-      return formatPFCPrimary(source.value);
-    case 'tag':
-      return source.value;
-    case 'manual':
-      return formatCurrency(source.value);
-  }
+  if (source.type === 'pfc_primary' || source.type === 'plaid_category')
+    return getPFCIncomeSourceLabel(source)
+  if (source.type === 'tag') return source.value
+  if (source.type === 'manual') return formatCurrency(source.value)
+  return ''
 }
 
 function getIcon(type: IncomeSource['type']): React.ReactNode {

@@ -194,6 +194,32 @@ func calculatePeriodEnd(periodStart time.Time, grouping string) time.Time {
 	}
 }
 
+// isPFCPrimary reports whether s is a known PFCv2 primary enum.
+func isPFCPrimary(s string) bool {
+	for _, p := range pfc.AllPrimaries() {
+		if p.Enum == s {
+			return true
+		}
+	}
+	return false
+}
+
+// pfcDisplayName returns the appropriate display name for a category enum.
+// Primary enums use PrimaryDisplayName; detailed enums use DetailedDisplayName.
+func pfcDisplayName(category string) string {
+	if isPFCPrimary(category) {
+		return pfc.PrimaryDisplayName(category)
+	}
+	// Detailed enum — look up the primary from the registry.
+	for _, d := range pfc.AllDetailed() {
+		if d.Enum == category {
+			return pfc.DetailedDisplayName(d.PrimaryEnum, category)
+		}
+	}
+	// Unknown detailed: fall back to primary display (title-case fallback inside).
+	return pfc.PrimaryDisplayName(category)
+}
+
 // GetSpendingByCategory returns spending totals grouped by category with percentages and display names
 func (s *analyticsService) GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.SpendingByCategoryResponse, error) {
 	categories, err := s.analyticsRepo.GetSpendingByCategory(ctx, userID, filters)
@@ -204,19 +230,21 @@ func (s *analyticsService) GetSpendingByCategory(ctx context.Context, userID str
 	// Normalize and merge: effectiveCategoryExpr returns display strings from category_override
 	// but raw enums from personal_finance_category->>'primary'. Normalize both to canonical display
 	// names, then sum any rows that map to the same display (e.g. "Food And Drink" + "FOOD_AND_DRINK").
+	// When filters.Category is set (drill-down), rows may be detailed-level enums; use
+	// DetailedDisplayName for those instead of PrimaryDisplayName.
 	merged := make(map[string]*domain.SpendingByCategory)
 	var order []string
 	for _, c := range categories {
-		displayName := pfc.PrimaryDisplayName(c.Category)
+		displayName := pfcDisplayName(c.Category)
 		if existing, ok := merged[displayName]; ok {
 			existing.Total += c.Total
 			existing.TransactionCount += c.TransactionCount
 		} else {
 			merged[displayName] = &domain.SpendingByCategory{
-				Category:         c.Category,
-				DisplayName:      displayName,
-				Total:            c.Total,
-				TransactionCount: c.TransactionCount,
+				Category:          c.Category,
+				PFCPrimaryDisplay: displayName,
+				Total:             c.Total,
+				TransactionCount:  c.TransactionCount,
 			}
 			order = append(order, displayName)
 		}
@@ -335,18 +363,18 @@ func (s *analyticsService) GetSpendingTrends(ctx context.Context, userID string,
 		for _, tc := range topCategories {
 			if spend, ok := catSpend[tc]; ok {
 				cats = append(cats, domain.CategorySpending{
-					Category:    tc,
-					DisplayName: PFCPrimaryDisplayName(tc),
-					Total:       spend,
+					Category:          tc,
+					PFCPrimaryDisplay: pfcDisplayName(tc),
+					Total:             spend,
 				})
 				periodTotal += spend
 			}
 		}
 		if otherSpend, ok := catSpend["OTHER"]; ok {
 			cats = append(cats, domain.CategorySpending{
-				Category:    "OTHER",
-				DisplayName: "Other",
-				Total:       otherSpend,
+				Category:          "OTHER",
+				PFCPrimaryDisplay: "Other",
+				Total:             otherSpend,
 			})
 			periodTotal += otherSpend
 		}

@@ -117,7 +117,7 @@ type SpendingFilters struct {
 // SpendingByCategory represents spending totals for a single category
 type SpendingByCategory struct {
 	Category         string  `json:"category"`
-	DisplayName      string  `json:"display_name"`
+	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
 	Total            float64 `json:"total"`
 	Percentage       float64 `json:"percentage"`
 	TransactionCount int     `json:"transaction_count"`
@@ -149,9 +149,9 @@ type SpendingByMerchantResponse struct {
 
 // CategorySpending represents spending for a single category within a trend period
 type CategorySpending struct {
-	Category    string  `json:"category"`
-	DisplayName string  `json:"display_name"`
-	Total       float64 `json:"total"`
+	Category         string  `json:"category"`
+	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
+	Total            float64 `json:"total"`
 }
 
 // SpendingTrendPeriod represents one month's spending breakdown in a trends response

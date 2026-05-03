@@ -47,7 +47,7 @@ describe('useSpendingByCategory', () => {
       end_date: '2024-01-31',
       total_spent: 500,
       categories: [
-        { category: 'FOOD_AND_DRINK', display_name: 'Food & Drink', total: 300, percentage: 60, transaction_count: 20 },
+        { category: 'FOOD_AND_DRINK', pfc_primary_display: 'Food And Drink', total: 300, percentage: 60, transaction_count: 20 },
       ],
     }
     mockUseGetSpendingByCategory.mockImplementation(() => ({

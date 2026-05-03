@@ -52,14 +52,16 @@ describe('BudgetCategoryCard', () => {
       const category = createMockCategory()
       render(<BudgetCategoryCard category={category} />)
 
-      expect(screen.getByText('FOOD_AND_DRINK_RESTAURANTS')).toBeInTheDocument()
+      // No display fields — falls back to formatPFCEnum
+      expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument()
     })
 
     it('should render single-level category path correctly', () => {
       const category = createMockCategory({ pfc_primary: 'GENERAL_MERCHANDISE', pfc_detailed: undefined })
       render(<BudgetCategoryCard category={category} />)
 
-      expect(screen.getByText('GENERAL_MERCHANDISE')).toBeInTheDocument()
+      // No display fields — falls back to formatPFCEnum
+      expect(screen.getByText('General Merchandise')).toBeInTheDocument()
     })
 
     it('should render allocated amount formatted as currency', () => {
@@ -174,7 +176,8 @@ describe('BudgetCategoryCard', () => {
       )
 
       expect(screen.getByRole('article')).toBeInTheDocument()
-      expect(screen.getByRole('heading')).toHaveTextContent('FOOD_AND_DRINK_RESTAURANTS')
+      // No display fields — heading shows formatPFCEnum fallback
+      expect(screen.getByRole('heading')).toHaveTextContent('Food And Drink › Restaurants')
       expect(screen.getByRole('button', { name: /edit/i })).toHaveAttribute('aria-label')
       expect(screen.getByRole('button', { name: /delete/i })).toHaveAttribute('aria-label')
     })

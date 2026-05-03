@@ -138,12 +138,13 @@ describe('AutoCategorizationRuleTable', () => {
       expect(screen.getByText('2 conditions (OR)')).toBeInTheDocument()
     })
 
-    it('should display target category in PFC v2 format', () => {
+    it('should display target category using display fields (fallback to formatPFCEnum)', () => {
+      // These mock rules have no display fields, so formatPFCEnum fallback is used
       render(<AutoCategorizationRuleTable rules={mockRules} />)
 
-      expect(screen.getByText('FOOD_AND_DRINK › FOOD_AND_DRINK_COFFEE')).toBeInTheDocument()
-      expect(screen.getByText('GENERAL_MERCHANDISE › GENERAL_MERCHANDISE_GROCERIES')).toBeInTheDocument()
-      expect(screen.getByText('RENT_AND_UTILITIES › RENT_AND_UTILITIES_TELEPHONE')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink › Coffee')).toBeInTheDocument()
+      expect(screen.getByText('General Merchandise › Groceries')).toBeInTheDocument()
+      expect(screen.getByText('Rent And Utilities › Telephone')).toBeInTheDocument()
     })
 
     it('should display match count', () => {

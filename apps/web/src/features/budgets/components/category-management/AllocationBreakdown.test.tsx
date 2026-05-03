@@ -81,9 +81,9 @@ describe('AllocationBreakdown', () => {
         />
       );
 
-      // Check legend items exist with PFC enum labels
-      expect(screen.getByText('FOOD_AND_DRINK_RESTAURANTS')).toBeInTheDocument();
-      expect(screen.getByText('TRANSPORTATION_GAS')).toBeInTheDocument();
+      // Check legend items exist — no display fields so formatPFCEnum fallback is used
+      expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument();
+      expect(screen.getByText('Transportation › Gas')).toBeInTheDocument();
       expect(screen.getByText('$500.00')).toBeInTheDocument();
       expect(screen.getByText('$300.00')).toBeInTheDocument();
     });

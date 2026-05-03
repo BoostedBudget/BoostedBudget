@@ -153,17 +153,23 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
   ], [])
 
   const categoryOptions = useMemo<FilterOption[]>(() => {
-    const cats = new Set<string>()
+    // Build filter options: value = raw enum/id (for filtering), label = display text
+    const seen = new Map<string, string>()
     rules.forEach((rule) => {
       if (rule.target_kind === 'pfc' && rule.target_pfc_primary) {
-        cats.add(rule.target_pfc_primary)
+        const value = rule.target_pfc_primary
+        if (!seen.has(value)) {
+          const label = rule.target_pfc_primary_display ?? rule.target_pfc_primary
+          seen.set(value, label)
+        }
       } else if (rule.target_kind === 'custom' && rule.target_custom_category_id) {
-        cats.add(rule.target_custom_category_id)
+        const value = rule.target_custom_category_id
+        if (!seen.has(value)) seen.set(value, value)
       }
     })
-    return Array.from(cats)
-      .sort()
-      .map((cat) => ({ value: cat, label: cat }))
+    return Array.from(seen.entries())
+      .sort(([, a], [, b]) => a.localeCompare(b))
+      .map(([value, label]) => ({ value, label }))
   }, [rules])
 
   // Issue #590: Filter handlers from useRuleFilters hook (URL-synced)

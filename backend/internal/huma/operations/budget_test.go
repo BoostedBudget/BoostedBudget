@@ -479,6 +479,40 @@ func TestDeleteBudgetCategory_Success(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestGetCategoryTransactions_EnrichesPFCDisplay tests that GetCategoryTransactions
+// populates pfc_primary_display on response transactions (Gap 3 — #1080).
+func TestGetCategoryTransactions_EnrichesPFCDisplay(t *testing.T) {
+	pfcPrimary := "FOOD_AND_DRINK"
+	mockTxRepo := &mockTransactionRepoForBudget{
+		transactions: []domain.Transaction{
+			{ID: "tx-1", UserID: "user-123", PFCPrimary: &pfcPrimary},
+		},
+		totalCount:  1,
+		totalAmount: 42.00,
+	}
+	budget := createTestBudget()
+	mockService := &mockBudgetService{budget: budget}
+
+	handler := NewBudgetHandler(mockService, &mockBudgetSyncService{}, mockTxRepo)
+
+	input := &GetCategoryTransactionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "budget-123",
+		CategoryID:         "cat-123",
+		Limit:              20,
+	}
+
+	output, err := handler.GetCategoryTransactions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.Len(t, output.Body.Transactions, 1)
+
+	tx := output.Body.Transactions[0]
+	require.NotNil(t, tx.PFCPrimaryDisplay, "PFCPrimaryDisplay must be populated by handler")
+	assert.Equal(t, "Food And Drink", *tx.PFCPrimaryDisplay)
+}
+
 // TestGetAvailableCategories_Success tests successful retrieval of available categories.
 func TestGetAvailableCategories_Success(t *testing.T) {
 	mockService := &mockBudgetService{

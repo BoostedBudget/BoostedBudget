@@ -1,8 +1,21 @@
-import { describe, it, expect } from 'bun:test'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, beforeEach } from 'bun:test'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import { ReadOnlyProvider } from '@/auth/ReadOnlyContext'
 import { TransactionEditor } from './TransactionEditor'
 import type { Transaction } from '../types'
+import { mockUpdateTransactionCategoryMutateAsync } from '@/test/mocks/transactions-api'
+
+function createWrapper() {
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return (
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        {children}
+      </QueryClientProvider>
+    )
+  }
+}
 
 const baseTransaction: Transaction = {
   id: 'txn-1',
@@ -42,8 +55,8 @@ describe('TransactionEditor', () => {
         pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD',
       }
       renderEditor(txn)
-      // CategoryEditor renders selectedCategory[0] which is pfc_primary
-      expect(screen.getByText('FOOD_AND_DRINK')).toBeInTheDocument()
+      // CategoryEditor resolves raw enum to display label via formatPFCEnum
+      expect(screen.getByText('Food And Drink')).toBeInTheDocument()
     })
 
     it('shows pfc_primary when pfc_detailed is absent', () => {
@@ -52,7 +65,7 @@ describe('TransactionEditor', () => {
         pfc_primary: 'FOOD_AND_DRINK',
       }
       renderEditor(txn)
-      expect(screen.getByText('FOOD_AND_DRINK')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink')).toBeInTheDocument()
     })
 
     it('shows pfc_primary_override when category_override_kind is pfc', () => {
@@ -65,8 +78,8 @@ describe('TransactionEditor', () => {
         pfc_detailed_override: 'TRANSPORTATION_GAS',
       }
       renderEditor(txn)
-      // Override takes precedence; CategoryEditor shows selectedCategory[0] = pfc_primary_override
-      expect(screen.getByText('TRANSPORTATION')).toBeInTheDocument()
+      // Override takes precedence; CategoryEditor resolves override enum to display label
+      expect(screen.getByText('Transportation')).toBeInTheDocument()
     })
   })
 
@@ -91,7 +104,52 @@ describe('TransactionEditor', () => {
         category_source: 'manual',
       }
       renderEditor(txn)
-      expect(screen.getByText('FOOD_AND_DRINK')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink')).toBeInTheDocument()
+    })
+  })
+
+  describe('save category — Plaid primary encoding', () => {
+    const plaidPrimaries = [
+      { enum: 'FOOD_AND_DRINK', display: 'Food And Drink' },
+      { enum: 'TRANSPORTATION', display: 'Transportation' },
+    ]
+
+    beforeEach(() => {
+      mockUpdateTransactionCategoryMutateAsync.mockClear()
+      mockUpdateTransactionCategoryMutateAsync.mockResolvedValue({ ...baseTransaction })
+    })
+
+    it('sends PFC enum not display name when selecting a Plaid primary', async () => {
+      const txn: Transaction = { ...baseTransaction, pfc_primary: 'FOOD_AND_DRINK' }
+      const Wrapper = createWrapper()
+      render(
+        <ReadOnlyProvider isReadOnly={false}>
+          <TransactionEditor
+            transaction={txn}
+            availableTags={[]}
+            availableCategories={[]}
+            plaidPrimaries={plaidPrimaries}
+            isOpen={true}
+            onClose={() => {}}
+            onSave={() => {}}
+          />
+        </ReadOnlyProvider>,
+        { wrapper: Wrapper }
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /change category/i }))
+      await waitFor(() => expect(screen.getByRole('option', { name: 'Transportation' })).toBeInTheDocument())
+      fireEvent.click(screen.getByRole('option', { name: 'Transportation' }))
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /save/i })).not.toBeDisabled())
+      fireEvent.click(screen.getByRole('button', { name: /save/i }))
+
+      await waitFor(() => {
+        expect(mockUpdateTransactionCategoryMutateAsync).toHaveBeenCalledWith({
+          id: 'txn-1',
+          data: { kind: 'pfc', pfc_primary: 'TRANSPORTATION', pfc_detailed: undefined },
+        })
+      })
     })
   })
 })
