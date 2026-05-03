@@ -284,6 +284,17 @@ func effectiveCategoryExpr(subcategory bool) string {
 	END`
 }
 
+// effectiveCategoryDisplayExpr returns the SQL expression for the human-readable display name
+// of the effective category. For custom-category overrides it resolves cc.name from the joined
+// custom_categories table (requires LEFT JOIN custom_categories cc). For all other rows it
+// returns '' so the service applies its PFCv2 registry lookup instead.
+func effectiveCategoryDisplayExpr() string {
+	return `CASE
+		WHEN t.category_override_kind = 'custom' THEN COALESCE(cc.name, 'Uncategorized')
+		ELSE ''
+	END`
+}
+
 // effectiveTransferExpr returns the SQL expression for the effective PFC primary used
 // in transfer filtering. Custom overrides always return '' (never match TRANSFER%).
 // PFC overrides: use pfc_primary_override; otherwise use raw pfc_primary.
@@ -334,23 +345,28 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 	}
 
 	extraClause, args, _ := buildSpendingFilter(filters, args)
+	displayExpr := effectiveCategoryDisplayExpr()
 
 	query := fmt.Sprintf(`
 		SELECT
 			%s as category,
+			%s as category_display,
 			COALESCE(SUM(ABS(t.amount)), 0) as total,
 			COUNT(*) as transaction_count
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
+		LEFT JOIN custom_categories cc
+		       ON cc.id = t.custom_category_override_id
+		      AND t.category_override_kind = 'custom'
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
 		  AND t.pending = false
 		%s%s
-		GROUP BY category
+		GROUP BY category, category_display
 		ORDER BY total DESC
-	`, catExpr, categoryFilter, extraClause)
+	`, catExpr, displayExpr, categoryFilter, extraClause)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -361,7 +377,7 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 	var results []domain.SpendingByCategory
 	for rows.Next() {
 		var row domain.SpendingByCategory
-		if err := rows.Scan(&row.Category, &row.Total, &row.TransactionCount); err != nil {
+		if err := rows.Scan(&row.Category, &row.PFCPrimaryDisplay, &row.Total, &row.TransactionCount); err != nil {
 			return nil, fmt.Errorf("failed to scan spending by category: %w", err)
 		}
 		results = append(results, row)
@@ -430,22 +446,27 @@ func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID stri
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	extraClause, args, _ := buildSpendingFilter(filters, args)
 
+	displayExprTrends := effectiveCategoryDisplayExpr()
 	query := fmt.Sprintf(`
 		SELECT
 			DATE_TRUNC('month', t.date)::date as period_start,
 			%s as category,
+			%s as category_display,
 			COALESCE(SUM(ABS(t.amount)), 0) as total
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
+		LEFT JOIN custom_categories cc
+		       ON cc.id = t.custom_category_override_id
+		      AND t.category_override_kind = 'custom'
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
 		  AND t.pending = false
 		%s
-		GROUP BY period_start, category
+		GROUP BY period_start, category, category_display
 		ORDER BY period_start ASC, total DESC
-	`, catExpr, extraClause)
+	`, catExpr, displayExprTrends, extraClause)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -456,7 +477,7 @@ func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID stri
 	var results []domain.SpendingTrendRow
 	for rows.Next() {
 		var row domain.SpendingTrendRow
-		if err := rows.Scan(&row.PeriodStart, &row.Category, &row.Total); err != nil {
+		if err := rows.Scan(&row.PeriodStart, &row.Category, &row.CategoryDisplay, &row.Total); err != nil {
 			return nil, fmt.Errorf("failed to scan spending trend row: %w", err)
 		}
 		results = append(results, row)

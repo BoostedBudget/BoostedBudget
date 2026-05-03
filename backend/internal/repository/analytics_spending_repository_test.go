@@ -31,9 +31,9 @@ func TestGetSpendingByCategory(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"category", "total", "transaction_count"}).
-			AddRow("FOOD_AND_DRINK", 250.0, 15).
-			AddRow("TRANSPORTATION", 120.0, 8)
+		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "transaction_count"}).
+			AddRow("FOOD_AND_DRINK", "", 250.0, 15).
+			AddRow("TRANSPORTATION", "", 120.0, 8)
 
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate).
@@ -58,9 +58,9 @@ func TestGetSpendingByCategory(t *testing.T) {
 			Category:  "FOOD_AND_DRINK",
 		}
 
-		rows := pgxmock.NewRows([]string{"category", "total", "transaction_count"}).
-			AddRow("RESTAURANTS", 180.0, 12).
-			AddRow("GROCERIES", 70.0, 3)
+		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "transaction_count"}).
+			AddRow("RESTAURANTS", "", 180.0, 12).
+			AddRow("GROCERIES", "", 70.0, 3)
 
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, subFilters.StartDate, subFilters.EndDate, subFilters.Category).
@@ -76,7 +76,7 @@ func TestGetSpendingByCategory(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"category", "total", "transaction_count"})
+		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "transaction_count"})
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate).
 			WillReturnRows(rows)
@@ -170,10 +170,10 @@ func TestGetSpendingTrends(t *testing.T) {
 		jan := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 		feb := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
 
-		rows := pgxmock.NewRows([]string{"period_start", "category", "total"}).
-			AddRow(jan, "FOOD_AND_DRINK", 200.0).
-			AddRow(jan, "TRANSPORTATION", 80.0).
-			AddRow(feb, "FOOD_AND_DRINK", 230.0)
+		rows := pgxmock.NewRows([]string{"period_start", "category", "category_display", "total"}).
+			AddRow(jan, "FOOD_AND_DRINK", "", 200.0).
+			AddRow(jan, "TRANSPORTATION", "", 80.0).
+			AddRow(feb, "FOOD_AND_DRINK", "", 230.0)
 
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate).
@@ -191,7 +191,7 @@ func TestGetSpendingTrends(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"period_start", "category", "total"})
+		rows := pgxmock.NewRows([]string{"period_start", "category", "category_display", "total"})
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate).
 			WillReturnRows(rows)
@@ -211,5 +211,62 @@ func TestGetSpendingTrends(t *testing.T) {
 
 		_, err := repo.GetSpendingTrends(ctx, userID, filters)
 		assert.Error(t, err)
+	})
+}
+
+func TestGetSpendingByCategory_CustomCategory(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	filters := domain.SpendingFilters{
+		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+	}
+
+	t.Run("populates PFCPrimaryDisplay from category_display column for custom rows", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "transaction_count"}).
+			AddRow("custom:7a93a4f0-dead-beef-1234-abcdef012345", "My Coffee Budget", 150.0, 5)
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, filters.StartDate, filters.EndDate).
+			WillReturnRows(rows)
+
+		result, err := repo.GetSpendingByCategory(ctx, userID, filters)
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		assert.Equal(t, "custom:7a93a4f0-dead-beef-1234-abcdef012345", result[0].Category)
+		assert.Equal(t, "My Coffee Budget", result[0].PFCPrimaryDisplay)
+		assert.Equal(t, 150.0, result[0].Total)
+	})
+}
+
+func TestGetSpendingTrends_CustomCategory(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	filters := domain.SpendingFilters{
+		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+	}
+
+	t.Run("populates CategoryDisplay for custom rows in trend query", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		jan := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+		rows := pgxmock.NewRows([]string{"period_start", "category", "category_display", "total"}).
+			AddRow(jan, "custom:uuid-aaa-111", "My Coffee Budget", 150.0)
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, filters.StartDate, filters.EndDate).
+			WillReturnRows(rows)
+
+		result, err := repo.GetSpendingTrends(ctx, userID, filters)
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		assert.Equal(t, "custom:uuid-aaa-111", result[0].Category)
+		assert.Equal(t, "My Coffee Budget", result[0].CategoryDisplay)
+		assert.Equal(t, 150.0, result[0].Total)
 	})
 }

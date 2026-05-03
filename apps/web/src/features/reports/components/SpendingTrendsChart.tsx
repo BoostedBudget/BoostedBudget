@@ -54,6 +54,8 @@ export function SpendingTrendsChart({ data, loading, className }: SpendingTrends
         const found = p.categories?.find((c) => c.category === cat)
         if (found?.pfc_primary_display) return found.pfc_primary_display
       }
+      // Guard against raw custom:<uuid> tokens reaching the chart
+      if (cat.startsWith('custom:')) return 'Custom Category'
       return formatPFCPrimary(cat)
     }
 

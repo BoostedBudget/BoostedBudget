@@ -35,9 +35,9 @@ describe('useIncomeTracking', () => {
       expect(result.current.expectedManualTotal).toBe(1750.50);
     });
 
-    it('ignores plaid_category and tag sources', () => {
+    it('ignores pfc_primary and tag sources', () => {
       const sources: IncomeSource[] = [
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
         { type: 'tag', value: 'Freelance' },
         { type: 'manual', value: '1000' },
       ];

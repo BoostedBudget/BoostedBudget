@@ -56,3 +56,29 @@ describe('CategoryBreakdownChart', () => {
     expect(screen.getByTestId('plotly-chart')).toBeDefined()
   })
 })
+
+  it('renders custom-category row without crashing and shows total', () => {
+    // CategoryBreakdownChart uses a pie chart (single trace); slice labels are not exposed
+    // in the PlotMock attributes, so we verify: renders without error + total is shown.
+    // The actual label content (pfc_primary_display) is tested at the SpendingTrendsChart level.
+    const customData: SpendingByCategoryResponse = {
+      start_date: '2024-01-01',
+      end_date: '2024-01-31',
+      total_spent: 150,
+      categories: [
+        {
+          category: 'custom:7a93a4f0-dead-beef-1234-abcdef012345',
+          pfc_primary_display: 'My Coffee Budget',
+          total: 150,
+          percentage: 100,
+          transaction_count: 5,
+        },
+      ],
+    }
+    render(<CategoryBreakdownChart data={customData} loading={false} />)
+    // Chart should render as a single pie trace (not empty)
+    const chart = screen.getByTestId('plotly-chart')
+    expect(chart.getAttribute('data-trace-count')).toBe('1')
+    // Total should be displayed
+    expect(screen.getByText('Total:')).toBeDefined()
+  })

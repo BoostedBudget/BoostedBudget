@@ -227,34 +227,34 @@ func (s *analyticsService) GetSpendingByCategory(ctx context.Context, userID str
 		return nil, fmt.Errorf("failed to get spending by category: %w", err)
 	}
 
-	// Normalize and merge: effectiveCategoryExpr returns display strings from category_override
-	// but raw enums from personal_finance_category->>'primary'. Normalize both to canonical display
-	// names, then sum any rows that map to the same display (e.g. "Food And Drink" + "FOOD_AND_DRINK").
-	// When filters.Category is set (drill-down), rows may be detailed-level enums; use
-	// DetailedDisplayName for those instead of PrimaryDisplayName.
+	// Merge by raw category token (UUID for custom, enum for PFC) to keep distinct rows.
+	// Use server-resolved display from repo when available; fall back to pfcDisplayName for PFC.
 	merged := make(map[string]*domain.SpendingByCategory)
 	var order []string
 	for _, c := range categories {
-		displayName := pfcDisplayName(c.Category)
-		if existing, ok := merged[displayName]; ok {
+		displayName := c.PFCPrimaryDisplay
+		if displayName == "" {
+			displayName = pfcDisplayName(c.Category)
+		}
+		if existing, ok := merged[c.Category]; ok {
 			existing.Total += c.Total
 			existing.TransactionCount += c.TransactionCount
 		} else {
-			merged[displayName] = &domain.SpendingByCategory{
+			merged[c.Category] = &domain.SpendingByCategory{
 				Category:          c.Category,
 				PFCPrimaryDisplay: displayName,
 				Total:             c.Total,
 				TransactionCount:  c.TransactionCount,
 			}
-			order = append(order, displayName)
+			order = append(order, c.Category)
 		}
 	}
 
 	categories = make([]domain.SpendingByCategory, 0, len(order))
 	var totalSpent float64
-	for _, name := range order {
-		categories = append(categories, *merged[name])
-		totalSpent += merged[name].Total
+	for _, key := range order {
+		categories = append(categories, *merged[key])
+		totalSpent += merged[key].Total
 	}
 
 	for i := range categories {
@@ -304,10 +304,14 @@ func (s *analyticsService) GetSpendingTrends(ctx context.Context, userID string,
 		return nil, fmt.Errorf("failed to get spending trends: %w", err)
 	}
 
-	// Calculate total per category across all periods
+	// Calculate total per category across all periods and collect display names.
 	categoryTotals := make(map[string]float64)
+	categoryDisplays := make(map[string]string)
 	for _, row := range rows {
 		categoryTotals[row.Category] += row.Total
+		if row.CategoryDisplay != "" {
+			categoryDisplays[row.Category] = row.CategoryDisplay
+		}
 	}
 
 	// Sort categories by total descending, take top 5
@@ -334,10 +338,9 @@ func (s *analyticsService) GetSpendingTrends(ctx context.Context, userID string,
 		topCategories = append(topCategories, ct.category)
 	}
 
-	// Group rows by period
-	type periodKey = time.Time
-	periodOrder := make([]periodKey, 0)
-	periodRows := make(map[periodKey][]domain.SpendingTrendRow)
+	// Group rows by period, preserving order
+	periodOrder := make([]time.Time, 0)
+	periodRows := make(map[time.Time][]domain.SpendingTrendRow)
 	for _, row := range rows {
 		if _, exists := periodRows[row.PeriodStart]; !exists {
 			periodOrder = append(periodOrder, row.PeriodStart)
@@ -357,14 +360,19 @@ func (s *analyticsService) GetSpendingTrends(ctx context.Context, userID string,
 			}
 		}
 
-		// Build category list (top categories first, then Other if present)
+		// Build category list (top categories first, then Other if present).
+		// Use server-resolved display when available; fall back to pfcDisplayName for PFC rows.
 		var periodTotal float64
 		cats := make([]domain.CategorySpending, 0)
 		for _, tc := range topCategories {
 			if spend, ok := catSpend[tc]; ok {
+				display := categoryDisplays[tc]
+				if display == "" {
+					display = pfcDisplayName(tc)
+				}
 				cats = append(cats, domain.CategorySpending{
 					Category:          tc,
-					PFCPrimaryDisplay: pfcDisplayName(tc),
+					PFCPrimaryDisplay: display,
 					Total:             spend,
 				})
 				periodTotal += spend

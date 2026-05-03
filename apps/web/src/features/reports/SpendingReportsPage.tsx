@@ -73,6 +73,7 @@ export function SpendingReportsPage() {
   }
 
   const handleCategoryClick = (category: string, displayLabel: string) => {
+    if (category.startsWith('custom:')) return
     if (drilldown?.category === category) {
       setDrilldown(undefined)
     } else {

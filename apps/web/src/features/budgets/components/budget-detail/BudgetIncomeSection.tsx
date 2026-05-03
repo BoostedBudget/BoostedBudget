@@ -177,17 +177,22 @@ export function BudgetIncomeSection({
                 const actualAmount = sourceActuals[source.description || ''];
                 const expectedAmount = source.type === 'manual' ? parseFloat(source.value || '0') : 0;
 
+                const getSourceLabel = () => {
+                  if (source.description) return source.description;
+                  if (source.type === 'pfc_primary') return getPFCIncomeSourceLabel(source);
+                  if (source.type === 'tag') return source.value;
+                  if (source.type === 'manual') return 'Manual';
+                  return 'Unknown source type';
+                };
+
                 return (
                   <li key={sourceKey} className="flex justify-between items-center p-3 bg-muted rounded-lg">
                     <div className="flex flex-col gap-0.5">
                       <span className="text-sm font-medium text-foreground">
-                        {source.description ||
-                        ((source.type === 'pfc_primary' || source.type === 'plaid_category')
-                          ? getPFCIncomeSourceLabel(source)
-                          : source.type === 'tag' ? source.value : 'Manual')}
+                        {getSourceLabel()}
                       </span>
                       <span className="text-xs text-muted-foreground">
-                        {(source.type === 'pfc_primary' || source.type === 'plaid_category') && 'Auto-tracked'}
+                        {source.type === 'pfc_primary' && 'Auto-tracked'}
                         {source.type === 'tag' && `Tag: ${source.value}`}
                         {source.type === 'manual' && 'Manual'}
                       </span>
