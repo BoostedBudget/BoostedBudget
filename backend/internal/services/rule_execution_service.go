@@ -273,6 +273,7 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 		}
 	}
 
+	result.PopulatePFCDisplay()
 	return result, nil
 }
 

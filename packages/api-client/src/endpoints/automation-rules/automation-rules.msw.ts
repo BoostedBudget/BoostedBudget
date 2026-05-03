@@ -466,10 +466,18 @@ export const getTestAutomationRuleResponseMock = (
       (_, i) => i + 1,
     ).map(() => ({
       actual: {},
+      actual_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       field: faker.string.alpha({ length: { min: 10, max: 20 } }),
       met: faker.datatype.boolean(),
       operator: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: {},
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),

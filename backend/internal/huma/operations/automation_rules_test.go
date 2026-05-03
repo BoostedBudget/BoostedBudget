@@ -509,6 +509,52 @@ func TestAutomationRuleHandler_TestAutomationRule_NoExecutionService(t *testing.
 	assert.Error(t, err)
 }
 
+func TestAutomationRuleHandler_TestAutomationRule_PFCDisplayFieldsPassThrough(t *testing.T) {
+	mockRuleService := new(MockAutomationRuleService)
+	mockExecService := new(MockRuleExecutionService)
+
+	rule := createMockRule("rule-1", "user-1")
+	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+
+	testResult := &domain.RuleTestResult{
+		RuleID:        "rule-1",
+		RuleName:      rule.Name,
+		RuleType:      rule.RuleType,
+		ConditionsMet: true,
+		ConditionResults: []domain.ConditionEvalResult{
+			{
+				Field:         "transaction.pfc_primary",
+				Operator:      "eq",
+				Value:         "FOOD_AND_DRINK",
+				ValueDisplay:  "Food And Drink",
+				Actual:        "FOOD_AND_DRINK",
+				ActualDisplay: "Food And Drink",
+				Met:           true,
+			},
+		},
+		TriggerDataUsed: map[string]interface{}{"transaction.pfc_primary": "FOOD_AND_DRINK"},
+	}
+	mockExecService.On("TestRule", mock.Anything, rule, mock.Anything).Return(testResult, nil)
+
+	handler := NewAutomationRuleHandler(mockRuleService, nil)
+	handler.SetExecutionService(mockExecService)
+
+	input := &TestAutomationRuleInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		ID:                 "rule-1",
+	}
+	input.Body.TriggerData = map[string]interface{}{"transaction.pfc_primary": "FOOD_AND_DRINK"}
+
+	result, err := handler.TestAutomationRule(context.Background(), input)
+
+	require.NoError(t, err)
+	require.Len(t, result.Body.ConditionResults, 1)
+	assert.Equal(t, "Food And Drink", result.Body.ConditionResults[0].ValueDisplay)
+	assert.Equal(t, "Food And Drink", result.Body.ConditionResults[0].ActualDisplay)
+	mockRuleService.AssertExpectations(t)
+	mockExecService.AssertExpectations(t)
+}
+
 func TestAutomationRuleHandler_EnableAutomationRule(t *testing.T) {
 	mockService := new(MockAutomationRuleService)
 

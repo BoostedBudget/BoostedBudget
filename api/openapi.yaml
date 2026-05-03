@@ -1190,6 +1190,8 @@ components:
       additionalProperties: false
       properties:
         actual: {}
+        actual_display:
+          type: string
         field:
           type: string
         met:
@@ -1197,6 +1199,8 @@ components:
         operator:
           type: string
         value: {}
+        value_display:
+          type: string
       required:
         - field
         - operator
