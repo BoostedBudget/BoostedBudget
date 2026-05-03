@@ -46,6 +46,7 @@ export interface CategorizationRule {
   priority: number;
   source: string;
   tag_behavior: string;
+  target_custom_category_display?: string;
   target_custom_category_id?: string;
   target_kind?: string;
   target_pfc_detailed?: string;
