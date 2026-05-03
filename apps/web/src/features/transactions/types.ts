@@ -55,6 +55,7 @@ export interface Transaction {
   pfc_primary_override_display?: string | null
   pfc_detailed_override_display?: string | null
   custom_category_override_id?: string | null
+  custom_category_override_display?: string | null
   category_source?: CategorySource
   category_override_date?: string | null // ISO 8601 date-time
   // Tags

@@ -69,6 +69,14 @@ func (m *MockCustomCategoryRepository) DecrementUsageCount(ctx context.Context, 
 	return args.Error(0)
 }
 
+func (m *MockCustomCategoryRepository) GetNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error) {
+	args := m.Called(ctx, userID, ids)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string]string), args.Error(1)
+}
+
 // TestCustomCategoryService_CreateCategory tests successful category creation
 func TestCustomCategoryService_CreateCategory(t *testing.T) {
 	mockCategoryRepo := new(MockCustomCategoryRepository)

@@ -41,6 +41,7 @@ export interface Transaction {
   category_override_kind?: string;
   category_source: string;
   created_at: string;
+  custom_category_override_display?: string;
   custom_category_override_id?: string;
   date: string;
   external_metadata?: string;

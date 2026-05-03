@@ -39,6 +39,11 @@ type CustomCategoryRepository interface {
 
 	// DecrementUsageCount decrements the usage count for a category
 	DecrementUsageCount(ctx context.Context, userID, categoryName string) error
+
+	// GetNamesByIDs returns a map of id→name for the given IDs scoped to userID.
+	// IDs not owned by userID or not found are omitted from the result.
+	// Returns an empty map (not an error) when ids is empty.
+	GetNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error)
 }
 
 // customCategoryRepository implements CustomCategoryRepository using PostgreSQL
@@ -298,4 +303,51 @@ func (r *customCategoryRepository) DecrementUsageCount(ctx context.Context, user
 	}
 
 	return nil
+}
+
+// GetNamesByIDs returns a map of id→name for the given IDs scoped to userID.
+// Dedupes the input slice. Returns an empty map for empty input without hitting the DB.
+// IDs not found or owned by a different user are omitted from the result.
+func (r *customCategoryRepository) GetNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error) {
+	if len(ids) == 0 {
+		return map[string]string{}, nil
+	}
+
+	// Dedupe
+	seen := make(map[string]struct{}, len(ids))
+	unique := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			unique = append(unique, id)
+		}
+	}
+
+	query := `
+		SELECT id, name
+		FROM custom_categories
+		WHERE id = ANY($1::uuid[])
+		  AND user_id = $2
+	`
+
+	rows, err := r.db.Query(ctx, query, unique, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]string, len(unique))
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		result[id] = name
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }

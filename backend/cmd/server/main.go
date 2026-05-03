@@ -338,7 +338,7 @@ func main() {
 			JobQueue:     nil, // Set after jobQueue is created via SetJobQueue
 		})
 		privacyService := services.NewPrivacyService(privacyRepo)
-		transactionService := services.NewTransactionService(transactionRepo)
+		transactionService := services.NewTransactionService(transactionRepo, customCategoryRepo)
 		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
 		registrationService.SetAnalytics(phClient)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
@@ -349,7 +349,7 @@ func main() {
 		userTagService := services.NewUserTagService(userTagRepo)
 		customCategoryService := services.NewCustomCategoryService(customCategoryRepo)
 		// Issue #346: Categorization rules services
-		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo)
+		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo, customCategoryRepo)
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
 		ruleApplicationService.SetAnalytics(phClient)
 		// Issue #354: Cash flow analytics and dashboard preferences services

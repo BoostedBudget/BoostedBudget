@@ -22,8 +22,9 @@ describe('getEffectiveCategory', () => {
       ...baseTransaction,
       category_override_kind: 'custom',
       custom_category_override_id: 'custom-uuid-123',
+      custom_category_override_display: 'Groceries',
     }
-    expect(getEffectiveCategory(tx)).toEqual({ kind: 'custom', custom_category_id: 'custom-uuid-123' })
+    expect(getEffectiveCategory(tx)).toEqual({ kind: 'custom', custom_category_id: 'custom-uuid-123', custom_category_display: 'Groceries' })
   })
 
   it('returns pfc override when category_override_kind is pfc', () => {
@@ -120,7 +121,7 @@ describe('getEffectiveCategory', () => {
       custom_category_override_id: 'custom-uuid',
       pfc_primary: 'FOOD_AND_DRINK',
     }
-    expect(getEffectiveCategory(tx)).toEqual({ kind: 'custom', custom_category_id: 'custom-uuid' })
+    expect(getEffectiveCategory(tx)).toEqual({ kind: 'custom', custom_category_id: 'custom-uuid', custom_category_display: undefined })
   })
 
   it('ignores pfc override when pfc_primary_override is absent', () => {
@@ -146,7 +147,11 @@ describe('getEffectiveCategoryLabel', () => {
     expect(getEffectiveCategoryLabel(null)).toBe('Uncategorized')
   })
 
-  it('returns custom_category_id for custom kind', () => {
+  it('prefers custom_category_display over id when present', () => {
+    expect(getEffectiveCategoryLabel({ kind: 'custom', custom_category_id: 'my-id', custom_category_display: 'My Category' })).toBe('My Category')
+  })
+
+  it('falls back to custom_category_id when display is absent', () => {
     expect(getEffectiveCategoryLabel({ kind: 'custom', custom_category_id: 'my-id' })).toBe('my-id')
   })
 
