@@ -198,8 +198,8 @@ describe('RolloverActionForm', () => {
       )
 
       const select = screen.getByLabelText(/source category/i)
-      expect(select).toContainHTML('FOOD_AND_DRINK_RESTAURANTS')
-      expect(select).toContainHTML('TRANSPORTATION_GAS')
+      expect(select).toContainHTML('Food And Drink › Restaurants')
+      expect(select).toContainHTML('Transportation › Gas')
     })
 
     it('should update source category when source budget changes', () => {
@@ -273,7 +273,7 @@ describe('RolloverActionForm', () => {
 
       // When target is in budget-2, should show budget-2 categories
       const select = screen.getByLabelText(/target category/i)
-      expect(select).toContainHTML('SAVINGS_EMERGENCY_FUND')
+      expect(select).toContainHTML('Savings › Emergency Fund')
     })
 
     it('should call onChange when target is set to Unallocated Funds', () => {

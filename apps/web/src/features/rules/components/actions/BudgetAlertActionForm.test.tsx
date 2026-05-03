@@ -179,8 +179,8 @@ describe('BudgetAlertActionForm', () => {
       )
 
       const categorySelect = screen.getByLabelText(/category/i)
-      expect(categorySelect).toContainHTML('FOOD_AND_DRINK_RESTAURANTS')
-      expect(categorySelect).toContainHTML('TRANSPORTATION_GAS')
+      expect(categorySelect).toContainHTML('Food And Drink › Restaurants')
+      expect(categorySelect).toContainHTML('Transportation › Gas')
     })
 
     it('should show "All Categories" option', () => {
