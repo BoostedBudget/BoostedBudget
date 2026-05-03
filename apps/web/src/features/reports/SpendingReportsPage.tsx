@@ -19,6 +19,7 @@ import { useSpendingByCategory } from './hooks/useSpendingByCategory'
 import { useSpendingByMerchant } from './hooks/useSpendingByMerchant'
 import { useSpendingTrends } from './hooks/useSpendingTrends'
 import { CategoryBreakdownChart } from './components/CategoryBreakdownChart'
+import { CategoryDrilldownHeading } from './components/CategoryDrilldownHeading'
 import { SpendingTrendsChart } from './components/SpendingTrendsChart'
 import { TopMerchantsTable } from './components/TopMerchantsTable'
 
@@ -121,20 +122,7 @@ export function SpendingReportsPage() {
           {/* Category Breakdown */}
           <section aria-labelledby="category-heading">
             <div className="mb-4">
-              <h2 id="category-heading" className="text-lg font-semibold">
-                Spending by Category
-                {drilldown && (
-                  <span className="ml-2 text-sm font-normal text-muted-foreground">
-                    — {drilldown.displayLabel}{' '}
-                    <button
-                      onClick={() => setDrilldown(undefined)}
-                      className="underline hover:no-underline"
-                    >
-                      (back)
-                    </button>
-                  </span>
-                )}
-              </h2>
+              <CategoryDrilldownHeading drilldown={drilldown} onBack={() => setDrilldown(undefined)} />
               <p className="text-sm text-muted-foreground">
                 {drilldown
                   ? 'Click a subcategory to view its transactions.'
