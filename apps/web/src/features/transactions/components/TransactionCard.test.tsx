@@ -199,10 +199,11 @@ describe('TransactionCard', () => {
         pfc_primary: 'FOOD_AND_DRINK',
         category_override_kind: 'custom',
         custom_category_override_id: 'custom-cat-uuid-123',
+        custom_category_override_display: 'My Custom Groceries',
         category_source: 'manual',
       }
       render(<TransactionCard transaction={transactionWithCustom} />)
-      expect(screen.getByText('custom-cat-uuid-123')).toBeInTheDocument()
+      expect(screen.getByText('My Custom Groceries')).toBeInTheDocument()
     })
 
     it('should fall back to source PFC when no override is set', () => {

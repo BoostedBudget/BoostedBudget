@@ -151,7 +151,7 @@ func (m *MockTransactionRepository) GetByUserAccountID(ctx context.Context, user
 // TestTransactionService_ListTransactions_EnforcesMaxLimit tests that the service enforces a maximum limit of 100
 func TestTransactionService_ListTransactions_EnforcesMaxLimit(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -167,7 +167,7 @@ func TestTransactionService_ListTransactions_EnforcesMaxLimit(t *testing.T) {
 // TestTransactionService_ListTransactions_EnforcesNonNegativeOffset tests that negative offsets are rejected
 func TestTransactionService_ListTransactions_EnforcesNonNegativeOffset(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -183,7 +183,7 @@ func TestTransactionService_ListTransactions_EnforcesNonNegativeOffset(t *testin
 // TestTransactionService_ListTransactions_ValidatesDateRange tests that start date must be before end date
 func TestTransactionService_ListTransactions_ValidatesDateRange(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -205,7 +205,7 @@ func TestTransactionService_ListTransactions_ValidatesDateRange(t *testing.T) {
 // TestTransactionService_ListTransactions_SanitizesSearchInput tests SQL injection prevention
 func TestTransactionService_ListTransactions_SanitizesSearchInput(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -236,7 +236,7 @@ func TestTransactionService_ListTransactions_SanitizesSearchInput(t *testing.T) 
 // TestTransactionService_ListTransactions_ReturnsTransactionsArray tests successful transaction retrieval
 func TestTransactionService_ListTransactions_ReturnsTransactionsArray(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -273,7 +273,7 @@ func TestTransactionService_ListTransactions_ReturnsTransactionsArray(t *testing
 // TestTransactionService_ListTransactions_IncludesPaginationMetadata tests that response includes pagination metadata
 func TestTransactionService_ListTransactions_IncludesPaginationMetadata(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -310,7 +310,7 @@ func TestTransactionService_ListTransactions_IncludesPaginationMetadata(t *testi
 // TestTransactionService_ListTransactions_HasMoreFalseWhenNoMoreResults tests has_more flag when all results returned
 func TestTransactionService_ListTransactions_HasMoreFalseWhenNoMoreResults(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -345,7 +345,7 @@ func TestTransactionService_ListTransactions_HasMoreFalseWhenNoMoreResults(t *te
 // TestTransactionService_ListTransactions_HandlesRepositoryError tests error handling from repository
 func TestTransactionService_ListTransactions_HandlesRepositoryError(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -365,7 +365,7 @@ func TestTransactionService_ListTransactions_HandlesRepositoryError(t *testing.T
 // TestTransactionService_ListTransactions_HandlesCountError tests error handling from count operation
 func TestTransactionService_ListTransactions_HandlesCountError(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -385,7 +385,7 @@ func TestTransactionService_ListTransactions_HandlesCountError(t *testing.T) {
 // TestTransactionService_ListTransactions_DefaultsLimit tests that default limit of 50 is applied
 func TestTransactionService_ListTransactions_DefaultsLimit(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -448,7 +448,7 @@ func containsSQLInjection(s string) bool {
 // TestTransactionService_GetDistinctPlaidCategories_Success tests successful retrieval of Plaid categories
 func TestTransactionService_GetDistinctPlaidCategories_Success(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -466,7 +466,7 @@ func TestTransactionService_GetDistinctPlaidCategories_Success(t *testing.T) {
 // TestTransactionService_GetDistinctPlaidCategories_Empty tests empty result
 func TestTransactionService_GetDistinctPlaidCategories_Empty(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 
 	userID := "user-no-transactions"
@@ -486,7 +486,7 @@ func TestTransactionService_GetDistinctPlaidCategories_Empty(t *testing.T) {
 // TestTransactionService_GetDistinctPlaidCategories_Error tests error handling
 func TestTransactionService_GetDistinctPlaidCategories_Error(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 
 	userID := "user-123"
@@ -510,7 +510,7 @@ func ptrStr(s string) *string { return &s }
 func TestGetTransactionByID_ReturnsPFCFields(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 
 	primary := "FOOD_AND_DRINK"
 	detailed := "FOOD_AND_DRINK_FAST_FOOD"
@@ -536,7 +536,7 @@ func TestGetTransactionByID_ReturnsPFCFields(t *testing.T) {
 func TestGetTransactionByID_NilPFC(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 
 	txn := &domain.Transaction{
 		ID:     "txn-1",
@@ -554,7 +554,7 @@ func TestGetTransactionByID_NilPFC(t *testing.T) {
 func TestGetTransactionByID_PopulatesPFCDisplay(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 
 	primary := "FOOD_AND_DRINK"
 	txn := &domain.Transaction{
@@ -575,7 +575,7 @@ func TestGetTransactionByID_PopulatesPFCDisplay(t *testing.T) {
 func TestListTransactions_PopulatesPFCDisplay(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 
 	primary := "TRANSPORTATION"
 	transactions := []domain.Transaction{
@@ -595,7 +595,7 @@ func TestListTransactions_PopulatesPFCDisplay(t *testing.T) {
 func TestListTransactions_ReturnsPFCFields(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 
 	primary1 := "TRANSPORTATION"
 	detailed1 := "TRANSPORTATION_TAXIS_AND_RIDE_SHARES"
@@ -622,7 +622,7 @@ func TestListTransactions_ReturnsPFCFields(t *testing.T) {
 func TestListByBudgetCategory_PopulatesPFCDisplay(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 
 	category := &domain.BudgetCategory{ID: "cat-1", BudgetID: "budget-1"}
 	primary := "FOOD_AND_DRINK"
@@ -648,7 +648,7 @@ func TestListByBudgetCategory_PopulatesPFCDisplay(t *testing.T) {
 func TestListByBudgetCategory_WrapsRepoError(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
 
 	category := &domain.BudgetCategory{ID: "cat-1", BudgetID: "budget-1"}
 	now := time.Now()
@@ -659,4 +659,105 @@ func TestListByBudgetCategory_WrapsRepoError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "list transactions for budget category")
 	mockRepo.AssertExpectations(t)
+}
+
+// TestGetTransactionByID_PopulatesCustomCategoryDisplay asserts enrichment of custom-category name.
+func TestGetTransactionByID_PopulatesCustomCategoryDisplay(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewTransactionService(mockRepo, mockCategoryRepo)
+
+	catID := "cat-uuid-1"
+	kind := "custom"
+	txn := &domain.Transaction{
+		ID: "txn-1", UserID: "user-1",
+		CategoryOverrideKind:     &kind,
+		CustomCategoryOverrideID: &catID,
+	}
+	mockRepo.On("GetByID", ctx, "txn-1").Return(txn, nil)
+	mockCategoryRepo.On("GetNamesByIDs", ctx, "user-1", []string{catID}).
+		Return(map[string]string{catID: "My Custom"}, nil)
+
+	result, err := service.GetTransactionByID(ctx, "user-1", "txn-1")
+	require.NoError(t, err)
+	require.NotNil(t, result.CustomCategoryOverrideDisplay)
+	assert.Equal(t, "My Custom", *result.CustomCategoryOverrideDisplay)
+	mockRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestGetTransactionByID_NilDisplayWhenNoCustomCategory asserts display field is nil for non-custom transactions.
+func TestGetTransactionByID_NilDisplayWhenNoCustomCategory(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewTransactionService(mockRepo, mockCategoryRepo)
+
+	primary := "FOOD_AND_DRINK"
+	txn := &domain.Transaction{ID: "txn-2", UserID: "user-1", PFCPrimary: &primary}
+	mockRepo.On("GetByID", ctx, "txn-2").Return(txn, nil)
+	// No GetNamesByIDs call expected — no custom override ID
+
+	result, err := service.GetTransactionByID(ctx, "user-1", "txn-2")
+	require.NoError(t, err)
+	assert.Nil(t, result.CustomCategoryOverrideDisplay)
+	mockRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestListTransactions_PopulatesCustomCategoryDisplay asserts that list enriches custom-category display.
+func TestListTransactions_PopulatesCustomCategoryDisplay(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewTransactionService(mockRepo, mockCategoryRepo)
+
+	catID := "cat-uuid-2"
+	kind := "custom"
+	transactions := []domain.Transaction{
+		{ID: "txn-3", UserID: "user-1", CategoryOverrideKind: &kind, CustomCategoryOverrideID: &catID},
+	}
+	mockRepo.On("GetByUserIDWithFilters", ctx, "user-1", mock.Anything, 50, 0).Return(transactions, nil)
+	mockRepo.On("CountByUserID", ctx, "user-1", mock.Anything).Return(1, nil)
+	mockCategoryRepo.On("GetNamesByIDs", ctx, "user-1", []string{catID}).
+		Return(map[string]string{catID: "Travel"}, nil)
+
+	resp, err := service.ListTransactions(ctx, "user-1", domain.TransactionFilters{}, 50, 0)
+	require.NoError(t, err)
+	require.Len(t, resp.Transactions, 1)
+	require.NotNil(t, resp.Transactions[0].CustomCategoryOverrideDisplay)
+	assert.Equal(t, "Travel", *resp.Transactions[0].CustomCategoryOverrideDisplay)
+	mockRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestListByBudgetCategory_PopulatesCustomCategoryDisplay asserts enrichment via budget category path.
+func TestListByBudgetCategory_PopulatesCustomCategoryDisplay(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewTransactionService(mockRepo, mockCategoryRepo)
+
+	catID := "cat-uuid-3"
+	kind := "custom"
+	category := &domain.BudgetCategory{ID: "cat-1", BudgetID: "budget-1"}
+	transactions := []domain.Transaction{
+		{ID: "txn-4", UserID: "user-1", CategoryOverrideKind: &kind, CustomCategoryOverrideID: &catID},
+	}
+	now := time.Now()
+	mockRepo.On("GetTransactionsForBudgetCategory", ctx, "user-1", category,
+		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), 50, 0).
+		Return(transactions, 1, 100.0, nil)
+	mockCategoryRepo.On("GetNamesByIDs", ctx, "user-1", []string{catID}).
+		Return(map[string]string{catID: "Dining Out"}, nil)
+
+	result, totalCount, _, err := service.ListByBudgetCategory(ctx, "user-1", category, now, now, 50, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 1, totalCount)
+	require.Len(t, result, 1)
+	require.NotNil(t, result[0].CustomCategoryOverrideDisplay)
+	assert.Equal(t, "Dining Out", *result[0].CustomCategoryOverrideDisplay)
+	mockRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
 }

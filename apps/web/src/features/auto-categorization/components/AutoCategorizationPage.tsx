@@ -164,7 +164,7 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
         }
       } else if (rule.target_kind === 'custom' && rule.target_custom_category_id) {
         const value = rule.target_custom_category_id
-        if (!seen.has(value)) seen.set(value, value)
+        if (!seen.has(value)) seen.set(value, rule.target_custom_category_display ?? value)
       }
     })
     return Array.from(seen.entries())
@@ -236,7 +236,7 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
         case 'category': {
           const ruleTargetKey = (r: typeof a): string => {
             if (r.target_kind === 'pfc' && r.target_pfc_primary) return r.target_pfc_primary
-            if (r.target_kind === 'custom' && r.target_custom_category_id) return r.target_custom_category_id
+            if (r.target_kind === 'custom' && r.target_custom_category_id) return r.target_custom_category_display ?? r.target_custom_category_id
             return ''
           }
           comparison = ruleTargetKey(a).localeCompare(ruleTargetKey(b))

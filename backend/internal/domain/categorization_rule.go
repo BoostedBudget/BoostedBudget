@@ -101,6 +101,8 @@ type CategorizationRule struct {
 	// PFC display names (populated by PopulatePFCDisplay, not stored in DB)
 	TargetPFCPrimaryDisplay  *string `json:"target_pfc_primary_display,omitempty" db:"-"`
 	TargetPFCDetailedDisplay *string `json:"target_pfc_detailed_display,omitempty" db:"-"`
+	// Custom category display name (populated by service enrichment from custom_categories table, not stored in DB)
+	TargetCustomCategoryDisplay *string `json:"target_custom_category_display,omitempty" db:"-"`
 	TargetTags     []string        `json:"target_tags,omitempty" db:"target_tags"`
 	TagBehavior    string          `json:"tag_behavior" db:"tag_behavior"` // "add" or "replace"
 	Source         string          `json:"source" db:"source"`             // "manual", "ai", or "template"

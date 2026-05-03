@@ -123,7 +123,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
             {rule.target_kind === 'custom' && rule.target_custom_category_id && (
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-muted-foreground">Set custom category:</span>
-                <span className="text-foreground font-medium">{rule.target_custom_category_id}</span>
+                <span className="text-foreground font-medium">{rule.target_custom_category_display ?? rule.target_custom_category_id}</span>
               </div>
             )}
             {rule.target_kind === 'clear' && (

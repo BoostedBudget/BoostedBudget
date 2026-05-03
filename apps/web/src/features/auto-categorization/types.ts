@@ -112,6 +112,7 @@ export interface CategorizationRule {
   target_pfc_primary_display?: string | null
   target_pfc_detailed_display?: string | null
   target_custom_category_id?: string | null
+  target_custom_category_display?: string | null
   target_tags?: string[] | null
   tag_behavior: TagBehavior
   source: RuleSource

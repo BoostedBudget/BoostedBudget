@@ -273,7 +273,7 @@ export function AutoCategorizationRuleTable({
                   ?? rule.target_pfc_primary_display
                   ?? formatPFCEnum(rule.target_pfc_detailed ?? rule.target_pfc_primary))
               : rule.target_kind === 'custom' && rule.target_custom_category_id
-                ? rule.target_custom_category_id
+                ? (rule.target_custom_category_display ?? rule.target_custom_category_id)
                 : rule.target_kind === 'clear'
                   ? 'Clear override'
                   : 'No category'

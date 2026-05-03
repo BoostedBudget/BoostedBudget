@@ -33,16 +33,50 @@ type CategorizationRuleService interface {
 
 // categorizationRuleService implements CategorizationRuleService.
 type categorizationRuleService struct {
-	ruleRepo repository.CategorizationRuleRepository
+	ruleRepo           repository.CategorizationRuleRepository
+	customCategoryRepo repository.CustomCategoryRepository
 }
 
 // NewCategorizationRuleService creates a new CategorizationRuleService instance.
 func NewCategorizationRuleService(
 	ruleRepo repository.CategorizationRuleRepository,
+	customCategoryRepo repository.CustomCategoryRepository,
 ) CategorizationRuleService {
 	return &categorizationRuleService{
-		ruleRepo: ruleRepo,
+		ruleRepo:           ruleRepo,
+		customCategoryRepo: customCategoryRepo,
 	}
+}
+
+// enrichCustomCategoryDisplay fetches the custom-category display name for a rule's target
+// in a single batched query. No-ops when the rule has no custom-category target.
+func (s *categorizationRuleService) enrichCustomCategoryDisplay(ctx context.Context, userID string, rules []*domain.CategorizationRule) error {
+	ids := make([]string, 0, len(rules))
+	seen := make(map[string]struct{}, len(rules))
+	for _, r := range rules {
+		if r.TargetCustomCategoryID != nil {
+			id := *r.TargetCustomCategoryID
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, ids)
+	if err != nil {
+		return err
+	}
+	for _, r := range rules {
+		if r.TargetCustomCategoryID != nil {
+			if name, ok := names[*r.TargetCustomCategoryID]; ok {
+				r.TargetCustomCategoryDisplay = &name
+			}
+		}
+	}
+	return nil
 }
 
 // CreateRule creates a new categorization rule (unlimited rules for all tiers).
@@ -84,6 +118,9 @@ func (s *categorizationRuleService) CreateRule(ctx context.Context, userID strin
 	}
 
 	rule.PopulatePFCDisplay()
+	if err := s.enrichCustomCategoryDisplay(ctx, userID, []*domain.CategorizationRule{rule}); err != nil {
+		return nil, err
+	}
 	return rule, nil
 }
 
@@ -95,6 +132,9 @@ func (s *categorizationRuleService) GetUserRules(ctx context.Context, userID str
 	}
 	for _, r := range rules {
 		r.PopulatePFCDisplay()
+	}
+	if err := s.enrichCustomCategoryDisplay(ctx, userID, rules); err != nil {
+		return nil, err
 	}
 	return rules, nil
 }
@@ -112,6 +152,9 @@ func (s *categorizationRuleService) GetRuleByID(ctx context.Context, userID, rul
 	}
 
 	rule.PopulatePFCDisplay()
+	if err := s.enrichCustomCategoryDisplay(ctx, userID, []*domain.CategorizationRule{rule}); err != nil {
+		return nil, err
+	}
 	return rule, nil
 }
 
@@ -177,6 +220,9 @@ func (s *categorizationRuleService) UpdateRule(ctx context.Context, userID, rule
 	}
 
 	rule.PopulatePFCDisplay()
+	if err := s.enrichCustomCategoryDisplay(ctx, userID, []*domain.CategorizationRule{rule}); err != nil {
+		return nil, err
+	}
 	return rule, nil
 }
 
@@ -217,6 +263,9 @@ func (s *categorizationRuleService) ToggleRule(ctx context.Context, userID, rule
 	}
 
 	rule.PopulatePFCDisplay()
+	if err := s.enrichCustomCategoryDisplay(ctx, userID, []*domain.CategorizationRule{rule}); err != nil {
+		return nil, err
+	}
 	return rule, nil
 }
 
@@ -228,6 +277,9 @@ func (s *categorizationRuleService) GetEnabledRules(ctx context.Context, userID 
 	}
 	for _, r := range rules {
 		r.PopulatePFCDisplay()
+	}
+	if err := s.enrichCustomCategoryDisplay(ctx, userID, rules); err != nil {
+		return nil, err
 	}
 	return rules, nil
 }

@@ -76,6 +76,10 @@ export const getGetUserRulesResponseMock = (): CategorizationRule[] | null =>
     priority: faker.number.int(),
     source: faker.string.alpha({ length: { min: 10, max: 20 } }),
     tag_behavior: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    target_custom_category_display: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
     target_custom_category_id: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
@@ -151,6 +155,10 @@ export const getCreateRuleResponseMock = (
   priority: faker.number.int(),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   tag_behavior: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  target_custom_category_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   target_custom_category_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -227,6 +235,10 @@ export const getGetRuleByIDResponseMock = (
   priority: faker.number.int(),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   tag_behavior: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  target_custom_category_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   target_custom_category_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -303,6 +315,10 @@ export const getUpdateRuleResponseMock = (
   priority: faker.number.int(),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   tag_behavior: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  target_custom_category_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   target_custom_category_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -379,6 +395,10 @@ export const getToggleRuleResponseMock = (
   priority: faker.number.int(),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   tag_behavior: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  target_custom_category_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   target_custom_category_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,

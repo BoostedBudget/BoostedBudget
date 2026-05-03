@@ -105,6 +105,9 @@ type Transaction struct {
 	PFCPrimaryOverrideDisplay  *string `json:"pfc_primary_override_display,omitempty" db:"-"`
 	PFCDetailedOverrideDisplay *string `json:"pfc_detailed_override_display,omitempty" db:"-"`
 
+	// Custom category display name (populated by service enrichment from custom_categories table, not stored in DB)
+	CustomCategoryOverrideDisplay *string `json:"custom_category_override_display,omitempty" db:"-"`
+
 	// Payment details
 	PaymentChannel *string `json:"payment_channel,omitempty" db:"payment_channel"` // online, in store, other
 	Pending        bool    `json:"pending" db:"pending"`                           // Whether transaction is pending
