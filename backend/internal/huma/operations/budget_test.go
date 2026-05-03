@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
@@ -198,7 +199,7 @@ func TestCreateBudget_Success(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &CreateBudgetInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -227,7 +228,7 @@ func TestCreateBudget_Error(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &CreateBudgetInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -252,7 +253,7 @@ func TestGetBudgets_Success(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &GetBudgetsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -273,7 +274,7 @@ func TestGetBudgets_Empty(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &GetBudgetsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -295,7 +296,7 @@ func TestGetBudget_Success(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &GetBudgetInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -317,7 +318,7 @@ func TestGetBudget_NotFound(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &GetBudgetInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -338,7 +339,7 @@ func TestGetCurrentBudget_Success(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &GetCurrentBudgetInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -359,7 +360,7 @@ func TestUpdateBudget_Success(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	newName := "Updated Budget"
 	input := &UpdateBudgetInput{
@@ -382,7 +383,7 @@ func TestDeleteBudget_Success(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &DeleteBudgetInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -408,7 +409,7 @@ func TestAddCategory_Success(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &AddCategoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -441,7 +442,7 @@ func TestUpdateBudgetCategory_Success(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	newAmount := 400.00
 	input := &UpdateBudgetCategoryInput{
@@ -466,7 +467,7 @@ func TestDeleteBudgetCategory_Success(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &DeleteBudgetCategoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -493,7 +494,7 @@ func TestGetCategoryTransactions_EnrichesPFCDisplay(t *testing.T) {
 	budget := createTestBudget()
 	mockService := &mockBudgetService{budget: budget}
 
-	handler := NewBudgetHandler(mockService, &mockBudgetSyncService{}, mockTxRepo)
+	handler := NewBudgetHandler(mockService, &mockBudgetSyncService{}, services.NewTransactionService(mockTxRepo))
 
 	input := &GetCategoryTransactionsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -513,6 +514,37 @@ func TestGetCategoryTransactions_EnrichesPFCDisplay(t *testing.T) {
 	assert.Equal(t, "Food And Drink", *tx.PFCPrimaryDisplay)
 }
 
+
+// TestGetCategoryTransactions_WrapsServiceError tests that a service/repo error
+// is mapped to a 500 response by the handler.
+func TestGetCategoryTransactions_WrapsServiceError(t *testing.T) {
+	budget := createTestBudget()
+	mockService := &mockBudgetService{budget: budget}
+	mockTxRepo := &mockTransactionRepoForBudget{
+		err: errors.New("db failure"),
+	}
+	txService := services.NewTransactionService(mockTxRepo)
+
+	handler := NewBudgetHandler(mockService, &mockBudgetSyncService{}, txService)
+
+	input := &GetCategoryTransactionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "budget-123",
+		CategoryID:         "cat-123",
+		Limit:              20,
+		Offset:             0,
+	}
+
+	output, err := handler.GetCategoryTransactions(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+
+	var humaErr huma.StatusError
+	require.ErrorAs(t, err, &humaErr)
+	assert.Equal(t, http.StatusInternalServerError, humaErr.GetStatus())
+}
+
 // TestGetAvailableCategories_Success tests successful retrieval of available categories.
 func TestGetAvailableCategories_Success(t *testing.T) {
 	mockService := &mockBudgetService{
@@ -521,7 +553,7 @@ func TestGetAvailableCategories_Success(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &GetAvailableCategoriesInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -542,7 +574,7 @@ func TestSyncBudget_Success(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &SyncBudgetInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -566,7 +598,7 @@ func TestSyncBudget_SyncError(t *testing.T) {
 	}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &SyncBudgetInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -595,7 +627,7 @@ func TestGetCategoryTransactions_Success(t *testing.T) {
 		totalAmount: 80.00,
 	}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &GetCategoryTransactionsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -623,7 +655,7 @@ func TestGetCategoryTransactions_CategoryNotFound(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &GetCategoryTransactionsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -649,7 +681,7 @@ func TestBudgetRouteRegistration(t *testing.T) {
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
 	_, api := humatest.New(t)
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 	RegisterBudgetRoutes(api, handler)
 
 	// Test GET /api/v1/budgets (without auth, should fail with 401)
@@ -672,7 +704,7 @@ func TestCreateBudget_WithExpectedIncome(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &CreateBudgetInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -700,7 +732,7 @@ func TestCreateBudget_BackCompatAmountOnly(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &CreateBudgetInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -736,7 +768,7 @@ func TestCreateBudget_BothFieldsProvided_ExpectedIncomeWins(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &CreateBudgetInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -769,7 +801,7 @@ func TestUpdateBudget_WithExpectedIncome(t *testing.T) {
 	mockSyncService := &mockBudgetSyncService{}
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 
 	input := &UpdateBudgetInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -793,7 +825,7 @@ func TestBudgetResponseJSON(t *testing.T) {
 	mockTxRepo := &mockTransactionRepoForBudget{}
 
 	_, api := humatest.New(t)
-	handler := NewBudgetHandler(mockService, mockSyncService, mockTxRepo)
+	handler := NewBudgetHandler(mockService, mockSyncService, services.NewTransactionService(mockTxRepo))
 	RegisterBudgetRoutes(api, handler)
 
 	resp := api.Get("/api/v1/budgets")
