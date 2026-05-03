@@ -616,3 +616,47 @@ func TestListTransactions_ReturnsPFCFields(t *testing.T) {
 	assert.Nil(t, resp.Transactions[1].PFCPrimary)
 	mockRepo.AssertExpectations(t)
 }
+
+// TestListByBudgetCategory_PopulatesPFCDisplay asserts that transactions returned by
+// ListByBudgetCategory have PFC display fields enriched.
+func TestListByBudgetCategory_PopulatesPFCDisplay(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo)
+
+	category := &domain.BudgetCategory{ID: "cat-1", BudgetID: "budget-1"}
+	primary := "FOOD_AND_DRINK"
+	transactions := []domain.Transaction{
+		{ID: "txn-1", UserID: "user-1", PFCPrimary: &primary},
+	}
+	now := time.Now()
+	mockRepo.On("GetTransactionsForBudgetCategory", ctx, "user-1", category, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), 50, 0).
+		Return(transactions, 1, 42.0, nil)
+
+	result, totalCount, totalAmount, err := service.ListByBudgetCategory(ctx, "user-1", category, now, now, 50, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 1, totalCount)
+	assert.Equal(t, 42.0, totalAmount)
+	require.Len(t, result, 1)
+	require.NotNil(t, result[0].PFCPrimaryDisplay, "PFCPrimaryDisplay should be populated")
+	assert.Equal(t, "Food And Drink", *result[0].PFCPrimaryDisplay)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestListByBudgetCategory_WrapsRepoError asserts that repository errors are wrapped
+// with the expected message prefix.
+func TestListByBudgetCategory_WrapsRepoError(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo)
+
+	category := &domain.BudgetCategory{ID: "cat-1", BudgetID: "budget-1"}
+	now := time.Now()
+	mockRepo.On("GetTransactionsForBudgetCategory", ctx, "user-1", category, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), 50, 0).
+		Return(nil, 0, 0.0, errors.New("db failure"))
+
+	_, _, _, err := service.ListByBudgetCategory(ctx, "user-1", category, now, now, 50, 0)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "list transactions for budget category")
+	mockRepo.AssertExpectations(t)
+}
