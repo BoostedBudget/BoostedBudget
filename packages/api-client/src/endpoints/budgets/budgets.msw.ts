@@ -681,6 +681,10 @@ export const getGetCategoryTransactionsResponseMock = (
       ]),
       category_source: faker.string.alpha({ length: { min: 10, max: 20 } }),
       created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      custom_category_override_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       custom_category_override_id: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,

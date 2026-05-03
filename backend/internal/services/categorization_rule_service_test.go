@@ -121,7 +121,7 @@ func createTestRuleRequest() *domain.CreateCategorizationRuleRequest {
 func TestCategorizationRuleService_CreateRule(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
 
-	service := NewCategorizationRuleService(mockRepo)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 	userID := "user-123"
 
@@ -142,7 +142,7 @@ func TestCategorizationRuleService_CreateRule(t *testing.T) {
 func TestCategorizationRuleService_CreateRule_ManyRules(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
 
-	service := NewCategorizationRuleService(mockRepo)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 	userID := "user-123"
 
@@ -161,7 +161,7 @@ func TestCategorizationRuleService_CreateRule_ManyRules(t *testing.T) {
 // TestCategorizationRuleService_GetUserRules tests retrieving all rules for a user
 func TestCategorizationRuleService_GetUserRules(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 	userID := "user-123"
 
@@ -182,7 +182,7 @@ func TestCategorizationRuleService_GetUserRules(t *testing.T) {
 // TestCategorizationRuleService_GetRuleByID tests retrieving a single rule
 func TestCategorizationRuleService_GetRuleByID(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 	userID := "user-123"
 	ruleID := "rule-123"
@@ -205,7 +205,7 @@ func TestCategorizationRuleService_GetRuleByID(t *testing.T) {
 // TestCategorizationRuleService_GetRuleByID_NotOwner tests access control
 func TestCategorizationRuleService_GetRuleByID_NotOwner(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 	userID := "user-123"
 	ruleID := "rule-123"
@@ -228,7 +228,7 @@ func TestCategorizationRuleService_GetRuleByID_NotOwner(t *testing.T) {
 // TestCategorizationRuleService_UpdateRule tests successful rule update
 func TestCategorizationRuleService_UpdateRule(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 	userID := "user-123"
 	ruleID := "rule-123"
@@ -265,7 +265,7 @@ func TestCategorizationRuleService_UpdateRule(t *testing.T) {
 // TestCategorizationRuleService_DeleteRule tests successful rule deletion
 func TestCategorizationRuleService_DeleteRule(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 	userID := "user-123"
 	ruleID := "rule-123"
@@ -287,7 +287,7 @@ func TestCategorizationRuleService_DeleteRule(t *testing.T) {
 // TestCategorizationRuleService_ToggleRule tests enabling/disabling a rule
 func TestCategorizationRuleService_ToggleRule(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 	userID := "user-123"
 	ruleID := "rule-123"
@@ -318,7 +318,7 @@ func TestCategorizationRuleService_ToggleRule(t *testing.T) {
 // enriches TargetPFCPrimaryDisplay before returning.
 func TestCategorizationRuleService_GetRuleByID_PopulatesPFCDisplay(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 	userID := "user-123"
 	ruleID := "rule-pfc"
@@ -349,7 +349,7 @@ func TestCategorizationRuleService_GetRuleByID_PopulatesPFCDisplay(t *testing.T)
 // enriches each rule with display names.
 func TestCategorizationRuleService_GetUserRules_PopulatesPFCDisplay(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 	userID := "user-123"
 
@@ -371,7 +371,7 @@ func TestCategorizationRuleService_GetUserRules_PopulatesPFCDisplay(t *testing.T
 // TestCategorizationRuleService_GetEnabledRules tests retrieving enabled rules only
 func TestCategorizationRuleService_GetEnabledRules(t *testing.T) {
 	mockRepo := new(mockRuleRepository)
-	service := NewCategorizationRuleService(mockRepo)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
 	ctx := context.Background()
 	userID := "user-123"
 
@@ -387,4 +387,211 @@ func TestCategorizationRuleService_GetEnabledRules(t *testing.T) {
 	assert.Len(t, rules, 1)
 	assert.True(t, rules[0].Enabled)
 	mockRepo.AssertExpectations(t)
+}
+
+// TestCategorizationRuleService_GetRuleByID_PopulatesTargetCustomCategoryDisplay asserts enrichment
+// of TargetCustomCategoryDisplay for custom-target rules.
+func TestCategorizationRuleService_GetRuleByID_PopulatesTargetCustomCategoryDisplay(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCategorizationRuleService(mockRepo, mockCategoryRepo)
+	ctx := context.Background()
+	userID := "user-123"
+	ruleID := "rule-custom"
+	catID := "cat-uuid-rule"
+
+	rule := &domain.CategorizationRule{
+		ID:     ruleID,
+		UserID: userID,
+		Name:   "Custom Rule",
+		TargetKind:             ptrStr("custom"),
+		TargetCustomCategoryID: &catID,
+		Conditions:             []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "test"}},
+		ConditionLogic:         "AND",
+		TagBehavior:            "add",
+		Source:                 "manual",
+	}
+
+	mockRepo.On("GetByID", ctx, ruleID).Return(rule, nil)
+	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{catID}).
+		Return(map[string]string{catID: "Coffee Shops"}, nil)
+
+	result, err := service.GetRuleByID(ctx, userID, ruleID)
+
+	require.NoError(t, err)
+	require.NotNil(t, result.TargetCustomCategoryDisplay)
+	assert.Equal(t, "Coffee Shops", *result.TargetCustomCategoryDisplay)
+	mockRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestCategorizationRuleService_GetUserRules_PopulatesTargetCustomCategoryDisplay asserts enrichment
+// in list results.
+func TestCategorizationRuleService_GetUserRules_PopulatesTargetCustomCategoryDisplay(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCategorizationRuleService(mockRepo, mockCategoryRepo)
+	ctx := context.Background()
+	userID := "user-123"
+	catID := "cat-uuid-list"
+
+	rules := []*domain.CategorizationRule{
+		{
+			ID:                     "rule-1",
+			UserID:                 userID,
+			Name:                   "Rule",
+			TargetKind:             ptrStr("custom"),
+			TargetCustomCategoryID: &catID,
+		},
+	}
+
+	mockRepo.On("GetByUserID", ctx, userID).Return(rules, nil)
+	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{catID}).
+		Return(map[string]string{catID: "Electronics"}, nil)
+
+	result, err := service.GetUserRules(ctx, userID)
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.NotNil(t, result[0].TargetCustomCategoryDisplay)
+	assert.Equal(t, "Electronics", *result[0].TargetCustomCategoryDisplay)
+	mockRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+func TestCategorizationRuleService_CreateRule_PopulatesTargetCustomCategoryDisplay(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCategorizationRuleService(mockRepo, mockCategoryRepo)
+	ctx := context.Background()
+	userID := "user-123"
+	catID := "cat-uuid-create"
+
+	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.CategorizationRule")).Return(nil)
+	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{catID}).
+		Return(map[string]string{catID: "Travel"}, nil)
+
+	req := &domain.CreateCategorizationRuleRequest{
+		Name:                   "Custom Create Rule",
+		Conditions:             []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "airline"}},
+		ConditionLogic:         "AND",
+		TargetKind:             ptrStr("custom"),
+		TargetCustomCategoryID: &catID,
+		TagBehavior:            "add",
+	}
+
+	rule, err := service.CreateRule(ctx, userID, req)
+
+	require.NoError(t, err)
+	require.NotNil(t, rule.TargetCustomCategoryDisplay)
+	assert.Equal(t, "Travel", *rule.TargetCustomCategoryDisplay)
+	mockRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+func TestCategorizationRuleService_UpdateRule_PopulatesTargetCustomCategoryDisplay(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCategorizationRuleService(mockRepo, mockCategoryRepo)
+	ctx := context.Background()
+	userID := "user-123"
+	ruleID := "rule-update"
+	catID := "cat-uuid-update"
+
+	existing := &domain.CategorizationRule{
+		ID:                     ruleID,
+		UserID:                 userID,
+		Name:                   "Old Name",
+		Enabled:                true,
+		TargetKind:             ptrStr("custom"),
+		TargetCustomCategoryID: &catID,
+		Conditions:             []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "store"}},
+		ConditionLogic:         "AND",
+		TagBehavior:            "add",
+		Source:                 "manual",
+	}
+
+	mockRepo.On("GetByID", ctx, ruleID).Return(existing, nil)
+	mockRepo.On("Update", ctx, mock.AnythingOfType("*domain.CategorizationRule")).Return(nil)
+	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{catID}).
+		Return(map[string]string{catID: "Shopping"}, nil)
+
+	newName := "New Name"
+	req := &domain.UpdateCategorizationRuleRequest{Name: &newName}
+
+	rule, err := service.UpdateRule(ctx, userID, ruleID, req)
+
+	require.NoError(t, err)
+	require.NotNil(t, rule.TargetCustomCategoryDisplay)
+	assert.Equal(t, "Shopping", *rule.TargetCustomCategoryDisplay)
+	mockRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+func TestCategorizationRuleService_ToggleRule_PopulatesTargetCustomCategoryDisplay(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCategorizationRuleService(mockRepo, mockCategoryRepo)
+	ctx := context.Background()
+	userID := "user-123"
+	ruleID := "rule-toggle"
+	catID := "cat-uuid-toggle"
+
+	existing := &domain.CategorizationRule{
+		ID:                     ruleID,
+		UserID:                 userID,
+		Enabled:                true,
+		TargetKind:             ptrStr("custom"),
+		TargetCustomCategoryID: &catID,
+		Conditions:             []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "shop"}},
+		ConditionLogic:         "AND",
+		TagBehavior:            "add",
+		Source:                 "manual",
+	}
+
+	mockRepo.On("GetByID", ctx, ruleID).Return(existing, nil)
+	mockRepo.On("Update", ctx, mock.AnythingOfType("*domain.CategorizationRule")).Return(nil)
+	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{catID}).
+		Return(map[string]string{catID: "Dining"}, nil)
+
+	rule, err := service.ToggleRule(ctx, userID, ruleID, false)
+
+	require.NoError(t, err)
+	require.NotNil(t, rule.TargetCustomCategoryDisplay)
+	assert.Equal(t, "Dining", *rule.TargetCustomCategoryDisplay)
+	mockRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+func TestCategorizationRuleService_GetEnabledRules_PopulatesTargetCustomCategoryDisplay(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCategorizationRuleService(mockRepo, mockCategoryRepo)
+	ctx := context.Background()
+	userID := "user-123"
+	catID := "cat-uuid-enabled"
+
+	rules := []*domain.CategorizationRule{
+		{
+			ID:                     "rule-enabled",
+			UserID:                 userID,
+			Name:                   "Enabled Rule",
+			Enabled:                true,
+			TargetKind:             ptrStr("custom"),
+			TargetCustomCategoryID: &catID,
+		},
+	}
+
+	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
+	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{catID}).
+		Return(map[string]string{catID: "Utilities"}, nil)
+
+	result, err := service.GetEnabledRules(ctx, userID)
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.NotNil(t, result[0].TargetCustomCategoryDisplay)
+	assert.Equal(t, "Utilities", *result[0].TargetCustomCategoryDisplay)
+	mockRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
 }

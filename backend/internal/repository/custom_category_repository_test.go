@@ -383,3 +383,102 @@ func TestCustomCategoryRepository_DecrementUsageCount(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestCustomCategoryRepository_GetNamesByIDs_EmptyInput tests that empty input returns empty map without DB roundtrip
+func TestCustomCategoryRepository_GetNamesByIDs_EmptyInput(t *testing.T) {
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	result, err := repo.GetNamesByIDs(ctx, userID, []string{})
+
+	assert.NoError(t, err)
+	assert.Empty(t, result)
+	assert.NoError(t, mock.ExpectationsWereMet()) // no DB calls expected
+}
+
+// TestCustomCategoryRepository_GetNamesByIDs_ValidIDs tests that valid IDs return id→name mapping
+func TestCustomCategoryRepository_GetNamesByIDs_ValidIDs(t *testing.T) {
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	id1 := uuid.New().String()
+	id2 := uuid.New().String()
+	unknownID := uuid.New().String()
+
+	rows := pgxmock.NewRows([]string{"id", "name"}).
+		AddRow(id1, "Groceries").
+		AddRow(id2, "Dining Out")
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name
+		FROM custom_categories
+		WHERE id = ANY($1::uuid[])
+		  AND user_id = $2
+	`)).WithArgs(pgxmock.AnyArg(), userID).WillReturnRows(rows)
+
+	result, err := repo.GetNamesByIDs(ctx, userID, []string{id1, id2, unknownID})
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{id1: "Groceries", id2: "Dining Out"}, result)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCustomCategoryRepository_GetNamesByIDs_DuplicateInput tests that duplicate input IDs are deduped
+func TestCustomCategoryRepository_GetNamesByIDs_DuplicateInput(t *testing.T) {
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	id1 := uuid.New().String()
+
+	rows := pgxmock.NewRows([]string{"id", "name"}).AddRow(id1, "Travel")
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name
+		FROM custom_categories
+		WHERE id = ANY($1::uuid[])
+		  AND user_id = $2
+	`)).WithArgs(pgxmock.AnyArg(), userID).WillReturnRows(rows)
+
+	// Pass the same ID twice — should dedupe before querying
+	result, err := repo.GetNamesByIDs(ctx, userID, []string{id1, id1})
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{id1: "Travel"}, result)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCustomCategoryRepository_GetNamesByIDs_CrossUser tests that IDs owned by another user are not returned
+func TestCustomCategoryRepository_GetNamesByIDs_CrossUser(t *testing.T) {
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userA := uuid.New().String()
+	otherUserID := uuid.New().String()
+	_ = otherUserID // represents cross-user ID: should not appear in result
+
+	id1 := uuid.New().String()
+
+	// DB returns empty rows because the ID belongs to a different user
+	rows := pgxmock.NewRows([]string{"id", "name"})
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name
+		FROM custom_categories
+		WHERE id = ANY($1::uuid[])
+		  AND user_id = $2
+	`)).WithArgs(pgxmock.AnyArg(), userA).WillReturnRows(rows)
+
+	result, err := repo.GetNamesByIDs(ctx, userA, []string{id1})
+
+	require.NoError(t, err)
+	assert.Empty(t, result)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

@@ -824,7 +824,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
               data-testid="target-custom-readonly"
               aria-label="Custom category target (read-only)"
             >
-              Custom category: <code className="font-mono text-xs">{targetCustomCategoryId}</code>
+              Custom category: <code className="font-mono text-xs">{rule?.target_custom_category_display ?? targetCustomCategoryId}</code>
               <span className="block text-xs mt-1 text-muted-foreground/80">
                 Editing the custom-category target is not yet supported in this UI.
               </span>

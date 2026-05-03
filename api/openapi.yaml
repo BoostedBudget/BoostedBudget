@@ -1011,6 +1011,8 @@ components:
           type: string
         tag_behavior:
           type: string
+        target_custom_category_display:
+          type: string
         target_custom_category_id:
           type: string
         target_kind:
@@ -3627,6 +3629,8 @@ components:
           type: string
         created_at:
           format: date-time
+          type: string
+        custom_category_override_display:
           type: string
         custom_category_override_id:
           type: string
