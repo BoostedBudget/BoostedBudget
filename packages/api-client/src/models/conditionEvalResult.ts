@@ -30,8 +30,10 @@ Multi-region support planned for Phase 7+.
 
 export interface ConditionEvalResult {
   actual: unknown;
+  actual_display?: string;
   field: string;
   met: boolean;
   operator: string;
   value: unknown;
+  value_display?: string;
 }
