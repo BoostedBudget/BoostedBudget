@@ -790,3 +790,106 @@ func TestAnalyticsService_GetSpendingTrends(t *testing.T) {
 		}
 	})
 }
+
+func TestAnalyticsService_GetSpendingByCategory_CustomCategory(t *testing.T) {
+	ctx := context.Background()
+	loc := time.UTC
+
+	t.Run("custom category row uses server-resolved display name not pfcDisplayName", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				// Repository resolves the UUID to the user's custom-category name
+				return []domain.SpendingByCategory{
+					{
+						Category:          "custom:7a93a4f0-dead-beef-1234-abcdef012345",
+						PFCPrimaryDisplay: "My Coffee Budget",
+						Total:             150.0,
+						TransactionCount:  5,
+					},
+				}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+		}
+		result, err := service.GetSpendingByCategory(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Categories) != 1 {
+			t.Fatalf("expected 1 category, got %d", len(result.Categories))
+		}
+		cat := result.Categories[0]
+		if cat.PFCPrimaryDisplay != "My Coffee Budget" {
+			t.Errorf("expected PFCPrimaryDisplay 'My Coffee Budget', got %q (uuid must not be passed through pfcDisplayName)", cat.PFCPrimaryDisplay)
+		}
+		if cat.Category != "custom:7a93a4f0-dead-beef-1234-abcdef012345" {
+			t.Errorf("expected raw category token preserved, got %q", cat.Category)
+		}
+	})
+
+	t.Run("two custom categories with same display name remain separate rows", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				return []domain.SpendingByCategory{
+					{Category: "custom:uuid-aaa-111", PFCPrimaryDisplay: "Groceries", Total: 100.0, TransactionCount: 3},
+					{Category: "custom:uuid-bbb-222", PFCPrimaryDisplay: "Groceries", Total: 80.0, TransactionCount: 2},
+				}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+		}
+		result, err := service.GetSpendingByCategory(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Categories) != 2 {
+			t.Fatalf("expected 2 separate rows (not merged despite same display name), got %d", len(result.Categories))
+		}
+	})
+}
+
+func TestAnalyticsService_GetSpendingTrends_CustomCategory(t *testing.T) {
+	ctx := context.Background()
+	loc := time.UTC
+
+	t.Run("custom category trend row uses CategoryDisplay field from repository", func(t *testing.T) {
+		jan := time.Date(2024, 1, 1, 0, 0, 0, 0, loc)
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingTrendsFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error) {
+				return []domain.SpendingTrendRow{
+					{
+						PeriodStart:     jan,
+						Category:        "custom:uuid-aaa-111",
+						CategoryDisplay: "My Coffee Budget",
+						Total:           150.0,
+					},
+				}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 1, 31, 0, 0, 0, 0, loc),
+		}
+		result, err := service.GetSpendingTrends(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Periods) != 1 {
+			t.Fatalf("expected 1 period, got %d", len(result.Periods))
+		}
+		cats := result.Periods[0].Categories
+		if len(cats) != 1 {
+			t.Fatalf("expected 1 category in period, got %d", len(cats))
+		}
+		if cats[0].PFCPrimaryDisplay != "My Coffee Budget" {
+			t.Errorf("expected PFCPrimaryDisplay 'My Coffee Budget', got %q (uuid must not leak through pfcDisplayName)", cats[0].PFCPrimaryDisplay)
+		}
+	})
+}

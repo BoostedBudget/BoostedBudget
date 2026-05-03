@@ -29,22 +29,22 @@ function formatCurrency(value: string): string {
 }
 
 function getDisplayValue(source: IncomeSource): string {
-  if (source.type === 'pfc_primary' || source.type === 'plaid_category')
-    return getPFCIncomeSourceLabel(source)
+  if (source.type === 'pfc_primary') return getPFCIncomeSourceLabel(source)
   if (source.type === 'tag') return source.value
   if (source.type === 'manual') return formatCurrency(source.value)
-  return ''
+  return 'Unknown source type'
 }
 
 function getIcon(type: IncomeSource['type']): React.ReactNode {
   switch (type) {
     case 'pfc_primary':
-    case 'plaid_category':
       return <FolderIcon className="w-4 h-4 text-muted-foreground" />;
     case 'tag':
       return <TagIcon className="w-4 h-4 text-muted-foreground" />;
     case 'manual':
       return <DollarSignIcon className="w-4 h-4 text-muted-foreground" />;
+    default:
+      return <FolderIcon className="w-4 h-4 text-muted-foreground" />;
   }
 }
 

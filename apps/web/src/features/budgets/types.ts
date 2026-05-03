@@ -15,10 +15,9 @@ export type BudgetPeriod = 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'cust
 
 /**
  * Income source type - matches backend domain.IncomeSourceType.
- * 'pfc_primary' is the canonical backend value; 'plaid_category' is kept for
- * backward compatibility with any existing saved budget data that uses the old name.
+ * 'pfc_primary' is the canonical backend value for category-based income sources.
  */
-export type IncomeSourceType = 'pfc_primary' | 'plaid_category' | 'tag' | 'manual';
+export type IncomeSourceType = 'pfc_primary' | 'tag' | 'manual';
 
 /**
  * Income source configuration - matches backend domain.IncomeSource

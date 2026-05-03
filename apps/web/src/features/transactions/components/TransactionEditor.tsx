@@ -94,6 +94,7 @@ export function TransactionEditor({
           id: transaction.id,
           data: categoryRequest,
         })) as Transaction
+        // category is raw UUID for custom-category rows; humanization tracked in #1093
         trackEvent(ANALYTICS_EVENTS.TRANSACTION_CATEGORIZED, { category: getEffectiveCategoryLabel(getEffectiveCategory(updatedTransaction)) })
       }
 

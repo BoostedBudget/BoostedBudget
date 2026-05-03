@@ -3,7 +3,7 @@
  * Issue #496: Income Source Configuration UI for Envelope Budgeting
  *
  * Allows adding new income sources with type-specific pickers:
- * - plaid_category: Dropdown of Plaid categories
+ * - pfc_primary: Dropdown of PFCv2 categories
  * - tag: Dropdown of user tags
  */
 
@@ -48,7 +48,7 @@ export function IncomeSourcePicker({
 
   // Filter out already selected categories (match both canonical and legacy type)
   const existingCategoryValues = existingSources
-    .filter((s) => s.type === 'pfc_primary' || s.type === 'plaid_category')
+    .filter((s) => s.type === 'pfc_primary')
     .map((s) => s.value);
   const availableCategoriesFiltered = availableCategories.filter(
     (primary) => !existingCategoryValues.includes(primary.enum)

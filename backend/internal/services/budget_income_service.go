@@ -26,7 +26,7 @@ type IncomeTransactionGetter interface {
 type BudgetIncomeService interface {
 	// CalculateBudgetIncome calculates total income for a budget from all configured income sources.
 	// Returns the sum of:
-	// - plaid_category sources: Sum of inflow (negative amount under PFCv2) transactions matching the category
+	// - pfc_primary sources: Sum of inflow (negative amount under PFCv2) transactions matching the category
 	// - tag sources: Sum of inflow transactions with the matching tag
 	// - manual sources: Parsed float value from IncomeSource.Value
 	//
