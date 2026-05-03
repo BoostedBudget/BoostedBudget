@@ -508,7 +508,7 @@ describe('CreateBudgetDialog', () => {
         expect(screen.getByLabelText(/source type/i)).toBeInTheDocument()
       })
 
-      // Source type defaults to plaid_category — pick a category to add
+      // Source type defaults to pfc_primary — pick a category to add
       // (mockUseGetPlaidCategories returns empty by default, so we just verify the section opened)
       submitForm()
 

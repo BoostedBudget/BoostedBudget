@@ -172,7 +172,8 @@ type SpendingTrendsResponse struct {
 
 // SpendingTrendRow is a raw database row from the spending trends query (month + category)
 type SpendingTrendRow struct {
-	PeriodStart time.Time
-	Category    string
-	Total       float64
+	PeriodStart     time.Time
+	Category        string
+	CategoryDisplay string // resolved display name for custom categories; empty for PFC rows (service computes display)
+	Total           float64
 }

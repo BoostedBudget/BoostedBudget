@@ -81,3 +81,31 @@ describe('SpendingTrendsChart', () => {
     expect(names[0]).not.toBe('LOAN_PAYMENTS')
   })
 })
+
+  it('falls back to "Custom Category" when a custom:<uuid> category has no pfc_primary_display', () => {
+    const customData: SpendingTrendsResponse = {
+      start_date: '2024-01-01',
+      end_date: '2024-01-31',
+      top_categories: ['custom:7a93a4f0-dead-beef-1234-abcdef012345'],
+      periods: [
+        {
+          period_start: '2024-01-01',
+          period_end: '2024-01-31',
+          total: 150,
+          categories: [
+            {
+              category: 'custom:7a93a4f0-dead-beef-1234-abcdef012345',
+              total: 150,
+            } as SpendingTrendsResponse['periods'][0]['categories'][0],
+          ],
+        },
+      ],
+    }
+    render(<SpendingTrendsChart data={customData} loading={false} />)
+    const chart = screen.getByTestId('plotly-chart')
+    const names = JSON.parse(chart.getAttribute('data-trace-names') ?? '[]') as string[]
+    // Should not contain the raw UUID
+    expect(names[0]).not.toContain('7a93a4f0-dead-beef-1234-abcdef012345')
+    // Should be a readable fallback
+    expect(names[0]).toBe('Custom Category')
+  })

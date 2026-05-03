@@ -12,14 +12,30 @@ const PlotMockComponent = ({
   config,
   style,
   useResizeHandler,
+  onClick,
 }: {
-  data: Array<{ name: string }>
+  data: Array<{ name: string; labels?: string[] }>
   layout: { shapes?: unknown }
   config: { responsive?: boolean }
   style: React.CSSProperties
   useResizeHandler: boolean
-}) =>
-  React.createElement('div', {
+  onClick?: (event: { points: Array<{ pointIndex: number }> }) => void
+}) => {
+  // Build hidden per-label test-trigger buttons for the first labelled trace (e.g. pie charts).
+  // Tests can use getByTestId('plotly-point-N') + fireEvent.click() to simulate Plotly point clicks.
+  const firstLabels = (data[0] as { labels?: string[] } | undefined)?.labels
+  const triggerButtons = onClick && firstLabels
+    ? firstLabels.map((_: string, idx: number) =>
+        React.createElement('button', {
+          key: idx,
+          'aria-hidden': 'true',
+          style: { display: 'none' },
+          'data-testid': `plotly-point-${idx}`,
+          onClick: () => onClick({ points: [{ pointIndex: idx }] }),
+        })
+      )
+    : []
+  return React.createElement('div', {
     'data-testid': 'plotly-chart',
     'data-trace-count': data.length,
     'data-trace-names': JSON.stringify(data.map((d) => d.name)),
@@ -27,8 +43,8 @@ const PlotMockComponent = ({
     'data-responsive': config?.responsive,
     'data-has-shapes': layout?.shapes ? 'true' : 'false',
     style,
-    children: 'Plotly Chart Mock',
-  })
+  }, 'Plotly Chart Mock', ...triggerButtons)
+}
 export const MockPlot = mock(PlotMockComponent)
 
 // === Plotly instance mock ===

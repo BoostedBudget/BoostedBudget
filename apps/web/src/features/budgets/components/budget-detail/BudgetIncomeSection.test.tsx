@@ -255,26 +255,6 @@ describe('BudgetIncomeSection', () => {
       expect(screen.getByText(/auto-tracked/i)).toBeInTheDocument();
     });
 
-    it('should show source type indicator for plaid_category sources (backward compat)', () => {
-      const plaidSources: IncomeSource[] = [
-        {
-          type: 'plaid_category',
-          value: 'Income',
-          description: 'Payroll deposits',
-        },
-      ];
-
-      render(
-        <BudgetIncomeSection
-          expectedIncome={5000}
-          actualIncome={5000}
-          incomeSources={plaidSources}
-          currencyCode="USD"
-        />
-      );
-
-      expect(screen.getByText(/auto-tracked/i)).toBeInTheDocument();
-    });
 
     it('should show source type indicator for tag sources', () => {
       const tagSources: IncomeSource[] = [
