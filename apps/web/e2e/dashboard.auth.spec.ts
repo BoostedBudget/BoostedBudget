@@ -515,12 +515,9 @@ test.describe('Dashboard - Authenticated User', () => {
       ).toBeVisible({ timeout: 10000 })
 
       // Assert - Should suggest connecting an account
-      const connectLink = page.getByRole('link', {
-        name: /connect|link account/i,
-      })
-      if ((await connectLink.count()) > 0) {
-        await expect(connectLink).toBeVisible()
-      }
+      await expect(
+        page.getByRole('link', { name: /connect|link account/i })
+      ).toBeVisible()
     })
   })
 })

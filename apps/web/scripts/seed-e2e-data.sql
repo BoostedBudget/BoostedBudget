@@ -145,7 +145,7 @@ BEGIN
     -- Step 3: Create test accounts
     -- =============================================================================
 
-    -- Checking Account (custom_color set for visual-enhancements E2E fixture)
+    -- Checking Account
     INSERT INTO accounts (
         id,
         linked_item_id,
@@ -158,8 +158,7 @@ BEGIN
         mask,
         current_balance,
         available_balance,
-        currency_code,
-        custom_color
+        currency_code
     ) VALUES (
         gen_random_uuid(),
         v_linked_item_id,
@@ -172,13 +171,11 @@ BEGIN
         '1234',
         5000.00,
         4850.00,
-        'USD',
-        '#FF5733'
+        'USD'
     )
     ON CONFLICT (user_id, plaid_account_id) DO UPDATE SET
         current_balance = EXCLUDED.current_balance,
-        available_balance = EXCLUDED.available_balance,
-        custom_color = EXCLUDED.custom_color
+        available_balance = EXCLUDED.available_balance
     RETURNING id INTO v_checking_id;
 
     -- Savings Account
