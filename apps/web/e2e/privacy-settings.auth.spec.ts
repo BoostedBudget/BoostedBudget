@@ -221,8 +221,8 @@ test.describe.skip('Privacy Settings - Authenticated', () => {
     await expect(analyticsAfterReload).toBeChecked({ checked: newState })
   })
 
-  // SKIPPED: Issue #615 - Cookie consent sync may not be wired
-  test.skip('should update cookie consent when Privacy Settings saved', async ({ page }) => {
+  // FIXME: Issue #615 - Cookie consent sync may not be wired
+  test.fixme('should update cookie consent when Privacy Settings saved', async ({ page }) => {
     await page.goto('/profile')
     await page.click('button:has-text("Privacy Settings")')
 
@@ -246,8 +246,8 @@ test.describe.skip('Privacy Settings - Authenticated', () => {
     expect(cookieData).toHaveProperty('version')
   })
 
-  // SKIPPED: Issue #615 - Cookie consent sync may not be wired
-  test.skip('should sync Cookie Consent banner with Privacy Settings', async ({ page }) => {
+  // FIXME: Issue #615 - Cookie consent sync may not be wired
+  test.fixme('should sync Cookie Consent banner with Privacy Settings', async ({ page }) => {
     // First, accept all cookies via banner
     await page.goto('/')
     await page.click('button:has-text("Accept All")')
