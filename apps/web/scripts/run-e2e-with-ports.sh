@@ -69,15 +69,13 @@ echo "   Backend:  $E2E_BACKEND_PORT"
 echo "   Postgres: $E2E_POSTGRES_PORT"
 
 # =============================================================================
-# Build Backend (if needed)
+# Build Backend (always rebuild to prevent stale-binary/schema mismatches)
 # =============================================================================
 
-if [ ! -f "${BACKEND_DIR}/bin/server" ]; then
-  echo ""
-  echo "🔨 Backend binary not found, building..."
-  (cd "$BACKEND_DIR" && go build -o bin/server ./cmd/server)
-  echo "   ✅ Backend built successfully"
-fi
+echo ""
+echo "Building backend binary..."
+(cd "$BACKEND_DIR" && go build -o bin/server ./cmd/server)
+echo "   Backend built successfully"
 
 # =============================================================================
 # Setup PostgreSQL Database

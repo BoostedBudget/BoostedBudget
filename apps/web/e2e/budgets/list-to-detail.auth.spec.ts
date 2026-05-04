@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { acceptCookieConsent } from '../helpers/auth'
 import { ensureBudgetExists } from '../helpers/api/budgets'
+import { getAuthToken } from '../helpers/api/client'
 
 test.describe('Budget list-to-detail navigation (#1051)', () => {
   test.beforeAll(async ({ browser }) => {
@@ -8,14 +9,17 @@ test.describe('Budget list-to-detail navigation (#1051)', () => {
     const page = await context.newPage()
     await page.goto('/budgets')
     await page.waitForLoadState('networkidle')
-    await page
-      .waitForFunction(
-        () =>
-          !!(window as unknown as { Clerk?: { session?: { id?: string } } }).Clerk?.session?.id,
-        { timeout: 15000 }
-      )
-      .catch(() => {})
-    await ensureBudgetExists(page)
+    await page.waitForFunction(
+      () =>
+        !!(window as unknown as { Clerk?: { session?: { id?: string } } }).Clerk?.session?.id,
+      { timeout: 30000 }
+    )
+    const token = await getAuthToken(page)
+    if (token) {
+      await ensureBudgetExists(page)
+    } else {
+      console.warn('beforeAll: Clerk token unavailable — trusting SQL seed for fixture budget')
+    }
     await context.close()
   })
 
