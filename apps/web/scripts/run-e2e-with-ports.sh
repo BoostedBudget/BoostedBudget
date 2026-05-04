@@ -6,7 +6,7 @@
 #   1. Finds available ports for frontend, backend, and PostgreSQL
 #   2. Starts a temporary PostgreSQL container (if Docker available)
 #   3. Runs database migrations
-#   4. Builds backend if binary doesn't exist
+#   4. Always rebuilds backend binary (prevents stale-binary/schema mismatches)
 #   5. Runs Playwright tests
 #   6. Cleans up PostgreSQL container on exit
 #
