@@ -351,16 +351,6 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await expect(page.getByText('Date Range')).not.toBeVisible()
     })
 
-    // SKIPPED: Amount type filter moved to inline table headers (Issue #615)
-    test.skip('should show active filter count badge', async ({ page }) => {
-      await mockFilteringAPIs(page)
-      await page.goto('/transactions?amount_type=income')
-      await page.waitForLoadState('networkidle')
-
-      // Should show badge with count
-      const badge = page.locator('text=Filters').locator('..').getByText('1')
-      await expect(badge).toBeVisible()
-    })
   })
 
   // ==========================================================================
@@ -475,17 +465,6 @@ test.describe('Transaction Filtering - Authenticated User', () => {
 
       // URL should contain filter param
       await expect(page).toHaveURL(/pending=false/)
-    })
-
-    // SKIPPED: amount_type filter moved to inline table headers (Issue #615)
-    test.skip('should restore filters from URL on page load', async ({ page }) => {
-      await mockFilteringAPIs(page)
-      await page.goto('/transactions?amount_type=income')
-      await page.waitForLoadState('networkidle')
-
-      // Should show only income transactions
-      await expect(page.getByText('Salary')).toBeVisible()
-      await expect(page.getByText('Starbucks')).not.toBeVisible()
     })
 
     test('should persist status filter after page reload', async ({ page }) => {
@@ -717,27 +696,6 @@ test.describe('Transaction Filtering - Authenticated User', () => {
   // Transaction Count Display Tests
   // ==========================================================================
 
-  test.describe('Transaction Count Display', () => {
-    // SKIPPED: amount_type filter moved to inline table headers (Issue #615)
-    test.skip('should show filtered count when filters active', async ({ page }) => {
-      await mockFilteringAPIs(page)
-      await page.goto('/transactions?amount_type=income')
-      await page.waitForLoadState('networkidle')
-
-      // Should show "Showing X of Y transactions" format
-      await expect(page.getByText(/showing.*of.*transaction/i)).toBeVisible()
-    })
-
-    // SKIPPED: Transaction count display format may vary based on implementation
-    test.skip('should show total count when no filters active', async ({ page }) => {
-      await mockFilteringAPIs(page)
-      await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
-
-      // Should show "X transactions total" format
-      await expect(page.getByText(/4.*transactions.*total/i)).toBeVisible()
-    })
-  })
 
   // ==========================================================================
   // Performance Tests (SKIPPED: Issue #615 - Tests use Type filter moved to inline headers)
