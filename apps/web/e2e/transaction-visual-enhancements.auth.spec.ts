@@ -59,45 +59,26 @@ test.describe('Transaction Visual Enhancements', () => {
 
   test.describe('Amount Arrows', () => {
     test('should display expense arrow for negative amounts', async ({ page }) => {
-      // Look for transactions with negative amounts (expenses)
       const expenseArrow = page.locator('[data-testid="expense-arrow"]').first()
-      const count = await expenseArrow.count()
-
-      if (count > 0) {
-        await expect(expenseArrow).toBeVisible()
-      }
+      await expect(expenseArrow).toBeVisible()
     })
 
     test('should display income arrow for positive amounts', async ({ page }) => {
-      // Look for transactions with positive amounts (income)
       const incomeArrow = page.locator('[data-testid="income-arrow"]').first()
-      const count = await incomeArrow.count()
-
-      if (count > 0) {
-        await expect(incomeArrow).toBeVisible()
-      }
+      await expect(incomeArrow).toBeVisible()
     })
   })
 
   test.describe('Enhanced Pending Badge', () => {
     test('should display clock icon in pending badge', async ({ page }) => {
-      // Look for pending transactions
       const pendingIcon = page.locator('[data-testid="pending-icon"]').first()
-      const count = await pendingIcon.count()
-
-      if (count > 0) {
-        await expect(pendingIcon).toBeVisible()
-      }
+      await expect(pendingIcon).toBeVisible()
     })
 
     test('should display tooltip on pending badge', async ({ page }) => {
       const pendingBadge = page.locator('.transaction-card__pending-badge').first()
-      const count = await pendingBadge.count()
-
-      if (count > 0) {
-        const title = await pendingBadge.getAttribute('title')
-        expect(title).toContain('pending')
-      }
+      const title = await pendingBadge.getAttribute('title')
+      expect(title).toContain('pending')
     })
   })
 
@@ -136,11 +117,7 @@ test.describe('Transaction Visual Enhancements', () => {
       const editButton = page.locator('button[aria-label="Edit transaction"]').first()
       await editButton.click()
 
-      // Verify editor modal opens
-      await expect(page.locator('.transaction-editor')).toBeVisible({ timeout: 5000 }).catch(() => {
-        // Alternative: check for any modal dialog
-        return expect(page.locator('[role="dialog"]')).toBeVisible()
-      })
+      await expect(page.locator('[role="dialog"]')).toBeVisible({ timeout: 5000 })
     })
   })
 
