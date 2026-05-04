@@ -6,7 +6,7 @@
 #   1. Finds available ports for frontend, backend, and PostgreSQL
 #   2. Starts a temporary PostgreSQL container (if Docker available)
 #   3. Runs database migrations
-#   4. Builds backend if binary doesn't exist
+#   4. Always rebuilds backend binary (prevents stale-binary/schema mismatches)
 #   5. Runs Playwright tests
 #   6. Cleans up PostgreSQL container on exit
 #
@@ -69,15 +69,13 @@ echo "   Backend:  $E2E_BACKEND_PORT"
 echo "   Postgres: $E2E_POSTGRES_PORT"
 
 # =============================================================================
-# Build Backend (if needed)
+# Build Backend (always rebuild to prevent stale-binary/schema mismatches)
 # =============================================================================
 
-if [ ! -f "${BACKEND_DIR}/bin/server" ]; then
-  echo ""
-  echo "🔨 Backend binary not found, building..."
-  (cd "$BACKEND_DIR" && go build -o bin/server ./cmd/server)
-  echo "   ✅ Backend built successfully"
-fi
+echo ""
+echo "Building backend binary..."
+(cd "$BACKEND_DIR" && go build -o bin/server ./cmd/server)
+echo "   Backend built successfully"
 
 # =============================================================================
 # Setup PostgreSQL Database

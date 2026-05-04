@@ -17,12 +17,11 @@ export async function ensureBudgetExists(page: Page): Promise<BudgetFixture> {
 
   const listResponse = await client.get('/api/v1/budgets')
 
-  if (listResponse.status() === 401) {
-    // Clerk not yet hydrated in beforeAll; SQL seed creates fixture budget
-    console.warn(
-      'ensureBudgetExists: auth unavailable — trusting SQL seed for fixture budget'
+  if (!listResponse.ok() && listResponse.status() === 401) {
+    throw new Error(
+      'ensureBudgetExists: GET /api/v1/budgets returned 401 — Clerk session not hydrated. ' +
+      'Check storageState and auth.setup.ts. Remove the waitForFunction .catch() in beforeAll to surface this earlier.'
     )
-    return { id: 'seed-placeholder', name: FIXTURE_NAME, description: FIXTURE_DESCRIPTION }
   }
 
   if (listResponse.ok()) {
@@ -49,10 +48,10 @@ export async function ensureBudgetExists(page: Page): Promise<BudgetFixture> {
   })
 
   if (createResponse.status() === 401) {
-    console.warn(
-      'ensureBudgetExists: auth unavailable for create — trusting SQL seed for fixture budget'
+    throw new Error(
+      'ensureBudgetExists: POST /api/v1/budgets returned 401 — Clerk session not hydrated. ' +
+      'Check storageState and auth.setup.ts.'
     )
-    return { id: 'seed-placeholder', name: FIXTURE_NAME, description: FIXTURE_DESCRIPTION }
   }
 
   if (!createResponse.ok()) {
