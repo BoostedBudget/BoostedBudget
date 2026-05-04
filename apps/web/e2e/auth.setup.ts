@@ -1,5 +1,6 @@
 import { clerk } from '@clerk/testing/playwright';
 import { test as setup } from '@playwright/test';
+import { getAuthToken, API_BASE } from './helpers/api/client';
 
 const authFile = 'e2e/.auth/user.json';
 
@@ -103,49 +104,16 @@ setup('authenticate', async ({ page }) => {
   // Issue #698: Grant trial subscription for E2E test user
   // This ensures the test user has an active subscription so PremiumRoute allows access to /dashboard
   console.log('   Granting trial subscription for E2E test...');
-  // Use E2E_BACKEND_PORT which is set by run-e2e-with-ports.sh for dynamic port allocation
-  const backendPort = process.env.E2E_BACKEND_PORT || '8080';
-  const apiUrl = `http://localhost:${backendPort}`;
 
-  // Extract Clerk JWT from browser session for direct API calls.
-  // Uses a retry loop with progressive backoff — page.evaluate() can fail with
-  // "Execution context was destroyed" if a navigation happens concurrently.
-  // Also validates that the JWT contains an email claim before accepting it,
-  // since the first token after sign-in may not yet have custom claims populated.
-  let authToken: string | null = null;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      authToken = await page.evaluate(async () => {
-        const clerk = (window as unknown as { Clerk?: { session?: { getToken: () => Promise<string | null> } } }).Clerk;
-        if (!clerk?.session) return null;
-        const token = await clerk.session.getToken();
-        if (!token) return null;
-        // Verify the JWT contains an email claim before accepting.
-        // The first token after sign-in may lack custom claims if Clerk hasn't
-        // completed its token refresh cycle yet.
-        try {
-          const payload = JSON.parse(atob(token.split('.')[1]));
-          if (!payload.email && !payload.primary_email) return null;
-        } catch {
-          // If we can't decode the payload, accept the token and let the backend handle it
-        }
-        return token;
-      });
-      if (authToken) {
-        console.log('   ✓ Extracted Clerk JWT for API calls');
-        break;
-      }
-    } catch (error) {
-      console.log(`   [Warning] JWT extraction attempt ${attempt + 1} failed: ${error}`);
-    }
-    // Progressive backoff: 1s, 2s, 3s, 4s
-    if (attempt < 4) await page.waitForTimeout(1000 * (attempt + 1));
+  const authToken = await getAuthToken(page);
+  if (authToken) {
+    console.log('   ✓ Extracted Clerk JWT for API calls');
   }
 
   const doTrialGrant = async (token: string | null): Promise<boolean> => {
     try {
       const trialResponse = await page.request.post(
-        `${apiUrl}/api/v1/admin/subscription/grant-trial`,
+        `${API_BASE}/api/v1/admin/subscription/grant-trial`,
         {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         }
@@ -216,16 +184,7 @@ setup('authenticate', async ({ page }) => {
   // first attempt. Now the session is stable — re-extract the JWT and retry the grant.
   if (result === 'pricing' || result === 'pricingLoading') {
     console.log('   [Recovery] Pricing page detected — retrying trial grant with fresh JWT...');
-    let freshToken: string | null = null;
-    try {
-      freshToken = await page.evaluate(async () => {
-        const clerk = (window as unknown as { Clerk?: { session?: { getToken: () => Promise<string | null> } } }).Clerk;
-        if (clerk?.session) return await clerk.session.getToken();
-        return null;
-      });
-    } catch (error) {
-      console.log(`   [Warning] Fresh JWT extraction failed: ${error}`);
-    }
+    const freshToken = await getAuthToken(page);
     const granted = await doTrialGrant(freshToken);
     if (granted) {
       await page.goto('/dashboard');

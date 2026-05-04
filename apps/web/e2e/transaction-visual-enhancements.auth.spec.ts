@@ -17,18 +17,13 @@ import { skipIfBackendDown } from './helpers/health'
 
 test.describe('Transaction Visual Enhancements', () => {
   test.beforeEach(async ({ page }, testInfo) => {
-    // Skip immediately if backend is down — this test file uses real DB data (no mocks)
+    // TransactionCard is not rendered on /transactions (table view only). All tests
+    // here are fixme until card view is integrated into the transactions page. #531
+    test.fixme(true, 'TransactionCard not integrated into /transactions (table-view only) — re-enable when card view ships. See #531')
     await skipIfBackendDown(page, testInfo)
     await setupClerkTestingToken({ page })
-    // Navigate to the transactions page
-    // Note: This requires authentication - use a logged in session
     await page.goto('/transactions')
-
-    // Wait for transactions to load
-    await page.waitForSelector('.transaction-card', { timeout: 10000 }).catch(() => {
-      // If no transactions, skip the test
-      test.skip()
-    })
+    await expect(page.locator('article[data-transaction-id]').first()).toBeVisible({ timeout: 10000 })
   })
 
   test.describe('Account Badge', () => {
@@ -36,24 +31,16 @@ test.describe('Transaction Visual Enhancements', () => {
       // Check for account badge on transaction cards
       const accountBadge = page.locator('.transaction-card__account-badge').first()
 
-      // Account badge may or may not be present depending on test data
-      const count = await accountBadge.count()
-      if (count > 0) {
-        await expect(accountBadge).toBeVisible()
-        // Verify badge has content (account name)
-        await expect(accountBadge).not.toBeEmpty()
-      }
+      await expect(accountBadge).toBeVisible()
+      await expect(accountBadge).not.toBeEmpty()
     })
 
     test('should apply custom color to account badge', async ({ page }) => {
       const accountBadge = page.locator('.transaction-card__account-badge').first()
 
-      const count = await accountBadge.count()
-      if (count > 0) {
-        // Verify badge has a background color style
-        const style = await accountBadge.getAttribute('style')
-        expect(style).toContain('background-color')
-      }
+      await expect(accountBadge).toBeVisible()
+      const style = await accountBadge.getAttribute('style')
+      expect(style).toContain('background-color')
     })
   })
 
@@ -116,7 +103,7 @@ test.describe('Transaction Visual Enhancements', () => {
 
   test.describe('Hover Quick Actions', () => {
     test('should show quick action buttons on hover', async ({ page }) => {
-      const transactionCard = page.locator('.transaction-card').first()
+      const transactionCard = page.locator('article[data-transaction-id]').first()
       const quickActions = page.locator('.transaction-card__quick-actions').first()
 
       // Verify quick actions are hidden by default (display: none)
@@ -130,7 +117,7 @@ test.describe('Transaction Visual Enhancements', () => {
     })
 
     test('should have edit button with correct aria-label', async ({ page }) => {
-      const transactionCard = page.locator('.transaction-card').first()
+      const transactionCard = page.locator('article[data-transaction-id]').first()
 
       // Hover to reveal quick actions
       await transactionCard.hover()
@@ -140,7 +127,7 @@ test.describe('Transaction Visual Enhancements', () => {
     })
 
     test('should open editor when edit button is clicked', async ({ page }) => {
-      const transactionCard = page.locator('.transaction-card').first()
+      const transactionCard = page.locator('article[data-transaction-id]').first()
 
       // Hover to reveal quick actions
       await transactionCard.hover()
@@ -158,14 +145,10 @@ test.describe('Transaction Visual Enhancements', () => {
   })
 
   test.describe('Visual Regression', () => {
+    test.fixme(true, 'transaction-card__name/__amount/__date CSS classes not added to TransactionCard — see #531')
     test('transaction card layout is correct', async ({ page }) => {
-      // Take a screenshot of a transaction card for visual comparison
-      const transactionCard = page.locator('.transaction-card').first()
-
-      // Basic layout checks
+      const transactionCard = page.locator('article[data-transaction-id]').first()
       await expect(transactionCard).toHaveCSS('position', 'relative')
-
-      // Check that card contains expected elements
       await expect(transactionCard.locator('.transaction-card__name')).toBeVisible()
       await expect(transactionCard.locator('.transaction-card__category')).toBeVisible()
       await expect(transactionCard.locator('.transaction-card__amount')).toBeVisible()

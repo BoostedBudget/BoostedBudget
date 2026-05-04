@@ -105,6 +105,7 @@ DECLARE
     v_checking_id UUID;
     v_savings_id UUID;
     v_credit_id UUID;
+    v_budget_id UUID;
 BEGIN
     -- Get the user ID
     SELECT id INTO v_user_id FROM users WHERE clerk_user_id = '__E2E_CLERK_USER_ID__';
@@ -144,7 +145,7 @@ BEGIN
     -- Step 3: Create test accounts
     -- =============================================================================
 
-    -- Checking Account
+    -- Checking Account (custom_color set for visual-enhancements E2E fixture)
     INSERT INTO accounts (
         id,
         linked_item_id,
@@ -157,7 +158,8 @@ BEGIN
         mask,
         current_balance,
         available_balance,
-        currency_code
+        currency_code,
+        custom_color
     ) VALUES (
         gen_random_uuid(),
         v_linked_item_id,
@@ -170,11 +172,13 @@ BEGIN
         '1234',
         5000.00,
         4850.00,
-        'USD'
+        'USD',
+        '#FF5733'
     )
     ON CONFLICT (user_id, plaid_account_id) DO UPDATE SET
         current_balance = EXCLUDED.current_balance,
-        available_balance = EXCLUDED.available_balance
+        available_balance = EXCLUDED.available_balance,
+        custom_color = EXCLUDED.custom_color
     RETURNING id INTO v_checking_id;
 
     -- Savings Account
@@ -360,6 +364,45 @@ BEGIN
         (v_user_id, 'Pet Supplies', 'GENERAL_MERCHANDISE', 'heart', '#E91E63', 0)
     ON CONFLICT (user_id, name) DO NOTHING;
 
+    -- =============================================================================
+    -- Step 7: Create E2E fixture budget + categories (description='e2e-fixture-v1' marker)
+    -- =============================================================================
+    INSERT INTO budgets (
+        user_id, name, description, period, start_date, amount, currency_code,
+        income_amount, income_sources, expected_income, is_active
+    ) VALUES (
+        v_user_id,
+        'E2E Monthly Budget',
+        'e2e-fixture-v1',
+        'monthly',
+        DATE_TRUNC('month', CURRENT_DATE)::DATE,
+        5000.00,
+        'USD',
+        0,
+        '[]'::jsonb,
+        7000.00,
+        true
+    )
+    ON CONFLICT (user_id, name) DO UPDATE SET
+        description = EXCLUDED.description,
+        amount = EXCLUDED.amount,
+        expected_income = EXCLUDED.expected_income,
+        is_active = true,
+        updated_at = NOW()
+    RETURNING id INTO v_budget_id;
+
+    -- Remove stale categories before re-inserting (UNIQUE constraint has NULLs so ON CONFLICT
+    -- is unreliable for pfc rows; idempotent delete+insert is safer)
+    DELETE FROM budget_categories WHERE budget_id = v_budget_id;
+
+    INSERT INTO budget_categories (budget_id, category_kind, pfc_primary, allocated_amount, tags, match_logic)
+    VALUES
+        (v_budget_id, 'pfc', 'FOOD_AND_DRINK',       500.00, '[]'::jsonb, 'category_only'),
+        (v_budget_id, 'pfc', 'GENERAL_MERCHANDISE',  300.00, '[]'::jsonb, 'category_only'),
+        (v_budget_id, 'pfc', 'TRANSPORTATION',        200.00, '[]'::jsonb, 'category_only');
+
+    RAISE NOTICE 'E2E fixture budget created: % (id=%)', 'E2E Monthly Budget', v_budget_id;
+
     RAISE NOTICE 'E2E test data seeded successfully for user %', v_user_id;
 END $$;
 
@@ -380,4 +423,8 @@ SELECT 'Transactions', COUNT(*) FROM transactions t JOIN users u ON t.user_id = 
 UNION ALL
 SELECT 'User Tags', COUNT(*) FROM user_tags ut JOIN users u ON ut.user_id = u.id WHERE u.email = 'e2e+clerk_test@boostedbudget.com'
 UNION ALL
-SELECT 'Custom Categories', COUNT(*) FROM custom_categories cc JOIN users u ON cc.user_id = u.id WHERE u.email = 'e2e+clerk_test@boostedbudget.com';
+SELECT 'Custom Categories', COUNT(*) FROM custom_categories cc JOIN users u ON cc.user_id = u.id WHERE u.email = 'e2e+clerk_test@boostedbudget.com'
+UNION ALL
+SELECT 'Budgets', COUNT(*) FROM budgets b JOIN users u ON b.user_id = u.id WHERE u.email = 'e2e+clerk_test@boostedbudget.com'
+UNION ALL
+SELECT 'Budget Categories', COUNT(*) FROM budget_categories bc JOIN budgets b ON bc.budget_id = b.id JOIN users u ON b.user_id = u.id WHERE u.email = 'e2e+clerk_test@boostedbudget.com';

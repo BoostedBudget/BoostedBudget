@@ -495,7 +495,7 @@ test.describe('Dashboard - Authenticated User', () => {
     // 2. Fix widget components to handle edge cases in mocked data
     // 3. Mock at the component level instead of API level
     // Skipping for now as the main PR (#691) is about navigation fixes.
-    test.skip('should show "No Data Available" message for new users', async ({
+    test.fixme('should show "No Data Available" message for new users', async ({
       page,
     }) => {
       // Arrange - Mock dashboard APIs with empty data structures
