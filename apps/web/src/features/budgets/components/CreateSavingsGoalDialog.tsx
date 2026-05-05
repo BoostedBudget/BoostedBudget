@@ -18,10 +18,10 @@ import {
 } from '@/components/ui/dialog';
 import { useCreateSavingsGoal } from '@boostedbudget/api-client/endpoints/savings-goals/savings-goals';
 import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts';
-import { GOAL_TEMPLATES, calculateDeadlineFromTemplate } from '../goalTemplates';
-import type { GoalTemplate } from '../goalTemplates';
+import { GOAL_TEMPLATES, calculateDeadlineFromTemplate } from '../../savings/goalTemplates';
+import type { GoalTemplate } from '../../savings/goalTemplates';
 import type { Account } from '../../accounts/types';
-import type { SavingsGoal, CreateSavingsGoalRequest } from '../types';
+import type { SavingsGoal, CreateSavingsGoalRequest } from '../../savings/types';
 
 export interface CreateSavingsGoalDialogProps {
   isOpen: boolean;

@@ -1,5 +1,6 @@
 /**
  * SavingsGoalCard Component
+ * Issue #954: Moved to features/savings module
  *
  * Displays a savings goal with progress.
  *
@@ -73,7 +74,6 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsG
     onAddFunds?.(goal);
   };
 
-  // Cap visual width at 100%
   const visualWidth = Math.min(progress, 100);
 
   return (

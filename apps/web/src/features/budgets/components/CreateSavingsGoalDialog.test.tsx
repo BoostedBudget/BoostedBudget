@@ -19,7 +19,7 @@ mock.module('@boostedbudget/api-client/endpoints/accounts/accounts', () => ({
   useGetAccounts: (_params: unknown, options: { query: { enabled: boolean } }) => mockUseGetAccounts(options),
 }))
 
-mock.module('../goalTemplates', () => ({
+mock.module('../../savings/goalTemplates', () => ({
   GOAL_TEMPLATES: [
     { id: 'emergency', name: 'Emergency Fund', defaultMonths: 12 },
     { id: 'vacation', name: 'Vacation', defaultMonths: 6 },
