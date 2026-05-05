@@ -1,8 +1,15 @@
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import type { SavingsGoal } from './types'
-import type { SavingsGoalWithProgress } from './hooks/useSavingsGoals'
+
+import {
+  mockUseGetSavingsGoals,
+  mockUseGetActiveSavingsGoals,
+  mockSavingsGoalsRefetch,
+} from '@/test/mocks/savings-goals-api'
 
 // ── Mock: analytics ──────────────────────────────────────────────────────────
 const mockTrackEvent = mock(() => {})
@@ -10,40 +17,9 @@ mock.module('@/shared/hooks/useTrackEvent', () => ({
   useTrackEvent: () => mockTrackEvent,
 }))
 
-// ── Mock: useSavingsGoals ────────────────────────────────────────────────────
-const mockRefetch = mock(() => Promise.resolve())
-const mockDeleteGoal = mock(() => Promise.resolve())
-const mockUseSavingsGoals = mock(() => ({
-  goals: [] as SavingsGoal[],
-  goalsWithProgress: [] as SavingsGoalWithProgress[],
-  loading: false,
-  error: null as Error | null,
-  totalTarget: 0,
-  totalSaved: 0,
-  refetch: mockRefetch,
-  createGoal: mock(() => Promise.resolve()),
-  updateGoal: mock(() => Promise.resolve()),
-  deleteGoal: mockDeleteGoal,
-}))
-
-mock.module('@/features/savings/hooks/useSavingsGoals', () => ({
-  useSavingsGoals: () => mockUseSavingsGoals(),
-}))
-
 // ── Mock: accounts API (used by CreateSavingsGoalDialog) ─────────────────────
 mock.module('@boostedbudget/api-client/endpoints/accounts/accounts', () => ({
   useGetAccounts: () => ({ data: { accounts: [] }, isLoading: false, error: null }),
-}))
-
-// ── Mock: savings-goals API (used by Create/UpdateSavingsGoalDialog) ─────────
-mock.module('@boostedbudget/api-client/endpoints/savings-goals/savings-goals', () => ({
-  useCreateSavingsGoal: () => ({ mutateAsync: mock(() => Promise.resolve({})), isPending: false }),
-  useUpdateSavingsGoal: () => ({ mutateAsync: mock(() => Promise.resolve({})), isPending: false }),
-  useDeleteSavingsGoal: () => ({ mutateAsync: mock(() => Promise.resolve()), isPending: false }),
-  useGetSavingsGoals: () => ({ data: undefined, isLoading: false, error: null, refetch: mock(() => Promise.resolve()) }),
-  useGetActiveSavingsGoals: () => ({ data: undefined, isLoading: false, error: null, refetch: mock(() => Promise.resolve()) }),
-  getGetSavingsGoalsQueryKey: () => ['savings-goals'],
-  getGetActiveSavingsGoalsQueryKey: () => ['savings-goals', 'active'],
 }))
 
 // ── Mock: ReadOnlyContext ─────────────────────────────────────────────────────
@@ -55,12 +31,19 @@ mock.module('@/auth/ReadOnlyContext', () => ({
 const { SavingsPage } = await import('./SavingsPage')
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+function createWrapper() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>{children}</MemoryRouter>
+      </QueryClientProvider>
+    )
+  }
+}
+
 function renderPage() {
-  return render(
-    <MemoryRouter>
-      <SavingsPage />
-    </MemoryRouter>,
-  )
+  return render(<SavingsPage />, { wrapper: createWrapper() })
 }
 
 const baseGoal: SavingsGoal = {
@@ -77,41 +60,32 @@ const baseGoal: SavingsGoal = {
   updated_at: '2024-01-01T00:00:00Z',
 }
 
-const baseGoalWithProgress: SavingsGoalWithProgress = { ...baseGoal, progress: 50 }
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 describe('SavingsPage', () => {
   beforeEach(() => {
     mockTrackEvent.mockReset()
-    mockRefetch.mockReset()
-    mockDeleteGoal.mockReset()
+    mockSavingsGoalsRefetch.mockClear()
     // Default: loaded, no goals
-    mockUseSavingsGoals.mockReturnValue({
-      goals: [],
-      goalsWithProgress: [],
-      loading: false,
+    mockUseGetSavingsGoals.mockReturnValue({
+      data: [],
+      isLoading: false,
       error: null,
-      totalTarget: 0,
-      totalSaved: 0,
-      refetch: mockRefetch,
-      createGoal: mock(() => Promise.resolve()),
-      updateGoal: mock(() => Promise.resolve()),
-      deleteGoal: mockDeleteGoal,
+      refetch: mockSavingsGoalsRefetch,
+    })
+    mockUseGetActiveSavingsGoals.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+      refetch: mockSavingsGoalsRefetch,
     })
   })
 
   it('renders page heading', () => {
-    mockUseSavingsGoals.mockReturnValue({
-      goals: [baseGoal],
-      goalsWithProgress: [baseGoalWithProgress],
-      loading: false,
+    mockUseGetSavingsGoals.mockReturnValue({
+      data: [baseGoal],
+      isLoading: false,
       error: null,
-      totalTarget: 5000,
-      totalSaved: 2500,
-      refetch: mockRefetch,
-      createGoal: mock(() => Promise.resolve()),
-      updateGoal: mock(() => Promise.resolve()),
-      deleteGoal: mockDeleteGoal,
+      refetch: mockSavingsGoalsRefetch,
     })
     renderPage()
     expect(screen.getByRole('heading', { level: 1 })).toBeDefined()
@@ -125,34 +99,22 @@ describe('SavingsPage', () => {
   })
 
   it('renders loading state', () => {
-    mockUseSavingsGoals.mockReturnValue({
-      goals: [],
-      goalsWithProgress: [],
-      loading: true,
+    mockUseGetSavingsGoals.mockReturnValue({
+      data: undefined,
+      isLoading: true,
       error: null,
-      totalTarget: 0,
-      totalSaved: 0,
-      refetch: mockRefetch,
-      createGoal: mock(() => Promise.resolve()),
-      updateGoal: mock(() => Promise.resolve()),
-      deleteGoal: mockDeleteGoal,
+      refetch: mockSavingsGoalsRefetch,
     })
     renderPage()
     expect(screen.getByRole('status')).toBeDefined()
   })
 
   it('renders error state with retry button', () => {
-    mockUseSavingsGoals.mockReturnValue({
-      goals: [],
-      goalsWithProgress: [],
-      loading: false,
+    mockUseGetSavingsGoals.mockReturnValue({
+      data: undefined,
+      isLoading: false,
       error: new Error('Network failure'),
-      totalTarget: 0,
-      totalSaved: 0,
-      refetch: mockRefetch,
-      createGoal: mock(() => Promise.resolve()),
-      updateGoal: mock(() => Promise.resolve()),
-      deleteGoal: mockDeleteGoal,
+      refetch: mockSavingsGoalsRefetch,
     })
     renderPage()
     expect(screen.getByText(/network failure/i)).toBeDefined()
@@ -160,40 +122,28 @@ describe('SavingsPage', () => {
   })
 
   it('renders empty state when no goals exist', () => {
-    // Default beforeEach sets goals: []
+    // Default beforeEach sets data: []
     renderPage()
     expect(screen.getByText(/no savings goals/i)).toBeDefined()
   })
 
   it('renders goal card when goals are present', () => {
-    mockUseSavingsGoals.mockReturnValue({
-      goals: [baseGoal],
-      goalsWithProgress: [baseGoalWithProgress],
-      loading: false,
+    mockUseGetSavingsGoals.mockReturnValue({
+      data: [baseGoal],
+      isLoading: false,
       error: null,
-      totalTarget: 5000,
-      totalSaved: 2500,
-      refetch: mockRefetch,
-      createGoal: mock(() => Promise.resolve()),
-      updateGoal: mock(() => Promise.resolve()),
-      deleteGoal: mockDeleteGoal,
+      refetch: mockSavingsGoalsRefetch,
     })
     renderPage()
     expect(screen.getByText('Vacation Fund')).toBeDefined()
   })
 
   it('opens create dialog when New goal button is clicked', async () => {
-    mockUseSavingsGoals.mockReturnValue({
-      goals: [baseGoal],
-      goalsWithProgress: [baseGoalWithProgress],
-      loading: false,
+    mockUseGetSavingsGoals.mockReturnValue({
+      data: [baseGoal],
+      isLoading: false,
       error: null,
-      totalTarget: 5000,
-      totalSaved: 2500,
-      refetch: mockRefetch,
-      createGoal: mock(() => Promise.resolve()),
-      updateGoal: mock(() => Promise.resolve()),
-      deleteGoal: mockDeleteGoal,
+      refetch: mockSavingsGoalsRefetch,
     })
     renderPage()
     const newGoalButton = screen.getByRole('button', { name: /new goal/i })
