@@ -1,3 +1,4 @@
+import { differenceInHours, parseISO, format } from 'date-fns'
 import { Link } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { NetWorthSparkline } from './NetWorthSparkline'
@@ -23,13 +24,15 @@ function formatCurrency(value: number): string {
 export function NetWorthDisplay({ summary, history, showSparkline, linkTo }: NetWorthDisplayProps) {
   const isPositive = summary.net_worth >= 0
   const comparison = summary.period_comparison
-  const changeVariant = !comparison
-    ? 'neutral'
-    : comparison.net_worth_change > 0
-      ? 'positive'
-      : comparison.net_worth_change < 0
-        ? 'negative'
-        : 'neutral'
+
+  let changeVariant: 'positive' | 'negative' | 'neutral' = 'neutral'
+  if (comparison) {
+    if (comparison.net_worth_change > 0) changeVariant = 'positive'
+    else if (comparison.net_worth_change < 0) changeVariant = 'negative'
+  }
+
+  const asOf = parseISO(summary.as_of_date)
+  const isStale = differenceInHours(new Date(), asOf) > 24
 
   const headline = (
     <span
@@ -53,6 +56,10 @@ export function NetWorthDisplay({ summary, history, showSparkline, linkTo }: Net
       ) : (
         headline
       )}
+
+      <p className="text-xs text-muted-foreground mt-1">
+        as of {format(asOf, 'MMM d, yyyy')}{isStale && ' (may be stale)'}
+      </p>
 
       {comparison && (
         <div className="mt-1">

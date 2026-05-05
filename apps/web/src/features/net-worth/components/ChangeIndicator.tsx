@@ -43,8 +43,8 @@ export function ChangeIndicator({ variant = 'neutral', amount, percent, classNam
       aria-label={ariaLabel}
     >
       <span aria-hidden="true">{glyph}</span>
-      <span>{formatAmount(amount)}</span>
-      <span className="text-muted-foreground">({Math.abs(percent).toFixed(2)}%)</span>
+      <span data-ph-mask>{formatAmount(amount)}</span>
+      <span data-ph-mask className="text-muted-foreground">({Math.abs(percent).toFixed(2)}%)</span>
     </span>
   )
 }

@@ -110,4 +110,18 @@ describe('NetWorthPage', () => {
     renderPage()
     expect(screen.getByText('Last 3 Months')).toBeDefined()
   })
+
+  it('renders empty state when summary is all-zero', () => {
+    const zeroSummary: NetWorthSummary = {
+      as_of_date: '2024-03-31',
+      net_worth: 0,
+      total_assets: 0,
+      total_liabilities: 0,
+      by_category: {},
+    }
+    mockUseNetWorthData.mockReturnValue({ summary: zeroSummary, history: baseHistory, loading: false, error: null, refetch: mockNetWorthRefetch })
+    renderPage()
+    expect(screen.getByText(/connect a bank account/i)).toBeDefined()
+    expect(screen.queryByTestId('plotly-chart')).toBeNull()
+  })
 })
