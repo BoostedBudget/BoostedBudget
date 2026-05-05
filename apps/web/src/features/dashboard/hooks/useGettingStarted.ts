@@ -84,7 +84,7 @@ export function useGettingStarted(): UseGettingStartedReturn {
       label: 'Create a savings goal',
       description: 'Set a goal to track progress toward your financial targets',
       complete: (savingsGoalsQuery.data?.length ?? 0) > 0,
-      href: '/budgets',
+      href: '/savings',
     },
     {
       id: 'create-automation-rule',

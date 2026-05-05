@@ -36,6 +36,11 @@ interface FormErrors {
   target_amount?: string;
 }
 
+function todayLocalDate(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 function goalToFormData(goal: SavingsGoal): FormData {
   return {
     name: goal.name,
@@ -191,7 +196,7 @@ export function UpdateSavingsGoalDialog({
             label="Deadline (optional)"
             value={formData.deadline}
             onChange={handleInputChange}
-            min={new Date().toISOString().split('T')[0]}
+            min={todayLocalDate()}
           />
 
           {apiError && (

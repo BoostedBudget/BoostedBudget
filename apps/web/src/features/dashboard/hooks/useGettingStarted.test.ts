@@ -113,7 +113,7 @@ describe('useGettingStarted', () => {
       expect(steps[1].id).toBe('set-up-budget')
       expect(steps[1].href).toBe('/budgets')
       expect(steps[2].id).toBe('create-savings-goal')
-      expect(steps[2].href).toBe('/budgets')
+      expect(steps[2].href).toBe('/savings')
       expect(steps[3].id).toBe('create-automation-rule')
       expect(steps[3].href).toBe('/rules')
       expect(steps[4].id).toBe('set-up-auto-categorization')
