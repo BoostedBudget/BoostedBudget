@@ -1,21 +1,16 @@
-/**
- * Dashboard widget displaying current net worth (assets - liabilities),
- * with optional configurable sparkline trend chart.
- */
-
-import { useState, useMemo } from 'react';
-import { TrendingUp } from 'lucide-react';
-import { NetWorthDisplay } from '../components/NetWorthDisplay';
-import { useDashboardContext } from '../context/DashboardContext';
-import { useNetWorthData } from '../hooks/useNetWorthData';
-import { registerWidget } from './registry';
-import { WidgetEmptyState } from './WidgetEmptyState';
+import { useState, useMemo } from 'react'
+import { Link } from 'react-router-dom'
+import { TrendingUp } from 'lucide-react'
+import { NetWorthDisplay } from '../components/NetWorthDisplay'
+import { useDashboardContext } from '../context/DashboardContext'
+import { useNetWorthData } from '../hooks/useNetWorthData'
+import { registerWidget } from './registry'
+import { WidgetEmptyState } from './WidgetEmptyState'
 
 function NetWorthWidget() {
-  const { filters } = useDashboardContext();
-  const [showSparkline, setShowSparkline] = useState(false);
+  const { filters } = useDashboardContext()
+  const [showSparkline, setShowSparkline] = useState(false)
 
-  // Memoize filters to prevent infinite re-renders
   const dashboardFilters = useMemo(
     () => ({
       startDate: filters.startDate,
@@ -23,36 +18,38 @@ function NetWorthWidget() {
       accountTypes: filters.accountTypes,
     }),
     [filters.startDate, filters.endDate, filters.accountTypes]
-  );
+  )
 
-  const { summary, history, loading, error } = useNetWorthData(dashboardFilters);
+  const { summary, history, loading, error } = useNetWorthData(dashboardFilters)
 
-  // Loading state
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
       </div>
-    );
+    )
   }
 
-  // Error state
   if (error) {
     return (
-      <div className="flex items-center justify-center h-full text-red-500 text-sm">
+      <div className="flex items-center justify-center h-full text-destructive text-sm">
         {error.message}
       </div>
-    );
+    )
   }
 
-  // Empty state
-  if (!summary || (summary.total_assets === 0 && summary.total_liabilities === 0 && Object.keys(summary.by_category).length === 0)) {
-    return <WidgetEmptyState widgetType="net-worth" />;
+  const isEmpty = !summary || (
+    summary.total_assets === 0 &&
+    summary.total_liabilities === 0 &&
+    Object.keys(summary.by_category).length === 0
+  )
+
+  if (isEmpty) {
+    return <WidgetEmptyState widgetType="net-worth" />
   }
 
   return (
     <div className="h-full flex flex-col">
-      {/* Toggle with user-friendly tooltip */}
       <div className="flex justify-end mb-2">
         <button
           onClick={() => setShowSparkline(!showSparkline)}
@@ -68,18 +65,31 @@ function NetWorthWidget() {
         </button>
       </div>
 
-      <NetWorthDisplay summary={summary} history={showSparkline ? history ?? undefined : undefined} showSparkline={showSparkline} />
+      <NetWorthDisplay
+        summary={summary}
+        history={showSparkline ? history ?? undefined : undefined}
+        showSparkline={showSparkline}
+        linkTo="/net-worth"
+      />
+
+      <div className="mt-auto pt-2 border-t border-border">
+        <Link
+          to="/net-worth"
+          className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          View details →
+        </Link>
+      </div>
     </div>
-  );
+  )
 }
 
-// Register the widget
 registerWidget({
   type: 'net-worth',
   title: 'Net Worth',
   description:
     'Track your total net worth with assets and liabilities breakdown. Toggle trend chart on/off.',
-  icon: 'chart-line', // Uses TrendingUp icon
+  icon: 'chart-line',
   category: 'overview',
   defaultSize: { w: 4, h: 4 },
   minSize: { w: 3, h: 3 },
@@ -91,6 +101,6 @@ registerWidget({
     noAccountsDescription: 'Connect a bank account to track your net worth',
     noDataDescription: 'No net worth data available',
   },
-});
+})
 
-export { NetWorthWidget };
+export { NetWorthWidget }
