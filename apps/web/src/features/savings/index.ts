@@ -10,3 +10,8 @@ export { computeSavingsProgress, computeSavingsRemaining } from './types'
 export { TextField, NumberField, DateField, SelectField } from './components/form'
 export { CreateSavingsGoalDialog } from './components/CreateSavingsGoalDialog'
 export type { CreateSavingsGoalDialogProps } from './components/CreateSavingsGoalDialog'
+export { UpdateSavingsGoalDialog } from './components/UpdateSavingsGoalDialog'
+export type { UpdateSavingsGoalDialogProps } from './components/UpdateSavingsGoalDialog'
+
+export { SavingsAggregateHeader } from './components/SavingsAggregateHeader'
+export type { SavingsAggregateHeaderProps } from './components/SavingsAggregateHeader'
