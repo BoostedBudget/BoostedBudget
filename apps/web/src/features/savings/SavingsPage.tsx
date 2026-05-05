@@ -1,11 +1,11 @@
 import { useEffect } from 'react'
+import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 
 export function SavingsPage() {
   const trackEvent = useTrackEvent()
   useEffect(() => {
-    // T3 will replace this string literal with ANALYTICS_EVENTS.SAVINGS_PAGE_VIEWED
-    trackEvent('savings_page_viewed')
+    trackEvent(ANALYTICS_EVENTS.SAVINGS_PAGE_VIEWED)
   }, [trackEvent])
 
   return (
