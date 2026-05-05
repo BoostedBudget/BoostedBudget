@@ -33,6 +33,7 @@ import { AutoCategorizationPageWrapper } from './features/auto-categorization/co
 import { BudgetsPage, BudgetDetailPage } from './features/budgets'
 import { RulesPage, RuleBuilder } from './features/rules'
 import { SpendingReportsPage } from './features/reports'
+import { NetWorthPage } from './features/net-worth'
 import { LandingPage } from './features/landing'
 import { AdminRoute, AdminLayout, AdminDashboardPage, UsersPage, HealthDashboardPage, WebhooksPage, DeadLetterPage } from './features/admin'
 import { NotFoundPage } from './features/not-found/NotFoundPage'
@@ -203,6 +204,16 @@ function App() {
                 <ProtectedRoute>
                   <PremiumRoute>
                     <SpendingReportsPage />
+                  </PremiumRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/net-worth"
+              element={
+                <ProtectedRoute>
+                  <PremiumRoute>
+                    <NetWorthPage />
                   </PremiumRoute>
                 </ProtectedRoute>
               }

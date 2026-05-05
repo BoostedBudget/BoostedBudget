@@ -6,6 +6,7 @@ import { Navigation } from './Navigation'
 
 const ROUTES = [
   { name: /dashboard/i, href: '/dashboard' },
+  { name: /net worth/i, href: '/net-worth' },
   { name: /accounts/i, href: '/accounts' },
   { name: /transactions/i, href: '/transactions' },
   { name: /budgets/i, href: '/budgets' },
