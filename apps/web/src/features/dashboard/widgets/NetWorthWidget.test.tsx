@@ -1,10 +1,12 @@
 /**
  * NetWorthWidget Tests
  * Issue #575: Refactored to use centralized mocks (no inline mock.module)
+ * Issue #955: Updated for semantic tokens + View details link + MemoryRouter
  */
 
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import type { NetWorthSummary, NetWorthHistory } from '../types'
 
 // Issue #575: Use centralized mocks to prevent mock.module() pollution
@@ -22,6 +24,14 @@ import {
 } from '@/test/mocks/net-worth-hooks'
 
 import { NetWorthWidget } from './NetWorthWidget'
+
+function renderWidget() {
+  return render(
+    <MemoryRouter>
+      <NetWorthWidget />
+    </MemoryRouter>
+  )
+}
 
 describe('NetWorthWidget', () => {
   const mockSummary: NetWorthSummary = {
@@ -62,7 +72,6 @@ describe('NetWorthWidget', () => {
     ],
   }
 
-  // Default states for the centralized mocks
   const defaultContextState = {
     filters: {
       startDate: '2024-01-01',
@@ -103,7 +112,7 @@ describe('NetWorthWidget', () => {
     it('should show loading spinner when loading', () => {
       setMockDataState({ loading: true })
 
-      render(<NetWorthWidget />)
+      renderWidget()
 
       const spinner = document.querySelector('.animate-spin')
       expect(spinner).toBeInTheDocument()
@@ -114,18 +123,18 @@ describe('NetWorthWidget', () => {
     it('should show error message when error occurs', () => {
       setMockDataState({ error: new Error('Network error') })
 
-      render(<NetWorthWidget />)
+      renderWidget()
 
       expect(screen.getByText('Network error')).toBeInTheDocument()
     })
 
-    it('should show error text in red', () => {
+    it('should show error text in destructive color', () => {
       setMockDataState({ error: new Error('API Error') })
 
-      render(<NetWorthWidget />)
+      renderWidget()
 
       const errorText = screen.getByText('API Error')
-      expect(errorText).toHaveClass('text-red-500')
+      expect(errorText).toHaveClass('text-destructive')
     })
   })
 
@@ -133,7 +142,7 @@ describe('NetWorthWidget', () => {
     it('should show no data message when summary is null', () => {
       setMockDataState({})
 
-      render(<NetWorthWidget />)
+      renderWidget()
 
       expect(screen.getByText('No data available')).toBeInTheDocument()
     })
@@ -148,7 +157,7 @@ describe('NetWorthWidget', () => {
       }
       setMockDataState({ summary: zeroSummary })
 
-      render(<NetWorthWidget />)
+      renderWidget()
 
       expect(screen.getByRole('status')).toBeInTheDocument()
     })
@@ -160,17 +169,17 @@ describe('NetWorthWidget', () => {
     })
 
     it('should render net worth value', () => {
-      render(<NetWorthWidget />)
+      renderWidget()
       expect(screen.getByText(/\$50,000/)).toBeInTheDocument()
     })
 
-    it('should display positive net worth with green color', () => {
-      render(<NetWorthWidget />)
+    it('should display positive net worth with success color', () => {
+      renderWidget()
       const netWorthElement = screen.getByText(/\$50,000/)
-      expect(netWorthElement).toHaveClass('text-green-600')
+      expect(netWorthElement).toHaveClass('text-success')
     })
 
-    it('should display negative net worth with red color', () => {
+    it('should display negative net worth with destructive color', () => {
       const negativeNetWorthSummary: NetWorthSummary = {
         ...mockSummary,
         net_worth: -10000,
@@ -179,14 +188,14 @@ describe('NetWorthWidget', () => {
       }
       setMockDataState({ summary: negativeNetWorthSummary, history: mockHistory })
 
-      render(<NetWorthWidget />)
+      renderWidget()
 
       const netWorthElement = screen.getByText(/-\$10,000/)
-      expect(netWorthElement).toHaveClass('text-red-600')
+      expect(netWorthElement).toHaveClass('text-destructive')
     })
 
     it('should display assets and liabilities breakdown', () => {
-      render(<NetWorthWidget />)
+      renderWidget()
 
       expect(screen.getByText('Assets')).toBeInTheDocument()
       expect(screen.getByText('Liabilities')).toBeInTheDocument()
@@ -195,10 +204,17 @@ describe('NetWorthWidget', () => {
     })
 
     it('should display period comparison when available', () => {
-      render(<NetWorthWidget />)
+      renderWidget()
 
       expect(screen.getByText(/\$5,000/)).toBeInTheDocument()
       expect(screen.getByText(/11\.11%/)).toBeInTheDocument()
+    })
+
+    it('renders "View details →" link to /net-worth', () => {
+      renderWidget()
+
+      const link = screen.getByRole('link', { name: /view details/i })
+      expect(link).toHaveAttribute('href', '/net-worth')
     })
   })
 
@@ -208,17 +224,17 @@ describe('NetWorthWidget', () => {
     })
 
     it('should render sparkline toggle button', () => {
-      render(<NetWorthWidget />)
+      renderWidget()
       expect(screen.getByText('Show Trend')).toBeInTheDocument()
     })
 
     it('should hide sparkline by default', () => {
-      render(<NetWorthWidget />)
+      renderWidget()
       expect(screen.queryByTestId('net-worth-sparkline')).not.toBeInTheDocument()
     })
 
     it('should show sparkline when toggle is clicked', () => {
-      render(<NetWorthWidget />)
+      renderWidget()
 
       const toggleButton = screen.getByText('Show Trend')
       fireEvent.click(toggleButton)
@@ -228,7 +244,7 @@ describe('NetWorthWidget', () => {
     })
 
     it('should have user-friendly tooltip on toggle', () => {
-      render(<NetWorthWidget />)
+      renderWidget()
 
       const toggleButton = screen.getByText('Show Trend')
       expect(toggleButton.closest('button')).toHaveAttribute('title', expect.stringContaining('trend'))
@@ -239,7 +255,7 @@ describe('NetWorthWidget', () => {
     it('should use filters from dashboard context', () => {
       setMockDataState({ summary: mockSummary, history: mockHistory })
 
-      render(<NetWorthWidget />)
+      renderWidget()
 
       expect(mockUseNetWorthData).toHaveBeenCalledWith(
         expect.objectContaining({

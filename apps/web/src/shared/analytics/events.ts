@@ -76,6 +76,10 @@ export const ANALYTICS_EVENTS = {
   NOTIFICATION_ACTION_CLICKED: 'notification_action_clicked',
   TRANSFER_SUGGESTION_ACCEPTED: 'transfer_suggestion_accepted',
   TRANSFER_SUGGESTION_REJECTED: 'transfer_suggestion_rejected',
+
+  // Net Worth (#955)
+  NET_WORTH_PAGE_VIEWED: 'net_worth_page_viewed',
+  NET_WORTH_RANGE_CHANGED: 'net_worth_range_changed',
 } as const
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[keyof typeof ANALYTICS_EVENTS]
