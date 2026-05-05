@@ -603,7 +603,7 @@ describe('BudgetDetailPage', () => {
   })
 
   describe('Navigation Handlers', () => {
-    it('should navigate to budgets page with openSavingsGoal state', async () => {
+    it('should navigate to savings page with openCreateDialog state', async () => {
       mockUseBudgetDetail.mockReturnValue({
         budget: createMockBudget(),
         loading: false,
@@ -617,7 +617,7 @@ describe('BudgetDetailPage', () => {
       fireEvent.click(screen.getByRole('button', { name: /create savings goal/i }))
 
       await waitFor(() => {
-        expect(mockNavigate).toHaveBeenCalledWith('/budgets', { state: { openSavingsGoal: true } })
+        expect(mockNavigate).toHaveBeenCalledWith('/savings', { state: { openCreateDialog: true } })
       })
     })
 

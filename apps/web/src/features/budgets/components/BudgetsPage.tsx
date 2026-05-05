@@ -3,9 +3,9 @@
  * Issue #30: Budget Dashboard UI
  * Issue #111: Goals Dashboard & Progress Visualization
  * Issue #462: shadcn/ui Migration - Mutual exclusion for dialogs
- * Issue #521: Enable Budget and Savings Goal Deletion in UI
+ * Issue #521: Enable Budget Deletion in UI
  *
- * Main page for viewing and managing budgets and savings goals.
+ * Main page for viewing and managing budgets.
  */
 
 import { useCallback, useMemo, useState } from 'react'
@@ -13,17 +13,14 @@ import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
-import { PieChart, Plus, Target } from 'lucide-react'
+import { PieChart, Plus } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { useBudgets } from '../hooks/useBudgets'
-import { useSavingsGoals } from '../../../features/savings/hooks/useSavingsGoals'
 import { useBudgetFilters } from '../hooks/useBudgetFilters'
 import { BudgetCard } from './BudgetCard'
 import { BudgetTable, type SortColumn as BudgetSortColumn, type SortDirection } from './BudgetTable'
-import { SavingsGoalCard } from '../../../features/savings/components/SavingsGoalCard'
 import { CreateBudgetDialog } from './CreateBudgetDialog'
-import { CreateSavingsGoalDialog } from './CreateSavingsGoalDialog'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
@@ -31,10 +28,8 @@ import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
 import { STORAGE_KEY_LIST_VIEW, getBudgetDetailPath } from '../constants'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { computeBudgetMetrics, type Budget, type BudgetWithMetrics } from '../types'
-import type { SavingsGoal } from '../../../features/savings/types'
 
-// Issue #462, #521: Use single state for mutual exclusion - only one dialog can be open at a time
-type ActiveDialog = 'budget' | 'goal' | 'delete-budget' | 'delete-goal' | null
+type ActiveDialog = 'budget' | 'delete-budget' | null
 
 function formatCurrency(amount: number, currencyCode: string): string {
   try {
@@ -49,13 +44,11 @@ function formatCurrency(amount: number, currencyCode: string): string {
   }
 }
 
-// Issue #584: Get initial view from localStorage
 function getInitialView(): ListView {
   try {
     const stored = localStorage.getItem(STORAGE_KEY_LIST_VIEW)
     if (stored === 'cards' || stored === 'table') return stored
   } catch {
-    /* ignore localStorage errors */
   }
   return 'cards'
 }
@@ -64,12 +57,10 @@ export function BudgetsPage() {
   const navigate = useNavigate()
   const trackEvent = useTrackEvent()
   const { budgets, loading: budgetsLoading, error: budgetsError, refetch: refetchBudgets, deleteBudget } = useBudgets()
-  const { goals, loading: goalsLoading, error: goalsError, refetch: refetchGoals, deleteGoal } = useSavingsGoals()
 
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null)
   const [view, setView] = useState<ListView>(getInitialView)
   const [deletingBudget, setDeletingBudget] = useState<Budget | null>(null)
-  const [deletingGoal, setDeletingGoal] = useState<SavingsGoal | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [sortColumn, setSortColumn] = useState<BudgetSortColumn | undefined>(undefined)
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
@@ -77,11 +68,9 @@ export function BudgetsPage() {
   const { periodFilter, progressRange, setPeriodFilter, setProgressRange } = useBudgetFilters()
 
   const openBudgetDialog = useCallback(() => setActiveDialog('budget'), [])
-  const openGoalDialog = useCallback(() => setActiveDialog('goal'), [])
   const closeDialog = useCallback(() => {
     setActiveDialog(null)
     setDeletingBudget(null)
-    setDeletingGoal(null)
   }, [])
 
   const handleBudgetCreated = useCallback((_budget: Budget) => {
@@ -93,12 +82,6 @@ export function BudgetsPage() {
     refetchBudgets()
   }, [trackEvent, closeDialog, refetchBudgets, budgets, budgetsLoading])
 
-  const handleGoalCreated = useCallback((_goal: SavingsGoal) => {
-    closeDialog()
-    refetchGoals()
-  }, [closeDialog, refetchGoals])
-
-  // Issue #521: Delete budget handlers
   const handleDeleteBudgetClick = useCallback((budgetId: string) => {
     const budget = budgets.find((b) => b.id === budgetId);
     if (budget) {
@@ -131,51 +114,15 @@ export function BudgetsPage() {
     }
   }, [deletingBudget, deleteBudget, trackEvent, closeDialog, refetchBudgets]);
 
-  // Issue #521: Delete goal handlers
-  const handleDeleteGoalClick = useCallback((goalId: string) => {
-    const goal = goals.find((g) => g.id === goalId);
-    if (goal) {
-      setDeletingGoal(goal);
-      setActiveDialog('delete-goal');
-    }
-  }, [goals]);
-
-  const handleConfirmDeleteGoal = useCallback(async () => {
-    if (!deletingGoal) return;
-
-    setIsDeleting(true);
-    try {
-      await deleteGoal(deletingGoal.id);
-      toast.success(`Savings goal "${deletingGoal.name}" deleted successfully`);
-      closeDialog();
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('404')) {
-        toast.error('Savings goal was already deleted');
-        closeDialog();
-        refetchGoals();
-      } else if (error instanceof Error && error.message.includes('401')) {
-        toast.error('Session expired. Please log in again.');
-      } else {
-        toast.error('Failed to delete savings goal. Please try again.');
-      }
-    } finally {
-      setIsDeleting(false);
-    }
-  }, [deletingGoal, deleteGoal, closeDialog, refetchGoals]);
-
-  // Issue #590: Handle sort change
   const handleSort = useCallback((column: BudgetSortColumn, direction: SortDirection) => {
     setSortColumn(column);
     setSortDirection(direction);
   }, []);
 
-  // Issue #1051: Navigate to budget detail page from table view
-  // Analytics are fired by BudgetDetailPage on mount, not here.
   const handleOpenBudget = useCallback((budget: BudgetWithMetrics) => {
     navigate(getBudgetDetailPath(budget.id));
   }, [navigate]);
 
-  // Issue #590: Create period options from budgets data
   const periodOptions = useMemo<FilterOption[]>(() => {
     const periods = new Set<string>();
     budgets.forEach((budget) => {
@@ -183,7 +130,6 @@ export function BudgetsPage() {
         periods.add(budget.period);
       }
     });
-    // Standard period order
     const periodOrder = ['weekly', 'monthly', 'quarterly', 'yearly', 'custom'];
     return Array.from(periods)
       .sort((a, b) => {
@@ -197,21 +143,15 @@ export function BudgetsPage() {
       }));
   }, [budgets]);
 
-  // Issue #590: Filter handlers from useBudgetFilters hook (URL-synced)
-  // setPeriodFilter, setProgressRange come from the hook
-
-  // Issue #590: Filter and sort budgets client-side
   const filterAndSortBudgets = useCallback((budgetsToProcess: Budget[]): BudgetWithMetrics[] => {
     let withMetrics = budgetsToProcess.map(computeBudgetMetrics);
 
-    // Apply period filter
     if (periodFilter.length > 0) {
       withMetrics = withMetrics.filter((budget) =>
         periodFilter.includes(budget.period)
       );
     }
 
-    // Apply progress range filter
     if (progressRange) {
       withMetrics = withMetrics.filter((budget) => {
         const progress = budget.percent_used;
@@ -221,7 +161,6 @@ export function BudgetsPage() {
       });
     }
 
-    // Apply sorting if sortColumn is set
     if (!sortColumn) return withMetrics;
 
     return [...withMetrics].sort((a, b) => {
@@ -254,8 +193,8 @@ export function BudgetsPage() {
     });
   }, [sortColumn, sortDirection, periodFilter, progressRange]);
 
-  const loading = budgetsLoading || goalsLoading
-  const error = budgetsError || goalsError
+  const loading = budgetsLoading
+  const error = budgetsError
 
   if (loading) {
     return (
@@ -281,8 +220,6 @@ export function BudgetsPage() {
 
   const activeBudgets = budgets.filter((b) => b.is_active)
   const inactiveBudgets = budgets.filter((b) => !b.is_active)
-  const activeGoals = goals.filter((g) => !g.is_completed)
-  const completedGoals = goals.filter((g) => g.is_completed)
 
   return (
     <div className="p-6 max-w-[1200px] mx-auto">
@@ -331,7 +268,6 @@ export function BudgetsPage() {
             sortColumn={sortColumn}
             sortDirection={sortDirection}
             onSort={handleSort}
-            // Issue #590: Inline filter props (URL-synced via useBudgetFilters)
             periodOptions={periodOptions}
             periodFilter={periodFilter}
             onPeriodFilterChange={setPeriodFilter}
@@ -360,7 +296,6 @@ export function BudgetsPage() {
               sortColumn={sortColumn}
               sortDirection={sortDirection}
               onSort={handleSort}
-              // Issue #590: Inline filter props (URL-synced via useBudgetFilters)
               periodOptions={periodOptions}
               periodFilter={periodFilter}
               onPeriodFilterChange={setPeriodFilter}
@@ -377,68 +312,12 @@ export function BudgetsPage() {
         </section>
       )}
 
-      <section className="mb-8">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="m-0 text-xl font-semibold text-foreground">Savings Goals</h2>
-          {(activeGoals.length > 0 || completedGoals.length > 0) && (
-            <ReadOnlyGuard>
-              <Button type="button" variant="outline" onClick={openGoalDialog} aria-label="Create savings goal">
-                <Plus />
-                Create Goal
-              </Button>
-            </ReadOnlyGuard>
-          )}
-        </div>
-        {activeGoals.length === 0 && completedGoals.length === 0 ? (
-          <EmptyState
-            icon={<Target />}
-            title="No savings goals yet"
-            description="Create one to track your progress."
-            action={
-              <ReadOnlyGuard>
-                <Button onClick={openGoalDialog}>
-                  <Plus />
-                  Create your first goal
-                </Button>
-              </ReadOnlyGuard>
-            }
-          />
-        ) : (
-          <>
-            {activeGoals.length > 0 && (
-              <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
-                {activeGoals.map((goal) => (
-                  <SavingsGoalCard key={goal.id} goal={goal} onDelete={handleDeleteGoalClick} />
-                ))}
-              </div>
-            )}
-            {completedGoals.length > 0 && (
-              <>
-                <h3 className="mt-6 mb-4 text-base font-semibold text-muted-foreground">Completed Goals</h3>
-                <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
-                  {completedGoals.map((goal) => (
-                    <SavingsGoalCard key={goal.id} goal={goal} onDelete={handleDeleteGoalClick} />
-                  ))}
-                </div>
-              </>
-            )}
-          </>
-        )}
-      </section>
-
-      {/* Creation Dialogs - Only one can be open at a time (Issue #462) */}
       <CreateBudgetDialog
         isOpen={activeDialog === 'budget'}
         onCancel={closeDialog}
         onBudgetCreated={handleBudgetCreated}
       />
-      <CreateSavingsGoalDialog
-        isOpen={activeDialog === 'goal'}
-        onCancel={closeDialog}
-        onGoalCreated={handleGoalCreated}
-      />
 
-      {/* Deletion Dialogs (Issue #521, #960) */}
       <ConfirmationDialog
         open={activeDialog === 'delete-budget'}
         onOpenChange={(open) => !open && closeDialog()}
@@ -452,22 +331,6 @@ export function BudgetsPage() {
           </>
         ) : ''}
         confirmText={deletingBudget?.name ?? ''}
-        loading={isDeleting}
-      />
-      <ConfirmationDialog
-        open={activeDialog === 'delete-goal'}
-        onOpenChange={(open) => !open && closeDialog()}
-        onConfirm={handleConfirmDeleteGoal}
-        title="Delete Savings Goal"
-        description={deletingGoal ? (
-          <>
-            Are you sure you want to delete &ldquo;{deletingGoal.name}&rdquo;? Progress of{' '}
-            {formatCurrency(deletingGoal.current_amount, deletingGoal.currency_code)} toward{' '}
-            {formatCurrency(deletingGoal.target_amount, deletingGoal.currency_code)} will be permanently deleted.
-            This action cannot be undone.
-          </>
-        ) : ''}
-        confirmText={deletingGoal?.name ?? ''}
         loading={isDeleting}
       />
     </div>
