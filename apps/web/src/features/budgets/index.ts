@@ -47,9 +47,6 @@ export { BudgetsPage } from './components/BudgetsPage';
 
 export { BudgetDetailPage } from './components/BudgetDetailPage';
 
-export { CreateSavingsGoalDialog } from '../savings/components/CreateSavingsGoalDialog';
-export type { CreateSavingsGoalDialogProps } from '../savings/components/CreateSavingsGoalDialog';
-
 export { CreateBudgetDialog } from './components/CreateBudgetDialog';
 export type { CreateBudgetDialogProps } from './components/CreateBudgetDialog';
 
@@ -64,13 +61,3 @@ export type { BudgetIncomeSectionProps } from './components/budget-detail/Budget
 
 export { UnallocatedFundsCard } from './components/budget-detail/UnallocatedFundsCard';
 export type { UnallocatedFundsCardProps } from './components/budget-detail/UnallocatedFundsCard';
-
-// TEMPORARY re-exports — will be removed in T12 once all callers migrated
-export type { SavingsGoal, CreateSavingsGoalRequest, UpdateSavingsGoalRequest } from '../savings/types';
-export { computeSavingsProgress, computeSavingsRemaining } from '../savings/types';
-export { useSavingsGoals } from '../savings/hooks/useSavingsGoals';
-export type { SavingsGoalWithProgress, UseSavingsGoalsOptions, UseSavingsGoalsResult } from '../savings/hooks/useSavingsGoals';
-export { SavingsGoalCard } from '../savings/components/SavingsGoalCard';
-export type { SavingsGoalCardProps } from '../savings/components/SavingsGoalCard';
-export { GOAL_TEMPLATES, getGoalTemplate, calculateDeadlineFromTemplate } from '../savings/goalTemplates';
-export type { GoalTemplate } from '../savings/goalTemplates';
