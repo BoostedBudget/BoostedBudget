@@ -89,11 +89,11 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsG
       </div>
 
       <div className="flex items-baseline gap-1">
-        <span className="text-2xl font-bold text-primary">
+        <span className="text-2xl font-bold text-primary" data-ph-mask>
           {formatCurrency(goal.current_amount, goal.currency_code)}
         </span>
         <span className="text-base text-muted-foreground">/</span>
-        <span className="text-base text-muted-foreground">
+        <span className="text-base text-muted-foreground" data-ph-mask>
           {formatCurrency(goal.target_amount, goal.currency_code)}
         </span>
       </div>
@@ -115,7 +115,7 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsG
       </div>
 
       <div className="flex justify-between items-center text-sm text-muted-foreground">
-        <span className="font-medium">
+        <span className="font-medium" data-ph-mask>
           {formatCurrency(remaining, goal.currency_code)} to go
         </span>
         {goal.deadline && (

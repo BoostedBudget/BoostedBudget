@@ -1,11 +1,6 @@
 /**
  * CreateSavingsGoalDialog
- * Issue #111: Goals Dashboard & Progress Visualization
- * Issue #462: Migrated from HeadlessUI to shadcn/ui
- * Issue #954: Moved to savings feature module, refactored to use form primitives
- *
- * Modal dialog for creating savings goals with template selection.
- * Uses shadcn/ui Dialog built on Radix UI.
+ * Issue #954: Modal dialog for creating savings goals with template selection
  */
 
 import { useState, useCallback } from 'react';
@@ -43,6 +38,11 @@ interface FormErrors {
   name?: string;
   target_amount?: string;
   account_id?: string;
+}
+
+function todayLocalDate(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 const initialFormData: FormData = {
@@ -185,7 +185,7 @@ export function CreateSavingsGoalDialog({
         </DialogHeader>
 
         <div className="mb-6">
-          <label className="block text-sm font-medium text-foreground mb-2">
+          <label className="text-sm font-medium text-foreground mb-2 block">
             Choose a template (optional)
           </label>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -275,7 +275,7 @@ export function CreateSavingsGoalDialog({
             label="Deadline (optional)"
             value={formData.deadline}
             onChange={handleInputChange}
-            min={new Date().toISOString().split('T')[0]}
+            min={todayLocalDate()}
           />
 
           {apiError && (
