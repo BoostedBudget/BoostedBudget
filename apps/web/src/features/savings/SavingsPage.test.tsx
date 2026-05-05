@@ -11,26 +11,20 @@ import {
   mockSavingsGoalsRefetch,
 } from '@/test/mocks/savings-goals-api'
 
-// ── Mock: analytics ──────────────────────────────────────────────────────────
 const mockTrackEvent = mock(() => {})
 mock.module('@/shared/hooks/useTrackEvent', () => ({
   useTrackEvent: () => mockTrackEvent,
 }))
 
-// ── Mock: accounts API (used by CreateSavingsGoalDialog) ─────────────────────
 mock.module('@boostedbudget/api-client/endpoints/accounts/accounts', () => ({
   useGetAccounts: () => ({ data: { accounts: [] }, isLoading: false, error: null }),
 }))
 
-// ── Mock: ReadOnlyContext ─────────────────────────────────────────────────────
 mock.module('@/auth/ReadOnlyContext', () => ({
   useReadOnly: () => ({ isReadOnly: false }),
 }))
 
-// ── Import component AFTER mocks ──────────────────────────────────────────────
 const { SavingsPage } = await import('./SavingsPage')
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 function createWrapper() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -60,12 +54,10 @@ const baseGoal: SavingsGoal = {
   updated_at: '2024-01-01T00:00:00Z',
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
 describe('SavingsPage', () => {
   beforeEach(() => {
     mockTrackEvent.mockReset()
     mockSavingsGoalsRefetch.mockClear()
-    // Default: loaded, no goals
     mockUseGetSavingsGoals.mockReturnValue({
       data: [],
       isLoading: false,
@@ -122,7 +114,6 @@ describe('SavingsPage', () => {
   })
 
   it('renders empty state when no goals exist', () => {
-    // Default beforeEach sets data: []
     renderPage()
     expect(screen.getByText(/no savings goals/i)).toBeDefined()
   })

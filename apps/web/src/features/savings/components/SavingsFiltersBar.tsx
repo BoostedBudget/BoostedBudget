@@ -1,10 +1,6 @@
 /**
  * SavingsFiltersBar Component
- * Issue #954: Savings page — T9
- *
- * Filter bar with Active/Completed/All tabs and a sort dropdown.
- * Uses shadcn Tabs (Radix UI) for accessible tab semantics.
- * Sort is a native <select> since shadcn Select is not available.
+ * Issue #954: Filter bar with tabs and sort dropdown
  */
 
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -38,7 +34,6 @@ export function SavingsFiltersBar({
   onTabChange,
   sortKey,
   onSortChange,
-  goalCount: _goalCount,
 }: SavingsFiltersBarProps) {
   return (
     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-6">

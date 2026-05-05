@@ -1,10 +1,6 @@
 /**
  * SavingsGoalsGrid Component
- * Issue #954: Savings page — T10
- *
- * Renders a responsive grid of SavingsGoalCard components.
- * Shows an inline empty message when the filtered view is empty
- * (distinguished from the zero-goals empty state on SavingsPage).
+ * Issue #954: Renders responsive grid of goal cards with empty state
  */
 
 import { SavingsGoalCard } from './SavingsGoalCard'

@@ -1,10 +1,6 @@
 /**
  * SavingsAggregateHeader
- * Issue #954: Savings page — T7
- *
- * Aggregates savings goals across currencies and renders a header card.
- * For a single currency, renders a single-row summary.
- * For multiple currencies, renders one row per currency + total counts.
+ * Issue #954: Aggregates savings goals across currencies
  */
 
 import type { SavingsGoal } from '../types'

@@ -1,9 +1,6 @@
 /**
  * useSavingsGoals Hook
- * Issue #564: Migrated to generated React Query hooks
- * Issue #954: Moved to features/savings module
- *
- * React hook for savings goal CRUD operations.
+ * Issue #954: React hook for savings goal CRUD operations
  */
 
 import { useCallback, useMemo } from 'react';
@@ -45,12 +42,6 @@ export interface UseSavingsGoalsResult {
   deleteGoal: (id: string) => Promise<void>;
 }
 
-/**
- * Hook for managing savings goals with full CRUD operations
- *
- * @param options - Configuration options including activeOnly filter
- * @returns Object containing goals data, computed values, loading state, error, and CRUD functions
- */
 export function useSavingsGoals(options: UseSavingsGoalsOptions = {}): UseSavingsGoalsResult {
   const { activeOnly = false } = options;
   const queryClient = useQueryClient();
@@ -78,9 +69,7 @@ export function useSavingsGoals(options: UseSavingsGoalsOptions = {}): UseSaving
     : null;
 
   const goals: SavingsGoal[] = useMemo(() => {
-    const data = query.data;
-    if (!data) return [];
-    return (Array.isArray(data) ? data : []) as unknown as SavingsGoal[];
+    return (query.data || []) as unknown as SavingsGoal[];
   }, [query.data]);
 
   const createMutation = useCreateSavingsGoal();
