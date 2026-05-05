@@ -80,6 +80,9 @@ export const ANALYTICS_EVENTS = {
   // Net Worth (#955)
   NET_WORTH_PAGE_VIEWED: 'net_worth_page_viewed',
   NET_WORTH_RANGE_CHANGED: 'net_worth_range_changed',
+
+  // Savings Goals (#954)
+  SAVINGS_PAGE_VIEWED: 'savings_page_viewed',
 } as const
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[keyof typeof ANALYTICS_EVENTS]
