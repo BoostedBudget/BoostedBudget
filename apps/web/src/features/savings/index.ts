@@ -1,10 +1,3 @@
-/**
- * Savings Feature Module
- * Issue #954: Savings page
- *
- * Exports all public APIs for the savings feature.
- */
-
 export { SavingsPage } from './SavingsPage'
 export { SavingsGoalCard } from './components/SavingsGoalCard'
 export type { SavingsGoalCardProps } from './components/SavingsGoalCard'
