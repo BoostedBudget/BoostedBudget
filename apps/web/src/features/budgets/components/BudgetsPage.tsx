@@ -31,24 +31,12 @@ import { computeBudgetMetrics, type Budget, type BudgetWithMetrics } from '../ty
 
 type ActiveDialog = 'budget' | 'delete-budget' | null
 
-function formatCurrency(amount: number, currencyCode: string): string {
-  try {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: currencyCode,
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(amount)
-  } catch {
-    return `${currencyCode} ${amount.toFixed(2)}`
-  }
-}
-
 function getInitialView(): ListView {
   try {
     const stored = localStorage.getItem(STORAGE_KEY_LIST_VIEW)
     if (stored === 'cards' || stored === 'table') return stored
   } catch {
+    // ignore localStorage read errors
   }
   return 'cards'
 }
