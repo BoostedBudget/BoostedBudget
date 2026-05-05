@@ -15,3 +15,8 @@ export type { UpdateSavingsGoalDialogProps } from './components/UpdateSavingsGoa
 
 export { SavingsAggregateHeader } from './components/SavingsAggregateHeader'
 export type { SavingsAggregateHeaderProps } from './components/SavingsAggregateHeader'
+export { useSavingsGoalsView } from './hooks/useSavingsGoalsView'
+export type { SortKey, TabKey, UseSavingsGoalsViewResult } from './hooks/useSavingsGoalsView'
+
+export { SavingsFiltersBar } from './components/SavingsFiltersBar'
+export type { SavingsFiltersBarProps, TabKey, SortKey } from './components/SavingsFiltersBar'
