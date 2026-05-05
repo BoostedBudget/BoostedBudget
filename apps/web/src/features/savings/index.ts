@@ -19,4 +19,4 @@ export { useSavingsGoalsView } from './hooks/useSavingsGoalsView'
 export type { SortKey, TabKey, UseSavingsGoalsViewResult } from './hooks/useSavingsGoalsView'
 
 export { SavingsFiltersBar } from './components/SavingsFiltersBar'
-export type { SavingsFiltersBarProps, TabKey, SortKey } from './components/SavingsFiltersBar'
+export type { SavingsFiltersBarProps } from './components/SavingsFiltersBar'
