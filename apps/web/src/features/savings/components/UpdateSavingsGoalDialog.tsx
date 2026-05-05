@@ -1,13 +1,9 @@
 /**
  * UpdateSavingsGoalDialog
  * Issue #954: Edit dialog for existing savings goals
- *
- * Pre-fills form from an existing goal and calls useUpdateSavingsGoal on submit.
- * Account assignment is permanent — no account_id field.
- * Uses shadcn/ui Dialog built on Radix UI.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { XIcon } from 'lucide-react';
 import {
   Dialog,
@@ -40,12 +36,14 @@ interface FormErrors {
   target_amount?: string;
 }
 
-const initialFormData: FormData = {
-  name: '',
-  description: '',
-  target_amount: '',
-  deadline: '',
-};
+function goalToFormData(goal: SavingsGoal): FormData {
+  return {
+    name: goal.name,
+    description: goal.description ?? '',
+    target_amount: String(goal.target_amount),
+    deadline: goal.deadline ? goal.deadline.split('T')[0] : '',
+  }
+}
 
 export function UpdateSavingsGoalDialog({
   isOpen,
@@ -53,7 +51,9 @@ export function UpdateSavingsGoalDialog({
   onCancel,
   onGoalUpdated,
 }: UpdateSavingsGoalDialogProps) {
-  const [formData, setFormData] = useState<FormData>(initialFormData);
+  const [formData, setFormData] = useState<FormData>(() =>
+    goal ? goalToFormData(goal) : { name: '', description: '', target_amount: '', deadline: '' },
+  )
   const [errors, setErrors] = useState<FormErrors>({});
   const [apiError, setApiError] = useState<string | null>(null);
 
@@ -61,19 +61,6 @@ export function UpdateSavingsGoalDialog({
   const updateMutation = useUpdateSavingsGoal();
 
   const isSubmitting = updateMutation.isPending;
-
-  useEffect(() => {
-    if (goal) {
-      setFormData({
-        name: goal.name,
-        description: goal.description ?? '',
-        target_amount: String(goal.target_amount),
-        deadline: goal.deadline ? goal.deadline.split('T')[0] : '',
-      });
-      setErrors({});
-      setApiError(null);
-    }
-  }, [goal]);
 
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {

@@ -1,9 +1,6 @@
 /**
  * SavingsPage
- * Issue #954: Savings page — T10
- *
- * Full page integration: header, aggregate stats, filters, goal grid,
- * create/edit/delete dialogs, loading/error/empty states, analytics.
+ * Issue #954: Main page with savings goals management
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -114,7 +111,6 @@ export function SavingsPage() {
     setActiveDialog('none')
   }, [])
 
-  // ── Loading ──────────────────────────────────────────────────────────────────
   if (loading) {
     return (
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
@@ -125,7 +121,6 @@ export function SavingsPage() {
     )
   }
 
-  // ── Error ────────────────────────────────────────────────────────────────────
   if (error) {
     return (
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
@@ -140,7 +135,6 @@ export function SavingsPage() {
     )
   }
 
-  // ── Empty state ──────────────────────────────────────────────────────────────
   if (goals.length === 0) {
     return (
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
@@ -163,7 +157,6 @@ export function SavingsPage() {
     )
   }
 
-  // ── Full render ──────────────────────────────────────────────────────────────
   const emptyMessage =
     tab === 'active'
       ? 'No active goals.'
@@ -200,22 +193,20 @@ export function SavingsPage() {
         emptyMessage={emptyMessage}
       />
 
-      {/* Create dialog */}
       <CreateSavingsGoalDialog
         isOpen={activeDialog === 'create'}
         onCancel={() => setActiveDialog('none')}
         onGoalCreated={handleGoalCreated}
       />
 
-      {/* Edit dialog */}
       <UpdateSavingsGoalDialog
+        key={editingGoal?.id ?? 'none'}
         isOpen={editingGoal !== null}
         goal={editingGoal}
         onCancel={() => setEditingGoal(null)}
         onGoalUpdated={handleGoalUpdated}
       />
 
-      {/* Delete confirmation */}
       <ConfirmationDialog
         open={activeDialog === 'delete'}
         onOpenChange={(open) => {
