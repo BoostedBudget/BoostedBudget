@@ -19,7 +19,7 @@ mock.module('@boostedbudget/api-client/endpoints/accounts/accounts', () => ({
   useGetAccounts: (_params: unknown, options: { query: { enabled: boolean } }) => mockUseGetAccounts(options),
 }))
 
-mock.module('../../savings/goalTemplates', () => ({
+mock.module('../goalTemplates', () => ({
   GOAL_TEMPLATES: [
     { id: 'emergency', name: 'Emergency Fund', defaultMonths: 12 },
     { id: 'vacation', name: 'Vacation', defaultMonths: 6 },
@@ -296,7 +296,6 @@ describe('CreateSavingsGoalDialog', () => {
       await user.clear(screen.getByLabelText('Target Amount'))
       await user.type(screen.getByLabelText('Target Amount'), '1000')
 
-      // Submit the form
       const form = document.querySelector('form')
       fireEvent.submit(form!)
 

@@ -47,8 +47,8 @@ export { BudgetsPage } from './components/BudgetsPage';
 
 export { BudgetDetailPage } from './components/BudgetDetailPage';
 
-export { CreateSavingsGoalDialog } from './components/CreateSavingsGoalDialog';
-export type { CreateSavingsGoalDialogProps } from './components/CreateSavingsGoalDialog';
+export { CreateSavingsGoalDialog } from '../savings/components/CreateSavingsGoalDialog';
+export type { CreateSavingsGoalDialogProps } from '../savings/components/CreateSavingsGoalDialog';
 
 export { CreateBudgetDialog } from './components/CreateBudgetDialog';
 export type { CreateBudgetDialogProps } from './components/CreateBudgetDialog';
