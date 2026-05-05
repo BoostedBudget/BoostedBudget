@@ -4,6 +4,10 @@ import { MemoryRouter } from 'react-router-dom'
 import { NetWorthDisplay } from './NetWorthDisplay'
 import type { NetWorthSummary } from '../types'
 
+function todayString(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
 const baseSummary: NetWorthSummary = {
   as_of_date: '2024-03-31',
   net_worth: 10000,
@@ -66,5 +70,22 @@ describe('NetWorthDisplay', () => {
     const { container } = renderWithRouter(<NetWorthDisplay summary={baseSummary} />)
     expect(container.innerHTML).not.toContain('green-600')
     expect(container.innerHTML).not.toContain('red-600')
+  })
+
+  it('renders as-of date muted under headline', () => {
+    renderWithRouter(<NetWorthDisplay summary={baseSummary} />)
+    expect(screen.getByText(/as of Mar 31, 2024/i)).toBeDefined()
+  })
+
+  it('appends (may be stale) when as_of_date is older than 24 hours', () => {
+    const stale = { ...baseSummary, as_of_date: '2020-01-01' }
+    renderWithRouter(<NetWorthDisplay summary={stale} />)
+    expect(screen.getByText(/may be stale/i)).toBeDefined()
+  })
+
+  it('does not append (may be stale) when as_of_date is recent', () => {
+    const fresh = { ...baseSummary, as_of_date: todayString() }
+    renderWithRouter(<NetWorthDisplay summary={fresh} />)
+    expect(screen.queryByText(/may be stale/i)).toBeNull()
   })
 })

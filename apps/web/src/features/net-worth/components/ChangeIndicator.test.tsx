@@ -45,4 +45,10 @@ describe('ChangeIndicator', () => {
     render(<ChangeIndicator variant="negative" amount={-750} percent={-3.2} />)
     expect(screen.getByText(/\$750/)).toBeDefined()
   })
+
+  it('applies data-ph-mask to financial amount', () => {
+    const { container } = render(<ChangeIndicator variant="positive" amount={1234} percent={5.2} />)
+    const masked = container.querySelectorAll('[data-ph-mask]')
+    expect(masked.length).toBeGreaterThan(0)
+  })
 })

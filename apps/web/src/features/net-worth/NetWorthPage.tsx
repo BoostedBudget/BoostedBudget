@@ -6,6 +6,7 @@ import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useNetWorthData } from '@/features/dashboard/hooks/useNetWorthData'
 import { NetWorthDisplay } from '@/features/dashboard/components/NetWorthDisplay'
+import { isNetWorthEmpty } from '@/features/dashboard/utils/netWorth'
 import { NetWorthSection } from './components/NetWorthSection'
 import { NetWorthHistoryChart } from './components/NetWorthHistoryChart'
 import { AccountBreakdownTable } from './components/AccountBreakdownTable'
@@ -54,7 +55,7 @@ export function NetWorthPage() {
     )
   }
 
-  if (!summary) {
+  if (!summary || isNetWorthEmpty(summary)) {
     return (
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <EmptyState

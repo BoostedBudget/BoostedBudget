@@ -4,6 +4,7 @@ import { TrendingUp } from 'lucide-react'
 import { NetWorthDisplay } from '../components/NetWorthDisplay'
 import { useDashboardContext } from '../context/DashboardContext'
 import { useNetWorthData } from '../hooks/useNetWorthData'
+import { isNetWorthEmpty } from '../utils/netWorth'
 import { registerWidget } from './registry'
 import { WidgetEmptyState } from './WidgetEmptyState'
 
@@ -38,13 +39,7 @@ function NetWorthWidget() {
     )
   }
 
-  const isEmpty = !summary || (
-    summary.total_assets === 0 &&
-    summary.total_liabilities === 0 &&
-    Object.keys(summary.by_category).length === 0
-  )
-
-  if (isEmpty) {
+  if (!summary || isNetWorthEmpty(summary)) {
     return <WidgetEmptyState widgetType="net-worth" />
   }
 
