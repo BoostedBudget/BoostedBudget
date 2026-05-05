@@ -62,14 +62,12 @@ describe('SavingsGoalCard', () => {
     it('should show progress percentage', () => {
       render(<SavingsGoalCard goal={mockGoal} />);
 
-      // 1500 / 5000 * 100 = 30%
       expect(screen.getByText('30%')).toBeInTheDocument();
     });
 
     it('should show remaining amount', () => {
       render(<SavingsGoalCard goal={mockGoal} />);
 
-      // 5000 - 1500 = 3500
       expect(screen.getByText(/\$3,500\.00.*to go/i)).toBeInTheDocument();
     });
 
@@ -92,7 +90,6 @@ describe('SavingsGoalCard', () => {
     it('should show deadline when provided', () => {
       render(<SavingsGoalCard goal={mockGoal} />);
 
-      // Check deadline section exists
       const deadlineElement = document.querySelector('.savings-goal-card__deadline');
       expect(deadlineElement).toBeInTheDocument();
     });
@@ -106,8 +103,6 @@ describe('SavingsGoalCard', () => {
     });
 
     it('renders the deadline as a local-day formatted date', () => {
-      // Guards against the timezone off-by-one: `new Date('2025-07-01T00:00:00Z')`
-      // renders "Jun 30" in timezones west of UTC. Fix parses the date portion only.
       render(<SavingsGoalCard goal={{ ...mockGoal, deadline: '2025-07-01T00:00:00Z' }} />);
       expect(screen.getByText(/Due:.*Jul 1, 2025/)).toBeInTheDocument();
     });

@@ -109,7 +109,6 @@ describe('goalTemplates', () => {
   });
 
   describe('calculateDeadlineFromTemplate', () => {
-    // Mock Date for predictable testing
     const mockDate = new Date('2025-06-15T12:00:00Z');
 
     beforeEach(() => {
@@ -150,7 +149,6 @@ describe('goalTemplates', () => {
       const template = getGoalTemplate('emergency-fund')!;
       const deadline = calculateDeadlineFromTemplate(template);
 
-      // June 2025 + 12 months = June 2026
       expect(deadline).toBe('2026-06-15');
     });
 
@@ -158,7 +156,6 @@ describe('goalTemplates', () => {
       const template = getGoalTemplate('vacation')!;
       const deadline = calculateDeadlineFromTemplate(template);
 
-      // June 2025 + 6 months = December 2025
       expect(deadline).toBe('2025-12-15');
     });
 
@@ -188,7 +185,6 @@ describe('goalTemplates', () => {
     });
 
     it('handles year boundary correctly (December + months)', () => {
-      // Set date to December
       setSystemTime(new Date('2025-12-15T12:00:00Z'));
 
       const template: GoalTemplate = {
@@ -200,7 +196,6 @@ describe('goalTemplates', () => {
       };
 
       const deadline = calculateDeadlineFromTemplate(template);
-      // December 2025 + 3 months = March 2026
       expect(deadline).toBe('2026-03-15');
     });
 
@@ -208,7 +203,6 @@ describe('goalTemplates', () => {
       const template = getGoalTemplate('home-down-payment')!;
       const deadline = calculateDeadlineFromTemplate(template);
 
-      // June 2025 + 36 months = June 2028
       expect(deadline).toBe('2028-06-15');
     });
 
@@ -216,17 +210,12 @@ describe('goalTemplates', () => {
       const template = getGoalTemplate('car-purchase')!;
       const deadline = calculateDeadlineFromTemplate(template);
 
-      // June 2025 + 24 months = June 2027
       expect(deadline).toBe('2027-06-15');
     });
 
     it('uses the local calendar day even when system clock is late UTC', () => {
-      // Pre-fix used `.toISOString().split('T')[0]`, which returns the next day
-      // for UTC-negative timezones in the evening (e.g. 23:30 UTC = local June 15
-      // but ISO string is still "2025-06-15" — this guards a future regression).
       setSystemTime(new Date('2025-06-15T23:30:00Z'));
       const template = getGoalTemplate('vacation')!;
-      // Local June 15 + 6 months = local December 15, never December 16.
       expect(calculateDeadlineFromTemplate(template)).toBe('2025-12-15');
     });
   });

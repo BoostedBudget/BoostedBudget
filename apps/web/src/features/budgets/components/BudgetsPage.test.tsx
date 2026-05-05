@@ -1,7 +1,8 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 import { mockNavigate } from '@/test/mocks/react-router'
 import { STORAGE_KEY_LIST_VIEW } from '../constants'
-import type { Budget, SavingsGoal } from '../types'
+import type { Budget } from '../types'
+import type { SavingsGoal } from '../../../features/savings/types'
 
 import {
   mockUseBudgets,
@@ -38,7 +39,7 @@ mock.module('./BudgetCard', () => ({
   ),
 }))
 
-mock.module('./SavingsGoalCard', () => ({
+mock.module('../../../features/savings/components/SavingsGoalCard', () => ({
   SavingsGoalCard: ({
     goal,
     onDelete,
@@ -116,11 +117,11 @@ mock.module('../hooks/useBudgets', () => ({
   useBudgets: () => mockUseBudgets(),
 }))
 
-mock.module('@/features/budgets/hooks/useSavingsGoals', () => ({
+mock.module('@/features/savings/hooks/useSavingsGoals', () => ({
   useSavingsGoals: () => mockUseSavingsGoals(),
 }))
 
-mock.module('../hooks/useSavingsGoals', () => ({
+mock.module('../../../features/savings/hooks/useSavingsGoals', () => ({
   useSavingsGoals: () => mockUseSavingsGoals(),
 }))
 
