@@ -346,5 +346,69 @@ describe('SavingsPage', () => {
 
       expect(mockTrackEvent).toHaveBeenCalledWith('savings_sort_changed', { sort: 'deadline_asc' })
     })
+
+    it('clicking Retry in error state calls refetch', async () => {
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: new Error('Network failure'),
+        refetch: mockSavingsGoalsRefetch,
+      })
+      renderPage()
+      const retryButton = screen.getByRole('button', { name: /retry/i })
+      await act(async () => {
+        retryButton.click()
+      })
+      expect(mockSavingsGoalsRefetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('auto-opens create dialog when navigated with location.state.openCreateDialog', async () => {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      render(<SavingsPage />, {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <QueryClientProvider client={queryClient}>
+            <MemoryRouter initialEntries={[{ pathname: '/savings', state: { openCreateDialog: true } }]}>
+              {children}
+            </MemoryRouter>
+          </QueryClientProvider>
+        ),
+      })
+      await act(async () => {})
+      expect(screen.getByText('Create Savings Goal')).toBeDefined()
+    })
+
+    it('clicking edit on a goal card opens the edit dialog', async () => {
+      const user = userEvent.setup()
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: [baseGoal],
+        isLoading: false,
+        error: null,
+        refetch: mockSavingsGoalsRefetch,
+      })
+      renderPage()
+      const editButton = screen.getByRole('button', { name: /edit goal/i })
+      await user.click(editButton)
+      expect(screen.getByText('Edit Savings Goal')).toBeDefined()
+    })
+
+    it('cancel on edit dialog closes it without calling refetch', async () => {
+      const user = userEvent.setup()
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: [baseGoal],
+        isLoading: false,
+        error: null,
+        refetch: mockSavingsGoalsRefetch,
+      })
+      renderPage()
+      const editButton = screen.getByRole('button', { name: /edit goal/i })
+      await user.click(editButton)
+      expect(screen.getByText('Edit Savings Goal')).toBeDefined()
+
+      const cancelButton = screen.getByRole('button', { name: /^cancel$/i })
+      await user.click(cancelButton)
+
+      expect(screen.queryByText('Edit Savings Goal')).toBeNull()
+      expect(mockSavingsGoalsRefetch).not.toHaveBeenCalled()
+    })
   })
 })
