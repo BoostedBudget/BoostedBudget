@@ -138,6 +138,7 @@ export function SavingsPage() {
   if (goals.length === 0) {
     return (
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <h1 className="sr-only">Savings</h1>
         <EmptyState
           icon={<PiggyBank className="h-12 w-12" />}
           title="No savings goals yet"

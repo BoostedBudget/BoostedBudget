@@ -1,18 +1,12 @@
+// Uses preloaded API mocks from bunfig.toml — do NOT add mock.module() for
+// savings-goals here; that is centralized in src/test/mocks/savings-goals-api.ts.
+
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import React from 'react'
-
-const mockMutateAsync = mock(() => Promise.resolve())
-const mockUseUpdateSavingsGoal = mock(() => ({
-  mutateAsync: mockMutateAsync,
-  isPending: false,
-}))
+import { mockUseUpdateSavingsGoal, mockUpdateSavingsGoalMutateAsync } from '@/test/mocks/savings-goals-api'
 
 const mockTrackEvent = mock(() => {})
 const mockUseTrackEvent = mock(() => mockTrackEvent)
-
-mock.module('@boostedbudget/api-client/endpoints/savings-goals/savings-goals', () => ({
-  useUpdateSavingsGoal: () => mockUseUpdateSavingsGoal(),
-}))
 
 mock.module('@/shared/hooks/useTrackEvent', () => ({
   useTrackEvent: () => mockUseTrackEvent(),
@@ -62,14 +56,14 @@ describe('UpdateSavingsGoalDialog', () => {
   const mockOnGoalUpdated = mock(() => {})
 
   beforeEach(() => {
-    mockMutateAsync.mockClear()
+    mockUpdateSavingsGoalMutateAsync.mockClear()
     mockUseUpdateSavingsGoal.mockClear()
     mockTrackEvent.mockClear()
     mockUseTrackEvent.mockClear()
     mockOnCancel.mockClear()
     mockOnGoalUpdated.mockClear()
     mockUseUpdateSavingsGoal.mockReturnValue({
-      mutateAsync: mockMutateAsync,
+      mutateAsync: mockUpdateSavingsGoalMutateAsync,
       isPending: false,
     })
   })
@@ -247,7 +241,7 @@ describe('UpdateSavingsGoalDialog', () => {
   describe('Form Submission', () => {
     it('calls update mutation with correct payload on submit', async () => {
       const updatedGoal = { ...mockGoal, name: 'Updated Vacation' }
-      mockMutateAsync.mockResolvedValueOnce(updatedGoal)
+      mockUpdateSavingsGoalMutateAsync.mockResolvedValueOnce(updatedGoal)
 
       renderWithQueryClient(
         <UpdateSavingsGoalDialog
@@ -264,7 +258,7 @@ describe('UpdateSavingsGoalDialog', () => {
       fireEvent.submit(form!)
 
       await waitFor(() => {
-        expect(mockMutateAsync).toHaveBeenCalledWith({
+        expect(mockUpdateSavingsGoalMutateAsync).toHaveBeenCalledWith({
           id: 'goal-1',
           data: expect.objectContaining({
             name: 'Updated Vacation',
@@ -276,7 +270,7 @@ describe('UpdateSavingsGoalDialog', () => {
 
     it('calls onGoalUpdated callback after successful update', async () => {
       const updatedGoal = { ...mockGoal, name: 'Updated' }
-      mockMutateAsync.mockResolvedValueOnce(updatedGoal)
+      mockUpdateSavingsGoalMutateAsync.mockResolvedValueOnce(updatedGoal)
 
       renderWithQueryClient(
         <UpdateSavingsGoalDialog
@@ -297,7 +291,7 @@ describe('UpdateSavingsGoalDialog', () => {
 
     it('fires SAVINGS_GOAL_EDITED analytics event after update', async () => {
       const updatedGoal = { ...mockGoal }
-      mockMutateAsync.mockResolvedValueOnce(updatedGoal)
+      mockUpdateSavingsGoalMutateAsync.mockResolvedValueOnce(updatedGoal)
 
       renderWithQueryClient(
         <UpdateSavingsGoalDialog
@@ -317,7 +311,7 @@ describe('UpdateSavingsGoalDialog', () => {
     })
 
     it('shows API error if update fails', async () => {
-      mockMutateAsync.mockRejectedValueOnce(new Error('Network error'))
+      mockUpdateSavingsGoalMutateAsync.mockRejectedValueOnce(new Error('Network error'))
 
       renderWithQueryClient(
         <UpdateSavingsGoalDialog
@@ -336,7 +330,7 @@ describe('UpdateSavingsGoalDialog', () => {
 
     it('shows "Saving..." and disables button when submitting', () => {
       mockUseUpdateSavingsGoal.mockReturnValue({
-        mutateAsync: mockMutateAsync,
+        mutateAsync: mockUpdateSavingsGoalMutateAsync,
         isPending: true,
       })
 
@@ -356,7 +350,7 @@ describe('UpdateSavingsGoalDialog', () => {
 
     it('converts deadline to ISO string before submission', async () => {
       const updatedGoal = { ...mockGoal }
-      mockMutateAsync.mockResolvedValueOnce(updatedGoal)
+      mockUpdateSavingsGoalMutateAsync.mockResolvedValueOnce(updatedGoal)
 
       renderWithQueryClient(
         <UpdateSavingsGoalDialog
@@ -373,7 +367,7 @@ describe('UpdateSavingsGoalDialog', () => {
       fireEvent.submit(form!)
 
       await waitFor(() => {
-        expect(mockMutateAsync).toHaveBeenCalledWith(
+        expect(mockUpdateSavingsGoalMutateAsync).toHaveBeenCalledWith(
           expect.objectContaining({
             data: expect.objectContaining({
               deadline: '2028-03-01T00:00:00.000Z',
@@ -409,7 +403,6 @@ describe('UpdateSavingsGoalDialog', () => {
         />
       )
 
-      // The X button contains the XIcon — find the button near it
       const xButton = document.querySelector('.update-goal-dialog button[type="button"]')
       fireEvent.click(xButton!)
       expect(mockOnCancel).toHaveBeenCalled()

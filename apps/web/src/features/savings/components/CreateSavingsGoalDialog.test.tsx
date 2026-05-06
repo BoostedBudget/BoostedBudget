@@ -1,23 +1,10 @@
+// Uses preloaded API mocks from bunfig.toml — do NOT add mock.module() for
+// savings-goals or accounts here; those are centralized in src/test/mocks/.
+
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import React from 'react'
-
-const mockMutateAsync = mock(() => Promise.resolve())
-const mockUseCreateSavingsGoal = mock(() => ({
-  mutateAsync: mockMutateAsync,
-  isPending: false,
-}))
-const mockUseGetAccounts = mock(() => ({
-  data: null,
-  isLoading: false,
-}))
-
-mock.module('@boostedbudget/api-client/endpoints/savings-goals/savings-goals', () => ({
-  useCreateSavingsGoal: () => mockUseCreateSavingsGoal(),
-}))
-
-mock.module('@boostedbudget/api-client/endpoints/accounts/accounts', () => ({
-  useGetAccounts: (_params: unknown, options: { query: { enabled: boolean } }) => mockUseGetAccounts(options),
-}))
+import { mockUseCreateSavingsGoal, mockCreateSavingsGoalMutateAsync } from '@/test/mocks/savings-goals-api'
+import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 
 mock.module('../goalTemplates', () => ({
   GOAL_TEMPLATES: [
@@ -63,13 +50,13 @@ describe('CreateSavingsGoalDialog', () => {
   const mockOnGoalCreated = mock(() => {})
 
   beforeEach(() => {
-    mockMutateAsync.mockClear()
+    mockCreateSavingsGoalMutateAsync.mockClear()
     mockUseCreateSavingsGoal.mockClear()
     mockUseGetAccounts.mockClear()
     mockOnCancel.mockClear()
     mockOnGoalCreated.mockClear()
     mockUseCreateSavingsGoal.mockReturnValue({
-      mutateAsync: mockMutateAsync,
+      mutateAsync: mockCreateSavingsGoalMutateAsync,
       isPending: false,
     })
     mockUseGetAccounts.mockReturnValue({
@@ -325,7 +312,7 @@ describe('CreateSavingsGoalDialog', () => {
   describe('Form Submission', () => {
     it('should call mutateAsync on valid submission', async () => {
       const newGoal = { id: 'goal-1', name: 'Test Goal', target_amount: 1000 }
-      mockMutateAsync.mockResolvedValueOnce(newGoal)
+      mockCreateSavingsGoalMutateAsync.mockResolvedValueOnce(newGoal)
 
       renderWithQueryClient(
         <CreateSavingsGoalDialog
@@ -343,7 +330,7 @@ describe('CreateSavingsGoalDialog', () => {
       fireEvent.submit(form!)
 
       await waitFor(() => {
-        expect(mockMutateAsync).toHaveBeenCalledWith({
+        expect(mockCreateSavingsGoalMutateAsync).toHaveBeenCalledWith({
           data: {
             name: 'Test Goal',
             target_amount: 1000,
@@ -357,7 +344,7 @@ describe('CreateSavingsGoalDialog', () => {
 
     it('should call onGoalCreated after successful submission', async () => {
       const newGoal = { id: 'goal-1', name: 'Test Goal', target_amount: 1000 }
-      mockMutateAsync.mockResolvedValueOnce(newGoal)
+      mockCreateSavingsGoalMutateAsync.mockResolvedValueOnce(newGoal)
 
       renderWithQueryClient(
         <CreateSavingsGoalDialog
@@ -381,7 +368,7 @@ describe('CreateSavingsGoalDialog', () => {
 
     it('converts deadline from YYYY-MM-DD to RFC3339 before submission', async () => {
       const newGoal = { id: 'goal-1', name: 'Vacation Fund', target_amount: 5000 }
-      mockMutateAsync.mockResolvedValueOnce(newGoal)
+      mockCreateSavingsGoalMutateAsync.mockResolvedValueOnce(newGoal)
 
       renderWithQueryClient(
         <CreateSavingsGoalDialog
@@ -400,7 +387,7 @@ describe('CreateSavingsGoalDialog', () => {
       fireEvent.submit(form!)
 
       await waitFor(() => {
-        expect(mockMutateAsync).toHaveBeenCalledWith(
+        expect(mockCreateSavingsGoalMutateAsync).toHaveBeenCalledWith(
           expect.objectContaining({
             data: expect.objectContaining({
               deadline: '2026-12-31T00:00:00.000Z',
@@ -411,7 +398,7 @@ describe('CreateSavingsGoalDialog', () => {
     })
 
     it('should show API error on submission failure', async () => {
-      mockMutateAsync.mockRejectedValueOnce(new Error('Network error'))
+      mockCreateSavingsGoalMutateAsync.mockRejectedValueOnce(new Error('Network error'))
 
       renderWithQueryClient(
         <CreateSavingsGoalDialog
@@ -433,7 +420,7 @@ describe('CreateSavingsGoalDialog', () => {
 
     it('should show Creating... text and disable button when submitting', () => {
       mockUseCreateSavingsGoal.mockReturnValue({
-        mutateAsync: mockMutateAsync,
+        mutateAsync: mockCreateSavingsGoalMutateAsync,
         isPending: true,
       })
 
@@ -536,7 +523,7 @@ describe('CreateSavingsGoalDialog', () => {
   describe('Edge Cases', () => {
     it('should include description and deadline when provided', async () => {
       const newGoal = { id: 'goal-1', name: 'Test', target_amount: 500 }
-      mockMutateAsync.mockResolvedValueOnce(newGoal)
+      mockCreateSavingsGoalMutateAsync.mockResolvedValueOnce(newGoal)
 
       renderWithQueryClient(
         <CreateSavingsGoalDialog
@@ -556,7 +543,7 @@ describe('CreateSavingsGoalDialog', () => {
       fireEvent.submit(form!)
 
       await waitFor(() => {
-        expect(mockMutateAsync).toHaveBeenCalledWith({
+        expect(mockCreateSavingsGoalMutateAsync).toHaveBeenCalledWith({
           data: {
             name: 'Vacation',
             description: 'Beach trip',
@@ -569,7 +556,7 @@ describe('CreateSavingsGoalDialog', () => {
     })
 
     it('should handle non-Error rejection', async () => {
-      mockMutateAsync.mockRejectedValueOnce('Unknown error')
+      mockCreateSavingsGoalMutateAsync.mockRejectedValueOnce('Unknown error')
 
       renderWithQueryClient(
         <CreateSavingsGoalDialog
