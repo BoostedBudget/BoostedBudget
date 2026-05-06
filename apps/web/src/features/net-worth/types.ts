@@ -4,9 +4,9 @@ export interface AccountBreakdownRow {
   id: string
   name: string
   type: string
+  institutionName: string
   currencyCode: string
   currentBalance: number
-  percentOfNetWorth: number
+  percentOfSide: number
   side: NetWorthSide
-  mask?: string
 }

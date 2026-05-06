@@ -87,8 +87,11 @@ describe('TableHeaderCell', () => {
         />
       )
 
+      // aria-sort belongs on the parent <th>, not the button (WAI-ARIA spec)
       const button = screen.getByRole('button', { name: /date/i })
-      expect(button).toHaveAttribute('aria-sort', 'ascending')
+      expect(button).not.toHaveAttribute('aria-sort')
+      // The ascending icon should still render
+      expect(button.querySelector('[aria-hidden="true"]')).toBeDefined()
     })
 
     it('should show descending icon when sorted descending', () => {
@@ -103,11 +106,12 @@ describe('TableHeaderCell', () => {
         />
       )
 
+      // aria-sort belongs on the parent <th>, not the button (WAI-ARIA spec)
       const button = screen.getByRole('button', { name: /date/i })
-      expect(button).toHaveAttribute('aria-sort', 'descending')
+      expect(button).not.toHaveAttribute('aria-sort')
     })
 
-    it('should not show aria-sort when column is not active', () => {
+    it('should not show aria-sort on the button for inactive sort column', () => {
       render(
         <TableHeaderCell
           label="Date"

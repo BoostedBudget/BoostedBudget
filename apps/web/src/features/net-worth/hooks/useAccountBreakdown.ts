@@ -8,44 +8,72 @@ function classifyAccount(type: string): NetWorthSide {
   return LIABILITY_TYPES.has(type) ? 'liabilities' : 'assets'
 }
 
+const assetContrib = (balance: number) => Math.max(0, balance)
+const liabContrib = (balance: number) => Math.max(0, Math.abs(balance))
+
 export interface UseAccountBreakdownResult {
   assets: AccountBreakdownRow[]
   liabilities: AccountBreakdownRow[]
+  assetsTotal: number
+  liabilitiesTotal: number
   loading: boolean
   error: Error | null
 }
 
-export function useAccountBreakdown(netWorth: number): UseAccountBreakdownResult {
+export function useAccountBreakdown(): UseAccountBreakdownResult {
   const { data, isLoading: loading, error } = useGetAccounts()
 
-  const { assets, liabilities } = useMemo(() => {
+  const result = useMemo(() => {
     const accounts = data?.accounts ?? []
-    const absNetWorth = Math.abs(netWorth)
-    const result = { assets: [] as AccountBreakdownRow[], liabilities: [] as AccountBreakdownRow[] }
+    const rawAssets: Array<{ account: (typeof accounts)[number]; balance: number }> = []
+    const rawLiabs: Array<{ account: (typeof accounts)[number]; balance: number }> = []
+    let assetsTotal = 0
+    let liabilitiesTotal = 0
 
     for (const account of accounts) {
       if (account.is_hidden) continue
-
       const balance = account.current_balance ?? 0
-      const percent = absNetWorth === 0 ? 0 : (Math.abs(balance) / absNetWorth) * 100
       const side = classifyAccount(account.type)
-
-      const row: AccountBreakdownRow = {
-        id: account.id,
-        name: account.nickname ?? account.name,
-        type: account.type,
-        currencyCode: account.currency_code,
-        currentBalance: balance,
-        percentOfNetWorth: percent,
-        side,
-        mask: account.mask ?? undefined,
+      if (side === 'assets') {
+        rawAssets.push({ account, balance })
+        assetsTotal += assetContrib(balance)
+      } else {
+        rawLiabs.push({ account, balance })
+        liabilitiesTotal += liabContrib(balance)
       }
-
-      result[side].push(row)
     }
 
-    return result
-  }, [data, netWorth])
+    const toRow = (
+      { account, balance }: { account: (typeof accounts)[number]; balance: number },
+      side: 'assets' | 'liabilities'
+    ): AccountBreakdownRow => ({
+      id: account.id,
+      name: account.nickname?.trim() || account.name,
+      type: account.type,
+      institutionName: account.institution_name ?? 'Unknown',
+      currencyCode: account.currency_code,
+      currentBalance: balance,
+      percentOfSide:
+        side === 'assets'
+          ? assetsTotal === 0
+            ? 0
+            : (assetContrib(balance) / assetsTotal) * 100
+          : liabilitiesTotal === 0
+            ? 0
+            : (liabContrib(balance) / liabilitiesTotal) * 100,
+      side,
+    })
 
-  return { assets, liabilities, loading, error: error ?? null }
+    // #1109: toRow helper ensures consistent mapping
+    const assets = rawAssets.map((item) => toRow(item, 'assets'))
+    const liabilities = rawLiabs.map((item) => toRow(item, 'liabilities'))
+
+    return { assets, liabilities, assetsTotal, liabilitiesTotal }
+  }, [data])
+
+  return {
+    ...result,
+    loading,
+    error: error ?? null,
+  }
 }
