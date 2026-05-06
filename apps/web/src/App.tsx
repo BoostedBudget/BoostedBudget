@@ -34,6 +34,7 @@ import { BudgetsPage, BudgetDetailPage } from './features/budgets'
 import { RulesPage, RuleBuilder } from './features/rules'
 import { SpendingReportsPage } from './features/reports'
 import { NetWorthPage } from './features/net-worth'
+import { SavingsPage } from './features/savings'
 import { LandingPage } from './features/landing'
 import { AdminRoute, AdminLayout, AdminDashboardPage, UsersPage, HealthDashboardPage, WebhooksPage, DeadLetterPage } from './features/admin'
 import { NotFoundPage } from './features/not-found/NotFoundPage'
@@ -214,6 +215,16 @@ function App() {
                 <ProtectedRoute>
                   <PremiumRoute>
                     <NetWorthPage />
+                  </PremiumRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/savings"
+              element={
+                <ProtectedRoute>
+                  <PremiumRoute>
+                    <SavingsPage />
                   </PremiumRoute>
                 </ProtectedRoute>
               }

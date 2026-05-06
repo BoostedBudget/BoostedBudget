@@ -87,7 +87,7 @@ export function BudgetDetailPage() {
   }, [budget]);
 
   const handleCreateSavingsGoal = useCallback(() => {
-    navigate('/budgets', { state: { openSavingsGoal: true } });
+    navigate('/savings', { state: { openCreateDialog: true } });
   }, [navigate]);
 
   const handleAddCategory = useCallback(
