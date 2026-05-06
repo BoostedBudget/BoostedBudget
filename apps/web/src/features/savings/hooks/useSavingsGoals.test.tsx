@@ -15,7 +15,6 @@ import {
 } from '@/test/mocks/savings-goals-api'
 import { useSavingsGoals } from './useSavingsGoals'
 
-// Helper to create wrapper with QueryClient
 function createWrapper() {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -61,7 +60,6 @@ describe('useSavingsGoals', () => {
   ]
 
   beforeEach(() => {
-    // Clear all mocks
     mockCreateSavingsGoalMutateAsync.mockClear()
     mockUpdateSavingsGoalMutateAsync.mockClear()
     mockDeleteSavingsGoalMutateAsync.mockClear()
@@ -71,7 +69,6 @@ describe('useSavingsGoals', () => {
     mockUseGetActiveSavingsGoals.mockClear()
   })
 
-  // Helper to configure query states
   function configureAllGoalsQuery(config: {
     data?: SavingsGoal[] | null
     isLoading?: boolean
