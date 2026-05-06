@@ -89,12 +89,6 @@ export function TableHeaderCell({
     [onFilterChange]
   )
 
-  const ariaSort = isActiveSortColumn
-    ? currentSortDirection === 'asc'
-      ? 'ascending'
-      : 'descending'
-    : undefined
-
   // Determine filter value based on type
   const selectFilterValue = filterType === 'select' ? (filterValue as string[] | undefined) : undefined
   const rangeFilterValue = filterType === 'range' ? (filterValue as RangeValue | null | undefined) : undefined
@@ -105,7 +99,6 @@ export function TableHeaderCell({
         <button
           type="button"
           onClick={handleSort}
-          aria-sort={ariaSort}
           className={[
             'inline-flex items-center gap-1 p-0 border-none bg-transparent font-[inherit] font-semibold cursor-pointer transition-colors duration-150',
             isActiveSortColumn
