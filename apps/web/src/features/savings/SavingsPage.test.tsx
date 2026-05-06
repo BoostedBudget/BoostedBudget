@@ -1,5 +1,9 @@
+// Uses preloaded API mocks from bunfig.toml — do NOT add mock.module() for
+// savings-goals or accounts here; those are centralized in src/test/mocks/.
+
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
-import { render, screen, act } from '@testing-library/react'
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
@@ -9,15 +13,13 @@ import {
   mockUseGetSavingsGoals,
   mockUseGetActiveSavingsGoals,
   mockSavingsGoalsRefetch,
+  mockDeleteSavingsGoalMutateAsync,
 } from '@/test/mocks/savings-goals-api'
+import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 
 const mockTrackEvent = mock(() => {})
 mock.module('@/shared/hooks/useTrackEvent', () => ({
   useTrackEvent: () => mockTrackEvent,
-}))
-
-mock.module('@boostedbudget/api-client/endpoints/accounts/accounts', () => ({
-  useGetAccounts: () => ({ data: { accounts: [] }, isLoading: false, error: null }),
 }))
 
 mock.module('@/auth/ReadOnlyContext', () => ({
@@ -54,10 +56,24 @@ const baseGoal: SavingsGoal = {
   updated_at: '2024-01-01T00:00:00Z',
 }
 
+const completedGoal: SavingsGoal = {
+  ...baseGoal,
+  id: 'goal-2',
+  name: 'Emergency Fund',
+  is_completed: true,
+  current_amount: 5000,
+}
+
 describe('SavingsPage', () => {
   beforeEach(() => {
     mockTrackEvent.mockReset()
     mockSavingsGoalsRefetch.mockClear()
+    mockDeleteSavingsGoalMutateAsync.mockClear()
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [] },
+      isLoading: false,
+      error: null,
+    })
     mockUseGetSavingsGoals.mockReturnValue({
       data: [],
       isLoading: false,
@@ -142,5 +158,193 @@ describe('SavingsPage', () => {
       newGoalButton.click()
     })
     expect(screen.getByText(/create savings goal/i)).toBeDefined()
+  })
+
+  describe('SavingsPage — flows', () => {
+    it('empty-state CTA button opens the create dialog', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      const ctaButton = screen.getByRole('button', { name: /create goal/i })
+      await user.click(ctaButton)
+      expect(screen.getByText('Create Savings Goal')).toBeDefined()
+    })
+
+    it('create dialog Cancel closes without calling refetch', async () => {
+      const user = userEvent.setup()
+      renderPage()
+      const ctaButton = screen.getByRole('button', { name: /create goal/i })
+      await user.click(ctaButton)
+      expect(screen.getByText('Create Savings Goal')).toBeDefined()
+
+      const cancelButton = screen.getByRole('button', { name: /^cancel$/i })
+      await user.click(cancelButton)
+
+      expect(screen.queryByText('Create Savings Goal')).toBeNull()
+      expect(mockSavingsGoalsRefetch).not.toHaveBeenCalled()
+    })
+
+    it('renders active and completed goals (both visible)', async () => {
+      const user = userEvent.setup()
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: [baseGoal, completedGoal],
+        isLoading: false,
+        error: null,
+        refetch: mockSavingsGoalsRefetch,
+      })
+      renderPage()
+      // switch to All tab to see both
+      const allTab = screen.getByRole('tab', { name: /all/i })
+      await user.click(allTab)
+      expect(screen.getByText('Vacation Fund')).toBeDefined()
+      expect(screen.getByText('Emergency Fund')).toBeDefined()
+    })
+
+    it('hides "New goal" header button when no goals exist (empty state only shows CTA)', () => {
+      renderPage()
+      // Header "New goal" only renders in the non-empty branch
+      expect(screen.queryByRole('button', { name: /new goal/i })).toBeNull()
+      // Empty-state CTA should be present
+      expect(screen.getByRole('button', { name: /create goal/i })).toBeDefined()
+    })
+
+    it('shows "New goal" header button when only completed goals exist', () => {
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: [completedGoal],
+        isLoading: false,
+        error: null,
+        refetch: mockSavingsGoalsRefetch,
+      })
+      renderPage()
+      expect(screen.getByRole('button', { name: /new goal/i })).toBeDefined()
+    })
+
+    it('opens delete confirmation dialog when Delete is clicked on a goal card', async () => {
+      const user = userEvent.setup()
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: [baseGoal],
+        isLoading: false,
+        error: null,
+        refetch: mockSavingsGoalsRefetch,
+      })
+      renderPage()
+      const deleteButton = screen.getByRole('button', { name: /delete goal/i })
+      await user.click(deleteButton)
+      expect(screen.getByRole('alertdialog')).toBeDefined()
+      expect(screen.getByText(/delete savings goal/i)).toBeDefined()
+    })
+
+    it('cancel on delete dialog closes it without calling deleteGoal', async () => {
+      const user = userEvent.setup()
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: [baseGoal],
+        isLoading: false,
+        error: null,
+        refetch: mockSavingsGoalsRefetch,
+      })
+      renderPage()
+      const deleteButton = screen.getByRole('button', { name: /delete goal/i })
+      await user.click(deleteButton)
+
+      const cancelButton = screen.getByRole('button', { name: /cancel/i })
+      await user.click(cancelButton)
+
+      expect(screen.queryByRole('alertdialog')).toBeNull()
+      expect(mockDeleteSavingsGoalMutateAsync).not.toHaveBeenCalled()
+    })
+
+    it('confirm delete calls deleteGoal with goal id', async () => {
+      const user = userEvent.setup()
+      mockDeleteSavingsGoalMutateAsync.mockResolvedValueOnce(undefined)
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: [baseGoal],
+        isLoading: false,
+        error: null,
+        refetch: mockSavingsGoalsRefetch,
+      })
+      renderPage()
+      const deleteButton = screen.getByRole('button', { name: /delete goal/i })
+      await user.click(deleteButton)
+
+      const confirmButton = screen.getByRole('button', { name: /^delete$/i })
+      await user.click(confirmButton)
+
+      await waitFor(() => {
+        expect(mockDeleteSavingsGoalMutateAsync).toHaveBeenCalledWith({ id: 'goal-1' })
+      })
+    })
+
+    it('fires SAVINGS_GOAL_DELETED analytics after confirm delete', async () => {
+      const user = userEvent.setup()
+      mockDeleteSavingsGoalMutateAsync.mockResolvedValueOnce(undefined)
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: [baseGoal],
+        isLoading: false,
+        error: null,
+        refetch: mockSavingsGoalsRefetch,
+      })
+      renderPage()
+      const deleteButton = screen.getByRole('button', { name: /delete goal/i })
+      await user.click(deleteButton)
+
+      const confirmButton = screen.getByRole('button', { name: /^delete$/i })
+      await user.click(confirmButton)
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith('savings_goal_deleted')
+      })
+    })
+
+    it('can delete a completed goal', async () => {
+      const user = userEvent.setup()
+      mockDeleteSavingsGoalMutateAsync.mockResolvedValueOnce(undefined)
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: [completedGoal],
+        isLoading: false,
+        error: null,
+        refetch: mockSavingsGoalsRefetch,
+      })
+      renderPage()
+      const completedTab = screen.getByRole('tab', { name: /completed/i })
+      await user.click(completedTab)
+
+      const deleteButton = screen.getByRole('button', { name: /delete goal/i })
+      await user.click(deleteButton)
+
+      const confirmButton = screen.getByRole('button', { name: /^delete$/i })
+      await user.click(confirmButton)
+
+      await waitFor(() => {
+        expect(mockDeleteSavingsGoalMutateAsync).toHaveBeenCalledWith({ id: 'goal-2' })
+      })
+    })
+
+    it('fires SAVINGS_FILTER_CHANGED when tab changes', async () => {
+      const user = userEvent.setup()
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: [baseGoal],
+        isLoading: false,
+        error: null,
+        refetch: mockSavingsGoalsRefetch,
+      })
+      renderPage()
+      const completedTab = screen.getByRole('tab', { name: /completed/i })
+      await user.click(completedTab)
+
+      expect(mockTrackEvent).toHaveBeenCalledWith('savings_filter_changed', { tab: 'completed' })
+    })
+
+    it('fires SAVINGS_SORT_CHANGED when sort changes', () => {
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: [baseGoal],
+        isLoading: false,
+        error: null,
+        refetch: mockSavingsGoalsRefetch,
+      })
+      renderPage()
+      const sortSelect = screen.getByRole('combobox', { name: /sort goals/i })
+      fireEvent.change(sortSelect, { target: { value: 'deadline_asc' } })
+
+      expect(mockTrackEvent).toHaveBeenCalledWith('savings_sort_changed', { sort: 'deadline_asc' })
+    })
   })
 })

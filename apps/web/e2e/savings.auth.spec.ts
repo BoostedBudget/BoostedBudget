@@ -49,11 +49,9 @@ const FIXTURE_GOAL_COMPLETED = {
   updated_at: '2026-03-01T00:00:00Z',
 }
 
-const GOALS_LIST_RESPONSE = {
-  goals: [FIXTURE_GOAL_ACTIVE, FIXTURE_GOAL_COMPLETED],
-}
+const GOALS_LIST_RESPONSE = [FIXTURE_GOAL_ACTIVE, FIXTURE_GOAL_COMPLETED]
 
-const EMPTY_GOALS_RESPONSE = { goals: [] }
+const EMPTY_GOALS_RESPONSE: typeof GOALS_LIST_RESPONSE = []
 
 const FIXTURE_ACCOUNT = {
   id: 'acc-1',
@@ -71,15 +69,22 @@ const FIXTURE_ACCOUNT = {
 
 type PageArg = Parameters<typeof mockAuthDependencies>[0]
 
-/** Mock the savings-goals endpoints with the given list body. GET = list, POST = create, DELETE = 204. */
+/** Mock the savings-goals endpoints with the given list body. GET = list, POST = 201, PUT/PATCH = 200, DELETE = 204. */
 async function mockSavingsGoals(page: PageArg, body: unknown) {
   await page.route('**/api/v1/savings-goals*', (route) => {
-    if (route.request().method() === 'GET') {
+    const method = route.request().method()
+    if (method === 'GET') {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify(body),
       })
+    } else if (method === 'POST') {
+      route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({}) })
+    } else if (method === 'PUT' || method === 'PATCH') {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({}) })
+    } else if (method === 'DELETE') {
+      route.fulfill({ status: 204 })
     } else {
       route.continue()
     }
@@ -220,7 +225,7 @@ test.describe('Savings Page - Goals Grid', () => {
 
   test('Completed tab shows inline message when no completed goals exist', async ({ page }) => {
     await mockAuthDependencies(page)
-    await mockSavingsGoals(page, { goals: [FIXTURE_GOAL_ACTIVE] })
+    await mockSavingsGoals(page, [FIXTURE_GOAL_ACTIVE])
 
     await page.goto('/savings')
     await page.waitForLoadState('networkidle')
@@ -291,7 +296,7 @@ test.describe('Savings Page - Create Flow', () => {
       const method = route.request().method()
       if (method === 'GET') {
         callCount++
-        const body = callCount === 1 ? EMPTY_GOALS_RESPONSE : { goals: [NEW_GOAL] }
+        const body = callCount === 1 ? EMPTY_GOALS_RESPONSE : [NEW_GOAL]
         route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -317,7 +322,7 @@ test.describe('Savings Page - Create Flow', () => {
 
     await page.getByLabel(/^name/i).fill('Car Fund')
     await page.getByLabel(/target amount/i).fill('8000')
-    await page.getByLabel(/account/i).selectOption({ label: /savings account/i })
+    await page.getByLabel(/account/i).selectOption({ label: 'Savings Account' })
 
     await page.getByRole('button', { name: /create goal/i }).last().click()
 
@@ -367,7 +372,7 @@ test.describe('Savings Page - Edit Flow', () => {
         route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ goals }),
+          body: JSON.stringify(goals),
         })
       } else if (method === 'PUT' || method === 'PATCH') {
         route.fulfill({
@@ -442,7 +447,7 @@ test.describe('Savings Page - Delete Flow', () => {
         route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ goals }),
+          body: JSON.stringify(goals),
         })
       } else if (method === 'DELETE') {
         route.fulfill({ status: 204 })
