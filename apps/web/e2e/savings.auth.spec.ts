@@ -71,7 +71,7 @@ type PageArg = Parameters<typeof mockAuthDependencies>[0]
 
 /** Mock the savings-goals endpoints with the given list body. GET = list, POST = 201, PUT/PATCH = 200, DELETE = 204. */
 async function mockSavingsGoals(page: PageArg, body: unknown) {
-  await page.route('**/api/v1/savings-goals*', (route) => {
+  await page.route('**/api/v1/savings-goals**', (route) => {
     const method = route.request().method()
     if (method === 'GET') {
       route.fulfill({
@@ -292,7 +292,7 @@ test.describe('Savings Page - Create Flow', () => {
     await mockAccounts(page)
 
     let callCount = 0
-    await page.route('**/api/v1/savings-goals*', (route) => {
+    await page.route('**/api/v1/savings-goals**', (route) => {
       const method = route.request().method()
       if (method === 'GET') {
         callCount++
@@ -322,7 +322,7 @@ test.describe('Savings Page - Create Flow', () => {
 
     await page.getByLabel(/^name/i).fill('Car Fund')
     await page.getByLabel(/target amount/i).fill('8000')
-    await page.getByLabel(/account/i).selectOption({ label: 'Savings Account' })
+    await page.getByLabel(/account/i).selectOption('acc-1') // fixture account ID
 
     await page.getByRole('button', { name: /create goal/i }).last().click()
 
@@ -362,7 +362,7 @@ test.describe('Savings Page - Edit Flow', () => {
     await mockAuthDependencies(page)
 
     let fetchCount = 0
-    await page.route('**/api/v1/savings-goals*', (route) => {
+    await page.route('**/api/v1/savings-goals**', (route) => {
       const method = route.request().method()
       if (method === 'GET') {
         fetchCount++
@@ -427,7 +427,7 @@ test.describe('Savings Page - Delete Flow', () => {
     const card = page.locator('.bg-card').filter({ hasText: 'Vacation Fund' }).first()
     await card.getByRole('button', { name: /delete/i }).click()
 
-    await expect(page.getByRole('dialog', { name: /delete savings goal/i })).toBeVisible()
+    await expect(page.getByRole('alertdialog', { name: /delete savings goal/i })).toBeVisible()
     await expect(
       page.getByText(/are you sure you want to delete "Vacation Fund"/i)
     ).toBeVisible()
@@ -437,7 +437,7 @@ test.describe('Savings Page - Delete Flow', () => {
     await mockAuthDependencies(page)
 
     let fetchCount = 0
-    await page.route('**/api/v1/savings-goals*', (route) => {
+    await page.route('**/api/v1/savings-goals**', (route) => {
       const method = route.request().method()
       if (method === 'GET') {
         fetchCount++
@@ -464,7 +464,7 @@ test.describe('Savings Page - Delete Flow', () => {
     const card = page.locator('.bg-card').filter({ hasText: 'Vacation Fund' }).first()
     await card.getByRole('button', { name: /delete/i }).click()
 
-    await expect(page.getByRole('dialog', { name: /delete savings goal/i })).toBeVisible()
+    await expect(page.getByRole('alertdialog', { name: /delete savings goal/i })).toBeVisible()
 
     // Confirm deletion using the destructive Delete button
     await page.getByRole('button', { name: /^delete$/i }).last().click()
@@ -485,11 +485,11 @@ test.describe('Savings Page - Delete Flow', () => {
     const card = page.locator('.bg-card').filter({ hasText: 'Vacation Fund' }).first()
     await card.getByRole('button', { name: /delete/i }).click()
 
-    await expect(page.getByRole('dialog', { name: /delete savings goal/i })).toBeVisible()
+    await expect(page.getByRole('alertdialog', { name: /delete savings goal/i })).toBeVisible()
 
     await page.getByRole('button', { name: /cancel/i }).click()
 
-    await expect(page.getByRole('dialog', { name: /delete savings goal/i })).not.toBeVisible()
+    await expect(page.getByRole('alertdialog', { name: /delete savings goal/i })).not.toBeVisible()
     await expect(page.getByText('Vacation Fund')).toBeVisible()
   })
 })
