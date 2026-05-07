@@ -10,7 +10,7 @@
       "devDependencies": {
         "@lhci/cli": "^0.15.1",
         "@size-limit/file": "^12.1.0",
-        "basic-ftp": "^5.3.0",
+        "basic-ftp": ">=5.3.1",
         "serve": "^14.2.6",
         "size-limit": "^12.0.1",
         "turbo": "^2.8.12",
@@ -127,6 +127,7 @@
   },
   "overrides": {
     "@types/plotly.js": "3.0.10",
+    "basic-ftp": ">=5.3.1",
     "brace-expansion": ">=5.0.5",
     "dompurify": ">=3.4.0",
     "flatted": ">=3.4.2",
@@ -960,7 +961,7 @@
 
     "baseline-browser-mapping": ["baseline-browser-mapping@2.10.8", "", { "bin": { "baseline-browser-mapping": "dist/cli.cjs" } }, "sha512-PCLz/LXGBsNTErbtB6i5u4eLpHeMfi93aUv5duMmj6caNu6IphS4q6UevDnL36sZQv9lrP11dbPKGMaXPwMKfQ=="],
 
-    "basic-ftp": ["basic-ftp@5.3.0", "", {}, "sha512-5K9eNNn7ywHPsYnFwjKgYH8Hf8B5emh7JKcPaVjjrMJFQQwGpwowEnZNEtHs7DfR7hCZsmaK3VA4HUK0YarT+w=="],
+    "basic-ftp": ["basic-ftp@5.3.1", "", {}, "sha512-bopVNp6ugyA150DDuZfPFdt1KZ5a94ZDiwX4hMgZDzF+GttD80lEy8kj98kbyhLXnPvhtIo93mdnLIjpCAeeOw=="],
 
     "bidi-js": ["bidi-js@1.0.3", "", { "dependencies": { "require-from-string": "^2.0.2" } }, "sha512-RKshQI1R3YQ+n9YJz2QQ147P66ELpa1FQEg20Dk8oW9t2KgLbpDLLp9aGZ7y8WHSshDknG0bknqGw5/tyCs5tw=="],
 
