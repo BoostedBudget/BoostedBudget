@@ -270,3 +270,129 @@ func TestGetSpendingTrends_CustomCategory(t *testing.T) {
 		assert.Equal(t, 150.0, result[0].Total)
 	})
 }
+
+// TestAnalyticsRepository_ActiveAccountFilter_RejectsReplacedAccounts verifies
+// that all spending/cash-flow aggregations filter to active accounts only,
+// ensuring re-linked (replaced) accounts are excluded from analytics.
+// These tests use pgxmock and inspect the generated SQL for the status filter.
+
+func TestGetSpendingByCategory_QueryContainsActiveFilter(t *testing.T) {
+	mock, repo := setupAnalyticsMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := "user-active-filter"
+	filters := domain.SpendingFilters{
+		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+	}
+
+	// The query must include a.status = 'active' — if the repo generates SQL without
+	// it, mock's regexp won't match and WillReturnRows won't fire, causing an error.
+	rows := pgxmock.NewRows([]string{"category", "category_display", "total", "transaction_count"}).
+		AddRow("FOOD_AND_DRINK", "", 100.0, 5)
+
+	mock.ExpectQuery(`(?i)a\.status\s*=\s*'active'`).
+		WithArgs(userID, filters.StartDate, filters.EndDate).
+		WillReturnRows(rows)
+
+	_, err := repo.GetSpendingByCategory(ctx, userID, filters)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetSpendingByMerchant_QueryContainsActiveFilter(t *testing.T) {
+	mock, repo := setupAnalyticsMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := "user-active-filter"
+	filters := domain.SpendingFilters{
+		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+	}
+	limit := 10
+
+	rows := pgxmock.NewRows([]string{"merchant_name", "total", "transaction_count"}).
+		AddRow("Starbucks", 50.0, 3)
+
+	mock.ExpectQuery(`(?i)a\.status\s*=\s*'active'`).
+		WithArgs(userID, filters.StartDate, filters.EndDate, limit).
+		WillReturnRows(rows)
+
+	_, err := repo.GetSpendingByMerchant(ctx, userID, filters, limit)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetSpendingTrends_QueryContainsActiveFilter(t *testing.T) {
+	mock, repo := setupAnalyticsMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := "user-active-filter"
+	filters := domain.SpendingFilters{
+		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+	}
+
+	jan := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	rows := pgxmock.NewRows([]string{"period_start", "category", "category_display", "total"}).
+		AddRow(jan, "FOOD_AND_DRINK", "", 200.0)
+
+	mock.ExpectQuery(`(?i)a\.status\s*=\s*'active'`).
+		WithArgs(userID, filters.StartDate, filters.EndDate).
+		WillReturnRows(rows)
+
+	_, err := repo.GetSpendingTrends(ctx, userID, filters)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetCashFlowAggregation_QueryContainsActiveFilter(t *testing.T) {
+	mock, repo := setupAnalyticsMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := "user-active-filter"
+	filters := domain.CashFlowFilters{
+		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+	}
+
+	rows := pgxmock.NewRows([]string{"income", "income_count", "expenses", "expense_count"}).
+		AddRow(500.0, 2, 300.0, 5)
+
+	mock.ExpectQuery(`(?i)a\.status\s*=\s*'active'`).
+		WithArgs(userID, filters.StartDate, filters.EndDate).
+		WillReturnRows(rows)
+
+	_, err := repo.GetCashFlowAggregation(ctx, userID, filters)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetCashFlowGrouped_QueryContainsActiveFilter(t *testing.T) {
+	mock, repo := setupAnalyticsMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := "user-active-filter"
+	filters := domain.CashFlowFilters{
+		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+		Grouping:  "monthly",
+	}
+
+	jan := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	rows := pgxmock.NewRows([]string{"period_start", "income", "expenses", "transaction_count"}).
+		AddRow(jan, 500.0, 300.0, 7)
+
+	mock.ExpectQuery(`(?i)a\.status\s*=\s*'active'`).
+		WithArgs(userID, filters.StartDate, filters.EndDate).
+		WillReturnRows(rows)
+
+	_, err := repo.GetCashFlowGrouped(ctx, userID, filters)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

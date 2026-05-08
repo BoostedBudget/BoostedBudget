@@ -43,6 +43,7 @@ type GetTransactionsInput struct {
 	MinAmount        string `query:"min_amount" doc:"Filter by minimum absolute amount"`
 	MaxAmount        string `query:"max_amount" doc:"Filter by maximum absolute amount"`
 	AmountType       string `query:"amount_type" enum:"income,expense,all" doc:"Filter by transaction type"`
+	UserAccountID    string `query:"user_account_id" doc:"Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members"`
 }
 
 // GetTransactionsOutput represents the response for listing transactions.
@@ -192,6 +193,12 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 	// Amount type filter
 	if input.AmountType != "" && input.AmountType != "all" {
 		filters.AmountType = &input.AmountType
+	}
+
+	// User account ID filter (Issue #1109: re-link transparency)
+	// Stable identifier that returns transactions from all chain members
+	if input.UserAccountID != "" {
+		filters.UserAccountID = &input.UserAccountID
 	}
 
 	// Call service layer

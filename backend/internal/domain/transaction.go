@@ -301,4 +301,10 @@ type TransactionFilters struct {
 	// AmountType filters transactions by direction: "income" (amount < 0, inflow), "expense" (amount > 0, outflow), or nil for both
 	// Issue #529: Transaction type filter support
 	AmountType *string
+
+	// UserAccountID filters transactions by logical account identity (user_accounts.id).
+	// Stable across re-links: returns transactions from both old and new chain members
+	// for this logical account. Use instead of AccountID when the caller has a
+	// user_account_id (e.g. the frontend after re-link transparency work in #1109).
+	UserAccountID *string
 }

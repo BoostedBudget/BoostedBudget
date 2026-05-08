@@ -2368,3 +2368,64 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_UnsupportedMatch
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+
+// TestTransactionRepository_GetByUserIDWithFilters_UserAccountID verifies that
+// providing UserAccountID in TransactionFilters generates a WHERE clause that
+// filters by transactions.user_account_id — the stable logical account identifier
+// that survives re-links (issue #1109).
+func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	userAccountID := "ua-abc-789"
+	limit := 10
+	offset := 0
+	filters := domain.TransactionFilters{
+		UserAccountID: &userAccountID,
+	}
+
+	extID := "plaid_tx_1"
+	now := time.Now()
+
+	rows := pgxmock.NewRows(transactionSelectColumns).
+		AddRow(
+			"tx-1", userID, "account-old-1", "item-1",
+			"plaid", &extID, nil,
+			-50.00, now, nil, "Transaction 1", nil,
+			nil, nil, nil, nil,
+			nil, false, nil, now, now,
+			nil, nil,
+			nil, nil, nil, nil, nil, nil,
+		).
+		AddRow(
+			"tx-2", userID, "account-new-2", "item-1",
+			"plaid", &extID, nil,
+			-75.00, now, nil, "Transaction 2", nil,
+			nil, nil, nil, nil,
+			nil, false, nil, now, now,
+			nil, nil,
+			nil, nil, nil, nil, nil, nil,
+		)
+
+	// The WHERE clause must contain user_account_id filter.
+	// Both rows have different account_ids but the same user_account_id,
+	// simulating transactions from two chain members of the same logical account.
+	mock.ExpectQuery(`SELECT (.+) FROM transactions WHERE user_id(.+)AND user_account_id`).
+		WithArgs(userID, userAccountID, limit, offset).
+		WillReturnRows(rows)
+
+	transactions, err := repo.GetByUserIDWithFilters(ctx, userID, filters, limit, offset)
+	require.NoError(t, err)
+	assert.Len(t, transactions, 2)
+	// Verify both chain members are returned despite different account_ids
+	assert.Equal(t, "account-old-1", transactions[0].AccountID)
+	assert.Equal(t, "account-new-2", transactions[1].AccountID)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
