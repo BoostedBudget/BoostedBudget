@@ -38,12 +38,13 @@ const makeAccount = (overrides: Partial<Account>): Account => ({
 
 const activeAccount = makeAccount({ id: 'acc-active', status: 'active' })
 const replacedAccount = makeAccount({ id: 'acc-replaced', status: 'replaced', replaced_by_id: 'acc-active' })
-const legacyAccount = makeAccount({ id: 'acc-legacy' }) // status already 'active' from default, but test undefined explicitly below
+// legacyAccount: see legacyNoStatusAccount for the real undefined-status test
 
 // Backward-compat: account created before status field was added — omit key entirely
 const legacyNoStatusAccount: Account = (() => {
   const acc = makeAccount({ id: 'acc-no-status' })
   // Remove the status key to simulate undefined
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { status: _s, ...rest } = acc as Account & { status?: string }
   return rest as Account
 })()

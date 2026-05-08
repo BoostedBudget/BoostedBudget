@@ -520,6 +520,32 @@ describe('CreateSavingsGoalDialog', () => {
     })
   })
 
+  describe('Re-link chain transparency (Issue #1109)', () => {
+    it('excludes replaced accounts from the account dropdown', () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: {
+          accounts: [
+            { id: 'acc-active', name: 'Primary Savings', type: 'depository', status: 'active' },
+            { id: 'acc-replaced', name: 'Old Savings', type: 'depository', status: 'replaced' },
+          ],
+        },
+        isLoading: false,
+      })
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      const select = screen.getByLabelText('Account')
+      expect(select).toContainHTML('Primary Savings')
+      expect(select).not.toContainHTML('Old Savings')
+    })
+  })
+
   describe('Edge Cases', () => {
     it('should include description and deadline when provided', async () => {
       const newGoal = { id: 'goal-1', name: 'Test', target_amount: 500 }

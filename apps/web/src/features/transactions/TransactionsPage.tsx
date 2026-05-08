@@ -12,7 +12,7 @@ import { TransactionFilterPanel } from './components/TransactionFilterPanel'
 import { useGetUserTags, getGetUserTagsQueryKey } from '@boostedbudget/api-client/endpoints/tags/tags'
 import { useGetUserCategories, getGetUserCategoriesQueryKey, useGetPlaidPrimaryCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
-import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
+import { useActiveAccounts } from '@/features/accounts/hooks'
 import type { Transaction } from './types'
 import type { Account } from '../accounts/types'
 import type { UserTag } from '../tags/types'
@@ -70,7 +70,7 @@ export function TransactionsPage() {
   // Fetch available tags, categories, accounts, and curated PFC primaries
   const { data: tagsData } = useGetUserTags()
   const { data: categoriesData } = useGetUserCategories()
-  const { data: accountsData } = useGetAccounts()
+  const { accounts: accountsList } = useActiveAccounts()
   const { data: plaidPrimariesData } = useGetPlaidPrimaryCategories()
 
   const availableTags = (tagsData as unknown as UserTag[]) ?? []
@@ -78,24 +78,24 @@ export function TransactionsPage() {
   const plaidPrimaries = useMemo(() => (plaidPrimariesData as unknown as Primary[]) ?? [], [plaidPrimariesData])
 
   // Issue #531: Create accounts lookup map for O(1) access
-  // Use accountsData?.accounts directly to avoid unstable reference in deps
+  // Issue #1109: Use useActiveAccounts to exclude replaced accounts
   const accountsMap = useMemo(() => {
     const map: Record<string, Account> = {}
-    const accs = accountsData?.accounts ?? []
+    const accs = accountsList ?? []
     accs.forEach((acc) => {
       map[acc.id] = acc
     })
     return map
-  }, [accountsData?.accounts])
+  }, [accountsList])
 
   // Issue #590: Create account filter options for inline column filter
   const accountOptions = useMemo<FilterOption[]>(() => {
-    const accs = accountsData?.accounts ?? []
+    const accs = accountsList ?? []
     return accs.map((acc) => ({
       value: acc.id,
       label: acc.nickname || acc.name,
     }))
-  }, [accountsData?.accounts])
+  }, [accountsList])
 
   // Issue #590: Inline filter callbacks
   const handleAccountFilterChange = useCallback(
