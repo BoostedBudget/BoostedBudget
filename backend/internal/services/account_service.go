@@ -782,7 +782,8 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 // AccountFilterOptions holds filter options for GetAccountsFiltered (Issue #1109).
 type AccountFilterOptions struct {
 	IncludeHidden   bool   // if true, include hidden accounts
-	IncludeReplaced bool   // if true, do not filter by status=active
+	IncludeReplaced bool   // if true, equivalent to StatusFilter="all" (backward-compat alias)
+	StatusFilter    string // "active" (default), "replaced" (replaced only), "all" (no filter)
 	UserAccountID   string // if set, filter to accounts with this user_account_id
 }
 
@@ -804,7 +805,8 @@ func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string,
 	// Map service options to repository filter options
 	repoOpts := repository.AccountFilterOptions{
 		IncludeHidden:   opts.IncludeHidden,
-		IncludeReplaced: opts.IncludeReplaced,
+		IncludeReplaced: opts.IncludeReplaced || opts.StatusFilter == "all",
+		ReplacedOnly:    opts.StatusFilter == "replaced",
 		UserAccountID:   opts.UserAccountID,
 	}
 

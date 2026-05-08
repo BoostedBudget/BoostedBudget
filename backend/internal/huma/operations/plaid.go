@@ -162,7 +162,8 @@ func (h *PlaidHandler) ExchangePublicToken(ctx context.Context, input *ExchangeP
 func (h *PlaidHandler) GetAccounts(ctx context.Context, input *GetAccountsInput) (*GetAccountsOutput, error) {
 	opts := services.AccountFilterOptions{
 		IncludeHidden:   input.IncludeHidden == "true",
-		IncludeReplaced: input.Status == "all" || input.IncludeReplaced == "true",
+		StatusFilter:    input.Status,                   // "active" (default), "replaced", "all"
+		IncludeReplaced: input.IncludeReplaced == "true", // backward-compat alias for status=all
 		UserAccountID:   input.UserAccountID,
 	}
 

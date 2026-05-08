@@ -34,7 +34,8 @@ type FingerprintOwnership struct {
 // AccountFilterOptions configures filtering for GetAccountsWithInstitutionFiltered (Issue #1109).
 type AccountFilterOptions struct {
 	IncludeHidden   bool   // if true, includes hidden accounts
-	IncludeReplaced bool   // if true, returns accounts regardless of status (not just active)
+	IncludeReplaced bool   // if true, returns all accounts regardless of status (active + replaced)
+	ReplacedOnly    bool   // if true, returns only replaced accounts (status=replaced)
 	UserAccountID   string // if non-empty, filters to accounts sharing this user_account_id
 }
 
@@ -355,6 +356,7 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
 		       current_balance, available_balance, currency_code,
+		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
 		WHERE linked_item_id = $1 AND status = 'active'
@@ -383,6 +385,10 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 			&account.CurrentBalance,
 			&account.AvailableBalance,
 			&account.CurrencyCode,
+			&account.Status,
+			&account.UserAccountID,
+			&account.ReplacedByID,
+			&account.ReplacedAt,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 		)
@@ -696,9 +702,14 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		hiddenClause = " AND a.is_hidden = FALSE"
 	}
 
-	statusClause := " AND a.status = 'active'"
-	if opts.IncludeReplaced {
+	var statusClause string
+	switch {
+	case opts.ReplacedOnly:
+		statusClause = " AND a.status = 'replaced'"
+	case opts.IncludeReplaced:
 		statusClause = ""
+	default:
+		statusClause = " AND a.status = 'active'"
 	}
 
 	userAccountClause := ""

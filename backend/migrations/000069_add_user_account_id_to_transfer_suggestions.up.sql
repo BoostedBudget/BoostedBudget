@@ -18,7 +18,7 @@ BEGIN
         WHERE table_name = 'transfer_suggestions' AND column_name = 'from_user_account_id'
     ) THEN
         ALTER TABLE transfer_suggestions
-        ADD COLUMN from_user_account_id UUID REFERENCES user_accounts(id) ON DELETE SET NULL;
+        ADD COLUMN from_user_account_id UUID;
 
         COMMENT ON COLUMN transfer_suggestions.from_user_account_id IS
             'Stable reference to the source user_account surviving Plaid re-links. '
@@ -38,7 +38,7 @@ BEGIN
         WHERE table_name = 'transfer_suggestions' AND column_name = 'to_user_account_id'
     ) THEN
         ALTER TABLE transfer_suggestions
-        ADD COLUMN to_user_account_id UUID REFERENCES user_accounts(id) ON DELETE SET NULL;
+        ADD COLUMN to_user_account_id UUID;
 
         COMMENT ON COLUMN transfer_suggestions.to_user_account_id IS
             'Stable reference to the destination user_account surviving Plaid re-links. '
@@ -92,6 +92,7 @@ BEGIN
         ADD CONSTRAINT fk_transfer_sugg_from_user_account_id
         FOREIGN KEY (from_user_account_id)
         REFERENCES user_accounts(id)
+        ON DELETE SET NULL
         NOT VALID;
     END IF;
 END $$;
@@ -109,6 +110,7 @@ BEGIN
         ADD CONSTRAINT fk_transfer_sugg_to_user_account_id
         FOREIGN KEY (to_user_account_id)
         REFERENCES user_accounts(id)
+        ON DELETE SET NULL
         NOT VALID;
     END IF;
 END $$;
