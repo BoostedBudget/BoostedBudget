@@ -200,7 +200,7 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 		       current_balance, available_balance, currency_code,
 		       created_at, updated_at
 		FROM accounts
-		WHERE linked_item_id = $1
+		WHERE linked_item_id = $1 AND status = 'active'
 		ORDER BY created_at ASC
 	`)).WithArgs(linkedItemID).WillReturnRows(rows)
 
@@ -249,7 +249,7 @@ func TestAccountRepository_GetByUserID(t *testing.T) {
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
-		WHERE user_id = $1 AND status != 'expired'
+		WHERE user_id = $1 AND status = 'active'
 		ORDER BY created_at ASC
 	`)).WithArgs(userID).WillReturnRows(rows)
 
@@ -397,7 +397,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 		       a.created_at, a.updated_at, l.institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status != 'expired'
+		WHERE a.user_id = $1 AND a.status = 'active'
 		ORDER BY a.created_at ASC
 	`
 
@@ -455,7 +455,7 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 		       a.created_at, a.updated_at, l.institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status != 'expired'
+		WHERE a.user_id = $1 AND a.status = 'active'
 		ORDER BY a.created_at ASC
 	`
 
@@ -507,7 +507,7 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing
 		       a.created_at, a.updated_at, l.institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status != 'expired'
+		WHERE a.user_id = $1 AND a.status = 'active'
 		ORDER BY a.created_at ASC
 	`
 
@@ -962,7 +962,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status != 'expired' AND a.is_hidden = FALSE ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
+		WHERE a.user_id = $1 AND a.status = 'active' AND a.is_hidden = FALSE ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -1035,7 +1035,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status != 'expired' ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
+		WHERE a.user_id = $1 AND a.status = 'active' ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -1492,6 +1492,145 @@ func TestAccountRepository_ExpireAccountsByFingerprint(t *testing.T) {
 	err := repo.ExpireAccountsByFingerprint(ctx, fingerprint)
 
 	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_GetByUserID_ExcludesReplaced verifies that replaced accounts
+// are not returned by GetByUserID (Issue #1109: re-link chain transparency).
+func TestAccountRepository_GetByUserID_ExcludesReplaced(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	now := time.Now()
+	balance := 1000.00
+
+	// Only the active account row is returned — DB filters replaced via WHERE status = 'active'
+	rows := pgxmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"created_at", "updated_at",
+	}).AddRow(
+		uuid.New().String(), uuid.New().String(), userID, "acc-active",
+		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
+		&balance, &balance, "USD",
+		"active", nil, nil, nil,
+		now, now,
+	)
+	// Note: replaced account not in rows — DB filters it via WHERE status = 'active'
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, linked_item_id, user_id, plaid_account_id,
+		       name, official_name, type, subtype, mask,
+		       current_balance, available_balance, currency_code,
+		       status, user_account_id, replaced_by_id, replaced_at,
+		       created_at, updated_at
+		FROM accounts
+		WHERE user_id = $1 AND status = 'active'
+		ORDER BY created_at ASC
+	`)).WithArgs(userID).WillReturnRows(rows)
+
+	accounts, err := repo.GetByUserID(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Len(t, accounts, 1)
+	assert.Equal(t, "Active Checking", accounts[0].Name)
+	assert.Equal(t, domain.AccountStatusActive, accounts[0].Status)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_GetAccountsWithInstitution_ExcludesReplaced verifies that
+// replaced accounts are not returned (Issue #1109).
+func TestAccountRepository_GetAccountsWithInstitution_ExcludesReplaced(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	bal := 500.00
+
+	// Only the active account is returned — replaced one filtered by WHERE status = 'active'
+	rows := pgxmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"created_at", "updated_at", "institution_name",
+	}).AddRow(
+		uuid.New().String(), uuid.New().String(), userID, "plaid-acc-active",
+		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
+		&bal, &bal, "USD",
+		"active", nil, nil, nil,
+		time.Now(), time.Now(), "Chase",
+	)
+
+	expectedQuery := `
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       a.current_balance, a.available_balance, a.currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       a.created_at, a.updated_at, l.institution_name
+		FROM accounts a
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		WHERE a.user_id = $1 AND a.status = 'active'
+		ORDER BY a.created_at ASC
+	`
+
+	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	accounts, err := repo.GetAccountsWithInstitution(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Len(t, accounts, 1)
+	assert.Equal(t, "Active Checking", accounts[0].Name)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_GetByLinkedItemID_ExcludesReplaced verifies that replaced
+// accounts sharing the same linked_item_id are not returned (Issue #1109).
+func TestAccountRepository_GetByLinkedItemID_ExcludesReplaced(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	now := time.Now()
+	balance := 1500.50
+	available := 1450.25
+
+	// Only the active account is returned — replaced one filtered by WHERE status = 'active'
+	rows := pgxmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"created_at", "updated_at",
+	}).AddRow(
+		uuid.New().String(), linkedItemID, uuid.New().String(), "acc-active",
+		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
+		&balance, &available, "USD",
+		now, now,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, linked_item_id, user_id, plaid_account_id,
+		       name, official_name, type, subtype, mask,
+		       current_balance, available_balance, currency_code,
+		       created_at, updated_at
+		FROM accounts
+		WHERE linked_item_id = $1 AND status = 'active'
+		ORDER BY created_at ASC
+	`)).WithArgs(linkedItemID).WillReturnRows(rows)
+
+	accounts, err := repo.GetByLinkedItemID(ctx, linkedItemID)
+
+	require.NoError(t, err)
+	assert.Len(t, accounts, 1)
+	assert.Equal(t, "Active Checking", accounts[0].Name)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -350,7 +350,7 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 		       current_balance, available_balance, currency_code,
 		       created_at, updated_at
 		FROM accounts
-		WHERE linked_item_id = $1
+		WHERE linked_item_id = $1 AND status = 'active'
 		ORDER BY created_at ASC
 	`
 
@@ -406,7 +406,7 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
-		WHERE user_id = $1 AND status != 'expired'
+		WHERE user_id = $1 AND status = 'active'
 		ORDER BY created_at ASC
 	`
 
@@ -466,7 +466,7 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 		       a.created_at, a.updated_at, l.institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status != 'expired'
+		WHERE a.user_id = $1 AND a.status = 'active'
 		ORDER BY a.created_at ASC
 	`
 
@@ -694,7 +694,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status != 'expired'` + hiddenClause + `
+		WHERE a.user_id = $1 AND a.status = 'active'` + hiddenClause + `
 		ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC`
 
 	rows, err := r.db.Query(ctx, query, userID)
