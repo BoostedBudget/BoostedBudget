@@ -125,17 +125,18 @@ func TestHoldingRepository_GetByUserID(t *testing.T) {
 	instValue := 1650.00
 	instPrice := 165.00
 
+	userAccountID := uuid.New().String()
 	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "security_id",
+		"id", "user_id", "account_id", "user_account_id", "security_id",
 		"quantity", "cost_basis", "institution_value", "institution_price",
 		"created_at", "updated_at",
 	}).AddRow(
-		uuid.New().String(), userID, accountID, secID,
+		uuid.New().String(), userID, accountID, &userAccountID, secID,
 		10.0, &costBasis, &instValue, &instPrice,
 		now, now,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`JOIN accounts a ON a.id = holdings.account_id`)).
 		WithArgs(userID).
 		WillReturnRows(rows)
 
@@ -182,5 +183,114 @@ func TestHoldingRepository_GetByAccountID(t *testing.T) {
 	require.Len(t, holdings, 1)
 	assert.Equal(t, accountID, holdings[0].AccountID)
 	assert.Equal(t, 5.0, holdings[0].Quantity)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Chain-aware tests for Issue #1109
+
+func TestHoldingRepository_GetByUserID_ActiveAccountsOnly(t *testing.T) {
+	// RED: GetByUserID must JOIN accounts and only return holdings for active accounts
+	mock, repo := setupHoldingMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+	secID := uuid.New().String()
+	userAccountID := uuid.New().String()
+	now := time.Now()
+
+	costBasis := 1500.00
+	instValue := 1650.00
+	instPrice := 165.00
+
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "account_id", "user_account_id", "security_id",
+		"quantity", "cost_basis", "institution_value", "institution_price",
+		"created_at", "updated_at",
+	}).AddRow(
+		uuid.New().String(), userID, accountID, &userAccountID, secID,
+		10.0, &costBasis, &instValue, &instPrice,
+		now, now,
+	)
+
+	// The query must JOIN accounts and filter status='active'
+	mock.ExpectQuery(regexp.QuoteMeta(`JOIN accounts a ON a.id = holdings.account_id`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	holdings, err := repo.GetByUserID(ctx, userID)
+
+	require.NoError(t, err)
+	require.Len(t, holdings, 1)
+	assert.Equal(t, userID, holdings[0].UserID)
+	assert.NotNil(t, holdings[0].UserAccountID)
+	assert.Equal(t, userAccountID, *holdings[0].UserAccountID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHoldingRepository_GetByUserID_ReplacedAccountExcluded(t *testing.T) {
+	// RED: Replaced accounts must NOT appear in GetByUserID
+	mock, repo := setupHoldingMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	// Return empty result (replaced account filtered out by JOIN on active accounts)
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "account_id", "user_account_id", "security_id",
+		"quantity", "cost_basis", "institution_value", "institution_price",
+		"created_at", "updated_at",
+	})
+
+	mock.ExpectQuery(regexp.QuoteMeta(`JOIN accounts a ON a.id = holdings.account_id`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	holdings, err := repo.GetByUserID(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Empty(t, holdings)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHoldingRepository_GetByUserAccountID(t *testing.T) {
+	// RED: New chain-aware method must exist and query by user_account_id
+	mock, repo := setupHoldingMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+	secID := uuid.New().String()
+	userAccountID := uuid.New().String()
+	now := time.Now()
+
+	costBasis := 1500.00
+	instValue := 1650.00
+	instPrice := 165.00
+
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "account_id", "user_account_id", "security_id",
+		"quantity", "cost_basis", "institution_value", "institution_price",
+		"created_at", "updated_at",
+	}).AddRow(
+		uuid.New().String(), userID, accountID, &userAccountID, secID,
+		10.0, &costBasis, &instValue, &instPrice,
+		now, now,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`user_account_id = $1`)).
+		WithArgs(userAccountID).
+		WillReturnRows(rows)
+
+	holdings, err := repo.(interface {
+		GetByUserAccountID(ctx context.Context, userAccountID string) ([]domain.Holding, error)
+	}).GetByUserAccountID(ctx, userAccountID)
+
+	require.NoError(t, err)
+	require.Len(t, holdings, 1)
+	assert.Equal(t, accountID, holdings[0].AccountID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

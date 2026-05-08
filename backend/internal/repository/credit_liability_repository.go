@@ -105,15 +105,19 @@ func (r *creditLiabilityRepository) ReplaceForAccount(ctx context.Context, accou
 
 // GetByUserID retrieves all credit liabilities for a user (without APRs).
 func (r *creditLiabilityRepository) GetByUserID(ctx context.Context, userID string) ([]domain.CreditLiability, error) {
+	// JOIN accounts to filter out replaced accounts — after a Plaid re-link the old
+	// account's status becomes 'replaced', so this join ensures only active liabilities appear.
 	query := `
-		SELECT id, user_id, account_id, is_overdue,
-			last_payment_amount, last_payment_date,
-			last_statement_issue_date, last_statement_balance,
-			minimum_payment_amount, next_payment_due_date,
-			synced_at, created_at, updated_at
+		SELECT credit_liabilities.id, credit_liabilities.user_id, credit_liabilities.account_id, credit_liabilities.is_overdue,
+			credit_liabilities.last_payment_amount, credit_liabilities.last_payment_date,
+			credit_liabilities.last_statement_issue_date, credit_liabilities.last_statement_balance,
+			credit_liabilities.minimum_payment_amount, credit_liabilities.next_payment_due_date,
+			credit_liabilities.synced_at, credit_liabilities.created_at, credit_liabilities.updated_at
 		FROM credit_liabilities
-		WHERE user_id = $1
-		ORDER BY account_id
+		JOIN accounts a ON a.id = credit_liabilities.account_id
+		WHERE credit_liabilities.user_id = $1
+		  AND a.status = 'active'
+		ORDER BY credit_liabilities.account_id
 	`
 
 	rows, err := r.db.Query(ctx, query, userID)

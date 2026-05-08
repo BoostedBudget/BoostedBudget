@@ -19,6 +19,10 @@ type InvestmentTransactionRepository interface {
 
 	// GetByAccountID retrieves investment transactions for a specific account.
 	GetByAccountID(ctx context.Context, accountID string) ([]domain.InvestmentTransaction, error)
+
+	// GetByUserAccountID returns all investment transactions for a logical account (all chain members)
+	// identified by the stable user_account_id that survives Plaid re-links.
+	GetByUserAccountID(ctx context.Context, userAccountID string, limit, offset int) ([]domain.InvestmentTransaction, error)
 }
 
 type investmentTransactionRepository struct {
@@ -90,15 +94,21 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 
 // GetByUserID retrieves investment transactions for a user with pagination.
 func (r *investmentTransactionRepository) GetByUserID(ctx context.Context, userID string, limit, offset int) ([]domain.InvestmentTransaction, error) {
+	// JOIN accounts to filter out replaced accounts — after a Plaid re-link the old
+	// account's status becomes 'replaced', so this join ensures only active transactions appear.
 	query := `
-		SELECT id, user_id, account_id, security_id,
-			plaid_investment_transaction_id,
-			type, subtype, name,
-			quantity, amount, price, fees, date,
-			created_at
+		SELECT investment_transactions.id, investment_transactions.user_id, investment_transactions.account_id,
+			investment_transactions.user_account_id, investment_transactions.security_id,
+			investment_transactions.plaid_investment_transaction_id,
+			investment_transactions.type, investment_transactions.subtype, investment_transactions.name,
+			investment_transactions.quantity, investment_transactions.amount, investment_transactions.price,
+			investment_transactions.fees, investment_transactions.date,
+			investment_transactions.created_at
 		FROM investment_transactions
-		WHERE user_id = $1
-		ORDER BY date DESC
+		JOIN accounts a ON a.id = investment_transactions.account_id
+		WHERE investment_transactions.user_id = $1
+		  AND a.status = 'active'
+		ORDER BY investment_transactions.date DESC
 		LIMIT $2 OFFSET $3
 	`
 
@@ -115,6 +125,7 @@ func (r *investmentTransactionRepository) GetByUserID(ctx context.Context, userI
 			&txn.ID,
 			&txn.UserID,
 			&txn.AccountID,
+			&txn.UserAccountID,
 			&txn.SecurityID,
 			&txn.PlaidInvestmentTransactionID,
 			&txn.Type,
@@ -164,6 +175,58 @@ func (r *investmentTransactionRepository) GetByAccountID(ctx context.Context, ac
 			&txn.ID,
 			&txn.UserID,
 			&txn.AccountID,
+			&txn.SecurityID,
+			&txn.PlaidInvestmentTransactionID,
+			&txn.Type,
+			&txn.Subtype,
+			&txn.Name,
+			&txn.Quantity,
+			&txn.Amount,
+			&txn.Price,
+			&txn.Fees,
+			&txn.Date,
+			&txn.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		txns = append(txns, txn)
+	}
+
+	if txns == nil {
+		txns = []domain.InvestmentTransaction{}
+	}
+	return txns, nil
+}
+
+func (r *investmentTransactionRepository) GetByUserAccountID(ctx context.Context, userAccountID string, limit, offset int) ([]domain.InvestmentTransaction, error) {
+	// Returns all investment transactions for a logical account identified by the stable user_account_id.
+	// This covers all physical account_ids in a re-link chain.
+	query := `
+		SELECT id, user_id, account_id, user_account_id, security_id,
+			plaid_investment_transaction_id,
+			type, subtype, name,
+			quantity, amount, price, fees, date,
+			created_at
+		FROM investment_transactions
+		WHERE user_account_id = $1
+		ORDER BY date DESC
+		LIMIT $2 OFFSET $3
+	`
+
+	rows, err := r.db.Query(ctx, query, userAccountID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var txns []domain.InvestmentTransaction
+	for rows.Next() {
+		txn := domain.InvestmentTransaction{}
+		if err := rows.Scan(
+			&txn.ID,
+			&txn.UserID,
+			&txn.AccountID,
+			&txn.UserAccountID,
 			&txn.SecurityID,
 			&txn.PlaidInvestmentTransactionID,
 			&txn.Type,

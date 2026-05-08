@@ -20,6 +20,10 @@ type HoldingRepository interface {
 
 	// GetByAccountID retrieves all holdings for a specific account.
 	GetByAccountID(ctx context.Context, accountID string) ([]domain.Holding, error)
+
+	// GetByUserAccountID returns all holdings for a logical account (all chain members)
+	// identified by the stable user_account_id that survives Plaid re-links.
+	GetByUserAccountID(ctx context.Context, userAccountID string) ([]domain.Holding, error)
 }
 
 type holdingRepository struct {
@@ -84,13 +88,17 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 
 // GetByUserID retrieves all holdings for a user.
 func (r *holdingRepository) GetByUserID(ctx context.Context, userID string) ([]domain.Holding, error) {
+	// JOIN accounts to filter out replaced accounts — after a Plaid re-link the old
+	// account's status becomes 'replaced', so this join ensures only active holdings appear.
 	query := `
-		SELECT id, user_id, account_id, security_id,
-			quantity, cost_basis, institution_value, institution_price,
-			created_at, updated_at
+		SELECT holdings.id, holdings.user_id, holdings.account_id, holdings.user_account_id, holdings.security_id,
+			holdings.quantity, holdings.cost_basis, holdings.institution_value, holdings.institution_price,
+			holdings.created_at, holdings.updated_at
 		FROM holdings
-		WHERE user_id = $1
-		ORDER BY account_id, security_id
+		JOIN accounts a ON a.id = holdings.account_id
+		WHERE holdings.user_id = $1
+		  AND a.status = 'active'
+		ORDER BY holdings.account_id, holdings.security_id
 	`
 
 	rows, err := r.db.Query(ctx, query, userID)
@@ -106,6 +114,7 @@ func (r *holdingRepository) GetByUserID(ctx context.Context, userID string) ([]d
 			&h.ID,
 			&h.UserID,
 			&h.AccountID,
+			&h.UserAccountID,
 			&h.SecurityID,
 			&h.Quantity,
 			&h.CostBasis,
@@ -149,6 +158,51 @@ func (r *holdingRepository) GetByAccountID(ctx context.Context, accountID string
 			&h.ID,
 			&h.UserID,
 			&h.AccountID,
+			&h.SecurityID,
+			&h.Quantity,
+			&h.CostBasis,
+			&h.InstitutionValue,
+			&h.InstitutionPrice,
+			&h.CreatedAt,
+			&h.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		holdings = append(holdings, h)
+	}
+
+	if holdings == nil {
+		holdings = []domain.Holding{}
+	}
+	return holdings, nil
+}
+
+func (r *holdingRepository) GetByUserAccountID(ctx context.Context, userAccountID string) ([]domain.Holding, error) {
+	// Returns all holdings for a logical account identified by the stable user_account_id.
+	// This covers all physical account_ids in a re-link chain.
+	query := `
+		SELECT id, user_id, account_id, user_account_id, security_id,
+			quantity, cost_basis, institution_value, institution_price,
+			created_at, updated_at
+		FROM holdings
+		WHERE user_account_id = $1
+		ORDER BY account_id, security_id
+	`
+
+	rows, err := r.db.Query(ctx, query, userAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var holdings []domain.Holding
+	for rows.Next() {
+		h := domain.Holding{}
+		if err := rows.Scan(
+			&h.ID,
+			&h.UserID,
+			&h.AccountID,
+			&h.UserAccountID,
 			&h.SecurityID,
 			&h.Quantity,
 			&h.CostBasis,
