@@ -88,6 +88,8 @@ export const ANALYTICS_EVENTS = {
   SAVINGS_GOAL_DELETED: 'savings_goal_deleted',
   SAVINGS_FILTER_CHANGED: 'savings_filter_changed',
   SAVINGS_SORT_CHANGED: 'savings_sort_changed',
+
+  ACCOUNT_REPLACED_FILTERED: 'account_replaced_filtered',
 } as const
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[keyof typeof ANALYTICS_EVENTS]
