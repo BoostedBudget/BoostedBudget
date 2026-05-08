@@ -395,12 +395,15 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 	return accounts, nil
 }
 
-// GetByUserID retrieves all accounts for a specific user
+// GetByUserID retrieves all accounts for a specific user, including status and re-link fields.
+// Returns active and replaced accounts (excludes expired). Status is always populated so
+// callers like ListActiveByUser can filter correctly.
 func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
 		       current_balance, available_balance, currency_code,
+		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
 		WHERE user_id = $1 AND status != 'expired'
@@ -429,6 +432,10 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 			&account.CurrentBalance,
 			&account.AvailableBalance,
 			&account.CurrencyCode,
+			&account.Status,
+			&account.UserAccountID,
+			&account.ReplacedByID,
+			&account.ReplacedAt,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 		)
@@ -448,12 +455,14 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 	return accounts, nil
 }
 
-// GetAccountsWithInstitution retrieves all accounts for a user with institution names from linked_items
+// GetAccountsWithInstitution retrieves all accounts for a user with institution names from linked_items.
+// Includes status and re-link fields so callers can distinguish active vs. replaced accounts.
 func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, a.currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
 		       a.created_at, a.updated_at, l.institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -483,6 +492,10 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 			&account.CurrentBalance,
 			&account.AvailableBalance,
 			&account.CurrencyCode,
+			&account.Status,
+			&account.UserAccountID,
+			&account.ReplacedByID,
+			&account.ReplacedAt,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 			&account.InstitutionName,

@@ -1,27 +1,13 @@
-// Package sql provides reusable SQL fragments and constants for account
-// status filtering. Centralising these strings prevents callers from
-// hand-rolling status checks and ensures consistent handling of the
-// re-link account chain across all query sites.
-package sql
+package accountsql
 
 import "fmt"
 
-// WhereAccountActive is an AND clause fragment that restricts a query to
-// active accounts only. Append to an existing WHERE clause; the leading
-// space and AND keyword are intentional so callers can concatenate directly.
-//
-// Example:
-//
-//	query := "SELECT id FROM accounts WHERE user_id = $1" + sql.WhereAccountActive
-const WhereAccountActive = " AND status = 'active'"
+// WhereAccountActive filters to accounts with status='active' using the standard 'a' alias.
+// This assumes the accounts table is aliased as 'a' in the query (e.g., "FROM accounts a").
+// Use WhereAliasedAccountActive when a different alias is needed.
+const WhereAccountActive = " AND a.status = 'active'"
 
-// WhereAliasedAccountActive is the aliased form of WhereAccountActive.
-// Use when the accounts table is referenced via an alias in a JOIN query.
-//
-// Example:
-//
-//	query := "SELECT a.id FROM accounts a LEFT JOIN ... WHERE a.user_id = $1" +
-//	         sql.WhereAliasedAccountActive("a")
+// WhereAliasedAccountActive returns a status='active' filter using the given table alias.
 func WhereAliasedAccountActive(alias string) string {
 	return fmt.Sprintf(" AND %s.status = 'active'", alias)
 }
