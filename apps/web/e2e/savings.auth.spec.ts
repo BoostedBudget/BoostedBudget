@@ -469,8 +469,9 @@ test.describe('Savings Page - Delete Flow', () => {
     // Confirm deletion using the destructive Delete button
     await page.getByRole('button', { name: /^delete$/i }).last().click()
 
-    await expect(page.getByText('Vacation Fund')).not.toBeVisible()
-    await expect(page.getByText('Emergency Fund')).toBeVisible()
+    await expect(page.getByRole('alertdialog', { name: /delete savings goal/i })).not.toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Vacation Fund' })).not.toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Emergency Fund' })).toBeVisible()
   })
 
   test('cancelling delete keeps goal in grid', async ({ page }) => {
