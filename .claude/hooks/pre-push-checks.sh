@@ -72,6 +72,16 @@ else
   WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"
 fi
 
+# Backend Go vulnerability scan (mirrors pre-commit; protects against --no-verify bypass)
+if command -v govulncheck &>/dev/null; then
+  run_check "govulncheck ./...    (Go vulnerabilities)" \
+    "$PROJECT_ROOT/backend" \
+    "govulncheck ./..."
+else
+  printf '  %-50s⚠️  (not installed)\n' "govulncheck ./..."
+  WARNINGS="${WARNINGS}\n  • govulncheck not installed — install: go install golang.org/x/vuln/cmd/govulncheck@latest"
+fi
+
 printf '\n'
 
 # =========================================================================
