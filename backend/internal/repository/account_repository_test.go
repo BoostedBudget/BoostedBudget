@@ -970,7 +970,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 		WillReturnRows(rows)
 
 	// Execute with includeHidden=false
-	accounts, err := repo.GetAccountsWithInstitutionFiltered(ctx, userID, false)
+	accounts, err := repo.GetAccountsWithInstitutionFiltered(ctx, userID, AccountFilterOptions{IncludeHidden: false})
 
 	// Assert
 	require.NoError(t, err)
@@ -1043,7 +1043,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 		WillReturnRows(rows)
 
 	// Execute with includeHidden=true
-	accounts, err := repo.GetAccountsWithInstitutionFiltered(ctx, userID, true)
+	accounts, err := repo.GetAccountsWithInstitutionFiltered(ctx, userID, AccountFilterOptions{IncludeHidden: true})
 
 	// Assert
 	require.NoError(t, err)

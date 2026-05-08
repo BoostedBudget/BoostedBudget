@@ -55,6 +55,14 @@ func (m *MockHoldingRepository) GetByAccountID(ctx context.Context, accountID st
 	return args.Get(0).([]domain.Holding), args.Error(1)
 }
 
+func (m *MockHoldingRepository) GetByUserAccountID(ctx context.Context, userAccountID string) ([]domain.Holding, error) {
+	args := m.Called(ctx, userAccountID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.Holding), args.Error(1)
+}
+
 type MockInvestmentTransactionRepository struct {
 	mock.Mock
 }
@@ -74,6 +82,14 @@ func (m *MockInvestmentTransactionRepository) GetByUserID(ctx context.Context, u
 
 func (m *MockInvestmentTransactionRepository) GetByAccountID(ctx context.Context, accountID string) ([]domain.InvestmentTransaction, error) {
 	args := m.Called(ctx, accountID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.InvestmentTransaction), args.Error(1)
+}
+
+func (m *MockInvestmentTransactionRepository) GetByUserAccountID(ctx context.Context, userAccountID string, limit, offset int) ([]domain.InvestmentTransaction, error) {
+	args := m.Called(ctx, userAccountID, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
