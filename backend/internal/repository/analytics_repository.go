@@ -57,7 +57,7 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) as expenses,
 			COUNT(CASE WHEN t.amount > 0 THEN 1 END) as expense_count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id
+		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
@@ -124,7 +124,7 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) as expenses,
 			COUNT(*) as transaction_count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id
+		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
@@ -354,7 +354,7 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 			COALESCE(SUM(ABS(t.amount)), 0) as total,
 			COUNT(*) as transaction_count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id
+		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
 		LEFT JOIN custom_categories cc
 		       ON cc.id = t.custom_category_override_id
 		      AND t.category_override_kind = 'custom'
@@ -405,7 +405,7 @@ func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID 
 			COALESCE(SUM(ABS(t.amount)), 0) as total,
 			COUNT(*) as transaction_count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id
+		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
@@ -454,7 +454,7 @@ func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID stri
 			%s as category_display,
 			COALESCE(SUM(ABS(t.amount)), 0) as total
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id
+		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
 		LEFT JOIN custom_categories cc
 		       ON cc.id = t.custom_category_override_id
 		      AND t.category_override_kind = 'custom'

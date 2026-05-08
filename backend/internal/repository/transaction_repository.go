@@ -742,6 +742,16 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		}
 	}
 
+	// Optional filter: user_account_id (Issue #1109)
+	// Filters by logical account identity — stable across re-links.
+	// Transactions from all chain members (old and new accounts) for this
+	// logical account are returned, since they all share the same user_account_id.
+	if filters.UserAccountID != nil {
+		conditions = append(conditions, fmt.Sprintf("user_account_id = $%d", argIndex))
+		args = append(args, *filters.UserAccountID)
+		argIndex++
+	}
+
 	// Combine all conditions with AND
 	whereClause := "WHERE " + strings.Join(conditions, " AND ")
 
