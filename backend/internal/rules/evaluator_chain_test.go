@@ -94,3 +94,33 @@ func TestAccountIDEvaluator_ChainAware_FallbackToAccountIDWhenNoUserAccountID(t 
 		t.Errorf("expected match via AccountID fallback, got false")
 	}
 }
+
+func TestAccountIDEvaluator_ChainAware_Depth2(t *testing.T) {
+	// Depth-2 chain: acct_old -> acct_mid -> acct_current
+	// Rule was authored with the stable user_account_id (not any raw account UUID).
+	// After two re-links, the transaction carries the stable user_account_id so it
+	// still matches even though the raw account IDs have changed twice.
+	evaluator := &AccountIDEvaluator{}
+
+	stableUserAccountID := "user-acct-stable-depth2"
+
+	tx := &domain.Transaction{
+		AccountID:     "acct_current",    // third-generation raw ID
+		UserAccountID: &stableUserAccountID, // stable across both re-links
+	}
+
+	condition := domain.RuleCondition{
+		Type:  domain.ConditionAccountID,
+		Value: stableUserAccountID, // rule authored with stable ID
+	}
+
+	got, err := evaluator.Evaluate(tx, condition)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got {
+		t.Errorf("depth-2 chain: expected match via UserAccountID, got false "+
+			"(AccountID=%q UserAccountID=%q conditionValue=%q)",
+			tx.AccountID, stableUserAccountID, condition.Value)
+	}
+}

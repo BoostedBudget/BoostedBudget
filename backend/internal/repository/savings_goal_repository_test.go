@@ -536,3 +536,52 @@ func TestSavingsGoalRepository_MarkCompleted_NotFound(t *testing.T) {
 	assert.Equal(t, domain.ErrSavingsGoalNotFound, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestSavingsGoalRepository_GetByAccountID_ChainExpand verifies that filtering
+// by active account_id returns goals associated with replaced (pre-relink) accounts
+// that share the same user_account_id. Issue #1109: B.4 fix.
+func TestSavingsGoalRepository_GetByAccountID_ChainExpand(t *testing.T) {
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	activeAccountID := uuid.New().String()
+	replacedAccountID := uuid.New().String()
+	userID := uuid.New().String()
+	userAccountID := uuid.New().String()
+	now := time.Now()
+
+	columns := []string{
+		"id", "user_id", "name", "description", "target_amount", "current_amount",
+		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
+		"created_at", "updated_at",
+	}
+
+	// Goal is linked to the replaced account but has the stable user_account_id.
+	// When the caller filters by activeAccountID, the goal must still be returned.
+	mock.ExpectQuery(regexp.QuoteMeta(`user_account_id = (SELECT user_account_id FROM accounts WHERE id = $1`)).
+		WithArgs(activeAccountID).
+		WillReturnRows(pgxmock.NewRows(columns).
+			AddRow(
+				uuid.New().String(),
+				userID,
+				"Chain Goal",
+				nil,
+				8000.00,
+				1000.00,
+				"USD",
+				replacedAccountID, // pre-relink account_id
+				&userAccountID,    // stable user_account_id
+				nil,
+				false,
+				nil,
+				now,
+				now,
+			))
+
+	goals, err := repo.GetByAccountID(ctx, activeAccountID)
+	require.NoError(t, err)
+	require.Len(t, goals, 1, "pre-relink goal must be returned when filtering by active account_id")
+	assert.Equal(t, replacedAccountID, goals[0].AccountID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

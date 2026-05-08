@@ -8,8 +8,11 @@ package services
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -141,4 +144,243 @@ func TestSavingsGoalService_ValidateOwnership_MatchesByUserAccountID(t *testing.
 	assert.Equal(t, newAccountID, goal.AccountID)
 	require.NotNil(t, goal.UserAccountID)
 	assert.Equal(t, stableUserAccountID, *goal.UserAccountID)
+}
+
+// TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID verifies that executeSavingsGoal
+// resolves the savings goal's linked account via the chain resolver when UserAccountID is set.
+// Issue #1109: B.3 fix.
+func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID(t *testing.T) {
+	execRepo := &mockRuleExecutionRepository{}
+	suggRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+	goalRepo := &mockSavingsGoalRepository{}
+
+	replacedAccountID := "account-savings-replaced"
+	activeAccountID := "account-savings-active"
+	userAccountID := "stable-savings-uaid"
+	goalUserAccountID := userAccountID
+
+	// Pre-populate the goal repo with a goal whose account_id is the replaced (old) account,
+	// but whose UserAccountID is the stable user_account_id.
+	savingsGoalID := "goal-chain-001"
+	existingGoal := &domain.SavingsGoal{
+		ID:            savingsGoalID,
+		UserID:        "user-savings-001",
+		Name:          "Emergency Fund",
+		TargetAmount:  10000.0,
+		CurrentAmount: 2000.0,
+		CurrencyCode:  "USD",
+		AccountID:     replacedAccountID,
+		UserAccountID: &goalUserAccountID,
+		IsCompleted:   false,
+	}
+	goalRepo.goals = append(goalRepo.goals, existingGoal)
+
+	mockResolver := &mockAccountChainResolver{
+		resolveActiveIDFunc: func(_ context.Context, uaid string) (string, error) {
+			if uaid == goalUserAccountID {
+				return activeAccountID, nil
+			}
+			return "", errors.New("unknown uaid")
+		},
+	}
+
+	svc := NewRuleExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetChainResolver(mockResolver)
+
+	ctx := context.Background()
+	now := time.Now()
+
+	actions := map[string]interface{}{
+		"savings_goal": map[string]interface{}{
+			"savings_goal_id": savingsGoalID,
+			"from_account_id": "from-checking-account",
+			"amount_type":     "fixed",
+			"amount":          float64(500),
+		},
+	}
+	actionsJSON, _ := json.Marshal(actions)
+
+	rule := &domain.AutomationRule{
+		ID:             "rule-savings-chain-001",
+		UserID:         "user-savings-001",
+		Name:           "Savings Chain Rule",
+		Enabled:        true,
+		RuleType:       domain.RuleTypeSavingsGoal,
+		ConditionLogic: "AND",
+		Conditions:     []domain.AutomationRuleCondition{},
+		Actions:        actionsJSON,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: "transaction_created",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+	require.NoError(t, err)
+
+	require.Len(t, suggRepo.suggestions, 1)
+	s := suggRepo.suggestions[0]
+
+	// Chain resolver should have replaced replacedAccountID with activeAccountID.
+	require.NotNil(t, s.ToAccountID)
+	assert.Equal(t, activeAccountID, *s.ToAccountID,
+		"ToAccountID should be resolved to active account, not replaced")
+	_ = replacedAccountID // ensure test clearly refers to both
+}
+
+// TestSavingsGoalExecutor_ChainResolver_NilFallback verifies that when chainResolver is nil,
+// executeSavingsGoal falls back to goal.AccountID (the raw account_id from the goal row).
+func TestSavingsGoalExecutor_ChainResolver_NilFallback(t *testing.T) {
+	execRepo := &mockRuleExecutionRepository{}
+	suggRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+	goalRepo := &mockSavingsGoalRepository{}
+
+	replacedAccountID := "account-savings-replaced-legacy"
+	goalUserAccountID := "stable-savings-uaid-legacy"
+
+	savingsGoalID := "goal-chain-legacy-001"
+	existingGoal := &domain.SavingsGoal{
+		ID:            savingsGoalID,
+		UserID:        "user-savings-002",
+		Name:          "Vacation Fund",
+		TargetAmount:  5000.0,
+		CurrentAmount: 0,
+		CurrencyCode:  "USD",
+		AccountID:     replacedAccountID,
+		UserAccountID: &goalUserAccountID,
+		IsCompleted:   false,
+	}
+	goalRepo.goals = append(goalRepo.goals, existingGoal)
+
+	svc := NewRuleExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc.SetSavingsGoalRepo(goalRepo)
+	// No SetChainResolver — chainResolver stays nil.
+
+	ctx := context.Background()
+	now := time.Now()
+
+	actions := map[string]interface{}{
+		"savings_goal": map[string]interface{}{
+			"savings_goal_id": savingsGoalID,
+			"from_account_id": "from-checking",
+			"amount_type":     "fixed",
+			"amount":          float64(200),
+		},
+	}
+	actionsJSON, _ := json.Marshal(actions)
+
+	rule := &domain.AutomationRule{
+		ID:             "rule-savings-nil-resolver",
+		UserID:         "user-savings-002",
+		Name:           "Nil Resolver Savings",
+		Enabled:        true,
+		RuleType:       domain.RuleTypeSavingsGoal,
+		ConditionLogic: "AND",
+		Conditions:     []domain.AutomationRuleCondition{},
+		Actions:        actionsJSON,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: "transaction_created",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+	require.NoError(t, err)
+
+	require.Len(t, suggRepo.suggestions, 1)
+	s := suggRepo.suggestions[0]
+
+	// Without resolver, fallback to raw goal.AccountID.
+	require.NotNil(t, s.ToAccountID)
+	assert.Equal(t, replacedAccountID, *s.ToAccountID,
+		"Without resolver, ToAccountID should be goal.AccountID (fallback)")
+}
+
+func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID_Depth2(t *testing.T) {
+	// Depth-2 chain: acct_old -> acct_mid -> acct_current
+	// The savings goal was created against acct_old and carries the stable user_account_id.
+	// The chain resolver returns acct_current (the current active ID) after two re-links.
+	execRepo := &mockRuleExecutionRepository{}
+	suggRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+	goalRepo := &mockSavingsGoalRepository{}
+
+	acctOld := "account-savings-old"
+	acctCurrent := "account-savings-current" // after depth-2 re-link
+	stableUserAccountID := "stable-savings-uaid-depth2"
+
+	savingsGoalID := "goal-depth2-001"
+	existingGoal := &domain.SavingsGoal{
+		ID:            savingsGoalID,
+		UserID:        "user-savings-depth2",
+		Name:          "Depth-2 Fund",
+		TargetAmount:  15000.0,
+		CurrentAmount: 0,
+		CurrencyCode:  "USD",
+		AccountID:     acctOld,
+		UserAccountID: &stableUserAccountID,
+		IsCompleted:   false,
+	}
+	goalRepo.goals = append(goalRepo.goals, existingGoal)
+
+	mockResolver := &mockAccountChainResolver{
+		resolveActiveIDFunc: func(_ context.Context, uaid string) (string, error) {
+			if uaid == stableUserAccountID {
+				return acctCurrent, nil // depth-2 resolved to current
+			}
+			return "", errors.New("unknown uaid")
+		},
+	}
+
+	svc := NewRuleExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetChainResolver(mockResolver)
+
+	ctx := context.Background()
+	now := time.Now()
+
+	actions := map[string]interface{}{
+		"savings_goal": map[string]interface{}{
+			"savings_goal_id": savingsGoalID,
+			"from_account_id": "from-checking",
+			"amount_type":     "fixed",
+			"amount":          float64(750),
+		},
+	}
+	actionsJSON, _ := json.Marshal(actions)
+
+	rule := &domain.AutomationRule{
+		ID:             "rule-savings-depth2-001",
+		UserID:         "user-savings-depth2",
+		Name:           "Depth-2 Savings Rule",
+		Enabled:        true,
+		RuleType:       domain.RuleTypeSavingsGoal,
+		ConditionLogic: "AND",
+		Conditions:     []domain.AutomationRuleCondition{},
+		Actions:        actionsJSON,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: "transaction_created",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+	require.NoError(t, err)
+
+	require.Len(t, suggRepo.suggestions, 1)
+	s := suggRepo.suggestions[0]
+
+	require.NotNil(t, s.ToAccountID)
+	assert.Equal(t, acctCurrent, *s.ToAccountID,
+		"depth-2 chain: ToAccountID should resolve to current active account")
+	_ = acctOld // referenced to make the depth-2 chain clear
 }

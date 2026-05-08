@@ -46,6 +46,8 @@ func NewAnalyticsRepository(db DB) AnalyticsRepository {
 // Filters out pending transactions by default.
 // Can optionally filter by account types and include/exclude transfers.
 func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
 	// Build dynamic query based on filters
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	argIndex := 4
@@ -100,6 +102,8 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 // Uses PostgreSQL DATE_TRUNC for period grouping.
 // Returns data ordered by period_start ASC for chart display.
 func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
 	// Determine the DATE_TRUNC interval based on grouping
 	var truncInterval string
 	switch filters.Grouping {
@@ -396,6 +400,8 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 // GetSpendingByMerchant returns expense totals grouped by merchant name, ordered by total descending.
 // Null merchant names are coalesced to "Unknown".
 func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	extraClause, args, argIndex := buildSpendingFilter(filters, args)
 
@@ -445,6 +451,8 @@ func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID 
 // GetSpendingTrends returns monthly expense totals per category for trend chart data.
 // Results are ordered by period_start ASC, total DESC.
 func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
 	catExpr := effectiveCategoryExpr(false)
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	extraClause, args, _ := buildSpendingFilter(filters, args)

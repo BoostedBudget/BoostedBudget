@@ -468,6 +468,56 @@ func TestGetAccounts_DefaultActiveOnly(t *testing.T) {
 	assert.Empty(t, mockAccount.capturedOpts.UserAccountID, "expected no UserAccountID by default")
 }
 
+
+// TestGetAccounts_UserAccountIDDefaultsToAll tests that when user_account_id is set
+// without an explicit status, StatusFilter defaults to "all" so the caller gets all
+// chain rows (active + replaced) without having to remember to pass status=all (Issue #1109).
+func TestGetAccounts_UserAccountIDDefaultsToAll(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		UserAccountID:      "some-uuid",
+		Status:             "", // not explicitly set
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "some-uuid", mockAccount.capturedOpts.UserAccountID, "UserAccountID should be forwarded")
+	assert.Equal(t, "all", mockAccount.capturedOpts.StatusFilter,
+		"StatusFilter should default to 'all' when user_account_id is supplied without explicit status")
+}
+
+// TestGetAccounts_UserAccountIDExplicitStatusNotOverridden tests that an explicit status
+// is preserved even when user_account_id is also set.
+func TestGetAccounts_UserAccountIDExplicitStatusNotOverridden(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		UserAccountID:      "some-uuid",
+		Status:             "active", // explicitly set
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "active", mockAccount.capturedOpts.StatusFilter,
+		"Explicit status should not be overridden even when user_account_id is set")
+}
 // TestUpdateAccount_Success tests successful account update.
 
 func TestUpdatePlaidAccount_Success(t *testing.T) {

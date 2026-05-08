@@ -294,3 +294,42 @@ func TestHoldingRepository_GetByUserAccountID(t *testing.T) {
 	assert.Equal(t, accountID, holdings[0].AccountID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestHoldingRepository_GetByAccountID_ChainExpand verifies that filtering by an active
+// account_id returns holdings stored under a replaced (pre-relink) account that shares
+// the same user_account_id. Issue #1109: B.4 fix.
+func TestHoldingRepository_GetByAccountID_ChainExpand(t *testing.T) {
+	mock, repo := setupHoldingMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	activeAccountID := uuid.New().String()
+	replacedAccountID := uuid.New().String()
+	setID := uuid.New().String()
+	now := time.Now()
+
+	costBasis := 750.00
+	instValue := 900.00
+	instPrice := 90.00
+
+	// Holding was recorded under the replaced account but the chain-expand query
+	// must return it when the caller queries by the active account_id.
+	mock.ExpectQuery(regexp.QuoteMeta(`user_account_id = (SELECT user_account_id FROM accounts WHERE id = $1`)).
+		WithArgs(activeAccountID).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "user_id", "account_id", "security_id",
+			"quantity", "cost_basis", "institution_value", "institution_price",
+			"created_at", "updated_at",
+		}).AddRow(
+			uuid.New().String(), userID, replacedAccountID, setID,
+			8.0, &costBasis, &instValue, &instPrice,
+			now, now,
+		))
+
+	holdings, err := repo.GetByAccountID(ctx, activeAccountID)
+	require.NoError(t, err)
+	require.Len(t, holdings, 1, "pre-relink holding must be returned when filtering by active account_id")
+	assert.Equal(t, replacedAccountID, holdings[0].AccountID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

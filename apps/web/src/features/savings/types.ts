@@ -29,6 +29,8 @@ export interface CreateSavingsGoalRequest {
   current_amount?: number;
   currency_code?: string;
   account_id: string;
+  /** Stable logical account ID — survives Plaid re-links (Issue #1109). */
+  user_account_id?: string;
   deadline?: string;
 }
 

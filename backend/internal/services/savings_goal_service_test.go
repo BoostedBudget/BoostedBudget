@@ -8,6 +8,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockSavingsGoalRepository is a mock implementation of repository.SavingsGoalRepository
@@ -549,5 +550,123 @@ func TestSavingsGoalService_CreateGoal_ReplacedAccountRejected(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "account not found")
+	mockAccountRepo.AssertExpectations(t)
+}
+
+
+// TestSavingsGoalService_UpdateGoal_RefreshesUserAccountID verifies that when a user
+// changes a savings goal's linked account, UpdateGoal writes the new account's
+// user_account_id to the goal. Issue #1109: B.5 fix.
+func TestSavingsGoalService_UpdateGoal_RefreshesUserAccountID(t *testing.T) {
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-update-001"
+	goalID := "goal-update-001"
+
+	uaidA := "user-acct-stable-A"
+	uaidB := "user-acct-stable-B"
+	accountA := "account-A-uuid"
+	accountB := "account-B-uuid"
+
+	existingGoal := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		Name:          "My Fund",
+		TargetAmount:  10000.0,
+		CurrentAmount: 0,
+		CurrencyCode:  "USD",
+		AccountID:     accountA,
+		UserAccountID: &uaidA,
+		IsCompleted:   false,
+	}
+
+	accounts := []domain.Account{
+		{
+			ID:            accountB,
+			UserID:        userID,
+			Name:          "New Savings",
+			Type:          "depository",
+			UserAccountID: &uaidB,
+		},
+	}
+
+	mockGoalRepo.On("GetByID", ctx, goalID).Return(existingGoal, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
+	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+	req := &domain.UpdateSavingsGoalRequest{
+		AccountID: &accountB,
+	}
+
+	updatedGoal, err := service.UpdateGoal(ctx, userID, goalID, req)
+	require.NoError(t, err)
+	require.NotNil(t, updatedGoal)
+
+	assert.Equal(t, accountB, updatedGoal.AccountID)
+	require.NotNil(t, updatedGoal.UserAccountID, "UserAccountID must be updated to new account's stable ID")
+	assert.Equal(t, uaidB, *updatedGoal.UserAccountID,
+		"UserAccountID must reflect the new account's stable user_account_id")
+
+	mockGoalRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestSavingsGoalService_UpdateGoal_ClearsUserAccountIDWhenNewAccountHasNone verifies
+// that when the new account has no user_account_id (legacy account), UserAccountID
+// is cleared on the goal. Issue #1109: B.5 fix.
+func TestSavingsGoalService_UpdateGoal_ClearsUserAccountIDWhenNewAccountHasNone(t *testing.T) {
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-update-002"
+	goalID := "goal-update-002"
+
+	uaidA := "user-acct-stable-A"
+	accountA := "account-A-uuid"
+	accountLegacy := "account-legacy-uuid"
+
+	existingGoal := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		Name:          "My Fund",
+		TargetAmount:  5000.0,
+		CurrentAmount: 0,
+		CurrencyCode:  "USD",
+		AccountID:     accountA,
+		UserAccountID: &uaidA,
+		IsCompleted:   false,
+	}
+
+	legacyAccounts := []domain.Account{
+		{
+			ID:            accountLegacy,
+			UserID:        userID,
+			Name:          "Legacy Savings",
+			Type:          "depository",
+			UserAccountID: nil, // no stable ID
+		},
+	}
+
+	mockGoalRepo.On("GetByID", ctx, goalID).Return(existingGoal, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(legacyAccounts, nil)
+	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+	req := &domain.UpdateSavingsGoalRequest{
+		AccountID: &accountLegacy,
+	}
+
+	updatedGoal, err := service.UpdateGoal(ctx, userID, goalID, req)
+	require.NoError(t, err)
+	require.NotNil(t, updatedGoal)
+
+	assert.Equal(t, accountLegacy, updatedGoal.AccountID)
+	assert.Nil(t, updatedGoal.UserAccountID, "UserAccountID must be cleared when new account has no stable ID")
+
+	mockGoalRepo.AssertExpectations(t)
 	mockAccountRepo.AssertExpectations(t)
 }

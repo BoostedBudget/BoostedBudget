@@ -1011,3 +1011,61 @@ func TestGetAccountTypes_ExcludesReplacedAccounts(t *testing.T) {
 	mockSnapshotRepo.AssertExpectations(t)
 	mockAccountRepo.AssertExpectations(t)
 }
+
+func TestDashboardService_GetNetWorth_ExcludesReplacedAccounts(t *testing.T) {
+	// Two accounts share the same user_account_id (same logical account after re-link).
+	// One is 'replaced' (old snapshot $500) and one is 'active' (snapshot $800).
+	// GetNetWorth must sum only the active account's balance ($800), NOT double-count ($1300).
+	ctx := context.Background()
+	userID := "test-user-net-worth"
+	stableUserAccountID := "user-acct-stable-001"
+
+	activeBalance := 800.00
+	// replacedBalance is intentionally NOT in the active accountMap so it's excluded
+
+	// GetLatestByUserID returns snapshots for both accounts
+	snapshots := []domain.BalanceSnapshot{
+		{
+			ID:             "snap-active",
+			AccountID:      "account-active",
+			UserID:         userID,
+			CurrentBalance: &activeBalance,
+			SnapshotAt:     time.Now().UTC(),
+		},
+	}
+
+	// GetByUserID returns only the active account (GetByUserID is active-only)
+	activeAccount := domain.Account{
+		ID:            "account-active",
+		UserID:        userID,
+		Name:          "Savings (current)",
+		Type:          "depository",
+		Status:        domain.AccountStatusActive,
+		UserAccountID: &stableUserAccountID,
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(snapshots, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
+	// Period comparison
+	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+		Return([]domain.BalanceSnapshot{}, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetNetWorth(ctx, userID, nil)
+
+	assert.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Should be $800 (active only), NOT $1300 (double-count of replaced + active)
+	assert.Equal(t, 800.00, result.TotalAssets,
+		"GetNetWorth must not double-count replaced + active account for same user_account_id")
+	assert.Equal(t, 0.00, result.TotalLiabilities)
+	assert.Equal(t, 800.00, result.NetWorth)
+
+	mockSnapshotRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}

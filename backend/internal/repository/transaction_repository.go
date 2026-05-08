@@ -636,15 +636,21 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 	args = append(args, userID)
 	argIndex++
 
-	// Optional filter: account_id (single, deprecated)
+	// Optional filter: account_id (single).
+	// Issue #1109: Chain-expand via user_account_id to include pre-relink transactions
 	if filters.AccountID != nil {
-		conditions = append(conditions, fmt.Sprintf("account_id = $%d", argIndex))
-		args = append(args, *filters.AccountID)
-		argIndex++
+		subq := fmt.Sprintf(
+			"(user_account_id = (SELECT user_account_id FROM accounts WHERE id = $%d AND user_account_id IS NOT NULL)"+
+				" OR (account_id = $%d AND user_account_id IS NULL))",
+			argIndex, argIndex+1,
+		)
+		conditions = append(conditions, subq)
+		args = append(args, *filters.AccountID, *filters.AccountID)
+		argIndex += 2
 	}
 
-	// Optional filter: account_ids (multi-value, Issue #529)
-	// Takes precedence over single account_id if both provided
+	// Optional filter: account_ids (multi-value, Issue #529).
+	// Issue #1109: Chain-expand via user_account_id subquery to include pre-relink transactions
 	if len(filters.AccountIDs) > 0 {
 		placeholders := make([]string, len(filters.AccountIDs))
 		for i, id := range filters.AccountIDs {
@@ -652,7 +658,21 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 			args = append(args, id)
 			argIndex++
 		}
-		conditions = append(conditions, fmt.Sprintf("account_id IN (%s)", strings.Join(placeholders, ", ")))
+		inList := strings.Join(placeholders, ", ")
+		// Fallback placeholders for legacy accounts without user_account_id
+		fallbackPlaceholders := make([]string, len(filters.AccountIDs))
+		for i, id := range filters.AccountIDs {
+			fallbackPlaceholders[i] = fmt.Sprintf("$%d", argIndex)
+			args = append(args, id)
+			argIndex++
+		}
+		fallbackInList := strings.Join(fallbackPlaceholders, ", ")
+		subq := fmt.Sprintf(
+			"(user_account_id IN (SELECT user_account_id FROM accounts WHERE id IN (%s) AND user_account_id IS NOT NULL)"+
+				" OR (account_id IN (%s) AND user_account_id IS NULL))",
+			inList, fallbackInList,
+		)
+		conditions = append(conditions, subq)
 	}
 
 	// Optional filter: start_date
@@ -743,9 +763,7 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 	}
 
 	// Optional filter: user_account_id (Issue #1109)
-	// Filters by logical account identity — stable across re-links.
-	// Transactions from all chain members (old and new accounts) for this
-	// logical account are returned, since they all share the same user_account_id.
+	// Filters by stable logical account identity across re-links
 	if filters.UserAccountID != nil {
 		conditions = append(conditions, fmt.Sprintf("user_account_id = $%d", argIndex))
 		args = append(args, *filters.UserAccountID)
@@ -1343,13 +1361,10 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 }
 
 // GetByUserAccountID retrieves all transactions for a specific user_account.
-// Issue #171: Provides stable queries across re-links since user_account_id survives
-// when a user re-links a bank (which assigns new item_id and account_id values).
+// Issue #171: Provides stable queries across re-links since user_account_id survives re-links.
 //
-// NOTE: This SELECT intentionally includes user_account_id at position 5, producing
-// 30 columns instead of the standard 29 in transactionSelectColumns. Columns 1-4 and
-// 6-30 must stay in sync with transactionSelectColumns. If you add a column to
-// transactionSelectColumns, update this SELECT and its Scan() below to match.
+// NOTE: This SELECT includes user_account_id at position 5 (30 columns total).
+// Columns 1-4 and 6-30 must stay in sync with transactionSelectColumns.
 func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error) {
 	query := `
 		SELECT id, user_id, account_id, linked_item_id, user_account_id,

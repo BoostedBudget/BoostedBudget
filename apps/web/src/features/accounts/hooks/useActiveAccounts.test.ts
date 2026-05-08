@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'bun:test'
-import { renderHook } from '@testing-library/react'
+import { renderHook, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
 import { filterActiveAccounts, isReplaced, useActiveAccounts } from './useActiveAccounts'
@@ -15,6 +15,7 @@ import {
   mockUseGetAccounts,
   mockRefetchAccounts,
 } from '@/test/mocks/accounts-api'
+import { mockPosthogCapture } from '@/test/mocks/posthog'
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -137,6 +138,8 @@ describe('useActiveAccounts', () => {
   beforeEach(() => {
     mockUseGetAccounts.mockClear()
     mockRefetchAccounts.mockClear()
+    mockPosthogCapture.mockClear()
+    sessionStorage.clear()
   })
 
   it('returns only active accounts, excluding replaced ones', () => {
@@ -256,4 +259,64 @@ describe('useActiveAccounts', () => {
     expect(result.current.accounts).toBeUndefined()
   })
 
+
+  it('sets the sessionStorage sentinel after first render with replaced accounts', async () => {
+    // The sentinel in sessionStorage is the mechanism that prevents the PostHog event
+    // from firing more than once per session (Issue #1109). Test the sentinel directly
+    // since mocking posthog.capture through the hook chain is fragile.
+    sessionStorage.removeItem('ph_acct_replaced_filtered')
+
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [activeAccount, replacedAccount] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+
+    await act(async () => {
+      renderHook(() => useActiveAccounts(), { wrapper: createWrapper() })
+    })
+
+    // After first render with excluded accounts, sentinel must be set in sessionStorage
+    expect(sessionStorage.getItem('ph_acct_replaced_filtered')).toBe('1')
+  })
+
+  it('does not set the sessionStorage sentinel when no accounts are replaced', async () => {
+    sessionStorage.removeItem('ph_acct_replaced_filtered')
+
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [activeAccount] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+
+    await act(async () => {
+      renderHook(() => useActiveAccounts(), { wrapper: createWrapper() })
+    })
+
+    // No replaced accounts means sentinel should NOT be set
+    expect(sessionStorage.getItem('ph_acct_replaced_filtered')).toBeNull()
+  })
+
+  it('does not reset the sentinel on second render (sentinel persists across hook instances)', async () => {
+    // If the sentinel is already set, a second hook instance must not clear it.
+    sessionStorage.setItem('ph_acct_replaced_filtered', '1')
+
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [activeAccount, replacedAccount] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+
+    await act(async () => {
+      renderHook(() => useActiveAccounts(), { wrapper: createWrapper() })
+    })
+
+    expect(sessionStorage.getItem('ph_acct_replaced_filtered')).toBe('1')
+  })
 })

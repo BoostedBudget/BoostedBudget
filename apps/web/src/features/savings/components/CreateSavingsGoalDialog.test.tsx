@@ -546,6 +546,85 @@ describe('CreateSavingsGoalDialog', () => {
     })
   })
 
+
+  describe('Re-link chain transparency - user_account_id submission (Issue #1109)', () => {
+    it('includes user_account_id in submit payload when selected account has user_account_id', async () => {
+      const accountWithUserAccountID = {
+        id: 'acc-with-uaid',
+        name: 'Savings',
+        type: 'depository',
+        mask: '0001',
+        institution_name: 'Test Bank',
+        user_account_id: 'stable-user-acct-uuid',
+      }
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [accountWithUserAccountID] },
+        isLoading: false,
+      })
+      const newGoal = { id: 'goal-uaid', name: 'Test', target_amount: 1000 }
+      mockCreateSavingsGoalMutateAsync.mockResolvedValueOnce(newGoal)
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Emergency Fund' } })
+      fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '5000' } })
+      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-with-uaid' } })
+
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      await waitFor(() => {
+        const callArg = mockCreateSavingsGoalMutateAsync.mock.calls[0][0]
+        expect(callArg.data.user_account_id).toBe('stable-user-acct-uuid')
+        expect(callArg.data.account_id).toBe('acc-with-uaid')
+      })
+    })
+
+    it('omits user_account_id when selected account does not have one (legacy account)', async () => {
+      const legacyAccount = {
+        id: 'acc-legacy',
+        name: 'Checking',
+        type: 'depository',
+        mask: '0002',
+        institution_name: 'Test Bank',
+        // no user_account_id field
+      }
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [legacyAccount] },
+        isLoading: false,
+      })
+      const newGoal = { id: 'goal-legacy', name: 'Test', target_amount: 500 }
+      mockCreateSavingsGoalMutateAsync.mockResolvedValueOnce(newGoal)
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Vacation' } })
+      fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '2000' } })
+      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-legacy' } })
+
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      await waitFor(() => {
+        const callArg = mockCreateSavingsGoalMutateAsync.mock.calls[0][0]
+        expect(callArg.data.user_account_id).toBeUndefined()
+        expect(callArg.data.account_id).toBe('acc-legacy')
+      })
+    })
+  })
+
   describe('Edge Cases', () => {
     it('should include description and deadline when provided', async () => {
       const newGoal = { id: 'goal-1', name: 'Test', target_amount: 500 }

@@ -52,27 +52,13 @@ func NewAccountChainResolver(accountRepo repository.AccountRepository) AccountCh
 	return &accountChainResolver{accountRepo: accountRepo}
 }
 
-// ListActiveByUser fetches all accounts for the user and filters to active only.
-// Legacy rows with a null user_account_id are included if their status is active.
+// ListActiveByUser returns all active accounts for the user.
+// GetByUserID already filters to status='active' in its SQL WHERE clause.
 func (r *accountChainResolver) ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error) {
-	// NOTE: Requires GetByUserID to select the status column (fixed in Step 3 of #1109).
-	// After that fix, all returned accounts have Status populated correctly.
-	all, err := r.accountRepo.GetByUserID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	active := make([]domain.Account, 0, len(all))
-	for _, a := range all {
-		if a.Status == domain.AccountStatusActive {
-			active = append(active, a)
-		}
-	}
-	return active, nil
+	return r.accountRepo.GetByUserID(ctx, userID)
 }
 
-// ResolveActiveID looks up the single active account for the given user_account_id
-// and returns its account.id.
+// ResolveActiveID returns the account.id for the active account in the given user_account_id chain.
 func (r *accountChainResolver) ResolveActiveID(ctx context.Context, userAccountID string) (string, error) {
 	if userAccountID == "" {
 		return "", ErrEmptyUserAccountID

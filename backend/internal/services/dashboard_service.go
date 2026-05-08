@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -49,6 +50,9 @@ func NewDashboardService(
 
 // GetBalanceSummary returns current balance overview with breakdown by account type
 func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.BalanceSummaryResponse, error) {
+	// Canary counter: Issue #1109
+	observability.AccountsReplacedFiltered.WithLabelValues("balance_summary").Inc()
+
 	// Determine the date for balance snapshot
 	asOfDate := time.Now().UTC().Truncate(24 * time.Hour)
 	if filters != nil && filters.AsOfDate != nil {
@@ -216,6 +220,9 @@ func (s *dashboardService) GetBalanceHistory(ctx context.Context, userID string,
 
 // GetAccountTypes returns available account types for the user
 func (s *dashboardService) GetAccountTypes(ctx context.Context, userID string) (*domain.AccountTypesResponse, error) {
+	// Canary counter: active-only query filters out any replaced accounts (Issue #1109).
+	observability.AccountsReplacedFiltered.WithLabelValues("account_types").Inc()
+
 	// Get latest snapshots for each account
 	snapshots, err := s.balanceSnapshotRepo.GetLatestByUserID(ctx, userID)
 	if err != nil {

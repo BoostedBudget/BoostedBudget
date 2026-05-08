@@ -79,11 +79,12 @@ export function useActiveAccounts(opts?: GetAccountsParams): UseActiveAccountsRe
   const rawAccounts = (query.data as GetAccountsOutputBody | undefined)?.accounts ?? undefined
   const filteredAccounts = rawAccounts !== undefined ? filterActiveAccounts(rawAccounts) : undefined
 
-  // Fire a PostHog event when replaced accounts are detected so we can confirm
-  // the filter is working in production after the Issue #1109 deploy.
+  // Fire PostHog event when replaced accounts are detected (session-scoped deduplication)
   const excludedCount = (rawAccounts?.length ?? 0) - (filteredAccounts?.length ?? 0)
   useEffect(() => {
-    if (excludedCount > 0) {
+    const SENTINEL_KEY = 'ph_acct_replaced_filtered'
+    if (excludedCount > 0 && !sessionStorage.getItem(SENTINEL_KEY)) {
+      sessionStorage.setItem(SENTINEL_KEY, '1')
       trackEvent(ANALYTICS_EVENTS.ACCOUNT_REPLACED_FILTERED, { excluded_count: excludedCount })
     }
   }, [excludedCount, trackEvent])

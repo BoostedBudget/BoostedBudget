@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // MortgageLiabilityRepository defines the interface for mortgage liability data access.
@@ -162,9 +163,10 @@ func (r *mortgageLiabilityRepository) ReplaceForAccount(ctx context.Context, acc
 }
 
 // GetByUserID retrieves all mortgage liabilities for a user.
+// Joins accounts to filter out replaced accounts (Issue #1109).
 func (r *mortgageLiabilityRepository) GetByUserID(ctx context.Context, userID string) ([]domain.MortgageLiability, error) {
-	// JOIN accounts to filter out replaced accounts — after a Plaid re-link the old
-	// account's status becomes 'replaced', so this join ensures only active liabilities appear.
+	observability.AccountsReplacedFiltered.WithLabelValues("liabilities").Inc()
+
 	query := `
 		SELECT mortgage_liabilities.id, mortgage_liabilities.user_id, mortgage_liabilities.account_id, mortgage_liabilities.account_number,
 			mortgage_liabilities.current_late_fee, mortgage_liabilities.escrow_balance, mortgage_liabilities.has_pmi, mortgage_liabilities.has_prepayment_penalty,
@@ -237,6 +239,12 @@ func (r *mortgageLiabilityRepository) GetByAccountID(ctx context.Context, accoun
 			synced_at, created_at, updated_at
 		FROM mortgage_liabilities
 		WHERE account_id = $1
+		   OR account_id IN (
+				SELECT id FROM accounts
+				WHERE user_account_id = (
+					SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL
+				)
+		   )
 	`
 
 	rows, err := r.db.Query(ctx, query, accountID)

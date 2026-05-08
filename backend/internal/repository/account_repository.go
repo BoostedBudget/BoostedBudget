@@ -408,9 +408,10 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 	return accounts, nil
 }
 
-// GetByUserID retrieves all accounts for a specific user, including status and re-link fields.
-// Returns active and replaced accounts (excludes expired). Status is always populated so
-// callers like ListActiveByUser can filter correctly.
+// GetByUserID retrieves active-only accounts for a specific user, including status and re-link fields.
+// Returns ONLY accounts with status='active' (excludes replaced and expired).
+// Callers that need all chain members (active + replaced) should use GetAccountsWithInstitutionFiltered
+// with IncludeReplaced=true or StatusFilter="all".
 func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,

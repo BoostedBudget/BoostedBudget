@@ -26,6 +26,7 @@ type mockTransactionService struct {
 	updateCategoryErr error
 	categories       []string
 	categoriesErr    error
+	capturedFilters  domain.TransactionFilters
 }
 
 func (m *mockTransactionService) ListTransactions(
@@ -35,6 +36,7 @@ func (m *mockTransactionService) ListTransactions(
 	limit int,
 	offset int,
 ) (*services.TransactionListResponse, error) {
+	m.capturedFilters = filters
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
@@ -531,4 +533,36 @@ func TestTransactionListResponseJSON(t *testing.T) {
 	var errorResp map[string]interface{}
 	err := json.Unmarshal(resp.Body.Bytes(), &errorResp)
 	require.NoError(t, err, "Error response should be valid JSON")
+}
+
+func TestGetTransactions_UserAccountIDFilter(t *testing.T) {
+	// Verify that ?user_account_id=<uuid> is parsed from the query string
+	// and forwarded to the service layer as filters.UserAccountID (Issue #1109).
+	userID := "user-123"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []domain.Transaction{},
+			TotalCount:   0,
+			Limit:        50,
+			Offset:       0,
+			HasMore:      false,
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	userAccountID := "some-uuid-stable-acct"
+	input := &GetTransactionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
+		UserAccountID:      userAccountID,
+	}
+
+	_, err := handler.GetTransactions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, mockService.capturedFilters.UserAccountID,
+		"UserAccountID should be plumbed through as filters.UserAccountID")
+	assert.Equal(t, userAccountID, *mockService.capturedFilters.UserAccountID,
+		"captured UserAccountID should match input")
 }
