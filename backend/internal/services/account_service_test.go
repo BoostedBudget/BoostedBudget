@@ -4036,3 +4036,45 @@ func TestLinkAccounts_FingerprintCheck_NilMaskAndSubtypeUseSentinels(t *testing.
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockPlaidSvc.AssertExpectations(t)
 }
+
+// TestAccountService_ListActiveByUser_ExcludesReplaced verifies that ListActiveByUser
+// returns only active accounts, excluding replaced and expired (Issue #1109).
+func TestAccountService_ListActiveByUser_ExcludesReplaced(t *testing.T) {
+	mockAccountRepo := new(MockAccountRepository)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockUserRepo := new(MockUserRepository)
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	// GetByUserID now returns only active accounts (replaced filtered at repo layer)
+	activeAccounts := []domain.Account{
+		{
+			ID:     "account-active",
+			UserID: userID,
+			Name:   "Active Checking",
+			Type:   "depository",
+			Status: domain.AccountStatusActive,
+		},
+	}
+
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeAccounts, nil)
+
+	svc := NewAccountService(
+		nil, // plaid not needed
+		nil, // subscription not needed
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil, // db not needed
+	)
+
+	result, err := svc.ListActiveByUser(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Len(t, result, 1)
+	assert.Equal(t, "account-active", result[0].ID)
+	assert.Equal(t, domain.AccountStatusActive, result[0].Status)
+
+	mockAccountRepo.AssertExpectations(t)
+}

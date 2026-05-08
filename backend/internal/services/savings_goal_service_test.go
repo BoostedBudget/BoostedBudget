@@ -513,3 +513,41 @@ func TestSavingsGoalService_DeleteGoal_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrSavingsGoalNotFound)
 	mockGoalRepo.AssertExpectations(t)
 }
+
+// TestSavingsGoalService_CreateGoal_ReplacedAccountRejected verifies that a replaced
+// account cannot be used for a savings goal (Issue #1109: re-link chain transparency).
+// GetByUserID now returns only active accounts, so replaced account IDs are not found.
+func TestSavingsGoalService_CreateGoal_ReplacedAccountRejected(t *testing.T) {
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	req := &domain.CreateSavingsGoalRequest{
+		Name:         "Test Goal",
+		TargetAmount: 1000.00,
+		CurrencyCode: "USD",
+		AccountID:    "account-replaced", // this is a replaced account ID
+	}
+
+	// GetByUserID returns only active accounts (replaced filtered at repo layer)
+	activeOnlyAccounts := []domain.Account{
+		{
+			ID:     "account-active",
+			UserID: userID,
+			Name:   "Active Checking",
+			Type:   "depository",
+			Status: domain.AccountStatusActive,
+		},
+	}
+
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeOnlyAccounts, nil)
+
+	_, err := service.CreateGoal(ctx, userID, req)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "account not found")
+	mockAccountRepo.AssertExpectations(t)
+}

@@ -128,6 +128,10 @@ type AccountService interface {
 	// Used for drag-and-drop reordering
 	ReorderAccounts(ctx context.Context, userID string, req *domain.ReorderAccountsRequest) error
 
+	// ListActiveByUser returns only active accounts for a user, excluding replaced and expired.
+	// Issue #1109: re-link chain transparency — callers should prefer this over GetByUserID.
+	ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error)
+
 	// DeleteAccount deletes a single account with ownership validation.
 	// Only the account owner can delete their account.
 	// Returns repository.ErrAccountNotFound if account doesn't exist or user doesn't own it.
@@ -158,9 +162,10 @@ type accountService struct {
 	linkedItemRepo  repository.LinkedItemRepository
 	accountRepo     repository.AccountRepository
 	userRepo        repository.ProfileRepository
-	userAccountSvc  UserAccountService // Issue #171: For re-link user_account matching
+	userAccountSvc  UserAccountService  // Issue #171: For re-link user_account matching
+	chainResolver   AccountChainResolver // Issue #1109: Active-only account resolution
 	db              *pgxpool.Pool
-	jobQueue        queue.JobQueue          // Issue #658: For auto-sync after linking (can be nil)
+	jobQueue        queue.JobQueue           // Issue #658: For auto-sync after linking (can be nil)
 	enc             *appcrypto.FieldEncryptor // Issue #1010: For fingerprint computation (can be nil)
 	logger          *slog.Logger
 }
@@ -267,6 +272,7 @@ func NewAccountService(
 		linkedItemRepo:  linkedItemRepo,
 		accountRepo:     accountRepo,
 		userRepo:        userRepo,
+		chainResolver:   NewAccountChainResolver(accountRepo), // Issue #1109
 		db:              db,
 		logger:          slog.Default(),
 	}
@@ -898,6 +904,12 @@ func (s *accountService) ReorderAccounts(
 // SetJobQueue sets the job queue for auto-sync after linking (Issue #658).
 // This is needed because of circular dependency: service must be created before
 // River client, but needs client to enqueue jobs.
+// ListActiveByUser returns only active (non-replaced, non-expired) accounts for a user.
+// Issue #1109: re-link chain transparency.
+func (s *accountService) ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error) {
+	return s.chainResolver.ListActiveByUser(ctx, userID)
+}
+
 func (s *accountService) SetJobQueue(jq queue.JobQueue) {
 	s.jobQueue = jq
 }

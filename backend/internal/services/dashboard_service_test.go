@@ -890,3 +890,124 @@ func TestAccountTypeCategory(t *testing.T) {
 		})
 	}
 }
+
+// TestGetBalanceSummary_ExcludesReplacedAccounts verifies that replaced accounts
+// are excluded from balance summary (Issue #1109: re-link chain transparency).
+// The exclusion happens at the repository layer (GetByUserID now returns status='active' only),
+// so snapshots for replaced account IDs will not match any account in the map.
+func TestGetBalanceSummary_ExcludesReplacedAccounts(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-id"
+
+	activeBalance := 2000.00
+	replacedBalance := 1500.00
+
+	// Snapshots for both active and replaced account
+	snapshots := []domain.BalanceSnapshot{
+		{
+			ID:             "snapshot-active",
+			AccountID:      "account-active",
+			UserID:         userID,
+			CurrentBalance: &activeBalance,
+			SnapshotAt:     time.Now().UTC(),
+		},
+		{
+			ID:             "snapshot-replaced",
+			AccountID:      "account-replaced",
+			UserID:         userID,
+			CurrentBalance: &replacedBalance,
+			SnapshotAt:     time.Now().UTC(),
+		},
+	}
+
+	// GetByUserID now returns only active accounts (replaced filtered by repo)
+	activeOnlyAccounts := []domain.Account{
+		{
+			ID:     "account-active",
+			UserID: userID,
+			Name:   "Active Checking",
+			Type:   "depository",
+			Status: domain.AccountStatusActive,
+		},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(snapshots, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeOnlyAccounts, nil)
+	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]domain.BalanceSnapshot{}, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetBalanceSummary(ctx, userID, nil)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	// Only the active account's balance should count (replaced snapshot has no matching account)
+	assert.Equal(t, 2000.00, result.TotalBalance)
+	assert.Equal(t, 1, result.ByType["depository"].AccountCount)
+
+	mockSnapshotRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestGetAccountTypes_ExcludesReplacedAccounts verifies that replaced accounts
+// are excluded from account type listing (Issue #1109).
+func TestGetAccountTypes_ExcludesReplacedAccounts(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-id"
+
+	activeBalance := 3000.00
+	replacedBalance := 1000.00
+
+	// Snapshots for both active and replaced account
+	snapshots := []domain.BalanceSnapshot{
+		{
+			ID:             "snap-active",
+			AccountID:      "account-active",
+			UserID:         userID,
+			CurrentBalance: &activeBalance,
+			SnapshotAt:     time.Now().UTC(),
+		},
+		{
+			ID:             "snap-replaced",
+			AccountID:      "account-replaced",
+			UserID:         userID,
+			CurrentBalance: &replacedBalance,
+			SnapshotAt:     time.Now().UTC(),
+		},
+	}
+
+	// GetByUserID returns only active — replaced is excluded at repo level
+	activeOnlyAccounts := []domain.Account{
+		{
+			ID:     "account-active",
+			UserID: userID,
+			Name:   "Active Checking",
+			Type:   "depository",
+			Status: domain.AccountStatusActive,
+		},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(snapshots, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeOnlyAccounts, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetAccountTypes(ctx, userID)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	// Only one account type (depository) with 1 account — replaced account excluded
+	assert.Len(t, result.Types, 1)
+	assert.Equal(t, "depository", result.Types[0].Key)
+	assert.Equal(t, 1, result.Types[0].Count)
+	assert.Equal(t, 3000.00, result.Types[0].TotalBalance)
+
+	mockSnapshotRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}

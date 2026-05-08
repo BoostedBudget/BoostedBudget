@@ -120,6 +120,13 @@ func (m *mockAccountServiceForPlaid) DisconnectInstitution(ctx context.Context, 
 	return m.disconnectErr
 }
 
+func (m *mockAccountServiceForPlaid) ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error) {
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	return m.accounts, nil
+}
+
 func (m *mockAccountServiceForPlaid) SetJobQueue(jq queue.JobQueue) {
 	// no-op for tests
 }
