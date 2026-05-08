@@ -83,7 +83,7 @@ export function NetWorthHistoryChart({ history, filterKey }: NetWorthHistoryChar
   }
 
   return (
-    <div className="h-[300px] sm:h-[400px] lg:h-[500px]">
+    <div className="h-[300px] sm:h-[400px] lg:h-[500px]" data-testid="net-worth-history-chart">
       <Plot
         data={traces}
         layout={layout}
