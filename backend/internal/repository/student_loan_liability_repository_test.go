@@ -497,3 +497,64 @@ func TestStudentLoanLiabilityRepository_GetByUserID_ReplacedAccountExcluded(t *t
 	assert.Empty(t, liabilities)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestStudentLoanLiabilityRepository_GetByAccountID_ChainExpand verifies that filtering
+// by active account_id returns liabilities recorded under a replaced account.
+// Issue #1109: B.4 fix.
+func TestStudentLoanLiabilityRepository_GetByAccountID_ChainExpand(t *testing.T) {
+	mock, repo := setupStudentLoanLiabilityMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	activeAccountID := uuid.New().String()
+	replacedAccountID := uuid.New().String()
+	now := time.Now()
+	rate := 4.5
+
+	// Loan was recorded under the replaced account but must be returned when
+	// the caller queries by the active account_id via chain-expansion.
+	mock.ExpectQuery(regexp.QuoteMeta(`account_id IN ( SELECT id FROM accounts WHERE user_account_id`)).
+		WithArgs(activeAccountID).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "user_id", "account_id", "account_number",
+			"disbursement_dates", "expected_payoff_date", "guarantor",
+			"interest_rate_percentage", "is_overdue",
+			"last_payment_amount", "last_payment_date",
+			"last_statement_issue_date", "last_statement_balance",
+			"loan_name", "loan_status_type", "loan_status_end_date",
+			"minimum_payment_amount", "next_payment_due_date",
+			"origination_date", "origination_principal_amount",
+			"outstanding_interest_amount", "payment_reference_number",
+			"pslf_estimated_eligibility_date", "pslf_payments_made", "pslf_payments_remaining",
+			"repayment_plan_type", "repayment_plan_description",
+			"sequence_number",
+			"servicer_address_street", "servicer_address_city",
+			"servicer_address_region", "servicer_address_postal_code", "servicer_address_country",
+			"ytd_interest_paid", "ytd_principal_paid",
+			"synced_at", "created_at", "updated_at",
+		}).AddRow(
+			uuid.New().String(), userID, replacedAccountID, nil,
+			[]string(nil), nil, nil,
+			&rate, nil,
+			nil, nil,
+			nil, nil,
+			nil, nil, nil,
+			nil, nil,
+			nil, nil,
+			nil, nil,
+			nil, nil, nil,
+			nil, nil,
+			nil,
+			nil, nil,
+			nil, nil, nil,
+			nil, nil,
+			now, now, now,
+		))
+
+	result, err := repo.GetByAccountID(ctx, activeAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, result, "pre-relink student loan must be returned when filtering by active account_id")
+	assert.Equal(t, replacedAccountID, result.AccountID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

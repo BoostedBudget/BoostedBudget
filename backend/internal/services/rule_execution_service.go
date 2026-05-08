@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -60,6 +61,7 @@ type ruleExecutionService struct {
 	notificationService NotificationService
 	notificationRepo    repository.NotificationRepository
 	analytics           phclient.Analytics
+	chainResolver       AccountChainResolver // Issue #1109: resolves active account IDs across re-links
 }
 
 // NotificationService defines the interface for sending notifications.
@@ -95,6 +97,12 @@ func (s *ruleExecutionService) SetSavingsGoalRepo(repo repository.SavingsGoalRep
 // SetNotificationRepo sets the notification repository for creating transfer suggestion notifications.
 func (s *ruleExecutionService) SetNotificationRepo(repo repository.NotificationRepository) {
 	s.notificationRepo = repo
+}
+
+// SetChainResolver injects the chain resolver to map user_account_id → active account_id.
+// Issue #1109: Used by executeTransferSuggestion and executeSavingsGoal.
+func (s *ruleExecutionService) SetChainResolver(resolver AccountChainResolver) {
+	s.chainResolver = resolver
 }
 
 // ExecuteRule executes a single rule with the given trigger data.
@@ -297,6 +305,10 @@ func (s *ruleExecutionService) simulateAction(rule *domain.AutomationRule, trigg
 		simulatedAction["to_account_id"] = actions.Transfer.ToAccountID
 		simulatedAction["amount"] = amount
 		simulatedAction["amount_type"] = actions.Transfer.AmountType
+		// Issue #1109: Expose stable user_account_id for transparency if available
+		if actions.Transfer.FromUserAccountID != "" {
+			simulatedAction["from_user_account_id"] = actions.Transfer.FromUserAccountID
+		}
 
 	case domain.RuleTypeBudgetAlert:
 		if actions.Alert == nil {
@@ -376,12 +388,26 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 		Status:          domain.SuggestionStatusPending,
 	}
 
-	// Issue #1109: Propagate stable user_account_id references when present (backfilled by migration 000070)
+	// Issue #1109: Resolve stable user_account_id to current active account_id when available
+	// (backfilled by migration 000070). This ensures suggestions point to live accounts after re-links.
 	if transfer.FromUserAccountID != "" {
 		suggestion.FromUserAccountID = ptrString(transfer.FromUserAccountID)
+		if s.chainResolver != nil {
+			if activeFromID, err := s.chainResolver.ResolveActiveID(ctx, transfer.FromUserAccountID); err == nil {
+				suggestion.FromAccountID = ptrString(activeFromID)
+			}
+		}
 	}
 	if transfer.ToUserAccountID != "" {
 		suggestion.ToUserAccountID = ptrString(transfer.ToUserAccountID)
+		if s.chainResolver != nil {
+			if activeToID, err := s.chainResolver.ResolveActiveID(ctx, transfer.ToUserAccountID); err == nil {
+				suggestion.ToAccountID = ptrString(activeToID)
+			}
+		}
+	}
+	if transfer.FromUserAccountID != "" || transfer.ToUserAccountID != "" {
+		observability.AccountsReplacedFiltered.WithLabelValues("automation").Inc()
 	}
 
 	if err := s.suggestionRepo.Create(ctx, suggestion); err != nil {
@@ -581,6 +607,14 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 	// Create reason string
 	reason := fmt.Sprintf("Savings contribution to '%s' from rule '%s'", goal.Name, rule.Name)
 
+	// Issue #1109: Resolve savings goal's account to current active account_id via stable user_account_id
+	toAccountID := goal.AccountID
+	if goal.UserAccountID != nil && *goal.UserAccountID != "" && s.chainResolver != nil {
+		if activeID, err := s.chainResolver.ResolveActiveID(ctx, *goal.UserAccountID); err == nil {
+			toAccountID = activeID
+		}
+	}
+
 	// Create transfer suggestion from source account to savings goal's linked account
 	suggestion := &domain.TransferSuggestion{
 		ID:              uuid.New().String(),
@@ -588,7 +622,7 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 		RuleID:          ptrString(rule.ID),
 		RuleExecutionID: ptrString(executionID),
 		FromAccountID:   ptrString(savingsGoalAction.FromAccountID),
-		ToAccountID:     ptrString(goal.AccountID), // Savings goal's linked account
+		ToAccountID:     ptrString(toAccountID), // Resolved to active account (Issue #1109)
 		Amount:          amount,
 		CurrencyCode:    "USD",
 		Reason:          &reason,

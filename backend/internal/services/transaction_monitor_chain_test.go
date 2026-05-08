@@ -152,3 +152,55 @@ func TestMonitorForMatches_ChainAware_FallbackToAccountID(t *testing.T) {
 	require.NoError(t, err)
 	suggestionRepo.AssertExpectations(t)
 }
+
+func TestMonitorForMatches_ChainAware_Depth2(t *testing.T) {
+	// Depth-2 chain: acct_old -> acct_mid -> acct_current
+	// The suggestion points at acct_old (pre-first-relink) via ToAccountID and
+	// carries the stable ToUserAccountID. A new transaction arrives on acct_current
+	// (post-second-relink) but carries the same stable UserAccountID.
+	// The monitor should match based on UserAccountID even at depth-2.
+	ctx := context.Background()
+	suggestionRepo := new(mockSuggestionRepoForMonitor)
+	svc := NewTransactionMonitorService(suggestionRepo)
+
+	userID := "user-depth2"
+	now := time.Now()
+
+	acctOld := "acct_old"
+	acctCurrent := "acct_current"
+	stableUserAccountID := "user-acct-stable-depth2"
+
+	suggestion := &domain.TransferSuggestion{
+		ID:              "suggestion-depth2",
+		UserID:          userID,
+		FromAccountID:   ptrStr("from-account"),
+		ToAccountID:     ptrStr(acctOld),           // original pre-relink account ID
+		ToUserAccountID: ptrStr(stableUserAccountID), // stable ID — survives both re-links
+		Amount:          300.00,
+		CurrencyCode:    "USD",
+		Source:          domain.SuggestionSourceRule,
+		Status:          domain.SuggestionStatusPending,
+		CreatedAt:       now.Add(-1 * time.Hour),
+	}
+
+	txn := &domain.Transaction{
+		ID:            "txn-depth2-current",
+		UserID:        userID,
+		AccountID:     acctCurrent,                   // third-generation raw ID
+		UserAccountID: ptrStr(stableUserAccountID),   // same stable ID
+		Amount:        -300.00,                        // inflow
+		Date:          now,
+		Name:          "Depth-2 Transfer",
+	}
+
+	suggestionRepo.On("GetPendingByUserID", ctx, userID).
+		Return([]*domain.TransferSuggestion{suggestion}, nil)
+
+	expectedNote := "Auto-matched with transaction txn-depth2-current"
+	suggestionRepo.On("UpdateStatus", ctx, suggestion.ID,
+		domain.SuggestionStatusAccepted, &expectedNote).Return(nil)
+
+	err := svc.MonitorForMatches(ctx, userID, []*domain.Transaction{txn})
+	require.NoError(t, err)
+	suggestionRepo.AssertExpectations(t)
+}

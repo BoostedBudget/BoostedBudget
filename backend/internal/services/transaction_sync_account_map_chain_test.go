@@ -70,3 +70,51 @@ func TestBuildAccountMaps_AfterRelink_OnlyContainsNewAccount(t *testing.T) {
 
 	mockAccountRepo.AssertExpectations(t)
 }
+
+func TestBuildAccountMaps_Depth2Chain_OnlyContainsCurrentAccount(t *testing.T) {
+	// Depth-2 chain: acct_old -> acct_mid -> acct_current
+	// All three share the same user_account_id (stableUserAccountID).
+	// GetByLinkedItemID returns only the current active account (the repo already
+	// filters to active-only for sync purposes). The account map must only contain
+	// the current active Plaid account ID.
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil, nil,
+		mockAccountRepo,
+		nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-depth2-test"
+	stableUserAccountID := "user-acct-stable-depth2"
+	plaidAccountID := "plaid-acc-shared" // same Plaid account ID across all re-links
+
+	// Only the current active account is returned (older ones are replaced)
+	acctCurrent := domain.Account{
+		ID:             "acct_current",
+		PlaidAccountID: plaidAccountID,
+		Name:           "Checking (current)",
+		Status:         domain.AccountStatusActive,
+		UserAccountID:  &stableUserAccountID,
+	}
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).
+		Return([]domain.Account{acctCurrent}, nil)
+
+	accountMap, userAccountMap, err := service.buildAccountMaps(ctx, linkedItemID)
+	require.NoError(t, err)
+
+	assert.Len(t, accountMap, 1, "accountMap should only contain the current active account")
+	assert.Equal(t, "acct_current", accountMap[plaidAccountID])
+
+	assert.Len(t, userAccountMap, 1)
+	assert.Equal(t, stableUserAccountID, userAccountMap[plaidAccountID])
+
+	// Ensure neither acct_old nor acct_mid are present
+	for rawID, mappedID := range accountMap {
+		assert.NotEqual(t, "acct_old", mappedID, "acct_old must not be in accountMap (key=%s)", rawID)
+		assert.NotEqual(t, "acct_mid", mappedID, "acct_mid must not be in accountMap (key=%s)", rawID)
+	}
+
+	mockAccountRepo.AssertExpectations(t)
+}

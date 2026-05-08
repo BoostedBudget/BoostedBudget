@@ -256,9 +256,13 @@ func (r *savingsGoalRepository) CountByUserID(ctx context.Context, userID string
 }
 
 // GetByAccountID retrieves all savings goals linked to a specific account.
-// This is used for balance sync when account balances change (Issue #452).
+// Issue #1109: Chain-expand via user_account_id to include pre-relink goals.
 func (r *savingsGoalRepository) GetByAccountID(ctx context.Context, accountID string) ([]*domain.SavingsGoal, error) {
-	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE account_id = $1 AND is_completed = false ORDER BY created_at DESC`
+	query := `SELECT ` + goalSelectCols + ` FROM savings_goals
+	WHERE (
+		user_account_id = (SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL)
+		OR (account_id = $1 AND user_account_id IS NULL)
+	) AND is_completed = false ORDER BY created_at DESC`
 	return r.scanGoals(ctx, query, accountID)
 }
 

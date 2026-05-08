@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // CreditLiabilityRepository defines the interface for credit liability data access.
@@ -104,9 +105,10 @@ func (r *creditLiabilityRepository) ReplaceForAccount(ctx context.Context, accou
 }
 
 // GetByUserID retrieves all credit liabilities for a user (without APRs).
+// Joins accounts to filter out replaced accounts (Issue #1109).
 func (r *creditLiabilityRepository) GetByUserID(ctx context.Context, userID string) ([]domain.CreditLiability, error) {
-	// JOIN accounts to filter out replaced accounts — after a Plaid re-link the old
-	// account's status becomes 'replaced', so this join ensures only active liabilities appear.
+	observability.AccountsReplacedFiltered.WithLabelValues("liabilities").Inc()
+
 	query := `
 		SELECT credit_liabilities.id, credit_liabilities.user_id, credit_liabilities.account_id, credit_liabilities.is_overdue,
 			credit_liabilities.last_payment_amount, credit_liabilities.last_payment_date,
@@ -155,6 +157,12 @@ func (r *creditLiabilityRepository) GetByAccountID(ctx context.Context, accountI
 			synced_at, created_at, updated_at
 		FROM credit_liabilities
 		WHERE account_id = $1
+		   OR account_id IN (
+				SELECT id FROM accounts
+				WHERE user_account_id = (
+					SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL
+				)
+		   )
 	`
 
 	rows, err := r.db.Query(ctx, query, accountID)

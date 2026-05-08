@@ -70,8 +70,8 @@ export function CreateSavingsGoalDialog({
 
   const createSavingsGoalMutation = useCreateSavingsGoal();
 
-  // Issue #1109: useActiveAccounts already excludes replaced accounts; also filter by depository type
-  const accounts: Account[] = (allAccounts ?? [])
+  // Issue #1109: useActiveAccounts excludes replaced accounts; also filter by depository type
+  const accounts = (allAccounts ?? [])
     .filter((acc) => acc.type === 'depository') as Account[];
 
   const isSubmitting = createSavingsGoalMutation.isPending;
@@ -133,11 +133,14 @@ export function CreateSavingsGoalDialog({
       }
 
       try {
+        // Include user_account_id so the goal remains valid after future re-links (Issue #1109).
+        const selectedAccount = accounts.find((acc) => acc.id === formData.account_id)
         const request: CreateSavingsGoalRequest = {
           name: formData.name.trim(),
           description: formData.description.trim() || undefined,
           target_amount: parseFloat(formData.target_amount),
           account_id: formData.account_id,
+          user_account_id: selectedAccount?.user_account_id ?? undefined,
           deadline: formData.deadline ? new Date(formData.deadline).toISOString() : undefined,
         };
 
@@ -147,7 +150,7 @@ export function CreateSavingsGoalDialog({
         setApiError(err instanceof Error ? err.message : 'Failed to create goal');
       }
     },
-    [formData, validate, onGoalCreated, createSavingsGoalMutation]
+    [formData, accounts, validate, onGoalCreated, createSavingsGoalMutation]
   );
 
   const handleOpenChange = useCallback(

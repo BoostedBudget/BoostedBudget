@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // Default matching parameters.
@@ -77,6 +78,9 @@ func (s *transactionMonitorService) MonitorForMatches(
 	}
 
 	// Check each transaction against each suggestion
+	// Canary counter: each call that resolves suggestions uses chain-aware account matching (Issue #1109).
+	observability.AccountsReplacedFiltered.WithLabelValues("transaction_match").Inc()
+
 	for _, txn := range newTransactions {
 		for _, suggestion := range suggestions {
 			if s.isMatch(txn, suggestion) {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // InvestmentTransactionRepository defines the interface for investment transaction data access.
@@ -93,9 +94,10 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 }
 
 // GetByUserID retrieves investment transactions for a user with pagination.
+// Joins accounts to filter out replaced accounts (Issue #1109).
 func (r *investmentTransactionRepository) GetByUserID(ctx context.Context, userID string, limit, offset int) ([]domain.InvestmentTransaction, error) {
-	// JOIN accounts to filter out replaced accounts — after a Plaid re-link the old
-	// account's status becomes 'replaced', so this join ensures only active transactions appear.
+	observability.AccountsReplacedFiltered.WithLabelValues("investments").Inc()
+
 	query := `
 		SELECT investment_transactions.id, investment_transactions.user_id, investment_transactions.account_id,
 			investment_transactions.user_account_id, investment_transactions.security_id,
@@ -150,6 +152,7 @@ func (r *investmentTransactionRepository) GetByUserID(ctx context.Context, userI
 }
 
 // GetByAccountID retrieves investment transactions for a specific account.
+// Issue #1109: Chain-expand via user_account_id to include pre-relink transactions.
 func (r *investmentTransactionRepository) GetByAccountID(ctx context.Context, accountID string) ([]domain.InvestmentTransaction, error) {
 	query := `
 		SELECT id, user_id, account_id, security_id,
@@ -158,7 +161,8 @@ func (r *investmentTransactionRepository) GetByAccountID(ctx context.Context, ac
 			quantity, amount, price, fees, date,
 			created_at
 		FROM investment_transactions
-		WHERE account_id = $1
+		WHERE (account_id = $1 AND user_account_id IS NULL)
+		   OR user_account_id = (SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL)
 		ORDER BY date DESC
 	`
 
@@ -192,15 +196,10 @@ func (r *investmentTransactionRepository) GetByAccountID(ctx context.Context, ac
 		txns = append(txns, txn)
 	}
 
-	if txns == nil {
-		txns = []domain.InvestmentTransaction{}
-	}
 	return txns, nil
 }
 
 func (r *investmentTransactionRepository) GetByUserAccountID(ctx context.Context, userAccountID string, limit, offset int) ([]domain.InvestmentTransaction, error) {
-	// Returns all investment transactions for a logical account identified by the stable user_account_id.
-	// This covers all physical account_ids in a re-link chain.
 	query := `
 		SELECT id, user_id, account_id, user_account_id, security_id,
 			plaid_investment_transaction_id,

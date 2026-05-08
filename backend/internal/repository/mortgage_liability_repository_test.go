@@ -449,3 +449,56 @@ func TestMortgageLiabilityRepository_GetByUserID_ReplacedAccountExcluded(t *test
 	assert.Empty(t, liabilities)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestMortgageLiabilityRepository_GetByAccountID_ChainExpand verifies that filtering
+// by active account_id returns liabilities recorded under a replaced account.
+// Issue #1109: B.4 fix.
+func TestMortgageLiabilityRepository_GetByAccountID_ChainExpand(t *testing.T) {
+	mock, repo := setupMortgageLiabilityMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	activeAccountID := uuid.New().String()
+	replacedAccountID := uuid.New().String()
+	now := time.Now()
+	rate := 3.75
+
+	// Mortgage was recorded under the replaced account but must be returned when
+	// the caller queries by the active account_id via chain-expansion.
+	mock.ExpectQuery(regexp.QuoteMeta(`account_id IN ( SELECT id FROM accounts WHERE user_account_id`)).
+		WithArgs(activeAccountID).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "user_id", "account_id", "account_number",
+			"current_late_fee", "escrow_balance", "has_pmi", "has_prepayment_penalty",
+			"interest_rate_percentage", "interest_rate_type",
+			"last_payment_amount", "last_payment_date",
+			"loan_type_description", "loan_term", "maturity_date",
+			"next_monthly_payment", "next_payment_due_date",
+			"origination_date", "origination_principal_amount",
+			"past_due_amount",
+			"property_address_street", "property_address_city",
+			"property_address_region", "property_address_postal_code", "property_address_country",
+			"ytd_interest_paid", "ytd_principal_paid",
+			"synced_at", "created_at", "updated_at",
+		}).AddRow(
+			uuid.New().String(), userID, replacedAccountID, nil,
+			nil, nil, nil, nil,
+			&rate, nil,
+			nil, nil,
+			nil, nil, nil,
+			nil, nil,
+			nil, nil,
+			nil,
+			nil, nil,
+			nil, nil, nil,
+			nil, nil,
+			now, now, now,
+		))
+
+	result, err := repo.GetByAccountID(ctx, activeAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, result, "pre-relink mortgage must be returned when filtering by active account_id")
+	assert.Equal(t, replacedAccountID, result.AccountID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

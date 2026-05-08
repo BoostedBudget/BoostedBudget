@@ -62,7 +62,7 @@ type GetAccountsInput struct {
 	IncludeHidden   string `query:"include_hidden" doc:"If 'true', includes hidden accounts"`
 	Status          string `query:"status" doc:"Filter by account status: 'active' (default), 'replaced', or 'all'"`
 	IncludeReplaced string `query:"include_replaced" doc:"If 'true', equivalent to status=all (backward-compat alias)"`
-	UserAccountID   string `query:"user_account_id" doc:"If set, filter to accounts belonging to this user_account_id chain"`
+	UserAccountID   string `query:"user_account_id" doc:"When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set."`
 }
 
 // GetAccountsOutput represents the response for getting accounts.
@@ -160,9 +160,15 @@ func (h *PlaidHandler) ExchangePublicToken(ctx context.Context, input *ExchangeP
 // GetAccounts handles GET /api/v1/accounts requests.
 // Retrieves all linked bank accounts for the authenticated user.
 func (h *PlaidHandler) GetAccounts(ctx context.Context, input *GetAccountsInput) (*GetAccountsOutput, error) {
+	// Issue #1109: C.2 — When user_account_id is supplied, default status filter to "all"
+	statusFilter := input.Status
+	if input.UserAccountID != "" && input.Status == "" {
+		statusFilter = "all"
+	}
+
 	opts := services.AccountFilterOptions{
 		IncludeHidden:   input.IncludeHidden == "true",
-		StatusFilter:    input.Status,                   // "active" (default), "replaced", "all"
+		StatusFilter:    statusFilter,                    // "active" (default), "replaced", "all"
 		IncludeReplaced: input.IncludeReplaced == "true", // backward-compat alias for status=all
 		UserAccountID:   input.UserAccountID,
 	}

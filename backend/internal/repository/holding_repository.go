@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // HoldingRepository defines the interface for holding data access.
@@ -87,9 +88,10 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 }
 
 // GetByUserID retrieves all holdings for a user.
+// Joins accounts to filter out replaced accounts (Issue #1109).
 func (r *holdingRepository) GetByUserID(ctx context.Context, userID string) ([]domain.Holding, error) {
-	// JOIN accounts to filter out replaced accounts — after a Plaid re-link the old
-	// account's status becomes 'replaced', so this join ensures only active holdings appear.
+	observability.AccountsReplacedFiltered.WithLabelValues("investments").Inc()
+
 	query := `
 		SELECT holdings.id, holdings.user_id, holdings.account_id, holdings.user_account_id, holdings.security_id,
 			holdings.quantity, holdings.cost_basis, holdings.institution_value, holdings.institution_price,
@@ -128,20 +130,19 @@ func (r *holdingRepository) GetByUserID(ctx context.Context, userID string) ([]d
 		holdings = append(holdings, h)
 	}
 
-	if holdings == nil {
-		holdings = []domain.Holding{}
-	}
 	return holdings, nil
 }
 
 // GetByAccountID retrieves all holdings for a specific account.
+// Issue #1109: Chain-expand via user_account_id to include pre-relink holdings.
 func (r *holdingRepository) GetByAccountID(ctx context.Context, accountID string) ([]domain.Holding, error) {
 	query := `
 		SELECT id, user_id, account_id, security_id,
 			quantity, cost_basis, institution_value, institution_price,
 			created_at, updated_at
 		FROM holdings
-		WHERE account_id = $1
+		WHERE (account_id = $1 AND user_account_id IS NULL)
+		   OR user_account_id = (SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL)
 		ORDER BY security_id
 	`
 

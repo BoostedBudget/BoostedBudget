@@ -156,10 +156,15 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 		return nil, domain.ErrSavingsGoalNotFound
 	}
 
-	// If changing account, validate new account ownership
+	// If changing account, validate new account ownership and refresh UserAccountID
+	// Issue #1109: B.5 — refresh to stable identity rather than potentially replaced account_id
 	if req.AccountID != nil && *req.AccountID != goal.AccountID {
-		if err := s.validateAccountOwnership(ctx, userID, *req.AccountID); err != nil {
+		newAccount, err := s.validateAccountOwnershipWithAccount(ctx, userID, *req.AccountID)
+		if err != nil {
 			return nil, err
+		}
+		if newAccount != nil {
+			goal.UserAccountID = newAccount.UserAccountID
 		}
 	}
 
@@ -240,9 +245,8 @@ func (s *savingsGoalService) DeleteGoal(ctx context.Context, userID, goalID stri
 	return nil
 }
 
-// validateAccountOwnership checks that the user owns the specified account.
-// validateAccountOwnershipWithAccount checks that accountID belongs to userID and returns
-// the matched account so the caller can capture its UserAccountID. (Issue #1109)
+// validateAccountOwnershipWithAccount checks account ownership and returns the matched account.
+// Issue #1109: Returns the account so the caller can capture its UserAccountID.
 func (s *savingsGoalService) validateAccountOwnershipWithAccount(ctx context.Context, userID, accountID string) (*domain.Account, error) {
 	accounts, err := s.accountRepo.GetByUserID(ctx, userID)
 	if err != nil {

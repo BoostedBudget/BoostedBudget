@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // StudentLoanLiabilityRepository defines the interface for student loan liability data access.
@@ -222,9 +223,10 @@ func (r *studentLoanLiabilityRepository) ReplaceForAccount(ctx context.Context, 
 }
 
 // GetByUserID retrieves all student loan liabilities for a user.
+// Joins accounts to filter out replaced accounts (Issue #1109).
 func (r *studentLoanLiabilityRepository) GetByUserID(ctx context.Context, userID string) ([]domain.StudentLoanLiability, error) {
-	// JOIN accounts to filter out replaced accounts — after a Plaid re-link the old
-	// account's status becomes 'replaced', so this join ensures only active liabilities appear.
+	observability.AccountsReplacedFiltered.WithLabelValues("liabilities").Inc()
+
 	query := `
 		SELECT student_loan_liabilities.id, student_loan_liabilities.user_id, student_loan_liabilities.account_id, student_loan_liabilities.account_number,
 			student_loan_liabilities.disbursement_dates, student_loan_liabilities.expected_payoff_date, student_loan_liabilities.guarantor,
@@ -309,6 +311,12 @@ func (r *studentLoanLiabilityRepository) GetByAccountID(ctx context.Context, acc
 			synced_at, created_at, updated_at
 		FROM student_loan_liabilities
 		WHERE account_id = $1
+		   OR account_id IN (
+				SELECT id FROM accounts
+				WHERE user_account_id = (
+					SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL
+				)
+		   )
 	`
 
 	rows, err := r.db.Query(ctx, query, accountID)

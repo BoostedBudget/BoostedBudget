@@ -367,3 +367,45 @@ func TestInvestmentTransactionRepository_GetByUserAccountID(t *testing.T) {
 	assert.Equal(t, accountID, txns[0].AccountID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestInvestmentTransactionRepository_GetByAccountID_ChainExpand verifies that filtering
+// by active account_id returns investment transactions stored under a replaced account
+// that shares the same user_account_id. Issue #1109: B.4 fix.
+func TestInvestmentTransactionRepository_GetByAccountID_ChainExpand(t *testing.T) {
+	mock, repo := setupInvTxnMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	activeAccountID := uuid.New().String()
+	replacedAccountID := uuid.New().String()
+	secID := uuid.New().String()
+	txnDate := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	qty := 3.0
+	price := 150.00
+	subtype := "buy"
+
+	// Transaction was recorded under the replaced account but must be returned
+	// when the caller queries by the active account_id.
+	mock.ExpectQuery(regexp.QuoteMeta(`user_account_id = (SELECT user_account_id FROM accounts WHERE id = $1`)).
+		WithArgs(activeAccountID).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "user_id", "account_id", "security_id",
+			"plaid_investment_transaction_id",
+			"type", "subtype", "name",
+			"quantity", "amount", "price", "fees", "date",
+			"created_at",
+		}).AddRow(
+			uuid.New().String(), userID, replacedAccountID, &secID,
+			"plaid-chain-txn-001",
+			"buy", &subtype, "ACME Corp",
+			&qty, 450.00, &price, (*float64)(nil), txnDate,
+			txnDate,
+		))
+
+	txns, err := repo.GetByAccountID(ctx, activeAccountID)
+	require.NoError(t, err)
+	require.Len(t, txns, 1, "pre-relink investment transaction must be returned by active account_id")
+	assert.Equal(t, replacedAccountID, txns[0].AccountID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
