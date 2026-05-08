@@ -174,7 +174,7 @@ test.describe('Net Worth Page — Core Rendering', () => {
     await mockNetWorthDependencies(page)
     await page.goto('/net-worth')
     await page.waitForLoadState('networkidle')
-    await expect(page.getByTestId('plotly-chart')).toBeVisible()
+    await expect(page.getByTestId('net-worth-history-chart')).toBeVisible()
   })
 
   test('Institution column header is visible in the Breakdown section', async ({ page }) => {

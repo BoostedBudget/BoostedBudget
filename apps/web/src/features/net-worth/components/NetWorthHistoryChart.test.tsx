@@ -58,4 +58,9 @@ describe('NetWorthHistoryChart', () => {
     render(<NetWorthHistoryChart history={historyWithData} filterKey="test-dark" />)
     expect(screen.getByTestId('plotly-chart')).toBeDefined()
   })
+
+  it('renders with net-worth-history-chart testid', () => {
+    render(<NetWorthHistoryChart history={historyWithData} filterKey="test" />)
+    expect(screen.getByTestId('net-worth-history-chart')).toBeDefined()
+  })
 })
