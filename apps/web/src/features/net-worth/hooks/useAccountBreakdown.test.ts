@@ -218,19 +218,21 @@ describe('useAccountBreakdown', () => {
     expect(result.current.assets[0].name).toBe('Plaid Savings')
   })
 
-  // --- Re-link chain deferred (Issue #1109) ---
+  // --- Re-link chain (Issue #1109) ---
 
-  it('does NOT filter replaced accounts (deferred to Issue #1109)', () => {
-    // Replaced accounts must still appear here until backend and header are fixed together in #1109.
-    // Filtering them only in the breakdown creates a reconciliation gap with dashboard_service.GetNetWorth.
+  it('filters out replaced accounts from breakdown', () => {
+    // Issue #1109: Now that backend returns active-only by default and the
+    // filterActiveAccounts helper is wired in, replaced accounts should not
+    // appear in the net-worth breakdown.
     const accounts = [
       makeAccount({ id: 'active', name: 'Active Checking', status: 'active', current_balance: 1000 }),
       makeAccount({ id: 'replaced', name: 'Old Checking', status: 'replaced', current_balance: 500 }),
     ]
     mockUseGetAccounts.mockReturnValue({ data: { accounts, total_count: 2 }, isLoading: false, error: null })
     const { result } = renderHook(() => useAccountBreakdown())
-    expect(result.current.assets).toHaveLength(2)
-    expect(result.current.assets.some((r) => r.id === 'replaced')).toBe(true)
+    expect(result.current.assets).toHaveLength(1)
+    expect(result.current.assets[0].id).toBe('active')
+    expect(result.current.assets.some((r) => r.id === 'replaced')).toBe(false)
   })
 
   // --- Loading / error / null propagation ---

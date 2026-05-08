@@ -554,6 +554,33 @@ describe('TransactionsPage', () => {
     })
   })
 
+  describe('Account filtering (Issue #1109)', () => {
+    it('excludes replaced accounts from account filter options', async () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: {
+          accounts: [
+            { id: 'active-1', name: 'Primary Checking', status: 'active' },
+            { id: 'replaced-1', name: 'Old Checking', status: 'replaced' },
+          ],
+        },
+        isLoading: false,
+        error: null,
+      })
+
+      const Wrapper = createWrapper()
+      render(<TransactionsPage />, { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
+      })
+
+      // The account map and options should only include active accounts
+      // This is a smoke test — the real assertion is that we can render without error
+      // when a replaced account is present in the API response
+      expect(screen.queryByText('Old Checking')).not.toBeInTheDocument()
+    })
+  })
+
   describe('filter_dropdown_includes_curated_pfc_primaries_not_in_loaded_rows', () => {
     it('includes curated PFC primaries even when no transactions have that category', async () => {
       // Loan Payments is a curated primary absent from all mock transactions (which use Food/Drink)

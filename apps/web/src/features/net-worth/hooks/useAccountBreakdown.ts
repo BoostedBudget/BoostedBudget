@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
+import { filterActiveAccounts } from '@/features/accounts/hooks'
 import type { AccountBreakdownRow, NetWorthSide } from '../types'
 
 const LIABILITY_TYPES = new Set(['credit', 'loan'])
@@ -24,7 +25,8 @@ export function useAccountBreakdown(): UseAccountBreakdownResult {
   const { data, isLoading: loading, error } = useGetAccounts()
 
   const result = useMemo(() => {
-    const accounts = data?.accounts ?? []
+    // Issue #1109: exclude replaced accounts so breakdown matches GetNetWorth
+    const accounts = filterActiveAccounts(data?.accounts ?? [])
     const rawAssets: Array<{ account: (typeof accounts)[number]; balance: number }> = []
     const rawLiabs: Array<{ account: (typeof accounts)[number]; balance: number }> = []
     let assetsTotal = 0

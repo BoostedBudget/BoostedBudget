@@ -13,7 +13,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useCreateSavingsGoal } from '@boostedbudget/api-client/endpoints/savings-goals/savings-goals';
-import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts';
+import { useActiveAccounts } from '@/features/accounts/hooks';
 import { GOAL_TEMPLATES, calculateDeadlineFromTemplate } from '../goalTemplates';
 import type { GoalTemplate } from '../goalTemplates';
 import type { Account } from '../../accounts/types';
@@ -64,17 +64,14 @@ export function CreateSavingsGoalDialog({
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
 
   const {
-    data: accountsData,
+    accounts: allAccounts,
     isLoading: accountsLoading,
-  } = useGetAccounts(undefined, {
-    query: {
-      enabled: isOpen,
-    },
-  });
+  } = useActiveAccounts();
 
   const createSavingsGoalMutation = useCreateSavingsGoal();
 
-  const accounts: Account[] = (accountsData?.accounts ?? [])
+  // Issue #1109: useActiveAccounts already excludes replaced accounts; also filter by depository type
+  const accounts: Account[] = (allAccounts ?? [])
     .filter((acc) => acc.type === 'depository') as Account[];
 
   const isSubmitting = createSavingsGoalMutation.isPending;
