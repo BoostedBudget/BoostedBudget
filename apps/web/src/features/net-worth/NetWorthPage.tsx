@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { TrendingUp } from 'lucide-react'
 import { DateRangePicker } from '@/shared/dates'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
@@ -12,6 +12,8 @@ import { NetWorthHistoryChart } from './components/NetWorthHistoryChart'
 import { AccountBreakdownTable } from './components/AccountBreakdownTable'
 import { useNetWorthDateRange } from './hooks/useNetWorthDateRange'
 import { useAccountBreakdown } from './hooks/useAccountBreakdown'
+import { useNetWorthBreakdownFilters } from './hooks/useNetWorthBreakdownFilters'
+import { applyFilterAndSort } from './utils/applyFilterAndSort'
 
 export function NetWorthPage() {
   const trackEvent = useTrackEvent()
@@ -23,8 +25,72 @@ export function NetWorthPage() {
 
   const filters = startDate && endDate ? { startDate, endDate } : undefined
   const { summary, history, loading, error, refetch } = useNetWorthData(filters)
-  const netWorth = summary?.net_worth ?? 0
-  const { assets, liabilities, loading: accountsLoading, error: accountsError } = useAccountBreakdown(netWorth)
+  const {
+    assets: rawAssets,
+    liabilities: rawLiabilities,
+    assetsTotal,
+    liabilitiesTotal,
+    loading: accountsLoading,
+    error: accountsError,
+  } = useAccountBreakdown()
+
+  const {
+    filters: breakdownFilters,
+    institutionFilter,
+    typeFilter,
+    balanceRange,
+    sortColumn,
+    sortDirection,
+    setInstitutionFilter,
+    setTypeFilter,
+    setBalanceRange,
+    setSortColumn,
+    hasActiveFilters,
+    clearAllFilters,
+  } = useNetWorthBreakdownFilters()
+
+  const institutionOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const opts: Array<{ value: string; label: string }> = []
+    for (const row of [...rawAssets, ...rawLiabilities]) {
+      if (!seen.has(row.institutionName)) {
+        seen.add(row.institutionName)
+        opts.push({ value: row.institutionName, label: row.institutionName })
+      }
+    }
+    return opts.sort((a, b) => a.label.localeCompare(b.label))
+  }, [rawAssets, rawLiabilities])
+
+  const typeOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const opts: Array<{ value: string; label: string }> = []
+    for (const row of [...rawAssets, ...rawLiabilities]) {
+      if (!seen.has(row.type)) {
+        seen.add(row.type)
+        opts.push({ value: row.type, label: row.type })
+      }
+    }
+    return opts.sort((a, b) => a.label.localeCompare(b.label))
+  }, [rawAssets, rawLiabilities])
+
+  const sortState = sortColumn ? { column: sortColumn, direction: sortDirection } : null
+  const filterState = {
+    ...breakdownFilters,
+    balanceMin: balanceRange?.min,
+    balanceMax: balanceRange?.max,
+  }
+
+  const assets = useMemo(
+    () => applyFilterAndSort(rawAssets, filterState, sortState),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rawAssets, institutionFilter, typeFilter, balanceRange, sortColumn, sortDirection]
+  )
+
+  const liabilities = useMemo(
+    () => applyFilterAndSort(rawLiabilities, filterState, sortState),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rawLiabilities, institutionFilter, typeFilter, balanceRange, sortColumn, sortDirection]
+  )
 
   function handlePresetChange(next: typeof preset) {
     setPreset(next)
@@ -98,13 +164,37 @@ export function NetWorthPage() {
           </NetWorthSection>
         )}
 
-        <NetWorthSection title="Breakdown">
+        <NetWorthSection
+          title="Breakdown"
+          action={
+            hasActiveFilters ? (
+              <button
+                onClick={clearAllFilters}
+                className="text-xs text-muted-foreground underline hover:text-foreground"
+              >
+                Clear filters
+              </button>
+            ) : undefined
+          }
+        >
           <AccountBreakdownTable
             assets={assets}
             liabilities={liabilities}
-            netWorth={netWorth}
+            assetsTotal={assetsTotal}
+            liabilitiesTotal={liabilitiesTotal}
             loading={accountsLoading}
             error={accountsError}
+            sortColumn={sortColumn}
+            sortDirection={sortDirection}
+            onSort={setSortColumn}
+            institutionOptions={institutionOptions}
+            typeOptions={typeOptions}
+            institutionFilter={institutionFilter}
+            typeFilter={typeFilter}
+            onInstitutionFilterChange={setInstitutionFilter}
+            onTypeFilterChange={setTypeFilter}
+            balanceRange={balanceRange}
+            onBalanceRangeChange={setBalanceRange}
           />
         </NetWorthSection>
       </div>

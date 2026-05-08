@@ -4,9 +4,10 @@
 # Exit 0 = allow push | Exit 2 = block push (stdout shown to user)
 #
 # Checks run (matches CI test.yml):
-#   1. Backend + frontend tests:  make test-fast
-#   2. Bundle size check:         npx size-limit
-#   3. Lighthouse CI audit:       npx lhci autorun
+#   1. Dependency audit:          bun audit --audit-level=high  (HIGH/CRITICAL block)
+#   2. Backend + frontend tests:  make test-fast
+#   3. Bundle size check:         npx size-limit
+#   4. Lighthouse CI audit:       npx lhci autorun
 
 set -euo pipefail
 
@@ -58,7 +59,33 @@ printf '╚═══════════════════════
 printf '\n'
 
 # =========================================================================
-# 1. Backend + frontend tests (test-fast: ~2 min)
+# 1. Dependency audit (bun audit) — fast, fail-fast on HIGH/CRITICAL
+# =========================================================================
+printf 'Security:\n'
+
+if command -v bun &>/dev/null; then
+  run_check "bun audit            (HIGH/CRITICAL advisories)" \
+    "$PROJECT_ROOT" \
+    "bun audit --audit-level=high"
+else
+  printf '  %-50s⚠️  (bun not installed)\n' "bun audit"
+  WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"
+fi
+
+# Backend Go vulnerability scan (mirrors pre-commit; protects against --no-verify bypass)
+if command -v govulncheck &>/dev/null; then
+  run_check "govulncheck ./...    (Go vulnerabilities)" \
+    "$PROJECT_ROOT/backend" \
+    "govulncheck ./..."
+else
+  printf '  %-50s⚠️  (not installed)\n' "govulncheck ./..."
+  WARNINGS="${WARNINGS}\n  • govulncheck not installed — install: go install golang.org/x/vuln/cmd/govulncheck@latest"
+fi
+
+printf '\n'
+
+# =========================================================================
+# 2. Backend + frontend tests (test-fast: ~2 min)
 # =========================================================================
 printf 'Tests:\n'
 
@@ -77,7 +104,7 @@ ensure_frontend_build() {
 }
 
 # =========================================================================
-# 2. Bundle size check
+# 3. Bundle size check
 # =========================================================================
 printf 'Bundle size:\n'
 
@@ -94,7 +121,7 @@ fi
 printf '\n'
 
 # =========================================================================
-# 3. Lighthouse CI audit
+# 4. Lighthouse CI audit
 # =========================================================================
 printf 'Lighthouse:\n'
 

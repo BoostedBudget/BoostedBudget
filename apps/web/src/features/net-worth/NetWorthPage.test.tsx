@@ -38,12 +38,31 @@ const baseHistory: NetWorthHistory = {
 
 const { NetWorthPage } = await import('./NetWorthPage')
 
-function renderPage() {
+function renderPage(initialPath = '/net-worth') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialPath]}>
       <NetWorthPage />
     </MemoryRouter>
   )
+}
+
+function makeAccount(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'acc-1',
+    name: 'Checking',
+    type: 'depository',
+    current_balance: 5000,
+    currency_code: 'USD',
+    is_hidden: false,
+    linked_item_id: 'item-1',
+    plaid_account_id: 'plaid-1',
+    created_at: '2024-01-01',
+    updated_at: '2024-01-01',
+    user_id: 'user-1',
+    status: 'active',
+    institution_name: 'Chase',
+    ...overrides,
+  }
 }
 
 describe('NetWorthPage', () => {
@@ -123,5 +142,60 @@ describe('NetWorthPage', () => {
     renderPage()
     expect(screen.getByText(/connect a bank account/i)).toBeDefined()
     expect(screen.queryByTestId('plotly-chart')).toBeNull()
+  })
+
+  // --- Integration: filter + sort from URL ---
+
+  it('renders all accounts when no filter active', () => {
+    mockUseNetWorthData.mockReturnValue({ summary: baseSummary, history: baseHistory, loading: false, error: null, refetch: mockNetWorthRefetch })
+    mockUseGetAccounts.mockReturnValue({
+      data: {
+        accounts: [
+          makeAccount({ id: 'a-1', institution_name: 'Chase', name: 'Checking', current_balance: 3000 }),
+          makeAccount({ id: 'a-2', institution_name: 'Citibank', name: 'Savings', current_balance: 2000 }),
+        ],
+        total_count: 2,
+      },
+      isLoading: false,
+      error: null,
+    })
+    renderPage()
+    expect(screen.getByText('Checking')).toBeDefined()
+    expect(screen.getByText('Savings')).toBeDefined()
+  })
+
+  it('applies institution filter from URL — shows only matching institution', () => {
+    mockUseNetWorthData.mockReturnValue({ summary: baseSummary, history: baseHistory, loading: false, error: null, refetch: mockNetWorthRefetch })
+    mockUseGetAccounts.mockReturnValue({
+      data: {
+        accounts: [
+          makeAccount({ id: 'a-1', institution_name: 'Chase', name: 'Checking', current_balance: 3000 }),
+          makeAccount({ id: 'a-2', institution_name: 'Citibank', name: 'Savings', current_balance: 2000 }),
+        ],
+        total_count: 2,
+      },
+      isLoading: false,
+      error: null,
+    })
+    renderPage('/net-worth?institution=Chase')
+    expect(screen.getByText('Checking')).toBeDefined()
+    expect(screen.queryByText('Savings')).toBeNull()
+  })
+
+  it('shows "No asset accounts match" when institution filter empties assets side', () => {
+    mockUseNetWorthData.mockReturnValue({ summary: baseSummary, history: baseHistory, loading: false, error: null, refetch: mockNetWorthRefetch })
+    mockUseGetAccounts.mockReturnValue({
+      data: {
+        accounts: [
+          makeAccount({ id: 'a-1', institution_name: 'Chase', name: 'Checking', current_balance: 3000 }),
+          makeAccount({ id: 'l-1', institution_name: 'Citibank', name: 'Visa', type: 'credit', current_balance: -500 }),
+        ],
+        total_count: 2,
+      },
+      isLoading: false,
+      error: null,
+    })
+    renderPage('/net-worth?institution=Citibank')
+    expect(screen.getByText(/No asset accounts match the current filters/i)).toBeDefined()
   })
 })
