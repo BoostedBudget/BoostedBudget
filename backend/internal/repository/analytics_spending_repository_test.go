@@ -276,7 +276,10 @@ func TestGetSpendingTrends_CustomCategory(t *testing.T) {
 // ensuring re-linked (replaced) accounts are excluded from analytics.
 // These tests use pgxmock and inspect the generated SQL for the status filter.
 
-func TestGetSpendingByCategory_QueryContainsActiveFilter(t *testing.T) {
+// TestGetSpendingByCategory_IncludesReplacedAccountTransactions verifies that
+// spending queries use LEFT JOIN (no status filter) so pre-relink transactions
+// from replaced accounts are still counted in historical analytics.
+func TestGetSpendingByCategory_IncludesReplacedAccountTransactions(t *testing.T) {
 	mock, repo := setupAnalyticsMockDB(t)
 	defer mock.Close()
 
@@ -287,12 +290,12 @@ func TestGetSpendingByCategory_QueryContainsActiveFilter(t *testing.T) {
 		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
 	}
 
-	// The query must include a.status = 'active' — if the repo generates SQL without
-	// it, mock's regexp won't match and WillReturnRows won't fire, causing an error.
 	rows := pgxmock.NewRows([]string{"category", "category_display", "total", "transaction_count"}).
 		AddRow("FOOD_AND_DRINK", "", 100.0, 5)
 
-	mock.ExpectQuery(`(?i)a\.status\s*=\s*'active'`).
+	// Query must use LEFT JOIN and must NOT filter by a.status so that
+	// transactions belonging to replaced accounts remain in analytics.
+	mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
 		WithArgs(userID, filters.StartDate, filters.EndDate).
 		WillReturnRows(rows)
 
@@ -301,7 +304,9 @@ func TestGetSpendingByCategory_QueryContainsActiveFilter(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestGetSpendingByMerchant_QueryContainsActiveFilter(t *testing.T) {
+// TestGetSpendingByMerchant_IncludesReplacedAccountTransactions verifies that
+// merchant queries use LEFT JOIN so pre-relink history is preserved.
+func TestGetSpendingByMerchant_IncludesReplacedAccountTransactions(t *testing.T) {
 	mock, repo := setupAnalyticsMockDB(t)
 	defer mock.Close()
 
@@ -316,7 +321,7 @@ func TestGetSpendingByMerchant_QueryContainsActiveFilter(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"merchant_name", "total", "transaction_count"}).
 		AddRow("Starbucks", 50.0, 3)
 
-	mock.ExpectQuery(`(?i)a\.status\s*=\s*'active'`).
+	mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
 		WithArgs(userID, filters.StartDate, filters.EndDate, limit).
 		WillReturnRows(rows)
 
@@ -325,7 +330,9 @@ func TestGetSpendingByMerchant_QueryContainsActiveFilter(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestGetSpendingTrends_QueryContainsActiveFilter(t *testing.T) {
+// TestGetSpendingTrends_IncludesReplacedAccountTransactions verifies that
+// trend queries use LEFT JOIN so pre-relink history is preserved.
+func TestGetSpendingTrends_IncludesReplacedAccountTransactions(t *testing.T) {
 	mock, repo := setupAnalyticsMockDB(t)
 	defer mock.Close()
 
@@ -340,7 +347,7 @@ func TestGetSpendingTrends_QueryContainsActiveFilter(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"period_start", "category", "category_display", "total"}).
 		AddRow(jan, "FOOD_AND_DRINK", "", 200.0)
 
-	mock.ExpectQuery(`(?i)a\.status\s*=\s*'active'`).
+	mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
 		WithArgs(userID, filters.StartDate, filters.EndDate).
 		WillReturnRows(rows)
 
@@ -349,7 +356,9 @@ func TestGetSpendingTrends_QueryContainsActiveFilter(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestGetCashFlowAggregation_QueryContainsActiveFilter(t *testing.T) {
+// TestGetCashFlowAggregation_IncludesReplacedAccountTransactions verifies that
+// cash-flow aggregation uses LEFT JOIN so pre-relink transactions remain visible.
+func TestGetCashFlowAggregation_IncludesReplacedAccountTransactions(t *testing.T) {
 	mock, repo := setupAnalyticsMockDB(t)
 	defer mock.Close()
 
@@ -363,7 +372,7 @@ func TestGetCashFlowAggregation_QueryContainsActiveFilter(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"income", "income_count", "expenses", "expense_count"}).
 		AddRow(500.0, 2, 300.0, 5)
 
-	mock.ExpectQuery(`(?i)a\.status\s*=\s*'active'`).
+	mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
 		WithArgs(userID, filters.StartDate, filters.EndDate).
 		WillReturnRows(rows)
 
@@ -372,7 +381,9 @@ func TestGetCashFlowAggregation_QueryContainsActiveFilter(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestGetCashFlowGrouped_QueryContainsActiveFilter(t *testing.T) {
+// TestGetCashFlowGrouped_IncludesReplacedAccountTransactions verifies that
+// grouped cash-flow uses LEFT JOIN so pre-relink transactions remain visible.
+func TestGetCashFlowGrouped_IncludesReplacedAccountTransactions(t *testing.T) {
 	mock, repo := setupAnalyticsMockDB(t)
 	defer mock.Close()
 
@@ -388,7 +399,7 @@ func TestGetCashFlowGrouped_QueryContainsActiveFilter(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"period_start", "income", "expenses", "transaction_count"}).
 		AddRow(jan, 500.0, 300.0, 7)
 
-	mock.ExpectQuery(`(?i)a\.status\s*=\s*'active'`).
+	mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
 		WithArgs(userID, filters.StartDate, filters.EndDate).
 		WillReturnRows(rows)
 

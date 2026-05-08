@@ -179,18 +179,21 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
+		"status", "user_account_id", "replaced_by_id", "replaced_at",
 		"created_at", "updated_at",
 	}).
 		AddRow(
 			uuid.New().String(), linkedItemID, uuid.New().String(), "acc-1",
 			"Checking", strPtr("Chase Total Checking"), "depository", strPtr("checking"), strPtr("1234"),
 			&balance1, &available1, "USD",
+			"active", nil, nil, nil,
 			now, now,
 		).
 		AddRow(
 			uuid.New().String(), linkedItemID, uuid.New().String(), "acc-2",
 			"Savings", nil, "depository", strPtr("savings"), strPtr("5678"),
 			&balance2, &available2, "USD",
+			"active", nil, nil, nil,
 			now, now,
 		)
 
@@ -198,6 +201,7 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
 		       current_balance, available_balance, currency_code,
+		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
 		WHERE linked_item_id = $1 AND status = 'active'
@@ -1608,11 +1612,13 @@ func TestAccountRepository_GetByLinkedItemID_ExcludesReplaced(t *testing.T) {
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
+		"status", "user_account_id", "replaced_by_id", "replaced_at",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), linkedItemID, uuid.New().String(), "acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&balance, &available, "USD",
+		"active", nil, nil, nil,
 		now, now,
 	)
 
@@ -1620,6 +1626,7 @@ func TestAccountRepository_GetByLinkedItemID_ExcludesReplaced(t *testing.T) {
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
 		       current_balance, available_balance, currency_code,
+		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
 		WHERE linked_item_id = $1 AND status = 'active'

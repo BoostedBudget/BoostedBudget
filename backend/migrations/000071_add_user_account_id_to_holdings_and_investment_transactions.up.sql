@@ -18,7 +18,7 @@ BEGIN
         WHERE table_name = 'holdings' AND column_name = 'user_account_id'
     ) THEN
         ALTER TABLE holdings
-        ADD COLUMN user_account_id UUID REFERENCES user_accounts(id) ON DELETE SET NULL;
+        ADD COLUMN user_account_id UUID;
 
         COMMENT ON COLUMN holdings.user_account_id IS
             'Stable reference to user_accounts surviving Plaid re-links. '
@@ -49,6 +49,7 @@ BEGIN
         ADD CONSTRAINT fk_holdings_user_account_id
         FOREIGN KEY (user_account_id)
         REFERENCES user_accounts(id)
+        ON DELETE SET NULL
         NOT VALID;
     END IF;
 END $$;
@@ -68,7 +69,7 @@ BEGIN
         WHERE table_name = 'investment_transactions' AND column_name = 'user_account_id'
     ) THEN
         ALTER TABLE investment_transactions
-        ADD COLUMN user_account_id UUID REFERENCES user_accounts(id) ON DELETE SET NULL;
+        ADD COLUMN user_account_id UUID;
 
         COMMENT ON COLUMN investment_transactions.user_account_id IS
             'Stable reference to user_accounts surviving Plaid re-links. '
@@ -99,6 +100,7 @@ BEGIN
         ADD CONSTRAINT fk_inv_txn_user_account_id
         FOREIGN KEY (user_account_id)
         REFERENCES user_accounts(id)
+        ON DELETE SET NULL
         NOT VALID;
     END IF;
 END $$;

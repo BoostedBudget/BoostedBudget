@@ -362,7 +362,7 @@ func TestGetAccounts_IncludeHidden(t *testing.T) {
 	require.NotNil(t, output)
 }
 
-// TestGetAccounts_StatusAll tests that status=all enables IncludeReplaced.
+// TestGetAccounts_StatusAll tests that status=all is forwarded via StatusFilter.
 func TestGetAccounts_StatusAll(t *testing.T) {
 	mockPlaid := &mockPlaidServiceForPlaid{}
 	mockAccount := &mockAccountServiceForPlaid{
@@ -380,10 +380,32 @@ func TestGetAccounts_StatusAll(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, output)
-	assert.True(t, mockAccount.capturedOpts.IncludeReplaced, "expected IncludeReplaced=true when status=all")
+	assert.Equal(t, "all", mockAccount.capturedOpts.StatusFilter, "expected StatusFilter=all when status=all")
 }
 
-// TestGetAccounts_IncludeReplacedAlias tests that include_replaced=true enables IncludeReplaced.
+// TestGetAccounts_StatusReplaced tests that status=replaced is forwarded via StatusFilter.
+func TestGetAccounts_StatusReplaced(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Status:             "replaced",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "replaced", mockAccount.capturedOpts.StatusFilter, "expected StatusFilter=replaced when status=replaced")
+	assert.False(t, mockAccount.capturedOpts.IncludeReplaced, "IncludeReplaced should not be set for status=replaced")
+}
+
+// TestGetAccounts_IncludeReplacedAlias tests that include_replaced=true sets IncludeReplaced.
 func TestGetAccounts_IncludeReplacedAlias(t *testing.T) {
 	mockPlaid := &mockPlaidServiceForPlaid{}
 	mockAccount := &mockAccountServiceForPlaid{

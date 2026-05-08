@@ -5,38 +5,48 @@
 --          Original keys are preserved so this migration is safely reversible.
 --
 -- rules.actions shape (transfer_suggestion rules):
---   {"from_account_id": "uuid", "to_account_id": "uuid", "amount_type": "...", "amount": N}
+--   {"transfer": {"from_account_id": "uuid", "to_account_id": "uuid", "amount_type": "...", "amount": N}}
+--   NOTE: actions are nested under the rule-type key ("transfer"), not at the top level.
+--
 -- rules.trigger_config.filters shape:
 --   {"type": "event", "filters": {"account_id": "uuid", ...}}
 --
 -- Idempotency: each UPDATE only touches rows where the new key is not yet present.
 
 -- =============================================================================
--- Step 1: Backfill from_user_account_id into rules.actions
---         Only processes transfer_suggestion rules that have from_account_id.
+-- Step 1: Backfill from_user_account_id into rules.actions.transfer
+--         Only processes transfer_suggestion rules that have transfer.from_account_id.
 -- =============================================================================
 
 UPDATE rules r
-SET actions = r.actions || jsonb_build_object('from_user_account_id', a.user_account_id::text)
+SET actions = jsonb_set(
+    r.actions,
+    '{transfer,from_user_account_id}',
+    to_jsonb(a.user_account_id::text)
+)
 FROM accounts a
 WHERE r.rule_type = 'transfer_suggestion'
-  AND r.actions ? 'from_account_id'
-  AND NOT (r.actions ? 'from_user_account_id')
-  AND a.id::text = r.actions->>'from_account_id'
+  AND r.actions->'transfer' ? 'from_account_id'
+  AND NOT (r.actions->'transfer' ? 'from_user_account_id')
+  AND a.id::text = r.actions->'transfer'->>'from_account_id'
   AND a.user_account_id IS NOT NULL;
 
 -- =============================================================================
--- Step 2: Backfill to_user_account_id into rules.actions
---         Only processes transfer_suggestion rules that have to_account_id.
+-- Step 2: Backfill to_user_account_id into rules.actions.transfer
+--         Only processes transfer_suggestion rules that have transfer.to_account_id.
 -- =============================================================================
 
 UPDATE rules r
-SET actions = r.actions || jsonb_build_object('to_user_account_id', a.user_account_id::text)
+SET actions = jsonb_set(
+    r.actions,
+    '{transfer,to_user_account_id}',
+    to_jsonb(a.user_account_id::text)
+)
 FROM accounts a
 WHERE r.rule_type = 'transfer_suggestion'
-  AND r.actions ? 'to_account_id'
-  AND NOT (r.actions ? 'to_user_account_id')
-  AND a.id::text = r.actions->>'to_account_id'
+  AND r.actions->'transfer' ? 'to_account_id'
+  AND NOT (r.actions->'transfer' ? 'to_user_account_id')
+  AND a.id::text = r.actions->'transfer'->>'to_account_id'
   AND a.user_account_id IS NOT NULL;
 
 -- =============================================================================

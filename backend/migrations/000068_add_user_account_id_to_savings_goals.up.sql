@@ -18,7 +18,7 @@ BEGIN
         WHERE table_name = 'savings_goals' AND column_name = 'user_account_id'
     ) THEN
         ALTER TABLE savings_goals
-        ADD COLUMN user_account_id UUID REFERENCES user_accounts(id) ON DELETE SET NULL;
+        ADD COLUMN user_account_id UUID;
 
         COMMENT ON COLUMN savings_goals.user_account_id IS
             'Stable reference to user_accounts surviving Plaid re-links. '
@@ -58,6 +58,7 @@ BEGIN
         ADD CONSTRAINT fk_savings_goals_user_account_id
         FOREIGN KEY (user_account_id)
         REFERENCES user_accounts(id)
+        ON DELETE SET NULL
         NOT VALID;
     END IF;
 END $$;
