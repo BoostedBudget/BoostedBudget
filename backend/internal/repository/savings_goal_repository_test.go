@@ -59,6 +59,7 @@ func TestSavingsGoalRepository_Create(t *testing.T) {
 		goal.CurrentAmount,
 		pgxmock.AnyArg(), // currency_code
 		goal.AccountID,
+		goal.UserAccountID, // user_account_id (Issue #1109)
 		pgxmock.AnyArg(), // deadline
 		goal.IsCompleted,
 		goal.CompletedAt,
@@ -90,6 +91,7 @@ func TestSavingsGoalRepository_Create_DuplicateName(t *testing.T) {
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
+		pgxmock.AnyArg(), // user_account_id (Issue #1109)
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
@@ -118,7 +120,7 @@ func TestSavingsGoalRepository_GetByID(t *testing.T) {
 
 	columns := []string{
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
-		"currency_code", "account_id", "deadline", "is_completed", "completed_at",
+		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
 		"created_at", "updated_at",
 	}
 
@@ -133,6 +135,7 @@ func TestSavingsGoalRepository_GetByID(t *testing.T) {
 			1000.00,
 			"USD",
 			accountID,
+			nil,       // user_account_id (nullable)
 			&deadline, // Use pointer for nullable deadline
 			false,
 			nil,
@@ -184,7 +187,7 @@ func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
 
 	columns := []string{
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
-		"currency_code", "account_id", "deadline", "is_completed", "completed_at",
+		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
 		"created_at", "updated_at",
 	}
 
@@ -200,6 +203,7 @@ func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
 				1000.00,
 				"USD",
 				uuid.New().String(),
+				nil,       // user_account_id (nullable)
 				&deadline, // Use pointer for nullable deadline
 				false,
 				nil,
@@ -215,6 +219,7 @@ func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
 				5000.00,
 				"USD",
 				uuid.New().String(),
+				nil, // user_account_id (nullable)
 				nil, // nil deadline is fine
 				false,
 				nil,
@@ -241,7 +246,7 @@ func TestSavingsGoalRepository_GetActiveByUserID(t *testing.T) {
 
 	columns := []string{
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
-		"currency_code", "account_id", "deadline", "is_completed", "completed_at",
+		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
 		"created_at", "updated_at",
 	}
 
@@ -256,6 +261,7 @@ func TestSavingsGoalRepository_GetActiveByUserID(t *testing.T) {
 			1000.00,
 			"USD",
 			uuid.New().String(),
+			nil, // user_account_id (nullable)
 			nil, // nil deadline is fine
 			false,
 			nil,
@@ -284,7 +290,7 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 
 	columns := []string{
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
-		"currency_code", "account_id", "deadline", "is_completed", "completed_at",
+		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
 		"created_at", "updated_at",
 	}
 
@@ -300,7 +306,8 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 				1000.00,
 				"USD",
 				accountID,
-				nil,
+				nil, // user_account_id (nullable)
+				nil, // deadline (nullable)
 				false,
 				nil,
 				now,
@@ -315,7 +322,8 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 				5000.00,
 				"USD",
 				accountID,
-				nil,
+				nil, // user_account_id (nullable)
+				nil, // deadline (nullable)
 				false,
 				nil,
 				now,

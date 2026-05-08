@@ -33,4 +33,16 @@ export type GetAccountsParams = {
    * If 'true', includes hidden accounts
    */
   include_hidden?: string;
+  /**
+   * Filter by account status: 'active' (default), 'replaced', or 'all'
+   */
+  status?: string;
+  /**
+   * If 'true', equivalent to status=all (backward-compat alias)
+   */
+  include_replaced?: string;
+  /**
+   * If set, filter to accounts belonging to this user_account_id chain
+   */
+  user_account_id?: string;
 };

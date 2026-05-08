@@ -69,15 +69,16 @@ func (m *mockPlaidServiceForPlaid) LiabilitiesGet(ctx context.Context, accessTok
 
 // mockAccountServiceForPlaid is a mock implementation of services.AccountService
 type mockAccountServiceForPlaid struct {
-	accounts      []domain.Account
-	account       *domain.Account
-	linkResult    *services.LinkAccountsResult
-	getErr        error
-	linkErr       error
-	updateErr     error
-	deleteErr     error
-	disconnectErr error
-	reorderErr    error
+	accounts       []domain.Account
+	account        *domain.Account
+	linkResult     *services.LinkAccountsResult
+	getErr         error
+	linkErr        error
+	updateErr      error
+	deleteErr      error
+	disconnectErr  error
+	reorderErr     error
+	capturedOpts   services.AccountFilterOptions
 }
 
 func (m *mockAccountServiceForPlaid) LinkAccounts(ctx context.Context, userID, publicToken, institutionID, institutionName string) (*services.LinkAccountsResult, error) {
@@ -94,7 +95,8 @@ func (m *mockAccountServiceForPlaid) GetAccounts(ctx context.Context, userID str
 	return m.accounts, nil
 }
 
-func (m *mockAccountServiceForPlaid) GetAccountsFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
+func (m *mockAccountServiceForPlaid) GetAccountsFiltered(ctx context.Context, userID string, opts services.AccountFilterOptions) ([]domain.Account, error) {
+	m.capturedOpts = opts
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
@@ -360,7 +362,92 @@ func TestGetAccounts_IncludeHidden(t *testing.T) {
 	require.NotNil(t, output)
 }
 
+// TestGetAccounts_StatusAll tests that status=all enables IncludeReplaced.
+func TestGetAccounts_StatusAll(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Status:             "all",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.True(t, mockAccount.capturedOpts.IncludeReplaced, "expected IncludeReplaced=true when status=all")
+}
+
+// TestGetAccounts_IncludeReplacedAlias tests that include_replaced=true enables IncludeReplaced.
+func TestGetAccounts_IncludeReplacedAlias(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		IncludeReplaced:    "true",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.True(t, mockAccount.capturedOpts.IncludeReplaced, "expected IncludeReplaced=true when include_replaced=true")
+}
+
+// TestGetAccounts_UserAccountIDFilter tests that user_account_id is forwarded.
+func TestGetAccounts_UserAccountIDFilter(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		UserAccountID:      "ua-abc-123",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "ua-abc-123", mockAccount.capturedOpts.UserAccountID, "expected UserAccountID forwarded")
+}
+
+// TestGetAccounts_DefaultActiveOnly tests that default (no params) uses active-only filtering.
+func TestGetAccounts_DefaultActiveOnly(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.False(t, mockAccount.capturedOpts.IncludeReplaced, "expected IncludeReplaced=false by default")
+	assert.Empty(t, mockAccount.capturedOpts.UserAccountID, "expected no UserAccountID by default")
+}
+
 // TestUpdateAccount_Success tests successful account update.
+
 func TestUpdatePlaidAccount_Success(t *testing.T) {
 	mockPlaid := &mockPlaidServiceForPlaid{}
 	mockAccount := &mockAccountServiceForPlaid{

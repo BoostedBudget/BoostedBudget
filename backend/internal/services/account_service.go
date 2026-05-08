@@ -113,10 +113,11 @@ type AccountService interface {
 	// NOTE: After PR #197, this accepts internal user UUID, not Clerk ID
 	GetAccounts(ctx context.Context, userID string) ([]domain.Account, error)
 
-	// GetAccountsFiltered retrieves accounts with optional hidden filter (Issue #307)
-	// includeHidden=false: Returns only visible accounts (default view)
-	// includeHidden=true: Returns all accounts including hidden ones
-	GetAccountsFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error)
+	// GetAccountsFiltered retrieves accounts with optional filters (Issue #307, #1109)
+	// opts.IncludeHidden=false: Returns only visible accounts (default)
+	// opts.IncludeReplaced=true: Also includes replaced accounts (chain transparency)
+	// opts.UserAccountID: Filters to accounts sharing a user_account_id chain
+	GetAccountsFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error)
 
 	// UpdateAccount updates account customization fields (Issue #307)
 	// Supports: nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden
@@ -778,9 +779,16 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 	return s.linkedItemRepo.DeleteByUser(ctx, linkedItemID, userID)
 }
 
-// GetAccountsFiltered retrieves accounts with optional hidden filter (Issue #307)
-// Similar to GetAccounts but supports filtering hidden accounts.
-func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
+// AccountFilterOptions holds filter options for GetAccountsFiltered (Issue #1109).
+type AccountFilterOptions struct {
+	IncludeHidden   bool   // if true, include hidden accounts
+	IncludeReplaced bool   // if true, do not filter by status=active
+	UserAccountID   string // if set, filter to accounts with this user_account_id
+}
+
+// GetAccountsFiltered retrieves accounts with optional filters (Issue #307, #1109).
+// Supports hidden, replaced-status, and user_account_id chain filtering.
+func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error) {
 	// Fetch user by internal UUID to verify user exists
 	_, err := s.userRepo.GetUserByID(ctx, userID)
 	if err != nil {
@@ -793,8 +801,15 @@ func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string,
 		return []domain.Account{}, nil
 	}
 
-	// Query accounts with hidden filter using internal UUID
-	accounts, err := s.accountRepo.GetAccountsWithInstitutionFiltered(ctx, userID, includeHidden)
+	// Map service options to repository filter options
+	repoOpts := repository.AccountFilterOptions{
+		IncludeHidden:   opts.IncludeHidden,
+		IncludeReplaced: opts.IncludeReplaced,
+		UserAccountID:   opts.UserAccountID,
+	}
+
+	// Query accounts with filters using internal UUID
+	accounts, err := s.accountRepo.GetAccountsWithInstitutionFiltered(ctx, userID, repoOpts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts: %w", err)
 	}

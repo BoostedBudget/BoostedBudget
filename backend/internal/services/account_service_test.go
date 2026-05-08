@@ -313,8 +313,8 @@ func (m *MockAccountRepository) UpdateDisplayOrders(ctx context.Context, userID 
 	return args.Error(0)
 }
 
-func (m *MockAccountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
-	args := m.Called(ctx, userID, includeHidden)
+func (m *MockAccountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts repository.AccountFilterOptions) ([]domain.Account, error) {
+	args := m.Called(ctx, userID, opts)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -1957,10 +1957,10 @@ func TestGetAccountsFiltered_ExcludeHidden(t *testing.T) {
 		{ID: uuid.New().String(), UserID: userID, Name: "Checking", IsHidden: false},
 		{ID: uuid.New().String(), UserID: userID, Name: "Savings", IsHidden: false},
 	}
-	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, false).Return(visibleAccounts, nil)
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, repository.AccountFilterOptions{IncludeHidden: false}).Return(visibleAccounts, nil)
 
 	// Execute - don't include hidden
-	result, err := service.GetAccountsFiltered(ctx, userID, false)
+	result, err := service.GetAccountsFiltered(ctx, userID, AccountFilterOptions{IncludeHidden: false})
 
 	// Assert
 	require.NoError(t, err)
@@ -1992,10 +1992,10 @@ func TestGetAccountsFiltered_IncludeHidden(t *testing.T) {
 		{ID: uuid.New().String(), UserID: userID, Name: "Savings", IsHidden: false},
 		{ID: uuid.New().String(), UserID: userID, Name: "Hidden Card", IsHidden: true},
 	}
-	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, true).Return(allAccounts, nil)
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, repository.AccountFilterOptions{IncludeHidden: true}).Return(allAccounts, nil)
 
 	// Execute - include hidden
-	result, err := service.GetAccountsFiltered(ctx, userID, true)
+	result, err := service.GetAccountsFiltered(ctx, userID, AccountFilterOptions{IncludeHidden: true})
 
 	// Assert
 	require.NoError(t, err)
@@ -2021,7 +2021,7 @@ func TestGetAccountsFiltered_UserNotFound(t *testing.T) {
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(nil, assert.AnError)
 
 	// Execute
-	result, err := service.GetAccountsFiltered(ctx, userID, false)
+	result, err := service.GetAccountsFiltered(ctx, userID, AccountFilterOptions{})
 
 	// Assert - should return empty list for non-existent user (consistent with GetAccounts)
 	require.NoError(t, err)

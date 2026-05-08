@@ -376,6 +376,14 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 		Status:          domain.SuggestionStatusPending,
 	}
 
+	// Issue #1109: Propagate stable user_account_id references when present (backfilled by migration 000070)
+	if transfer.FromUserAccountID != "" {
+		suggestion.FromUserAccountID = ptrString(transfer.FromUserAccountID)
+	}
+	if transfer.ToUserAccountID != "" {
+		suggestion.ToUserAccountID = ptrString(transfer.ToUserAccountID)
+	}
+
 	if err := s.suggestionRepo.Create(ctx, suggestion); err != nil {
 		return err
 	}

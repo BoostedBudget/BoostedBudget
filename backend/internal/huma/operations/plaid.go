@@ -59,7 +59,10 @@ type ExchangePublicTokenOutput struct {
 // GetAccountsInput represents the input for getting accounts.
 type GetAccountsInput struct {
 	inputs.AuthenticatedInput
-	IncludeHidden string `query:"include_hidden" doc:"If 'true', includes hidden accounts"`
+	IncludeHidden   string `query:"include_hidden" doc:"If 'true', includes hidden accounts"`
+	Status          string `query:"status" doc:"Filter by account status: 'active' (default), 'replaced', or 'all'"`
+	IncludeReplaced string `query:"include_replaced" doc:"If 'true', equivalent to status=all (backward-compat alias)"`
+	UserAccountID   string `query:"user_account_id" doc:"If set, filter to accounts belonging to this user_account_id chain"`
 }
 
 // GetAccountsOutput represents the response for getting accounts.
@@ -157,9 +160,13 @@ func (h *PlaidHandler) ExchangePublicToken(ctx context.Context, input *ExchangeP
 // GetAccounts handles GET /api/v1/accounts requests.
 // Retrieves all linked bank accounts for the authenticated user.
 func (h *PlaidHandler) GetAccounts(ctx context.Context, input *GetAccountsInput) (*GetAccountsOutput, error) {
-	includeHidden := input.IncludeHidden == "true"
+	opts := services.AccountFilterOptions{
+		IncludeHidden:   input.IncludeHidden == "true",
+		IncludeReplaced: input.Status == "all" || input.IncludeReplaced == "true",
+		UserAccountID:   input.UserAccountID,
+	}
 
-	accounts, err := h.accountService.GetAccountsFiltered(ctx, input.UserID, includeHidden)
+	accounts, err := h.accountService.GetAccountsFiltered(ctx, input.UserID, opts)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}

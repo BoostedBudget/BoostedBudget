@@ -85,4 +85,8 @@ export type GetTransactionsParams = {
    * Filter by transaction type
    */
   amount_type?: GetTransactionsAmountType;
+  /**
+   * Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members
+   */
+  user_account_id?: string;
 };
