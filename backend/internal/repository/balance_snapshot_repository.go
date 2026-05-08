@@ -110,27 +110,65 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 	// Build query based on whether account types filter is provided
 	// Uses timezone-fixed date cast to aggregate multiple intraday snapshots into daily totals
 	if len(accountTypes) > 0 {
+		// CTE deduplicates by chain_key per day before aggregating, preventing
+		// double-counting when both old and new accounts have snapshots on the re-link day.
 		query = `
-			SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date as snapshot_date, SUM(bs.current_balance) as total_balance
-			FROM balance_snapshots bs
-			JOIN accounts a ON a.id = bs.account_id
-			WHERE bs.user_id = $1
-			  AND bs.snapshot_at >= $2
-			  AND bs.snapshot_at <= $3
-			  AND a.type = ANY($4)
-			GROUP BY (bs.snapshot_at AT TIME ZONE 'UTC')::date
-			ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date ASC
+			WITH latest_per_account_per_day AS (
+			    SELECT
+			        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
+			        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
+			        MAX(snapshot_at) AS latest_at
+			    FROM balance_snapshots bs
+			    JOIN accounts a ON a.id = bs.account_id
+			    WHERE bs.user_id = $1
+			      AND bs.snapshot_at >= $2
+			      AND bs.snapshot_at <= $3
+			      AND a.type = ANY($4)
+			    GROUP BY snapshot_date, chain_key
+			),
+			deduped_snapshots AS (
+			    SELECT bs.current_balance, (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date
+			    FROM balance_snapshots bs
+			    JOIN latest_per_account_per_day l
+			      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
+			      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
+			      AND bs.snapshot_at = l.latest_at
+			    WHERE bs.user_id = $1
+			)
+			SELECT snapshot_date, SUM(current_balance) as total_balance
+			FROM deduped_snapshots
+			GROUP BY snapshot_date
+			ORDER BY snapshot_date ASC
 		`
 		args = []interface{}{userID, startDate, endDate, accountTypes}
 	} else {
+		// CTE deduplicates by chain_key per day before aggregating, preventing
+		// double-counting when both old and new accounts have snapshots on the re-link day.
 		query = `
-			SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date as snapshot_date, SUM(bs.current_balance) as total_balance
-			FROM balance_snapshots bs
-			WHERE bs.user_id = $1
-			  AND bs.snapshot_at >= $2
-			  AND bs.snapshot_at <= $3
-			GROUP BY (bs.snapshot_at AT TIME ZONE 'UTC')::date
-			ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date ASC
+			WITH latest_per_account_per_day AS (
+			    SELECT
+			        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
+			        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
+			        MAX(snapshot_at) AS latest_at
+			    FROM balance_snapshots bs
+			    WHERE bs.user_id = $1
+			      AND bs.snapshot_at >= $2
+			      AND bs.snapshot_at <= $3
+			    GROUP BY snapshot_date, chain_key
+			),
+			deduped_snapshots AS (
+			    SELECT bs.current_balance, (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date
+			    FROM balance_snapshots bs
+			    JOIN latest_per_account_per_day l
+			      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
+			      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
+			      AND bs.snapshot_at = l.latest_at
+			    WHERE bs.user_id = $1
+			)
+			SELECT snapshot_date, SUM(current_balance) as total_balance
+			FROM deduped_snapshots
+			GROUP BY snapshot_date
+			ORDER BY snapshot_date ASC
 		`
 		args = []interface{}{userID, startDate, endDate}
 	}
@@ -163,13 +201,17 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 
 // GetLatestByUserID retrieves the most recent balance snapshot for each account for a user
 func (r *balanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userID string) ([]domain.BalanceSnapshot, error) {
+	// Use COALESCE(user_account_id::text, account_id::text) as the dedup key so that
+	// all physical accounts in a re-link chain share one key (user_account_id) and only
+	// the most recent snapshot (the active account) is returned. Legacy rows where
+	// user_account_id IS NULL fall back to account_id, preserving previous behaviour.
 	query := `
-		SELECT DISTINCT ON (account_id)
+		SELECT DISTINCT ON (COALESCE(user_account_id::text, account_id::text))
 		       id, account_id, user_account_id, user_id, current_balance, available_balance,
 		       currency_code, snapshot_at, source, created_at
 		FROM balance_snapshots
 		WHERE user_id = $1
-		ORDER BY account_id, snapshot_at DESC
+		ORDER BY COALESCE(user_account_id::text, account_id::text), snapshot_at DESC
 	`
 	return r.scanSnapshots(ctx, query, userID)
 }
