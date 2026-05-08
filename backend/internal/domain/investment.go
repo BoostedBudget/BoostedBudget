@@ -44,6 +44,7 @@ type Holding struct {
 	ID               string   `json:"id" db:"id"`
 	UserID           string   `json:"user_id" db:"user_id"`
 	AccountID        string   `json:"account_id" db:"account_id"`
+	UserAccountID    *string  `json:"user_account_id,omitempty" db:"user_account_id"` // Stable reference across Plaid re-links (Issue #1109)
 	SecurityID       string   `json:"security_id" db:"security_id"`
 	PlaidSecurityID  string   `json:"plaid_security_id,omitempty" db:"-"` // transient: used during sync to resolve SecurityID
 	Quantity         float64  `json:"quantity" db:"quantity"`
@@ -78,6 +79,7 @@ type InvestmentTransaction struct {
 	ID                           string   `json:"id" db:"id"`
 	UserID                       string   `json:"user_id" db:"user_id"`
 	AccountID                    string   `json:"account_id" db:"account_id"`
+	UserAccountID                *string  `json:"user_account_id,omitempty" db:"user_account_id"` // Stable reference across Plaid re-links (Issue #1109)
 	SecurityID                   *string  `json:"security_id,omitempty" db:"security_id"` // NULL for cash transactions
 	PlaidSecurityID              string   `json:"plaid_security_id,omitempty" db:"-"`     // transient: used during sync
 	PlaidInvestmentTransactionID string   `json:"plaid_investment_transaction_id" db:"plaid_investment_transaction_id"`

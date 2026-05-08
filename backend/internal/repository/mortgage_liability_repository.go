@@ -163,22 +163,26 @@ func (r *mortgageLiabilityRepository) ReplaceForAccount(ctx context.Context, acc
 
 // GetByUserID retrieves all mortgage liabilities for a user.
 func (r *mortgageLiabilityRepository) GetByUserID(ctx context.Context, userID string) ([]domain.MortgageLiability, error) {
+	// JOIN accounts to filter out replaced accounts — after a Plaid re-link the old
+	// account's status becomes 'replaced', so this join ensures only active liabilities appear.
 	query := `
-		SELECT id, user_id, account_id, account_number,
-			current_late_fee, escrow_balance, has_pmi, has_prepayment_penalty,
-			interest_rate_percentage, interest_rate_type,
-			last_payment_amount, last_payment_date,
-			loan_type_description, loan_term, maturity_date,
-			next_monthly_payment, next_payment_due_date,
-			origination_date, origination_principal_amount,
-			past_due_amount,
-			property_address_street, property_address_city,
-			property_address_region, property_address_postal_code, property_address_country,
-			ytd_interest_paid, ytd_principal_paid,
-			synced_at, created_at, updated_at
+		SELECT mortgage_liabilities.id, mortgage_liabilities.user_id, mortgage_liabilities.account_id, mortgage_liabilities.account_number,
+			mortgage_liabilities.current_late_fee, mortgage_liabilities.escrow_balance, mortgage_liabilities.has_pmi, mortgage_liabilities.has_prepayment_penalty,
+			mortgage_liabilities.interest_rate_percentage, mortgage_liabilities.interest_rate_type,
+			mortgage_liabilities.last_payment_amount, mortgage_liabilities.last_payment_date,
+			mortgage_liabilities.loan_type_description, mortgage_liabilities.loan_term, mortgage_liabilities.maturity_date,
+			mortgage_liabilities.next_monthly_payment, mortgage_liabilities.next_payment_due_date,
+			mortgage_liabilities.origination_date, mortgage_liabilities.origination_principal_amount,
+			mortgage_liabilities.past_due_amount,
+			mortgage_liabilities.property_address_street, mortgage_liabilities.property_address_city,
+			mortgage_liabilities.property_address_region, mortgage_liabilities.property_address_postal_code, mortgage_liabilities.property_address_country,
+			mortgage_liabilities.ytd_interest_paid, mortgage_liabilities.ytd_principal_paid,
+			mortgage_liabilities.synced_at, mortgage_liabilities.created_at, mortgage_liabilities.updated_at
 		FROM mortgage_liabilities
-		WHERE user_id = $1
-		ORDER BY account_id
+		JOIN accounts a ON a.id = mortgage_liabilities.account_id
+		WHERE mortgage_liabilities.user_id = $1
+		  AND a.status = 'active'
+		ORDER BY mortgage_liabilities.account_id
 	`
 
 	rows, err := r.db.Query(ctx, query, userID)
