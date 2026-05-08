@@ -55,6 +55,8 @@ func NewAccountChainResolver(accountRepo repository.AccountRepository) AccountCh
 // ListActiveByUser fetches all accounts for the user and filters to active only.
 // Legacy rows with a null user_account_id are included if their status is active.
 func (r *accountChainResolver) ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error) {
+	// NOTE: Requires GetByUserID to select the status column (fixed in Step 3 of #1109).
+	// After that fix, all returned accounts have Status populated correctly.
 	all, err := r.accountRepo.GetByUserID(ctx, userID)
 	if err != nil {
 		return nil, err

@@ -232,11 +232,13 @@ func TestAccountRepository_GetByUserID(t *testing.T) {
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
+		"status", "user_account_id", "replaced_by_id", "replaced_at",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "acc-1",
 		"Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&balance, &available, "USD",
+		"active", nil, nil, nil,
 		now, now,
 	)
 
@@ -244,6 +246,7 @@ func TestAccountRepository_GetByUserID(t *testing.T) {
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
 		       current_balance, available_balance, currency_code,
+		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
 		WHERE user_id = $1 AND status != 'expired'
@@ -257,6 +260,7 @@ func TestAccountRepository_GetByUserID(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, accounts, 1)
 	assert.Equal(t, userID, accounts[0].UserID)
+	assert.Equal(t, domain.AccountStatusActive, accounts[0].Status)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -360,24 +364,28 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
+		"status", "user_account_id", "replaced_by_id", "replaced_at",
 		"created_at", "updated_at", "institution_name",
 	}).
 		AddRow(
 			uuid.New().String(), linkedItemID1, userID, "plaid-acc-1",
 			"Chase Checking", strPtr("Chase Total Checking®"), "depository", strPtr("checking"), strPtr("1234"),
 			&bal1, &avail1, "USD",
+			"active", nil, nil, nil,
 			time.Now(), time.Now(), "Chase",
 		).
 		AddRow(
 			uuid.New().String(), linkedItemID1, userID, "plaid-acc-2",
 			"Chase Savings", strPtr("Chase Savings℠"), "depository", strPtr("savings"), strPtr("5678"),
 			&bal2, &avail2, "USD",
+			"active", nil, nil, nil,
 			time.Now(), time.Now(), "Chase",
 		).
 		AddRow(
 			uuid.New().String(), linkedItemID2, userID, "plaid-acc-3",
 			"Wells Fargo Checking", nil, "depository", strPtr("checking"), strPtr("9012"),
 			&bal3, &avail3, "USD",
+			"active", nil, nil, nil,
 			time.Now(), time.Now(), "Wells Fargo",
 		)
 
@@ -385,6 +393,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, a.currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
 		       a.created_at, a.updated_at, l.institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -434,6 +443,7 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
+		"status", "user_account_id", "replaced_by_id", "replaced_at",
 		"created_at", "updated_at", "institution_name",
 	})
 
@@ -441,6 +451,7 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, a.currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
 		       a.created_at, a.updated_at, l.institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -477,11 +488,13 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
+		"status", "user_account_id", "replaced_by_id", "replaced_at",
 		"created_at", "updated_at", "institution_name",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "plaid-acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&bal, &bal, "USD",
+		"active", nil, nil, nil,
 		time.Now(), time.Now(), "Chase",
 	)
 	// Note: expired account not in rows — DB filters it via WHERE a.status != 'expired'
@@ -490,6 +503,7 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, a.currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
 		       a.created_at, a.updated_at, l.institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
