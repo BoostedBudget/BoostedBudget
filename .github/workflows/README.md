@@ -105,7 +105,7 @@ Deploys to production Fly.io environment.
 ## Environment Variables
 
 ```yaml
-GO_VERSION: '1.26.2'    # Go version for backend tests
+GO_VERSION: '1.26.3'    # Go version for backend tests
 REGISTRY: 'ghcr.io'     # Container registry
 ```
 
