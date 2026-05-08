@@ -10,7 +10,7 @@
 import {
   useGetAccounts,
 } from '@boostedbudget/api-client/endpoints/accounts/accounts'
-import type { GetAccountsParams } from '@boostedbudget/api-client/models'
+import type { GetAccountsOutputBody, GetAccountsParams } from '@boostedbudget/api-client/models'
 import type { Account } from '@boostedbudget/api-client/models'
 
 // ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ export interface UseActiveAccountsResult {
   isLoading: boolean
   isError: boolean
   error: Error | null
-  refetch: () => void
+  refetch: () => Promise<void>
 }
 
 /**
@@ -72,13 +72,13 @@ export interface UseActiveAccountsResult {
 export function useActiveAccounts(opts?: GetAccountsParams): UseActiveAccountsResult {
   const query = useGetAccounts(opts, undefined)
 
-  const rawAccounts = (query.data as { accounts?: Account[] } | undefined)?.accounts
+  const rawAccounts = (query.data as GetAccountsOutputBody | undefined)?.accounts ?? undefined
 
   return {
-    accounts: rawAccounts !== undefined ? filterActiveAccounts(rawAccounts) : undefined,
+    accounts: rawAccounts !== undefined ? filterActiveAccounts(rawAccounts ?? []) : undefined,
     isLoading: query.isLoading,
     isError: query.isError,
     error: query.error as Error | null,
-    refetch: query.refetch as () => void,
+    refetch: () => query.refetch().then(() => void 0),
   }
 }

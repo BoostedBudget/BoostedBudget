@@ -239,4 +239,20 @@ describe('useActiveAccounts', () => {
 
     expect(result.current.accounts).toHaveLength(0)
   })
+  it("returns undefined accounts when backend returns null accounts", () => {
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: null, total_count: 0 },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+
+    const { result } = renderHook(() => useActiveAccounts(), {
+      wrapper: createWrapper(),
+    })
+
+    expect(result.current.accounts).toBeUndefined()
+  })
+
 })
