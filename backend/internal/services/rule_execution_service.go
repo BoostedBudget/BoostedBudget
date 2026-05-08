@@ -5,6 +5,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -388,13 +389,14 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 		Status:          domain.SuggestionStatusPending,
 	}
 
-	// Issue #1109: Resolve stable user_account_id to current active account_id when available
-	// (backfilled by migration 000070). This ensures suggestions point to live accounts after re-links.
+	// Issue #1109: Resolve stable user_account_id → current active account_id (backfilled by migration 000070).
 	if transfer.FromUserAccountID != "" {
 		suggestion.FromUserAccountID = ptrString(transfer.FromUserAccountID)
 		if s.chainResolver != nil {
 			if activeFromID, err := s.chainResolver.ResolveActiveID(ctx, transfer.FromUserAccountID); err == nil {
 				suggestion.FromAccountID = ptrString(activeFromID)
+			} else if !errors.Is(err, ErrNoActiveAccount) {
+				slog.Warn("chain resolve failed for from_account; using raw id", "error", err)
 			}
 		}
 	}
@@ -403,6 +405,8 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 		if s.chainResolver != nil {
 			if activeToID, err := s.chainResolver.ResolveActiveID(ctx, transfer.ToUserAccountID); err == nil {
 				suggestion.ToAccountID = ptrString(activeToID)
+			} else if !errors.Is(err, ErrNoActiveAccount) {
+				slog.Warn("chain resolve failed for to_account; using raw id", "error", err)
 			}
 		}
 	}
@@ -607,27 +611,34 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 	// Create reason string
 	reason := fmt.Sprintf("Savings contribution to '%s' from rule '%s'", goal.Name, rule.Name)
 
-	// Issue #1109: Resolve savings goal's account to current active account_id via stable user_account_id
+	// Issue #1109: Resolve savings goal's account to current active account_id via stable user_account_id.
 	toAccountID := goal.AccountID
 	if goal.UserAccountID != nil && *goal.UserAccountID != "" && s.chainResolver != nil {
 		if activeID, err := s.chainResolver.ResolveActiveID(ctx, *goal.UserAccountID); err == nil {
 			toAccountID = activeID
+			observability.AccountsReplacedFiltered.WithLabelValues("automation").Inc()
+		} else if !errors.Is(err, ErrNoActiveAccount) {
+			slog.Warn("chain resolve failed for savings goal account; using raw id", "error", err)
 		}
 	}
 
-	// Create transfer suggestion from source account to savings goal's linked account
+	// Create transfer suggestion from source account to savings goal's linked account.
 	suggestion := &domain.TransferSuggestion{
 		ID:              uuid.New().String(),
 		UserID:          rule.UserID,
 		RuleID:          ptrString(rule.ID),
 		RuleExecutionID: ptrString(executionID),
 		FromAccountID:   ptrString(savingsGoalAction.FromAccountID),
-		ToAccountID:     ptrString(toAccountID), // Resolved to active account (Issue #1109)
+		ToAccountID:     ptrString(toAccountID),
 		Amount:          amount,
 		CurrencyCode:    "USD",
 		Reason:          &reason,
 		Source:          domain.SuggestionSourceRule,
 		Status:          domain.SuggestionStatusPending,
+	}
+	// Propagate stable user_account_id so monitoring can re-resolve post-relink.
+	if goal.UserAccountID != nil {
+		suggestion.ToUserAccountID = goal.UserAccountID
 	}
 
 	if err := s.suggestionRepo.Create(ctx, suggestion); err != nil {

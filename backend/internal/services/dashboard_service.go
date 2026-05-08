@@ -221,7 +221,7 @@ func (s *dashboardService) GetBalanceHistory(ctx context.Context, userID string,
 // GetAccountTypes returns available account types for the user
 func (s *dashboardService) GetAccountTypes(ctx context.Context, userID string) (*domain.AccountTypesResponse, error) {
 	// Canary counter: active-only query filters out any replaced accounts (Issue #1109).
-	observability.AccountsReplacedFiltered.WithLabelValues("account_types").Inc()
+	observability.AccountsReplacedFiltered.WithLabelValues("balance_summary").Inc()
 
 	// Get latest snapshots for each account
 	snapshots, err := s.balanceSnapshotRepo.GetLatestByUserID(ctx, userID)
