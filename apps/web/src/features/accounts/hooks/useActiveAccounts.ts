@@ -7,11 +7,14 @@
  * so every consumer stays consistent (Issue #1109).
  */
 
+import { useEffect } from 'react'
 import {
   useGetAccounts,
 } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import type { GetAccountsOutputBody, GetAccountsParams } from '@boostedbudget/api-client/models'
 import type { Account } from '@boostedbudget/api-client/models'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
+import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 
 // ---------------------------------------------------------------------------
 // Pure helpers (usable inside other hooks that already hold an accounts array)
@@ -71,11 +74,22 @@ export interface UseActiveAccountsResult {
  */
 export function useActiveAccounts(opts?: GetAccountsParams): UseActiveAccountsResult {
   const query = useGetAccounts(opts, undefined)
+  const trackEvent = useTrackEvent()
 
   const rawAccounts = (query.data as GetAccountsOutputBody | undefined)?.accounts ?? undefined
+  const filteredAccounts = rawAccounts !== undefined ? filterActiveAccounts(rawAccounts ?? []) : undefined
+
+  // Fire a PostHog event when replaced accounts are detected so we can confirm
+  // the filter is working in production after the Issue #1109 deploy.
+  const excludedCount = (rawAccounts?.length ?? 0) - (filteredAccounts?.length ?? 0)
+  useEffect(() => {
+    if (excludedCount > 0) {
+      trackEvent(ANALYTICS_EVENTS.ACCOUNT_REPLACED_FILTERED, { excluded_count: excludedCount })
+    }
+  }, [excludedCount, trackEvent])
 
   return {
-    accounts: rawAccounts !== undefined ? filterActiveAccounts(rawAccounts ?? []) : undefined,
+    accounts: filteredAccounts,
     isLoading: query.isLoading,
     isError: query.isError,
     error: query.error as Error | null,

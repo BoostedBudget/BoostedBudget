@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // AnalyticsRepository defines the interface for analytics data access.
@@ -332,6 +333,8 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 // GetSpendingByCategory returns expense totals grouped by effective primary category.
 // When filters.Category is non-empty, returns the detailed subcategory breakdown.
 func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+	// Canary counter: the JOIN uses a.status = 'active', filtering replaced accounts (Issue #1109).
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 	isDrillDown := filters.Category != ""
 	catExpr := effectiveCategoryExpr(isDrillDown)
 

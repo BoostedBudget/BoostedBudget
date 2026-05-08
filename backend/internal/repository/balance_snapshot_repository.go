@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 var (
@@ -104,6 +105,8 @@ func (r *balanceSnapshotRepository) GetByUserIDAndDateRange(ctx context.Context,
 
 // GetAggregatedHistory retrieves aggregated balance history for dashboard charts
 func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
+	// Canary counter: every call applies the re-link chain CTE dedup (Issue #1109).
+	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
 	var query string
 	var args []interface{}
 
@@ -201,6 +204,8 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 
 // GetLatestByUserID retrieves the most recent balance snapshot for each account for a user
 func (r *balanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userID string) ([]domain.BalanceSnapshot, error) {
+	// Canary counter: every call uses the re-link chain dedup key (Issue #1109).
+	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
 	// Use COALESCE(user_account_id::text, account_id::text) as the dedup key so that
 	// all physical accounts in a re-link chain share one key (user_account_id) and only
 	// the most recent snapshot (the active account) is returned. Legacy rows where

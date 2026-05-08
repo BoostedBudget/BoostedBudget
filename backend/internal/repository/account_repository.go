@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 var (
@@ -28,6 +29,13 @@ type FingerprintOwnership struct {
 	LinkedItemID    string
 	ItemStatus      domain.LinkedItemStatus
 	StatusChangedAt *time.Time
+}
+
+// AccountFilterOptions configures filtering for GetAccountsWithInstitutionFiltered (Issue #1109).
+type AccountFilterOptions struct {
+	IncludeHidden   bool   // if true, includes hidden accounts
+	IncludeReplaced bool   // if true, returns accounts regardless of status (not just active)
+	UserAccountID   string // if non-empty, filters to accounts sharing this user_account_id
 }
 
 // AccountRepository defines the interface for account data access
@@ -79,10 +87,9 @@ type AccountRepository interface {
 	// Returns ErrAccountNotFound if any account doesn't exist or user doesn't own it.
 	UpdateDisplayOrders(ctx context.Context, userID string, orders []domain.AccountOrder) error
 
-	// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and hidden filtering.
-	// If includeHidden is false, only returns accounts where is_hidden = false.
+	// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and flexible filtering.
 	// Results are sorted by display_order ASC (nulls last), then created_at ASC.
-	GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error)
+	GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error)
 
 	// GetByUserAccountAndStatus retrieves accounts by user_account_id and status.
 	// This is used for querying accounts across re-links using stable user_account reference.
@@ -676,12 +683,29 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 	return tx.Commit(ctx)
 }
 
-// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and hidden filtering.
+// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and flexible filtering.
 // Issue #679, #680: Also includes linked_item status to show 'disconnected' when subscription expires.
-func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
+// Issue #1109: Added IncludeReplaced and UserAccountID filter options.
+func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error) {
+	// Canary counter: every active-only call filters out replaced accounts (Issue #1109).
+	if !opts.IncludeReplaced {
+		observability.AccountsReplacedFiltered.WithLabelValues("accounts_list").Inc()
+	}
 	hiddenClause := ""
-	if !includeHidden {
+	if !opts.IncludeHidden {
 		hiddenClause = " AND a.is_hidden = FALSE"
+	}
+
+	statusClause := " AND a.status = 'active'"
+	if opts.IncludeReplaced {
+		statusClause = ""
+	}
+
+	userAccountClause := ""
+	args := []any{userID}
+	if opts.UserAccountID != "" {
+		args = append(args, opts.UserAccountID)
+		userAccountClause = " AND a.user_account_id = $2"
 	}
 
 	query := `
@@ -694,10 +718,10 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status = 'active'` + hiddenClause + `
+		WHERE a.user_id = $1` + statusClause + hiddenClause + userAccountClause + `
 		ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC`
 
-	rows, err := r.db.Query(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
