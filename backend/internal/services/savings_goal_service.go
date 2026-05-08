@@ -87,9 +87,13 @@ func (s *savingsGoalService) CreateGoal(ctx context.Context, userID string, req 
 		return nil, err
 	}
 
-	// Validate account ownership
-	if err := s.validateAccountOwnership(ctx, userID, req.AccountID); err != nil {
+	// Issue #1109: Validate account ownership and capture stable UserAccountID for re-link stability.
+	account, err := s.validateAccountOwnershipWithAccount(ctx, userID, req.AccountID)
+	if err != nil {
 		return nil, err
+	}
+	if account != nil && account.UserAccountID != nil {
+		goal.UserAccountID = account.UserAccountID
 	}
 
 	// Save to database
@@ -237,17 +241,24 @@ func (s *savingsGoalService) DeleteGoal(ctx context.Context, userID, goalID stri
 }
 
 // validateAccountOwnership checks that the user owns the specified account.
-func (s *savingsGoalService) validateAccountOwnership(ctx context.Context, userID, accountID string) error {
+// validateAccountOwnershipWithAccount checks that accountID belongs to userID and returns
+// the matched account so the caller can capture its UserAccountID. (Issue #1109)
+func (s *savingsGoalService) validateAccountOwnershipWithAccount(ctx context.Context, userID, accountID string) (*domain.Account, error) {
 	accounts, err := s.accountRepo.GetByUserID(ctx, userID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	for _, account := range accounts {
-		if account.ID == accountID {
-			return nil
+	for i := range accounts {
+		if accounts[i].ID == accountID {
+			return &accounts[i], nil
 		}
 	}
 
-	return errors.New("account not found or does not belong to user")
+	return nil, errors.New("account not found or does not belong to user")
+}
+
+func (s *savingsGoalService) validateAccountOwnership(ctx context.Context, userID, accountID string) error {
+	_, err := s.validateAccountOwnershipWithAccount(ctx, userID, accountID)
+	return err
 }

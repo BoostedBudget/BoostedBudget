@@ -77,7 +77,7 @@ export function useActiveAccounts(opts?: GetAccountsParams): UseActiveAccountsRe
   const trackEvent = useTrackEvent()
 
   const rawAccounts = (query.data as GetAccountsOutputBody | undefined)?.accounts ?? undefined
-  const filteredAccounts = rawAccounts !== undefined ? filterActiveAccounts(rawAccounts ?? []) : undefined
+  const filteredAccounts = rawAccounts !== undefined ? filterActiveAccounts(rawAccounts) : undefined
 
   // Fire a PostHog event when replaced accounts are detected so we can confirm
   // the filter is working in production after the Issue #1109 deploy.

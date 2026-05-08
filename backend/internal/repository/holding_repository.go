@@ -171,8 +171,11 @@ func (r *holdingRepository) GetByAccountID(ctx context.Context, accountID string
 		holdings = append(holdings, h)
 	}
 
-	if holdings == nil {
-		holdings = []domain.Holding{}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	if len(holdings) == 0 {
+		return []domain.Holding{}, nil
 	}
 	return holdings, nil
 }
@@ -216,8 +219,11 @@ func (r *holdingRepository) GetByUserAccountID(ctx context.Context, userAccountI
 		holdings = append(holdings, h)
 	}
 
-	if holdings == nil {
-		holdings = []domain.Holding{}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	if len(holdings) == 0 {
+		return []domain.Holding{}, nil
 	}
 	return holdings, nil
 }

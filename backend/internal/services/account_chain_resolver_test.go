@@ -71,7 +71,7 @@ func (m *mockAccountRepositoryForChainResolver) Update(ctx context.Context, acco
 func (m *mockAccountRepositoryForChainResolver) UpdateDisplayOrders(ctx context.Context, userID string, orders []domain.AccountOrder) error {
 	return nil
 }
-func (m *mockAccountRepositoryForChainResolver) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
+func (m *mockAccountRepositoryForChainResolver) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts repository.AccountFilterOptions) ([]domain.Account, error) {
 	return nil, nil
 }
 func (m *mockAccountRepositoryForChainResolver) UpdateStatus(ctx context.Context, accountID, userID string, status domain.AccountStatus, replacedByID *string) error {
