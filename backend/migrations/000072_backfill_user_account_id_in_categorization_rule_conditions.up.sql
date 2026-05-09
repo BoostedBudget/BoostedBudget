@@ -71,13 +71,13 @@ SET conditions = (
                         COALESCE(
                             (SELECT to_jsonb(a.user_account_id::text)
                              FROM accounts a
-                             WHERE a.id::text = elem#>>'{}'
+                             WHERE a.id::text = elem_text
                                AND a.user_account_id IS NOT NULL
                              LIMIT 1),
-                            elem
+                            to_jsonb(elem_text)
                         )
                     ), '[]'::jsonb)
-                    FROM jsonb_array_elements(cond->'value') AS elem
+                    FROM jsonb_array_elements_text(cond->'value') AS elem_text
                 )
             )
             ELSE cond
@@ -92,9 +92,9 @@ WHERE EXISTS (
       AND jsonb_typeof(c->'value') = 'array'
       AND EXISTS (
           SELECT 1
-          FROM jsonb_array_elements(c->'value') AS v,
+          FROM jsonb_array_elements_text(c->'value') AS v_text,
                accounts a
-          WHERE a.id::text = v#>>'{}'
+          WHERE a.id::text = v_text
             AND a.user_account_id IS NOT NULL
       )
 );

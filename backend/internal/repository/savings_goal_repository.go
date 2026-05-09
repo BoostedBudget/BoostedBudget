@@ -192,8 +192,8 @@ func (r *savingsGoalRepository) Update(ctx context.Context, goal *domain.Savings
 		UPDATE savings_goals
 		SET name = $1, description = $2, target_amount = $3, current_amount = $4,
 			currency_code = $5, account_id = $6, deadline = $7, is_completed = $8,
-			completed_at = $9, updated_at = $10
-		WHERE id = $11 AND user_id = $12
+			completed_at = $9, updated_at = $10, user_account_id = $11
+		WHERE id = $12 AND user_id = $13
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -207,6 +207,7 @@ func (r *savingsGoalRepository) Update(ctx context.Context, goal *domain.Savings
 		goal.IsCompleted,
 		goal.CompletedAt,
 		goal.UpdatedAt,
+		goal.UserAccountID,
 		goal.ID,
 		goal.UserID,
 	)

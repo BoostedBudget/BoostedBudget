@@ -406,6 +406,48 @@ VALUES
     (gen_random_uuid(), '00000000-0000-0000-0000-000000000022'::uuid, 'txn-005', 100.00, '2025-11-01', 'Transfer from Checking', 'TRANSFER_IN', 'TRANSFER_IN_ACCOUNT_TRANSFER', false, NOW(), NOW()),
     (gen_random_uuid(), '00000000-0000-0000-0000-000000000023'::uuid, 'txn-006', -200.00, '2025-11-04', 'Restaurant', 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANTS', false, NOW(), NOW()),
     (gen_random_uuid(), '00000000-0000-0000-0000-000000000023'::uuid, 'txn-007', -75.00, '2025-11-06', 'Utilities', 'RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY', false, NOW(), NOW());
+
+-- User accounts (chain transparency, #1109)
+INSERT INTO user_accounts (id, user_id, institution_id, mask, primary_type, created_at, updated_at)
+VALUES
+    ('00000000-0000-0000-0000-000000000031'::uuid, '00000000-0000-0000-0000-000000000001'::uuid, 'ins-test-001', '1234', 'depository', NOW(), NOW()),
+    ('00000000-0000-0000-0000-000000000032'::uuid, '00000000-0000-0000-0000-000000000002'::uuid, 'ins-test-002', '5678', 'depository', NOW(), NOW());
+
+-- Link accounts for migration 000070/000072 backfill
+UPDATE accounts SET user_account_id = '00000000-0000-0000-0000-000000000031'::uuid WHERE id = '00000000-0000-0000-0000-000000000021'::uuid;
+UPDATE accounts SET user_account_id = '00000000-0000-0000-0000-000000000032'::uuid WHERE id = '00000000-0000-0000-0000-000000000022'::uuid;
+
+-- Migration 000072: string-valued account_id condition
+INSERT INTO categorization_rules (id, user_id, name, conditions, created_at, updated_at)
+VALUES (
+    '00000000-0000-0000-0000-000000000041'::uuid,
+    '00000000-0000-0000-0000-000000000001'::uuid,
+    'Test Rule String Condition',
+    '[{"type": "account_id", "operator": "equals", "value": "00000000-0000-0000-0000-000000000021"}]'::jsonb,
+    NOW(), NOW()
+);
+
+-- Migration 000072: array-valued account_id condition
+INSERT INTO categorization_rules (id, user_id, name, conditions, created_at, updated_at)
+VALUES (
+    '00000000-0000-0000-0000-000000000042'::uuid,
+    '00000000-0000-0000-0000-000000000001'::uuid,
+    'Test Rule Array Condition',
+    '[{"type": "account_id", "operator": "in", "value": ["00000000-0000-0000-0000-000000000021"]}]'::jsonb,
+    NOW(), NOW()
+);
+
+-- Migration 000070: transfer_suggestion rule with raw account IDs
+INSERT INTO rules (id, user_id, name, rule_type, trigger_config, actions, created_at, updated_at)
+VALUES (
+    '00000000-0000-0000-0000-000000000051'::uuid,
+    '00000000-0000-0000-0000-000000000001'::uuid,
+    'Test Transfer Suggestion Rule',
+    'transfer_suggestion',
+    '{"type": "event", "event": "transaction_created", "filters": {"account_id": "00000000-0000-0000-0000-000000000021"}}'::jsonb,
+    '{"transfer": {"from_account_id": "00000000-0000-0000-0000-000000000021", "to_account_id": "00000000-0000-0000-0000-000000000022", "amount_type": "fixed", "amount": 100}}'::jsonb,
+    NOW(), NOW()
+);
 EOF
 
     if [ $? -ne 0 ]; then
@@ -471,11 +513,59 @@ EOF
         fi
     done
 
+    # Verify migrations 000070 and 000072 backfilled user_account_id into JSONB columns (#1109)
+    echo ""
+    log_info "Verifying JSONB backfill in migrations 000070/000072..."
+    local ua_id_1="00000000-0000-0000-0000-000000000031"
+    local ua_id_2="00000000-0000-0000-0000-000000000032"
+
+    # Migration 000072: categorization_rules conditions (string & array)
+    local cat_rule_string=$(run_psql "SELECT conditions->0->>'value' FROM categorization_rules WHERE id = '00000000-0000-0000-0000-000000000041'")
+    if [ "$cat_rule_string" != "$ua_id_1" ]; then
+        fail_test "Migration 000072 Step 1 failed: string condition value should be '$ua_id_1', got '$cat_rule_string'"
+        data_preserved=false
+    else
+        log_success "Migration 000072 Step 1: string condition backfilled"
+    fi
+
+    local cat_rule_array=$(run_psql "SELECT conditions->0->'value'->>0 FROM categorization_rules WHERE id = '00000000-0000-0000-0000-000000000042'")
+    if [ "$cat_rule_array" != "$ua_id_1" ]; then
+        fail_test "Migration 000072 Step 2 failed: array condition should be '$ua_id_1', got '$cat_rule_array'"
+        data_preserved=false
+    else
+        log_success "Migration 000072 Step 2: array condition backfilled"
+    fi
+
+    # Migration 000070: rules actions and trigger_config
+    local transfer_from=$(run_psql "SELECT actions->'transfer'->>'from_user_account_id' FROM rules WHERE id = '00000000-0000-0000-0000-000000000051'")
+    if [ "$transfer_from" != "$ua_id_1" ]; then
+        fail_test "Migration 000070 Step 1 failed: from_user_account_id should be '$ua_id_1', got '$transfer_from'"
+        data_preserved=false
+    else
+        log_success "Migration 000070 Step 1: from_user_account_id backfilled"
+    fi
+
+    local transfer_to=$(run_psql "SELECT actions->'transfer'->>'to_user_account_id' FROM rules WHERE id = '00000000-0000-0000-0000-000000000051'")
+    if [ "$transfer_to" != "$ua_id_2" ]; then
+        fail_test "Migration 000070 Step 2 failed: to_user_account_id should be '$ua_id_2', got '$transfer_to'"
+        data_preserved=false
+    else
+        log_success "Migration 000070 Step 2: to_user_account_id backfilled"
+    fi
+
+    local trigger_ua=$(run_psql "SELECT trigger_config->'filters'->>'user_account_id' FROM rules WHERE id = '00000000-0000-0000-0000-000000000051'")
+    if [ "$trigger_ua" != "$ua_id_1" ]; then
+        fail_test "Migration 000070 Step 3 failed: trigger_config user_account_id should be '$ua_id_1', got '$trigger_ua'"
+        data_preserved=false
+    else
+        log_success "Migration 000070 Step 3: trigger_config user_account_id backfilled"
+    fi
+
     if [ "$data_preserved" = true ]; then
-        pass_test "DATA INTEGRITY TEST PASSED - All data preserved after re-applying migrations"
+        pass_test "DATA INTEGRITY TEST PASSED - All data preserved and JSONB backfills verified"
         return 0
     else
-        fail_test "DATA INTEGRITY TEST FAILED - Data was lost or corrupted"
+        fail_test "DATA INTEGRITY TEST FAILED - Data was lost, corrupted, or JSONB backfill assertions failed"
         return 1
     fi
 }

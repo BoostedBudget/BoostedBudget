@@ -71,18 +71,30 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 		return nil, fmt.Errorf("failed to get accounts: %w", err)
 	}
 
-	// Build account map for lookups
+	// Build account map keyed by both account.ID and account.UserAccountID so that
+	// snapshots carrying an old replaced account_id still resolve via the chain key.
 	accountMap := make(map[string]domain.Account)
 	for _, account := range accounts {
 		accountMap[account.ID] = account
+		if account.UserAccountID != nil && *account.UserAccountID != "" {
+			accountMap[*account.UserAccountID] = account
+		}
 	}
 
 	// Group snapshots by account type
 	byType := make(map[string]*domain.AccountTypeBalance)
 	var totalBalance float64
 
+	// chainKey returns the preferred lookup key: user_account_id if available, else account_id.
+	chainKey := func(s domain.BalanceSnapshot) string {
+		if s.UserAccountID != nil && *s.UserAccountID != "" {
+			return *s.UserAccountID
+		}
+		return s.AccountID
+	}
+
 	for _, snapshot := range snapshots {
-		account, exists := accountMap[snapshot.AccountID]
+		account, exists := accountMap[chainKey(snapshot)]
 		if !exists {
 			continue // Skip if account not found
 		}
@@ -235,17 +247,26 @@ func (s *dashboardService) GetAccountTypes(ctx context.Context, userID string) (
 		return nil, fmt.Errorf("failed to get accounts: %w", err)
 	}
 
-	// Build account map for lookups
 	accountMap := make(map[string]domain.Account)
 	for _, account := range accounts {
 		accountMap[account.ID] = account
+		if account.UserAccountID != nil && *account.UserAccountID != "" {
+			accountMap[*account.UserAccountID] = account
+		}
+	}
+
+	chainKey := func(s domain.BalanceSnapshot) string {
+		if s.UserAccountID != nil && *s.UserAccountID != "" {
+			return *s.UserAccountID
+		}
+		return s.AccountID
 	}
 
 	// Aggregate by account type
 	typeMap := make(map[string]*domain.AccountTypeInfo)
 
 	for _, snapshot := range snapshots {
-		account, exists := accountMap[snapshot.AccountID]
+		account, exists := accountMap[chainKey(snapshot)]
 		if !exists {
 			continue
 		}
@@ -315,10 +336,19 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 		return nil, fmt.Errorf("failed to get accounts: %w", err)
 	}
 
-	// Build account map for lookups
 	accountMap := make(map[string]domain.Account)
 	for _, account := range accounts {
 		accountMap[account.ID] = account
+		if account.UserAccountID != nil && *account.UserAccountID != "" {
+			accountMap[*account.UserAccountID] = account
+		}
+	}
+
+	chainKey := func(s domain.BalanceSnapshot) string {
+		if s.UserAccountID != nil && *s.UserAccountID != "" {
+			return *s.UserAccountID
+		}
+		return s.AccountID
 	}
 
 	// Initialize category structure
@@ -326,7 +356,7 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 	var totalAssets, totalLiabilities float64
 
 	for _, snapshot := range snapshots {
-		account, exists := accountMap[snapshot.AccountID]
+		account, exists := accountMap[chainKey(snapshot)]
 		if !exists {
 			continue // Skip if account not found
 		}

@@ -4789,12 +4789,12 @@ paths:
           schema:
             description: If 'true', equivalent to status=all (backward-compat alias)
             type: string
-        - description: If set, filter to accounts belonging to this user_account_id chain
+        - description: When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set.
           explode: false
           in: query
           name: user_account_id
           schema:
-            description: If set, filter to accounts belonging to this user_account_id chain
+            description: When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set.
             type: string
       responses:
         "200":

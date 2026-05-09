@@ -283,7 +283,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestTransactionRepository_GetByAccountID_Success tests retrieving transactions by account
+// TestTransactionRepository_GetByAccountID_Success tests retrieving transactions by account via chain-aware subquery (Issue #1109).
 func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -310,8 +310,8 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 		)
 
-	// Expect SELECT query
-	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE account_id").
+	// Expect chain-aware SELECT query (subquery expands via user_account_id)
+	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE .+user_account_id").
 		WithArgs(accountID).
 		WillReturnRows(rows)
 
@@ -319,6 +319,47 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, transactions, 1)
 	assert.Equal(t, accountID, transactions[0].AccountID)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_GetByAccountID_ChainAware verifies chain-aware subquery returns pre-relink transactions from replaced accounts (Issue #1109, W3-G4).
+func TestTransactionRepository_GetByAccountID_ChainAware(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	activeAccountID := "account-active-456"
+	replacedAccountID := "account-replaced-123"
+
+	extID := "plaid_tx_chain"
+	now := time.Now()
+
+	// Transaction with replaced account_id (simulates user_account_id subquery expansion)
+	rows := pgxmock.NewRows(transactionSelectColumns).
+		AddRow(
+			"tx-chain-1", "user-1", replacedAccountID, "item-1",
+			"plaid", &extID, nil,
+			-99.00, now, nil, "Pre-Relink Transaction", nil,
+			nil, nil, nil, nil,
+			nil, false, nil, now, now,
+			nil, nil,
+			nil, nil, nil, nil, nil, nil,
+		)
+
+	// Chain subquery includes replaced account in result
+	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE .+user_account_id").
+		WithArgs(activeAccountID).
+		WillReturnRows(rows)
+
+	transactions, err := repo.GetByAccountID(ctx, activeAccountID)
+	assert.NoError(t, err)
+	assert.Len(t, transactions, 1)
+	assert.Equal(t, replacedAccountID, transactions[0].AccountID)
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
@@ -492,7 +533,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 		)
 
-	// Issue #1109: WHERE clause uses chain-expanded subquery (account_id arg used twice).
+	// Chain-expanded WHERE clause (account_id appears twice for subquery)
 	mock.ExpectQuery(`SELECT (.+) FROM transactions WHERE user_id(.+)AND \(user_account_id`).
 		WithArgs(userID, accountID, accountID, limit, offset).
 		WillReturnRows(rows)
@@ -506,9 +547,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestTransactionRepository_ChainExpand_AccountID verifies that filtering by an active
-// account_id returns pre-relink transactions stored under the replaced account.
-// Issue #1109: buildWhereClause must use user_account_id subquery to chain-expand.
+// TestTransactionRepository_ChainExpand_AccountID verifies active account_id filter returns pre-relink transactions from replaced accounts (Issue #1109).
 func TestTransactionRepository_ChainExpand_AccountID(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -531,7 +570,6 @@ func TestTransactionRepository_ChainExpand_AccountID(t *testing.T) {
 	extID := "plaid_tx_prerelink"
 	now := time.Now()
 
-	// The pre-relink transaction carries the replaced account_id.
 	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			"tx-prerelink-1", userID, replacedAccountID, "item-1",
@@ -543,8 +581,7 @@ func TestTransactionRepository_ChainExpand_AccountID(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 		)
 
-	// Issue #1109: WHERE clause must use the chain-expanded subquery pattern.
-	// Two args for activeAccountID: once in subquery lookup, once in fallback.
+	// Chain-expanded WHERE clause with activeAccountID twice (subquery + fallback)
 	mock.ExpectQuery(`SELECT (.+) FROM transactions WHERE user_id(.+)AND \(user_account_id = \(SELECT user_account_id FROM accounts WHERE id = \$\d+`).
 		WithArgs(userID, activeAccountID, activeAccountID, limit, offset).
 		WillReturnRows(rows)
@@ -557,8 +594,7 @@ func TestTransactionRepository_ChainExpand_AccountID(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestTransactionRepository_ChainExpand_AccountIDs verifies chain-expansion for the
-// multi-value account_ids filter. Issue #1109.
+// TestTransactionRepository_ChainExpand_AccountIDs verifies chain-expansion for multi-value account_ids filter (Issue #1109).
 func TestTransactionRepository_ChainExpand_AccountIDs(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -574,7 +610,6 @@ func TestTransactionRepository_ChainExpand_AccountIDs(t *testing.T) {
 	limit := 20
 	offset := 0
 
-	// Filter by multiple active account IDs
 	filters := domain.TransactionFilters{
 		AccountIDs: []string{activeAccountID1, activeAccountID2},
 	}
@@ -593,7 +628,7 @@ func TestTransactionRepository_ChainExpand_AccountIDs(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 		)
 
-	// Issue #1109: WHERE clause uses IN-based subquery. Args appear twice (subquery + fallback).
+	// Chain-expanded WHERE with IN subquery (args appear twice)
 	mock.ExpectQuery(`SELECT (.+) FROM transactions WHERE user_id(.+)AND \(user_account_id IN \(SELECT user_account_id FROM accounts WHERE id IN`).
 		WithArgs(userID, activeAccountID1, activeAccountID2, activeAccountID1, activeAccountID2, limit, offset).
 		WillReturnRows(rows)

@@ -593,7 +593,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
         return (
           <SearchableSelect
             options={accounts.map(acc => ({
-              value: acc.id,
+              value: acc.user_account_id ?? acc.id,
               label: acc.name,
               sublabel: `${acc.type}${acc.mask ? ` ••••${acc.mask}` : ''}`
             }))}
