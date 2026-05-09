@@ -8,6 +8,7 @@
  */
 
 import { useEffect } from 'react'
+import { useUser } from '@clerk/react-router'
 import {
   useGetAccounts,
 } from '@boostedbudget/api-client/endpoints/accounts/accounts'
@@ -73,27 +74,33 @@ export interface UseActiveAccountsResult {
  * ```
  */
 export function useActiveAccounts(opts?: GetAccountsParams): UseActiveAccountsResult {
+  const { user, isLoaded: clerkLoaded } = useUser()
   const query = useGetAccounts(opts, undefined)
   const trackEvent = useTrackEvent()
 
-  const rawAccounts = (query.data as GetAccountsOutputBody | undefined)?.accounts ?? undefined
-  const filteredAccounts = rawAccounts !== undefined ? filterActiveAccounts(rawAccounts) : undefined
+  const data = query.data as GetAccountsOutputBody | undefined
+  const rawAccounts = data?.accounts
+  const filteredAccounts = rawAccounts != null ? filterActiveAccounts(rawAccounts) : undefined
 
-  // Fire PostHog event when replaced accounts are detected (session-scoped deduplication)
+  // Fire PostHog event when replaced accounts are detected.
+  // Gate on clerkLoaded so the event is not emitted under the ':anon' key during
+  // Clerk bootstrap before the real user identity is resolved (Issue #1109 W4-D).
+  // Key is per-user so that two users sharing a browser each get independent dedup.
   const excludedCount = (rawAccounts?.length ?? 0) - (filteredAccounts?.length ?? 0)
   useEffect(() => {
-    const SENTINEL_KEY = 'ph_acct_replaced_filtered'
-    if (excludedCount > 0 && !sessionStorage.getItem(SENTINEL_KEY)) {
-      sessionStorage.setItem(SENTINEL_KEY, '1')
+    if (!clerkLoaded) return
+    const sentinelKey = `ph_acct_replaced_filtered:${user?.id ?? 'anon'}`
+    if (excludedCount > 0 && !sessionStorage.getItem(sentinelKey)) {
+      sessionStorage.setItem(sentinelKey, '1')
       trackEvent(ANALYTICS_EVENTS.ACCOUNT_REPLACED_FILTERED, { excluded_count: excludedCount })
     }
-  }, [excludedCount, trackEvent])
+  }, [excludedCount, trackEvent, user?.id, clerkLoaded])
 
   return {
     accounts: filteredAccounts,
     isLoading: query.isLoading,
     isError: query.isError,
     error: query.error as Error | null,
-    refetch: () => query.refetch().then(() => void 0),
+    refetch: async () => { await query.refetch() },
   }
 }
