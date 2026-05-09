@@ -245,6 +245,10 @@ func (r *mortgageLiabilityRepository) GetByAccountID(ctx context.Context, accoun
 					SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL
 				)
 		   )
+		ORDER BY (
+			account_id IN (SELECT id FROM accounts WHERE status = 'active')
+		) DESC,
+		mortgage_liabilities.created_at DESC
 	`
 
 	rows, err := r.db.Query(ctx, query, accountID)

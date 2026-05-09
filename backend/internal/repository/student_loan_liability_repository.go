@@ -317,6 +317,10 @@ func (r *studentLoanLiabilityRepository) GetByAccountID(ctx context.Context, acc
 					SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL
 				)
 		   )
+		ORDER BY (
+			account_id IN (SELECT id FROM accounts WHERE status = 'active')
+		) DESC,
+		student_loan_liabilities.created_at DESC
 	`
 
 	rows, err := r.db.Query(ctx, query, accountID)

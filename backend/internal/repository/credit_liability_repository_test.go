@@ -370,6 +370,61 @@ func TestCreditLiabilityRepository_GetByUserID_ReplacedAccountExcluded(t *testin
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestCreditLiabilityRepository_GetByAccountID_PrefersActiveRow verifies that when
+// both a replaced and an active chain member have a liability row, GetByAccountID
+// returns the active row. The query must include ORDER BY active-first so the
+// result is deterministic. Issue #1109 W4-A.
+func TestCreditLiabilityRepository_GetByAccountID_PrefersActiveRow(t *testing.T) {
+	mock, repo := setupCreditLiabilityMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	activeAccountID := uuid.New().String()
+	replacedAccountID := uuid.New().String()
+	now := time.Now()
+
+	isOverdue := false
+	lastPayment := 300.00
+	lastBalance := 2000.00
+	minPayment := 30.00
+
+	cols := []string{
+		"id", "user_id", "account_id", "is_overdue",
+		"last_payment_amount", "last_payment_date",
+		"last_statement_issue_date", "last_statement_balance",
+		"minimum_payment_amount", "next_payment_due_date",
+		"synced_at", "created_at", "updated_at",
+	}
+
+	// Query must include ORDER BY so the active row is returned first when both
+	// replaced and active rows exist in the chain.
+	mock.ExpectQuery("ORDER BY").
+		WithArgs(activeAccountID).
+		WillReturnRows(pgxmock.NewRows(cols).
+			AddRow( // active row returned first by ORDER BY
+				uuid.New().String(), userID, activeAccountID, &isOverdue,
+				&lastPayment, &now,
+				&now, &lastBalance,
+				&minPayment, &now,
+				now, now, now,
+			).
+			AddRow( // replaced row — must NOT be returned
+				uuid.New().String(), userID, replacedAccountID, &isOverdue,
+				&lastPayment, &now,
+				&now, &lastBalance,
+				&minPayment, &now,
+				now, now, now,
+			))
+
+	result, err := repo.GetByAccountID(ctx, activeAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, activeAccountID, result.AccountID,
+		"active row must be returned first when both replaced and active rows exist")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestCreditLiabilityRepository_GetByAccountID_ChainExpand verifies that filtering
 // by active account_id returns liabilities recorded under a replaced account that
 // shares the same user_account_id. Issue #1109: B.4 fix.
@@ -390,7 +445,7 @@ func TestCreditLiabilityRepository_GetByAccountID_ChainExpand(t *testing.T) {
 
 	// Liability was recorded under the replaced account but must be returned
 	// when the caller queries by the active account_id via chain-expansion.
-	mock.ExpectQuery(regexp.QuoteMeta(`account_id IN ( SELECT id FROM accounts WHERE user_account_id`)).
+	mock.ExpectQuery("account_id IN.*user_account_id.*ORDER BY").
 		WithArgs(activeAccountID).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "user_id", "account_id", "is_overdue",

@@ -453,6 +453,75 @@ func TestMortgageLiabilityRepository_GetByUserID_ReplacedAccountExcluded(t *test
 // TestMortgageLiabilityRepository_GetByAccountID_ChainExpand verifies that filtering
 // by active account_id returns liabilities recorded under a replaced account.
 // Issue #1109: B.4 fix.
+// TestMortgageLiabilityRepository_GetByAccountID_PrefersActiveRow verifies that when
+// both a replaced and active chain member have a liability row, the active row is returned.
+// The query must include ORDER BY active-first for determinism. Issue #1109 W4-A.
+func TestMortgageLiabilityRepository_GetByAccountID_PrefersActiveRow(t *testing.T) {
+	mock, repo := setupMortgageLiabilityMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	activeAccountID := uuid.New().String()
+	replacedAccountID := uuid.New().String()
+	now := time.Now()
+	rate := 3.75
+
+	cols := []string{
+		"id", "user_id", "account_id", "account_number",
+		"current_late_fee", "escrow_balance", "has_pmi", "has_prepayment_penalty",
+		"interest_rate_percentage", "interest_rate_type",
+		"last_payment_amount", "last_payment_date",
+		"loan_type_description", "loan_term", "maturity_date",
+		"next_monthly_payment", "next_payment_due_date",
+		"origination_date", "origination_principal_amount",
+		"past_due_amount",
+		"property_address_street", "property_address_city",
+		"property_address_region", "property_address_postal_code", "property_address_country",
+		"ytd_interest_paid", "ytd_principal_paid",
+		"synced_at", "created_at", "updated_at",
+	}
+
+	mock.ExpectQuery("ORDER BY").
+		WithArgs(activeAccountID).
+		WillReturnRows(pgxmock.NewRows(cols).
+			AddRow( // active row first (ORDER BY active-first guarantee)
+				uuid.New().String(), userID, activeAccountID, nil,
+				nil, nil, nil, nil,
+				&rate, nil,
+				nil, nil,
+				nil, nil, nil,
+				nil, nil,
+				nil, nil,
+				nil,
+				nil, nil,
+				nil, nil, nil,
+				nil, nil,
+				now, now, now,
+			).
+			AddRow( // replaced row — must NOT be returned
+				uuid.New().String(), userID, replacedAccountID, nil,
+				nil, nil, nil, nil,
+				&rate, nil,
+				nil, nil,
+				nil, nil, nil,
+				nil, nil,
+				nil, nil,
+				nil,
+				nil, nil,
+				nil, nil, nil,
+				nil, nil,
+				now, now, now,
+			))
+
+	result, err := repo.GetByAccountID(ctx, activeAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, activeAccountID, result.AccountID,
+		"active row must be returned first when both replaced and active rows exist")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestMortgageLiabilityRepository_GetByAccountID_ChainExpand(t *testing.T) {
 	mock, repo := setupMortgageLiabilityMockDB(t)
 	defer mock.Close()
@@ -466,7 +535,7 @@ func TestMortgageLiabilityRepository_GetByAccountID_ChainExpand(t *testing.T) {
 
 	// Mortgage was recorded under the replaced account but must be returned when
 	// the caller queries by the active account_id via chain-expansion.
-	mock.ExpectQuery(regexp.QuoteMeta(`account_id IN ( SELECT id FROM accounts WHERE user_account_id`)).
+	mock.ExpectQuery("account_id IN.*user_account_id.*ORDER BY").
 		WithArgs(activeAccountID).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "user_id", "account_id", "account_number",

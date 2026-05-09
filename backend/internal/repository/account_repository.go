@@ -14,11 +14,8 @@ import (
 )
 
 var (
-	// ErrAccountNotFound is returned when an account is not found in the database
-	ErrAccountNotFound = errors.New("account not found")
-	// ErrDuplicateAccount is returned when attempting to create an account that already exists
-	ErrDuplicateAccount = errors.New("account already exists for this user")
-	// ErrAccountOwnedByAnotherUser is returned when a fingerprint is already held by a different user (Issue #1010)
+	ErrAccountNotFound          = errors.New("account not found")
+	ErrDuplicateAccount         = errors.New("account already exists for this user")
 	ErrAccountOwnedByAnotherUser = errors.New("one or more accounts are already linked by another user")
 )
 
@@ -133,6 +130,20 @@ type accountRepository struct {
 // NewAccountRepository creates a new AccountRepository instance
 func NewAccountRepository(db DB, enc *appcrypto.FieldEncryptor) AccountRepository {
 	return &accountRepository{db: db, enc: enc}
+}
+
+// mapConstraintError maps database constraint violation errors to domain errors
+func mapConstraintError(err error) error {
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "duplicate key") || strings.Contains(errMsg, "unique constraint") {
+		if strings.Contains(errMsg, "unique_user_account") || strings.Contains(errMsg, "unique_accounts_plaid_id_blind") {
+			return ErrDuplicateAccount
+		}
+		if strings.Contains(errMsg, "unique_persistent_account_id_active") || strings.Contains(errMsg, "unique_fallback_fingerprint_active") {
+			return ErrAccountOwnedByAnotherUser
+		}
+	}
+	return err
 }
 
 // encryptAccountPIIFields encrypts PII fields on an account before writing to the database.
@@ -252,17 +263,7 @@ func (r *accountRepository) Create(ctx context.Context, account *domain.Account)
 	)
 
 	if err != nil {
-		// Check for unique constraint violations
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "duplicate key") || strings.Contains(errMsg, "unique constraint") {
-			if strings.Contains(errMsg, "unique_user_account") || strings.Contains(errMsg, "unique_accounts_plaid_id_blind") {
-				return ErrDuplicateAccount
-			}
-			if strings.Contains(errMsg, "unique_persistent_account_id_active") || strings.Contains(errMsg, "unique_fallback_fingerprint_active") {
-				return ErrAccountOwnedByAnotherUser
-			}
-		}
-		return err
+		return mapConstraintError(err)
 	}
 
 	return nil
@@ -332,17 +333,7 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 		)
 
 		if err != nil {
-			// Check for unique constraint violations
-			errMsg := err.Error()
-			if strings.Contains(errMsg, "duplicate key") || strings.Contains(errMsg, "unique constraint") {
-				if strings.Contains(errMsg, "unique_user_account") || strings.Contains(errMsg, "unique_accounts_plaid_id_blind") {
-					return ErrDuplicateAccount
-				}
-				if strings.Contains(errMsg, "unique_persistent_account_id_active") || strings.Contains(errMsg, "unique_fallback_fingerprint_active") {
-					return ErrAccountOwnedByAnotherUser
-				}
-			}
-			return err
+			return mapConstraintError(err)
 		}
 	}
 
@@ -708,7 +699,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 	case opts.ReplacedOnly:
 		statusClause = " AND a.status = 'replaced'"
 	case opts.IncludeReplaced:
-		statusClause = ""
+		statusClause = " AND a.status IN ('active', 'replaced')"
 	default:
 		statusClause = " AND a.status = 'active'"
 	}

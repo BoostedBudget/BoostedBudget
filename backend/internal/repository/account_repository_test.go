@@ -1666,3 +1666,75 @@ func TestAccountRepository_CountByUserID_ExcludesExpired(t *testing.T) {
 	assert.Equal(t, expectedCount, count)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExcludesExpired verifies
+// that IncludeReplaced=true returns active+replaced accounts but never expired ones (Issue #1109 W4-C).
+func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExcludesExpired(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	now := time.Now()
+	replacedAt := now.Add(-time.Hour)
+
+	bal1, avail1 := 1200.00, 1200.00
+	bal2, avail2 := 900.00, 900.00
+	order0 := 0
+
+	rows := pgxmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"nickname", "custom_color", "custom_icon", "custom_emoji",
+		"display_order", "is_hidden",
+		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"created_at", "updated_at", "institution_name", "linked_item_status",
+	}).
+		AddRow(
+			uuid.New().String(), uuid.New().String(), userID, "acc-active",
+			"Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
+			&bal1, &avail1, "USD",
+			nil, nil, nil, nil,
+			&order0, false,
+			nil, "active", nil, nil,
+			now, now, "Chase", "active",
+		).
+		AddRow(
+			uuid.New().String(), uuid.New().String(), userID, "acc-replaced",
+			"Old Checking", nil, "depository", strPtr("checking"), strPtr("0000"),
+			&bal2, &avail2, "USD",
+			nil, nil, nil, nil,
+			nil, false,
+			nil, "replaced", &replacedAt, nil,
+			now, now, "Chase", "active",
+		)
+	// Note: expired account is NOT included in the mock result rows.
+	// The SQL query with IN ('active', 'replaced') ensures it never reaches the scanner.
+
+	expectedQuery := `
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       a.current_balance, a.available_balance, a.currency_code,
+		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
+		       a.display_order, a.is_hidden,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       a.created_at, a.updated_at, l.institution_name, l.status
+		FROM accounts a
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		WHERE a.user_id = $1 AND a.status IN ('active', 'replaced') AND a.is_hidden = FALSE ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
+	`
+
+	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	accounts, err := repo.GetAccountsWithInstitutionFiltered(ctx, userID, AccountFilterOptions{IncludeReplaced: true})
+
+	require.NoError(t, err)
+	assert.Len(t, accounts, 2, "only active and replaced accounts should be returned, not expired")
+	statuses := []string{string(accounts[0].Status), string(accounts[1].Status)}
+	assert.Contains(t, statuses, "active")
+	assert.Contains(t, statuses, "replaced")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

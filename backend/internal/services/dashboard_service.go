@@ -3,12 +3,35 @@ package services
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
-	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
+
+// snapshotChainKey returns the preferred lookup key for a balance snapshot:
+// the stable user_account_id if present, otherwise the raw account_id.
+// Used throughout dashboard service to resolve replaced accounts (Issue #1109).
+func snapshotChainKey(s domain.BalanceSnapshot) string {
+	if s.UserAccountID != nil && *s.UserAccountID != "" {
+		return *s.UserAccountID
+	}
+	return s.AccountID
+}
+
+// buildChainAwareAccountMap builds a map keyed by both account.ID and account.UserAccountID
+// so that snapshots carrying a replaced account_id still resolve via the chain key (Issue #1109).
+func buildChainAwareAccountMap(accounts []domain.Account) map[string]domain.Account {
+	m := make(map[string]domain.Account, len(accounts)*2)
+	for _, account := range accounts {
+		m[account.ID] = account
+		if account.UserAccountID != nil && *account.UserAccountID != "" {
+			m[*account.UserAccountID] = account
+		}
+	}
+	return m
+}
 
 // DashboardService provides balance dashboard functionality
 // Issue #353: Balance Tracking Dashboard
@@ -50,9 +73,6 @@ func NewDashboardService(
 
 // GetBalanceSummary returns current balance overview with breakdown by account type
 func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.BalanceSummaryResponse, error) {
-	// Canary counter: Issue #1109
-	observability.AccountsReplacedFiltered.WithLabelValues("balance_summary").Inc()
-
 	// Determine the date for balance snapshot
 	asOfDate := time.Now().UTC().Truncate(24 * time.Hour)
 	if filters != nil && filters.AsOfDate != nil {
@@ -65,36 +85,20 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 		return nil, fmt.Errorf("failed to get balance snapshots: %w", err)
 	}
 
-	// Get accounts to map account IDs to account details
+	// Get accounts to map account IDs to account details (GetByUserID filters to active only)
 	accounts, err := s.accountRepo.GetByUserID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts: %w", err)
 	}
 
-	// Build account map keyed by both account.ID and account.UserAccountID so that
-	// snapshots carrying an old replaced account_id still resolve via the chain key.
-	accountMap := make(map[string]domain.Account)
-	for _, account := range accounts {
-		accountMap[account.ID] = account
-		if account.UserAccountID != nil && *account.UserAccountID != "" {
-			accountMap[*account.UserAccountID] = account
-		}
-	}
+	accountMap := buildChainAwareAccountMap(accounts)
 
 	// Group snapshots by account type
 	byType := make(map[string]*domain.AccountTypeBalance)
 	var totalBalance float64
 
-	// chainKey returns the preferred lookup key: user_account_id if available, else account_id.
-	chainKey := func(s domain.BalanceSnapshot) string {
-		if s.UserAccountID != nil && *s.UserAccountID != "" {
-			return *s.UserAccountID
-		}
-		return s.AccountID
-	}
-
 	for _, snapshot := range snapshots {
-		account, exists := accountMap[chainKey(snapshot)]
+		account, exists := accountMap[snapshotChainKey(snapshot)]
 		if !exists {
 			continue // Skip if account not found
 		}
@@ -147,8 +151,19 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 
 	previousSnapshots, err := s.balanceSnapshotRepo.GetByUserIDAndDateRange(ctx, userID, previousDate, previousDate)
 	if err == nil && len(previousSnapshots) > 0 {
+		// Sort descending so the dedup below keeps the LATEST snapshot per chain key.
+		// The repo returns ASC; on a re-link day both replaced and active rows may exist.
+		sort.Slice(previousSnapshots, func(i, j int) bool {
+			return previousSnapshots[i].SnapshotAt.After(previousSnapshots[j].SnapshotAt)
+		})
 		var previousBalance float64
+		seenChainKeys := make(map[string]bool)
 		for _, snapshot := range previousSnapshots {
+			key := snapshotChainKey(snapshot)
+			if seenChainKeys[key] {
+				continue // Dedup: count each logical account (chain) only once
+			}
+			seenChainKeys[key] = true
 			if snapshot.CurrentBalance != nil {
 				previousBalance += *snapshot.CurrentBalance
 			}
@@ -232,41 +247,25 @@ func (s *dashboardService) GetBalanceHistory(ctx context.Context, userID string,
 
 // GetAccountTypes returns available account types for the user
 func (s *dashboardService) GetAccountTypes(ctx context.Context, userID string) (*domain.AccountTypesResponse, error) {
-	// Canary counter: active-only query filters out any replaced accounts (Issue #1109).
-	observability.AccountsReplacedFiltered.WithLabelValues("balance_summary").Inc()
-
 	// Get latest snapshots for each account
 	snapshots, err := s.balanceSnapshotRepo.GetLatestByUserID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get balance snapshots: %w", err)
 	}
 
-	// Get accounts to map account IDs to types
+	// Get accounts to map account IDs to types (GetByUserID filters to active only)
 	accounts, err := s.accountRepo.GetByUserID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts: %w", err)
 	}
 
-	accountMap := make(map[string]domain.Account)
-	for _, account := range accounts {
-		accountMap[account.ID] = account
-		if account.UserAccountID != nil && *account.UserAccountID != "" {
-			accountMap[*account.UserAccountID] = account
-		}
-	}
-
-	chainKey := func(s domain.BalanceSnapshot) string {
-		if s.UserAccountID != nil && *s.UserAccountID != "" {
-			return *s.UserAccountID
-		}
-		return s.AccountID
-	}
+	accountMap := buildChainAwareAccountMap(accounts)
 
 	// Aggregate by account type
 	typeMap := make(map[string]*domain.AccountTypeInfo)
 
 	for _, snapshot := range snapshots {
-		account, exists := accountMap[chainKey(snapshot)]
+		account, exists := accountMap[snapshotChainKey(snapshot)]
 		if !exists {
 			continue
 		}
@@ -336,27 +335,14 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 		return nil, fmt.Errorf("failed to get accounts: %w", err)
 	}
 
-	accountMap := make(map[string]domain.Account)
-	for _, account := range accounts {
-		accountMap[account.ID] = account
-		if account.UserAccountID != nil && *account.UserAccountID != "" {
-			accountMap[*account.UserAccountID] = account
-		}
-	}
-
-	chainKey := func(s domain.BalanceSnapshot) string {
-		if s.UserAccountID != nil && *s.UserAccountID != "" {
-			return *s.UserAccountID
-		}
-		return s.AccountID
-	}
+	accountMap := buildChainAwareAccountMap(accounts)
 
 	// Initialize category structure
 	byCategory := make(map[string]*domain.NetWorthCategoryBalance)
 	var totalAssets, totalLiabilities float64
 
 	for _, snapshot := range snapshots {
-		account, exists := accountMap[chainKey(snapshot)]
+		account, exists := accountMap[snapshotChainKey(snapshot)]
 		if !exists {
 			continue // Skip if account not found
 		}
@@ -443,10 +429,21 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 
 	previousSnapshots, err := s.balanceSnapshotRepo.GetByUserIDAndDateRange(ctx, userID, previousDate, previousDate)
 	if err == nil && len(previousSnapshots) > 0 {
+		// Sort descending so the dedup below keeps the LATEST snapshot per chain key.
+		sort.Slice(previousSnapshots, func(i, j int) bool {
+			return previousSnapshots[i].SnapshotAt.After(previousSnapshots[j].SnapshotAt)
+		})
 		var prevAssets, prevLiabilities float64
+		seenChainKeys := make(map[string]bool)
 
 		for _, snapshot := range previousSnapshots {
-			account, exists := accountMap[chainKey(snapshot)]
+			key := snapshotChainKey(snapshot)
+			if seenChainKeys[key] {
+				continue // Dedup: count each logical account (chain) only once
+			}
+			seenChainKeys[key] = true
+
+			account, exists := accountMap[key]
 			if !exists {
 				continue
 			}
