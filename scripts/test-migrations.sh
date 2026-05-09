@@ -457,6 +457,18 @@ EOF
 
     log_success "Test data seeded successfully"
 
+    # Run backfill migration SQL directly against seeded data (#1109 W3-G3).
+    # Migrations 000070 and 000072 ran during initial apply_migrations when the DB was empty
+    # (no-op). golang-migrate marks them applied so the second apply_migrations won't re-run
+    # them. We re-execute their SQL directly here so the JSONB assertions below have live data
+    # to verify. Both migrations are idempotent (they check for missing keys before updating).
+    log_info "Applying backfill migrations against seeded data (000070, 000072)..."
+    local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    local abs_migrations_dir="$project_root/backend/migrations"
+    psql "$DATABASE_URL" -f "$abs_migrations_dir/000070_backfill_user_account_id_in_rules.up.sql" > /dev/null 2>&1
+    psql "$DATABASE_URL" -f "$abs_migrations_dir/000072_backfill_user_account_id_in_categorization_rule_conditions.up.sql" > /dev/null 2>&1
+    log_success "Backfill migrations applied against seeded data"
+
     # Record row counts before re-running migrations
     log_info "Recording row counts..."
     local users_count_before=$(run_psql "SELECT COUNT(*) FROM users")
