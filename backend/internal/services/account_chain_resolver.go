@@ -53,9 +53,19 @@ func NewAccountChainResolver(accountRepo repository.AccountRepository) AccountCh
 }
 
 // ListActiveByUser returns all active accounts for the user.
-// GetByUserID already filters to status='active' in its SQL WHERE clause.
+// Defense-in-depth: client-side filter guarantees active-only across mock/test boundaries.
 func (r *accountChainResolver) ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error) {
-	return r.accountRepo.GetByUserID(ctx, userID)
+	accounts, err := r.accountRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	active := accounts[:0]
+	for _, a := range accounts {
+		if a.Status == domain.AccountStatusActive {
+			active = append(active, a)
+		}
+	}
+	return active, nil
 }
 
 // ResolveActiveID returns the account.id for the active account in the given user_account_id chain.

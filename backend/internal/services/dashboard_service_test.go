@@ -8,6 +8,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockBalanceSnapshotRepository is a mock for BalanceSnapshotRepository
@@ -1065,6 +1066,56 @@ func TestDashboardService_GetNetWorth_ExcludesReplacedAccounts(t *testing.T) {
 		"GetNetWorth must not double-count replaced + active account for same user_account_id")
 	assert.Equal(t, 0.00, result.TotalLiabilities)
 	assert.Equal(t, 800.00, result.NetWorth)
+
+	mockSnapshotRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestDashboardService_GetNetWorth_ResolvesByUserAccountID verifies that a snapshot
+// whose account_id points at a replaced row is still included via the user_account_id
+// chain key.
+func TestDashboardService_GetNetWorth_ResolvesByUserAccountID(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-chain-resolve"
+	stableUserAccountID := "ua-chain-stable-xyz"
+
+	activeBalance := 600.00
+	snapshot := domain.BalanceSnapshot{
+		ID:             "snap-from-replaced",
+		AccountID:      "account-replaced-id",
+		UserAccountID:  &stableUserAccountID,
+		UserID:         userID,
+		CurrentBalance: &activeBalance,
+		SnapshotAt:     time.Now().UTC(),
+	}
+
+	activeAccount := domain.Account{
+		ID:            "account-active-id",
+		UserID:        userID,
+		Name:          "Checking (active)",
+		Type:          "depository",
+		Status:        domain.AccountStatusActive,
+		UserAccountID: &stableUserAccountID,
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return([]domain.BalanceSnapshot{snapshot}, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
+	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID,
+		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+		Return([]domain.BalanceSnapshot{}, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetNetWorth(ctx, userID, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 600.00, result.TotalAssets,
+		"GetNetWorth must resolve snapshot via user_account_id when snapshot.AccountID is a replaced row")
+	assert.Equal(t, 600.00, result.NetWorth)
 
 	mockSnapshotRepo.AssertExpectations(t)
 	mockAccountRepo.AssertExpectations(t)

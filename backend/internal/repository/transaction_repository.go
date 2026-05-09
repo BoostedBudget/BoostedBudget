@@ -456,12 +456,17 @@ func (r *transactionRepository) GetByUserID(ctx context.Context, userID string, 
 	return r.scanTransactions(rows)
 }
 
-// GetByAccountID retrieves all transactions for a specific account
+// GetByAccountID retrieves all transactions for a specific account.
+// Chain-aware: expands to include transactions from all accounts in the re-link chain
+// by matching on user_account_id (Issue #1109).
 func (r *transactionRepository) GetByAccountID(ctx context.Context, accountID string) ([]domain.Transaction, error) {
 	query := fmt.Sprintf(`
 		SELECT %s
 		FROM transactions
-		WHERE account_id = $1
+		WHERE (
+			user_account_id = (SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL)
+			OR (account_id = $1 AND user_account_id IS NULL)
+		)
 		ORDER BY date DESC, created_at DESC
 	`, transactionSelectExpr)
 

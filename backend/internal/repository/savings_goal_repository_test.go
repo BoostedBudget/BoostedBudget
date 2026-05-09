@@ -340,7 +340,7 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestSavingsGoalRepository_Update tests savings goal update
+// TestSavingsGoalRepository_Update tests savings goal update, including user_account_id persistence.
 func TestSavingsGoalRepository_Update(t *testing.T) {
 	mock, repo := setupSavingsGoalMockDB(t)
 	defer mock.Close()
@@ -349,7 +349,10 @@ func TestSavingsGoalRepository_Update(t *testing.T) {
 	goal := createTestSavingsGoal(uuid.New().String(), uuid.New().String())
 	goal.ID = uuid.New().String()
 	goal.Name = "Updated Name"
+	uaID := "ua-stable-123"
+	goal.UserAccountID = &uaID
 
+	// user_account_id must be bound as $11, preceding id ($12) and user_id ($13).
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
 		WithArgs(
 			goal.Name,
@@ -362,12 +365,50 @@ func TestSavingsGoalRepository_Update(t *testing.T) {
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
+			goal.UserAccountID, // $11 user_account_id — must be persisted
 			goal.ID,
 			goal.UserID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.Update(ctx, goal)
 
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSavingsGoalRepository_Update_UserAccountIDPersisted verifies chain-stable id survives round-trip.
+func TestSavingsGoalRepository_Update_UserAccountIDPersisted(t *testing.T) {
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	goal := createTestSavingsGoal(uuid.New().String(), uuid.New().String())
+	goal.ID = uuid.New().String()
+	uaIDA := "ua-chain-a"
+	uaIDB := "ua-chain-b"
+	goal.UserAccountID = &uaIDA
+
+	// Simulate account change: update UserAccountID to chain B.
+	goal.UserAccountID = &uaIDB
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
+		WithArgs(
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			&uaIDB, // must be chain B's id, not chain A's
+			goal.ID,
+			goal.UserID,
+		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.Update(ctx, goal)
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -393,6 +434,7 @@ func TestSavingsGoalRepository_Update_NotFound(t *testing.T) {
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // user_account_id
 			goal.ID,
 			goal.UserID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
