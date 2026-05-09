@@ -1120,3 +1120,69 @@ func TestDashboardService_GetNetWorth_ResolvesByUserAccountID(t *testing.T) {
 	mockSnapshotRepo.AssertExpectations(t)
 	mockAccountRepo.AssertExpectations(t)
 }
+
+// TestDashboardService_GetNetWorth_PreviousPeriodResolvesChain verifies that the
+// previous-period snapshot loop also resolves via user_account_id. Without the fix
+// a historical snapshot tagged with a replaced account_id would be silently dropped,
+// making period-over-period delta calculations wrong after a re-link.
+func TestDashboardService_GetNetWorth_PreviousPeriodResolvesChain(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-prev-period-chain"
+	stableUA := "ua-prev-period-stable"
+
+	currentBalance := 700.00
+	previousBalance := 500.00
+
+	currentSnapshot := domain.BalanceSnapshot{
+		ID:             "snap-current",
+		AccountID:      "account-active-id",
+		UserAccountID:  &stableUA,
+		UserID:         userID,
+		CurrentBalance: &currentBalance,
+		SnapshotAt:     time.Now().UTC(),
+	}
+	// Previous snapshot carries the OLD replaced account_id but the stable user_account_id.
+	previousSnapshot := domain.BalanceSnapshot{
+		ID:             "snap-previous-replaced",
+		AccountID:      "account-replaced-id",
+		UserAccountID:  &stableUA,
+		UserID:         userID,
+		CurrentBalance: &previousBalance,
+		SnapshotAt:     time.Now().UTC().AddDate(0, 0, -30),
+	}
+
+	activeAccount := domain.Account{
+		ID:            "account-active-id",
+		UserID:        userID,
+		Name:          "Checking",
+		Type:          "depository",
+		Status:        domain.AccountStatusActive,
+		UserAccountID: &stableUA,
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return([]domain.BalanceSnapshot{currentSnapshot}, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
+	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID,
+		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+		Return([]domain.BalanceSnapshot{previousSnapshot}, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetNetWorth(ctx, userID, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 700.00, result.TotalAssets, "current period should reflect active snapshot")
+	require.NotNil(t, result.PeriodComparison,
+		"previous-period snapshot must be resolved via user_account_id, not dropped")
+	assert.Equal(t, 500.00, result.PeriodComparison.PreviousAssets,
+		"pre-relink snapshot from replaced account must be included in previous-period total")
+	assert.InDelta(t, 200.00, result.PeriodComparison.NetWorthChange, 0.01,
+		"period delta must reflect diff between current and pre-relink snapshot")
+
+	mockSnapshotRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}

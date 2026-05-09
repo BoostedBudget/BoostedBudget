@@ -446,7 +446,7 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 		var prevAssets, prevLiabilities float64
 
 		for _, snapshot := range previousSnapshots {
-			account, exists := accountMap[snapshot.AccountID]
+			account, exists := accountMap[chainKey(snapshot)]
 			if !exists {
 				continue
 			}
