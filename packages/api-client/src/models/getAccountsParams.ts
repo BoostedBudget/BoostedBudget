@@ -42,7 +42,7 @@ export type GetAccountsParams = {
    */
   include_replaced?: string;
   /**
-   * If set, filter to accounts belonging to this user_account_id chain
+   * When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set.
    */
   user_account_id?: string;
 };
