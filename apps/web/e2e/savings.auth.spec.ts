@@ -512,7 +512,12 @@ test.describe('Savings Page - Read-only Mode (inactive subscription)', () => {
     await page.goto('/savings')
     await page.waitForLoadState('networkidle')
 
-    // ReadOnlyGuard wraps the button — it should not render
+    // Wait for ReadOnlyBanner (role="alert") to confirm the inactive-subscription state is
+    // active before asserting the button. Without this, the assertion races the profile fetch.
+    await expect(page.getByRole('alert')).toBeVisible({ timeout: 10000 })
+
+    // ReadOnlyGuard wraps the button in an inert container — Playwright excludes inert
+    // elements from getByRole, so the button should not be found / should not be visible.
     await expect(page.getByRole('button', { name: /create goal/i })).not.toBeVisible()
   })
 })

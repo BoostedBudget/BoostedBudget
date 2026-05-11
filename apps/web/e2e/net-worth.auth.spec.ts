@@ -232,6 +232,8 @@ test.describe('Net Worth Page — Percent ≤ 100% regression', () => {
     await page.waitForLoadState('networkidle')
 
     const cells = page.locator('[data-testid^="breakdown-percent-"]')
+    // count() is not auto-retrying — wait for at least one cell before counting.
+    await expect(cells.first()).toBeVisible({ timeout: 10000 })
     const count = await cells.count()
     expect(count).toBeGreaterThan(0)
 
