@@ -45,6 +45,7 @@ const FIXTURE_ACCOUNTS = {
     // Chase assets
     {
       id: 'acc-chase-checking',
+      user_id: 'user-123',
       name: 'Plaid Checking',
       type: 'depository',
       current_balance: 110,
@@ -54,9 +55,15 @@ const FIXTURE_ACCOUNTS = {
       linked_item_id: 'item-1',
       plaid_account_id: 'plaid-1',
       status: 'active',
+      user_account_id: 'ua-chase-checking',
+      replaced_at: null,
+      replaced_by_id: null,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
     },
     {
       id: 'acc-chase-money-market',
+      user_id: 'user-123',
       name: 'Plaid Money Market',
       type: 'depository',
       current_balance: 43200,
@@ -66,10 +73,16 @@ const FIXTURE_ACCOUNTS = {
       linked_item_id: 'item-1',
       plaid_account_id: 'plaid-2',
       status: 'active',
+      user_account_id: 'ua-chase-money-market',
+      replaced_at: null,
+      replaced_by_id: null,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
     },
     // Citibank assets
     {
       id: 'acc-citi-checking',
+      user_id: 'user-123',
       name: 'Plaid Checking',
       type: 'depository',
       current_balance: 110,
@@ -79,10 +92,16 @@ const FIXTURE_ACCOUNTS = {
       linked_item_id: 'item-2',
       plaid_account_id: 'plaid-3',
       status: 'active',
+      user_account_id: 'ua-citi-checking',
+      replaced_at: null,
+      replaced_by_id: null,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
     },
     // Chase liability
     {
       id: 'acc-chase-mortgage',
+      user_id: 'user-123',
       name: 'Plaid Mortgage',
       type: 'loan',
       current_balance: 56302,
@@ -92,10 +111,16 @@ const FIXTURE_ACCOUNTS = {
       linked_item_id: 'item-1',
       plaid_account_id: 'plaid-4',
       status: 'active',
+      user_account_id: 'ua-chase-mortgage',
+      replaced_at: null,
+      replaced_by_id: null,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
     },
     // Citibank liability — large, previously caused >100% percent
     {
       id: 'acc-citi-student-loan',
+      user_id: 'user-123',
       name: 'Plaid Student Loan',
       type: 'loan',
       current_balance: 65262,
@@ -105,8 +130,14 @@ const FIXTURE_ACCOUNTS = {
       linked_item_id: 'item-2',
       plaid_account_id: 'plaid-5',
       status: 'active',
+      user_account_id: 'ua-citi-student-loan',
+      replaced_at: null,
+      replaced_by_id: null,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
     },
   ],
+  total_count: 5,
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +232,8 @@ test.describe('Net Worth Page — Percent ≤ 100% regression', () => {
     await page.waitForLoadState('networkidle')
 
     const cells = page.locator('[data-testid^="breakdown-percent-"]')
+    // count() is not auto-retrying — wait for at least one cell before counting.
+    await expect(cells.first()).toBeVisible({ timeout: 10000 })
     const count = await cells.count()
     expect(count).toBeGreaterThan(0)
 
@@ -240,8 +273,10 @@ test.describe('Net Worth Page — Institution column', () => {
     await page.goto('/net-worth')
     await page.waitForLoadState('networkidle')
 
-    // Both Chase and Citibank have "Plaid Checking" — both should render
+    // Both Chase and Citibank have "Plaid Checking" — both should render.
+    // count() is not auto-retrying; wait for the first cell before counting.
     const checkingCells = page.locator('td', { hasText: 'Plaid Checking' })
+    await expect(checkingCells.first()).toBeVisible({ timeout: 10000 })
     const count = await checkingCells.count()
     expect(count).toBeGreaterThanOrEqual(2)
   })

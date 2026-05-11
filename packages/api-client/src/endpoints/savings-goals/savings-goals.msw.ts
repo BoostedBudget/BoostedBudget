@@ -137,6 +137,10 @@ export const getGetSavingsGoalsResponseMock = (): SavingsGoal[] | null =>
     name: faker.string.alpha({ length: { min: 10, max: 20 } }),
     target_amount: faker.number.float({ fractionDigits: 2 }),
     updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    user_account_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
     user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   }));
 
@@ -241,6 +245,10 @@ export const getCreateSavingsGoalResponseMock = (
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
   target_amount: faker.number.float({ fractionDigits: 2 }),
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  user_account_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   ...overrideResponse,
 });
@@ -348,6 +356,10 @@ export const getGetActiveSavingsGoalsResponseMock = (): SavingsGoal[] | null =>
     name: faker.string.alpha({ length: { min: 10, max: 20 } }),
     target_amount: faker.number.float({ fractionDigits: 2 }),
     updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    user_account_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
     user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   }));
 
@@ -452,6 +464,10 @@ export const getGetSavingsGoalResponseMock = (
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
   target_amount: faker.number.float({ fractionDigits: 2 }),
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  user_account_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   ...overrideResponse,
 });
@@ -557,6 +573,10 @@ export const getUpdateSavingsGoalResponseMock = (
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
   target_amount: faker.number.float({ fractionDigits: 2 }),
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  user_account_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   ...overrideResponse,
 });

@@ -27,6 +27,7 @@ import { useTierLimits } from '../subscription/hooks/useTierLimits'
 import { useAccountCustomization } from './hooks/useAccountCustomization'
 import { useAccountFilters } from './hooks/useAccountFilters'
 import type { Account, UpdateAccountRequest } from './types'
+import { isReplaced } from './hooks/useActiveAccounts'
 
 // Get initial view from localStorage
 function getInitialView(): ListView {
@@ -127,9 +128,10 @@ export function AccountsPage() {
   // Issue #978: Detect if the account is the last one for its linked_item_id
   function isLastAccountForItem(account: Account): boolean {
     const allAccounts = accountsData?.accounts ?? []
-    return allAccounts.filter(a =>
-      a.linked_item_id === account.linked_item_id && a.status !== 'replaced'
-    ).length === 1
+    const activeAccountsForItem = allAccounts.filter(
+      a => a.linked_item_id === account.linked_item_id && !isReplaced(a)
+    )
+    return activeAccountsForItem.length === 1
   }
 
   // Issue #978: Build descriptive ReactNode for the delete confirmation dialog
@@ -226,7 +228,7 @@ export function AccountsPage() {
     let filtered = accs
 
     // Issue #171: Always filter out replaced accounts (they're soft-deleted after Plaid re-link)
-    filtered = filtered.filter(acc => acc.status !== 'replaced')
+    filtered = filtered.filter(acc => !isReplaced(acc))
 
     // Filter hidden accounts unless showHidden is true
     if (!showHidden) {
@@ -309,7 +311,7 @@ export function AccountsPage() {
   // Account counts (excluding replaced accounts)
   const { hiddenCount, activeAccountsCount } = useMemo(() => {
     const accs = accountsData?.accounts ?? []
-    const activeAccounts = accs.filter(acc => acc.status !== 'replaced')
+    const activeAccounts = accs.filter(acc => !isReplaced(acc))
     return {
       hiddenCount: activeAccounts.filter(acc => acc.is_hidden).length,
       activeAccountsCount: activeAccounts.length,

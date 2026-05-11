@@ -34,6 +34,7 @@ export interface TransferSuggestion {
   currency_code: string;
   expires_at?: string;
   from_account_id?: string;
+  from_user_account_id?: string;
   id: string;
   reason?: string;
   rule_execution_id?: string;
@@ -41,6 +42,7 @@ export interface TransferSuggestion {
   source: string;
   status: string;
   to_account_id?: string;
+  to_user_account_id?: string;
   updated_at: string;
   user_action_at?: string;
   user_id: string;

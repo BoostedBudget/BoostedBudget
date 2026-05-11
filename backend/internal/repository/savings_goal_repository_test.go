@@ -59,6 +59,7 @@ func TestSavingsGoalRepository_Create(t *testing.T) {
 		goal.CurrentAmount,
 		pgxmock.AnyArg(), // currency_code
 		goal.AccountID,
+		goal.UserAccountID, // user_account_id (Issue #1109)
 		pgxmock.AnyArg(), // deadline
 		goal.IsCompleted,
 		goal.CompletedAt,
@@ -90,6 +91,7 @@ func TestSavingsGoalRepository_Create_DuplicateName(t *testing.T) {
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
+		pgxmock.AnyArg(), // user_account_id (Issue #1109)
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
@@ -118,7 +120,7 @@ func TestSavingsGoalRepository_GetByID(t *testing.T) {
 
 	columns := []string{
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
-		"currency_code", "account_id", "deadline", "is_completed", "completed_at",
+		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
 		"created_at", "updated_at",
 	}
 
@@ -133,6 +135,7 @@ func TestSavingsGoalRepository_GetByID(t *testing.T) {
 			1000.00,
 			"USD",
 			accountID,
+			nil,       // user_account_id (nullable)
 			&deadline, // Use pointer for nullable deadline
 			false,
 			nil,
@@ -184,7 +187,7 @@ func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
 
 	columns := []string{
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
-		"currency_code", "account_id", "deadline", "is_completed", "completed_at",
+		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
 		"created_at", "updated_at",
 	}
 
@@ -200,6 +203,7 @@ func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
 				1000.00,
 				"USD",
 				uuid.New().String(),
+				nil,       // user_account_id (nullable)
 				&deadline, // Use pointer for nullable deadline
 				false,
 				nil,
@@ -215,6 +219,7 @@ func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
 				5000.00,
 				"USD",
 				uuid.New().String(),
+				nil, // user_account_id (nullable)
 				nil, // nil deadline is fine
 				false,
 				nil,
@@ -241,7 +246,7 @@ func TestSavingsGoalRepository_GetActiveByUserID(t *testing.T) {
 
 	columns := []string{
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
-		"currency_code", "account_id", "deadline", "is_completed", "completed_at",
+		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
 		"created_at", "updated_at",
 	}
 
@@ -256,6 +261,7 @@ func TestSavingsGoalRepository_GetActiveByUserID(t *testing.T) {
 			1000.00,
 			"USD",
 			uuid.New().String(),
+			nil, // user_account_id (nullable)
 			nil, // nil deadline is fine
 			false,
 			nil,
@@ -284,7 +290,7 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 
 	columns := []string{
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
-		"currency_code", "account_id", "deadline", "is_completed", "completed_at",
+		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
 		"created_at", "updated_at",
 	}
 
@@ -300,7 +306,8 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 				1000.00,
 				"USD",
 				accountID,
-				nil,
+				nil, // user_account_id (nullable)
+				nil, // deadline (nullable)
 				false,
 				nil,
 				now,
@@ -315,7 +322,8 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 				5000.00,
 				"USD",
 				accountID,
-				nil,
+				nil, // user_account_id (nullable)
+				nil, // deadline (nullable)
 				false,
 				nil,
 				now,
@@ -332,7 +340,7 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestSavingsGoalRepository_Update tests savings goal update
+// TestSavingsGoalRepository_Update tests savings goal update, including user_account_id persistence.
 func TestSavingsGoalRepository_Update(t *testing.T) {
 	mock, repo := setupSavingsGoalMockDB(t)
 	defer mock.Close()
@@ -341,7 +349,10 @@ func TestSavingsGoalRepository_Update(t *testing.T) {
 	goal := createTestSavingsGoal(uuid.New().String(), uuid.New().String())
 	goal.ID = uuid.New().String()
 	goal.Name = "Updated Name"
+	uaID := "ua-stable-123"
+	goal.UserAccountID = &uaID
 
+	// user_account_id must be bound as $11, preceding id ($12) and user_id ($13).
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
 		WithArgs(
 			goal.Name,
@@ -354,12 +365,50 @@ func TestSavingsGoalRepository_Update(t *testing.T) {
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
+			goal.UserAccountID, // $11 user_account_id — must be persisted
 			goal.ID,
 			goal.UserID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.Update(ctx, goal)
 
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSavingsGoalRepository_Update_UserAccountIDPersisted verifies chain-stable id survives round-trip.
+func TestSavingsGoalRepository_Update_UserAccountIDPersisted(t *testing.T) {
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	goal := createTestSavingsGoal(uuid.New().String(), uuid.New().String())
+	goal.ID = uuid.New().String()
+	uaIDA := "ua-chain-a"
+	uaIDB := "ua-chain-b"
+	goal.UserAccountID = &uaIDA
+
+	// Simulate account change: update UserAccountID to chain B.
+	goal.UserAccountID = &uaIDB
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
+		WithArgs(
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			&uaIDB, // must be chain B's id, not chain A's
+			goal.ID,
+			goal.UserID,
+		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.Update(ctx, goal)
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -385,6 +434,7 @@ func TestSavingsGoalRepository_Update_NotFound(t *testing.T) {
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // user_account_id
 			goal.ID,
 			goal.UserID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
@@ -527,4 +577,53 @@ func TestSavingsGoalRepository_MarkCompleted_NotFound(t *testing.T) {
 	assert.Error(t, err)
 	assert.Equal(t, domain.ErrSavingsGoalNotFound, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSavingsGoalRepository_GetByAccountID_ChainExpand verifies that filtering
+// by active account_id returns goals associated with replaced (pre-relink) accounts
+// that share the same user_account_id. Issue #1109: B.4 fix.
+func TestSavingsGoalRepository_GetByAccountID_ChainExpand(t *testing.T) {
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	activeAccountID := uuid.New().String()
+	replacedAccountID := uuid.New().String()
+	userID := uuid.New().String()
+	userAccountID := uuid.New().String()
+	now := time.Now()
+
+	columns := []string{
+		"id", "user_id", "name", "description", "target_amount", "current_amount",
+		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
+		"created_at", "updated_at",
+	}
+
+	// Goal is linked to the replaced account but has the stable user_account_id.
+	// When the caller filters by activeAccountID, the goal must still be returned.
+	mock.ExpectQuery(regexp.QuoteMeta(`user_account_id = (SELECT user_account_id FROM accounts WHERE id = $1`)).
+		WithArgs(activeAccountID).
+		WillReturnRows(pgxmock.NewRows(columns).
+			AddRow(
+				uuid.New().String(),
+				userID,
+				"Chain Goal",
+				nil,
+				8000.00,
+				1000.00,
+				"USD",
+				replacedAccountID, // pre-relink account_id
+				&userAccountID,    // stable user_account_id
+				nil,
+				false,
+				nil,
+				now,
+				now,
+			))
+
+	goals, err := repo.GetByAccountID(ctx, activeAccountID)
+	require.NoError(t, err)
+	require.Len(t, goals, 1, "pre-relink goal must be returned when filtering by active account_id")
+	assert.Equal(t, replacedAccountID, goals[0].AccountID)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

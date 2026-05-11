@@ -21,7 +21,7 @@ import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { useGetUserCategories, useGetPlaidPrimaryCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
-import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
+import { useActiveAccounts } from '@/features/accounts/hooks'
 import { useGetUserTags } from '@boostedbudget/api-client/endpoints/tags/tags'
 import { useProfile } from '../../profile/hooks/useProfile'
 import type { CustomCategory } from '../../categories/types'
@@ -38,7 +38,7 @@ export function AutoCategorizationPageWrapper() {
   // Fetch data using generated hooks
   const { data: customCategoriesData } = useGetUserCategories()
   const { data: plaidPrimariesData } = useGetPlaidPrimaryCategories()
-  const { data: accountsData } = useGetAccounts()
+  const { accounts: activeAccounts } = useActiveAccounts()
   const { data: userTagsData } = useGetUserTags()
 
   // Convert CustomCategory[] to string[][] format for AutoCategorizationPage.
@@ -53,7 +53,8 @@ export function AutoCategorizationPageWrapper() {
   }, [customCategoriesData])
 
   const plaidPrimaries = (plaidPrimariesData as unknown as Primary[]) ?? []
-  const accounts = accountsData?.accounts ?? []
+  // Issue #1109: useActiveAccounts already excludes replaced accounts
+  const accounts = activeAccounts ?? []
   const tags = (userTagsData as unknown as UserTag[]) ?? []
   const userTier = user?.effective_tier ?? user?.subscription_tier ?? 'premium'
 

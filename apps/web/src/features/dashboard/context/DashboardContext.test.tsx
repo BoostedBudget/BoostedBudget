@@ -387,12 +387,22 @@ describe('DashboardContext', () => {
 
     it('should provide hasAccounts: true when accounts exist', () => {
       mockUseGetAccounts.mockReturnValue({
-        data: { accounts: [{ id: '1', name: 'Checking' }] },
+        data: { accounts: [{ id: '1', name: 'Checking', status: 'active' }] },
         isLoading: false,
         error: null,
       })
       const { result } = renderHook(() => useDashboardContext(), { wrapper })
       expect(result.current.hasAccounts).toBe(true)
+    })
+
+    it('should provide hasAccounts: false when only replaced accounts exist (Issue #1109)', () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [{ id: '1', name: 'Old Checking', status: 'replaced' }] },
+        isLoading: false,
+        error: null,
+      })
+      const { result } = renderHook(() => useDashboardContext(), { wrapper })
+      expect(result.current.hasAccounts).toBe(false)
     })
 
     it('should provide hasAccounts: false when data is undefined', () => {

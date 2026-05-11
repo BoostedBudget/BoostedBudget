@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useMemo } from 'react'
-import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
+import { useActiveAccounts } from '@/features/accounts/hooks'
 import { useGetSavingsGoals } from '@boostedbudget/api-client/endpoints/savings-goals/savings-goals'
 import type { SavingsGoalAction } from '../../types'
 
@@ -58,10 +58,9 @@ export function SavingsGoalActionForm({
   disabled = false,
   className = '',
 }: SavingsGoalActionFormProps) {
-  const { data: accounts, isLoading: loadingAccounts } = useGetAccounts()
+  const { accounts: accountsList, isLoading: loadingAccounts } = useActiveAccounts()
   const { data: savingsGoals, isLoading: loadingGoals } = useGetSavingsGoals()
 
-  const accountsList = accounts?.accounts ?? []
   const goalsList = (savingsGoals ?? []) as {
     id: string
     name: string
@@ -93,12 +92,15 @@ export function SavingsGoalActionForm({
 
   const handleFromAccountChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const selectedId = e.target.value
+      const account = (accountsList ?? []).find((a) => a.id === selectedId)
       onChange({
         ...action,
-        from_account_id: e.target.value,
+        from_account_id: selectedId,
+        from_user_account_id: account?.user_account_id,
       })
     },
-    [action, onChange]
+    [action, onChange, accountsList]
   )
 
   const handleAmountTypeChange = useCallback(
@@ -189,7 +191,7 @@ export function SavingsGoalActionForm({
           className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <option value="">Select an account...</option>
-          {accountsList.map((account: { id: string; name: string }) => (
+          {(accountsList ?? []).map((account: { id: string; name: string }) => (
             <option key={account.id} value={account.id}>
               {account.name}
             </option>

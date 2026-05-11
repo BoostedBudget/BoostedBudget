@@ -56,6 +56,10 @@ export const getGetTransferSuggestionsResponseMock = ():
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),
+    from_user_account_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
     id: faker.string.alpha({ length: { min: 10, max: 20 } }),
     reason: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -72,6 +76,10 @@ export const getGetTransferSuggestionsResponseMock = ():
     source: faker.string.alpha({ length: { min: 10, max: 20 } }),
     status: faker.string.alpha({ length: { min: 10, max: 20 } }),
     to_account_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    to_user_account_id: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),
@@ -106,6 +114,10 @@ export const getAcceptTransferSuggestionResponseMock = (
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),
+    from_user_account_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
     id: faker.string.alpha({ length: { min: 10, max: 20 } }),
     reason: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -122,6 +134,10 @@ export const getAcceptTransferSuggestionResponseMock = (
     source: faker.string.alpha({ length: { min: 10, max: 20 } }),
     status: faker.string.alpha({ length: { min: 10, max: 20 } }),
     to_account_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    to_user_account_id: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),
@@ -158,6 +174,10 @@ export const getRejectTransferSuggestionResponseMock = (
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),
+    from_user_account_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
     id: faker.string.alpha({ length: { min: 10, max: 20 } }),
     reason: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -174,6 +194,10 @@ export const getRejectTransferSuggestionResponseMock = (
     source: faker.string.alpha({ length: { min: 10, max: 20 } }),
     status: faker.string.alpha({ length: { min: 10, max: 20 } }),
     to_account_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    to_user_account_id: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),

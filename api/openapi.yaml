@@ -3163,6 +3163,8 @@ components:
         updated_at:
           format: date-time
           type: string
+        user_account_id:
+          type: string
         user_id:
           type: string
       required:
@@ -3762,6 +3764,8 @@ components:
           type: string
         from_account_id:
           type: string
+        from_user_account_id:
+          type: string
         id:
           type: string
         reason:
@@ -3775,6 +3779,8 @@ components:
         status:
           type: string
         to_account_id:
+          type: string
+        to_user_account_id:
           type: string
         updated_at:
           format: date-time
@@ -4768,6 +4774,27 @@ paths:
           name: include_hidden
           schema:
             description: If 'true', includes hidden accounts
+            type: string
+        - description: "Filter by account status: 'active' (default), 'replaced', or 'all'"
+          explode: false
+          in: query
+          name: status
+          schema:
+            description: "Filter by account status: 'active' (default), 'replaced', or 'all'"
+            type: string
+        - description: If 'true', equivalent to status=all (backward-compat alias)
+          explode: false
+          in: query
+          name: include_replaced
+          schema:
+            description: If 'true', equivalent to status=all (backward-compat alias)
+            type: string
+        - description: When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set.
+          explode: false
+          in: query
+          name: user_account_id
+          schema:
+            description: When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set.
             type: string
       responses:
         "200":
@@ -8238,6 +8265,13 @@ paths:
               - income
               - expense
               - all
+            type: string
+        - description: Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members
+          explode: false
+          in: query
+          name: user_account_id
+          schema:
+            description: Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members
             type: string
       responses:
         "200":

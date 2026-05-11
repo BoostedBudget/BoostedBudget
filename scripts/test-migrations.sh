@@ -337,83 +337,155 @@ test_data_integrity() {
     # Seed test data
     log_info "Seeding test data..."
 
-    # Insert test users
-    psql "$DATABASE_URL" > /dev/null 2>&1 <<EOF
--- Free tier user
-INSERT INTO users (id, clerk_user_id, email, primary_region, tier, created_at, updated_at)
+    # Insert test users.
+    # `if !` + `<<EOF > /dev/null`: three-way fix for set -e + ON_ERROR_STOP interaction:
+    #   1. `if !` prevents set -e from killing the script when psql exits non-zero (code 3).
+    #   2. `> /dev/null` suppresses verbose INSERT success noise (stdout only).
+    #   3. stderr is NOT redirected — SQL error messages appear in CI logs for diagnosis.
+    # `\set ON_ERROR_STOP on` makes psql exit 3 immediately on the first SQL error
+    # instead of continuing and silently masking failures with a 0 exit code.
+    if ! psql "$DATABASE_URL" <<EOF > /dev/null
+\set ON_ERROR_STOP on
+-- primary_region must be 'iad' after migrations 000005 and 000059.
+-- subscription_tier is the column name (not 'tier'); valid values post-migration-000040:
+--   premium, household_2, household_3, household_4, household_5
+-- Keep subscription_tier explicit here because the legacy column default is still 'free',
+-- which no longer satisfies the final valid_subscription_tier CHECK constraint.
+INSERT INTO users (id, clerk_user_id, email, primary_region, subscription_tier, created_at, updated_at)
 VALUES (
     '00000000-0000-0000-0000-000000000001'::uuid,
-    'user_test_free',
-    'free@test.com',
-    'us-east-1',
-    'free',
-    NOW(),
-    NOW()
-);
-
--- Premium user
-INSERT INTO users (id, clerk_user_id, email, primary_region, tier, created_at, updated_at)
-VALUES (
-    '00000000-0000-0000-0000-000000000002'::uuid,
-    'user_test_premium',
-    'premium@test.com',
-    'us-east-1',
+    'user_test_1',
+    'user1@test.com',
+    'iad',
     'premium',
     NOW(),
     NOW()
 );
 
--- Premium Plus user
-INSERT INTO users (id, clerk_user_id, email, primary_region, tier, created_at, updated_at)
+INSERT INTO users (id, clerk_user_id, email, primary_region, subscription_tier, created_at, updated_at)
 VALUES (
-    '00000000-0000-0000-0000-000000000003'::uuid,
-    'user_test_premium_plus',
-    'premium-plus@test.com',
-    'us-east-1',
-    'premium_plus',
+    '00000000-0000-0000-0000-000000000002'::uuid,
+    'user_test_2',
+    'user2@test.com',
+    'iad',
+    'premium',
     NOW(),
     NOW()
 );
 
--- Privacy settings
-INSERT INTO privacy_settings (user_id, data_retention_days, created_at, updated_at)
-VALUES
-    ('00000000-0000-0000-0000-000000000001'::uuid, 90, NOW(), NOW()),
-    ('00000000-0000-0000-0000-000000000002'::uuid, 365, NOW(), NOW()),
-    ('00000000-0000-0000-0000-000000000003'::uuid, 730, NOW(), NOW());
+INSERT INTO users (id, clerk_user_id, email, primary_region, subscription_tier, created_at, updated_at)
+VALUES (
+    '00000000-0000-0000-0000-000000000003'::uuid,
+    'user_test_3',
+    'user3@test.com',
+    'iad',
+    'household_5',
+    NOW(),
+    NOW()
+);
 
--- Linked items
-INSERT INTO linked_items (id, user_id, item_id, access_token, provider, status, created_at, updated_at)
+-- Privacy settings (no data_retention_days column exists in the final schema)
+INSERT INTO privacy_settings (user_id, created_at, updated_at)
+VALUES
+    ('00000000-0000-0000-0000-000000000001'::uuid, NOW(), NOW()),
+    ('00000000-0000-0000-0000-000000000002'::uuid, NOW(), NOW()),
+    ('00000000-0000-0000-0000-000000000003'::uuid, NOW(), NOW());
+
+-- Linked items (access_token_encrypted is the column name per migration 000006)
+INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted, provider, status, created_at, updated_at)
 VALUES
     ('00000000-0000-0000-0000-000000000011'::uuid, '00000000-0000-0000-0000-000000000001'::uuid, 'item-001', 'encrypted-token-1', 'plaid', 'active', NOW(), NOW()),
     ('00000000-0000-0000-0000-000000000012'::uuid, '00000000-0000-0000-0000-000000000002'::uuid, 'item-002', 'encrypted-token-2', 'plaid', 'active', NOW(), NOW()),
     ('00000000-0000-0000-0000-000000000013'::uuid, '00000000-0000-0000-0000-000000000003'::uuid, 'item-003', 'encrypted-token-3', 'plaid', 'active', NOW(), NOW());
 
--- Accounts
-INSERT INTO accounts (id, linked_item_id, plaid_account_id, name, official_name, type, subtype, created_at, updated_at)
+-- Accounts (user_id is NOT NULL — each account belongs to the same-numbered user)
+INSERT INTO accounts (id, user_id, linked_item_id, plaid_account_id, name, official_name, type, subtype, created_at, updated_at)
 VALUES
-    ('00000000-0000-0000-0000-000000000021'::uuid, '00000000-0000-0000-0000-000000000011'::uuid, 'plaid-acc-001', 'Checking', 'Main Checking', 'depository', 'checking', NOW(), NOW()),
-    ('00000000-0000-0000-0000-000000000022'::uuid, '00000000-0000-0000-0000-000000000012'::uuid, 'plaid-acc-002', 'Savings', 'High Yield Savings', 'depository', 'savings', NOW(), NOW()),
-    ('00000000-0000-0000-0000-000000000023'::uuid, '00000000-0000-0000-0000-000000000013'::uuid, 'plaid-acc-003', 'Credit Card', 'Premium Rewards Card', 'credit', 'credit card', NOW(), NOW());
+    ('00000000-0000-0000-0000-000000000021'::uuid, '00000000-0000-0000-0000-000000000001'::uuid, '00000000-0000-0000-0000-000000000011'::uuid, 'plaid-acc-001', 'Checking', 'Main Checking', 'depository', 'checking', NOW(), NOW()),
+    ('00000000-0000-0000-0000-000000000022'::uuid, '00000000-0000-0000-0000-000000000002'::uuid, '00000000-0000-0000-0000-000000000012'::uuid, 'plaid-acc-002', 'Savings', 'High Yield Savings', 'depository', 'savings', NOW(), NOW()),
+    ('00000000-0000-0000-0000-000000000023'::uuid, '00000000-0000-0000-0000-000000000003'::uuid, '00000000-0000-0000-0000-000000000013'::uuid, 'plaid-acc-003', 'Credit Card', 'Premium Rewards Card', 'credit', 'credit card', NOW(), NOW());
 
 -- Transactions (PFC v2 canonical, #1073 — `category` column dropped in migration 000065)
-INSERT INTO transactions (id, account_id, external_transaction_id, amount, date, name, pfc_primary, pfc_detailed, pending, created_at, updated_at)
+-- user_id and source remain required in the final schema; linked_item_id is nullable but
+-- included here so the seed preserves the account/item chain.
+INSERT INTO transactions (
+    id, user_id, account_id, linked_item_id, source, external_transaction_id,
+    amount, date, name, pfc_primary, pfc_detailed, pending, created_at, updated_at
+)
 VALUES
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000021'::uuid, 'txn-001', -50.00, '2025-11-01', 'Grocery Store', 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_GROCERIES', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000021'::uuid, 'txn-002', -25.50, '2025-11-02', 'Gas Station', 'TRANSPORTATION', 'TRANSPORTATION_GAS', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000021'::uuid, 'txn-003', 2500.00, '2025-11-05', 'Paycheck', 'INCOME', 'INCOME_WAGES', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000022'::uuid, 'txn-004', -100.00, '2025-11-03', 'Online Shopping', 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_ONLINE_MARKETPLACES', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000022'::uuid, 'txn-005', 100.00, '2025-11-01', 'Transfer from Checking', 'TRANSFER_IN', 'TRANSFER_IN_ACCOUNT_TRANSFER', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000023'::uuid, 'txn-006', -200.00, '2025-11-04', 'Restaurant', 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANTS', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000023'::uuid, 'txn-007', -75.00, '2025-11-06', 'Utilities', 'RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY', false, NOW(), NOW());
-EOF
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000001'::uuid, '00000000-0000-0000-0000-000000000021'::uuid, '00000000-0000-0000-0000-000000000011'::uuid, 'plaid', 'txn-001', -50.00, '2025-11-01', 'Grocery Store', 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_GROCERIES', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000001'::uuid, '00000000-0000-0000-0000-000000000021'::uuid, '00000000-0000-0000-0000-000000000011'::uuid, 'plaid', 'txn-002', -25.50, '2025-11-02', 'Gas Station', 'TRANSPORTATION', 'TRANSPORTATION_GAS', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000001'::uuid, '00000000-0000-0000-0000-000000000021'::uuid, '00000000-0000-0000-0000-000000000011'::uuid, 'plaid', 'txn-003', 2500.00, '2025-11-05', 'Paycheck', 'INCOME', 'INCOME_WAGES', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000002'::uuid, '00000000-0000-0000-0000-000000000022'::uuid, '00000000-0000-0000-0000-000000000012'::uuid, 'plaid', 'txn-004', -100.00, '2025-11-03', 'Online Shopping', 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_ONLINE_MARKETPLACES', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000002'::uuid, '00000000-0000-0000-0000-000000000022'::uuid, '00000000-0000-0000-0000-000000000012'::uuid, 'plaid', 'txn-005', 100.00, '2025-11-01', 'Transfer from Checking', 'TRANSFER_IN', 'TRANSFER_IN_ACCOUNT_TRANSFER', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000003'::uuid, '00000000-0000-0000-0000-000000000023'::uuid, '00000000-0000-0000-0000-000000000013'::uuid, 'plaid', 'txn-006', -200.00, '2025-11-04', 'Restaurant', 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANTS', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000003'::uuid, '00000000-0000-0000-0000-000000000023'::uuid, '00000000-0000-0000-0000-000000000013'::uuid, 'plaid', 'txn-007', -75.00, '2025-11-06', 'Utilities', 'RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY', false, NOW(), NOW());
 
-    if [ $? -ne 0 ]; then
-        fail_test "Failed to seed test data"
+-- User accounts (chain transparency, #1109)
+INSERT INTO user_accounts (id, user_id, institution_id, mask, primary_type, created_at, updated_at)
+VALUES
+    ('00000000-0000-0000-0000-000000000031'::uuid, '00000000-0000-0000-0000-000000000001'::uuid, 'ins-test-001', '1234', 'depository', NOW(), NOW()),
+    ('00000000-0000-0000-0000-000000000032'::uuid, '00000000-0000-0000-0000-000000000002'::uuid, 'ins-test-002', '5678', 'depository', NOW(), NOW());
+
+-- Link accounts for migration 000070/000072 backfill
+UPDATE accounts SET user_account_id = '00000000-0000-0000-0000-000000000031'::uuid WHERE id = '00000000-0000-0000-0000-000000000021'::uuid;
+UPDATE accounts SET user_account_id = '00000000-0000-0000-0000-000000000032'::uuid WHERE id = '00000000-0000-0000-0000-000000000022'::uuid;
+
+-- Migration 000072: string-valued account_id condition
+-- Uses target_kind/target_pfc_primary (target_category was dropped in migration 000065_pfc_v2_canonical)
+INSERT INTO categorization_rules (id, user_id, name, conditions, target_kind, target_pfc_primary, created_at, updated_at)
+VALUES (
+    '00000000-0000-0000-0000-000000000041'::uuid,
+    '00000000-0000-0000-0000-000000000001'::uuid,
+    'Test Rule String Condition',
+    '[{"type": "account_id", "operator": "equals", "value": "00000000-0000-0000-0000-000000000021"}]'::jsonb,
+    'pfc',
+    'GENERAL_MERCHANDISE',
+    NOW(), NOW()
+);
+
+-- Migration 000072: array-valued account_id condition
+INSERT INTO categorization_rules (id, user_id, name, conditions, target_kind, target_pfc_primary, created_at, updated_at)
+VALUES (
+    '00000000-0000-0000-0000-000000000042'::uuid,
+    '00000000-0000-0000-0000-000000000001'::uuid,
+    'Test Rule Array Condition',
+    '[{"type": "account_id", "operator": "in", "value": ["00000000-0000-0000-0000-000000000021"]}]'::jsonb,
+    'pfc',
+    'GENERAL_MERCHANDISE',
+    NOW(), NOW()
+);
+
+-- Migration 000070: transfer_suggestion rule with raw account IDs
+INSERT INTO rules (id, user_id, name, rule_type, trigger_config, actions, created_at, updated_at)
+VALUES (
+    '00000000-0000-0000-0000-000000000051'::uuid,
+    '00000000-0000-0000-0000-000000000001'::uuid,
+    'Test Transfer Suggestion Rule',
+    'transfer_suggestion',
+    '{"type": "event", "event": "transaction_created", "filters": {"account_id": "00000000-0000-0000-0000-000000000021"}}'::jsonb,
+    '{"transfer": {"from_account_id": "00000000-0000-0000-0000-000000000021", "to_account_id": "00000000-0000-0000-0000-000000000022", "amount_type": "fixed", "amount": 100}}'::jsonb,
+    NOW(), NOW()
+);
+EOF
+    then
+        fail_test "Failed to seed test data: check stderr above for the specific SQL error"
         return 1
     fi
 
     log_success "Test data seeded successfully"
+
+    # Run backfill migration SQL directly against seeded data (#1109 W3-G3).
+    # Migrations 000070 and 000072 ran during initial apply_migrations when the DB was empty
+    # (no-op). golang-migrate marks them applied so the second apply_migrations won't re-run
+    # them. We re-execute their SQL directly here so the JSONB assertions below have live data
+    # to verify. Both migrations are idempotent (they check for missing keys before updating).
+    log_info "Applying backfill migrations against seeded data (000070, 000072)..."
+    local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    local abs_migrations_dir="$project_root/backend/migrations"
+    psql "$DATABASE_URL" -f "$abs_migrations_dir/000070_backfill_user_account_id_in_rules.up.sql"
+    psql "$DATABASE_URL" -f "$abs_migrations_dir/000072_backfill_user_account_id_in_categorization_rule_conditions.up.sql"
+    log_success "Backfill migrations applied against seeded data"
 
     # Record row counts before re-running migrations
     log_info "Recording row counts..."
@@ -471,11 +543,59 @@ EOF
         fi
     done
 
+    # Verify migrations 000070 and 000072 backfilled user_account_id into JSONB columns (#1109)
+    echo ""
+    log_info "Verifying JSONB backfill in migrations 000070/000072..."
+    local ua_id_1="00000000-0000-0000-0000-000000000031"
+    local ua_id_2="00000000-0000-0000-0000-000000000032"
+
+    # Migration 000072: categorization_rules conditions (string & array)
+    local cat_rule_string=$(run_psql "SELECT conditions->0->>'value' FROM categorization_rules WHERE id = '00000000-0000-0000-0000-000000000041'")
+    if [ "$cat_rule_string" != "$ua_id_1" ]; then
+        fail_test "Migration 000072 Step 1 failed: string condition value should be '$ua_id_1', got '$cat_rule_string'"
+        data_preserved=false
+    else
+        log_success "Migration 000072 Step 1: string condition backfilled"
+    fi
+
+    local cat_rule_array=$(run_psql "SELECT conditions->0->'value'->>0 FROM categorization_rules WHERE id = '00000000-0000-0000-0000-000000000042'")
+    if [ "$cat_rule_array" != "$ua_id_1" ]; then
+        fail_test "Migration 000072 Step 2 failed: array condition should be '$ua_id_1', got '$cat_rule_array'"
+        data_preserved=false
+    else
+        log_success "Migration 000072 Step 2: array condition backfilled"
+    fi
+
+    # Migration 000070: rules actions and trigger_config
+    local transfer_from=$(run_psql "SELECT actions->'transfer'->>'from_user_account_id' FROM rules WHERE id = '00000000-0000-0000-0000-000000000051'")
+    if [ "$transfer_from" != "$ua_id_1" ]; then
+        fail_test "Migration 000070 Step 1 failed: from_user_account_id should be '$ua_id_1', got '$transfer_from'"
+        data_preserved=false
+    else
+        log_success "Migration 000070 Step 1: from_user_account_id backfilled"
+    fi
+
+    local transfer_to=$(run_psql "SELECT actions->'transfer'->>'to_user_account_id' FROM rules WHERE id = '00000000-0000-0000-0000-000000000051'")
+    if [ "$transfer_to" != "$ua_id_2" ]; then
+        fail_test "Migration 000070 Step 2 failed: to_user_account_id should be '$ua_id_2', got '$transfer_to'"
+        data_preserved=false
+    else
+        log_success "Migration 000070 Step 2: to_user_account_id backfilled"
+    fi
+
+    local trigger_ua=$(run_psql "SELECT trigger_config->'filters'->>'user_account_id' FROM rules WHERE id = '00000000-0000-0000-0000-000000000051'")
+    if [ "$trigger_ua" != "$ua_id_1" ]; then
+        fail_test "Migration 000070 Step 3 failed: trigger_config user_account_id should be '$ua_id_1', got '$trigger_ua'"
+        data_preserved=false
+    else
+        log_success "Migration 000070 Step 3: trigger_config user_account_id backfilled"
+    fi
+
     if [ "$data_preserved" = true ]; then
-        pass_test "DATA INTEGRITY TEST PASSED - All data preserved after re-applying migrations"
+        pass_test "DATA INTEGRITY TEST PASSED - All data preserved and JSONB backfills verified"
         return 0
     else
-        fail_test "DATA INTEGRITY TEST FAILED - Data was lost or corrupted"
+        fail_test "DATA INTEGRITY TEST FAILED - Data was lost, corrupted, or JSONB backfill assertions failed"
         return 1
     fi
 }

@@ -507,12 +507,20 @@ test.describe('Savings Page - Read-only Mode (inactive subscription)', () => {
   test('Create goal button is hidden when subscription is inactive', async ({ page }) => {
     await mockAuthDependencies(page, { subscriptionStatus: 'inactive' })
     await mockSavingsGoals(page, EMPTY_GOALS_RESPONSE)
+    await mockAccounts(page)
 
     await page.goto('/savings')
     await page.waitForLoadState('networkidle')
 
-    // ReadOnlyGuard wraps the button — it should not render
-    await expect(page.getByRole('button', { name: /create goal/i })).not.toBeVisible()
+    // Wait for ReadOnlyBanner (role="alert") to confirm isReadOnly=true is active.
+    // This is the authoritative signal that the profile mock returned 'inactive'.
+    await expect(page.getByRole('alert')).toBeVisible({ timeout: 10000 })
+
+    // ReadOnlyGuard wraps children in <div inert> — the button is disabled-in-place, not
+    // visually hidden. Playwright 1.59 on macOS finds inert elements via getByRole, so
+    // not.toBeVisible() is unreliable. Assert the inert wrapper exists around the button instead.
+    const createButton = page.getByRole('button', { name: /create goal/i })
+    await expect(page.locator('[inert]').filter({ has: createButton })).toBeVisible()
   })
 })
 

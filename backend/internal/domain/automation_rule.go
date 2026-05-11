@@ -250,11 +250,13 @@ type AutomationRuleCondition struct {
 
 // TransferAction defines the action for transfer_suggestion rules.
 type TransferAction struct {
-	FromAccountID string  `json:"from_account_id"`
-	ToAccountID   string  `json:"to_account_id"`
-	AmountType    string  `json:"amount_type,omitempty"` // fixed, percentage, excess
-	Amount        float64 `json:"amount"`
-	Threshold     float64 `json:"threshold,omitempty"` // For excess type: minimum before transfer
+	FromAccountID     string  `json:"from_account_id"`
+	ToAccountID       string  `json:"to_account_id"`
+	FromUserAccountID string  `json:"from_user_account_id,omitempty"` // Stable reference surviving re-links (Issue #1109)
+	ToUserAccountID   string  `json:"to_user_account_id,omitempty"`   // Stable reference surviving re-links (Issue #1109)
+	AmountType        string  `json:"amount_type,omitempty"`           // fixed, percentage, excess
+	Amount            float64 `json:"amount"`
+	Threshold         float64 `json:"threshold,omitempty"` // For excess type: minimum before transfer
 }
 
 // AlertAction defines the action for budget_alert rules.
@@ -542,22 +544,24 @@ func (e *RuleExecution) MarkFailed(errorCode, errorMessage string) {
 // TransferSuggestion represents a suggested money transfer.
 // IMPORTANT: No actual money movement - suggestions only (per CLAUDE.md).
 type TransferSuggestion struct {
-	ID              string           `json:"id" db:"id"`
-	UserID          string           `json:"user_id" db:"user_id"`
-	RuleID          *string          `json:"rule_id,omitempty" db:"rule_id"`
-	RuleExecutionID *string          `json:"rule_execution_id,omitempty" db:"rule_execution_id"`
-	FromAccountID   *string          `json:"from_account_id,omitempty" db:"from_account_id"`
-	ToAccountID     *string          `json:"to_account_id,omitempty" db:"to_account_id"`
-	Amount          float64          `json:"amount" db:"amount"`
-	CurrencyCode    string           `json:"currency_code" db:"currency_code"`
-	Reason          *string          `json:"reason,omitempty" db:"reason"`
-	Source          SuggestionSource `json:"source" db:"source"`
-	Status          SuggestionStatus `json:"status" db:"status"`
-	ExpiresAt       *time.Time       `json:"expires_at,omitempty" db:"expires_at"`
-	UserActionAt    *time.Time       `json:"user_action_at,omitempty" db:"user_action_at"`
-	UserNotes       *string          `json:"user_notes,omitempty" db:"user_notes"`
-	CreatedAt       time.Time        `json:"created_at" db:"created_at"`
-	UpdatedAt       time.Time        `json:"updated_at" db:"updated_at"`
+	ID                string           `json:"id" db:"id"`
+	UserID            string           `json:"user_id" db:"user_id"`
+	RuleID            *string          `json:"rule_id,omitempty" db:"rule_id"`
+	RuleExecutionID   *string          `json:"rule_execution_id,omitempty" db:"rule_execution_id"`
+	FromAccountID     *string          `json:"from_account_id,omitempty" db:"from_account_id"`
+	ToAccountID       *string          `json:"to_account_id,omitempty" db:"to_account_id"`
+	FromUserAccountID *string          `json:"from_user_account_id,omitempty" db:"from_user_account_id"` // Stable reference surviving re-links (Issue #1109)
+	ToUserAccountID   *string          `json:"to_user_account_id,omitempty" db:"to_user_account_id"`   // Stable reference surviving re-links (Issue #1109)
+	Amount            float64          `json:"amount" db:"amount"`
+	CurrencyCode      string           `json:"currency_code" db:"currency_code"`
+	Reason            *string          `json:"reason,omitempty" db:"reason"`
+	Source            SuggestionSource `json:"source" db:"source"`
+	Status            SuggestionStatus `json:"status" db:"status"`
+	ExpiresAt         *time.Time       `json:"expires_at,omitempty" db:"expires_at"`
+	UserActionAt      *time.Time       `json:"user_action_at,omitempty" db:"user_action_at"`
+	UserNotes         *string          `json:"user_notes,omitempty" db:"user_notes"`
+	CreatedAt         time.Time        `json:"created_at" db:"created_at"`
+	UpdatedAt         time.Time        `json:"updated_at" db:"updated_at"`
 }
 
 // Validate checks that the transfer suggestion has all required fields and valid values.

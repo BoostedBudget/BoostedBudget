@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // Default matching parameters.
@@ -77,6 +78,9 @@ func (s *transactionMonitorService) MonitorForMatches(
 	}
 
 	// Check each transaction against each suggestion
+	// Canary counter: each call that resolves suggestions uses chain-aware account matching (Issue #1109).
+	observability.AccountsReplacedFiltered.WithLabelValues("transaction_match").Inc()
+
 	for _, txn := range newTransactions {
 		for _, suggestion := range suggestions {
 			if s.isMatch(txn, suggestion) {
@@ -99,10 +103,23 @@ func (s *transactionMonitorService) MonitorForMatches(
 	return nil
 }
 
+// accountsMatch returns true when the transaction account matches the suggestion
+// destination. Prefers stable UserAccountID comparison when both sides have one
+// (post-relink scenario); falls back to raw account_id for legacy data. (Issue #1109)
+func accountsMatch(txnAccountID string, txnUserAccountID *string, suggAccountID *string, suggUserAccountID *string) bool {
+	if suggUserAccountID != nil && txnUserAccountID != nil {
+		return *txnUserAccountID == *suggUserAccountID
+	}
+	if suggAccountID != nil {
+		return txnAccountID == *suggAccountID
+	}
+	return false
+}
+
 // isMatch checks if a transaction matches a suggestion.
 func (s *transactionMonitorService) isMatch(txn *domain.Transaction, suggestion *domain.TransferSuggestion) bool {
-	// Skip if suggestion has no ToAccountID
-	if suggestion.ToAccountID == nil {
+	// Skip if suggestion has no destination reference at all
+	if suggestion.ToAccountID == nil && suggestion.ToUserAccountID == nil {
 		return false
 	}
 
@@ -111,8 +128,8 @@ func (s *transactionMonitorService) isMatch(txn *domain.Transaction, suggestion 
 		return false
 	}
 
-	// 1. Check account match
-	if txn.AccountID != *suggestion.ToAccountID {
+	// 1. Check account match — chain-aware: prefer UserAccountID when available
+	if !accountsMatch(txn.AccountID, txn.UserAccountID, suggestion.ToAccountID, suggestion.ToUserAccountID) {
 		return false
 	}
 

@@ -1083,6 +1083,7 @@ describe('AutoCategorizationRuleEditor', () => {
     const mockAccounts = [
       {
         id: 'acc-1',
+        user_account_id: 'ua-acc-1',
         name: 'Checking',
         type: 'depository' as const,
         mask: '1234',
@@ -1097,6 +1098,7 @@ describe('AutoCategorizationRuleEditor', () => {
       },
       {
         id: 'acc-2',
+        user_account_id: 'ua-acc-2',
         name: 'Savings',
         type: 'depository' as const,
         mask: '5678',
@@ -1111,6 +1113,7 @@ describe('AutoCategorizationRuleEditor', () => {
       },
       {
         id: 'acc-3',
+        // No user_account_id — legacy account; should fall back to raw id.
         name: 'Credit Card',
         type: 'credit' as const,
         mask: '9012',
@@ -1206,7 +1209,8 @@ describe('AutoCategorizationRuleEditor', () => {
         })
       })
 
-      it('should update condition value with account ID', async () => {
+      // Issue #1109: condition value must use stable user_account_id so rules survive re-link.
+      it('should store user_account_id (not raw account id) as condition value', async () => {
         const user = userEvent.setup({ delay: null })
 
         render(
@@ -1231,7 +1235,6 @@ describe('AutoCategorizationRuleEditor', () => {
         await user.click(searchInput)
         await user.click(screen.getByText('Checking'))
 
-        // Satisfy validation with a tag (target picker exercised in dedicated tests).
         await user.type(screen.getByPlaceholderText(/add tag/i), 'TestTag')
         fireEvent.click(screen.getByRole('button', { name: /add tag/i }))
 
@@ -1239,8 +1242,48 @@ describe('AutoCategorizationRuleEditor', () => {
         fireEvent.click(saveButton)
 
         await waitFor(() => {
+          // Must store ua-acc-1 (user_account_id), NOT acc-1 (raw id).
           expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
-            conditions: [{ type: 'account_id', value: 'acc-1' }],
+            conditions: [{ type: 'account_id', value: 'ua-acc-1' }],
+          }))
+        })
+      })
+
+      it('should fall back to raw account id when user_account_id is absent (legacy)', async () => {
+        const user = userEvent.setup({ delay: null })
+
+        render(
+          <AutoCategorizationRuleEditor
+            mode="create"
+            onSave={mockOnSave}
+            onCancel={mockOnCancel}
+            categories={mockCategories}
+            accounts={mockAccounts}
+          />
+        )
+
+        await user.type(screen.getByLabelText(/rule name/i), 'Account Rule Legacy')
+
+        const addButton = screen.getByRole('button', { name: /add condition/i })
+        fireEvent.click(addButton)
+
+        const typeSelect = screen.getByLabelText(/condition type/i)
+        await user.selectOptions(typeSelect, 'account_id')
+
+        const searchInput = screen.getByRole('combobox', { name: /select account/i })
+        await user.click(searchInput)
+        await user.click(screen.getByText('Credit Card'))
+
+        await user.type(screen.getByPlaceholderText(/add tag/i), 'TestTag2')
+        fireEvent.click(screen.getByRole('button', { name: /add tag/i }))
+
+        const saveButton = screen.getByRole('button', { name: /save/i })
+        fireEvent.click(saveButton)
+
+        await waitFor(() => {
+          // acc-3 has no user_account_id — falls back to raw id.
+          expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+            conditions: [{ type: 'account_id', value: 'acc-3' }],
           }))
         })
       })

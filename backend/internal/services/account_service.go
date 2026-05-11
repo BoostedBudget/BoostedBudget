@@ -113,10 +113,11 @@ type AccountService interface {
 	// NOTE: After PR #197, this accepts internal user UUID, not Clerk ID
 	GetAccounts(ctx context.Context, userID string) ([]domain.Account, error)
 
-	// GetAccountsFiltered retrieves accounts with optional hidden filter (Issue #307)
-	// includeHidden=false: Returns only visible accounts (default view)
-	// includeHidden=true: Returns all accounts including hidden ones
-	GetAccountsFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error)
+	// GetAccountsFiltered retrieves accounts with optional filters (Issue #307, #1109)
+	// opts.IncludeHidden=false: Returns only visible accounts (default)
+	// opts.IncludeReplaced=true: Also includes replaced accounts (chain transparency)
+	// opts.UserAccountID: Filters to accounts sharing a user_account_id chain
+	GetAccountsFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error)
 
 	// UpdateAccount updates account customization fields (Issue #307)
 	// Supports: nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden
@@ -127,6 +128,10 @@ type AccountService interface {
 	// ReorderAccounts bulk updates display_order for multiple accounts (Issue #307)
 	// Used for drag-and-drop reordering
 	ReorderAccounts(ctx context.Context, userID string, req *domain.ReorderAccountsRequest) error
+
+	// ListActiveByUser returns only active accounts for a user, excluding replaced and expired.
+	// Issue #1109: re-link chain transparency — callers should prefer this over GetByUserID.
+	ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error)
 
 	// DeleteAccount deletes a single account with ownership validation.
 	// Only the account owner can delete their account.
@@ -158,9 +163,10 @@ type accountService struct {
 	linkedItemRepo  repository.LinkedItemRepository
 	accountRepo     repository.AccountRepository
 	userRepo        repository.ProfileRepository
-	userAccountSvc  UserAccountService // Issue #171: For re-link user_account matching
+	userAccountSvc  UserAccountService  // Issue #171: For re-link user_account matching
+	chainResolver   AccountChainResolver // Issue #1109: Active-only account resolution
 	db              *pgxpool.Pool
-	jobQueue        queue.JobQueue          // Issue #658: For auto-sync after linking (can be nil)
+	jobQueue        queue.JobQueue           // Issue #658: For auto-sync after linking (can be nil)
 	enc             *appcrypto.FieldEncryptor // Issue #1010: For fingerprint computation (can be nil)
 	logger          *slog.Logger
 }
@@ -267,6 +273,7 @@ func NewAccountService(
 		linkedItemRepo:  linkedItemRepo,
 		accountRepo:     accountRepo,
 		userRepo:        userRepo,
+		chainResolver:   NewAccountChainResolver(accountRepo), // Issue #1109
 		db:              db,
 		logger:          slog.Default(),
 	}
@@ -772,9 +779,17 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 	return s.linkedItemRepo.DeleteByUser(ctx, linkedItemID, userID)
 }
 
-// GetAccountsFiltered retrieves accounts with optional hidden filter (Issue #307)
-// Similar to GetAccounts but supports filtering hidden accounts.
-func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
+// AccountFilterOptions holds filter options for GetAccountsFiltered (Issue #1109).
+type AccountFilterOptions struct {
+	IncludeHidden   bool   // if true, include hidden accounts
+	IncludeReplaced bool   // if true, equivalent to StatusFilter="all" (backward-compat alias)
+	StatusFilter    string // "active" (default), "replaced" (replaced only), "all" (no filter)
+	UserAccountID   string // if set, filter to accounts with this user_account_id
+}
+
+// GetAccountsFiltered retrieves accounts with optional filters (Issue #307, #1109).
+// Supports hidden, replaced-status, and user_account_id chain filtering.
+func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error) {
 	// Fetch user by internal UUID to verify user exists
 	_, err := s.userRepo.GetUserByID(ctx, userID)
 	if err != nil {
@@ -787,8 +802,16 @@ func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string,
 		return []domain.Account{}, nil
 	}
 
-	// Query accounts with hidden filter using internal UUID
-	accounts, err := s.accountRepo.GetAccountsWithInstitutionFiltered(ctx, userID, includeHidden)
+	// Map service options to repository filter options
+	repoOpts := repository.AccountFilterOptions{
+		IncludeHidden:   opts.IncludeHidden,
+		IncludeReplaced: opts.IncludeReplaced || opts.StatusFilter == "all",
+		ReplacedOnly:    opts.StatusFilter == "replaced",
+		UserAccountID:   opts.UserAccountID,
+	}
+
+	// Query accounts with filters using internal UUID
+	accounts, err := s.accountRepo.GetAccountsWithInstitutionFiltered(ctx, userID, repoOpts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts: %w", err)
 	}
@@ -898,6 +921,12 @@ func (s *accountService) ReorderAccounts(
 // SetJobQueue sets the job queue for auto-sync after linking (Issue #658).
 // This is needed because of circular dependency: service must be created before
 // River client, but needs client to enqueue jobs.
+// ListActiveByUser returns only active (non-replaced, non-expired) accounts for a user.
+// Issue #1109: re-link chain transparency.
+func (s *accountService) ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error) {
+	return s.chainResolver.ListActiveByUser(ctx, userID)
+}
+
 func (s *accountService) SetJobQueue(jq queue.JobQueue) {
 	s.jobQueue = jq
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // StudentLoanLiabilityRepository defines the interface for student loan liability data access.
@@ -222,27 +223,32 @@ func (r *studentLoanLiabilityRepository) ReplaceForAccount(ctx context.Context, 
 }
 
 // GetByUserID retrieves all student loan liabilities for a user.
+// Joins accounts to filter out replaced accounts (Issue #1109).
 func (r *studentLoanLiabilityRepository) GetByUserID(ctx context.Context, userID string) ([]domain.StudentLoanLiability, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("liabilities").Inc()
+
 	query := `
-		SELECT id, user_id, account_id, account_number,
-			disbursement_dates, expected_payoff_date, guarantor,
-			interest_rate_percentage, is_overdue,
-			last_payment_amount, last_payment_date,
-			last_statement_issue_date, last_statement_balance,
-			loan_name, loan_status_type, loan_status_end_date,
-			minimum_payment_amount, next_payment_due_date,
-			origination_date, origination_principal_amount,
-			outstanding_interest_amount, payment_reference_number,
-			pslf_estimated_eligibility_date, pslf_payments_made, pslf_payments_remaining,
-			repayment_plan_type, repayment_plan_description,
-			sequence_number,
-			servicer_address_street, servicer_address_city,
-			servicer_address_region, servicer_address_postal_code, servicer_address_country,
-			ytd_interest_paid, ytd_principal_paid,
-			synced_at, created_at, updated_at
+		SELECT student_loan_liabilities.id, student_loan_liabilities.user_id, student_loan_liabilities.account_id, student_loan_liabilities.account_number,
+			student_loan_liabilities.disbursement_dates, student_loan_liabilities.expected_payoff_date, student_loan_liabilities.guarantor,
+			student_loan_liabilities.interest_rate_percentage, student_loan_liabilities.is_overdue,
+			student_loan_liabilities.last_payment_amount, student_loan_liabilities.last_payment_date,
+			student_loan_liabilities.last_statement_issue_date, student_loan_liabilities.last_statement_balance,
+			student_loan_liabilities.loan_name, student_loan_liabilities.loan_status_type, student_loan_liabilities.loan_status_end_date,
+			student_loan_liabilities.minimum_payment_amount, student_loan_liabilities.next_payment_due_date,
+			student_loan_liabilities.origination_date, student_loan_liabilities.origination_principal_amount,
+			student_loan_liabilities.outstanding_interest_amount, student_loan_liabilities.payment_reference_number,
+			student_loan_liabilities.pslf_estimated_eligibility_date, student_loan_liabilities.pslf_payments_made, student_loan_liabilities.pslf_payments_remaining,
+			student_loan_liabilities.repayment_plan_type, student_loan_liabilities.repayment_plan_description,
+			student_loan_liabilities.sequence_number,
+			student_loan_liabilities.servicer_address_street, student_loan_liabilities.servicer_address_city,
+			student_loan_liabilities.servicer_address_region, student_loan_liabilities.servicer_address_postal_code, student_loan_liabilities.servicer_address_country,
+			student_loan_liabilities.ytd_interest_paid, student_loan_liabilities.ytd_principal_paid,
+			student_loan_liabilities.synced_at, student_loan_liabilities.created_at, student_loan_liabilities.updated_at
 		FROM student_loan_liabilities
-		WHERE user_id = $1
-		ORDER BY account_id
+		JOIN accounts a ON a.id = student_loan_liabilities.account_id
+		WHERE student_loan_liabilities.user_id = $1
+		  AND a.status = 'active'
+		ORDER BY student_loan_liabilities.account_id
 	`
 
 	rows, err := r.db.Query(ctx, query, userID)
@@ -305,6 +311,16 @@ func (r *studentLoanLiabilityRepository) GetByAccountID(ctx context.Context, acc
 			synced_at, created_at, updated_at
 		FROM student_loan_liabilities
 		WHERE account_id = $1
+		   OR account_id IN (
+				SELECT id FROM accounts
+				WHERE user_account_id = (
+					SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL
+				)
+		   )
+		ORDER BY (
+			account_id IN (SELECT id FROM accounts WHERE status = 'active')
+		) DESC,
+		student_loan_liabilities.created_at DESC
 	`
 
 	rows, err := r.db.Query(ctx, query, accountID)

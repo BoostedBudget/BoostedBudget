@@ -45,5 +45,6 @@ export interface SavingsGoal {
   name: string;
   target_amount: number;
   updated_at: string;
+  user_account_id?: string;
   user_id: string;
 }

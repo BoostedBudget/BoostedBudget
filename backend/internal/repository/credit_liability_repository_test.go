@@ -298,3 +298,172 @@ func TestCreditLiabilityRepository_GetByAccountID_NotFound(t *testing.T) {
 	assert.Nil(t, liability)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// Chain-aware tests for Issue #1109
+
+func TestCreditLiabilityRepository_GetByUserID_ActiveAccountsOnly(t *testing.T) {
+	// RED: GetByUserID must JOIN accounts and only return liabilities for active accounts
+	mock, repo := setupCreditLiabilityMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+	now := time.Now()
+
+	isOverdue := false
+	lastPayment := 250.00
+	lastBalance := 1500.00
+	minPayment := 25.00
+
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "account_id", "is_overdue",
+		"last_payment_amount", "last_payment_date",
+		"last_statement_issue_date", "last_statement_balance",
+		"minimum_payment_amount", "next_payment_due_date",
+		"synced_at", "created_at", "updated_at",
+	}).AddRow(
+		uuid.New().String(), userID, accountID, &isOverdue,
+		&lastPayment, &now,
+		&now, &lastBalance,
+		&minPayment, &now,
+		now, now, now,
+	)
+
+	// The query must JOIN accounts and filter status='active'
+	mock.ExpectQuery(regexp.QuoteMeta(`JOIN accounts a ON a.id = credit_liabilities.account_id`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	liabilities, err := repo.GetByUserID(ctx, userID)
+
+	require.NoError(t, err)
+	require.Len(t, liabilities, 1)
+	assert.Equal(t, accountID, liabilities[0].AccountID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreditLiabilityRepository_GetByUserID_ReplacedAccountExcluded(t *testing.T) {
+	// RED: Replaced credit liability accounts must NOT appear in GetByUserID
+	mock, repo := setupCreditLiabilityMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "account_id", "is_overdue",
+		"last_payment_amount", "last_payment_date",
+		"last_statement_issue_date", "last_statement_balance",
+		"minimum_payment_amount", "next_payment_due_date",
+		"synced_at", "created_at", "updated_at",
+	})
+
+	mock.ExpectQuery(regexp.QuoteMeta(`JOIN accounts a ON a.id = credit_liabilities.account_id`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	liabilities, err := repo.GetByUserID(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Empty(t, liabilities)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCreditLiabilityRepository_GetByAccountID_PrefersActiveRow verifies that when
+// both a replaced and an active chain member have a liability row, GetByAccountID
+// returns the active row. The query must include ORDER BY active-first so the
+// result is deterministic. Issue #1109 W4-A.
+func TestCreditLiabilityRepository_GetByAccountID_PrefersActiveRow(t *testing.T) {
+	mock, repo := setupCreditLiabilityMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	activeAccountID := uuid.New().String()
+	replacedAccountID := uuid.New().String()
+	now := time.Now()
+
+	isOverdue := false
+	lastPayment := 300.00
+	lastBalance := 2000.00
+	minPayment := 30.00
+
+	cols := []string{
+		"id", "user_id", "account_id", "is_overdue",
+		"last_payment_amount", "last_payment_date",
+		"last_statement_issue_date", "last_statement_balance",
+		"minimum_payment_amount", "next_payment_due_date",
+		"synced_at", "created_at", "updated_at",
+	}
+
+	// Query must include ORDER BY so the active row is returned first when both
+	// replaced and active rows exist in the chain.
+	mock.ExpectQuery("ORDER BY").
+		WithArgs(activeAccountID).
+		WillReturnRows(pgxmock.NewRows(cols).
+			AddRow( // active row returned first by ORDER BY
+				uuid.New().String(), userID, activeAccountID, &isOverdue,
+				&lastPayment, &now,
+				&now, &lastBalance,
+				&minPayment, &now,
+				now, now, now,
+			).
+			AddRow( // replaced row — must NOT be returned
+				uuid.New().String(), userID, replacedAccountID, &isOverdue,
+				&lastPayment, &now,
+				&now, &lastBalance,
+				&minPayment, &now,
+				now, now, now,
+			))
+
+	result, err := repo.GetByAccountID(ctx, activeAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, activeAccountID, result.AccountID,
+		"active row must be returned first when both replaced and active rows exist")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCreditLiabilityRepository_GetByAccountID_ChainExpand verifies that filtering
+// by active account_id returns liabilities recorded under a replaced account that
+// shares the same user_account_id. Issue #1109: B.4 fix.
+func TestCreditLiabilityRepository_GetByAccountID_ChainExpand(t *testing.T) {
+	mock, repo := setupCreditLiabilityMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	activeAccountID := uuid.New().String()
+	replacedAccountID := uuid.New().String()
+	now := time.Now()
+
+	isOverdue := false
+	lastPayment := 300.00
+	lastBalance := 2000.00
+	minPayment := 30.00
+
+	// Liability was recorded under the replaced account but must be returned
+	// when the caller queries by the active account_id via chain-expansion.
+	mock.ExpectQuery("account_id IN.*user_account_id.*ORDER BY").
+		WithArgs(activeAccountID).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "user_id", "account_id", "is_overdue",
+			"last_payment_amount", "last_payment_date",
+			"last_statement_issue_date", "last_statement_balance",
+			"minimum_payment_amount", "next_payment_due_date",
+			"synced_at", "created_at", "updated_at",
+		}).AddRow(
+			uuid.New().String(), userID, replacedAccountID, &isOverdue,
+			&lastPayment, &now,
+			&now, &lastBalance,
+			&minPayment, &now,
+			now, now, now,
+		))
+
+	result, err := repo.GetByAccountID(ctx, activeAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, result, "pre-relink liability must be returned when filtering by active account_id")
+	assert.Equal(t, replacedAccountID, result.AccountID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
