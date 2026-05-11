@@ -507,6 +507,7 @@ test.describe('Savings Page - Read-only Mode (inactive subscription)', () => {
   test('Create goal button is hidden when subscription is inactive', async ({ page }) => {
     await mockAuthDependencies(page, { subscriptionStatus: 'inactive' })
     await mockSavingsGoals(page, EMPTY_GOALS_RESPONSE)
+    await mockAccounts(page)
 
     await page.goto('/savings')
     await page.waitForLoadState('networkidle')
