@@ -418,22 +418,27 @@ UPDATE accounts SET user_account_id = '00000000-0000-0000-0000-000000000031'::uu
 UPDATE accounts SET user_account_id = '00000000-0000-0000-0000-000000000032'::uuid WHERE id = '00000000-0000-0000-0000-000000000022'::uuid;
 
 -- Migration 000072: string-valued account_id condition
-INSERT INTO categorization_rules (id, user_id, name, conditions, created_at, updated_at)
+-- Uses target_kind/target_pfc_primary (target_category was dropped in migration 000065_pfc_v2_canonical)
+INSERT INTO categorization_rules (id, user_id, name, conditions, target_kind, target_pfc_primary, created_at, updated_at)
 VALUES (
     '00000000-0000-0000-0000-000000000041'::uuid,
     '00000000-0000-0000-0000-000000000001'::uuid,
     'Test Rule String Condition',
     '[{"type": "account_id", "operator": "equals", "value": "00000000-0000-0000-0000-000000000021"}]'::jsonb,
+    'pfc',
+    'GENERAL_MERCHANDISE',
     NOW(), NOW()
 );
 
 -- Migration 000072: array-valued account_id condition
-INSERT INTO categorization_rules (id, user_id, name, conditions, created_at, updated_at)
+INSERT INTO categorization_rules (id, user_id, name, conditions, target_kind, target_pfc_primary, created_at, updated_at)
 VALUES (
     '00000000-0000-0000-0000-000000000042'::uuid,
     '00000000-0000-0000-0000-000000000001'::uuid,
     'Test Rule Array Condition',
     '[{"type": "account_id", "operator": "in", "value": ["00000000-0000-0000-0000-000000000021"]}]'::jsonb,
+    'pfc',
+    'GENERAL_MERCHANDISE',
     NOW(), NOW()
 );
 
@@ -465,8 +470,8 @@ EOF
     log_info "Applying backfill migrations against seeded data (000070, 000072)..."
     local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     local abs_migrations_dir="$project_root/backend/migrations"
-    psql "$DATABASE_URL" -f "$abs_migrations_dir/000070_backfill_user_account_id_in_rules.up.sql" > /dev/null 2>&1
-    psql "$DATABASE_URL" -f "$abs_migrations_dir/000072_backfill_user_account_id_in_categorization_rule_conditions.up.sql" > /dev/null 2>&1
+    psql "$DATABASE_URL" -f "$abs_migrations_dir/000070_backfill_user_account_id_in_rules.up.sql"
+    psql "$DATABASE_URL" -f "$abs_migrations_dir/000072_backfill_user_account_id_in_categorization_rule_conditions.up.sql"
     log_success "Backfill migrations applied against seeded data"
 
     # Record row counts before re-running migrations
