@@ -338,39 +338,41 @@ test_data_integrity() {
     log_info "Seeding test data..."
 
     # Insert test users
+    # \set ON_ERROR_STOP on: psql exits non-zero on statement failure so $? catches it.
+    # Without it, psql always returns 0 even if INSERTs silently fail.
     psql "$DATABASE_URL" > /dev/null 2>&1 <<EOF
--- Free tier user
-INSERT INTO users (id, clerk_user_id, email, primary_region, tier, created_at, updated_at)
+\set ON_ERROR_STOP on
+-- subscription_tier is the column name (not 'tier'); valid values post-migration-000040:
+--   premium, household_2, household_3, household_4, household_5
+INSERT INTO users (id, clerk_user_id, email, primary_region, subscription_tier, created_at, updated_at)
 VALUES (
     '00000000-0000-0000-0000-000000000001'::uuid,
-    'user_test_free',
-    'free@test.com',
-    'us-east-1',
-    'free',
-    NOW(),
-    NOW()
-);
-
--- Premium user
-INSERT INTO users (id, clerk_user_id, email, primary_region, tier, created_at, updated_at)
-VALUES (
-    '00000000-0000-0000-0000-000000000002'::uuid,
-    'user_test_premium',
-    'premium@test.com',
+    'user_test_1',
+    'user1@test.com',
     'us-east-1',
     'premium',
     NOW(),
     NOW()
 );
 
--- Premium Plus user
-INSERT INTO users (id, clerk_user_id, email, primary_region, tier, created_at, updated_at)
+INSERT INTO users (id, clerk_user_id, email, primary_region, subscription_tier, created_at, updated_at)
+VALUES (
+    '00000000-0000-0000-0000-000000000002'::uuid,
+    'user_test_2',
+    'user2@test.com',
+    'us-east-1',
+    'premium',
+    NOW(),
+    NOW()
+);
+
+INSERT INTO users (id, clerk_user_id, email, primary_region, subscription_tier, created_at, updated_at)
 VALUES (
     '00000000-0000-0000-0000-000000000003'::uuid,
-    'user_test_premium_plus',
-    'premium-plus@test.com',
+    'user_test_3',
+    'user3@test.com',
     'us-east-1',
-    'premium_plus',
+    'household_5',
     NOW(),
     NOW()
 );
@@ -382,8 +384,8 @@ VALUES
     ('00000000-0000-0000-0000-000000000002'::uuid, 365, NOW(), NOW()),
     ('00000000-0000-0000-0000-000000000003'::uuid, 730, NOW(), NOW());
 
--- Linked items
-INSERT INTO linked_items (id, user_id, item_id, access_token, provider, status, created_at, updated_at)
+-- Linked items (access_token_encrypted is the column name per migration 000006)
+INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted, provider, status, created_at, updated_at)
 VALUES
     ('00000000-0000-0000-0000-000000000011'::uuid, '00000000-0000-0000-0000-000000000001'::uuid, 'item-001', 'encrypted-token-1', 'plaid', 'active', NOW(), NOW()),
     ('00000000-0000-0000-0000-000000000012'::uuid, '00000000-0000-0000-0000-000000000002'::uuid, 'item-002', 'encrypted-token-2', 'plaid', 'active', NOW(), NOW()),
