@@ -337,19 +337,26 @@ test_data_integrity() {
     # Seed test data
     log_info "Seeding test data..."
 
-    # Insert test users
-    # \set ON_ERROR_STOP on: psql exits non-zero on statement failure so $? catches it.
-    # Without it, psql always returns 0 even if INSERTs silently fail.
-    psql "$DATABASE_URL" > /dev/null 2>&1 <<EOF
+    # Insert test users.
+    # `if !` + `<<EOF > /dev/null`: three-way fix for set -e + ON_ERROR_STOP interaction:
+    #   1. `if !` prevents set -e from killing the script when psql exits non-zero (code 3).
+    #   2. `> /dev/null` suppresses verbose INSERT success noise (stdout only).
+    #   3. stderr is NOT redirected — SQL error messages appear in CI logs for diagnosis.
+    # `\set ON_ERROR_STOP on` makes psql exit 3 immediately on the first SQL error
+    # instead of continuing and silently masking failures with a 0 exit code.
+    if ! psql "$DATABASE_URL" <<EOF > /dev/null
 \set ON_ERROR_STOP on
+-- primary_region must be 'iad' after migrations 000005 and 000059.
 -- subscription_tier is the column name (not 'tier'); valid values post-migration-000040:
 --   premium, household_2, household_3, household_4, household_5
+-- Keep subscription_tier explicit here because the legacy column default is still 'free',
+-- which no longer satisfies the final valid_subscription_tier CHECK constraint.
 INSERT INTO users (id, clerk_user_id, email, primary_region, subscription_tier, created_at, updated_at)
 VALUES (
     '00000000-0000-0000-0000-000000000001'::uuid,
     'user_test_1',
     'user1@test.com',
-    'us-east-1',
+    'iad',
     'premium',
     NOW(),
     NOW()
@@ -360,7 +367,7 @@ VALUES (
     '00000000-0000-0000-0000-000000000002'::uuid,
     'user_test_2',
     'user2@test.com',
-    'us-east-1',
+    'iad',
     'premium',
     NOW(),
     NOW()
@@ -371,18 +378,18 @@ VALUES (
     '00000000-0000-0000-0000-000000000003'::uuid,
     'user_test_3',
     'user3@test.com',
-    'us-east-1',
+    'iad',
     'household_5',
     NOW(),
     NOW()
 );
 
--- Privacy settings
-INSERT INTO privacy_settings (user_id, data_retention_days, created_at, updated_at)
+-- Privacy settings (no data_retention_days column exists in the final schema)
+INSERT INTO privacy_settings (user_id, created_at, updated_at)
 VALUES
-    ('00000000-0000-0000-0000-000000000001'::uuid, 90, NOW(), NOW()),
-    ('00000000-0000-0000-0000-000000000002'::uuid, 365, NOW(), NOW()),
-    ('00000000-0000-0000-0000-000000000003'::uuid, 730, NOW(), NOW());
+    ('00000000-0000-0000-0000-000000000001'::uuid, NOW(), NOW()),
+    ('00000000-0000-0000-0000-000000000002'::uuid, NOW(), NOW()),
+    ('00000000-0000-0000-0000-000000000003'::uuid, NOW(), NOW());
 
 -- Linked items (access_token_encrypted is the column name per migration 000006)
 INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted, provider, status, created_at, updated_at)
@@ -399,15 +406,20 @@ VALUES
     ('00000000-0000-0000-0000-000000000023'::uuid, '00000000-0000-0000-0000-000000000003'::uuid, '00000000-0000-0000-0000-000000000013'::uuid, 'plaid-acc-003', 'Credit Card', 'Premium Rewards Card', 'credit', 'credit card', NOW(), NOW());
 
 -- Transactions (PFC v2 canonical, #1073 — `category` column dropped in migration 000065)
-INSERT INTO transactions (id, account_id, external_transaction_id, amount, date, name, pfc_primary, pfc_detailed, pending, created_at, updated_at)
+-- user_id and source remain required in the final schema; linked_item_id is nullable but
+-- included here so the seed preserves the account/item chain.
+INSERT INTO transactions (
+    id, user_id, account_id, linked_item_id, source, external_transaction_id,
+    amount, date, name, pfc_primary, pfc_detailed, pending, created_at, updated_at
+)
 VALUES
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000021'::uuid, 'txn-001', -50.00, '2025-11-01', 'Grocery Store', 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_GROCERIES', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000021'::uuid, 'txn-002', -25.50, '2025-11-02', 'Gas Station', 'TRANSPORTATION', 'TRANSPORTATION_GAS', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000021'::uuid, 'txn-003', 2500.00, '2025-11-05', 'Paycheck', 'INCOME', 'INCOME_WAGES', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000022'::uuid, 'txn-004', -100.00, '2025-11-03', 'Online Shopping', 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_ONLINE_MARKETPLACES', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000022'::uuid, 'txn-005', 100.00, '2025-11-01', 'Transfer from Checking', 'TRANSFER_IN', 'TRANSFER_IN_ACCOUNT_TRANSFER', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000023'::uuid, 'txn-006', -200.00, '2025-11-04', 'Restaurant', 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANTS', false, NOW(), NOW()),
-    (gen_random_uuid(), '00000000-0000-0000-0000-000000000023'::uuid, 'txn-007', -75.00, '2025-11-06', 'Utilities', 'RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY', false, NOW(), NOW());
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000001'::uuid, '00000000-0000-0000-0000-000000000021'::uuid, '00000000-0000-0000-0000-000000000011'::uuid, 'plaid', 'txn-001', -50.00, '2025-11-01', 'Grocery Store', 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_GROCERIES', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000001'::uuid, '00000000-0000-0000-0000-000000000021'::uuid, '00000000-0000-0000-0000-000000000011'::uuid, 'plaid', 'txn-002', -25.50, '2025-11-02', 'Gas Station', 'TRANSPORTATION', 'TRANSPORTATION_GAS', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000001'::uuid, '00000000-0000-0000-0000-000000000021'::uuid, '00000000-0000-0000-0000-000000000011'::uuid, 'plaid', 'txn-003', 2500.00, '2025-11-05', 'Paycheck', 'INCOME', 'INCOME_WAGES', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000002'::uuid, '00000000-0000-0000-0000-000000000022'::uuid, '00000000-0000-0000-0000-000000000012'::uuid, 'plaid', 'txn-004', -100.00, '2025-11-03', 'Online Shopping', 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_ONLINE_MARKETPLACES', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000002'::uuid, '00000000-0000-0000-0000-000000000022'::uuid, '00000000-0000-0000-0000-000000000012'::uuid, 'plaid', 'txn-005', 100.00, '2025-11-01', 'Transfer from Checking', 'TRANSFER_IN', 'TRANSFER_IN_ACCOUNT_TRANSFER', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000003'::uuid, '00000000-0000-0000-0000-000000000023'::uuid, '00000000-0000-0000-0000-000000000013'::uuid, 'plaid', 'txn-006', -200.00, '2025-11-04', 'Restaurant', 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANTS', false, NOW(), NOW()),
+    (gen_random_uuid(), '00000000-0000-0000-0000-000000000003'::uuid, '00000000-0000-0000-0000-000000000023'::uuid, '00000000-0000-0000-0000-000000000013'::uuid, 'plaid', 'txn-007', -75.00, '2025-11-06', 'Utilities', 'RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY', false, NOW(), NOW());
 
 -- User accounts (chain transparency, #1109)
 INSERT INTO user_accounts (id, user_id, institution_id, mask, primary_type, created_at, updated_at)
@@ -456,9 +468,8 @@ VALUES (
     NOW(), NOW()
 );
 EOF
-
-    if [ $? -ne 0 ]; then
-        fail_test "Failed to seed test data"
+    then
+        fail_test "Failed to seed test data: check stderr above for the specific SQL error"
         return 1
     fi
 
