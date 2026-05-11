@@ -220,12 +220,31 @@ type AccountIDEvaluator struct{}
 // Uses OR logic: matches if account type is ANY of the specified types.
 type AccountTypeEvaluator struct{}
 
+// Evaluate matches a transaction's account against the condition's value list.
+// Issue #1109 chain-awareness: when the transaction carries a UserAccountID (stable
+// reference that survives Plaid re-links), match against that instead of the raw
+// AccountID. This allows rules backfilled by migration 000070 to keep firing after
+// a user re-links their bank. Falls back to AccountID for legacy transactions.
 func (e *AccountIDEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	if tx.AccountID == "" {
+	values := matching.ExtractStringValues(condition.Value)
+	if len(values) == 0 {
 		return false, nil
 	}
 
-	values := matching.ExtractStringValues(condition.Value)
+	// Prefer stable UserAccountID when present (post-relink scenario).
+	if tx.UserAccountID != nil && *tx.UserAccountID != "" {
+		for _, v := range values {
+			if *tx.UserAccountID == v {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	// Fallback: legacy transactions without UserAccountID use raw AccountID.
+	if tx.AccountID == "" {
+		return false, nil
+	}
 	for _, v := range values {
 		if tx.AccountID == v {
 			return true, nil

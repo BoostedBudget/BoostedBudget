@@ -10,14 +10,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 var (
-	// ErrAccountNotFound is returned when an account is not found in the database
-	ErrAccountNotFound = errors.New("account not found")
-	// ErrDuplicateAccount is returned when attempting to create an account that already exists
-	ErrDuplicateAccount = errors.New("account already exists for this user")
-	// ErrAccountOwnedByAnotherUser is returned when a fingerprint is already held by a different user (Issue #1010)
+	ErrAccountNotFound          = errors.New("account not found")
+	ErrDuplicateAccount         = errors.New("account already exists for this user")
 	ErrAccountOwnedByAnotherUser = errors.New("one or more accounts are already linked by another user")
 )
 
@@ -28,6 +26,14 @@ type FingerprintOwnership struct {
 	LinkedItemID    string
 	ItemStatus      domain.LinkedItemStatus
 	StatusChangedAt *time.Time
+}
+
+// AccountFilterOptions configures filtering for GetAccountsWithInstitutionFiltered (Issue #1109).
+type AccountFilterOptions struct {
+	IncludeHidden   bool   // if true, includes hidden accounts
+	IncludeReplaced bool   // if true, returns all accounts regardless of status (active + replaced)
+	ReplacedOnly    bool   // if true, returns only replaced accounts (status=replaced)
+	UserAccountID   string // if non-empty, filters to accounts sharing this user_account_id
 }
 
 // AccountRepository defines the interface for account data access
@@ -79,10 +85,9 @@ type AccountRepository interface {
 	// Returns ErrAccountNotFound if any account doesn't exist or user doesn't own it.
 	UpdateDisplayOrders(ctx context.Context, userID string, orders []domain.AccountOrder) error
 
-	// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and hidden filtering.
-	// If includeHidden is false, only returns accounts where is_hidden = false.
+	// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and flexible filtering.
 	// Results are sorted by display_order ASC (nulls last), then created_at ASC.
-	GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error)
+	GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error)
 
 	// GetByUserAccountAndStatus retrieves accounts by user_account_id and status.
 	// This is used for querying accounts across re-links using stable user_account reference.
@@ -125,6 +130,20 @@ type accountRepository struct {
 // NewAccountRepository creates a new AccountRepository instance
 func NewAccountRepository(db DB, enc *appcrypto.FieldEncryptor) AccountRepository {
 	return &accountRepository{db: db, enc: enc}
+}
+
+// mapConstraintError maps database constraint violation errors to domain errors
+func mapConstraintError(err error) error {
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "duplicate key") || strings.Contains(errMsg, "unique constraint") {
+		if strings.Contains(errMsg, "unique_user_account") || strings.Contains(errMsg, "unique_accounts_plaid_id_blind") {
+			return ErrDuplicateAccount
+		}
+		if strings.Contains(errMsg, "unique_persistent_account_id_active") || strings.Contains(errMsg, "unique_fallback_fingerprint_active") {
+			return ErrAccountOwnedByAnotherUser
+		}
+	}
+	return err
 }
 
 // encryptAccountPIIFields encrypts PII fields on an account before writing to the database.
@@ -244,17 +263,7 @@ func (r *accountRepository) Create(ctx context.Context, account *domain.Account)
 	)
 
 	if err != nil {
-		// Check for unique constraint violations
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "duplicate key") || strings.Contains(errMsg, "unique constraint") {
-			if strings.Contains(errMsg, "unique_user_account") || strings.Contains(errMsg, "unique_accounts_plaid_id_blind") {
-				return ErrDuplicateAccount
-			}
-			if strings.Contains(errMsg, "unique_persistent_account_id_active") || strings.Contains(errMsg, "unique_fallback_fingerprint_active") {
-				return ErrAccountOwnedByAnotherUser
-			}
-		}
-		return err
+		return mapConstraintError(err)
 	}
 
 	return nil
@@ -324,17 +333,7 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 		)
 
 		if err != nil {
-			// Check for unique constraint violations
-			errMsg := err.Error()
-			if strings.Contains(errMsg, "duplicate key") || strings.Contains(errMsg, "unique constraint") {
-				if strings.Contains(errMsg, "unique_user_account") || strings.Contains(errMsg, "unique_accounts_plaid_id_blind") {
-					return ErrDuplicateAccount
-				}
-				if strings.Contains(errMsg, "unique_persistent_account_id_active") || strings.Contains(errMsg, "unique_fallback_fingerprint_active") {
-					return ErrAccountOwnedByAnotherUser
-				}
-			}
-			return err
+			return mapConstraintError(err)
 		}
 	}
 
@@ -348,9 +347,10 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
 		       current_balance, available_balance, currency_code,
+		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
-		WHERE linked_item_id = $1
+		WHERE linked_item_id = $1 AND status = 'active'
 		ORDER BY created_at ASC
 	`
 
@@ -376,6 +376,10 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 			&account.CurrentBalance,
 			&account.AvailableBalance,
 			&account.CurrencyCode,
+			&account.Status,
+			&account.UserAccountID,
+			&account.ReplacedByID,
+			&account.ReplacedAt,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 		)
@@ -395,15 +399,19 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 	return accounts, nil
 }
 
-// GetByUserID retrieves all accounts for a specific user
+// GetByUserID retrieves active-only accounts for a specific user, including status and re-link fields.
+// Returns ONLY accounts with status='active' (excludes replaced and expired).
+// Callers that need all chain members (active + replaced) should use GetAccountsWithInstitutionFiltered
+// with IncludeReplaced=true or StatusFilter="all".
 func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
 		       current_balance, available_balance, currency_code,
+		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
-		WHERE user_id = $1 AND status != 'expired'
+		WHERE user_id = $1 AND status = 'active'
 		ORDER BY created_at ASC
 	`
 
@@ -429,6 +437,10 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 			&account.CurrentBalance,
 			&account.AvailableBalance,
 			&account.CurrencyCode,
+			&account.Status,
+			&account.UserAccountID,
+			&account.ReplacedByID,
+			&account.ReplacedAt,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 		)
@@ -448,16 +460,18 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 	return accounts, nil
 }
 
-// GetAccountsWithInstitution retrieves all accounts for a user with institution names from linked_items
+// GetAccountsWithInstitution retrieves all accounts for a user with institution names from linked_items.
+// Includes status and re-link fields so callers can distinguish active vs. replaced accounts.
 func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, a.currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
 		       a.created_at, a.updated_at, l.institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status != 'expired'
+		WHERE a.user_id = $1 AND a.status = 'active'
 		ORDER BY a.created_at ASC
 	`
 
@@ -483,6 +497,10 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 			&account.CurrentBalance,
 			&account.AvailableBalance,
 			&account.CurrencyCode,
+			&account.Status,
+			&account.UserAccountID,
+			&account.ReplacedByID,
+			&account.ReplacedAt,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 			&account.InstitutionName,
@@ -663,12 +681,34 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 	return tx.Commit(ctx)
 }
 
-// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and hidden filtering.
+// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and flexible filtering.
 // Issue #679, #680: Also includes linked_item status to show 'disconnected' when subscription expires.
-func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
+// Issue #1109: Added IncludeReplaced and UserAccountID filter options.
+func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error) {
+	// Canary counter: every active-only call filters out replaced accounts (Issue #1109).
+	if !opts.IncludeReplaced {
+		observability.AccountsReplacedFiltered.WithLabelValues("accounts_list").Inc()
+	}
 	hiddenClause := ""
-	if !includeHidden {
+	if !opts.IncludeHidden {
 		hiddenClause = " AND a.is_hidden = FALSE"
+	}
+
+	var statusClause string
+	switch {
+	case opts.ReplacedOnly:
+		statusClause = " AND a.status = 'replaced'"
+	case opts.IncludeReplaced:
+		statusClause = " AND a.status IN ('active', 'replaced')"
+	default:
+		statusClause = " AND a.status = 'active'"
+	}
+
+	userAccountClause := ""
+	args := []any{userID}
+	if opts.UserAccountID != "" {
+		args = append(args, opts.UserAccountID)
+		userAccountClause = " AND a.user_account_id = $2"
 	}
 
 	query := `
@@ -681,10 +721,10 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status != 'expired'` + hiddenClause + `
+		WHERE a.user_id = $1` + statusClause + hiddenClause + userAccountClause + `
 		ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC`
 
-	rows, err := r.db.Query(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

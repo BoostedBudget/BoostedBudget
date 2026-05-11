@@ -9,7 +9,7 @@
 
 import React, { createContext, useContext, useMemo, useState, useCallback } from 'react';
 import { getDateRange, type DatePreset } from '@/shared/dates';
-import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts';
+import { useActiveAccounts } from '@/features/accounts/hooks';
 
 export interface DashboardContextValue {
   filters: {
@@ -39,8 +39,9 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
   const [customFilters, setCustomFilters] = useState<Partial<DashboardContextValue['filters']>>({});
   const [isEditing, setIsEditing] = useState(false);
 
-  const { data: accountsData, isLoading: accountsLoading } = useGetAccounts();
-  const hasAccounts = (accountsData?.accounts?.length ?? 0) > 0;
+  // Issue #1109: use only active (non-replaced) accounts for hasAccounts
+  const { accounts: activeAccounts, isLoading: accountsLoading } = useActiveAccounts();
+  const hasAccounts = (activeAccounts?.length ?? 0) > 0;
 
   const baseFilters = useMemo(() => {
     const dateRange = getDateRange(timeframe);

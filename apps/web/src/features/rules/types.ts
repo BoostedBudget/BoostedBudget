@@ -76,6 +76,10 @@ export type NotificationChannel = 'email' | 'push' | 'in_app'
 export interface TransferAction {
   from_account_id: string
   to_account_id: string
+  /** Stable identifier that survives Plaid re-link (Issue #1109) */
+  from_user_account_id?: string
+  /** Stable identifier that survives Plaid re-link (Issue #1109) */
+  to_user_account_id?: string
   amount_type: 'fixed' | 'percentage' | 'excess'
   amount: number
   threshold?: number // For excess type: minimum before transfer
@@ -114,6 +118,8 @@ export interface RolloverAction {
 export interface SavingsGoalAction {
   savings_goal_id: string
   from_account_id: string
+  /** Stable identifier that survives Plaid re-link (Issue #1109) */
+  from_user_account_id?: string
   amount_type: 'fixed' | 'percentage' | 'remaining'
   amount?: number // For fixed type
   percentage?: number // For percentage type

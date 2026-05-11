@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // CreditLiabilityRepository defines the interface for credit liability data access.
@@ -104,16 +105,21 @@ func (r *creditLiabilityRepository) ReplaceForAccount(ctx context.Context, accou
 }
 
 // GetByUserID retrieves all credit liabilities for a user (without APRs).
+// Joins accounts to filter out replaced accounts (Issue #1109).
 func (r *creditLiabilityRepository) GetByUserID(ctx context.Context, userID string) ([]domain.CreditLiability, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("liabilities").Inc()
+
 	query := `
-		SELECT id, user_id, account_id, is_overdue,
-			last_payment_amount, last_payment_date,
-			last_statement_issue_date, last_statement_balance,
-			minimum_payment_amount, next_payment_due_date,
-			synced_at, created_at, updated_at
+		SELECT credit_liabilities.id, credit_liabilities.user_id, credit_liabilities.account_id, credit_liabilities.is_overdue,
+			credit_liabilities.last_payment_amount, credit_liabilities.last_payment_date,
+			credit_liabilities.last_statement_issue_date, credit_liabilities.last_statement_balance,
+			credit_liabilities.minimum_payment_amount, credit_liabilities.next_payment_due_date,
+			credit_liabilities.synced_at, credit_liabilities.created_at, credit_liabilities.updated_at
 		FROM credit_liabilities
-		WHERE user_id = $1
-		ORDER BY account_id
+		JOIN accounts a ON a.id = credit_liabilities.account_id
+		WHERE credit_liabilities.user_id = $1
+		  AND a.status = 'active'
+		ORDER BY credit_liabilities.account_id
 	`
 
 	rows, err := r.db.Query(ctx, query, userID)
@@ -151,6 +157,16 @@ func (r *creditLiabilityRepository) GetByAccountID(ctx context.Context, accountI
 			synced_at, created_at, updated_at
 		FROM credit_liabilities
 		WHERE account_id = $1
+		   OR account_id IN (
+				SELECT id FROM accounts
+				WHERE user_account_id = (
+					SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL
+				)
+		   )
+		ORDER BY (
+			account_id IN (SELECT id FROM accounts WHERE status = 'active')
+		) DESC,
+		credit_liabilities.created_at DESC
 	`
 
 	rows, err := r.db.Query(ctx, query, accountID)

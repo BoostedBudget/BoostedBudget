@@ -159,32 +159,23 @@ const DEFAULT_CONDITION: RuleCondition = {
 }
 
 export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, plaidPrimaries = [], accounts = [], tags = [] }: AutoCategorizationRuleEditorProps) {
-  // Form state
+  // Form state - basic info
   const [name, setName] = useState(rule?.name || '')
   const [description, setDescription] = useState(rule?.description || '')
   const [priority, setPriority] = useState(rule?.priority || 10)
-  const [conditions, setConditions] = useState<RuleCondition[]>(
-    rule?.conditions || []
-  )
-  const [conditionLogic, setConditionLogic] = useState<ConditionLogic>(
-    rule?.condition_logic || 'AND'
-  )
-  // PFC v2 discriminated target. Custom-target editing is not yet exposed in the picker
-  // UI; we still hydrate `targetCustomCategoryId` from the rule so edits to other fields
-  // round-trip a custom-target rule without dropping its id.
-  const [targetKind, setTargetKind] = useState<RuleTargetKind | null>(
-    rule?.target_kind ?? null
-  )
-  const [targetPfcPrimary, setTargetPfcPrimary] = useState<string | null>(
-    rule?.target_pfc_primary ?? null
-  )
-  const [targetPfcDetailed, setTargetPfcDetailed] = useState<string | null>(
-    rule?.target_pfc_detailed ?? null
-  )
-  // setTargetCustomCategoryId is reserved for the deferred custom-target picker.
-  const [targetCustomCategoryId] = useState<string | null>(
-    rule?.target_custom_category_id ?? null
-  )
+
+  // Form state - conditions
+  const [conditions, setConditions] = useState<RuleCondition[]>(rule?.conditions || [])
+  const [conditionLogic, setConditionLogic] = useState<ConditionLogic>(rule?.condition_logic || 'AND')
+
+  // Form state - target (PFC v2 discriminated)
+  // Note: targetCustomCategoryId is hydrated but read-only pending deferred custom-target picker
+  const [targetKind, setTargetKind] = useState<RuleTargetKind | null>(rule?.target_kind ?? null)
+  const [targetPfcPrimary, setTargetPfcPrimary] = useState<string | null>(rule?.target_pfc_primary ?? null)
+  const [targetPfcDetailed, setTargetPfcDetailed] = useState<string | null>(rule?.target_pfc_detailed ?? null)
+  const [targetCustomCategoryId] = useState<string | null>(rule?.target_custom_category_id ?? null)
+
+  // Form state - tags
   const [targetTags, setTargetTags] = useState<string[]>(rule?.target_tags || [])
   const [tagBehavior, setTagBehavior] = useState<TagBehavior>(rule?.tag_behavior || 'add')
   const [newTag, setNewTag] = useState('')
@@ -193,10 +184,9 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
   const [saving, setSaving] = useState(false)
   const [errors, setErrors] = useState<FormErrors>({})
   const [conditionErrors, setConditionErrors] = useState<ConditionErrors>({})
-  // Per-condition primary selection for pfc_detailed_select stage-1 (index → primary enum)
   const [pfcDetailedPrimarySelections, setPfcDetailedPrimarySelections] = useState<Record<number, string>>({})
 
-  // Lazy-load detailed categories when either a pfc_detailed condition exists OR the target uses PFC.
+  // Lazy-load detailed categories for pfc_detailed conditions or pfc-kind targets
   const needsPlaidDetailed = useMemo(
     () => conditions.some(c => c.type === 'existing_pfc_detailed') || targetKind === 'pfc',
     [conditions, targetKind]
@@ -589,15 +579,23 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
         )
       }
 
-      case 'account_select':
+      case 'account_select': {
+        const accountOptions = accounts.map(acc => ({
+          value: acc.user_account_id ?? acc.id,
+          label: acc.name,
+          sublabel: `${acc.type}${acc.mask ? ` ••••${acc.mask}` : ''}`
+        }))
+        const rawValue = String(condition.value || '') || null
+        // Edit-mode hydration: if a legacy rule stored a raw account.id (not user_account_id),
+        // resolve it to the stable user_account_id so the dropdown renders correctly.
+        // Migration 000072 backfills existing rules, but this is a belt-and-suspenders guard.
+        const resolvedValue = rawValue !== null && !accountOptions.some(o => o.value === rawValue)
+          ? (accounts.find(acc => acc.id === rawValue)?.user_account_id ?? rawValue)
+          : rawValue
         return (
           <SearchableSelect
-            options={accounts.map(acc => ({
-              value: acc.id,
-              label: acc.name,
-              sublabel: `${acc.type}${acc.mask ? ` ••••${acc.mask}` : ''}`
-            }))}
-            value={String(condition.value || '') || null}
+            options={accountOptions}
+            value={resolvedValue}
             onChange={(value) => updateCondition(index, { value: value || '' })}
             placeholder="Search accounts..."
             disabled={saving}
@@ -606,6 +604,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
             clearLabel="Select an account"
           />
         )
+      }
 
       case 'account_type_select': {
         const selectedTypes = (Array.isArray(condition.value) ? condition.value : []) as string[]

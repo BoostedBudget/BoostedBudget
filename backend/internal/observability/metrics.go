@@ -97,4 +97,22 @@ var (
 		Name: "investment_transactions_synced_total",
 		Help: "Total number of investment transactions processed by action (inserted/skipped).",
 	}, []string{"action"})
+
+	// AccountsReplacedFiltered counts query executions that exclude replaced accounts or
+	// resolve a re-link chain (Issue #1109). The "family" label groups call sites by domain
+	// so we can confirm every filter path is exercised after a staging deploy.
+	//
+	// Expected families:
+	//   accounts_list      - GetAccountsWithInstitutionFiltered (active-only path)
+	//   balance_summary    - GetBalanceSummary, GetAccountTypes
+	//   dashboard_history  - GetLatestByUserID, GetAggregatedHistory
+	//   analytics          - analytics_repository spending/cash-flow joins
+	//   transaction_match  - MonitorForMatches chain resolution
+	//   automation         - rule execution chain resolution, savings goal creation
+	//   investments        - holdings/investment_transactions active filter
+	//   liabilities        - liability repositories active filter
+	AccountsReplacedFiltered = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "accounts_replaced_filtered_total",
+		Help: "Number of query executions that excluded at least one replaced account or expanded a re-link chain",
+	}, []string{"family"})
 )

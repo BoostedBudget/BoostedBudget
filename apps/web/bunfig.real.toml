@@ -16,6 +16,9 @@
 preload = [
   "./src/test/happydom.ts",
   "./src/test/testing-library.ts",
+  # Clerk mock required: DashboardContext → useActiveAccounts → useUser() needs a provider stub
+  # Added in Wave 4 (Issue #1109 W4-D); safe for real-impl tests since it only stubs auth hooks
+  "./src/test/mocks/clerk.tsx",
   # API-level mocks needed for useSavingsGoals.test.tsx (doesn't mock wrapper hook)
   "./src/test/mocks/savings-goals-api.ts"
 ]

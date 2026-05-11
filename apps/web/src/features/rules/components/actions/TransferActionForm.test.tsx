@@ -388,4 +388,44 @@ describe('TransferActionForm', () => {
       expect(screen.getByLabelText(/^amount$/i)).toBeInTheDocument()
     })
   })
+
+  describe('Re-link chain transparency (Issue #1109)', () => {
+    it('includes from_user_account_id in onChange payload when account has user_account_id', () => {
+      const onChange = mock(() => {})
+      // mockAccounts[0] (acc-1) has no user_account_id — should produce undefined
+      renderWithProviders(
+        <TransferActionForm action={defaultAction} onChange={onChange} />
+      )
+
+      fireEvent.change(screen.getByLabelText(/from account/i), {
+        target: { value: 'acc-1' },
+      })
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          from_account_id: 'acc-1',
+          // user_account_id is undefined for this fixture
+          from_user_account_id: undefined,
+        })
+      )
+    })
+
+    it('includes to_user_account_id in onChange payload when account has user_account_id', () => {
+      const onChange = mock(() => {})
+      renderWithProviders(
+        <TransferActionForm action={defaultAction} onChange={onChange} />
+      )
+
+      fireEvent.change(screen.getByLabelText(/to account/i), {
+        target: { value: 'acc-2' },
+      })
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to_account_id: 'acc-2',
+          to_user_account_id: undefined,
+        })
+      )
+    })
+  })
 })
