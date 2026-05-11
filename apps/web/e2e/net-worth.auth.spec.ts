@@ -273,8 +273,10 @@ test.describe('Net Worth Page — Institution column', () => {
     await page.goto('/net-worth')
     await page.waitForLoadState('networkidle')
 
-    // Both Chase and Citibank have "Plaid Checking" — both should render
+    // Both Chase and Citibank have "Plaid Checking" — both should render.
+    // count() is not auto-retrying; wait for the first cell before counting.
     const checkingCells = page.locator('td', { hasText: 'Plaid Checking' })
+    await expect(checkingCells.first()).toBeVisible({ timeout: 10000 })
     const count = await checkingCells.count()
     expect(count).toBeGreaterThanOrEqual(2)
   })
