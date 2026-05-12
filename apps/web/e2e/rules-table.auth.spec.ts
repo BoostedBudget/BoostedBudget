@@ -127,11 +127,10 @@ test.describe('Rules Page — Table View', () => {
     await page.goto('/rules')
     await page.waitForLoadState('networkidle')
 
-    // Switch to table view using the ListViewToggle
-    const tableViewBtn = page.getByRole('button', { name: /table view/i })
-    if (await tableViewBtn.isVisible({ timeout: 2000 })) {
-      await tableViewBtn.click()
-    }
+    // Switch to table view using the ListViewToggle.
+    // getByTitle matches the button's title="Table view" attribute, which is
+    // stable at all viewports (the span text is hidden on mobile via max-sm:hidden).
+    await page.getByTitle('Table view').click()
 
     await expect(page.getByRole('table')).toBeVisible({ timeout: 5000 })
   })
@@ -142,10 +141,7 @@ test.describe('Rules Page — Table View', () => {
     await page.waitForLoadState('networkidle')
 
     // Switch to table view
-    const tableViewBtn = page.getByRole('button', { name: /table view/i })
-    if (await tableViewBtn.isVisible({ timeout: 2000 })) {
-      await tableViewBtn.click()
-    }
+    await page.getByTitle('Table view').click()
 
     // Wait for table to appear
     const table = page.getByRole('table')
@@ -163,10 +159,7 @@ test.describe('Rules Page — Table View', () => {
     await page.waitForLoadState('networkidle')
 
     // Switch to table view
-    const tableViewBtn = page.getByRole('button', { name: /table view/i })
-    if (await tableViewBtn.isVisible({ timeout: 2000 })) {
-      await tableViewBtn.click()
-    }
+    await page.getByTitle('Table view').click()
 
     await expect(page.getByRole('table')).toBeVisible({ timeout: 5000 })
     await expect(page.getByText('Tag Coffee Purchases')).toBeVisible()
@@ -178,10 +171,7 @@ test.describe('Rules Page — Table View', () => {
     await page.goto('/rules')
     await page.waitForLoadState('networkidle')
 
-    const tableViewBtn = page.getByRole('button', { name: /table view/i })
-    if (await tableViewBtn.isVisible({ timeout: 2000 })) {
-      await tableViewBtn.click()
-    }
+    await page.getByTitle('Table view').click()
 
     const nameHeader = page.getByRole('columnheader', { name: /name/i })
     await nameHeader.locator('button').click()
