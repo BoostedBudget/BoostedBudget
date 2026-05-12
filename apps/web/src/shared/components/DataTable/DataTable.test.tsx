@@ -461,3 +461,61 @@ describe('onRowClick', () => {
     expect(onRowClick.mock.calls[0][0]).toEqual(rows[0])
   })
 })
+
+// ── Critical Regression Test 8 ───────────────────────────────────────────────
+// Server-side filter boundary contract: DataTable never calls APIs.
+// It only emits via onFiltersChange — parents decide whether that triggers
+// a server refetch or an in-memory filter. This test locks the boundary so
+// a future refactor cannot accidentally add a fetch() inside DataTable.
+describe('server-side filter boundary', () => {
+  it('does not call fetch when filters change — only emits via onFiltersChange', async () => {
+    const fetchSpy = mock(() => Promise.resolve(new Response('{}', { status: 200 })))
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch
+
+    try {
+      const onFiltersChange = mock((_: FilterState) => {})
+      const columns: ColumnDef<Row>[] = [
+        {
+          id: 'name',
+          header: 'Name',
+          filter: {
+            type: 'select',
+            options: [
+              { label: 'Alice', value: 'Alice' },
+              { label: 'Bob', value: 'Bob' },
+            ],
+            multiSelect: true,
+          },
+        },
+        { id: 'amount', header: 'Amount', key: 'amount' },
+      ]
+
+      render(
+        <DataTable<Row>
+          data={rows}
+          columns={columns}
+          rowKey={(r) => r.id}
+          sort={null}
+          onSortChange={noopSort()}
+          filters={{}}
+          onFiltersChange={onFiltersChange}
+        />
+      )
+
+      // Open the filter dropdown and select an option
+      // Multi-select checkboxes fire onFiltersChange immediately on click (no Apply button)
+      await userEvent.click(screen.getByRole('button', { name: /filter by name/i }))
+      await userEvent.click(screen.getByRole('checkbox', { name: /alice/i }))
+
+      // onFiltersChange must have fired
+      expect(onFiltersChange).toHaveBeenCalledTimes(1)
+      expect(onFiltersChange.mock.calls[0][0]).toEqual({ name: ['Alice'] })
+
+      // fetch must NOT have been called — DataTable is data-agnostic
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
