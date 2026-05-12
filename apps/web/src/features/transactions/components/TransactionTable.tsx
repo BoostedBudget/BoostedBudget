@@ -211,7 +211,6 @@ export function TransactionTable({
                     ? 'transaction-table__amount--credit text-green-600 dark:text-green-400'
                     : 'text-foreground'
               )}
-              data-ph-mask
             >
               {amountFormatted}
             </span>
@@ -247,6 +246,7 @@ export function TransactionTable({
         )
       }
       className={cn(loading && 'transaction-table--loading', className)}
+      maskedColumnIds={['amount']}
       emptyState={
         <p className="py-12 px-6 text-center text-muted-foreground">
           No transactions found.

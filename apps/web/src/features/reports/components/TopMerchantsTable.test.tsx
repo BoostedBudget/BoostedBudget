@@ -71,9 +71,29 @@ describe('TopMerchantsTable', () => {
     expect(screen.getByText('Transactions')).toBeDefined()
   })
 
-  it('calls onSortChange with ascending sort when Merchant header clicked', () => {
+  it('calls onSortChange with ascending sort when Merchant header clicked from null', () => {
     const onSortChange = mock((_: SortState) => {})
     renderTable({ sort: null, onSortChange })
+    const merchantBtn = screen
+      .getAllByRole('button')
+      .find((b) => b.textContent?.includes('Merchant'))!
+    fireEvent.click(merchantBtn)
+    expect(onSortChange.mock.calls[0][0]).toEqual({ columnId: 'merchant_name', direction: 'asc' })
+  })
+
+  it('calls onSortChange with null when clicking already-sorted-desc column (3-state cycle: desc → null)', () => {
+    const onSortChange = mock((_: SortState) => {})
+    renderTable({ sort: { columnId: 'total', direction: 'desc' }, onSortChange })
+    const totalBtn = screen
+      .getAllByRole('button')
+      .find((b) => b.textContent?.includes('Total'))!
+    fireEvent.click(totalBtn)
+    expect(onSortChange.mock.calls[0][0]).toBeNull()
+  })
+
+  it('calls onSortChange with asc for new column when a different column is already sorted', () => {
+    const onSortChange = mock((_: SortState) => {})
+    renderTable({ sort: { columnId: 'total', direction: 'desc' }, onSortChange })
     const merchantBtn = screen
       .getAllByRole('button')
       .find((b) => b.textContent?.includes('Merchant'))!
