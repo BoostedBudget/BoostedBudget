@@ -272,8 +272,9 @@ describe('AccountTable', () => {
         />
       )
 
-      const nameHeader = screen.getByText('Account').closest('button')!
-      expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
+      // aria-sort lives on <th> (correct HTML semantics), not the sort button
+      const nameTh = screen.getByRole('columnheader', { name: /account/i })
+      expect(nameTh).toHaveAttribute('aria-sort', 'ascending')
     })
   })
 
