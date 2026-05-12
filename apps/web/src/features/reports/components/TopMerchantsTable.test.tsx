@@ -5,6 +5,7 @@ import React from 'react'
 import '@/test/mocks/shared-charts'
 import { TopMerchantsTable } from './TopMerchantsTable'
 import type { SpendingByMerchantResponse } from '@boostedbudget/api-client/models'
+import type { SortState } from '@/shared/components/DataTable'
 
 const mockData: SpendingByMerchantResponse = {
   start_date: '2024-01-01',
@@ -16,9 +17,33 @@ const mockData: SpendingByMerchantResponse = {
   ],
 }
 
+const defaultMocks = {
+  onSortChange: mock((_: SortState) => {}),
+  onMerchantClick: mock((name: string) => name),
+}
+
+function renderTable(overrides: Partial<{
+  data: SpendingByMerchantResponse | null
+  loading: boolean
+  sort: SortState
+  onSortChange: ReturnType<typeof mock>
+  onMerchantClick: ReturnType<typeof mock>
+}> = {}) {
+  return render(
+    <TopMerchantsTable
+      data={mockData}
+      loading={false}
+      sort={null}
+      onSortChange={overrides.onSortChange ?? defaultMocks.onSortChange}
+      onMerchantClick={overrides.onMerchantClick}
+      {...overrides}
+    />
+  )
+}
+
 describe('TopMerchantsTable', () => {
   it('renders loading state', () => {
-    render(<TopMerchantsTable data={null} loading={true} />)
+    render(<TopMerchantsTable data={null} loading={true} sort={null} onSortChange={defaultMocks.onSortChange} />)
     expect(screen.getByLabelText('Loading merchants')).toBeDefined()
   })
 
@@ -29,45 +54,50 @@ describe('TopMerchantsTable', () => {
       top_n: 10,
       merchants: [],
     }
-    render(<TopMerchantsTable data={emptyData} loading={false} />)
+    renderTable({ data: emptyData })
     expect(screen.getByText(/No merchant data/)).toBeDefined()
   })
 
   it('renders all merchants', () => {
-    render(<TopMerchantsTable data={mockData} loading={false} />)
+    renderTable()
     expect(screen.getByText('Starbucks')).toBeDefined()
     expect(screen.getByText('Amazon')).toBeDefined()
   })
 
   it('shows column headers', () => {
-    render(<TopMerchantsTable data={mockData} loading={false} />)
+    renderTable()
     expect(screen.getByText('Merchant')).toBeDefined()
-    // "Total" has sort indicator appended since it is the default sort column
     expect(screen.getByText(/Total/)).toBeDefined()
     expect(screen.getByText('Transactions')).toBeDefined()
   })
 
-  it('sorts by merchant name when header clicked twice (ascending)', () => {
-    render(<TopMerchantsTable data={mockData} loading={false} />)
-    const merchantHeader = screen.getByText('Merchant')
-    // First click: sort by merchant desc (S > A), Starbucks first
-    fireEvent.click(merchantHeader)
-    // Second click: sort by merchant asc (A < S), Amazon first
-    fireEvent.click(merchantHeader)
+  it('calls onSortChange with ascending sort when Merchant header clicked', () => {
+    const onSortChange = mock((_: SortState) => {})
+    renderTable({ sort: null, onSortChange })
+    const merchantBtn = screen
+      .getAllByRole('button')
+      .find((b) => b.textContent?.includes('Merchant'))!
+    fireEvent.click(merchantBtn)
+    expect(onSortChange.mock.calls[0][0]).toEqual({ columnId: 'merchant_name', direction: 'asc' })
+  })
+
+  it('renders rows in the order provided by sorted data', () => {
+    // Data pre-sorted ascending by merchant_name: Amazon first
+    const sortedData: SpendingByMerchantResponse = {
+      ...mockData,
+      merchants: [
+        { merchant_name: 'Amazon', total: 350, transaction_count: 5, percentage: 70 },
+        { merchant_name: 'Starbucks', total: 150, transaction_count: 15, percentage: 30 },
+      ],
+    }
+    renderTable({ data: sortedData, sort: { columnId: 'merchant_name', direction: 'asc' } })
     const rows = screen.getAllByRole('row')
     expect(rows[1].textContent).toContain('Amazon')
   })
 
   it('calls onMerchantClick when row is clicked', () => {
-    const onMerchantClick = mock((name: string) => name)
-    render(
-      <TopMerchantsTable
-        data={mockData}
-        loading={false}
-        onMerchantClick={onMerchantClick}
-      />
-    )
+    renderTable({ onMerchantClick: defaultMocks.onMerchantClick })
     fireEvent.click(screen.getByText('Starbucks'))
-    expect(onMerchantClick).toHaveBeenCalledWith('Starbucks')
+    expect(defaultMocks.onMerchantClick).toHaveBeenCalledWith('Starbucks')
   })
 })
