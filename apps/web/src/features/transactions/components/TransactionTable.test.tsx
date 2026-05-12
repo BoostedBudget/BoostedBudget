@@ -315,8 +315,9 @@ describe('TransactionTable', () => {
         sortDirection: 'asc',
       })
 
-      const dateHeader = screen.getByText('Date').closest('button')!
-      expect(dateHeader).toHaveAttribute('aria-sort', 'ascending')
+      // aria-sort lives on <th> (correct HTML semantics), not the sort button
+      const dateTh = screen.getByRole('columnheader', { name: /date/i })
+      expect(dateTh).toHaveAttribute('aria-sort', 'ascending')
     })
   })
 
