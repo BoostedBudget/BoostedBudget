@@ -136,7 +136,7 @@ export function TransactionTable({
             <div className="mt-1 flex flex-wrap gap-1">
               {row.tags.map((tag) => (
                 <span
-                  key={tag}
+                  key={`${row.id}-${tag}`}
                   className="inline-flex items-center rounded bg-blue-50 px-1.5 py-0.5 text-[0.625rem] font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300"
                 >
                   {tag}
