@@ -44,6 +44,10 @@ type GetTransactionsInput struct {
 	MaxAmount        string `query:"max_amount" doc:"Filter by maximum absolute amount"`
 	AmountType       string `query:"amount_type" enum:"income,expense,all" doc:"Filter by transaction type"`
 	UserAccountID    string `query:"user_account_id" doc:"Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members"`
+
+	// Sort parameters
+	SortBy  string `query:"sort_by"  enum:"date,merchant,amount,category" default:"date"  doc:"Column to sort by"`
+	SortDir string `query:"sort_dir" enum:"asc,desc"                      default:"desc" doc:"Sort direction"`
 }
 
 // GetTransactionsOutput represents the response for listing transactions.
@@ -199,6 +203,16 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 	// Stable identifier that returns transactions from all chain members
 	if input.UserAccountID != "" {
 		filters.UserAccountID = &input.UserAccountID
+	}
+
+	// Sort parameters — apply defaults if Huma did not populate them (e.g. direct handler calls)
+	filters.SortBy = input.SortBy
+	if filters.SortBy == "" {
+		filters.SortBy = "date"
+	}
+	filters.SortDir = input.SortDir
+	if filters.SortDir == "" {
+		filters.SortDir = "desc"
 	}
 
 	// Call service layer

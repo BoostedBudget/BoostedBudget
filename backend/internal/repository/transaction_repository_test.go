@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"regexp"
 	"testing"
 	"time"
 
@@ -2669,4 +2670,132 @@ func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
+}
+
+// TestBuildOrderBy tests the buildOrderBy helper for all supported sort combinations.
+func TestBuildOrderBy(t *testing.T) {
+	tests := []struct {
+		name     string
+		filters  domain.TransactionFilters
+		wantExpr string
+	}{
+		{
+			name:     "default (empty SortBy/SortDir) -> date DESC",
+			filters:  domain.TransactionFilters{},
+			wantExpr: "ORDER BY COALESCE(authorized_date, date) DESC, id ASC",
+		},
+		{
+			name:     "date asc",
+			filters:  domain.TransactionFilters{SortBy: "date", SortDir: "asc"},
+			wantExpr: "ORDER BY COALESCE(authorized_date, date) ASC, id ASC",
+		},
+		{
+			name:     "date desc",
+			filters:  domain.TransactionFilters{SortBy: "date", SortDir: "desc"},
+			wantExpr: "ORDER BY COALESCE(authorized_date, date) DESC, id ASC",
+		},
+		{
+			name:     "merchant asc",
+			filters:  domain.TransactionFilters{SortBy: "merchant", SortDir: "asc"},
+			wantExpr: "ORDER BY merchant_name ASC, id ASC",
+		},
+		{
+			name:     "merchant desc",
+			filters:  domain.TransactionFilters{SortBy: "merchant", SortDir: "desc"},
+			wantExpr: "ORDER BY merchant_name DESC, id ASC",
+		},
+		{
+			name:     "amount asc",
+			filters:  domain.TransactionFilters{SortBy: "amount", SortDir: "asc"},
+			wantExpr: "ORDER BY amount ASC, id ASC",
+		},
+		{
+			name:     "amount desc",
+			filters:  domain.TransactionFilters{SortBy: "amount", SortDir: "desc"},
+			wantExpr: "ORDER BY amount DESC, id ASC",
+		},
+		{
+			name:     "category asc",
+			filters:  domain.TransactionFilters{SortBy: "category", SortDir: "asc"},
+			wantExpr: "ORDER BY COALESCE(effective_category_name, effective_pfc_primary, pfc_primary) ASC, id ASC",
+		},
+		{
+			name:     "category desc",
+			filters:  domain.TransactionFilters{SortBy: "category", SortDir: "desc"},
+			wantExpr: "ORDER BY COALESCE(effective_category_name, effective_pfc_primary, pfc_primary) DESC, id ASC",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildOrderBy(tc.filters)
+			assert.Equal(t, tc.wantExpr, got)
+		})
+	}
+}
+
+// TestTransactionRepository_GetByUserIDWithFilters_SortBy tests that buildOrderBy is
+// applied to the SQL emitted by GetByUserIDWithFilters.
+func TestTransactionRepository_GetByUserIDWithFilters_SortBy(t *testing.T) {
+	tests := []struct {
+		name        string
+		filters     domain.TransactionFilters
+		orderByFrag string // substring that must appear in the query
+	}{
+		{
+			name:        "default -> date DESC",
+			filters:     domain.TransactionFilters{},
+			orderByFrag: "ORDER BY COALESCE(authorized_date, date) DESC, id ASC",
+		},
+		{
+			name:        "date asc",
+			filters:     domain.TransactionFilters{SortBy: "date", SortDir: "asc"},
+			orderByFrag: "ORDER BY COALESCE(authorized_date, date) ASC, id ASC",
+		},
+		{
+			name:        "merchant desc",
+			filters:     domain.TransactionFilters{SortBy: "merchant", SortDir: "desc"},
+			orderByFrag: "ORDER BY merchant_name DESC, id ASC",
+		},
+		{
+			name:        "amount asc",
+			filters:     domain.TransactionFilters{SortBy: "amount", SortDir: "asc"},
+			orderByFrag: "ORDER BY amount ASC, id ASC",
+		},
+		{
+			name:        "category desc",
+			filters:     domain.TransactionFilters{SortBy: "category", SortDir: "desc"},
+			orderByFrag: "ORDER BY COALESCE(effective_category_name, effective_pfc_primary, pfc_primary) DESC, id ASC",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock, err := pgxmock.NewPool()
+			require.NoError(t, err)
+			defer mock.Close()
+
+			repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+			ctx := context.Background()
+
+			userID := "user-sort-test"
+			limit := 10
+			offset := 0
+
+			rows := pgxmock.NewRows(transactionSelectColumns) // empty result set is fine
+
+			// pgxmock matches queries as regexps; escape the ORDER BY fragment so
+			// special chars like '(' and ')' are treated literally.
+			pattern := "SELECT .+ FROM transactions WHERE user_id .+" + regexp.QuoteMeta(tc.orderByFrag)
+			mock.ExpectQuery(pattern).
+				WithArgs(userID, limit, offset).
+				WillReturnRows(rows)
+
+			_, err = repo.GetByUserIDWithFilters(ctx, userID, tc.filters, limit, offset)
+			assert.NoError(t, err)
+
+			err = mock.ExpectationsWereMet()
+			assert.NoError(t, err, "query did not contain expected ORDER BY clause")
+		})
+	}
 }

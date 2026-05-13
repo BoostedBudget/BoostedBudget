@@ -566,3 +566,93 @@ func TestGetTransactions_UserAccountIDFilter(t *testing.T) {
 	assert.Equal(t, userAccountID, *mockService.capturedFilters.UserAccountID,
 		"captured UserAccountID should match input")
 }
+
+
+// TestGetTransactions_SortDefaults tests that empty sort params produce default
+// SortBy="date" and SortDir="desc" in filters forwarded to the service.
+func TestGetTransactions_SortDefaults(t *testing.T) {
+	userID := "user-sort-def"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
+		// SortBy and SortDir intentionally left empty — Huma default fills them
+	}
+
+	_, err := handler.GetTransactions(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, "date", mockService.capturedFilters.SortBy,
+		"default SortBy should be 'date'")
+	assert.Equal(t, "desc", mockService.capturedFilters.SortDir,
+		"default SortDir should be 'desc'")
+}
+
+// TestGetTransactions_SortByAmount tests that sort_by=amount&sort_dir=asc
+// propagates through to filters.
+func TestGetTransactions_SortByAmount(t *testing.T) {
+	userID := "user-sort-amount"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
+		SortBy:             "amount",
+		SortDir:            "asc",
+	}
+
+	_, err := handler.GetTransactions(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, "amount", mockService.capturedFilters.SortBy)
+	assert.Equal(t, "asc", mockService.capturedFilters.SortDir)
+}
+
+// TestGetTransactions_SortByMerchant tests that sort_by=merchant&sort_dir=desc
+// propagates through to filters.
+func TestGetTransactions_SortByMerchant(t *testing.T) {
+	userID := "user-sort-merchant"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
+		SortBy:             "merchant",
+		SortDir:            "desc",
+	}
+
+	_, err := handler.GetTransactions(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, "merchant", mockService.capturedFilters.SortBy)
+	assert.Equal(t, "desc", mockService.capturedFilters.SortDir)
+}
+
+// TestGetTransactions_SortByCategory tests that sort_by=category&sort_dir=asc
+// propagates through to filters.
+func TestGetTransactions_SortByCategory(t *testing.T) {
+	userID := "user-sort-cat"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
+		SortBy:             "category",
+		SortDir:            "asc",
+	}
+
+	_, err := handler.GetTransactions(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, "category", mockService.capturedFilters.SortBy)
+	assert.Equal(t, "asc", mockService.capturedFilters.SortDir)
+}
