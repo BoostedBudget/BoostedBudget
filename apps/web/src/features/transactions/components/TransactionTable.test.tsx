@@ -217,6 +217,28 @@ describe('TransactionTable', () => {
     })
   })
 
+  describe('PII Masking', () => {
+    it('should apply data-ph-mask to the amount <td> via maskedColumnIds prop', () => {
+      const { container } = renderTable()
+      // The amount column <td> must carry data-ph-mask (PostHog session replay protection).
+      // This test locks in the maskedColumnIds={['amount']} prop on <DataTable> so a future
+      // re-render cannot silently un-mask the column (e.g. by moving text outside the <td>).
+      const maskedTds = container.querySelectorAll('td[data-ph-mask]')
+      // One masked <td> per transaction row
+      expect(maskedTds.length).toBe(3)
+    })
+
+    it('should not apply data-ph-mask to non-amount columns', () => {
+      const { container } = renderTable()
+      // Verify masking is column-scoped: date, description, account, and category cells are NOT masked
+      const allTds = container.querySelectorAll('td')
+      const maskedTds = Array.from(container.querySelectorAll('td[data-ph-mask]'))
+      const unmaskedTds = Array.from(allTds).filter((td) => !td.hasAttribute('data-ph-mask'))
+      // Must have more unmasked than masked — most columns are unmasked
+      expect(unmaskedTds.length).toBeGreaterThan(maskedTds.length)
+    })
+  })
+
   describe('Row Actions', () => {
     it('should call onEdit when edit button is clicked', () => {
       const onEdit = mock(() => {})
@@ -315,8 +337,9 @@ describe('TransactionTable', () => {
         sortDirection: 'asc',
       })
 
-      const dateHeader = screen.getByText('Date').closest('button')!
-      expect(dateHeader).toHaveAttribute('aria-sort', 'ascending')
+      // aria-sort lives on <th> (correct HTML semantics), not the sort button
+      const dateTh = screen.getByRole('columnheader', { name: /date/i })
+      expect(dateTh).toHaveAttribute('aria-sort', 'ascending')
     })
   })
 

@@ -331,10 +331,12 @@ describe('BudgetTable', () => {
         />
       )
 
-      const nameHeader = screen.getByText('Name').closest('button')!
-      expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
+      // aria-sort lives on <th>, not the sort button
+      const nameTh = screen.getByRole('columnheader', { name: /name/i })
+      expect(nameTh).toHaveAttribute('aria-sort', 'ascending')
 
-      fireEvent.click(nameHeader)
+      const nameButton = screen.getByText('Name').closest('button')!
+      fireEvent.click(nameButton)
       expect(onSort).toHaveBeenCalledWith('name', 'desc')
     })
   })
