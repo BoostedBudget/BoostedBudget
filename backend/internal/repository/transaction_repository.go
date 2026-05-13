@@ -36,6 +36,7 @@ var transactionSelectColumns = []string{
 	"tags", "tags_source",
 	"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
 	"custom_category_override_id", "category_source", "category_override_date",
+	"effective_pfc_primary", "effective_pfc_detailed", "effective_category_name",
 }
 
 var transactionSelectExpr = strings.Join(transactionSelectColumns, ", ")
@@ -138,6 +139,11 @@ type TransactionRepository interface {
 	// when a user re-links a bank (which assigns new item_id and account_id values).
 	// Returns transactions from all associated accounts (current and replaced) ordered by date DESC.
 	GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error)
+
+	// UpdateEffectiveCategoryNameByCustomCategoryID bulk-updates effective_category_name
+	// for all transactions in a user's account that are assigned to the given custom category.
+	// Used when a custom category is renamed. Returns the number of rows updated.
+	UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID string, customCategoryID string, newName string) (int64, error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -214,8 +220,11 @@ func (r *transactionRepository) Create(ctx context.Context, transaction *domain.
 		(id, user_id, account_id, linked_item_id, source, external_transaction_id,
 		 external_transaction_id_blind_idx, external_metadata, amount, date, authorized_date,
 		 name, merchant_name, pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url,
-		 payment_channel, pending, user_notes, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+		 payment_channel, pending, user_notes, created_at, updated_at, effective_category_name)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+		    CASE WHEN $23 = 'custom' THEN (SELECT name FROM custom_categories WHERE id = $24::uuid AND user_id = $2)
+		         WHEN $23 = 'pfc'    THEN $25
+		         ELSE $14 END)
 	`
 
 	_, err = r.db.Exec(ctx, query,
@@ -241,6 +250,9 @@ func (r *transactionRepository) Create(ctx context.Context, transaction *domain.
 		transaction.UserNotes,
 		transaction.CreatedAt,
 		transaction.UpdatedAt,
+		transaction.CategoryOverrideKind,
+		transaction.CustomCategoryOverrideID,
+		transaction.PFCPrimaryOverride,
 	)
 
 	if err != nil {
@@ -269,8 +281,9 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 	}
 
 	// Build multi-row INSERT query
-	// Issue #171: Added user_account_id field; encryption adds external_transaction_id_blind_idx (23 fields)
-	const numFields = 23
+	// Issue #171: Added user_account_id field; encryption adds external_transaction_id_blind_idx
+	// Issue #1123: Added effective_category_name (24 fields)
+	const numFields = 24
 	valueStrings := make([]string, 0, len(transactions))
 	valueArgs := make([]interface{}, 0, len(transactions)*numFields)
 
@@ -298,6 +311,11 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		}
 		valueStrings = append(valueStrings, fmt.Sprintf("(%s)", strings.Join(placeholders, ", ")))
 
+		// Compute effective_category_name from in-memory values.
+		// CreateBatch is Plaid-only and override columns are not written here (existing
+		// bug documented in #TODO-createbatch-overrides), so effective_category_name = pfc_primary.
+		effectiveCategoryName := transactions[i].PFCPrimary
+
 		// Add values (including user_account_id and external_transaction_id_blind_idx)
 		valueArgs = append(valueArgs,
 			transactions[i].ID,
@@ -323,6 +341,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			transactions[i].UserNotes,
 			transactions[i].CreatedAt,
 			transactions[i].UpdatedAt,
+			effectiveCategoryName,
 		)
 	}
 
@@ -338,7 +357,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		 source, external_transaction_id, external_transaction_id_blind_idx, external_metadata,
 		 amount, date, authorized_date, name, merchant_name,
 		 pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending, user_notes,
-		 created_at, updated_at)
+		 created_at, updated_at, effective_category_name)
 		VALUES %s
 		ON CONFLICT (source, external_transaction_id_blind_idx, user_id) DO UPDATE SET
 			account_id = EXCLUDED.account_id,
@@ -357,6 +376,10 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			pfc_category_icon_url = EXCLUDED.pfc_category_icon_url,
 			payment_channel = EXCLUDED.payment_channel,
 			pending = EXCLUDED.pending,
+			effective_category_name = CASE
+			    WHEN transactions.category_override_kind IS NOT NULL THEN transactions.effective_category_name
+			    ELSE EXCLUDED.pfc_primary
+			END,
 			updated_at = NOW()
 	`, strings.Join(valueStrings, ", "))
 	// Note: user_notes, category_override_kind, tags, tags_source are NOT in the SET clause
@@ -385,8 +408,14 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 		SET amount = $1, date = $2, authorized_date = $3, name = $4,
 		    merchant_name = $5, pfc_primary = $6, pfc_detailed = $7, pfc_confidence_level = $8,
 		    pfc_category_icon_url = $9, payment_channel = $10, pending = $11, external_metadata = $12,
-		    user_notes = $13, updated_at = $14
-		WHERE id = $15
+		    user_notes = $13, updated_at = $14,
+		    effective_category_name = CASE
+		        WHEN category_override_kind = 'custom' THEN
+		            (SELECT name FROM custom_categories WHERE id = transactions.custom_category_override_id AND user_id = transactions.user_id)
+		        WHEN category_override_kind = 'pfc' THEN COALESCE(NULLIF(pfc_primary_override, ''), $6)
+		        ELSE $6
+		    END
+		WHERE id = $15 AND user_id = $16
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -405,6 +434,7 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 		transaction.UserNotes,
 		transaction.UpdatedAt,
 		transaction.ID,
+		transaction.UserID,
 	)
 
 	if err != nil {
@@ -590,6 +620,9 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 		&tx.CustomCategoryOverrideID,
 		&categorySource,
 		&tx.CategoryOverrideDate,
+		&tx.EffectivePFCPrimary,
+		&tx.EffectivePFCDetailed,
+		&tx.EffectiveCategoryName,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -823,6 +856,9 @@ func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transa
 			&tx.CustomCategoryOverrideID,
 			&categorySource,
 			&tx.CategoryOverrideDate,
+			&tx.EffectivePFCPrimary,
+			&tx.EffectivePFCDetailed,
+			&tx.EffectiveCategoryName,
 		)
 
 		if err != nil {
@@ -911,6 +947,9 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 		&tx.CustomCategoryOverrideID,
 		&categorySource,
 		&tx.CategoryOverrideDate,
+		&tx.EffectivePFCPrimary,
+		&tx.EffectivePFCDetailed,
+		&tx.EffectiveCategoryName,
 	)
 
 	if err != nil {
@@ -994,6 +1033,12 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 		    custom_category_override_id = $4,
 		    category_source = $5,
 		    category_override_date = $6,
+		    effective_category_name = CASE
+		        WHEN $1 = 'custom' THEN
+		            (SELECT name FROM custom_categories WHERE id = $4::uuid AND user_id = transactions.user_id)
+		        WHEN $1 = 'pfc' THEN COALESCE(NULLIF($2, ''), pfc_primary)
+		        ELSE pfc_primary
+		    END,
 		    updated_at = $7
 		WHERE id = $8 AND user_id = $9
 	`
@@ -1368,8 +1413,8 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 // GetByUserAccountID retrieves all transactions for a specific user_account.
 // Issue #171: Provides stable queries across re-links since user_account_id survives re-links.
 //
-// NOTE: This SELECT includes user_account_id at position 5 (30 columns total).
-// Columns 1-4 and 6-30 must stay in sync with transactionSelectColumns.
+// NOTE: This SELECT includes user_account_id at position 5 (33 columns total).
+// Columns 1-4 and 6-33 must stay in sync with transactionSelectColumns.
 func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error) {
 	query := `
 		SELECT id, user_id, account_id, linked_item_id, user_account_id,
@@ -1378,7 +1423,8 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 			   pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending, user_notes,
 			   created_at, updated_at, tags, tags_source,
 			   category_override_kind, pfc_primary_override, pfc_detailed_override,
-			   custom_category_override_id, category_source, category_override_date
+			   custom_category_override_id, category_source, category_override_date,
+			   effective_pfc_primary, effective_pfc_detailed, effective_category_name
 		FROM transactions
 		WHERE user_id = $1 AND user_account_id = $2
 		ORDER BY date DESC, created_at DESC
@@ -1431,6 +1477,9 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 			&tx.CustomCategoryOverrideID,
 			&categorySource,
 			&tx.CategoryOverrideDate,
+			&tx.EffectivePFCPrimary,
+			&tx.EffectivePFCDetailed,
+			&tx.EffectiveCategoryName,
 		)
 
 		if err != nil {
@@ -1472,4 +1521,22 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 	}
 
 	return transactions, nil
+}
+
+// UpdateEffectiveCategoryNameByCustomCategoryID bulk-updates effective_category_name
+// for all transactions in a user's account that are assigned to the given custom category.
+// Used when a custom category is renamed. Returns the number of rows updated.
+func (r *transactionRepository) UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID string, customCategoryID string, newName string) (int64, error) {
+	query := `
+		UPDATE transactions
+		SET effective_category_name = $3, updated_at = NOW()
+		WHERE user_id = $1
+		  AND category_override_kind = 'custom'
+		  AND custom_category_override_id = $2::uuid
+	`
+	ct, err := r.db.Exec(ctx, query, userID, customCategoryID, newName)
+	if err != nil {
+		return 0, fmt.Errorf("failed to update effective category name: %w", err)
+	}
+	return ct.RowsAffected(), nil
 }
