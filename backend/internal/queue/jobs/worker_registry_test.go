@@ -35,6 +35,8 @@ func TestAllExpectedJobKinds(t *testing.T) {
 		// Notification / rule workers
 		{"NotificationEmailArgs", NotificationEmailArgs{}, "notification_email"},
 		{"RuleEvaluationArgs", RuleEvaluationArgs{}, "rule_evaluation"},
+		// Category denormalization workers
+		{"EffectiveCategoryRefreshArgs", EffectiveCategoryRefreshArgs{}, "effective_category_refresh"},
 	}
 
 	for _, tc := range testCases {

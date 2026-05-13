@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"regexp"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ func TestTransactionSelectColumns(t *testing.T) {
 		"tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
 		"custom_category_override_id", "category_source", "category_override_date",
+		"effective_pfc_primary", "effective_pfc_detailed", "effective_category_name",
 	}
 
 	t.Run("exact order and count match scanTransactions destinations", func(t *testing.T) {
@@ -65,7 +67,7 @@ func TestTransactionRepository_Create_Success(t *testing.T) {
 		Name:                  "Starbucks",
 	}
 
-	// Expect INSERT query (21 args: added pfc_confidence_level)
+	// Expect INSERT query (25 args: 22 base + $23 category_override_kind, $24 custom_category_override_id, $25 pfc_primary_override)
 	mock.ExpectExec("INSERT INTO transactions").
 		WithArgs(
 			pgxmock.AnyArg(), // id (UUID generated)
@@ -90,6 +92,9 @@ func TestTransactionRepository_Create_Success(t *testing.T) {
 			pgxmock.AnyArg(), // user_notes
 			pgxmock.AnyArg(), // created_at
 			pgxmock.AnyArg(), // updated_at
+			pgxmock.AnyArg(), // $23 category_override_kind (for effective_category_name CASE)
+			pgxmock.AnyArg(), // $24 custom_category_override_id
+			pgxmock.AnyArg(), // $25 pfc_primary_override
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
@@ -137,9 +142,10 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with multiple value sets (23 fields per transaction * 2 transactions = 46 args)
+	// Expect batch INSERT with multiple value sets (24 fields per transaction * 2 transactions = 48 args)
 	// Issue #171: Added user_account_id as the 5th field; encryption adds external_transaction_id_blind_idx
-	args := make([]interface{}, 46)
+	// Issue #1123: Added effective_category_name as the 24th field
+	args := make([]interface{}, 48)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -195,6 +201,7 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 			pgxmock.AnyArg(), // user_notes
 			pgxmock.AnyArg(), // updated_at
 			transaction.ID,
+			transaction.UserID, // $16: user_id scope
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
@@ -257,6 +264,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		).
 		AddRow(
 			"tx-2", userID, "account-2", "item-1",
@@ -266,6 +274,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	// Expect SELECT query
@@ -308,6 +317,7 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	// Expect chain-aware SELECT query (subquery expands via user_account_id)
@@ -349,6 +359,7 @@ func TestTransactionRepository_GetByAccountID_ChainAware(t *testing.T) {
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	// Chain subquery includes replaced account in result
@@ -391,6 +402,7 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	// Expect SELECT query (source is passed as string, not domain type)
@@ -435,6 +447,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	// Expect SELECT query with only user_id filter
@@ -484,6 +497,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	// Expect SELECT query with date range filter
@@ -531,6 +545,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	// Chain-expanded WHERE clause (account_id appears twice for subquery)
@@ -579,6 +594,7 @@ func TestTransactionRepository_ChainExpand_AccountID(t *testing.T) {
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	// Chain-expanded WHERE clause with activeAccountID twice (subquery + fallback)
@@ -626,6 +642,7 @@ func TestTransactionRepository_ChainExpand_AccountIDs(t *testing.T) {
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	// Chain-expanded WHERE with IN subquery (args appear twice)
@@ -673,6 +690,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	// Expect SELECT query with ILIKE search (case-insensitive)
@@ -719,6 +737,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_PFCPrimaries(t *testing.T)
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
@@ -764,6 +783,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 			nil, true, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	// Expect SELECT query with pending filter
@@ -816,6 +836,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	// Issue #1109: chain-expanded account_id filter uses subquery; accountID appears twice.
@@ -922,6 +943,7 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	// Expect SELECT query with WHERE source = $1 AND external_transaction_id_blind_idx = $2 AND user_id = $3
@@ -997,6 +1019,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 			nil, false, nil, now, now,
 			[]byte(`["Food", "Shopping"]`), []byte(`[{"tag":"Food","source":"user"},{"tag":"Shopping","source":"user"}]`),
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
@@ -1047,6 +1070,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 			nil, nil,
 			&overrideKind, &pfcPrimaryOverride, nil,
 			nil, "manual", &overrideDate,
+			nil, nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
@@ -1094,6 +1118,7 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 			now, now, []byte(`["Food"]`), []byte(`[{"tag":"Food","source":"user"}]`),
 			&overrideKind, &pfcPrimaryOverride, nil,
 			nil, "manual", &overrideDate,
+			nil, nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE id").
@@ -1183,6 +1208,77 @@ func TestTransactionRepository_UpdateCategory_ClearOverride(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_UpdateEffectiveCategoryNameByCustomCategoryID_HappyPath tests the bulk rename
+// of effective_category_name for all transactions assigned to a given custom category.
+func TestTransactionRepository_UpdateEffectiveCategoryNameByCustomCategoryID_HappyPath(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	customCategoryID := "cc-uuid-456"
+	mock.ExpectExec("UPDATE transactions").
+		WithArgs(userID, customCategoryID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 3))
+
+	rowsUpdated, err := repo.UpdateEffectiveCategoryNameByCustomCategoryID(ctx, userID, customCategoryID)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(3), rowsUpdated)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_UpdateEffectiveCategoryNameByCustomCategoryID_ZeroRows tests
+// that zero rows updated (no matching transactions) returns 0 without error.
+func TestTransactionRepository_UpdateEffectiveCategoryNameByCustomCategoryID_ZeroRows(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	customCategoryID := "cc-uuid-nonexistent"
+
+	mock.ExpectExec("UPDATE transactions").
+		WithArgs(userID, customCategoryID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	rowsUpdated, err := repo.UpdateEffectiveCategoryNameByCustomCategoryID(ctx, userID, customCategoryID)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), rowsUpdated)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_UpdateEffectiveCategoryNameByCustomCategoryID_DBError tests
+// that a database error is wrapped and returned correctly.
+func TestTransactionRepository_UpdateEffectiveCategoryNameByCustomCategoryID_DBError(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	customCategoryID := "cc-uuid-456"
+
+	mock.ExpectExec("UPDATE transactions").
+		WithArgs(userID, customCategoryID).
+		WillReturnError(errors.New("db connection error"))
+
+	_, err = repo.UpdateEffectiveCategoryNameByCustomCategoryID(ctx, userID, customCategoryID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to update effective category name")
 }
 
 // TestTransactionRepository_GetDistinctPlaidCategories_Success tests retrieving distinct Plaid categories
@@ -1477,8 +1573,8 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly(t *test
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
+		WithArgs(userID, startDate, endDate, pfcPrimary).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1549,8 +1645,8 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_And(t *testing.T) {
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
+		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1585,8 +1681,8 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_Or(t *testing.T) {
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
+		WithArgs(userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1620,8 +1716,8 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_EmptyMatchLogic(t *t
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
+		WithArgs(userID, startDate, endDate, pfcPrimary).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1654,8 +1750,8 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_NoMatches(t *testing
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(0.0)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
+		WithArgs(userID, startDate, endDate, pfcPrimary).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1686,8 +1782,8 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_DBError(t *testing.T
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
+		WithArgs(userID, startDate, endDate, pfcPrimary).
 		WillReturnError(errors.New("connection done"))
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1724,8 +1820,8 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
+		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1762,8 +1858,8 @@ func TestTransactionRepository_GetMatchingTransactionStats_SingleCategory(t *tes
 
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
+		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, &pfcDetailed, nil, tags, matchLogic, startDate, endDate)
@@ -1796,8 +1892,8 @@ func TestTransactionRepository_GetMatchingTransactionStats_CustomCategory(t *tes
 
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\).+custom_category_override_id::text = \$4`).
+		WithArgs(userID, startDate, endDate, customCategoryID).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "custom", nil, nil, &customCategoryID, tags, matchLogic, startDate, endDate)
@@ -1864,8 +1960,8 @@ func TestTransactionRepository_GetMatchingTransactionStats_And(t *testing.T) {
 
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
+		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, &pfcDetailed, nil, tags, matchLogic, startDate, endDate)
@@ -1899,8 +1995,8 @@ func TestTransactionRepository_GetMatchingTransactionStats_Or(t *testing.T) {
 
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
+		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, &pfcDetailed, nil, tags, matchLogic, startDate, endDate)
@@ -2005,9 +2101,9 @@ func TestTransactionRepository_CreateBatch_WithUserAccountID(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with user_account_id and external_transaction_id_blind_idx (23 fields now)
-	// Build arguments for 23 fields per transaction
-	args := make([]interface{}, 23)
+	// Expect batch INSERT with user_account_id and external_transaction_id_blind_idx (24 fields now)
+	// Issue #1123: Added effective_category_name as the 24th field
+	args := make([]interface{}, 24)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -2050,8 +2146,8 @@ func TestTransactionRepository_CreateBatch_DOUpdateBehavior(t *testing.T) {
 		},
 	}
 
-	// Build arguments for 23 fields per transaction (includes external_transaction_id_blind_idx and pfc_category_icon_url)
-	args := make([]interface{}, 23)
+	// Build arguments for 24 fields per transaction (includes external_transaction_id_blind_idx, pfc_category_icon_url, effective_category_name)
+	args := make([]interface{}, 24)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -2096,6 +2192,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 		"created_at", "updated_at", "tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
 		"custom_category_override_id", "category_source", "category_override_date",
+		"effective_pfc_primary", "effective_pfc_detailed", "effective_category_name",
 	}).
 		AddRow(
 			"tx-uuid-1", userID, "account-old", "item-old", &userAccountID,
@@ -2104,6 +2201,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 			nil, nil, nil, nil, nil, false, nil,
 			now, now, []byte(`[]`), []byte(`[]`),
 			nil, nil, nil, nil, "plaid", nil,
+			nil, nil, nil,
 		).
 		AddRow(
 			"tx-uuid-2", userID, "account-new", "item-new", &userAccountID,
@@ -2112,6 +2210,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 			nil, nil, nil, nil, nil, false, nil,
 			now, now, []byte(`[]`), []byte(`[]`),
 			nil, nil, nil, nil, "plaid", nil,
+			nil, nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT.*FROM transactions.*WHERE user_id.*AND user_account_id").
@@ -2176,6 +2275,7 @@ func testTxRow(id, userID, accountID, itemID, name string, amount float64, now t
 		nil, false, nil, now, now,
 		nil, nil,
 		nil, nil, nil, nil, nil, nil,
+		nil, nil, nil,
 	}
 }
 
@@ -2201,8 +2301,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_PFC
 
 	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
 		mock,
-		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override`,
-		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+LIMIT \$5 OFFSET \$6`,
+		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4`,
+		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4.+LIMIT \$5 OFFSET \$6`,
 		[]interface{}{userID, startDate, endDate, pfcPrimary},
 		[]interface{}{userID, startDate, endDate, pfcPrimary, limit, offset},
 	)
@@ -2241,8 +2341,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_Emp
 
 	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
 		mock,
-		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override`,
-		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+LIMIT \$5 OFFSET \$6`,
+		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4`,
+		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4.+LIMIT \$5 OFFSET \$6`,
 		[]interface{}{userID, startDate, endDate, pfcPrimary},
 		[]interface{}{userID, startDate, endDate, pfcPrimary, limit, offset},
 	)
@@ -2281,8 +2381,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_Hie
 
 	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
 		mock,
-		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+pfc_detailed_override`,
-		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_detailed_override.+LIMIT \$6 OFFSET \$7`,
+		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4.+effective_pfc_detailed = \$5`,
+		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4.+effective_pfc_detailed = \$5.+LIMIT \$6 OFFSET \$7`,
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pfcDetailed},
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pfcDetailed, limit, offset},
 	)
@@ -2319,8 +2419,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_Cus
 
 	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
 		mock,
-		`SELECT COUNT\(\*\).+category_override_kind = 'custom' AND custom_category_override_id`,
-		`SELECT (.+) FROM transactions WHERE.+category_override_kind = 'custom' AND custom_category_override_id.+LIMIT \$5 OFFSET \$6`,
+		`SELECT COUNT\(\*\).+custom_category_override_id::text = \$4`,
+		`SELECT (.+) FROM transactions WHERE.+custom_category_override_id::text = \$4.+LIMIT \$5 OFFSET \$6`,
 		[]interface{}{userID, startDate, endDate, customCategoryID},
 		[]interface{}{userID, startDate, endDate, customCategoryID, limit, offset},
 	)
@@ -2400,8 +2500,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_And_PFC(t *testi
 
 	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
 		mock,
-		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+AND tags \?\| \$5`,
-		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+AND tags \?\| \$5.+LIMIT \$6 OFFSET \$7`,
+		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4.+AND tags \?\| \$5`,
+		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4.+AND tags \?\| \$5.+LIMIT \$6 OFFSET \$7`,
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg()},
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg(), limit, offset},
 	)
@@ -2439,8 +2539,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_Or_PFC(t *testin
 
 	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
 		mock,
-		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+\) OR tags \?\| \$5\)`,
-		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+\) OR tags \?\| \$5\).+LIMIT \$6 OFFSET \$7`,
+		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4\) OR tags \?\| \$5\)`,
+		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4\) OR tags \?\| \$5\).+LIMIT \$6 OFFSET \$7`,
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg()},
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg(), limit, offset},
 	)
@@ -2537,6 +2637,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		).
 		AddRow(
 			"tx-2", userID, "account-new-2", "item-1",
@@ -2546,6 +2647,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T
 			nil, false, nil, now, now,
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
 		)
 
 	// The WHERE clause must contain user_account_id filter.
@@ -2564,4 +2666,137 @@ func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
+}
+
+// TestBuildOrderBy tests the buildOrderBy helper for all supported sort combinations.
+func TestBuildOrderBy(t *testing.T) {
+	tests := []struct {
+		name     string
+		filters  domain.TransactionFilters
+		wantExpr string
+	}{
+		{
+			name:     "default (empty SortBy/SortDir) -> date DESC",
+			filters:  domain.TransactionFilters{},
+			wantExpr: "ORDER BY COALESCE(authorized_date, date) DESC, id ASC",
+		},
+		{
+			name:     "date asc",
+			filters:  domain.TransactionFilters{SortBy: "date", SortDir: "asc"},
+			wantExpr: "ORDER BY COALESCE(authorized_date, date) ASC, id ASC",
+		},
+		{
+			name:     "date desc",
+			filters:  domain.TransactionFilters{SortBy: "date", SortDir: "desc"},
+			wantExpr: "ORDER BY COALESCE(authorized_date, date) DESC, id ASC",
+		},
+		{
+			name:     "merchant asc",
+			filters:  domain.TransactionFilters{SortBy: "merchant", SortDir: "asc"},
+			wantExpr: "ORDER BY COALESCE(merchant_name, name) ASC, id ASC",
+		},
+		{
+			name:     "merchant desc",
+			filters:  domain.TransactionFilters{SortBy: "merchant", SortDir: "desc"},
+			wantExpr: "ORDER BY COALESCE(merchant_name, name) DESC, id ASC",
+		},
+		{
+			name:     "amount asc",
+			filters:  domain.TransactionFilters{SortBy: "amount", SortDir: "asc"},
+			wantExpr: "ORDER BY amount ASC, id ASC",
+		},
+		{
+			name:     "amount desc",
+			filters:  domain.TransactionFilters{SortBy: "amount", SortDir: "desc"},
+			wantExpr: "ORDER BY amount DESC, id ASC",
+		},
+		{
+			name:     "category asc",
+			filters:  domain.TransactionFilters{SortBy: "category", SortDir: "asc"},
+			wantExpr: "ORDER BY COALESCE(effective_category_name, effective_pfc_primary, pfc_primary) ASC, id ASC",
+		},
+		{
+			name:     "category desc",
+			filters:  domain.TransactionFilters{SortBy: "category", SortDir: "desc"},
+			wantExpr: "ORDER BY COALESCE(effective_category_name, effective_pfc_primary, pfc_primary) DESC, id ASC",
+		},
+		{
+			name:     "unknown SortBy falls back to date DESC",
+			filters:  domain.TransactionFilters{SortBy: "hax", SortDir: "desc"},
+			wantExpr: "ORDER BY COALESCE(authorized_date, date) DESC, id ASC",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildOrderBy(tc.filters)
+			assert.Equal(t, tc.wantExpr, got)
+		})
+	}
+}
+
+// TestTransactionRepository_GetByUserIDWithFilters_SortBy tests that buildOrderBy is
+// applied to the SQL emitted by GetByUserIDWithFilters.
+func TestTransactionRepository_GetByUserIDWithFilters_SortBy(t *testing.T) {
+	tests := []struct {
+		name        string
+		filters     domain.TransactionFilters
+		orderByFrag string // substring that must appear in the query
+	}{
+		{
+			name:        "default -> date DESC",
+			filters:     domain.TransactionFilters{},
+			orderByFrag: "ORDER BY COALESCE(authorized_date, date) DESC, id ASC",
+		},
+		{
+			name:        "date asc",
+			filters:     domain.TransactionFilters{SortBy: "date", SortDir: "asc"},
+			orderByFrag: "ORDER BY COALESCE(authorized_date, date) ASC, id ASC",
+		},
+		{
+			name:        "merchant desc",
+			filters:     domain.TransactionFilters{SortBy: "merchant", SortDir: "desc"},
+			orderByFrag: "ORDER BY COALESCE(merchant_name, name) DESC, id ASC",
+		},
+		{
+			name:        "amount asc",
+			filters:     domain.TransactionFilters{SortBy: "amount", SortDir: "asc"},
+			orderByFrag: "ORDER BY amount ASC, id ASC",
+		},
+		{
+			name:        "category desc",
+			filters:     domain.TransactionFilters{SortBy: "category", SortDir: "desc"},
+			orderByFrag: "ORDER BY COALESCE(effective_category_name, effective_pfc_primary, pfc_primary) DESC, id ASC",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock, err := pgxmock.NewPool()
+			require.NoError(t, err)
+			defer mock.Close()
+
+			repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+			ctx := context.Background()
+
+			userID := "user-sort-test"
+			limit := 10
+			offset := 0
+
+			rows := pgxmock.NewRows(transactionSelectColumns) // empty result set is fine
+
+			// pgxmock matches queries as regexps; escape the ORDER BY fragment so
+			// special chars like '(' and ')' are treated literally.
+			pattern := "SELECT .+ FROM transactions WHERE user_id .+" + regexp.QuoteMeta(tc.orderByFrag)
+			mock.ExpectQuery(pattern).
+				WithArgs(userID, limit, offset).
+				WillReturnRows(rows)
+
+			_, err = repo.GetByUserIDWithFilters(ctx, userID, tc.filters, limit, offset)
+			assert.NoError(t, err)
+
+			err = mock.ExpectationsWereMet()
+			assert.NoError(t, err, "query did not contain expected ORDER BY clause")
+		})
+	}
 }

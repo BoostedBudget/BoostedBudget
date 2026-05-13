@@ -151,6 +151,18 @@ export const getGetTransactionsResponseMock = (
         undefined,
       ]),
       date: faker.date.past().toISOString().slice(0, 19) + "Z",
+      effective_category_name: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      effective_pfc_detailed: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      effective_pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       external_metadata: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
@@ -354,6 +366,18 @@ export const getGetTransactionByIDResponseMock = (
     undefined,
   ]),
   date: faker.date.past().toISOString().slice(0, 19) + "Z",
+  effective_category_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  effective_pfc_detailed: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  effective_pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   external_metadata: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -554,6 +578,18 @@ export const getUpdateTransactionCategoryResponseMock = (
     undefined,
   ]),
   date: faker.date.past().toISOString().slice(0, 19) + "Z",
+  effective_category_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  effective_pfc_detailed: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  effective_pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   external_metadata: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -754,6 +790,18 @@ export const getUpdateTransactionTagsResponseMock = (
     undefined,
   ]),
   date: faker.date.past().toISOString().slice(0, 19) + "Z",
+  effective_category_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  effective_pfc_detailed: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  effective_pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   external_metadata: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,

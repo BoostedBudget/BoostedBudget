@@ -10,6 +10,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -64,6 +65,9 @@ func (m *mockCustomCategoryService) GetOrCreateCategory(ctx context.Context, use
 	}
 	return m.getOrCreateCat, nil
 }
+
+// SetJobQueue is a no-op for the mock (Issue #1123: satisfies updated interface).
+func (m *mockCustomCategoryService) SetJobQueue(_ queue.JobQueue) {}
 
 // Helper to create a test category
 func createTestCategory(userID, name string) *domain.CustomCategory {

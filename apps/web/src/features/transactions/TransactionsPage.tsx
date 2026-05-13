@@ -5,7 +5,8 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { useTransactions } from './hooks/useTransactions'
 import { useTransactionFilters } from './hooks/useTransactionFilters'
-import { TransactionTable, type TransactionSortColumn, type SortDirection } from './components/TransactionTable'
+import { TransactionTable } from './components/TransactionTable'
+import type { TransactionSortColumn, SortDirection } from './hooks/useTransactions'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import { TransactionEditor } from './components/TransactionEditor'
 import { TransactionFilterPanel } from './components/TransactionFilterPanel'
@@ -22,19 +23,7 @@ import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { formatPFCPrimary } from '@/shared/categories/formatPfc'
 
 /**
- * Transactions Page
- *
- * Displays a list of transactions with comprehensive filtering and pagination.
- *
- * Features:
- * - Multi-filter support (date, account, category, type, amount, status)
- * - URL state sync for shareable/bookmarkable filters
- * - Search transactions with 300ms debounce
- * - Pagination with Next/Previous buttons
- * - Total count display showing filtered vs total
- * - Loading and error states
- * - Empty state when no transactions
- *
+ * Transactions Page — displays transactions with filtering, search, and pagination.
  * Issue #529: Transaction page filtering
  */
 export function TransactionsPage() {
@@ -63,9 +52,9 @@ export function TransactionsPage() {
     trackEvent(ANALYTICS_EVENTS.TRANSACTIONS_VIEWED)
   }, [trackEvent])
 
-  // Issue #590: Sorting state
-  const [sortColumn, setSortColumn] = useState<TransactionSortColumn | undefined>(undefined)
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
+  // Sort state — server-side (#1123). Default matches backend default.
+  const [sortColumn, setSortColumn] = useState<TransactionSortColumn>('date')
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
 
   // Fetch available tags, categories, accounts, and curated PFC primaries
   const { data: tagsData } = useGetUserTags()
@@ -77,8 +66,7 @@ export function TransactionsPage() {
   const availableCategories = (categoriesData as unknown as CustomCategory[]) ?? []
   const plaidPrimaries = useMemo(() => (plaidPrimariesData as unknown as Primary[]) ?? [], [plaidPrimariesData])
 
-  // Issue #531: Create accounts lookup map for O(1) access
-  // Issue #1109: Use useActiveAccounts to exclude replaced accounts
+  // Create accounts lookup map
   const accountsMap = useMemo(() => {
     const map: Record<string, Account> = {}
     const accs = accountsList ?? []
@@ -88,7 +76,7 @@ export function TransactionsPage() {
     return map
   }, [accountsList])
 
-  // Issue #590: Create account filter options for inline column filter
+  // Create account filter options
   const accountOptions = useMemo<FilterOption[]>(() => {
     const accs = accountsList ?? []
     return accs.map((acc) => ({
@@ -97,7 +85,7 @@ export function TransactionsPage() {
     }))
   }, [accountsList])
 
-  // Issue #590: Inline filter callbacks
+  // Inline filter callbacks
   const handleAccountFilterChange = useCallback(
     (value: string[]) => {
       setFilter('account_ids', value.length > 0 ? value : undefined)
@@ -131,7 +119,7 @@ export function TransactionsPage() {
     [filters, setFilters]
   )
 
-  // Issue #590: Get current amount range from filters
+  // Get current amount range from filters
   const currentAmountRange = useMemo<RangeValue | null>(() => {
     if (filters.min_amount !== undefined || filters.max_amount !== undefined) {
       return {
@@ -153,7 +141,7 @@ export function TransactionsPage() {
     hasMore,
     totalCount,
     currentPage,
-  } = useTransactions({ filters, limit: 50 })
+  } = useTransactions({ filters, limit: 50, sortBy: sortColumn, sortDir: sortDirection })
 
   // Category filter options: curated PFC primaries + observed effective primaries.
   // Values are raw enum strings (e.g. "FOOD_AND_DRINK") so they match the pfc_primary
@@ -178,25 +166,21 @@ export function TransactionsPage() {
       .map(([value, label]) => ({ value, label }))
   }, [data?.transactions, plaidPrimaries])
 
-  // Handle opening the transaction editor
   const handleEditTransaction = (transaction: Transaction) => {
     setSelectedTransaction(transaction)
     setIsEditorOpen(true)
   }
 
-  // Handle closing the editor
   const handleEditorClose = useCallback(() => {
     setIsEditorOpen(false)
     setSelectedTransaction(null)
   }, [])
 
-  // Handle successful save - update transaction in place for immediate display
   const handleEditorSave = useCallback((updatedTransaction: Transaction) => {
     updateTransaction(updatedTransaction)
     handleEditorClose()
   }, [updateTransaction, handleEditorClose])
 
-  // Handle tag creation - invalidate query to refetch tags
   const handleTagCreated = useCallback(
     (_tag: UserTag) => {
       queryClient.invalidateQueries({ queryKey: getGetUserTagsQueryKey() })
@@ -204,7 +188,6 @@ export function TransactionsPage() {
     [queryClient]
   )
 
-  // Handle category creation - invalidate query to refetch categories
   const handleCategoryCreated = useCallback(
     (_category: CustomCategory) => {
       queryClient.invalidateQueries({ queryKey: getGetUserCategoriesQueryKey() })
@@ -212,7 +195,6 @@ export function TransactionsPage() {
     [queryClient]
   )
 
-  // Issue #531: Handle categorize quick action (opens editor focused on category)
   const handleCategorizeTransaction = (transaction: Transaction) => {
     setSelectedTransaction(transaction)
     setIsEditorOpen(true)
@@ -234,48 +216,10 @@ export function TransactionsPage() {
   // Calculate pending count from transactions data
   const pendingCount = data?.transactions?.filter((t) => t.pending).length ?? 0
 
-  // Issue #590: Handle sort change
   const handleSort = useCallback((column: TransactionSortColumn, direction: SortDirection) => {
     setSortColumn(column)
     setSortDirection(direction)
   }, [])
-
-  // Issue #590: Sort transactions client-side
-  const sortedTransactions = useMemo(() => {
-    const transactions = data?.transactions ?? []
-    if (!sortColumn) return transactions
-
-    return [...transactions].sort((a, b) => {
-      let comparison = 0
-
-      switch (sortColumn) {
-        case 'date': {
-          const dateA = new Date(a.authorized_date || a.date).getTime()
-          const dateB = new Date(b.authorized_date || b.date).getTime()
-          comparison = dateA - dateB
-          break
-        }
-        case 'merchant': {
-          const nameA = (a.merchant_name || a.name || '').toLowerCase()
-          const nameB = (b.merchant_name || b.name || '').toLowerCase()
-          comparison = nameA.localeCompare(nameB)
-          break
-        }
-        case 'amount': {
-          comparison = a.amount - b.amount
-          break
-        }
-        case 'category': {
-          const resolveCat = (t: Transaction) =>
-            t.pfc_primary_override ?? t.pfc_primary ?? ''
-          comparison = resolveCat(a).localeCompare(resolveCat(b))
-          break
-        }
-      }
-
-      return sortDirection === 'asc' ? comparison : -comparison
-    })
-  }, [data?.transactions, sortColumn, sortDirection])
 
   // Loading state
   if (loading && !data) {
@@ -303,7 +247,7 @@ export function TransactionsPage() {
     )
   }
 
-  const transactions = sortedTransactions
+  const transactions = data?.transactions ?? []
   const isEmpty = transactions.length === 0
 
   return (
@@ -320,8 +264,7 @@ export function TransactionsPage() {
         />
       </div>
 
-      {/* Filter Panel - Issue #529 */}
-      <TransactionFilterPanel
+          <TransactionFilterPanel
         filters={filters}
         datePreset={datePreset}
         statusFilter={statusFilter}
@@ -375,7 +318,6 @@ export function TransactionsPage() {
             </p>
           </div>
 
-          {/* Issue #584: Transaction table view */}
           <div className="min-h-[200px] overflow-x-auto">
             <TransactionTable
               transactions={transactions}
@@ -387,7 +329,6 @@ export function TransactionsPage() {
               sortColumn={sortColumn}
               sortDirection={sortDirection}
               onSort={handleSort}
-              // Issue #590: Inline column filters
               accountOptions={accountOptions}
               accountFilter={filters.account_ids}
               onAccountFilterChange={handleAccountFilterChange}

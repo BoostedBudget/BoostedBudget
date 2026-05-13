@@ -290,17 +290,14 @@ func TestEffectiveCategoryExpr_OverrideBranchFires_Subcategory(t *testing.T) {
 	}
 }
 
-// TestEffectiveCategoryExpr_SingleElementOverride_FallsThroughForSubcategory verifies that
-// when category_override has only one element, ->>1 returns NULL and the COALESCE falls through.
-// The SQL semantics guarantee this: a JSON array element that doesn't exist returns NULL.
-func TestEffectiveCategoryExpr_SingleElementOverride_FallsThroughForSubcategory(t *testing.T) {
+// TestEffectiveCategoryExpr_IncludesUncategorizedFallback verifies that the category_token
+// grouping expression falls back to 'UNCATEGORIZED' when no category is present.
+// The PFCv2 discriminated-union model means custom kind uses 'custom:<id>' and pfc kind
+// uses the PFC column values. When none match, COALESCE provides 'UNCATEGORIZED'.
+func TestEffectiveCategoryExpr_IncludesUncategorizedFallback(t *testing.T) {
 	expr := effectiveCategoryExpr(true)
-	// Single-element override (category_override = '["Food And Drink"]') has no ->>1.
-	// NULL from ->>1 → COALESCE falls through to personal_finance_category->>'detailed' → 'UNCATEGORIZED'.
-	// We can't test PostgreSQL semantics in a unit test; we verify the expression shape here
-	// and the 3-level fallback chain is explicit.
 	if !contains(expr, "COALESCE") {
-		t.Errorf("expr must use COALESCE for 3-level fallback: %s", expr)
+		t.Errorf("expr must use COALESCE for fallback: %s", expr)
 	}
 	if !contains(expr, "'UNCATEGORIZED'") {
 		t.Errorf("expr must fall back to 'UNCATEGORIZED': %s", expr)
@@ -319,18 +316,37 @@ func contains(s, substr string) bool {
 		}())
 }
 
-func TestEffectiveCategoryDisplayExpr_ReferencesCustomCategoryName(t *testing.T) {
+// TestEffectiveCategoryDisplayExpr_UsesEffectiveCategoryNameColumn verifies that the
+// display expression reads from the denormalized effective_category_name column
+// instead of performing a JOIN on custom_categories.
+func TestEffectiveCategoryDisplayExpr_UsesEffectiveCategoryNameColumn(t *testing.T) {
 	expr := effectiveCategoryDisplayExpr()
-	if !contains(expr, "cc.name") {
-		t.Errorf("display expr must reference cc.name for custom categories, got: %s", expr)
+	// Must reference the denormalized column directly
+	if !contains(expr, "effective_category_name") {
+		t.Errorf("display expr must reference effective_category_name column, got: %s", expr)
 	}
-	if !contains(expr, "COALESCE") {
-		t.Errorf("display expr must use COALESCE to handle NULL cc.name, got: %s", expr)
+	// Must NOT require a JOIN on custom_categories (no cc. alias)
+	if contains(expr, "cc.name") {
+		t.Errorf("display expr must NOT reference cc.name (JOIN removed), got: %s", expr)
 	}
-	if !contains(expr, "category_override_kind") {
-		t.Errorf("display expr must branch on category_override_kind, got: %s", expr)
+	if contains(expr, "category_override_kind") {
+		t.Errorf("display expr must NOT branch on category_override_kind (column is pre-computed), got: %s", expr)
 	}
-	if !contains(expr, "'custom'") {
-		t.Errorf("display expr must handle 'custom' override kind, got: %s", expr)
+}
+
+// TestEffectiveTransferExpr_UsesEffectivePfcPrimaryColumn verifies that the transfer
+// filter expression reads from the denormalized effective_pfc_primary column.
+func TestEffectiveTransferExpr_UsesEffectivePfcPrimaryColumn(t *testing.T) {
+	expr := effectiveTransferExpr()
+	// Must reference the denormalized column
+	if !contains(expr, "effective_pfc_primary") {
+		t.Errorf("transfer expr must reference effective_pfc_primary column, got: %s", expr)
+	}
+	// Must NOT use the old CASE/override pattern
+	if contains(expr, "pfc_primary_override") {
+		t.Errorf("transfer expr must NOT reference pfc_primary_override directly, got: %s", expr)
+	}
+	if contains(expr, "category_override_kind") {
+		t.Errorf("transfer expr must NOT branch on category_override_kind (column is pre-computed), got: %s", expr)
 	}
 }

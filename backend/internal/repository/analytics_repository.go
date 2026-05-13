@@ -290,25 +290,18 @@ func effectiveCategoryExpr(subcategory bool) string {
 }
 
 // effectiveCategoryDisplayExpr returns the SQL expression for the human-readable display name
-// of the effective category. For custom-category overrides it resolves cc.name from the joined
-// custom_categories table (requires LEFT JOIN custom_categories cc). For all other rows it
-// returns '' so the service applies its PFCv2 registry lookup instead.
+// of the effective category. Reads the denormalized effective_category_name column directly,
+// eliminating the need for a LEFT JOIN on custom_categories.
 func effectiveCategoryDisplayExpr() string {
-	return `CASE
-		WHEN t.category_override_kind = 'custom' THEN COALESCE(cc.name, 'Uncategorized')
-		ELSE ''
-	END`
+	return `t.effective_category_name`
 }
 
 // effectiveTransferExpr returns the SQL expression for the effective PFC primary used
-// in transfer filtering. Custom overrides always return '' (never match TRANSFER%).
-// PFC overrides: use pfc_primary_override; otherwise use raw pfc_primary.
+// in transfer filtering. Reads the denormalized effective_pfc_primary column directly.
+// effective_pfc_primary is NULL for custom-kind rows (never match TRANSFER%), so
+// COALESCE to '' ensures the NOT LIKE filter still works correctly.
 func effectiveTransferExpr() string {
-	return `CASE
-		WHEN t.category_override_kind = 'pfc'    THEN COALESCE(t.pfc_primary_override, '')
-		WHEN t.category_override_kind = 'custom' THEN ''
-		ELSE                                          COALESCE(t.pfc_primary, '')
-	END`
+	return `COALESCE(t.effective_pfc_primary, '')`
 }
 
 // spendingBaseQuery returns the common WHERE clause args and starting argIndex for spending queries.
@@ -362,9 +355,6 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 			COUNT(*) as transaction_count
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
-		LEFT JOIN custom_categories cc
-		       ON cc.id = t.custom_category_override_id
-		      AND t.category_override_kind = 'custom'
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
@@ -466,9 +456,6 @@ func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID stri
 			COALESCE(SUM(ABS(t.amount)), 0) as total
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
-		LEFT JOIN custom_categories cc
-		       ON cc.id = t.custom_category_override_id
-		      AND t.category_override_kind = 'custom'
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
