@@ -2,49 +2,66 @@ package services
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
-// CustomCategoryService defines the interface for custom category business logic
+// effectiveCategoryRefreshJobArgs is a local mirror of jobs.EffectiveCategoryRefreshArgs.
+// Defined here to avoid the services→jobs→services import cycle.
+// The JSON structure MUST match jobs.EffectiveCategoryRefreshArgs exactly.
+// Issue #1123: Async cascade rename of effective_category_name on custom category update.
+type effectiveCategoryRefreshJobArgs struct {
+	UserID           string `json:"user_id"`
+	CustomCategoryID string `json:"custom_category_id"`
+	NewName          string `json:"new_name"`
+}
+
+// Kind returns the job type identifier. Must match jobs.EffectiveCategoryRefreshArgs.Kind().
+func (effectiveCategoryRefreshJobArgs) Kind() string { return "effective_category_refresh" }
+
 type CustomCategoryService interface {
-	// CreateCategory creates a new custom category (unlimited categories for all tiers)
 	CreateCategory(ctx context.Context, userID string, req *domain.CreateCustomCategoryRequest) (*domain.CustomCategory, error)
 
-	// GetUserCategories retrieves all categories for a user
 	GetUserCategories(ctx context.Context, userID string) ([]*domain.CustomCategory, error)
 
-	// GetCategoryByID retrieves a specific category by ID
 	GetCategoryByID(ctx context.Context, categoryID string) (*domain.CustomCategory, error)
 
-	// UpdateCategory updates a category's name, icon, or color
 	UpdateCategory(ctx context.Context, userID, categoryID string, req *domain.UpdateCustomCategoryRequest) (*domain.CustomCategory, error)
 
-	// DeleteCategory removes a category
 	DeleteCategory(ctx context.Context, userID, categoryID string) error
 
-	// GetOrCreateCategory gets an existing category or creates it if it doesn't exist
 	GetOrCreateCategory(ctx context.Context, userID, categoryName string) (*domain.CustomCategory, error)
+
+	// SetJobQueue injects the job queue for async effective_category_name refreshes.
+	// Called after the River client is created (see main.go). Safe to skip in tests
+	// that don't exercise the rename path.
+	SetJobQueue(jq queue.JobQueue)
 }
 
-// customCategoryService implements CustomCategoryService
 type customCategoryService struct {
 	categoryRepo repository.CustomCategoryRepository
+	jobQueue     queue.JobQueue // nil until SetJobQueue is called
+	logger       *slog.Logger
 }
 
-// NewCustomCategoryService creates a new CustomCategoryService instance
 func NewCustomCategoryService(
 	categoryRepo repository.CustomCategoryRepository,
 ) CustomCategoryService {
 	return &customCategoryService{
 		categoryRepo: categoryRepo,
+		logger:       slog.Default(),
 	}
 }
 
-// CreateCategory creates a new custom category (unlimited categories for all tiers)
+// SetJobQueue injects the job queue after construction (Issue #1123).
+func (s *customCategoryService) SetJobQueue(jq queue.JobQueue) {
+	s.jobQueue = jq
+}
+
 func (s *customCategoryService) CreateCategory(ctx context.Context, userID string, req *domain.CreateCustomCategoryRequest) (*domain.CustomCategory, error) {
-	// Create the category
 	category := &domain.CustomCategory{
 		UserID:           userID,
 		Name:             req.Name,
@@ -54,12 +71,10 @@ func (s *customCategoryService) CreateCategory(ctx context.Context, userID strin
 		UsageCount:       0,
 	}
 
-	// Validate
 	if err := category.Validate(); err != nil {
 		return nil, err
 	}
 
-	// Save to database
 	if err := s.categoryRepo.Create(ctx, category); err != nil {
 		return nil, err
 	}
@@ -68,7 +83,6 @@ func (s *customCategoryService) CreateCategory(ctx context.Context, userID strin
 	return category, nil
 }
 
-// GetUserCategories retrieves all categories for a user
 func (s *customCategoryService) GetUserCategories(ctx context.Context, userID string) ([]*domain.CustomCategory, error) {
 	categories, err := s.categoryRepo.GetByUserID(ctx, userID)
 	if err != nil {
@@ -80,7 +94,6 @@ func (s *customCategoryService) GetUserCategories(ctx context.Context, userID st
 	return categories, nil
 }
 
-// GetCategoryByID retrieves a specific category by ID
 func (s *customCategoryService) GetCategoryByID(ctx context.Context, categoryID string) (*domain.CustomCategory, error) {
 	c, err := s.categoryRepo.GetByID(ctx, categoryID)
 	if err != nil {
@@ -90,20 +103,17 @@ func (s *customCategoryService) GetCategoryByID(ctx context.Context, categoryID 
 	return c, nil
 }
 
-// UpdateCategory updates a category's name, icon, or color
 func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, categoryID string, req *domain.UpdateCustomCategoryRequest) (*domain.CustomCategory, error) {
-	// Get existing category
 	category, err := s.categoryRepo.GetByID(ctx, categoryID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Verify ownership
 	if category.UserID != userID {
 		return nil, domain.ErrCategoryNotFound
 	}
 
-	// Apply updates
+	nameChanged := req.Name != nil && *req.Name != category.Name
 	if req.Name != nil {
 		category.Name = *req.Name
 	}
@@ -117,47 +127,56 @@ func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, cate
 		category.Color = req.Color
 	}
 
-	// Validate
 	if err := category.Validate(); err != nil {
 		return nil, err
 	}
 
-	// Save changes
 	if err := s.categoryRepo.Update(ctx, category); err != nil {
 		return nil, err
+	}
+
+	// Issue #1123: enqueue async effective_category_name refresh when the name changed.
+	if nameChanged && s.jobQueue != nil {
+		refreshJob := effectiveCategoryRefreshJobArgs{
+			UserID:           userID,
+			CustomCategoryID: categoryID,
+			NewName:          category.Name,
+		}
+		if _, enqErr := s.jobQueue.Enqueue(ctx, refreshJob); enqErr != nil {
+			// Log but do not fail the request — the rename is already persisted.
+			s.logger.Error("failed to enqueue effective category refresh job",
+				"user_id", userID,
+				"custom_category_id", categoryID,
+				"new_name", category.Name,
+				"error", enqErr,
+			)
+		}
 	}
 
 	category.PopulatePFCDisplay()
 	return category, nil
 }
 
-// DeleteCategory removes a category
 func (s *customCategoryService) DeleteCategory(ctx context.Context, userID, categoryID string) error {
-	// Get existing category to verify ownership
 	category, err := s.categoryRepo.GetByID(ctx, categoryID)
 	if err != nil {
 		return err
 	}
 
-	// Verify ownership
 	if category.UserID != userID {
 		return domain.ErrCategoryNotFound
 	}
 
-	// Delete the category
 	return s.categoryRepo.Delete(ctx, categoryID)
 }
 
-// GetOrCreateCategory gets an existing category or creates it if it doesn't exist
 func (s *customCategoryService) GetOrCreateCategory(ctx context.Context, userID, categoryName string) (*domain.CustomCategory, error) {
-	// Try to get existing category
 	category, err := s.categoryRepo.GetByName(ctx, userID, categoryName)
 	if err == nil {
 		category.PopulatePFCDisplay()
 		return category, nil
 	}
 
-	// If not found, create it
 	if err == domain.ErrCategoryNotFound {
 		req := &domain.CreateCustomCategoryRequest{
 			Name: categoryName,
