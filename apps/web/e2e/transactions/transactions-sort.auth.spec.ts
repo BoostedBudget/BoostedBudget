@@ -36,6 +36,12 @@ function buildFixture() {
 const allTransactions = buildFixture()
 
 async function setupTransactionsMock(page: Page) {
+  // Pre-set cookie consent so the banner never appears (mocked tests don't need GDPR UX)
+  await page.addInitScript(() => {
+    const consent = { consents: { necessary: true, analytics: false, advertising: false }, timestamp: '2026-01-01T00:00:00.000Z', version: '2.0' }
+    document.cookie = `boostedbudget_cookie_consent=${encodeURIComponent(JSON.stringify(consent))}; path=/; SameSite=Strict`
+  })
+
   await mockAuthDependencies(page)
 
   // Mock Plaid categories
@@ -146,13 +152,14 @@ test.describe('Transaction Sort', () => {
     // Click the amount column header sort button
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
     const sortBtn = amountHeader.locator('button').first()
-    await sortBtn.click()
 
-    // Wait for a request with sort_by=amount
-    await page.waitForRequest(
+    // Arm listener BEFORE the click so the request can't race past it
+    const sortReqPromise = page.waitForRequest(
       (req) => req.url().includes('sort_by=amount') && req.method() === 'GET',
       { timeout: 5_000 }
     )
+    await sortBtn.click()
+    await sortReqPromise
 
     const sortedUrl = capturedRequests.find((u) => u.includes('sort_by=amount'))
     expect(sortedUrl).toBeTruthy()
@@ -172,11 +179,14 @@ test.describe('Transaction Sort', () => {
     // Sort by amount ascending
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
     const sortBtn = amountHeader.locator('button').first()
-    await sortBtn.click()
-    await page.waitForRequest(
+
+    // Arm listener BEFORE the click so the request can't race past it
+    const sortReqPromise = page.waitForRequest(
       (req) => req.url().includes('sort_by=amount') && req.method() === 'GET',
       { timeout: 5_000 }
     )
+    await sortBtn.click()
+    await sortReqPromise
 
     // Wait for table to render
     await page.waitForLoadState('networkidle')
@@ -187,20 +197,21 @@ test.describe('Transaction Sort', () => {
     const lastRow = rows.last()
     const lastAmountText = await lastRow.locator('td').nth(4).textContent()
 
-    // Navigate to page 2
-    await page.getByRole('button', { name: /next/i }).click()
-    await page.waitForRequest(
+    // Navigate to page 2 — arm listener before click
+    const page2ReqPromise = page.waitForRequest(
       (req) => req.url().includes('sort_by=amount') && req.url().includes('offset=50'),
       { timeout: 5_000 }
     )
+    await page.getByRole('button', { name: /next/i }).click()
+    await page2ReqPromise
     await page.waitForLoadState('networkidle')
 
     const firstRowPage2 = table.locator('tbody tr').first()
     await expect(firstRowPage2).toBeVisible({ timeout: 5_000 })
     const firstAmountText = await firstRowPage2.locator('td').nth(4).textContent()
 
-    // Parse amounts (strip $ and commas)
-    const parseAmt = (s: string | null) => parseFloat((s ?? '0').replace(/[$,]/g, ''))
+    // Parse absolute value of displayed amounts (UI negates Plaid amounts: $500 debit → "-$500")
+    const parseAmt = (s: string | null) => Math.abs(parseFloat((s ?? '0').replace(/[$,]/g, '')))
     expect(parseAmt(lastAmountText)).toBeLessThanOrEqual(parseAmt(firstAmountText))
   })
 
@@ -219,20 +230,25 @@ test.describe('Transaction Sort', () => {
     await acceptCookieConsent(page)
     await expect(page.getByRole('table')).toBeVisible({ timeout: 10_000 })
 
-    // Go to page 2
-    await page.getByRole('button', { name: /next/i }).click()
-    await page.waitForRequest(
+    // Wait for Next button — it only appears once hasMore=true arrives from the API
+    await expect(page.getByRole('button', { name: /next/i })).toBeVisible({ timeout: 10_000 })
+
+    // Go to page 2 — arm listener before click
+    const page2ReqPromise = page.waitForRequest(
       (req) => req.url().includes('/api/v1/transactions') && req.url().includes('offset=50'),
       { timeout: 5_000 }
     )
+    await page.getByRole('button', { name: /next/i }).click()
+    await page2ReqPromise
 
-    // Now sort — offset should reset to 0
+    // Now sort — offset should reset to 0; arm listener before click
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
-    await amountHeader.locator('button').first().click()
-    await page.waitForRequest(
+    const sortReqPromise = page.waitForRequest(
       (req) => req.url().includes('sort_by=amount') && req.url().includes('offset=0'),
       { timeout: 5_000 }
     )
+    await amountHeader.locator('button').first().click()
+    await sortReqPromise
 
     // Verify offset=0 was sent after the sort change
     const lastSortRequest = capturedOffsets.at(-1)
