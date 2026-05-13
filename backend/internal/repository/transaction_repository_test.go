@@ -2724,6 +2724,11 @@ func TestBuildOrderBy(t *testing.T) {
 			filters:  domain.TransactionFilters{SortBy: "category", SortDir: "desc"},
 			wantExpr: "ORDER BY COALESCE(effective_category_name, effective_pfc_primary, pfc_primary) DESC, id ASC",
 		},
+		{
+			name:     "unknown SortBy falls back to date DESC",
+			filters:  domain.TransactionFilters{SortBy: "hax", SortDir: "desc"},
+			wantExpr: "ORDER BY COALESCE(authorized_date, date) DESC, id ASC",
+		},
 	}
 
 	for _, tc := range tests {
