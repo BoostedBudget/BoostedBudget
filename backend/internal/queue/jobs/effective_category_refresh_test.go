@@ -14,16 +14,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// MockTransactionRepositoryForCategoryRefresh is a minimal mock for the
-// effective category refresh worker.
 type MockTransactionRepositoryForCategoryRefresh struct {
 	mock.Mock
 }
 
 func (m *MockTransactionRepositoryForCategoryRefresh) UpdateEffectiveCategoryNameByCustomCategoryID(
-	ctx context.Context, userID, customCategoryID, newName string,
+	ctx context.Context, userID, customCategoryID string,
 ) (int64, error) {
-	args := m.Called(ctx, userID, customCategoryID, newName)
+	args := m.Called(ctx, userID, customCategoryID)
 	return int64(args.Int(0)), args.Error(1)
 }
 
@@ -48,10 +46,9 @@ func TestEffectiveCategoryRefreshWorker_Work_Success(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 	customCategoryID := uuid.New().String()
-	newName := "Dining Out"
 
 	mockRepo := new(MockTransactionRepositoryForCategoryRefresh)
-	mockRepo.On("UpdateEffectiveCategoryNameByCustomCategoryID", ctx, userID, customCategoryID, newName).
+	mockRepo.On("UpdateEffectiveCategoryNameByCustomCategoryID", ctx, userID, customCategoryID).
 		Return(5, nil)
 
 	worker := NewEffectiveCategoryRefreshWorker(EffectiveCategoryRefreshWorkerDeps{
@@ -62,7 +59,6 @@ func TestEffectiveCategoryRefreshWorker_Work_Success(t *testing.T) {
 	job := newTestEffectiveCategoryRefreshJob(EffectiveCategoryRefreshArgs{
 		UserID:           userID,
 		CustomCategoryID: customCategoryID,
-		NewName:          newName,
 	})
 
 	err := worker.Work(ctx, job)
@@ -75,10 +71,9 @@ func TestEffectiveCategoryRefreshWorker_Work_ZeroRowsUpdated(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 	customCategoryID := uuid.New().String()
-	newName := "Travel"
 
 	mockRepo := new(MockTransactionRepositoryForCategoryRefresh)
-	mockRepo.On("UpdateEffectiveCategoryNameByCustomCategoryID", ctx, userID, customCategoryID, newName).
+	mockRepo.On("UpdateEffectiveCategoryNameByCustomCategoryID", ctx, userID, customCategoryID).
 		Return(0, nil)
 
 	worker := NewEffectiveCategoryRefreshWorker(EffectiveCategoryRefreshWorkerDeps{
@@ -89,7 +84,6 @@ func TestEffectiveCategoryRefreshWorker_Work_ZeroRowsUpdated(t *testing.T) {
 	job := newTestEffectiveCategoryRefreshJob(EffectiveCategoryRefreshArgs{
 		UserID:           userID,
 		CustomCategoryID: customCategoryID,
-		NewName:          newName,
 	})
 
 	err := worker.Work(ctx, job)
@@ -102,12 +96,11 @@ func TestEffectiveCategoryRefreshWorker_Work_RepoError(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 	customCategoryID := uuid.New().String()
-	newName := "Groceries"
 
 	dbErr := errors.New("database connection lost")
 
 	mockRepo := new(MockTransactionRepositoryForCategoryRefresh)
-	mockRepo.On("UpdateEffectiveCategoryNameByCustomCategoryID", ctx, userID, customCategoryID, newName).
+	mockRepo.On("UpdateEffectiveCategoryNameByCustomCategoryID", ctx, userID, customCategoryID).
 		Return(0, dbErr)
 
 	worker := NewEffectiveCategoryRefreshWorker(EffectiveCategoryRefreshWorkerDeps{
@@ -118,7 +111,6 @@ func TestEffectiveCategoryRefreshWorker_Work_RepoError(t *testing.T) {
 	job := newTestEffectiveCategoryRefreshJob(EffectiveCategoryRefreshArgs{
 		UserID:           userID,
 		CustomCategoryID: customCategoryID,
-		NewName:          newName,
 	})
 
 	err := worker.Work(ctx, job)

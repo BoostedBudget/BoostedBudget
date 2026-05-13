@@ -143,7 +143,7 @@ type TransactionRepository interface {
 	// UpdateEffectiveCategoryNameByCustomCategoryID bulk-updates effective_category_name
 	// for all transactions in a user's account that are assigned to the given custom category.
 	// Used when a custom category is renamed. Returns the number of rows updated.
-	UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID string, customCategoryID string, newName string) (int64, error)
+	UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID string, customCategoryID string) (int64, error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -667,7 +667,7 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 // sortColumnMap maps sort_by parameter values to their SQL column expressions.
 var sortColumnMap = map[string]string{
 	"date":     "COALESCE(authorized_date, date)",
-	"merchant": "merchant_name",
+	"merchant": "COALESCE(merchant_name, name)",
 	"amount":   "amount",
 	"category": "COALESCE(effective_category_name, effective_pfc_primary, pfc_primary)",
 }
@@ -1545,15 +1545,21 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 // UpdateEffectiveCategoryNameByCustomCategoryID bulk-updates effective_category_name
 // for all transactions in a user's account that are assigned to the given custom category.
 // Used when a custom category is renamed. Returns the number of rows updated.
-func (r *transactionRepository) UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID string, customCategoryID string, newName string) (int64, error) {
+func (r *transactionRepository) UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID string, customCategoryID string) (int64, error) {
+	// Read the current name from custom_categories at execution time so that stale
+	// job payloads from rapid successive renames always converge to the latest name.
 	query := `
 		UPDATE transactions
-		SET effective_category_name = $3, updated_at = NOW()
+		SET effective_category_name = (
+			SELECT name FROM custom_categories
+			WHERE id = $2::uuid AND user_id = $1
+		),
+		updated_at = NOW()
 		WHERE user_id = $1
 		  AND category_override_kind = 'custom'
 		  AND custom_category_override_id = $2::uuid
 	`
-	ct, err := r.db.Exec(ctx, query, userID, customCategoryID, newName)
+	ct, err := r.db.Exec(ctx, query, userID, customCategoryID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to update effective category name: %w", err)
 	}

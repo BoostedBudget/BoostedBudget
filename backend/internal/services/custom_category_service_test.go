@@ -340,8 +340,7 @@ func TestCustomCategoryService_UpdateCategory_EnqueuesRefreshJobOnRename(t *test
 			args, ok := job.(effectiveCategoryRefreshJobArgs)
 			return ok &&
 				args.UserID == userID &&
-				args.CustomCategoryID == categoryID &&
-				args.NewName == newName
+				args.CustomCategoryID == categoryID
 		}),
 		mock.Anything,
 	).Return(&queue.JobResult{ID: 1, Kind: "effective_category_refresh"}, nil)

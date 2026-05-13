@@ -13,7 +13,6 @@ import (
 type effectiveCategoryRefreshJobArgs struct {
 	UserID           string `json:"user_id"`
 	CustomCategoryID string `json:"custom_category_id"`
-	NewName          string `json:"new_name"`
 }
 
 func (effectiveCategoryRefreshJobArgs) Kind() string { return "effective_category_refresh" }
@@ -136,13 +135,11 @@ func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, cate
 		if _, enqErr := s.jobQueue.Enqueue(ctx, effectiveCategoryRefreshJobArgs{
 			UserID:           userID,
 			CustomCategoryID: categoryID,
-			NewName:          category.Name,
 		}); enqErr != nil {
 			// Log but don't fail — rename is already persisted
 			s.logger.Error("failed to enqueue effective category refresh job",
 				"user_id", userID,
 				"custom_category_id", categoryID,
-				"new_name", category.Name,
 				"error", enqErr,
 			)
 		}

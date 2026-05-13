@@ -1222,13 +1222,11 @@ func TestTransactionRepository_UpdateEffectiveCategoryNameByCustomCategoryID_Hap
 
 	userID := "user-123"
 	customCategoryID := "cc-uuid-456"
-	newName := "Groceries Updated"
-
 	mock.ExpectExec("UPDATE transactions").
-		WithArgs(userID, customCategoryID, newName).
+		WithArgs(userID, customCategoryID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 3))
 
-	rowsUpdated, err := repo.UpdateEffectiveCategoryNameByCustomCategoryID(ctx, userID, customCategoryID, newName)
+	rowsUpdated, err := repo.UpdateEffectiveCategoryNameByCustomCategoryID(ctx, userID, customCategoryID)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(3), rowsUpdated)
 
@@ -1248,13 +1246,12 @@ func TestTransactionRepository_UpdateEffectiveCategoryNameByCustomCategoryID_Zer
 
 	userID := "user-123"
 	customCategoryID := "cc-uuid-nonexistent"
-	newName := "No Match"
 
 	mock.ExpectExec("UPDATE transactions").
-		WithArgs(userID, customCategoryID, newName).
+		WithArgs(userID, customCategoryID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
-	rowsUpdated, err := repo.UpdateEffectiveCategoryNameByCustomCategoryID(ctx, userID, customCategoryID, newName)
+	rowsUpdated, err := repo.UpdateEffectiveCategoryNameByCustomCategoryID(ctx, userID, customCategoryID)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(0), rowsUpdated)
 
@@ -1274,13 +1271,12 @@ func TestTransactionRepository_UpdateEffectiveCategoryNameByCustomCategoryID_DBE
 
 	userID := "user-123"
 	customCategoryID := "cc-uuid-456"
-	newName := "Groceries Updated"
 
 	mock.ExpectExec("UPDATE transactions").
-		WithArgs(userID, customCategoryID, newName).
+		WithArgs(userID, customCategoryID).
 		WillReturnError(errors.New("db connection error"))
 
-	_, err = repo.UpdateEffectiveCategoryNameByCustomCategoryID(ctx, userID, customCategoryID, newName)
+	_, err = repo.UpdateEffectiveCategoryNameByCustomCategoryID(ctx, userID, customCategoryID)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to update effective category name")
 }
@@ -2697,12 +2693,12 @@ func TestBuildOrderBy(t *testing.T) {
 		{
 			name:     "merchant asc",
 			filters:  domain.TransactionFilters{SortBy: "merchant", SortDir: "asc"},
-			wantExpr: "ORDER BY merchant_name ASC, id ASC",
+			wantExpr: "ORDER BY COALESCE(merchant_name, name) ASC, id ASC",
 		},
 		{
 			name:     "merchant desc",
 			filters:  domain.TransactionFilters{SortBy: "merchant", SortDir: "desc"},
-			wantExpr: "ORDER BY merchant_name DESC, id ASC",
+			wantExpr: "ORDER BY COALESCE(merchant_name, name) DESC, id ASC",
 		},
 		{
 			name:     "amount asc",
@@ -2760,7 +2756,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_SortBy(t *testing.T) {
 		{
 			name:        "merchant desc",
 			filters:     domain.TransactionFilters{SortBy: "merchant", SortDir: "desc"},
-			orderByFrag: "ORDER BY merchant_name DESC, id ASC",
+			orderByFrag: "ORDER BY COALESCE(merchant_name, name) DESC, id ASC",
 		},
 		{
 			name:        "amount asc",

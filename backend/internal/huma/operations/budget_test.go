@@ -161,7 +161,7 @@ func (m *mockTransactionRepoForBudget) GetMatchingTransactionStats(ctx context.C
 // GetByUserAccountID retrieves all transactions for a user_account.
 // Issue #171 - Plaid Re-Link Handling
 func (m *mockTransactionRepoForBudget) GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error) { return nil, nil }
-func (m *mockTransactionRepoForBudget) UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID string, customCategoryID string, newName string) (int64, error) { return 0, nil }
+func (m *mockTransactionRepoForBudget) UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID string, customCategoryID string) (int64, error) { return 0, nil }
 
 // mockCustomCategoryRepoForBudget is a minimal no-op mock of repository.CustomCategoryRepository
 // used by budget handler tests that construct a real TransactionService.
