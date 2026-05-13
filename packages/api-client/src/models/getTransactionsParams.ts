@@ -28,6 +28,8 @@ Multi-region support planned for Phase 7+.
  * OpenAPI spec version: 1.0.0
  */
 import type { GetTransactionsAmountType } from "./getTransactionsAmountType";
+import type { GetTransactionsSortBy } from "./getTransactionsSortBy";
+import type { GetTransactionsSortDir } from "./getTransactionsSortDir";
 
 export type GetTransactionsParams = {
   /**
@@ -89,4 +91,12 @@ export type GetTransactionsParams = {
    * Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members
    */
   user_account_id?: string;
+  /**
+   * Column to sort by
+   */
+  sort_by?: GetTransactionsSortBy;
+  /**
+   * Sort direction
+   */
+  sort_dir?: GetTransactionsSortDir;
 };

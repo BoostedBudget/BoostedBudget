@@ -5,7 +5,8 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { useTransactions } from './hooks/useTransactions'
 import { useTransactionFilters } from './hooks/useTransactionFilters'
-import { TransactionTable, type TransactionSortColumn, type SortDirection } from './components/TransactionTable'
+import { TransactionTable } from './components/TransactionTable'
+import type { TransactionSortColumn, SortDirection } from './hooks/useTransactions'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import { TransactionEditor } from './components/TransactionEditor'
 import { TransactionFilterPanel } from './components/TransactionFilterPanel'
@@ -63,9 +64,9 @@ export function TransactionsPage() {
     trackEvent(ANALYTICS_EVENTS.TRANSACTIONS_VIEWED)
   }, [trackEvent])
 
-  // Issue #590: Sorting state
-  const [sortColumn, setSortColumn] = useState<TransactionSortColumn | undefined>(undefined)
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
+  // Sort state — server-side (#1123). Default matches backend default.
+  const [sortColumn, setSortColumn] = useState<TransactionSortColumn>('date')
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
 
   // Fetch available tags, categories, accounts, and curated PFC primaries
   const { data: tagsData } = useGetUserTags()
@@ -153,7 +154,7 @@ export function TransactionsPage() {
     hasMore,
     totalCount,
     currentPage,
-  } = useTransactions({ filters, limit: 50 })
+  } = useTransactions({ filters, limit: 50, sortBy: sortColumn, sortDir: sortDirection })
 
   // Category filter options: curated PFC primaries + observed effective primaries.
   // Values are raw enum strings (e.g. "FOOD_AND_DRINK") so they match the pfc_primary
@@ -234,48 +235,10 @@ export function TransactionsPage() {
   // Calculate pending count from transactions data
   const pendingCount = data?.transactions?.filter((t) => t.pending).length ?? 0
 
-  // Issue #590: Handle sort change
   const handleSort = useCallback((column: TransactionSortColumn, direction: SortDirection) => {
     setSortColumn(column)
     setSortDirection(direction)
   }, [])
-
-  // Issue #590: Sort transactions client-side
-  const sortedTransactions = useMemo(() => {
-    const transactions = data?.transactions ?? []
-    if (!sortColumn) return transactions
-
-    return [...transactions].sort((a, b) => {
-      let comparison = 0
-
-      switch (sortColumn) {
-        case 'date': {
-          const dateA = new Date(a.authorized_date || a.date).getTime()
-          const dateB = new Date(b.authorized_date || b.date).getTime()
-          comparison = dateA - dateB
-          break
-        }
-        case 'merchant': {
-          const nameA = (a.merchant_name || a.name || '').toLowerCase()
-          const nameB = (b.merchant_name || b.name || '').toLowerCase()
-          comparison = nameA.localeCompare(nameB)
-          break
-        }
-        case 'amount': {
-          comparison = a.amount - b.amount
-          break
-        }
-        case 'category': {
-          const resolveCat = (t: Transaction) =>
-            t.pfc_primary_override ?? t.pfc_primary ?? ''
-          comparison = resolveCat(a).localeCompare(resolveCat(b))
-          break
-        }
-      }
-
-      return sortDirection === 'asc' ? comparison : -comparison
-    })
-  }, [data?.transactions, sortColumn, sortDirection])
 
   // Loading state
   if (loading && !data) {
@@ -303,7 +266,7 @@ export function TransactionsPage() {
     )
   }
 
-  const transactions = sortedTransactions
+  const transactions = data?.transactions ?? []
   const isEmpty = transactions.length === 0
 
   return (

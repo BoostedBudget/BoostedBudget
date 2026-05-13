@@ -19,10 +19,15 @@ import type { GetTransactionsResponse, TransactionFilters, Transaction } from '.
 const DEFAULT_LIMIT = 50
 const SEARCH_DEBOUNCE_MS = 300
 
+export type TransactionSortColumn = 'date' | 'merchant' | 'amount' | 'category'
+export type SortDirection = 'asc' | 'desc'
+
 export interface UseTransactionsOptions {
   filters?: TransactionFilters
   limit?: number
   initialOffset?: number
+  sortBy?: TransactionSortColumn
+  sortDir?: SortDirection
 }
 
 export interface UseTransactionsResult {
@@ -88,7 +93,7 @@ export interface UseTransactionsResult {
  * ```
  */
 export function useTransactions(options: UseTransactionsOptions = {}): UseTransactionsResult {
-  const { filters = {}, limit = DEFAULT_LIMIT, initialOffset = 0 } = options;
+  const { filters = {}, limit = DEFAULT_LIMIT, initialOffset = 0, sortBy, sortDir } = options;
   const queryClient = useQueryClient();
 
   // State
@@ -131,8 +136,11 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
       params.amount_type = filters.amount_type;
     }
 
+    if (sortBy) params.sort_by = sortBy;
+    if (sortDir) params.sort_dir = sortDir;
+
     return params;
-  }, [limit, offset, filters, debouncedSearch]);
+  }, [limit, offset, filters, debouncedSearch, sortBy, sortDir]);
 
   // Use generated query hook
   const {
@@ -203,6 +211,19 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
       }
     };
   }, [filters]);
+
+  // Reset offset to 0 when sort changes
+  const prevSortByRef = useRef<TransactionSortColumn | undefined>(sortBy);
+  const prevSortDirRef = useRef<SortDirection | undefined>(sortDir);
+  useEffect(() => {
+    const sortChanged = prevSortByRef.current !== sortBy || prevSortDirRef.current !== sortDir;
+    prevSortByRef.current = sortBy;
+    prevSortDirRef.current = sortDir;
+    if (sortChanged) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setOffset(0);
+    }
+  }, [sortBy, sortDir]);
 
   // Pagination controls
   const nextPage = useCallback(() => {
