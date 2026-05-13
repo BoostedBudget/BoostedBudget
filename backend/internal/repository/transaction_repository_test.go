@@ -2305,8 +2305,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_PFC
 
 	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
 		mock,
-		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override`,
-		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+LIMIT \$5 OFFSET \$6`,
+		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4`,
+		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4.+LIMIT \$5 OFFSET \$6`,
 		[]interface{}{userID, startDate, endDate, pfcPrimary},
 		[]interface{}{userID, startDate, endDate, pfcPrimary, limit, offset},
 	)
@@ -2345,8 +2345,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_Emp
 
 	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
 		mock,
-		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override`,
-		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+LIMIT \$5 OFFSET \$6`,
+		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4`,
+		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4.+LIMIT \$5 OFFSET \$6`,
 		[]interface{}{userID, startDate, endDate, pfcPrimary},
 		[]interface{}{userID, startDate, endDate, pfcPrimary, limit, offset},
 	)
@@ -2385,8 +2385,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_Hie
 
 	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
 		mock,
-		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+pfc_detailed_override`,
-		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_detailed_override.+LIMIT \$6 OFFSET \$7`,
+		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4.+effective_pfc_detailed = \$5`,
+		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4.+effective_pfc_detailed = \$5.+LIMIT \$6 OFFSET \$7`,
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pfcDetailed},
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pfcDetailed, limit, offset},
 	)
@@ -2423,8 +2423,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_Cus
 
 	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
 		mock,
-		`SELECT COUNT\(\*\).+category_override_kind = 'custom' AND custom_category_override_id`,
-		`SELECT (.+) FROM transactions WHERE.+category_override_kind = 'custom' AND custom_category_override_id.+LIMIT \$5 OFFSET \$6`,
+		`SELECT COUNT\(\*\).+custom_category_override_id::text = \$4`,
+		`SELECT (.+) FROM transactions WHERE.+custom_category_override_id::text = \$4.+LIMIT \$5 OFFSET \$6`,
 		[]interface{}{userID, startDate, endDate, customCategoryID},
 		[]interface{}{userID, startDate, endDate, customCategoryID, limit, offset},
 	)
@@ -2504,8 +2504,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_And_PFC(t *testi
 
 	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
 		mock,
-		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+AND tags \?\| \$5`,
-		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+AND tags \?\| \$5.+LIMIT \$6 OFFSET \$7`,
+		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4.+AND tags \?\| \$5`,
+		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4.+AND tags \?\| \$5.+LIMIT \$6 OFFSET \$7`,
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg()},
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg(), limit, offset},
 	)
@@ -2543,8 +2543,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_Or_PFC(t *testin
 
 	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
 		mock,
-		`SELECT COUNT\(\*\).+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+\) OR tags \?\| \$5\)`,
-		`SELECT (.+) FROM transactions WHERE.+CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override.+\) OR tags \?\| \$5\).+LIMIT \$6 OFFSET \$7`,
+		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4\) OR tags \?\| \$5\)`,
+		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4\) OR tags \?\| \$5\).+LIMIT \$6 OFFSET \$7`,
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg()},
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg(), limit, offset},
 	)
