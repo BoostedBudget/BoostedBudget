@@ -22,14 +22,11 @@ type EffectiveCategoryRefreshArgs struct {
 func (EffectiveCategoryRefreshArgs) Kind() string { return "effective_category_refresh" }
 
 // effectiveCategoryUpdater is the minimal repository interface needed by the worker.
-// Using a narrow interface instead of the full TransactionRepository keeps the worker
-// decoupled and makes tests simpler.
 type effectiveCategoryUpdater interface {
 	UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID, customCategoryID, newName string) (int64, error)
 }
 
-// EffectiveCategoryRefreshWorker handles the async update of effective_category_name
-// after a custom category is renamed.
+// EffectiveCategoryRefreshWorker handles async updates of effective_category_name.
 type EffectiveCategoryRefreshWorker struct {
 	river.WorkerDefaults[EffectiveCategoryRefreshArgs]
 
@@ -39,8 +36,6 @@ type EffectiveCategoryRefreshWorker struct {
 
 // EffectiveCategoryRefreshWorkerDeps holds dependencies for EffectiveCategoryRefreshWorker.
 type EffectiveCategoryRefreshWorkerDeps struct {
-	// TransactionRepo only needs UpdateEffectiveCategoryNameByCustomCategoryID.
-	// The full repository.TransactionRepository satisfies this interface.
 	TransactionRepo effectiveCategoryUpdater
 	Logger          *slog.Logger
 }

@@ -87,36 +87,35 @@ type Transaction struct {
 	ExternalMetadata *string `json:"external_metadata,omitempty" db:"external_metadata"`
 
 	// Core transaction fields (standardized across all providers)
-	Amount         float64    `json:"amount" db:"amount"`                                             // Positive=outflow (debit/spending), Negative=inflow (credit/refund) — Plaid PFCv2 convention
-	Date           time.Time  `json:"date" db:"date"`                                                 // Transaction date
-	AuthorizedDate *time.Time `json:"authorized_date,omitempty" db:"authorized_date"`                 // Authorization date (may differ from settlement)
-	Name           string     `json:"name" db:"name"`                                                 // Transaction description
-	MerchantName   *string    `json:"merchant_name,omitempty" db:"merchant_name"`                     // Merchant name if available
+	Amount         float64    `json:"amount" db:"amount"`                                    // Positive=outflow, Negative=inflow (Plaid PFCv2)
+	Date           time.Time  `json:"date" db:"date"`
+	AuthorizedDate *time.Time `json:"authorized_date,omitempty" db:"authorized_date"`
+	Name           string     `json:"name" db:"name"`
+	MerchantName   *string    `json:"merchant_name,omitempty" db:"merchant_name"`
 
-	// PFCv2 source columns (from Plaid). NULL for manual transactions and rare responses without PFC.
+	// PFCv2 source columns (from Plaid)
 	PFCPrimary           *string `json:"pfc_primary,omitempty" db:"pfc_primary"`
 	PFCDetailed          *string `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
 	PFCConfidenceLevel   *string `json:"pfc_confidence_level,omitempty" db:"pfc_confidence_level"`
 	PFCCategoryIconURL   *string `json:"pfc_category_icon_url,omitempty" db:"pfc_category_icon_url"`
 
-	// PFC display names (populated by PopulatePFCDisplay, not stored in DB)
+	// PFC display names (not stored in DB)
 	PFCPrimaryDisplay          *string `json:"pfc_primary_display,omitempty" db:"-"`
 	PFCDetailedDisplay         *string `json:"pfc_detailed_display,omitempty" db:"-"`
 	PFCPrimaryOverrideDisplay  *string `json:"pfc_primary_override_display,omitempty" db:"-"`
 	PFCDetailedOverrideDisplay *string `json:"pfc_detailed_override_display,omitempty" db:"-"`
 
-	// Custom category display name (populated by service enrichment from custom_categories table, not stored in DB)
+	// Custom category display name (not stored in DB)
 	CustomCategoryOverrideDisplay *string `json:"custom_category_override_display,omitempty" db:"-"`
 
 	// Payment details
-	PaymentChannel *string `json:"payment_channel,omitempty" db:"payment_channel"` // online, in store, other
-	Pending        bool    `json:"pending" db:"pending"`                           // Whether transaction is pending
+	PaymentChannel *string `json:"payment_channel,omitempty" db:"payment_channel"`
+	Pending        bool    `json:"pending" db:"pending"`
 
 	// User customization
-	UserNotes *string `json:"user_notes,omitempty" db:"user_notes"` // User-added notes or annotations
+	UserNotes *string `json:"user_notes,omitempty" db:"user_notes"`
 
 	// Category override — discriminated union (category_override_kind determines which branch is active)
-	// category_source is orthogonal: it tracks who made the change (plaid/rule/manual)
 	CategoryOverrideKind       *string        `json:"category_override_kind,omitempty" db:"category_override_kind"`
 	PFCPrimaryOverride         *string        `json:"pfc_primary_override,omitempty" db:"pfc_primary_override"`
 	PFCDetailedOverride        *string        `json:"pfc_detailed_override,omitempty" db:"pfc_detailed_override"`
@@ -124,16 +123,14 @@ type Transaction struct {
 	CategorySourceField        CategorySource `json:"category_source" db:"category_source"`
 	CategoryOverrideDate       *time.Time     `json:"category_override_date,omitempty" db:"category_override_date"`
 
-	// Effective category columns — denormalized, maintained by repository on every write.
-	// EffectivePFCPrimary and EffectivePFCDetailed are PostgreSQL GENERATED ALWAYS AS columns.
-	// EffectiveCategoryName is app-maintained: raw PFC enum for PFC kind, custom_categories.name for custom kind.
+	// Effective category columns (denormalized, generated or app-maintained)
 	EffectivePFCPrimary   *string `json:"effective_pfc_primary,omitempty" db:"effective_pfc_primary"`
 	EffectivePFCDetailed  *string `json:"effective_pfc_detailed,omitempty" db:"effective_pfc_detailed"`
 	EffectiveCategoryName *string `json:"effective_category_name,omitempty" db:"effective_category_name"`
 
-	// Tags (Issue #345: Manual Transaction Category & Tag Editing)
-	Tags       []string    `json:"tags" db:"tags"`               // Array of tag names
-	TagsSource []TagSource `json:"tags_source" db:"tags_source"` // Source tracking for each tag
+	// Tags
+	Tags       []string    `json:"tags" db:"tags"`
+	TagsSource []TagSource `json:"tags_source" db:"tags_source"`
 
 	// Timestamps
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
