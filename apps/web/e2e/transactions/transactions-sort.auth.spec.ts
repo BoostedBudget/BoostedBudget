@@ -74,19 +74,21 @@ async function setupTransactionsMock(page: Page) {
 
     let sorted = [...allTransactions]
     sorted.sort((a, b) => {
-      let cmp = 0
-      switch (sortBy) {
-        case 'amount':
-          cmp = a.amount - b.amount
-          break
-        case 'merchant':
-          cmp = (a.merchant_name ?? '').localeCompare(b.merchant_name ?? '')
-          break
-        default:
-          cmp = new Date(a.date).getTime() - new Date(b.date).getTime()
-      }
+      const primary = (() => {
+        switch (sortBy) {
+          case 'amount':
+            return a.amount - b.amount
+          case 'merchant':
+            return (a.merchant_name ?? '').localeCompare(b.merchant_name ?? '')
+          default:
+            return new Date(a.date).getTime() - new Date(b.date).getTime()
+        }
+      })()
       // tiebreaker by id (numeric portion)
-      if (cmp === 0) cmp = parseInt(a.id.replace('txn-', '')) - parseInt(b.id.replace('txn-', ''))
+      const cmp =
+        primary !== 0
+          ? primary
+          : parseInt(a.id.replace('txn-', '')) - parseInt(b.id.replace('txn-', ''))
       return sortDir === 'asc' ? cmp : -cmp
     })
 
