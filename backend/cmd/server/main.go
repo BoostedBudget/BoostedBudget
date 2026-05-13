@@ -239,6 +239,9 @@ func main() {
 	// Issue #1015: Declare rule evaluation worker (non-Plaid)
 	var ruleEvaluationWorker *jobs.RuleEvaluationWorker
 
+	// Issue #1123: Declare effective category refresh worker
+	var effectiveCategoryRefreshWorker *jobs.EffectiveCategoryRefreshWorker
+
 	// Issue #1015: Declare Plaid-dependent workers at outer scope so they can be nil-checked
 	// during River registration (which now occurs after the Plaid block).
 	var webhookProcessingWorker *jobs.WebhookProcessingWorker
@@ -597,6 +600,13 @@ func main() {
 		})
 		appLogger.Info("Rule evaluation worker created (River)")
 
+		// Issue #1123: Create effective category refresh worker (no external dependencies)
+		effectiveCategoryRefreshWorker = jobs.NewEffectiveCategoryRefreshWorker(jobs.EffectiveCategoryRefreshWorkerDeps{
+			TransactionRepo: transactionRepo,
+			Logger:          appLogger,
+		})
+		appLogger.Info("Effective category refresh worker created (River)")
+
 		// Create Plaid service and account linking (if configured)
 		// plaidHandler migrated to Huma (see humaPlaidHandler) - Issue #559
 		// var plaidHandler *handlers.PlaidHandler
@@ -943,6 +953,10 @@ func main() {
 				river.AddWorker(riverWorkers, ruleEvaluationWorker)
 				appLogger.Info("Rule evaluation worker registered with River")
 			}
+			if effectiveCategoryRefreshWorker != nil {
+				river.AddWorker(riverWorkers, effectiveCategoryRefreshWorker)
+				appLogger.Info("Effective category refresh worker registered with River")
+			}
 
 			// Plaid-specific workers (nil when Plaid not configured)
 			if webhookProcessingWorker != nil {
@@ -1000,6 +1014,10 @@ func main() {
 					itemCleanupCheckWorker.SetJobQueue(jobQueue)
 					appLogger.Info("Item cleanup check worker connected to job queue")
 				}
+
+				// Issue #1123: Wire job queue for async effective_category_name refresh
+				customCategoryService.SetJobQueue(jobQueue)
+				appLogger.Info("Custom category service connected to job queue for rename cascade")
 			}
 		}
 
