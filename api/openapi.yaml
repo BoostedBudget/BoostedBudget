@@ -3639,6 +3639,12 @@ components:
         date:
           format: date-time
           type: string
+        effective_category_name:
+          type: string
+        effective_pfc_detailed:
+          type: string
+        effective_pfc_primary:
+          type: string
         external_metadata:
           type: string
         external_transaction_id:
@@ -8272,6 +8278,30 @@ paths:
           name: user_account_id
           schema:
             description: Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members
+            type: string
+        - description: Column to sort by
+          explode: false
+          in: query
+          name: sort_by
+          schema:
+            default: date
+            description: Column to sort by
+            enum:
+              - date
+              - merchant
+              - amount
+              - category
+            type: string
+        - description: Sort direction
+          explode: false
+          in: query
+          name: sort_dir
+          schema:
+            default: desc
+            description: Sort direction
+            enum:
+              - asc
+              - desc
             type: string
       responses:
         "200":

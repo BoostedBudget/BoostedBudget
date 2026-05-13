@@ -540,9 +540,9 @@ func (r *transactionRepository) GetByUserIDWithFilters(ctx context.Context, user
 		SELECT %s
 		FROM transactions
 		%s
-		ORDER BY date DESC, created_at DESC
+		%s
 		LIMIT $%d OFFSET $%d
-	`, transactionSelectExpr, whereClause, len(args)-1, len(args))
+	`, transactionSelectExpr, whereClause, buildOrderBy(filters), len(args)-1, len(args))
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -664,6 +664,28 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 
 // buildWhereClause constructs a dynamic WHERE clause based on filters
 // Returns the WHERE clause string and the corresponding query arguments
+// sortColumnMap maps sort_by parameter values to their SQL column expressions.
+var sortColumnMap = map[string]string{
+	"date":     "COALESCE(authorized_date, date)",
+	"merchant": "merchant_name",
+	"amount":   "amount",
+	"category": "COALESCE(effective_category_name, effective_pfc_primary, pfc_primary)",
+}
+
+// buildOrderBy constructs a safe ORDER BY clause from TransactionFilters.SortBy and SortDir.
+// Defaults to date DESC with an id ASC tiebreaker for stable pagination.
+func buildOrderBy(filters domain.TransactionFilters) string {
+	dir := "DESC"
+	if strings.EqualFold(filters.SortDir, "asc") {
+		dir = "ASC"
+	}
+	col, ok := sortColumnMap[filters.SortBy]
+	if !ok {
+		col = sortColumnMap["date"] // safe default
+	}
+	return fmt.Sprintf("ORDER BY %s %s, id ASC", col, dir)
+}
+
 func buildWhereClause(userID string, filters domain.TransactionFilters) (string, []interface{}) {
 	var conditions []string
 	var args []interface{}
