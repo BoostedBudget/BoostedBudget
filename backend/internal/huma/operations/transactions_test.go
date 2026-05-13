@@ -635,6 +635,23 @@ func TestGetTransactions_SortByMerchant(t *testing.T) {
 	assert.Equal(t, "desc", mockService.capturedFilters.SortDir)
 }
 
+// TestGetTransactions_SortByInvalid tests that an unknown sort_by value is rejected by Huma's
+// enum validation. In the test environment, auth fails too, so Huma returns 401 with both
+// errors in the body. The enum error being present confirms the validation fired.
+func TestGetTransactions_SortByInvalid(t *testing.T) {
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{},
+	}
+	_, api := humatest.New(t)
+	handler := NewTransactionHandler(mockService)
+	RegisterTransactionRoutes(api, handler)
+
+	resp := api.Get("/api/v1/transactions?sort_by=hax")
+	// Auth also fails in test, so status is 401 (higher priority than 422).
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+	assert.Contains(t, resp.Body.String(), "expected value to be one of")
+}
+
 // TestGetTransactions_SortByCategory tests that sort_by=category&sort_dir=asc
 // propagates through to filters.
 func TestGetTransactions_SortByCategory(t *testing.T) {
