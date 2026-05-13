@@ -22,6 +22,7 @@ import { CategoryBreakdownChart } from './components/CategoryBreakdownChart'
 import { CategoryDrilldownHeading } from './components/CategoryDrilldownHeading'
 import { SpendingTrendsChart } from './components/SpendingTrendsChart'
 import { TopMerchantsTable } from './components/TopMerchantsTable'
+import type { SortState } from '@/shared/components/DataTable'
 
 export function SpendingReportsPage() {
   const navigate = useNavigate()
@@ -31,6 +32,7 @@ export function SpendingReportsPage() {
   const [customStartDate, setCustomStartDate] = useState('')
   const [customEndDate, setCustomEndDate] = useState('')
   const [drilldown, setDrilldown] = useState<{ category: string; displayLabel: string } | undefined>()
+  const [merchantSort, setMerchantSort] = useState<SortState>({ columnId: 'total', direction: 'desc' })
 
   const derivedRange = preset !== 'custom' ? getDateRange(preset) : null
   const startDate = preset === 'custom' ? customStartDate : (derivedRange?.startDate ?? '')
@@ -170,6 +172,8 @@ export function SpendingReportsPage() {
               loading={merchantLoading}
               onMerchantClick={handleMerchantClick}
               className="rounded-xl border border-border bg-card p-4"
+              sort={merchantSort}
+              onSortChange={setMerchantSort}
             />
           </section>
         </div>

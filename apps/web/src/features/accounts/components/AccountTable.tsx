@@ -1,71 +1,37 @@
-/**
- * AccountTable Component
- * Issue #584: Unified Card/Table View System
- *
- * Displays accounts in a table format with sorting and actions.
- */
-
 import { useCallback } from 'react'
-import { Edit, Trash2, ChevronUp, ChevronDown, EyeOff, Unplug } from 'lucide-react'
+import { Edit, Trash2, EyeOff, Unplug } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import type { Account } from '@boostedbudget/api-client/models'
-import {
-  ColumnFilterDropdown,
-  type FilterOption,
-  type RangeValue,
-} from '@/shared/components/ColumnFilterDropdown'
+import { DataTable } from '@/shared/components/DataTable'
+import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
+import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 
 export type SortColumn = 'institution' | 'name' | 'type' | 'balance'
 export type SortDirection = 'asc' | 'desc'
 
 export interface AccountTableProps {
-  /** Accounts to display */
   accounts: Account[]
-  /** Called when edit button is clicked */
   onEdit?: (account: Account) => void
-  /** Called when delete button is clicked */
   onDelete?: (account: Account) => void
-  /** Called when a row is clicked */
   onRowClick?: (account: Account) => void
-  /** Show loading state */
   loading?: boolean
-  /** Enable sorting */
   sortable?: boolean
-  /** Currently sorted column */
   sortColumn?: SortColumn
-  /** Current sort direction */
   sortDirection?: SortDirection
-  /** Called when sort changes */
   onSort?: (column: SortColumn, direction: SortDirection) => void
-  /** Additional CSS class */
   className?: string
-
-  // Issue #590: Inline filter props
-  /** Available institution options for filtering */
   institutionOptions?: FilterOption[]
-  /** Current institution filter value */
   institutionFilter?: string[]
-  /** Called when institution filter changes */
   onInstitutionFilterChange?: (value: string[]) => void
-
-  /** Available type options for filtering */
   typeOptions?: FilterOption[]
-  /** Current type filter value */
   typeFilter?: string[]
-  /** Called when type filter changes */
   onTypeFilterChange?: (value: string[]) => void
-
-  /** Current balance range filter value */
   balanceRange?: RangeValue | null
-  /** Called when balance range filter changes */
   onBalanceRangeChange?: (value: RangeValue | null) => void
 }
 
-/**
- * Format account balance as currency
- */
 function formatBalance(balance: number | undefined): string {
   if (balance === undefined || balance === null) return '—'
-
   const absBalance = Math.abs(balance)
   const formatted = new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -73,70 +39,38 @@ function formatBalance(balance: number | undefined): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(absBalance)
-
-  if (balance < 0) return `-${formatted}`
-  return formatted
+  return balance < 0 ? `-${formatted}` : formatted
 }
 
-/**
- * Get human-readable account type label
- */
 function getAccountTypeLabel(type: string, subtype?: string): string {
-  // Use subtype for more specific label when available
   if (subtype) {
     switch (subtype.toLowerCase()) {
-      case 'checking':
-        return 'Checking'
-      case 'savings':
-        return 'Savings'
-      case 'credit card':
-        return 'Credit Card'
-      case 'money market':
-        return 'Money Market'
-      case 'cd':
-        return 'CD'
-      case 'paypal':
-        return 'PayPal'
-      case 'brokerage':
-        return 'Brokerage'
-      case '401k':
-        return '401(k)'
-      case 'ira':
-        return 'IRA'
-      case 'roth':
-        return 'Roth IRA'
-      case 'mortgage':
-        return 'Mortgage'
-      case 'auto':
-        return 'Auto Loan'
-      case 'student':
-        return 'Student Loan'
-      default:
-        // Capitalize first letter
-        return subtype.charAt(0).toUpperCase() + subtype.slice(1)
+      case 'checking': return 'Checking'
+      case 'savings': return 'Savings'
+      case 'credit card': return 'Credit Card'
+      case 'money market': return 'Money Market'
+      case 'cd': return 'CD'
+      case 'paypal': return 'PayPal'
+      case 'brokerage': return 'Brokerage'
+      case '401k': return '401(k)'
+      case 'ira': return 'IRA'
+      case 'roth': return 'Roth IRA'
+      case 'mortgage': return 'Mortgage'
+      case 'auto': return 'Auto Loan'
+      case 'student': return 'Student Loan'
+      default: return subtype.charAt(0).toUpperCase() + subtype.slice(1)
     }
   }
-
-  // Fallback to type
   switch (type.toLowerCase()) {
-    case 'depository':
-      return 'Bank Account'
-    case 'credit':
-      return 'Credit'
-    case 'investment':
-      return 'Investment'
-    case 'loan':
-      return 'Loan'
-    case 'other':
-      return 'Other'
-    default:
-      return type.charAt(0).toUpperCase() + type.slice(1)
+    case 'depository': return 'Bank Account'
+    case 'credit': return 'Credit'
+    case 'investment': return 'Investment'
+    case 'loan': return 'Loan'
+    case 'other': return 'Other'
+    default: return type.charAt(0).toUpperCase() + type.slice(1)
   }
 }
 
-/**
- * AccountTable displays accounts in a sortable table format.
- */
 export function AccountTable({
   accounts,
   onEdit,
@@ -148,7 +82,6 @@ export function AccountTable({
   sortDirection = 'asc',
   onSort,
   className = '',
-  // Issue #590: Inline filter props
   institutionOptions,
   institutionFilter,
   onInstitutionFilterChange,
@@ -159,251 +92,214 @@ export function AccountTable({
   onBalanceRangeChange,
 }: AccountTableProps) {
   const hasActions = !!(onEdit || onDelete)
-
-  const handleSort = useCallback(
-    (column: SortColumn) => {
-      if (!sortable || !onSort) return
-      const newDirection =
-        sortColumn === column && sortDirection === 'asc' ? 'desc' : 'asc'
-      onSort(column, newDirection)
-    },
-    [sortable, onSort, sortColumn, sortDirection]
-  )
-
-  const renderSortableHeader = (label: string, column: SortColumn) => {
-    if (!sortable) {
-      return label
-    }
-
-    const isActive = sortColumn === column
-    const ariaSort = isActive
-      ? sortDirection === 'asc'
-        ? 'ascending'
-        : 'descending'
-      : undefined
-
-    return (
-      <button
-        type="button"
-        onClick={() => handleSort(column)}
-        aria-sort={ariaSort}
-        className="inline-flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 font-[inherit] text-inherit"
-      >
-        {label}
-        <span className="inline-flex h-4 w-4 items-center [&_svg]:h-3.5 [&_svg]:w-3.5">
-          {isActive && sortDirection === 'asc' && (
-            <ChevronUp aria-hidden="true" />
-          )}
-          {isActive && sortDirection === 'desc' && (
-            <ChevronDown aria-hidden="true" />
-          )}
-        </span>
-      </button>
-    )
-  }
-
-  // Issue #590: Compute if any filters are active
-  // Note: Use != null to check for both null and undefined
   const hasActiveFilters =
     (institutionFilter?.length ?? 0) > 0 ||
     (typeFilter?.length ?? 0) > 0 ||
     balanceRange != null
 
-  // Only show empty state if no data AND no active filters
+  const handleSortChange = useCallback(
+    (newSort: SortState) => {
+      if (!onSort || !sortable) return
+      if (newSort) {
+        onSort(newSort.columnId as SortColumn, newSort.direction)
+      } else if (sortColumn) {
+        onSort(sortColumn, sortDirection === 'asc' ? 'desc' : 'asc')
+      }
+    },
+    [onSort, sortable, sortColumn, sortDirection]
+  )
+
+  const sort: SortState =
+    sortColumn && sortable ? { columnId: sortColumn, direction: sortDirection } : null
+
+  const filters: FilterState = {
+    institution: institutionFilter ?? [],
+    type: typeFilter ?? [],
+    balance: balanceRange ?? null,
+  }
+
+  const handleFiltersChange = useCallback(
+    (newFilters: FilterState) => {
+      if (newFilters.institution !== filters.institution) {
+        onInstitutionFilterChange?.(newFilters.institution as string[])
+      }
+      if (newFilters.type !== filters.type) {
+        onTypeFilterChange?.(newFilters.type as string[])
+      }
+      if (newFilters.balance !== filters.balance) {
+        onBalanceRangeChange?.(newFilters.balance as RangeValue | null)
+      }
+    },
+    [filters.institution, filters.type, filters.balance, onInstitutionFilterChange, onTypeFilterChange, onBalanceRangeChange]
+  )
+
+  const columns: ColumnDef<Account>[] = [
+    {
+      id: 'institution',
+      header: 'Institution',
+      sortable,
+      widthClass: 'min-w-[120px] max-md:min-w-[100px]',
+      render: (row) => (
+        <span className="font-medium text-foreground">
+          {row.institution_name || 'Unknown'}
+        </span>
+      ),
+      filter:
+        institutionOptions && onInstitutionFilterChange
+          ? { type: 'select', options: institutionOptions, multiSelect: true, searchable: true }
+          : undefined,
+    },
+    {
+      id: 'name',
+      header: 'Account',
+      sortable,
+      widthClass: 'min-w-[180px] max-md:min-w-[150px]',
+      render: (row) => {
+        const isDisconnected = row.linked_item_status === 'disconnected'
+        const displayName = row.nickname || row.name
+        return (
+          <div className="flex items-center gap-2">
+            {row.custom_emoji && (
+              <span className="text-lg">{row.custom_emoji}</span>
+            )}
+            <span
+              className="font-medium text-foreground"
+              style={row.custom_color ? { color: row.custom_color } : undefined}
+            >
+              {displayName}
+            </span>
+            {isDisconnected && (
+              <span
+                className="ml-2 inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[0.625rem] font-medium text-amber-700 dark:bg-[#451a03] dark:text-yellow-300"
+                title="Account disconnected - resubscribe to reconnect"
+              >
+                <Unplug className="h-2.5 w-2.5" aria-hidden="true" />
+                Disconnected
+              </span>
+            )}
+            {row.is_hidden && (
+              <span className="ml-2 inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[0.625rem] font-medium text-muted-foreground">
+                <EyeOff className="h-2.5 w-2.5" aria-hidden="true" />
+                Hidden
+              </span>
+            )}
+          </div>
+        )
+      },
+    },
+    {
+      id: 'type',
+      header: 'Type',
+      sortable,
+      render: (row) => <>{getAccountTypeLabel(row.type, row.subtype)}</>,
+      filter:
+        typeOptions && onTypeFilterChange
+          ? { type: 'select', options: typeOptions, multiSelect: true }
+          : undefined,
+    },
+    {
+      id: 'mask',
+      header: 'Acct #',
+      numeric: true,
+      render: (row) => <>{row.mask ? `••••${row.mask}` : '—'}</>,
+    },
+    {
+      id: 'balance',
+      header: 'Balance',
+      sortable,
+      align: 'right',
+      numeric: true,
+      render: (row) => {
+        const isNegative = row.current_balance !== undefined && row.current_balance < 0
+        return (
+          <span
+            className={cn(
+              'font-semibold tabular-nums',
+              isNegative
+                ? 'account-table__balance--negative text-red-600 dark:text-red-400'
+                : 'account-table__balance--positive text-foreground'
+            )}
+          >
+            {formatBalance(row.current_balance)}
+          </span>
+        )
+      },
+      filter: onBalanceRangeChange ? { type: 'range', unit: 'currency' } : undefined,
+    },
+  ]
+
   if (accounts.length === 0 && !hasActiveFilters) {
     return (
-      <div className={`text-center rounded-lg border border-dashed border-border bg-card px-6 py-12 text-muted-foreground ${className}`.trim()}>
+      <div
+        className={cn(
+          'rounded-lg border border-dashed border-border bg-card px-6 py-12 text-center text-muted-foreground',
+          className
+        )}
+      >
         <p>No accounts found. Connect a bank account to get started.</p>
       </div>
     )
   }
 
   return (
-    <table
-      className={`w-full border-collapse overflow-visible rounded-lg border border-border bg-card ${loading ? 'account-table--loading pointer-events-none opacity-60' : ''} ${className}`.trim()}
-    >
-      <thead>
-        <tr className="bg-muted/50">
-          <th className="border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">
-            <div className="flex items-center gap-1">
-              {renderSortableHeader('Institution', 'institution')}
-              {institutionOptions && onInstitutionFilterChange && (
-                <ColumnFilterDropdown
-                  type="select"
-                  options={institutionOptions}
-                  value={institutionFilter}
-                  onChange={(val) => onInstitutionFilterChange(val as string[])}
-                  multiSelect
-                  searchable
-                  ariaLabel="Filter by institution"
-                />
-              )}
-            </div>
-          </th>
-          <th className="border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">
-            {renderSortableHeader('Account', 'name')}
-          </th>
-          <th className="border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">
-            <div className="flex items-center gap-1">
-              {renderSortableHeader('Type', 'type')}
-              {typeOptions && onTypeFilterChange && (
-                <ColumnFilterDropdown
-                  type="select"
-                  options={typeOptions}
-                  value={typeFilter}
-                  onChange={(val) => onTypeFilterChange(val as string[])}
-                  multiSelect
-                  ariaLabel="Filter by type"
-                />
-              )}
-            </div>
-          </th>
-          <th className="border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">Acct #</th>
-          <th className="border-b border-border px-4 py-3 text-right text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground">
-            <div className="flex items-center gap-1">
-              {renderSortableHeader('Balance', 'balance')}
-              {onBalanceRangeChange && (
-                <ColumnFilterDropdown
-                  type="range"
-                  rangeValue={balanceRange}
-                  onChange={(val) => onBalanceRangeChange(val as RangeValue | null)}
-                  ariaLabel="Filter by balance"
-                />
-              )}
-            </div>
-          </th>
-          {hasActions && (
-            <th className="w-24 border-b border-border px-4 py-3 text-right text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground max-md:w-16">
-              Actions
-            </th>
-          )}
-        </tr>
-      </thead>
-      <tbody>
-        {accounts.length === 0 ? (
-          <tr>
-            <td
-              colSpan={hasActions ? 6 : 5}
-              className="px-4 py-12 text-center italic text-muted-foreground"
-            >
-              No accounts match your filters. Try adjusting your criteria.
-            </td>
-          </tr>
-        ) : accounts.map((account) => {
-          const displayName = account.nickname || account.name
-          const typeLabel = getAccountTypeLabel(account.type, account.subtype)
-          const balanceFormatted = formatBalance(account.current_balance)
-          const isNegativeBalance =
-            account.current_balance !== undefined && account.current_balance < 0
-          // Issue #679, #680: Check if linked item is disconnected
-          const isDisconnected = account.linked_item_status === 'disconnected'
-
-          return (
-            <tr
-              key={account.id}
-              className={[
-                'transition-colors duration-150',
-                onRowClick ? 'account-table__row--clickable cursor-pointer' : '',
-                account.is_hidden ? 'opacity-60' : '',
-                isDisconnected
-                  ? 'bg-amber-50/30 hover:bg-amber-50/50 dark:bg-[rgba(69,26,3,0.3)] dark:hover:bg-[rgba(69,26,3,0.5)]'
-                  : 'hover:bg-muted/50',
-              ].filter(Boolean).join(' ')}
-              onClick={onRowClick ? () => onRowClick(account) : undefined}
-            >
-              <td className="min-w-[120px] border-b border-border px-4 py-3.5 text-sm align-middle text-foreground max-md:min-w-[100px] max-md:px-3 max-md:py-2.5">
-                <span className="font-medium text-foreground">
-                  {account.institution_name || 'Unknown'}
-                </span>
-              </td>
-              <td className="min-w-[180px] border-b border-border px-4 py-3.5 text-sm align-middle text-foreground max-md:min-w-[150px] max-md:px-3 max-md:py-2.5">
-                <div className="flex items-center gap-2">
-                  {account.custom_emoji && (
-                    <span className="text-lg">
-                      {account.custom_emoji}
-                    </span>
-                  )}
-                  <span
-                    className="font-medium text-foreground"
-                    style={
-                      account.custom_color
-                        ? { color: account.custom_color }
-                        : undefined
-                    }
+    <DataTable<Account>
+      data={accounts}
+      columns={columns}
+      rowKey={(row) => row.id}
+      sort={sort}
+      onSortChange={handleSortChange}
+      filters={filters}
+      onFiltersChange={handleFiltersChange}
+      loading={loading}
+      onRowClick={onRowClick}
+      rowClassName={(row) => {
+        const isDisconnected = row.linked_item_status === 'disconnected'
+        return cn(
+          onRowClick && 'account-table__row--clickable',
+          row.is_hidden && 'opacity-60',
+          isDisconnected &&
+            'bg-amber-50/30 hover:bg-amber-50/50 dark:bg-[rgba(69,26,3,0.3)] dark:hover:bg-[rgba(69,26,3,0.5)]'
+        )
+      }}
+      className={cn(loading && 'account-table--loading', className)}
+      maskedColumnIds={['mask', 'balance']}
+      emptyState={
+        <p className="py-12 px-4 text-center text-muted-foreground italic">
+          No accounts match your filters. Try adjusting your criteria.
+        </p>
+      }
+      rowActions={
+        hasActions
+          ? (row) => (
+              <div className="flex items-center justify-end gap-2">
+                {onEdit && (
+                  <button
+                    type="button"
+                    onClick={() => onEdit(row)}
+                    disabled={loading}
+                    className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
+                    aria-label="Edit account"
+                    title="Edit account"
                   >
-                    {displayName}
-                  </span>
-                  {/* Issue #679, #680: Disconnected badge */}
-                  {isDisconnected && (
-                    <span
-                      className="ml-2 inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[0.625rem] font-medium text-amber-700 dark:bg-[#451a03] dark:text-yellow-300"
-                      title="Account disconnected - resubscribe to reconnect"
-                    >
-                      <Unplug className="h-2.5 w-2.5" aria-hidden="true" />
-                      Disconnected
-                    </span>
-                  )}
-                  {account.is_hidden && (
-                    <span className="ml-2 inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[0.625rem] font-medium text-muted-foreground">
-                      <EyeOff className="h-2.5 w-2.5" aria-hidden="true" />
-                      Hidden
-                    </span>
-                  )}
-                </div>
-              </td>
-              <td className="border-b border-border px-4 py-3.5 text-sm align-middle text-foreground max-md:px-3 max-md:py-2.5">{typeLabel}</td>
-              <td className="border-b border-border px-4 py-3.5 text-sm align-middle tabular-nums text-muted-foreground max-md:px-3 max-md:py-2.5" data-ph-mask>
-                {account.mask ? `••••${account.mask}` : '—'}
-              </td>
-              <td className="border-b border-border px-4 py-3.5 text-right text-sm align-middle max-md:px-3 max-md:py-2.5">
-                <span
-                  className={`font-semibold tabular-nums ${
-                    isNegativeBalance
-                      ? 'account-table__balance--negative text-red-600 dark:text-red-400'
-                      : 'account-table__balance--positive text-foreground'
-                  }`}
-                  data-ph-mask
-                >
-                  {balanceFormatted}
-                </span>
-              </td>
-              {hasActions && (
-                <td
-                  className="border-b border-border px-4 py-3.5 text-right align-middle max-md:px-3 max-md:py-2.5"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="flex items-center justify-end gap-2">
-                    {onEdit && (
-                      <button
-                        type="button"
-                        onClick={() => onEdit(account)}
-                        disabled={loading}
-                        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
-                        aria-label="Edit account"
-                        title="Edit account"
-                      >
-                        <Edit aria-hidden="true" />
-                      </button>
-                    )}
-                    {onDelete && (
-                      <button
-                        type="button"
-                        onClick={() => onDelete(account)}
-                        disabled={loading}
-                        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors duration-150 hover:bg-red-100 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4 dark:hover:bg-red-900 dark:hover:text-red-400"
-                        aria-label="Delete account"
-                        title="Delete account"
-                      >
-                        <Trash2 aria-hidden="true" />
-                      </button>
-                    )}
-                  </div>
-                </td>
-              )}
-            </tr>
-          )
-        })}
-      </tbody>
-    </table>
+                    <Edit aria-hidden="true" />
+                  </button>
+                )}
+                {onDelete && (
+                  <button
+                    type="button"
+                    onClick={() => onDelete(row)}
+                    disabled={loading}
+                    className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-red-100 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4 dark:hover:bg-red-900 dark:hover:text-red-400"
+                    aria-label="Delete account"
+                    title="Delete account"
+                  >
+                    <Trash2 aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+            )
+          : undefined
+      }
+    />
   )
 }
