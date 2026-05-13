@@ -290,17 +290,14 @@ func TestEffectiveCategoryExpr_OverrideBranchFires_Subcategory(t *testing.T) {
 	}
 }
 
-// TestEffectiveCategoryExpr_SingleElementOverride_FallsThroughForSubcategory verifies that
-// when category_override has only one element, ->>1 returns NULL and the COALESCE falls through.
-// The SQL semantics guarantee this: a JSON array element that doesn't exist returns NULL.
-func TestEffectiveCategoryExpr_SingleElementOverride_FallsThroughForSubcategory(t *testing.T) {
+// TestEffectiveCategoryExpr_IncludesUncategorizedFallback verifies that the category_token
+// grouping expression falls back to 'UNCATEGORIZED' when no category is present.
+// The PFCv2 discriminated-union model means custom kind uses 'custom:<id>' and pfc kind
+// uses the PFC column values. When none match, COALESCE provides 'UNCATEGORIZED'.
+func TestEffectiveCategoryExpr_IncludesUncategorizedFallback(t *testing.T) {
 	expr := effectiveCategoryExpr(true)
-	// Single-element override (category_override = '["Food And Drink"]') has no ->>1.
-	// NULL from ->>1 → COALESCE falls through to personal_finance_category->>'detailed' → 'UNCATEGORIZED'.
-	// We can't test PostgreSQL semantics in a unit test; we verify the expression shape here
-	// and the 3-level fallback chain is explicit.
 	if !contains(expr, "COALESCE") {
-		t.Errorf("expr must use COALESCE for 3-level fallback: %s", expr)
+		t.Errorf("expr must use COALESCE for fallback: %s", expr)
 	}
 	if !contains(expr, "'UNCATEGORIZED'") {
 		t.Errorf("expr must fall back to 'UNCATEGORIZED': %s", expr)
