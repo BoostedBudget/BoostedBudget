@@ -122,6 +122,8 @@ export * from "./getSpendingByMerchantParams";
 export * from "./getSpendingTrendsParams";
 export * from "./getTransactionsAmountType";
 export * from "./getTransactionsParams";
+export * from "./getTransactionsSortBy";
+export * from "./getTransactionsSortDir";
 export * from "./getUnreadCountOutputBody";
 export * from "./getUserAccountsParams";
 export * from "./grantTrialResponseBody";
