@@ -760,7 +760,7 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		}
 		inClause := strings.Join(placeholders, ", ")
 		conditions = append(conditions, fmt.Sprintf(
-			"(CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override ELSE pfc_primary END) IN (%s)",
+			"effective_pfc_primary IN (%s)",
 			inClause,
 		))
 	}
@@ -1126,7 +1126,7 @@ func (r *transactionRepository) GetIncomeSumByCategory(ctx context.Context, user
 		WHERE user_id = $1
 		  AND amount < 0
 		  AND date BETWEEN $2 AND $3
-		  AND (CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override ELSE pfc_primary END) = $4
+		  AND effective_pfc_primary = $4
 	`
 
 	var sum float64
@@ -1162,42 +1162,32 @@ func (r *transactionRepository) GetIncomeSumByTag(ctx context.Context, userID st
 // Issue #493: Budget Category Matching Service
 // =============================================================================
 
-// buildEffectiveCategoryMatchClause returns the SQL fragment and args for matching
+// buildCategoryClause returns the SQL fragment and args for matching
 // a transaction's effective category against a budget category discriminated union.
+// Uses the pre-computed effective_pfc_primary, effective_pfc_detailed, and
+// custom_category_override_id columns (no CASE expressions needed).
 // argStart is the starting positional parameter number (e.g. 4 when $1-$3 are already used).
-// Returns (clause string, args []interface{}, nextArgNum int).
-func buildEffectiveCategoryMatchClause(categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, argStart int) (string, []interface{}, int) {
+// Returns (clause string, args []interface{}).
+func buildCategoryClause(categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, argStart int) (string, []interface{}) {
 	switch categoryKind {
 	case "pfc":
 		if pfcPrimary == nil {
-			return "1=0", nil, argStart
+			return "1=0", nil
 		}
-		clause := fmt.Sprintf(
-			`(CASE WHEN category_override_kind = 'pfc' THEN pfc_primary_override ELSE pfc_primary END) = $%d`,
-			argStart,
-		)
+		clause := fmt.Sprintf(`effective_pfc_primary = $%d`, argStart)
 		args := []interface{}{*pfcPrimary}
-		nextArg := argStart + 1
 		if pfcDetailed != nil {
-			clause += fmt.Sprintf(
-				` AND (CASE WHEN category_override_kind = 'pfc' THEN pfc_detailed_override ELSE pfc_detailed END) = $%d`,
-				nextArg,
-			)
+			clause += fmt.Sprintf(` AND effective_pfc_detailed = $%d`, argStart+1)
 			args = append(args, *pfcDetailed)
-			nextArg++
 		}
-		return clause, args, nextArg
+		return clause, args
 	case "custom":
 		if customCategoryID == nil {
-			return "1=0", nil, argStart
+			return "1=0", nil
 		}
-		clause := fmt.Sprintf(
-			`category_override_kind = 'custom' AND custom_category_override_id::text = $%d`,
-			argStart,
-		)
-		return clause, []interface{}{*customCategoryID}, argStart + 1
+		return fmt.Sprintf(`custom_category_override_id::text = $%d`, argStart), []interface{}{*customCategoryID}
 	default:
-		return "1=0", nil, argStart
+		return "1=0", nil
 	}
 }
 
@@ -1213,16 +1203,13 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 	}
 	tags := budgetCat.Tags
 
-	catClause, catArgs, nextArg := buildEffectiveCategoryMatchClause(
-		budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4,
-	)
-
 	var query string
 	var args []interface{}
 	baseArgs := []interface{}{userID, startDate, endDate}
 
 	switch matchLogic {
 	case domain.MatchLogicCategoryOnly:
+		catClause, catArgs := buildCategoryClause(budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4)
 		query = fmt.Sprintf(`
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
@@ -1233,16 +1220,18 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 		args = append(baseArgs, catArgs...)
 
 	case domain.MatchLogicTagOnly:
-		query = fmt.Sprintf(`
+		query = `
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
 			WHERE user_id = $1 AND amount > 0
 			  AND date BETWEEN $2 AND $3
 			  AND tags ?| $4
-		`)
+		`
 		args = append(baseArgs, pq.Array(tags))
 
 	case domain.MatchLogicAnd:
+		catClause, catArgs := buildCategoryClause(budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4)
+		nextArg := 4 + len(catArgs)
 		query = fmt.Sprintf(`
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
@@ -1255,6 +1244,8 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 		args = append(args, pq.Array(tags))
 
 	case domain.MatchLogicOr:
+		catClause, catArgs := buildCategoryClause(budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4)
+		nextArg := 4 + len(catArgs)
 		query = fmt.Sprintf(`
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
@@ -1286,7 +1277,6 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 		matchLogic = domain.MatchLogicCategoryOnly
 	}
 
-	catClause, catArgs, nextArg := buildEffectiveCategoryMatchClause(categoryKind, pfcPrimary, pfcDetailed, customCategoryID, 4)
 	baseArgs := []interface{}{userID, startDate, endDate}
 
 	var query string
@@ -1294,6 +1284,7 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 
 	switch matchLogic {
 	case domain.MatchLogicCategoryOnly:
+		catClause, catArgs := buildCategoryClause(categoryKind, pfcPrimary, pfcDetailed, customCategoryID, 4)
 		query = fmt.Sprintf(`
 			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
@@ -1314,6 +1305,8 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 		args = append(baseArgs, pq.Array(tags))
 
 	case domain.MatchLogicAnd:
+		catClause, catArgs := buildCategoryClause(categoryKind, pfcPrimary, pfcDetailed, customCategoryID, 4)
+		nextArg := 4 + len(catArgs)
 		query = fmt.Sprintf(`
 			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
@@ -1326,6 +1319,8 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 		args = append(args, pq.Array(tags))
 
 	case domain.MatchLogicOr:
+		catClause, catArgs := buildCategoryClause(categoryKind, pfcPrimary, pfcDetailed, customCategoryID, 4)
+		nextArg := 4 + len(catArgs)
 		query = fmt.Sprintf(`
 			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
@@ -1369,9 +1364,6 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 	}
 	tags := budgetCat.Tags
 
-	catClause, catArgs, nextArg := buildEffectiveCategoryMatchClause(
-		budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4,
-	)
 	baseArgs := []interface{}{userID, startDate, endDate}
 
 	var whereClause string
@@ -1379,6 +1371,7 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 
 	switch matchLogic {
 	case domain.MatchLogicCategoryOnly:
+		catClause, catArgs := buildCategoryClause(budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4)
 		whereClause = fmt.Sprintf(`user_id = $1 AND amount > 0 AND date BETWEEN $2 AND $3 AND (%s)`, catClause)
 		allBaseArgs = append(baseArgs, catArgs...)
 
@@ -1387,11 +1380,15 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 		allBaseArgs = append(baseArgs, pq.Array(tags))
 
 	case domain.MatchLogicAnd:
+		catClause, catArgs := buildCategoryClause(budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4)
+		nextArg := 4 + len(catArgs)
 		whereClause = fmt.Sprintf(`user_id = $1 AND amount > 0 AND date BETWEEN $2 AND $3 AND (%s) AND tags ?| $%d`, catClause, nextArg)
 		allBaseArgs = append(baseArgs, catArgs...)
 		allBaseArgs = append(allBaseArgs, pq.Array(tags))
 
 	case domain.MatchLogicOr:
+		catClause, catArgs := buildCategoryClause(budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4)
+		nextArg := 4 + len(catArgs)
 		whereClause = fmt.Sprintf(`user_id = $1 AND amount > 0 AND date BETWEEN $2 AND $3 AND ((%s) OR tags ?| $%d)`, catClause, nextArg)
 		allBaseArgs = append(baseArgs, catArgs...)
 		allBaseArgs = append(allBaseArgs, pq.Array(tags))
