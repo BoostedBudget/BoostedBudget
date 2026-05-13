@@ -122,7 +122,7 @@ export async function acceptCookieConsent(page: Page): Promise<void> {
     const acceptButton = page.locator('button:has-text("Accept"), button:has-text("Accept All")');
     if (await acceptButton.isVisible({ timeout: 2000 })) {
       await acceptButton.click();
-      await page.waitForTimeout(500);
+      await page.locator('[aria-label="Cookie Consent"]').waitFor({ state: 'hidden', timeout: 5_000 });
     }
   } catch {
     // Cookie banner not present or already accepted
