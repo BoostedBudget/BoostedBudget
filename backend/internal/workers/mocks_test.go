@@ -293,6 +293,11 @@ func (m *MockTransactionRepository) GetByUserAccountID(ctx context.Context, user
 	return args.Get(0).([]domain.Transaction), args.Error(1)
 }
 
+func (m *MockTransactionRepository) UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID string, customCategoryID string, newName string) (int64, error) {
+	args := m.Called(ctx, userID, customCategoryID, newName)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 // MockPlaidClient is a mock for Plaid API client
 type MockPlaidClient struct {
 	mock.Mock
