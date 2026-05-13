@@ -16,14 +16,13 @@ import (
 type EffectiveCategoryRefreshArgs struct {
 	UserID           string `json:"user_id"`
 	CustomCategoryID string `json:"custom_category_id"`
-	NewName          string `json:"new_name"`
 }
 
 func (EffectiveCategoryRefreshArgs) Kind() string { return "effective_category_refresh" }
 
 // effectiveCategoryUpdater is the minimal repository interface needed by the worker.
 type effectiveCategoryUpdater interface {
-	UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID, customCategoryID, newName string) (int64, error)
+	UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID, customCategoryID string) (int64, error)
 }
 
 // EffectiveCategoryRefreshWorker handles async updates of effective_category_name.
@@ -60,7 +59,6 @@ func (w *EffectiveCategoryRefreshWorker) Work(ctx context.Context, job *river.Jo
 		"job_id", job.ID,
 		"user_id", args.UserID,
 		"custom_category_id", args.CustomCategoryID,
-		"new_name", args.NewName,
 		"attempt", job.Attempt,
 	)
 
@@ -75,7 +73,7 @@ func (w *EffectiveCategoryRefreshWorker) Work(ctx context.Context, job *river.Jo
 	}()
 
 	rowsUpdated, err := w.transactionRepo.UpdateEffectiveCategoryNameByCustomCategoryID(
-		ctx, args.UserID, args.CustomCategoryID, args.NewName,
+		ctx, args.UserID, args.CustomCategoryID,
 	)
 	if err != nil {
 		w.logger.Error("effective category refresh failed",
