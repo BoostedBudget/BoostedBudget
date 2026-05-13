@@ -1577,8 +1577,8 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly(t *test
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
+		WithArgs(userID, startDate, endDate, pfcPrimary).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1649,8 +1649,8 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_And(t *testing.T) {
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
+		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1685,8 +1685,8 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_Or(t *testing.T) {
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
+		WithArgs(userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1720,8 +1720,8 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_EmptyMatchLogic(t *t
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
+		WithArgs(userID, startDate, endDate, pfcPrimary).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1754,8 +1754,8 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_NoMatches(t *testing
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(0.0)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
+		WithArgs(userID, startDate, endDate, pfcPrimary).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1786,8 +1786,8 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_DBError(t *testing.T
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
+		WithArgs(userID, startDate, endDate, pfcPrimary).
 		WillReturnError(errors.New("connection done"))
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1824,8 +1824,8 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
+		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1862,8 +1862,8 @@ func TestTransactionRepository_GetMatchingTransactionStats_SingleCategory(t *tes
 
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
+		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, &pfcDetailed, nil, tags, matchLogic, startDate, endDate)
@@ -1896,8 +1896,8 @@ func TestTransactionRepository_GetMatchingTransactionStats_CustomCategory(t *tes
 
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\).+custom_category_override_id::text = \$4`).
+		WithArgs(userID, startDate, endDate, customCategoryID).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "custom", nil, nil, &customCategoryID, tags, matchLogic, startDate, endDate)
@@ -1964,8 +1964,8 @@ func TestTransactionRepository_GetMatchingTransactionStats_And(t *testing.T) {
 
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
+		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, &pfcDetailed, nil, tags, matchLogic, startDate, endDate)
@@ -1999,8 +1999,8 @@ func TestTransactionRepository_GetMatchingTransactionStats_Or(t *testing.T) {
 
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
+		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed, pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, &pfcDetailed, nil, tags, matchLogic, startDate, endDate)

@@ -1185,7 +1185,7 @@ func buildCategoryClause(categoryKind string, pfcPrimary *string, pfcDetailed *s
 		if customCategoryID == nil {
 			return "1=0", nil
 		}
-		return fmt.Sprintf(`custom_category_override_id::text = $%d`, argStart), []interface{}{*customCategoryID}
+		return fmt.Sprintf(`(category_override_kind = 'custom' AND custom_category_override_id::text = $%d)`, argStart), []interface{}{*customCategoryID}
 	default:
 		return "1=0", nil
 	}
