@@ -51,7 +51,9 @@ END $$;
 -- PART 2: Add app-maintained effective_category_name column
 -- ==============================================================================
 
--- effective_category_name: human-readable display name for the effective category.
+-- effective_category_name: resolved category identifier for the effective category.
+-- For PFC kind: the raw PFC enum string (e.g. 'FOOD_AND_DRINK'). Display conversion is frontend responsibility.
+-- For custom kind: the custom category name from custom_categories.name.
 -- NULL until backfilled below. App maintains this in sync with override changes.
 DO $$
 BEGIN
@@ -96,7 +98,7 @@ BEGIN
         UPDATE transactions t
         SET effective_category_name = CASE
             WHEN t.category_override_kind = 'custom' THEN
-                (SELECT name FROM custom_categories WHERE id = t.custom_category_override_id)
+                (SELECT name FROM custom_categories WHERE id = t.custom_category_override_id AND user_id = t.user_id)
             WHEN t.category_override_kind = 'pfc' THEN
                 t.pfc_primary_override
             ELSE
@@ -123,6 +125,7 @@ COMMENT ON COLUMN transactions.effective_pfc_detailed IS
     'Equals pfc_detailed_override when kind=''pfc'', pfc_detailed otherwise.';
 
 COMMENT ON COLUMN transactions.effective_category_name IS
-    'App-maintained human-readable display name for the effective category. '
-    'Backfilled from pfc_primary/override or custom_categories.name. '
+    'App-maintained resolved category identifier. '
+    'PFC kind: raw PFC enum string (e.g. FOOD_AND_DRINK); display conversion is a frontend concern. '
+    'Custom kind: custom_categories.name for the assigned custom category. '
     'App must keep this in sync whenever category_override_kind or override columns change.';
