@@ -9,17 +9,13 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
-// effectiveCategoryRefreshJobArgs is a local mirror of jobs.EffectiveCategoryRefreshArgs.
-// Defined here to avoid the services→jobs→services import cycle.
-// The JSON structure MUST match jobs.EffectiveCategoryRefreshArgs exactly.
-// Issue #1123: Async cascade rename of effective_category_name on custom category update.
+// effectiveCategoryRefreshJobArgs mirrors jobs.EffectiveCategoryRefreshArgs to avoid import cycle.
 type effectiveCategoryRefreshJobArgs struct {
 	UserID           string `json:"user_id"`
 	CustomCategoryID string `json:"custom_category_id"`
 	NewName          string `json:"new_name"`
 }
 
-// Kind returns the job type identifier. Must match jobs.EffectiveCategoryRefreshArgs.Kind().
 func (effectiveCategoryRefreshJobArgs) Kind() string { return "effective_category_refresh" }
 
 type CustomCategoryService interface {
@@ -135,15 +131,14 @@ func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, cate
 		return nil, err
 	}
 
-	// Issue #1123: enqueue async effective_category_name refresh when the name changed.
+	// Enqueue async refresh of effective_category_name when name changed
 	if nameChanged && s.jobQueue != nil {
-		refreshJob := effectiveCategoryRefreshJobArgs{
+		if _, enqErr := s.jobQueue.Enqueue(ctx, effectiveCategoryRefreshJobArgs{
 			UserID:           userID,
 			CustomCategoryID: categoryID,
 			NewName:          category.Name,
-		}
-		if _, enqErr := s.jobQueue.Enqueue(ctx, refreshJob); enqErr != nil {
-			// Log but do not fail the request — the rename is already persisted.
+		}); enqErr != nil {
+			// Log but don't fail — rename is already persisted
 			s.logger.Error("failed to enqueue effective category refresh job",
 				"user_id", userID,
 				"custom_category_id", categoryID,
