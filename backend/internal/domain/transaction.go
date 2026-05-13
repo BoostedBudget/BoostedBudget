@@ -124,6 +124,13 @@ type Transaction struct {
 	CategorySourceField        CategorySource `json:"category_source" db:"category_source"`
 	CategoryOverrideDate       *time.Time     `json:"category_override_date,omitempty" db:"category_override_date"`
 
+	// Effective category columns — denormalized, maintained by repository on every write.
+	// EffectivePFCPrimary and EffectivePFCDetailed are PostgreSQL GENERATED ALWAYS AS columns.
+	// EffectiveCategoryName is app-maintained: raw PFC enum for PFC kind, custom_categories.name for custom kind.
+	EffectivePFCPrimary   *string `json:"effective_pfc_primary,omitempty" db:"effective_pfc_primary"`
+	EffectivePFCDetailed  *string `json:"effective_pfc_detailed,omitempty" db:"effective_pfc_detailed"`
+	EffectiveCategoryName *string `json:"effective_category_name,omitempty" db:"effective_category_name"`
+
 	// Tags (Issue #345: Manual Transaction Category & Tag Editing)
 	Tags       []string    `json:"tags" db:"tags"`               // Array of tag names
 	TagsSource []TagSource `json:"tags_source" db:"tags_source"` // Source tracking for each tag
@@ -307,4 +314,11 @@ type TransactionFilters struct {
 	// for this logical account. Use instead of AccountID when the caller has a
 	// user_account_id (e.g. the frontend after re-link transparency work in #1109).
 	UserAccountID *string
+
+	// SortBy specifies the column to sort by. Allowed values: date, merchant, amount, category.
+	// Defaults to "date" when empty. Validated by Huma enum tag at the operation layer.
+	SortBy string
+
+	// SortDir specifies sort direction. Allowed values: asc, desc. Defaults to "desc" when empty.
+	SortDir string
 }
