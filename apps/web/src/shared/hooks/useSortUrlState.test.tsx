@@ -254,4 +254,19 @@ describe('useSortUrlState', () => {
     expect(warnSpy).toHaveBeenCalled()
     warnSpy.mockRestore()
   })
+
+  it('warns at most once per malformed raw value across re-renders', () => {
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+    const { rerender } = renderHook(
+      () => useSortUrlState({ defaultSort: null, validColumns: COLS }),
+      { wrapper: wrapper('/?sort=BADVALUE') },
+    )
+    rerender()
+    rerender()
+    const warnings = warnSpy.mock.calls.filter((args: unknown[]) =>
+      String(args[0]).includes('"sort" URL param'),
+    )
+    expect(warnings.length).toBeLessThanOrEqual(2)
+    warnSpy.mockRestore()
+  })
 })

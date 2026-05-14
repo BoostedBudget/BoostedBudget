@@ -169,7 +169,7 @@ export function NetWorthPage() {
           action={
             hasActiveFilters ? (
               <button
-                onClick={clearAllFilters}
+                onClick={() => clearAllFilters()}
                 className="text-xs text-muted-foreground underline hover:text-foreground"
               >
                 Clear filters

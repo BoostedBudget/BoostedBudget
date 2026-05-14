@@ -277,7 +277,7 @@ test.describe('URL Sort — Transactions', () => {
     await page.goto('/transactions')
     await page.waitForLoadState('networkidle')
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
-    await amountHeader.locator('button').click()
+    await amountHeader.getByRole('button', { name: 'Amount' }).click()
     await expect(page).toHaveURL(/sort=amount/)
     await expect(amountHeader).toHaveAttribute('aria-sort', /ascending|descending/)
   })
@@ -287,7 +287,7 @@ test.describe('URL Sort — Transactions', () => {
     await page.goto('/transactions')
     await page.waitForLoadState('networkidle')
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
-    await amountHeader.locator('button').click()
+    await amountHeader.getByRole('button', { name: 'Amount' }).click()
     await expect(page).toHaveURL(/sort=amount/)
     const sortBefore = await amountHeader.getAttribute('aria-sort')
     await page.reload()
@@ -303,7 +303,7 @@ test.describe('URL Sort — Transactions', () => {
     await page.goto('/transactions')
     await page.waitForLoadState('networkidle')
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
-    await amountHeader.locator('button').click()
+    await amountHeader.getByRole('button', { name: 'Amount' }).click()
     await expect(page).toHaveURL(/sort=amount/)
     // With replace semantics, back should exit /transactions entirely
     await page.goBack()
@@ -314,19 +314,12 @@ test.describe('URL Sort — Transactions', () => {
     await mockTransactionPage(page)
     await page.goto('/transactions?sort=amount%3Adesc')
     await page.waitForLoadState('networkidle')
-    // Verify sort is active
     await expect(page).toHaveURL(/sort=amount%3Adesc/)
-    // Open the filter panel and clear filters
-    // The clear-all button is inside the transaction filter panel
-    // Look for a "Clear all" or "Clear" button that targets filters (not sort)
     const clearBtn = page.getByRole('button', { name: /clear all/i })
     if (await clearBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
       await clearBtn.click()
-      // Sort should still be in URL
       await expect(page).toHaveURL(/sort=amount%3Adesc/)
     } else {
-      // If no clear-all button is visible without opening the filter panel, skip the interaction
-      // and just verify the URL preservation is correctly wired
       test.info().annotations.push({ type: 'note', description: 'Clear-all button not visible without filter panel open — URL sort preservation verified by hook unit tests' })
     }
   })
@@ -346,8 +339,8 @@ test.describe('URL Sort — Accounts', () => {
     await page.goto('/accounts?sort=name%3Aasc')
     await page.waitForLoadState('networkidle')
     await switchToTableView(page)
-    const nameHeader = page.getByRole('columnheader', { name: /^name$/i })
-    await expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
+    const accountHeader = page.getByRole('columnheader', { name: /^account$/i })
+    await expect(accountHeader).toHaveAttribute('aria-sort', 'ascending')
   })
 
   test('clicking a sortable header adds sort to URL', async ({ page }) => {
@@ -355,10 +348,10 @@ test.describe('URL Sort — Accounts', () => {
     await page.goto('/accounts')
     await page.waitForLoadState('networkidle')
     await switchToTableView(page)
-    const nameHeader = page.getByRole('columnheader', { name: /^name$/i })
-    await nameHeader.locator('button').click()
+    const accountHeader = page.getByRole('columnheader', { name: /^account$/i })
+    await accountHeader.locator('button').click()
     await expect(page).toHaveURL(/sort=name/)
-    await expect(nameHeader).toHaveAttribute('aria-sort', /ascending|descending/)
+    await expect(accountHeader).toHaveAttribute('aria-sort', /ascending|descending/)
   })
 
   test('sort persists after reload', async ({ page }) => {
@@ -366,8 +359,8 @@ test.describe('URL Sort — Accounts', () => {
     await page.goto('/accounts')
     await page.waitForLoadState('networkidle')
     await switchToTableView(page)
-    const nameHeader = page.getByRole('columnheader', { name: /^name$/i })
-    await nameHeader.locator('button').click()
+    const accountHeader = page.getByRole('columnheader', { name: /^account$/i })
+    await accountHeader.locator('button').click()
     await expect(page).toHaveURL(/sort=name/)
     await page.reload()
     await page.waitForLoadState('networkidle')
@@ -380,8 +373,8 @@ test.describe('URL Sort — Accounts', () => {
     await page.goto('/accounts')
     await page.waitForLoadState('networkidle')
     await switchToTableView(page)
-    const nameHeader = page.getByRole('columnheader', { name: /^name$/i })
-    await nameHeader.locator('button').click()
+    const accountHeader = page.getByRole('columnheader', { name: /^account$/i })
+    await accountHeader.locator('button').click()
     await expect(page).toHaveURL(/sort=name/)
     await page.goBack()
     await expect(page).not.toHaveURL(/\/accounts/)

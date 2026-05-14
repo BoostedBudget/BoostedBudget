@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import type { SortDirection, SortState } from '@/shared/components/DataTable'
 import { useUrlState } from './useUrlState'
 
@@ -53,11 +53,12 @@ export function useSortUrlState(opts: UseSortUrlStateOptions): UseSortUrlStateRe
   }
   const resolvedDefault = defaultSort !== null && !validColumns.has(defaultSort.columnId) ? null : defaultSort
 
+  const lastWarnedRaw = useRef<string | null>(null)
   const warnIfInvalid = (raw: string | null) => {
     // eslint-disable-next-line no-undef
-    if (process.env.NODE_ENV !== 'production' && raw !== null && raw !== '') {
-      const result = parseSortParam(raw, validColumns)
-      if (result === null) {
+    if (process.env.NODE_ENV !== 'production' && raw !== null && raw !== '' && raw !== lastWarnedRaw.current) {
+      if (parseSortParam(raw, validColumns) === null) {
+        lastWarnedRaw.current = raw
         console.warn(
           `[useSortUrlState] Invalid "${paramName}" URL param: "${raw}". Falling back to default.`,
         )
