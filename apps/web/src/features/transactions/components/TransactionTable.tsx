@@ -14,6 +14,14 @@ import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterD
 export type TransactionSortColumn = 'date' | 'merchant' | 'amount' | 'category'
 export type SortDirection = 'asc' | 'desc'
 
+// eslint-disable-next-line react-refresh/only-export-components
+export const TRANSACTION_SORTABLE_COLUMNS = new Set([
+  'date',
+  'merchant',
+  'amount',
+  'category',
+] as const)
+
 export interface TransactionTableProps {
   transactions: Transaction[]
   accountsMap: Record<string, Account>

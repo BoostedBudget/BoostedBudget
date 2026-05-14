@@ -7,6 +7,15 @@ import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterD
 import type { AccountBreakdownRow } from '../types'
 import type { SortColumn, SortDirection } from '../hooks/useNetWorthBreakdownFilters'
 
+// eslint-disable-next-line react-refresh/only-export-components
+export const NET_WORTH_SORTABLE_COLUMNS = new Set([
+  'institution',
+  'name',
+  'type',
+  'balance',
+  'percent',
+] as const)
+
 interface AccountBreakdownTableProps {
   assets: AccountBreakdownRow[]
   liabilities: AccountBreakdownRow[]

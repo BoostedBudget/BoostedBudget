@@ -6,8 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
 import { mockUseListAdminUsers } from '@/test/mocks/admin-api'
@@ -304,7 +303,7 @@ describe('UsersPage', () => {
       expect(screen.getByPlaceholderText(/search by email/i)).toBeInTheDocument()
     })
 
-    it('should call API with search param when searching', async () => {
+    it('should call API with search param when searching', () => {
       mockUseListAdminUsers.mockReturnValue({
         data: mockListResponse,
         isLoading: false,
@@ -314,12 +313,9 @@ describe('UsersPage', () => {
       render(<UsersPage />, { wrapper: createWrapper() })
 
       const searchInput = screen.getByPlaceholderText(/search by email/i)
-      await userEvent.type(searchInput, 'admin@')
+      fireEvent.change(searchInput, { target: { value: 'admin@' } })
 
-      // The hook should be called with search param
-      await waitFor(() => {
-        expect(mockUseListAdminUsers).toHaveBeenCalled()
-      })
+      expect(mockUseListAdminUsers).toHaveBeenCalled()
     })
   })
 
