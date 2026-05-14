@@ -213,7 +213,16 @@ async function mockAccountPage(page: Page) {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ tiers: { premium: { account_limit: 100 } } }),
+      body: JSON.stringify({
+        tiers: {
+          premium: {
+            name: 'premium',
+            display_name: 'Premium',
+            limits: { accounts: 100, transaction_history_days: 365, executions_per_day: 100 },
+            features: { ads_enabled: false, ai_insights: true, api_access: true, priority_support: true, custom_categories: true, custom_tags: true, advanced_reports: true },
+          },
+        },
+      }),
     })
   })
   await page.route('**/api/v1/linked-items*', (route) => {
