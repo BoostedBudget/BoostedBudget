@@ -16,19 +16,23 @@ if ! ls "$DIST"/*.js 1>/dev/null 2>&1; then
   exit 0
 fi
 
-# Extract budgeted chunk name prefixes from .size-limit.json (no jq needed).
+# Extract budgeted glob patterns from .size-limit.json (no jq needed).
 # Matches lines like: "path": "apps/web/dist/assets/transactions-*.js"
-# Extracts: transactions
-KNOWN=$(grep -oE '"apps/web/dist/assets/[^"]+\.js"' .size-limit.json \
-  | sed 's|"apps/web/dist/assets/||; s|-\*\.js"||; s|\.js"||; s|"||g')
+# Extracts the filename glob: transactions-*.js
+GLOBS=$(grep '"apps/web/dist/assets/[^"]*\.js"' .size-limit.json \
+  | sed 's|.*"apps/web/dist/assets/||; s|".*||')
 
 ORPHANS=0
 for f in "$DIST"/*.js; do
   base=$(basename "$f")
-  # Strip Vite content-hash suffix: -[8 base64url chars].js
-  # Vite hashes are 8 chars from [A-Za-z0-9_-], e.g. -DGj_IzSb.js or -Bl13-G5I.js
-  prefix=$(echo "$base" | sed 's/-[A-Za-z0-9_-]\{8\}\.js$//')
-  if ! printf '%s\n' "$KNOWN" | grep -qx "$prefix"; then
+  matched=0
+  while IFS= read -r glob; do
+    # shellcheck disable=SC2254
+    case "$base" in $glob) matched=1; break ;; esac
+  done <<EOF
+$GLOBS
+EOF
+  if [ $matched -eq 0 ]; then
     echo "❌ ORPHAN CHUNK (no size-limit entry): $base"
     ORPHANS=$((ORPHANS + 1))
   fi
