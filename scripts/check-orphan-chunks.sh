@@ -11,6 +11,11 @@ if [ ! -d "$DIST" ]; then
   exit 1
 fi
 
+if ! ls "$DIST"/*.js 1>/dev/null 2>&1; then
+  echo "ℹ️  No JS chunks found in $DIST. Skipping orphan check."
+  exit 0
+fi
+
 # Extract budgeted chunk name prefixes from .size-limit.json (no jq needed).
 # Matches lines like: "path": "apps/web/dist/assets/transactions-*.js"
 # Extracts: transactions
