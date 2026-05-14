@@ -18,6 +18,15 @@ import {
 export type SortColumn = 'name' | 'status' | 'priority' | 'matches' | 'category'
 export type SortDirection = 'asc' | 'desc'
 
+// eslint-disable-next-line react-refresh/only-export-components
+export const RULE_SORTABLE_COLUMNS = new Set([
+  'name',
+  'status',
+  'priority',
+  'matches',
+  'category',
+] as const)
+
 export interface AutoCategorizationRuleTableProps {
   /** Rules to display */
   rules: CategorizationRule[]

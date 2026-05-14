@@ -1,6 +1,9 @@
 import { useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { RangeValue } from '@/shared/components/ColumnFilterDropdown'
+import type { SortState } from '@/shared/components/DataTable'
+import { useSortUrlState } from '@/shared/hooks/useSortUrlState'
+import { NET_WORTH_SORTABLE_COLUMNS } from '../components/AccountBreakdownTable'
 
 export type SortColumn = 'institution' | 'name' | 'type' | 'balance' | 'percent'
 export type SortDirection = 'asc' | 'desc'
@@ -17,18 +20,19 @@ export interface UseNetWorthBreakdownFiltersResult {
   institutionFilter: string[]
   typeFilter: string[]
   balanceRange: RangeValue | null
+  sort: SortState | null
   sortColumn: SortColumn | null
   sortDirection: SortDirection
   setInstitutionFilter: (value: string[]) => void
   setTypeFilter: (value: string[]) => void
   setBalanceRange: (value: RangeValue | null) => void
+  setSort: (next: SortState | null) => void
+  resetSort: () => void
   setSortColumn: (column: SortColumn) => void
-  clearAllFilters: () => void
+  clearAllFilters: (options?: { includeSort?: boolean }) => void
   activeFilterCount: number
   hasActiveFilters: boolean
 }
-
-const VALID_SORT_COLUMNS = new Set<string>(['institution', 'name', 'type', 'balance', 'percent'])
 
 const parseCSV = (value: string | null): string[] =>
   value ? value.split(',').filter(Boolean).map((s) => s.trim()) : []
@@ -42,6 +46,11 @@ const parseNumber = (value: string | null): number | undefined => {
 export function useNetWorthBreakdownFilters(): UseNetWorthBreakdownFiltersResult {
   const [searchParams, setSearchParams] = useSearchParams()
 
+  const { sort, setSort, resetSort, toggleSortColumn } = useSortUrlState({
+    defaultSort: null,
+    validColumns: NET_WORTH_SORTABLE_COLUMNS,
+  })
+
   const filters = useMemo<NetWorthBreakdownFilters>(() => ({
     institution: parseCSV(searchParams.get('institution')),
     type: parseCSV(searchParams.get('type')),
@@ -49,27 +58,21 @@ export function useNetWorthBreakdownFilters(): UseNetWorthBreakdownFiltersResult
     balanceMax: parseNumber(searchParams.get('balance_max')),
   }), [searchParams])
 
-  const { sortColumn, sortDirection } = useMemo<{
-    sortColumn: SortColumn | null
-    sortDirection: SortDirection
-  }>(() => {
-    const raw = searchParams.get('sort')
-    if (!raw) return { sortColumn: null, sortDirection: 'asc' }
-    const [col, dir] = raw.split(':')
-    if (!col || !VALID_SORT_COLUMNS.has(col)) return { sortColumn: null, sortDirection: 'asc' }
-    return {
-      sortColumn: col as SortColumn,
-      sortDirection: dir === 'desc' ? 'desc' : 'asc',
-    }
-  }, [searchParams])
-
   const institutionFilter = filters.institution
   const typeFilter = filters.type
 
-  const balanceRange = useMemo<RangeValue | null>(() => {
+  const balanceRange: RangeValue | null = useMemo(() => {
     if (filters.balanceMin === undefined && filters.balanceMax === undefined) return null
     return { min: filters.balanceMin, max: filters.balanceMax }
   }, [filters.balanceMin, filters.balanceMax])
+
+  const sortColumn = (sort?.columnId ?? null) as SortColumn | null
+  const sortDirection: SortDirection = sort?.direction ?? 'asc'
+
+  const setSortColumn = useCallback(
+    (column: SortColumn) => toggleSortColumn(column),
+    [toggleSortColumn],
+  )
 
   const updateParam = useCallback(
     (key: string, value: string | null) => {
@@ -79,20 +82,20 @@ export function useNetWorthBreakdownFilters(): UseNetWorthBreakdownFiltersResult
           if (value) { next.set(key, value) } else { next.delete(key) }
           return next
         },
-        { replace: true }
+        { replace: true },
       )
     },
-    [setSearchParams]
+    [setSearchParams],
   )
 
   const setInstitutionFilter = useCallback(
     (value: string[]) => updateParam('institution', value.length > 0 ? value.join(',') : null),
-    [updateParam]
+    [updateParam],
   )
 
   const setTypeFilter = useCallback(
     (value: string[]) => updateParam('type', value.length > 0 ? value.join(',') : null),
-    [updateParam]
+    [updateParam],
   )
 
   const setBalanceRange = useCallback(
@@ -111,51 +114,36 @@ export function useNetWorthBreakdownFilters(): UseNetWorthBreakdownFiltersResult
           }
           return next
         },
-        { replace: true }
+        { replace: true },
       )
     },
-    [setSearchParams]
+    [setSearchParams],
   )
 
-  const setSortColumn = useCallback(
-    (column: SortColumn) => {
+  const clearAllFilters = useCallback(
+    (options?: { includeSort?: boolean }) => {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev)
-          const currentCol = next.get('sort')?.split(':')[0]
-          const currentDir = next.get('sort')?.split(':')[1] ?? 'asc'
-          const newDir: SortDirection =
-            currentCol === column && currentDir === 'asc' ? 'desc' : 'asc'
-          next.set('sort', `${column}:${newDir}`)
+          next.delete('institution')
+          next.delete('type')
+          next.delete('balance_min')
+          next.delete('balance_max')
+          if (options?.includeSort) next.delete('sort')
           return next
         },
-        { replace: true }
+        { replace: true },
       )
     },
-    [setSearchParams]
+    [setSearchParams],
   )
-
-  const clearAllFilters = useCallback(() => {
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev)
-        next.delete('institution')
-        next.delete('type')
-        next.delete('balance_min')
-        next.delete('balance_max')
-        next.delete('sort')
-        return next
-      },
-      { replace: true }
-    )
-  }, [setSearchParams])
 
   const activeFilterCount = useMemo(
     () =>
       (filters.institution.length > 0 ? 1 : 0) +
       (filters.type.length > 0 ? 1 : 0) +
       (filters.balanceMin !== undefined || filters.balanceMax !== undefined ? 1 : 0),
-    [filters]
+    [filters],
   )
 
   return {
@@ -163,11 +151,14 @@ export function useNetWorthBreakdownFilters(): UseNetWorthBreakdownFiltersResult
     institutionFilter,
     typeFilter,
     balanceRange,
+    sort,
     sortColumn,
     sortDirection,
     setInstitutionFilter,
     setTypeFilter,
     setBalanceRange,
+    setSort,
+    resetSort,
     setSortColumn,
     clearAllFilters,
     activeFilterCount,

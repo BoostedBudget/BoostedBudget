@@ -1,13 +1,3 @@
-/**
- * Budgets Page
- * Issue #30: Budget Dashboard UI
- * Issue #111: Goals Dashboard & Progress Visualization
- * Issue #462: shadcn/ui Migration - Mutual exclusion for dialogs
- * Issue #521: Enable Budget Deletion in UI
- *
- * Main page for viewing and managing budgets.
- */
-
 import { useCallback, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -36,7 +26,7 @@ function getInitialView(): ListView {
     const stored = localStorage.getItem(STORAGE_KEY_LIST_VIEW)
     if (stored === 'cards' || stored === 'table') return stored
   } catch {
-    // ignore localStorage read errors
+    // ignore localStorage errors
   }
   return 'cards'
 }
@@ -50,10 +40,11 @@ export function BudgetsPage() {
   const [view, setView] = useState<ListView>(getInitialView)
   const [deletingBudget, setDeletingBudget] = useState<Budget | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
-  const [sortColumn, setSortColumn] = useState<BudgetSortColumn | undefined>(undefined)
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
-  const { periodFilter, progressRange, setPeriodFilter, setProgressRange } = useBudgetFilters()
+  const { sort, setSort, periodFilter, progressRange, setPeriodFilter, setProgressRange } = useBudgetFilters()
+
+  const sortColumn = sort?.columnId as BudgetSortColumn | undefined
+  const sortDirection: SortDirection = sort?.direction ?? 'asc'
 
   const openBudgetDialog = useCallback(() => setActiveDialog('budget'), [])
   const closeDialog = useCallback(() => {
@@ -103,13 +94,12 @@ export function BudgetsPage() {
   }, [deletingBudget, deleteBudget, trackEvent, closeDialog, refetchBudgets]);
 
   const handleSort = useCallback((column: BudgetSortColumn, direction: SortDirection) => {
-    setSortColumn(column);
-    setSortDirection(direction);
-  }, []);
+    setSort({ columnId: column, direction })
+  }, [setSort])
 
   const handleOpenBudget = useCallback((budget: BudgetWithMetrics) => {
-    navigate(getBudgetDetailPath(budget.id));
-  }, [navigate]);
+    navigate(getBudgetDetailPath(budget.id))
+  }, [navigate])
 
   const periodOptions = useMemo<FilterOption[]>(() => {
     const periods = new Set<string>();
@@ -132,59 +122,56 @@ export function BudgetsPage() {
   }, [budgets]);
 
   const filterAndSortBudgets = useCallback((budgetsToProcess: Budget[]): BudgetWithMetrics[] => {
-    let withMetrics = budgetsToProcess.map(computeBudgetMetrics);
+    let withMetrics = budgetsToProcess.map(computeBudgetMetrics)
 
     if (periodFilter.length > 0) {
       withMetrics = withMetrics.filter((budget) =>
         periodFilter.includes(budget.period)
-      );
+      )
     }
 
     if (progressRange) {
       withMetrics = withMetrics.filter((budget) => {
-        const progress = budget.percent_used;
-        if (progressRange.min !== undefined && progress < progressRange.min) return false;
-        if (progressRange.max !== undefined && progress > progressRange.max) return false;
-        return true;
-      });
+        const progress = budget.percent_used
+        if (progressRange.min !== undefined && progress < progressRange.min) return false
+        if (progressRange.max !== undefined && progress > progressRange.max) return false
+        return true
+      })
     }
 
-    if (!sortColumn) return withMetrics;
+    if (!sortColumn) return withMetrics
 
     return [...withMetrics].sort((a, b) => {
-      let comparison = 0;
+      let comparison = 0
 
       switch (sortColumn) {
         case 'name': {
-          comparison = a.name.localeCompare(b.name);
-          break;
+          comparison = a.name.localeCompare(b.name)
+          break
         }
         case 'period': {
-          comparison = a.period.localeCompare(b.period);
-          break;
+          comparison = a.period.localeCompare(b.period)
+          break
         }
         case 'amount': {
-          comparison = (a.expected_income ?? a.amount) - (b.expected_income ?? b.amount);
-          break;
+          comparison = (a.expected_income ?? a.amount) - (b.expected_income ?? b.amount)
+          break
         }
         case 'progress': {
-          comparison = a.percent_used - b.percent_used;
-          break;
+          comparison = a.percent_used - b.percent_used
+          break
         }
         case 'remaining': {
-          comparison = a.remaining_amount - b.remaining_amount;
-          break;
+          comparison = a.remaining_amount - b.remaining_amount
+          break
         }
       }
 
-      return sortDirection === 'asc' ? comparison : -comparison;
-    });
-  }, [sortColumn, sortDirection, periodFilter, progressRange]);
+      return sortDirection === 'asc' ? comparison : -comparison
+    })
+  }, [sortColumn, sortDirection, periodFilter, progressRange])
 
-  const loading = budgetsLoading
-  const error = budgetsError
-
-  if (loading) {
+  if (budgetsLoading) {
     return (
       <div className="p-6 max-w-[1200px] mx-auto">
         <div className="flex flex-col items-center justify-center h-[300px] gap-4 text-muted-foreground">
@@ -195,12 +182,12 @@ export function BudgetsPage() {
     )
   }
 
-  if (error) {
+  if (budgetsError) {
     return (
       <div className="p-6 max-w-[1200px] mx-auto">
         <div className="flex items-center justify-center h-[200px] gap-2 text-destructive">
           <span className="flex items-center justify-center w-6 h-6 bg-destructive text-white rounded-full text-xs font-bold">!</span>
-          <span>Error loading budgets: {error.message}</span>
+          <span>Error loading budgets: {budgetsError.message}</span>
         </div>
       </div>
     )

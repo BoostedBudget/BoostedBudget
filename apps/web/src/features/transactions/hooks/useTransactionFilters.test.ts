@@ -159,7 +159,7 @@ describe('useTransactionFilters', () => {
       window.history.replaceState(
         {},
         '',
-        '/?search=coffee/?search=coffee&min_amount=10&categories=Foodmin_amount=10/?search=coffee&min_amount=10&categories=Foodpfc_primaries=FOOD_AND_DRINK'
+        '/?search=coffee&min_amount=10&pfc_primaries=FOOD_AND_DRINK'
       )
 
       const { result } = renderHook(() => useTransactionFilters(), {
@@ -173,6 +173,26 @@ describe('useTransactionFilters', () => {
       expect(result.current.filters).toEqual({})
       expect(result.current.activeFilterCount).toBe(0)
       expect(window.location.search).toBe('')
+    })
+
+    it('should preserve unrelated URL params', () => {
+      window.history.replaceState(
+        {},
+        '',
+        '/?search=coffee&tab=overview'
+      )
+
+      const { result } = renderHook(() => useTransactionFilters(), {
+        wrapper: createWrapper(),
+      })
+
+      act(() => {
+        result.current.clearAllFilters()
+      })
+
+      expect(result.current.filters).toEqual({})
+      expect(window.location.search).toContain('tab=overview')
+      expect(window.location.search).not.toContain('search=')
     })
   })
 
@@ -417,6 +437,75 @@ describe('useTransactionFilters', () => {
       rerender()
 
       expect(result.current.filters.search).toBe('coffee')
+    })
+  })
+
+  describe('Sort (URL-persisted)', () => {
+    it('returns default sort date:desc when no URL param', () => {
+      window.history.replaceState({}, '', '/')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      expect(result.current.sort).toEqual({ columnId: 'date', direction: 'desc' })
+      expect(result.current.isDefaultSort).toBe(true)
+    })
+
+    it('parses sort from URL', () => {
+      window.history.replaceState({}, '', '/?sort=amount%3Adesc')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      expect(result.current.sort).toEqual({ columnId: 'amount', direction: 'desc' })
+      expect(result.current.isDefaultSort).toBe(false)
+    })
+
+    it('setSort updates sort and deletes offset', () => {
+      window.history.replaceState({}, '', '/?offset=50')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      act(() => {
+        result.current.setSort({ columnId: 'amount', direction: 'asc' })
+      })
+      expect(result.current.sort).toEqual({ columnId: 'amount', direction: 'asc' })
+      expect(window.location.search).not.toContain('offset')
+    })
+
+    it('resetSort restores default date:desc', () => {
+      window.history.replaceState({}, '', '/?sort=amount%3Aasc')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      act(() => {
+        result.current.resetSort()
+      })
+      expect(result.current.sort).toEqual({ columnId: 'date', direction: 'desc' })
+      expect(result.current.isDefaultSort).toBe(true)
+    })
+
+    it('clearAllFilters preserves sort', () => {
+      window.history.replaceState({}, '', '/?search=coffee&sort=amount%3Adesc')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      act(() => {
+        result.current.clearAllFilters()
+      })
+      expect(result.current.filters.search).toBeUndefined()
+      expect(result.current.sort).toEqual({ columnId: 'amount', direction: 'desc' })
+    })
+
+    it('clearAllFilters({ includeSort: true }) clears sort too', () => {
+      window.history.replaceState({}, '', '/?sort=amount%3Adesc')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      act(() => {
+        result.current.clearAllFilters({ includeSort: true })
+      })
+      expect(result.current.sort).toEqual({ columnId: 'date', direction: 'desc' })
+      expect(result.current.isDefaultSort).toBe(true)
+    })
+
+    it('activeFilterCount does not count sort', () => {
+      window.history.replaceState({}, '', '/?sort=amount%3Adesc&search=coffee')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      expect(result.current.activeFilterCount).toBe(1)
+    })
+
+    it('ignores invalid sort column gracefully', () => {
+      window.history.replaceState({}, '', '/?sort=unknown%3Aasc')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      expect(result.current.sort).toEqual({ columnId: 'date', direction: 'desc' })
+      expect(result.current.isDefaultSort).toBe(true)
     })
   })
 })

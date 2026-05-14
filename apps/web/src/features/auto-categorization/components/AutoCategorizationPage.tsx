@@ -1,11 +1,3 @@
-/**
- * AutoCategorizationPage Component
- *
- * Main page for managing auto-categorization rules.
- * Issue #346: Custom Transaction Categorization Rules
- * Issue #584: Unified Card/Table View System
- */
-
 import { useCallback, useMemo, useState } from 'react'
 import { Tags } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -36,7 +28,6 @@ export interface AutoCategorizationPageProps {
 
 type EditorMode = 'create' | 'edit' | null
 
-// Issue #584: Get initial view from localStorage
 const getInitialView = (): ListView => {
   try {
     const stored = localStorage.getItem(STORAGE_KEY_LIST_VIEW)
@@ -44,7 +35,7 @@ const getInitialView = (): ListView => {
       return stored
     }
   } catch {
-    // Ignore localStorage errors
+    // ignore localStorage errors
   }
   return 'cards'
 }
@@ -64,16 +55,12 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
   const [editorMode, setEditorMode] = useState<EditorMode>(null)
   const [editingRule, setEditingRule] = useState<CategorizationRule | null>(null)
   const [view, setView] = useState<ListView>(getInitialView)
-  // Issue #960: Table view delete confirmation (cards view uses AutoCategorizationRuleCard's built-in dialog)
   const [tableDeleteTarget, setTableDeleteTarget] = useState<CategorizationRule | null>(null)
   const [tableDeleting, setTableDeleting] = useState(false)
 
-  // Issue #590: Sorting state
-  const [sortColumn, setSortColumn] = useState<RuleSortColumn | undefined>(undefined)
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
-
-  // Issue #590: Inline filter state (URL-synced)
   const {
+    sort,
+    setSort,
     statusFilter,
     categoryFilter,
     priorityRange,
@@ -81,6 +68,9 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
     setCategoryFilter,
     setPriorityRange,
   } = useRuleFilters()
+
+  const sortColumn = sort?.columnId as RuleSortColumn | undefined
+  const sortDirection: SortDirection = sort?.direction ?? 'asc'
 
   const isAtLimit = maxRules !== undefined && rules.length >= maxRules
   const showTierWarning = isAtLimit && currentTier === 'free'
@@ -127,7 +117,6 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
     [toggleRule]
   )
 
-  // Issue #584: Handle toggle from table component (takes rule object instead of ruleId)
   const handleTableToggle = useCallback(
     async (rule: CategorizationRule, enabled: boolean) => {
       await toggleRule(rule.id, enabled)
@@ -135,18 +124,14 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
     [toggleRule]
   )
 
-  // Issue #584: Handle view change
   const handleViewChange = useCallback((newView: ListView) => {
     setView(newView)
   }, [])
 
-  // Issue #590: Handle sort change
   const handleSort = useCallback((column: RuleSortColumn, direction: SortDirection) => {
-    setSortColumn(column)
-    setSortDirection(direction)
-  }, [])
+    setSort({ columnId: column, direction })
+  }, [setSort])
 
-  // Issue #590: Create filter options from rules data
   const statusOptions = useMemo<FilterOption[]>(() => [
     { value: 'enabled', label: 'Enabled' },
     { value: 'disabled', label: 'Disabled' },
@@ -172,10 +157,6 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
       .map(([value, label]) => ({ value, label }))
   }, [rules])
 
-  // Issue #590: Filter handlers from useRuleFilters hook (URL-synced)
-  // setStatusFilter, setCategoryFilter, setPriorityRange come from the hook
-
-  // Issue #590: Filter and sort rules client-side
   const filteredAndSortedRules = useMemo(() => {
     let filtered = [...rules]
 
@@ -248,7 +229,6 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
     })
   }, [rules, sortColumn, sortDirection, statusFilter, categoryFilter, priorityRange])
 
-  // Loading state
   if (loading) {
     return (
       <div className="max-w-[800px] mx-auto py-8 px-4">
@@ -260,7 +240,6 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
     )
   }
 
-  // Error state
   if (error) {
     return (
       <div className="max-w-[800px] mx-auto py-8 px-4">
@@ -278,7 +257,6 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
     )
   }
 
-  // Editor mode
   if (editorMode) {
     return (
       <div className="max-w-[800px] mx-auto py-8 px-4">
@@ -296,7 +274,6 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
     )
   }
 
-  // Empty state
   if (rules.length === 0) {
     return (
       <div className="max-w-[800px] mx-auto py-8 px-4">
@@ -314,7 +291,6 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
     )
   }
 
-  // Rules list
   return (
     <div className="max-w-[800px] mx-auto py-8 px-4">
       <div className="flex items-center justify-between mb-6">
@@ -352,7 +328,6 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
         </div>
       )}
 
-      {/* Issue #584: Conditional cards/table rendering */}
       <div className="mt-4">
         {view === 'cards' ? (
           <div className="flex flex-col gap-0">
@@ -377,7 +352,6 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
             sortColumn={sortColumn}
             sortDirection={sortDirection}
             onSort={handleSort}
-            // Issue #590: Inline filter props (URL-synced via useRuleFilters)
             statusOptions={statusOptions}
             statusFilter={statusFilter}
             onStatusFilterChange={setStatusFilter}
@@ -390,7 +364,6 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
         )}
       </div>
 
-      {/* Issue #960: Table view delete confirmation */}
       <ConfirmationDialog
         open={tableDeleteTarget !== null}
         onOpenChange={(open) => !open && !tableDeleting && setTableDeleteTarget(null)}
