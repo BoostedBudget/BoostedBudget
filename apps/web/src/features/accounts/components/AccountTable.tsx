@@ -9,6 +9,14 @@ import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterD
 export type SortColumn = 'institution' | 'name' | 'type' | 'balance'
 export type SortDirection = 'asc' | 'desc'
 
+// eslint-disable-next-line react-refresh/only-export-components
+export const ACCOUNT_SORTABLE_COLUMNS = new Set([
+  'institution',
+  'name',
+  'type',
+  'balance',
+] as const)
+
 export interface AccountTableProps {
   accounts: Account[]
   onEdit?: (account: Account) => void

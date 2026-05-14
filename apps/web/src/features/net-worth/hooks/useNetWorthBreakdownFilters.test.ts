@@ -86,7 +86,7 @@ describe('useNetWorthBreakdownFilters', () => {
     expect(result.current.sortDirection).toBe('asc')
   })
 
-  it('clearAllFilters resets everything', () => {
+  it('clearAllFilters clears data filters but preserves sort by default', () => {
     const { result } = renderHook(() => useNetWorthBreakdownFilters(), {
       wrapper: wrapper('/net-worth?institution=Chase&type=credit&balance_min=1000&sort=balance%3Adesc'),
     })
@@ -96,6 +96,18 @@ describe('useNetWorthBreakdownFilters', () => {
     expect(result.current.institutionFilter).toEqual([])
     expect(result.current.typeFilter).toEqual([])
     expect(result.current.balanceRange).toBeNull()
+    expect(result.current.sortColumn).toBe('balance')
+    expect(result.current.sortDirection).toBe('desc')
+  })
+
+  it('clearAllFilters({ includeSort: true }) clears sort too', () => {
+    const { result } = renderHook(() => useNetWorthBreakdownFilters(), {
+      wrapper: wrapper('/net-worth?institution=Chase&sort=balance%3Adesc'),
+    })
+    act(() => {
+      result.current.clearAllFilters({ includeSort: true })
+    })
+    expect(result.current.institutionFilter).toEqual([])
     expect(result.current.sortColumn).toBeNull()
   })
 
@@ -106,9 +118,9 @@ describe('useNetWorthBreakdownFilters', () => {
     expect(result.current.hasActiveFilters).toBe(true)
   })
 
-  it('activeFilterCount counts institution, type, and balance separately', () => {
+  it('activeFilterCount counts institution, type, and balance separately (sort excluded)', () => {
     const { result } = renderHook(() => useNetWorthBreakdownFilters(), {
-      wrapper: wrapper('/net-worth?institution=Chase&type=credit&balance_min=500'),
+      wrapper: wrapper('/net-worth?institution=Chase&type=credit&balance_min=500&sort=balance%3Adesc'),
     })
     expect(result.current.activeFilterCount).toBe(3)
   })
@@ -125,5 +137,23 @@ describe('useNetWorthBreakdownFilters', () => {
       wrapper: wrapper('/net-worth?sort=badvalue'),
     })
     expect(result.current.sortColumn).toBeNull()
+  })
+
+  it('exposes sort as SortState object', () => {
+    const { result } = renderHook(() => useNetWorthBreakdownFilters(), {
+      wrapper: wrapper('/net-worth?sort=balance%3Adesc'),
+    })
+    expect(result.current.sort).toEqual({ columnId: 'balance', direction: 'desc' })
+  })
+
+  it('resetSort restores null default', () => {
+    const { result } = renderHook(() => useNetWorthBreakdownFilters(), {
+      wrapper: wrapper('/net-worth?sort=balance%3Adesc'),
+    })
+    act(() => {
+      result.current.resetSort()
+    })
+    expect(result.current.sortColumn).toBeNull()
+    expect(result.current.sort).toBeNull()
   })
 })
