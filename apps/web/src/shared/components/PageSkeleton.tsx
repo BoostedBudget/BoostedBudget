@@ -3,6 +3,7 @@ import { cn } from '../../lib/utils'
 export function PageSkeleton({ className }: { className?: string }) {
   return (
     <div
+      role="status"
       className={cn('flex items-center justify-center min-h-[60vh]', className)}
       aria-busy="true"
       aria-label="Loading page"
