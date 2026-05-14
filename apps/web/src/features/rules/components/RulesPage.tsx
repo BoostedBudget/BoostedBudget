@@ -64,7 +64,7 @@ export function RulesPage() {
     refetch,
   } = useGetAutomationRules()
 
-  const rules = data ?? []
+  const rules = useMemo(() => data ?? [], [data])
 
   // Mutations
   // Issue #579: Optimistic updates for toggle - UI updates immediately, rollback on error
