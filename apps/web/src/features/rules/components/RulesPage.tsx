@@ -6,7 +6,7 @@
  * Supports card and table views.
  */
 
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
@@ -28,7 +28,8 @@ import type { ListView } from '@/shared/components/ListViewToggle'
 import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { RuleCard } from './RuleCard'
-import { RuleTable } from './RuleTable'
+import { RuleTable, type SortColumn as RuleSortColumn, type SortDirection } from './RuleTable'
+import { useRuleFilters } from '../hooks/useRuleFilters'
 
 /**
  * RulesPage displays the list of automation rules with card/table toggle.
@@ -53,6 +54,10 @@ export function RulesPage() {
 
   const [view, setView] = useState<ListView>(getInitialView)
   const [deleteConfirm, setDeleteConfirm] = useState<AutomationRule | null>(null)
+
+  const { sort, setSort } = useRuleFilters()
+  const sortColumn = sort?.columnId as RuleSortColumn | undefined
+  const sortDirection: SortDirection = sort?.direction ?? 'asc'
 
   // Fetch rules
   const {
@@ -146,6 +151,38 @@ export function RulesPage() {
   const handleDeleteCancel = useCallback(() => {
     setDeleteConfirm(null)
   }, [])
+
+  const handleSort = useCallback((column: RuleSortColumn, direction: SortDirection) => {
+    setSort({ columnId: column, direction })
+  }, [setSort])
+
+  const sortedRules = useMemo(() => {
+    if (!sortColumn) return rules
+    return [...rules].sort((a, b) => {
+      let comparison = 0
+      switch (sortColumn) {
+        case 'name':
+          comparison = a.name.localeCompare(b.name)
+          break
+        case 'type':
+          comparison = a.rule_type.localeCompare(b.rule_type)
+          break
+        case 'status':
+          comparison = Number(a.enabled) - Number(b.enabled)
+          break
+        case 'trigger':
+          comparison = (a.trigger_config?.type ?? '').localeCompare(b.trigger_config?.type ?? '')
+          break
+        case 'lastRun':
+          comparison = (a.last_executed_at ?? '').localeCompare(b.last_executed_at ?? '')
+          break
+        case 'priority':
+          comparison = a.priority - b.priority
+          break
+      }
+      return sortDirection === 'asc' ? comparison : -comparison
+    })
+  }, [rules, sortColumn, sortDirection])
 
   const handleViewChange = useCallback((newView: ListView) => {
     setView(newView)
@@ -262,12 +299,16 @@ export function RulesPage() {
           </div>
         ) : (
           <RuleTable
-            rules={rules}
+            rules={sortedRules}
             onEdit={handleEditRule}
             onDelete={handleDeleteClick}
             onToggle={handleToggleRule}
             onTest={handleTestRule}
             loading={toggleMutation.isPending || deleteMutation.isPending || testMutation.isPending}
+            sortable
+            sortColumn={sortColumn}
+            sortDirection={sortDirection}
+            onSort={handleSort}
           />
         )}
       </div>

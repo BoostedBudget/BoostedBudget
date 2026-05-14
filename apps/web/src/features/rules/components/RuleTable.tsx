@@ -14,8 +14,18 @@ import type { ColumnDef, SortState } from '@/shared/components/DataTable'
 import { RULE_TYPE_LABELS } from '../constants'
 import type { RuleType } from '../types'
 
-export type SortColumn = 'name' | 'type' | 'status' | 'trigger' | 'lastRun'
+export type SortColumn = 'name' | 'type' | 'status' | 'trigger' | 'lastRun' | 'priority'
 export type SortDirection = 'asc' | 'desc'
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const RULE_SORTABLE_COLUMNS = new Set([
+  'name',
+  'type',
+  'status',
+  'trigger',
+  'lastRun',
+  'priority',
+] as const)
 
 export interface RuleTableProps {
   rules: AutomationRule[]
@@ -205,6 +215,12 @@ export function RuleTable({
         ) : (
           <span className="italic text-muted-foreground">Never</span>
         ),
+    },
+    {
+      id: 'priority',
+      header: 'Priority',
+      sortable,
+      render: (row) => <span className="tabular-nums text-muted-foreground">{row.priority}</span>,
     },
   ]
 

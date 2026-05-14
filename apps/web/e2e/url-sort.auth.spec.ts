@@ -134,14 +134,15 @@ const FIXTURE_RULES = [
     user_id: 'user-123',
     name: 'Tag Coffee',
     description: 'Tag coffee purchases',
+    rule_type: 'tag',
     enabled: true,
     priority: 10,
+    execution_count: 42,
     conditions: [{ type: 'merchant_contains', value: 'starbucks', operator: 'contains' }],
     condition_logic: 'AND',
     actions: [{ type: 'add_tag', tag: 'coffee' }],
-    source: 'manual',
-    match_count: 42,
-    last_matched_at: '2026-05-01T10:00:00Z',
+    trigger_config: { type: 'event' },
+    last_executed_at: '2026-05-01T10:00:00Z',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-05-01T10:00:00Z',
   },
@@ -150,14 +151,15 @@ const FIXTURE_RULES = [
     user_id: 'user-123',
     name: 'Categorize Groceries',
     description: 'Set grocery category',
+    rule_type: 'categorize',
     enabled: false,
     priority: 20,
+    execution_count: 15,
     conditions: [{ type: 'merchant_contains', value: 'whole foods', operator: 'contains' }],
     condition_logic: 'AND',
     actions: [{ type: 'set_category', category: 'FOOD_AND_DRINK' }],
-    source: 'manual',
-    match_count: 15,
-    last_matched_at: '2026-04-15T08:00:00Z',
+    trigger_config: { type: 'schedule' },
+    last_executed_at: '2026-04-15T08:00:00Z',
     created_at: '2026-02-01T00:00:00Z',
     updated_at: '2026-04-15T08:00:00Z',
   },
@@ -221,6 +223,16 @@ async function mockAccountPage(page: Page) {
   // the request from hanging and consuming the test timeout via waitForLoadState('networkidle')
   await page.route('**/api/v1/plaid/link-token*', (route) => {
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ link_token: 'test-link-token' }) })
+  })
+  // react-plaid-link loads cdn.plaid.com/link/stable/link-initialize.js when given a token.
+  // In CI this CDN request can hang for the full 30s test timeout, blocking networkidle.
+  // Return a minimal Plaid stub so the SDK initialises instantly without network activity.
+  await page.route('**/cdn.plaid.com/**', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/javascript',
+      body: 'window.Plaid={create:function(c){return{open:function(){},destroy:function(){},exit:function(){if(c&&c.onExit)c.onExit(null,{});}};}}',
+    })
   })
 }
 
