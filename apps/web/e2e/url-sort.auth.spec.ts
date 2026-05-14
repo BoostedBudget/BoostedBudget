@@ -217,6 +217,11 @@ async function mockAccountPage(page: Page) {
   await page.route('**/api/v1/linked-items*', (route) => {
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
   })
+  // PlaidLinkButton calls POST /api/v1/plaid/link-token on mount; mock it to prevent
+  // the request from hanging and consuming the test timeout via waitForLoadState('networkidle')
+  await page.route('**/api/v1/plaid/link-token*', (route) => {
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ link_token: 'test-link-token' }) })
+  })
 }
 
 async function mockBudgetPage(page: Page) {
@@ -277,7 +282,7 @@ test.describe('URL Sort — Transactions', () => {
     await page.goto('/transactions')
     await page.waitForLoadState('networkidle')
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
-    await amountHeader.getByRole('button', { name: 'Amount' }).click()
+    await amountHeader.getByRole('button', { name: /^Amount$/i }).click()
     await expect(page).toHaveURL(/sort=amount/)
     await expect(amountHeader).toHaveAttribute('aria-sort', /ascending|descending/)
   })
@@ -287,7 +292,7 @@ test.describe('URL Sort — Transactions', () => {
     await page.goto('/transactions')
     await page.waitForLoadState('networkidle')
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
-    await amountHeader.getByRole('button', { name: 'Amount' }).click()
+    await amountHeader.getByRole('button', { name: /^Amount$/i }).click()
     await expect(page).toHaveURL(/sort=amount/)
     const sortBefore = await amountHeader.getAttribute('aria-sort')
     await page.reload()
@@ -303,7 +308,7 @@ test.describe('URL Sort — Transactions', () => {
     await page.goto('/transactions')
     await page.waitForLoadState('networkidle')
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
-    await amountHeader.getByRole('button', { name: 'Amount' }).click()
+    await amountHeader.getByRole('button', { name: /^Amount$/i }).click()
     await expect(page).toHaveURL(/sort=amount/)
     // With replace semantics, back should exit /transactions entirely
     await page.goBack()
