@@ -39,8 +39,7 @@ export function RulesPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
-  // Get initial view from localStorage
-  const getInitialView = (): ListView => {
+  const [view, setView] = useState<ListView>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY_LIST_VIEW)
       if (stored === 'cards' || stored === 'table') {
@@ -50,14 +49,12 @@ export function RulesPage() {
       // Ignore localStorage errors
     }
     return 'cards'
-  }
-
-  const [view, setView] = useState<ListView>(getInitialView)
+  })
   const [deleteConfirm, setDeleteConfirm] = useState<AutomationRule | null>(null)
 
   const { sort, setSort } = useRuleFilters()
   const sortColumn = sort?.columnId as RuleSortColumn | undefined
-  const sortDirection: SortDirection = sort?.direction ?? 'asc'
+  const sortDirection: SortDirection = sort?.direction || 'asc'
 
   // Fetch rules
   const {
