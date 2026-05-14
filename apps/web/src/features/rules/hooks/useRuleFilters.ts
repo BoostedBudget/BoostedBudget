@@ -11,16 +11,8 @@ export interface UseRuleFiltersResult {
 }
 
 export function useRuleFilters(): UseRuleFiltersResult {
-  const { sort, setSort, resetSort, toggleSortColumn, isDefaultSort } = useSortUrlState({
+  return useSortUrlState({
     defaultSort: null,
     validColumns: RULE_SORTABLE_COLUMNS,
   })
-
-  return {
-    sort,
-    isDefaultSort,
-    setSort,
-    resetSort,
-    toggleSortColumn,
-  }
 }
