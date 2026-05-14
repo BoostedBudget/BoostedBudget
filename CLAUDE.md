@@ -121,7 +121,7 @@ Every implementation task MUST end with these steps in order:
 2. Run `code-simplifier` subagent to clean up code
 3. Run ALL tests to validate:
    cd backend && go test ./... -v
-   cd apps/web && bun run test && bun run lint
+   cd apps/web && bun run test && bun run typecheck && bun run lint
    cd apps/web && bun run test:e2e -- --reporter=line
 4. Run Codex adversarial review on changes for a second opinion (see below)
 5. Run `/commit-push-pr` to commit, push, and create PR with "Closes #N"
