@@ -317,6 +317,7 @@ test.describe('URL Sort — Transactions', () => {
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
     await amountHeader.getByRole('button', { name: /^Amount$/i }).click()
     await expect(page).toHaveURL(/sort=amount/)
+    await expect(amountHeader).toHaveAttribute('aria-sort', /ascending|descending/)
     const sortBefore = await amountHeader.getAttribute('aria-sort')
     await page.reload()
     await page.waitForLoadState('networkidle')
