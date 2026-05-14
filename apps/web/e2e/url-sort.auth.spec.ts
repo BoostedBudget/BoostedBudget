@@ -283,6 +283,24 @@ async function switchToTableView(page: Page) {
   await expect(page.getByRole('table')).toBeVisible({ timeout: 5000 })
 }
 
+// Verify sort persists after page reload
+async function verifySortPersistsAfterReload(
+  page: Page,
+  headerLocator: ReturnType<Page['getByRole']>
+) {
+  const sortBefore = await headerLocator.getAttribute('aria-sort')
+  await page.reload()
+  await page.waitForLoadState('networkidle')
+  await expect(page).toHaveURL(/sort=/)
+  await expect(headerLocator).toHaveAttribute('aria-sort', sortBefore!)
+}
+
+// Verify sort changes use replace semantics
+async function verifySortReplaceSemanticsForBackButton(page: Page) {
+  await page.goBack()
+  await expect(page).not.toHaveURL(/\/transactions|\/accounts|\/budgets|\/rules/)
+}
+
 // ---------------------------------------------------------------------------
 // Transactions (always table view)
 // ---------------------------------------------------------------------------
@@ -318,11 +336,7 @@ test.describe('URL Sort — Transactions', () => {
     await amountHeader.getByRole('button', { name: /^Amount$/i }).click()
     await expect(page).toHaveURL(/sort=amount/)
     await expect(amountHeader).toHaveAttribute('aria-sort', /ascending|descending/)
-    const sortBefore = await amountHeader.getAttribute('aria-sort')
-    await page.reload()
-    await page.waitForLoadState('networkidle')
-    await expect(page).toHaveURL(/sort=amount/)
-    await expect(amountHeader).toHaveAttribute('aria-sort', sortBefore!)
+    await verifySortPersistsAfterReload(page, amountHeader)
   })
 
   test('sort changes use replace semantics — back-button leaves the page', async ({ page }) => {
@@ -334,9 +348,7 @@ test.describe('URL Sort — Transactions', () => {
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
     await amountHeader.getByRole('button', { name: /^Amount$/i }).click()
     await expect(page).toHaveURL(/sort=amount/)
-    // With replace semantics, back should exit /transactions entirely
-    await page.goBack()
-    await expect(page).not.toHaveURL(/\/transactions/)
+    await verifySortReplaceSemanticsForBackButton(page)
   })
 
   test('clearAllFilters preserves sort', async ({ page }) => {
@@ -391,9 +403,8 @@ test.describe('URL Sort — Accounts', () => {
     const accountHeader = page.getByRole('columnheader', { name: /^account$/i })
     await accountHeader.locator('button').click()
     await expect(page).toHaveURL(/sort=name/)
-    await page.reload()
-    await page.waitForLoadState('networkidle')
-    await expect(page).toHaveURL(/sort=name/)
+    await expect(accountHeader).toHaveAttribute('aria-sort', /ascending|descending/)
+    await verifySortPersistsAfterReload(page, accountHeader)
   })
 
   test('sort changes use replace semantics — back-button leaves the page', async ({ page }) => {
@@ -405,8 +416,7 @@ test.describe('URL Sort — Accounts', () => {
     const accountHeader = page.getByRole('columnheader', { name: /^account$/i })
     await accountHeader.locator('button').click()
     await expect(page).toHaveURL(/sort=name/)
-    await page.goBack()
-    await expect(page).not.toHaveURL(/\/accounts/)
+    await verifySortReplaceSemanticsForBackButton(page)
   })
 })
 
@@ -447,9 +457,20 @@ test.describe('URL Sort — Budgets', () => {
     const nameHeader = page.getByRole('columnheader', { name: /^name$/i })
     await nameHeader.locator('button').click()
     await expect(page).toHaveURL(/sort=name/)
-    await page.reload()
+    await expect(nameHeader).toHaveAttribute('aria-sort', /ascending|descending/)
+    await verifySortPersistsAfterReload(page, nameHeader)
+  })
+
+  test('sort changes use replace semantics — back-button leaves the page', async ({ page }) => {
+    await mockBudgetPage(page)
+    await page.goto('/')
+    await page.goto('/budgets')
     await page.waitForLoadState('networkidle')
+    await switchToTableView(page)
+    const nameHeader = page.getByRole('columnheader', { name: /^name$/i })
+    await nameHeader.locator('button').click()
     await expect(page).toHaveURL(/sort=name/)
+    await verifySortReplaceSemanticsForBackButton(page)
   })
 })
 
@@ -490,8 +511,19 @@ test.describe('URL Sort — Rules', () => {
     const priorityHeader = page.getByRole('columnheader', { name: /priority/i })
     await priorityHeader.locator('button').click()
     await expect(page).toHaveURL(/sort=priority/)
-    await page.reload()
+    await expect(priorityHeader).toHaveAttribute('aria-sort', /ascending|descending/)
+    await verifySortPersistsAfterReload(page, priorityHeader)
+  })
+
+  test('sort changes use replace semantics — back-button leaves the page', async ({ page }) => {
+    await mockRulesPage(page)
+    await page.goto('/')
+    await page.goto('/rules')
     await page.waitForLoadState('networkidle')
+    await switchToTableView(page)
+    const priorityHeader = page.getByRole('columnheader', { name: /priority/i })
+    await priorityHeader.locator('button').click()
     await expect(page).toHaveURL(/sort=priority/)
+    await verifySortReplaceSemanticsForBackButton(page)
   })
 })
