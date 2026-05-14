@@ -170,9 +170,15 @@ export function RulesPage() {
         case 'trigger':
           comparison = (a.trigger_config?.type ?? '').localeCompare(b.trigger_config?.type ?? '')
           break
-        case 'lastRun':
-          comparison = (a.last_executed_at ?? '').localeCompare(b.last_executed_at ?? '')
+        case 'lastRun': {
+          const aRun = a.last_executed_at ?? null
+          const bRun = b.last_executed_at ?? null
+          if (aRun === null && bRun === null) { comparison = 0; break }
+          if (aRun === null) { comparison = 1; break }
+          if (bRun === null) { comparison = -1; break }
+          comparison = aRun.localeCompare(bRun)
           break
+        }
         case 'priority':
           comparison = a.priority - b.priority
           break
