@@ -39,6 +39,12 @@ make generate-all           # Both
 make migrate-up/down/status
 make -C backend migrate-create NAME=add_table
 ./scripts/test-migrations.sh  # 5 test suites (idempotency, perf, data, schema, rollback)
+
+# Performance
+make lighthouse             # Lighthouse CI audit (local, builds frontend first)
+make check-bundle-size      # Bundle size check against .size-limit.json budgets
+make perf-check             # Both lighthouse + bundle size
+# See apps/web/README.md § "Bundle-size budgets" for per-route policy and budget maintenance.
 ```
 
 ## Architecture
