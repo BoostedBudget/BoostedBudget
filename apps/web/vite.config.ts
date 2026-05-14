@@ -63,16 +63,14 @@ export default defineConfig({
           if (id.includes('node_modules')) return 'vendor';
 
           if (!id.includes('/apps/web/src/')) return;
-          if (id.includes('/features/legal/') || /PrivacyPolicy|TermsOfService|CookiePolicy/.test(id)) return 'legal';
+          if (id.includes('/legal/')) return 'legal';
           if (id.includes('/features/admin/') || id.includes('AdminLayout')) return 'admin';
-          if (id.includes('/features/billing/') || /PricingPage|SubscriptionManagement|CheckoutSuccess/.test(id)) return 'billing';
+          if (id.includes('/features/billing/') || id.includes('/features/pricing/') || id.includes('/features/subscription/')) return 'billing';
           if (id.includes('/features/transactions/')) return 'transactions';
           if (id.includes('/features/accounts/')) return 'accounts';
           if (id.includes('/features/budgets/')) return 'budgets';
           if (id.includes('/features/rules/')) return 'rules';
-          if (id.includes('/features/reports/') || id.includes('SpendingReports')) return 'reports';
-          if (id.includes('/features/net-worth/') || id.includes('NetWorth')) return 'net-worth';
-          if (id.includes('/features/savings/')) return 'savings';
+          if (id.includes('/features/net-worth/')) return 'net-worth';
           if (id.includes('/features/dashboard/')) return 'dashboard';
           if (id.includes('/features/auto-categorization/') || id.includes('AutoCategorization')) return 'auto-categorization';
           if (id.includes('/features/profile/') || id.includes('ProfilePage')) return 'profile';
