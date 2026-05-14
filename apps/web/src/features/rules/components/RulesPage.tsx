@@ -6,7 +6,7 @@
  * Supports card and table views.
  */
 
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
@@ -28,7 +28,8 @@ import type { ListView } from '@/shared/components/ListViewToggle'
 import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { RuleCard } from './RuleCard'
-import { RuleTable } from './RuleTable'
+import { RuleTable, type SortColumn as RuleSortColumn, type SortDirection } from './RuleTable'
+import { useRuleFilters } from '../hooks/useRuleFilters'
 
 /**
  * RulesPage displays the list of automation rules with card/table toggle.
@@ -38,8 +39,7 @@ export function RulesPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
-  // Get initial view from localStorage
-  const getInitialView = (): ListView => {
+  const [view, setView] = useState<ListView>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY_LIST_VIEW)
       if (stored === 'cards' || stored === 'table') {
@@ -49,10 +49,12 @@ export function RulesPage() {
       // Ignore localStorage errors
     }
     return 'cards'
-  }
-
-  const [view, setView] = useState<ListView>(getInitialView)
+  })
   const [deleteConfirm, setDeleteConfirm] = useState<AutomationRule | null>(null)
+
+  const { sort, setSort } = useRuleFilters()
+  const sortColumn = sort?.columnId as RuleSortColumn | undefined
+  const sortDirection: SortDirection = sort?.direction || 'asc'
 
   // Fetch rules
   const {
@@ -62,7 +64,7 @@ export function RulesPage() {
     refetch,
   } = useGetAutomationRules()
 
-  const rules = data ?? []
+  const rules = useMemo(() => data ?? [], [data])
 
   // Mutations
   // Issue #579: Optimistic updates for toggle - UI updates immediately, rollback on error
@@ -146,6 +148,44 @@ export function RulesPage() {
   const handleDeleteCancel = useCallback(() => {
     setDeleteConfirm(null)
   }, [])
+
+  const handleSort = useCallback((column: RuleSortColumn, direction: SortDirection) => {
+    setSort({ columnId: column, direction })
+  }, [setSort])
+
+  const sortedRules = useMemo(() => {
+    if (!sortColumn) return rules
+    return [...rules].sort((a, b) => {
+      let comparison = 0
+      switch (sortColumn) {
+        case 'name':
+          comparison = a.name.localeCompare(b.name)
+          break
+        case 'type':
+          comparison = a.rule_type.localeCompare(b.rule_type)
+          break
+        case 'status':
+          comparison = Number(a.enabled) - Number(b.enabled)
+          break
+        case 'trigger':
+          comparison = (a.trigger_config?.type ?? '').localeCompare(b.trigger_config?.type ?? '')
+          break
+        case 'lastRun': {
+          const aRun = a.last_executed_at ?? null
+          const bRun = b.last_executed_at ?? null
+          if (aRun === null && bRun === null) { comparison = 0; break }
+          if (aRun === null) { comparison = 1; break }
+          if (bRun === null) { comparison = -1; break }
+          comparison = aRun.localeCompare(bRun)
+          break
+        }
+        case 'priority':
+          comparison = a.priority - b.priority
+          break
+      }
+      return sortDirection === 'asc' ? comparison : -comparison
+    })
+  }, [rules, sortColumn, sortDirection])
 
   const handleViewChange = useCallback((newView: ListView) => {
     setView(newView)
@@ -262,12 +302,16 @@ export function RulesPage() {
           </div>
         ) : (
           <RuleTable
-            rules={rules}
+            rules={sortedRules}
             onEdit={handleEditRule}
             onDelete={handleDeleteClick}
             onToggle={handleToggleRule}
             onTest={handleTestRule}
             loading={toggleMutation.isPending || deleteMutation.isPending || testMutation.isPending}
+            sortable
+            sortColumn={sortColumn}
+            sortDirection={sortDirection}
+            onSort={handleSort}
           />
         )}
       </div>

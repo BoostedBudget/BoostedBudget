@@ -258,4 +258,65 @@ describe('useBudgetFilters', () => {
       expect(result.current.periodFilter).toEqual(['monthly'])
     })
   })
+
+  describe('Sort (URL-persisted)', () => {
+    it('returns null sort when no URL param', () => {
+      const { result } = renderHook(() => useBudgetFilters(), { wrapper: createWrapper() })
+      expect(result.current.sort).toBeNull()
+      expect(result.current.isDefaultSort).toBe(true)
+    })
+
+    it('parses sort from URL', () => {
+      const { result } = renderHook(() => useBudgetFilters(), {
+        wrapper: createWrapper('/?sort=amount%3Adesc'),
+      })
+      expect(result.current.sort).toEqual({ columnId: 'amount', direction: 'desc' })
+    })
+
+    it('setSort updates sort', () => {
+      const { result } = renderHook(() => useBudgetFilters(), { wrapper: createWrapper() })
+      act(() => {
+        result.current.setSort({ columnId: 'progress', direction: 'asc' })
+      })
+      expect(result.current.sort).toEqual({ columnId: 'progress', direction: 'asc' })
+    })
+
+    it('resetSort restores null default', () => {
+      const { result } = renderHook(() => useBudgetFilters(), {
+        wrapper: createWrapper('/?sort=amount%3Aasc'),
+      })
+      act(() => {
+        result.current.resetSort()
+      })
+      expect(result.current.sort).toBeNull()
+    })
+
+    it('clearAllFilters preserves sort', () => {
+      const { result } = renderHook(() => useBudgetFilters(), {
+        wrapper: createWrapper('/?period=monthly&sort=amount%3Adesc'),
+      })
+      act(() => {
+        result.current.clearAllFilters()
+      })
+      expect(result.current.periodFilter).toEqual([])
+      expect(result.current.sort).toEqual({ columnId: 'amount', direction: 'desc' })
+    })
+
+    it('clearAllFilters({ includeSort: true }) clears sort too', () => {
+      const { result } = renderHook(() => useBudgetFilters(), {
+        wrapper: createWrapper('/?sort=amount%3Adesc'),
+      })
+      act(() => {
+        result.current.clearAllFilters({ includeSort: true })
+      })
+      expect(result.current.sort).toBeNull()
+    })
+
+    it('activeFilterCount does not count sort', () => {
+      const { result } = renderHook(() => useBudgetFilters(), {
+        wrapper: createWrapper('/?sort=amount%3Adesc&period=monthly'),
+      })
+      expect(result.current.activeFilterCount).toBe(1)
+    })
+  })
 })

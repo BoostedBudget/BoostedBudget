@@ -8,6 +8,7 @@ import { useTransactionFilters } from './hooks/useTransactionFilters'
 import { TransactionTable } from './components/TransactionTable'
 import type { TransactionSortColumn, SortDirection } from './hooks/useTransactions'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
+
 import { TransactionEditor } from './components/TransactionEditor'
 import { TransactionFilterPanel } from './components/TransactionFilterPanel'
 import { useGetUserTags, getGetUserTagsQueryKey } from '@boostedbudget/api-client/endpoints/tags/tags'
@@ -22,13 +23,10 @@ import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { formatPFCPrimary } from '@/shared/categories/formatPfc'
 
-/**
- * Transactions Page — displays transactions with filtering, search, and pagination.
- * Issue #529: Transaction page filtering
- */
 export function TransactionsPage() {
   const {
     filters,
+    sort,
     datePreset,
     statusFilter,
     activeFilterCount,
@@ -37,10 +35,14 @@ export function TransactionsPage() {
     setFilters,
     clearFilter,
     clearAllFilters,
+    setSort,
     setDatePreset,
     setCustomDateRange,
     setStatusFilter,
   } = useTransactionFilters()
+
+  const sortColumn = (sort?.columnId ?? 'date') as TransactionSortColumn
+  const sortDirection = (sort?.direction ?? 'desc') as SortDirection
 
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
   const [isEditorOpen, setIsEditorOpen] = useState(false)
@@ -52,11 +54,6 @@ export function TransactionsPage() {
     trackEvent(ANALYTICS_EVENTS.TRANSACTIONS_VIEWED)
   }, [trackEvent])
 
-  // Sort state — server-side (#1123). Default matches backend default.
-  const [sortColumn, setSortColumn] = useState<TransactionSortColumn>('date')
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
-
-  // Fetch available tags, categories, accounts, and curated PFC primaries
   const { data: tagsData } = useGetUserTags()
   const { data: categoriesData } = useGetUserCategories()
   const { accounts: accountsList } = useActiveAccounts()
@@ -85,7 +82,6 @@ export function TransactionsPage() {
     }))
   }, [accountsList])
 
-  // Inline filter callbacks
   const handleAccountFilterChange = useCallback(
     (value: string[]) => {
       setFilter('account_ids', value.length > 0 ? value : undefined)
@@ -119,7 +115,6 @@ export function TransactionsPage() {
     [filters, setFilters]
   )
 
-  // Get current amount range from filters
   const currentAmountRange = useMemo<RangeValue | null>(() => {
     if (filters.min_amount !== undefined || filters.max_amount !== undefined) {
       return {
@@ -143,9 +138,6 @@ export function TransactionsPage() {
     currentPage,
   } = useTransactions({ filters, limit: 50, sortBy: sortColumn, sortDir: sortDirection })
 
-  // Category filter options: curated PFC primaries + observed effective primaries.
-  // Values are raw enum strings (e.g. "FOOD_AND_DRINK") so they match the pfc_primary
-  // column; labels are human-readable display strings.
   const categoryOptions = useMemo<FilterOption[]>(() => {
     const enumToDisplay = new Map<string, string>()
 
@@ -200,7 +192,6 @@ export function TransactionsPage() {
     setIsEditorOpen(true)
   }
 
-  // Handle search input change
   function handleSearchChange(event: React.ChangeEvent<HTMLInputElement>) {
     const searchValue = event.target.value
     setFilter('search', searchValue || undefined) // Remove if empty
@@ -213,15 +204,15 @@ export function TransactionsPage() {
     }
   }
 
-  // Calculate pending count from transactions data
   const pendingCount = data?.transactions?.filter((t) => t.pending).length ?? 0
 
-  const handleSort = useCallback((column: TransactionSortColumn, direction: SortDirection) => {
-    setSortColumn(column)
-    setSortDirection(direction)
-  }, [])
+  const handleSort = useCallback(
+    (column: TransactionSortColumn, direction: SortDirection) => {
+      setSort({ columnId: column, direction })
+    },
+    [setSort],
+  )
 
-  // Loading state
   if (loading && !data) {
     return (
       <main className="p-8 max-w-[1200px] mx-auto">
@@ -230,7 +221,6 @@ export function TransactionsPage() {
     )
   }
 
-  // Error state
   if (error) {
     return (
       <main className="p-8 max-w-[1200px] mx-auto">
@@ -277,7 +267,7 @@ export function TransactionsPage() {
         onCustomDateChange={setCustomDateRange}
         onStatusFilterChange={setStatusFilter}
         onClearFilter={clearFilter}
-        onClearAllFilters={clearAllFilters}
+        onClearAllFilters={() => clearAllFilters()}
         disabled={loading}
       />
 
@@ -294,7 +284,7 @@ export function TransactionsPage() {
           }
           action={
             hasActiveFilters ? (
-              <Button variant="outline" size="sm" onClick={clearAllFilters}>
+              <Button variant="outline" size="sm" onClick={() => clearAllFilters()}>
                 Clear all filters
               </Button>
             ) : undefined

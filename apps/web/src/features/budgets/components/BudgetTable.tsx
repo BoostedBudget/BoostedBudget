@@ -11,6 +11,15 @@ import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterD
 export type SortColumn = 'name' | 'period' | 'amount' | 'progress' | 'remaining'
 export type SortDirection = 'asc' | 'desc'
 
+// eslint-disable-next-line react-refresh/only-export-components
+export const BUDGET_SORTABLE_COLUMNS = new Set([
+  'name',
+  'period',
+  'amount',
+  'progress',
+  'remaining',
+] as const)
+
 export interface BudgetTableProps {
   budgets: BudgetWithMetrics[]
   onManage?: (budget: BudgetWithMetrics) => void
