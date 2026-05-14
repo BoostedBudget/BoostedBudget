@@ -73,7 +73,7 @@ export default defineConfig({
           if (id.includes('/features/net-worth/')) return 'net-worth';
           if (id.includes('/features/dashboard/')) return 'dashboard';
           if (id.includes('/features/auto-categorization/')) return 'auto-categorization';
-          if (id.includes('/features/profile/')) return 'profile';
+          if (id.includes('/features/profile/') || id.includes('/features/deletion/')) return 'profile';
         },
       },
     },

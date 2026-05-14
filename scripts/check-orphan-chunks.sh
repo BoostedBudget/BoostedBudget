@@ -25,7 +25,9 @@ KNOWN=$(grep -oE '"apps/web/dist/assets/[^"]+\.js"' .size-limit.json \
 ORPHANS=0
 for f in "$DIST"/*.js; do
   base=$(basename "$f")
-  prefix="${base%-*}"  # strips -[hash].js suffix (last dash segment)
+  # Strip Vite content-hash suffix: -[8 base64url chars].js
+  # Vite hashes are 8 chars from [A-Za-z0-9_-], e.g. -DGj_IzSb.js or -Bl13-G5I.js
+  prefix=$(echo "$base" | sed 's/-[A-Za-z0-9_-]\{8\}\.js$//')
   if ! printf '%s\n' "$KNOWN" | grep -qx "$prefix"; then
     echo "❌ ORPHAN CHUNK (no size-limit entry): $base"
     ORPHANS=$((ORPHANS + 1))
