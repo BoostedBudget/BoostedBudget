@@ -810,3 +810,43 @@ jobs:
       - name: Final workspace cleanup
         if: always()
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+  # ===========================================================================
+  # Bundle Size Check (size-limit + orphan-chunk guard)
+  # ===========================================================================
+  # Hard fails if any JS chunk exceeds its per-route budget OR if a Rollup-emitted
+  # chunk has no budget entry at all. Budgets set at baseline + 20% (vendor +25%).
+  bundle-size:
+    name: Bundle Size Check
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-bundle-size-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+          fetch-depth: 1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install workspace dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bun install --frozen-lockfile
+
+      - name: Check bundle size
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: make check-bundle-size
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
