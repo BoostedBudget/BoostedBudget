@@ -64,7 +64,7 @@ export default defineConfig({
 
           if (!id.includes('/apps/web/src/')) return;
           if (id.includes('/legal/')) return 'legal';
-          if (id.includes('/features/admin/') || id.includes('AdminLayout')) return 'admin';
+          if (id.includes('/features/admin/')) return 'admin';
           if (id.includes('/features/billing/') || id.includes('/features/pricing/') || id.includes('/features/subscription/')) return 'billing';
           if (id.includes('/features/transactions/')) return 'transactions';
           if (id.includes('/features/accounts/')) return 'accounts';
@@ -72,8 +72,8 @@ export default defineConfig({
           if (id.includes('/features/rules/')) return 'rules';
           if (id.includes('/features/net-worth/')) return 'net-worth';
           if (id.includes('/features/dashboard/')) return 'dashboard';
-          if (id.includes('/features/auto-categorization/') || id.includes('AutoCategorization')) return 'auto-categorization';
-          if (id.includes('/features/profile/') || id.includes('ProfilePage')) return 'profile';
+          if (id.includes('/features/auto-categorization/')) return 'auto-categorization';
+          if (id.includes('/features/profile/')) return 'profile';
         },
       },
     },
