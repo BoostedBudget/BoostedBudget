@@ -227,7 +227,9 @@ async function mockAccountPage(page: Page) {
   // react-plaid-link loads cdn.plaid.com/link/stable/link-initialize.js when given a token.
   // In CI this CDN request can hang for the full 30s test timeout, blocking networkidle.
   // Return a minimal Plaid stub so the SDK initialises instantly without network activity.
-  await page.route('**/cdn.plaid.com/**', (route) => {
+  // Use a RegExp so the pattern reliably matches the full https:// URL (glob ** can misparse
+  // the double-slash in https:// depending on the Playwright version).
+  await page.route(/cdn\.plaid\.com/, (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/javascript',
