@@ -1,7 +1,8 @@
 /**
  * AutoCategorizationRuleTable Component
  * Issue #584: Unified Card/Table View System
- * Issue #1143: Migrate to shared DataTable (~-300 LOC)
+ * Issue #1143: Migrate to shared DataTable (actual ~-30 LOC net; rich rowActions
+ * JSX and column render functions absorbed the raw-table structural savings)
  *
  * Displays auto-categorization rules in a table format with sorting and actions.
  *
@@ -175,15 +176,17 @@ export function AutoCategorizationRuleTable({
 
   const handleFiltersChange = useCallback(
     (f: FilterState) => {
-      if (onStatusFilterChange) {
+      // Only fire a callback when its key is present in f — guards against spurious resets
+      // when an unrelated column's filter changes (DataTable emits the full merged FilterState).
+      if (onStatusFilterChange && 'status' in f) {
         const v = f.status
         onStatusFilterChange(Array.isArray(v) ? v : [])
       }
-      if (onCategoryFilterChange) {
+      if (onCategoryFilterChange && 'category' in f) {
         const v = f.category
         onCategoryFilterChange(Array.isArray(v) ? v : [])
       }
-      if (onPriorityRangeChange) {
+      if (onPriorityRangeChange && 'priority' in f) {
         const v = f.priority
         onPriorityRangeChange(!Array.isArray(v) ? (v as RangeValue ?? null) : null)
       }
@@ -194,16 +197,6 @@ export function AutoCategorizationRuleTable({
   const handleToggle = useCallback(
     (rule: CategorizationRule) => {
       if (onToggle && !loading) onToggle(rule, !rule.enabled)
-    },
-    [onToggle, loading]
-  )
-
-  const handleToggleKeyDown = useCallback(
-    (e: React.KeyboardEvent, rule: CategorizationRule) => {
-      if (e.key === ' ' || e.key === 'Enter') {
-        e.preventDefault()
-        if (onToggle && !loading) onToggle(rule, !rule.enabled)
-      }
     },
     [onToggle, loading]
   )
@@ -297,7 +290,9 @@ export function AutoCategorizationRuleTable({
       sortAccessor: (r) => r.match_count,
       key: 'match_count' as keyof CategorizationRule,
     },
-  ], [sortable, statusOptions, categoryOptions, onPriorityRangeChange])
+  // Use a boolean flag in deps — the function reference changes every parent render
+  // but presence/absence is what gates the range filter config on the priority column.
+  ], [sortable, statusOptions, categoryOptions, !!onPriorityRangeChange])
 
   // Pre-filters empty state: no data and no active filters → return external div
   if (rules.length === 0 && !hasActiveFilters) {
@@ -337,7 +332,7 @@ export function AutoCategorizationRuleTable({
               role="switch"
               aria-checked={rule.enabled}
               onClick={() => handleToggle(rule)}
-              onKeyDown={(e) => handleToggleKeyDown(e, rule)}
+              onKeyDown={(e) => { if (e.key === ' ') e.preventDefault() }}
               disabled={loading}
               className={cn(
                 'relative h-5 w-10 cursor-pointer rounded-full border-none p-0 transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-50',

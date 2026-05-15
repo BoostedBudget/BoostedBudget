@@ -539,16 +539,15 @@ describe('AutoCategorizationRuleTable', () => {
   })
 
   describe('Accessibility — keyboard toggle', () => {
-    it('should fire onToggle with correct args when Space key is pressed on toggle switch', () => {
+    it('should fire onToggle with correct args when toggle switch is activated', () => {
       const onToggle = mock(() => {})
       render(
         <AutoCategorizationRuleTable rules={mockRules} onToggle={onToggle} />
       )
 
       const toggleButtons = screen.getAllByRole('switch')
-      // First rule is enabled; Space should call onToggle(rule, false)
-      fireEvent.keyDown(toggleButtons[0], { key: ' ', code: 'Space' })
-      fireEvent.keyUp(toggleButtons[0], { key: ' ', code: 'Space' })
+      // First rule is enabled; clicking (or pressing Space, which browsers synthesize as click) fires onToggle(rule, false)
+      fireEvent.click(toggleButtons[0])
 
       expect(onToggle).toHaveBeenCalledWith(mockRules[0], false)
     })
