@@ -820,3 +820,189 @@ describe('column resize', () => {
   // Manual verification: confirm `column_resized` event fires with { column_id, new_width } in
   // PostHog dashboard after dragging or keyboard-resizing a column header in staging/prod.
 })
+
+// Phase 3b: Column Reorder
+describe('column reorder', () => {
+  const reorderableColumns: ColumnDef<Row>[] = [
+    { id: 'name', header: 'Name', key: 'name', reorderable: true },
+    { id: 'amount', header: 'Amount', key: 'amount', reorderable: true },
+  ]
+
+  it('renders drag handle when reorderable:true; NOT rendered when reorderable is absent', () => {
+    const mixedColumns: ColumnDef<Row>[] = [
+      { id: 'name', header: 'Name', key: 'name', reorderable: true },
+      { id: 'amount', header: 'Amount', key: 'amount' },
+    ]
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={mixedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handles = container.querySelectorAll('[data-testid="drag-handle"]')
+    expect(handles.length).toBe(1)
+  })
+
+  it('drag handle has aria-pressed=false when not dragging', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelectorAll('[data-testid="drag-handle"]')[0]!
+    expect(handle.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('Space key picks up column: aria-pressed becomes true and aria-live announces pickup', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelectorAll('[data-testid="drag-handle"]')[0]!
+    fireEvent.keyDown(handle, { key: ' ' })
+    expect(handle.getAttribute('aria-pressed')).toBe('true')
+    const liveRegion = container.querySelector('[aria-live="polite"]')!
+    expect(liveRegion.textContent).toMatch(/Picked up column Name/i)
+  })
+
+  it('ArrowRight moves picked-up column one position right; live region updates', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handles = container.querySelectorAll('[data-testid="drag-handle"]')
+    const nameHandle = handles[0]!
+    fireEvent.keyDown(nameHandle, { key: ' ' })        // pick up
+    fireEvent.keyDown(nameHandle, { key: 'ArrowRight' }) // move right
+    const liveRegion = container.querySelector('[aria-live="polite"]')!
+    expect(liveRegion.textContent).toMatch(/position 2/i)
+  })
+
+  it('Space again drops the column and calls onColumnOrderChange', () => {
+    const onColumnOrderChange = mock((_: string[]) => {})
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        onColumnOrderChange={onColumnOrderChange}
+      />
+    )
+    const handles = container.querySelectorAll('[data-testid="drag-handle"]')
+    const nameHandle = handles[0]!
+    fireEvent.keyDown(nameHandle, { key: ' ' })          // pick up
+    fireEvent.keyDown(nameHandle, { key: 'ArrowRight' }) // move
+    fireEvent.keyDown(nameHandle, { key: ' ' })          // drop
+    expect(onColumnOrderChange).toHaveBeenCalledTimes(1)
+    expect(onColumnOrderChange.mock.calls[0][0]).toEqual(['amount', 'name'])
+  })
+
+  it('Escape cancels reorder: column returns to original position, live announces cancel', () => {
+    const onColumnOrderChange = mock((_: string[]) => {})
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        onColumnOrderChange={onColumnOrderChange}
+      />
+    )
+    const handles = container.querySelectorAll('[data-testid="drag-handle"]')
+    const nameHandle = handles[0]!
+    fireEvent.keyDown(nameHandle, { key: ' ' })          // pick up
+    fireEvent.keyDown(nameHandle, { key: 'ArrowRight' }) // move
+    fireEvent.keyDown(nameHandle, { key: 'Escape' })     // cancel
+    // onColumnOrderChange must NOT have been called
+    expect(onColumnOrderChange).not.toHaveBeenCalled()
+    const liveRegion = container.querySelector('[aria-live="polite"]')!
+    expect(liveRegion.textContent).toMatch(/Cancelled/i)
+  })
+
+  it('ArrowRight does nothing when not in dragging mode', () => {
+    const onColumnOrderChange = mock((_: string[]) => {})
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        onColumnOrderChange={onColumnOrderChange}
+      />
+    )
+    const handle = container.querySelectorAll('[data-testid="drag-handle"]')[0]!
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    expect(onColumnOrderChange).not.toHaveBeenCalled()
+  })
+
+  it('controlled mode: accepts columnOrder and renders columns in given order', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnOrder={['amount', 'name']}
+      />
+    )
+    const ths = container.querySelectorAll('th')
+    // First column header should be Amount
+    expect(ths[0].textContent).toContain('Amount')
+    expect(ths[1].textContent).toContain('Name')
+  })
+
+  it('aria-live region exists in DOM for screen reader announcements', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const liveRegion = container.querySelector('[aria-live="polite"]')
+    expect(liveRegion).not.toBeNull()
+    expect(liveRegion!.getAttribute('aria-atomic')).toBe('true')
+  })
+})
