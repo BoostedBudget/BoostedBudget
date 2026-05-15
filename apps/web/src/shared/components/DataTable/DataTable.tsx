@@ -3,11 +3,14 @@ import { cva } from 'class-variance-authority'
 import { cn } from '@/lib/utils'
 import { TableHeaderCell } from '../TableHeaderCell'
 import type { RangeValue } from '../ColumnFilterDropdown'
+import {
+  useReactTable,
+  getCoreRowModel,
+} from '@/shared/lib/tanstack'
 import type { DataTableProps, SortState, SortDirection, ColumnDef } from './types'
-// Pre-import TanStack re-exports so the tanstack manualChunk is emitted even before
-// Phase 1 migration wires up the full headless API. Runtime cost: zero (tree-shaken by Rollup since no exported values are consumed here).
-// See docs/decisions/2026-05-15-tanstack-table-adoption.md § Bundle strategy.
-import '@/shared/lib/tanstack'
+import { bbSortToTanStack, tanStackSortToBb } from './adapters/sortAdapter'
+import { bbFiltersToTanStack, tanStackFiltersToBb } from './adapters/filterAdapter'
+import { bbColumnsToTanStack } from './adapters/columnAdapter'
 
 const tableVariants = cva(
   'w-full border-collapse overflow-visible rounded-lg border border-border bg-card',
@@ -117,6 +120,9 @@ export function DataTable<T,>({
   rowClassName,
   maskedColumnIds = [],
   rowActions,
+  // rowSelection and onRowSelectionChange accepted but UI not yet implemented (Phase 1 skeleton)
+  rowSelection: _rowSelection,
+  onRowSelectionChange: _onRowSelectionChange,
 }: DataTableProps<T>) {
   const totalCols = columns.length + (rowActions ? 1 : 0)
 
@@ -140,6 +146,37 @@ export function DataTable<T,>({
     },
     [filters, onFiltersChange]
   )
+
+  // Wire up TanStack's useReactTable for state management.
+  // manualSorting/manualFiltering/manualPagination = true → we own data fetching.
+  // We still render our own <td> markup (never flexRender) to keep data-ph-mask in our control.
+  const table = useReactTable({
+    data,
+    columns: bbColumnsToTanStack(columns),
+    getCoreRowModel: getCoreRowModel(),
+    manualSorting: true,
+    manualFiltering: true,
+    manualPagination: true,
+    state: {
+      sorting: bbSortToTanStack(sort),
+      columnFilters: bbFiltersToTanStack(filters),
+    },
+    onSortingChange: (updater) => {
+      const prevSorting = bbSortToTanStack(sort)
+      const nextSorting =
+        typeof updater === 'function' ? updater(prevSorting) : updater
+      onSortChange(tanStackSortToBb(nextSorting))
+    },
+    onColumnFiltersChange: (updater) => {
+      const prevFilters = bbFiltersToTanStack(filters)
+      const nextFilters =
+        typeof updater === 'function' ? updater(prevFilters) : updater
+      onFiltersChange(tanStackFiltersToBb(nextFilters))
+    },
+  })
+
+  // Use TanStack's row model for iteration — row.original gives back the typed T.
+  const rows = table.getRowModel().rows
 
   return (
     <table
@@ -177,52 +214,55 @@ export function DataTable<T,>({
         </tr>
       </thead>
       <tbody>
-        {data.length === 0 ? (
+        {rows.length === 0 ? (
           <tr>
             <td colSpan={totalCols}>{emptyState}</td>
           </tr>
         ) : (
-          data.map((row) => (
-            <tr
-              key={rowKey(row)}
-              className={cn(
-                'transition-colors',
-                onRowClick && 'cursor-pointer hover:bg-muted/50',
-                rowClassName?.(row)
-              )}
-              onClick={onRowClick ? () => onRowClick(row) : undefined}
-            >
-              {columns.map((col) => {
-                const isMasked = maskedColumnIds.includes(col.id)
-                const content = col.render
-                  ? col.render(row)
-                  : col.key !== undefined
-                    ? String(row[col.key] ?? '')
-                    : null
+          rows.map((tanStackRow) => {
+            const row = tanStackRow.original
+            return (
+              <tr
+                key={rowKey(row)}
+                className={cn(
+                  'transition-colors',
+                  onRowClick && 'cursor-pointer hover:bg-muted/50',
+                  rowClassName?.(row)
+                )}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+              >
+                {columns.map((col) => {
+                  const isMasked = maskedColumnIds.includes(col.id)
+                  const content = col.render
+                    ? col.render(row)
+                    : col.key !== undefined
+                      ? String(row[col.key] ?? '')
+                      : null
 
-                return (
+                  return (
+                    <td
+                      key={col.id}
+                      className={bodyCellVariants({
+                        align: col.align,
+                        numeric: col.numeric ?? false,
+                      })}
+                      {...(isMasked && { 'data-ph-mask': '' })}
+                    >
+                      {content}
+                    </td>
+                  )
+                })}
+                {rowActions && (
                   <td
-                    key={col.id}
-                    className={bodyCellVariants({
-                      align: col.align,
-                      numeric: col.numeric ?? false,
-                    })}
-                    {...(isMasked && { 'data-ph-mask': '' })}
+                    className={bodyCellVariants({ align: 'right' })}
+                    onClick={(e) => e.stopPropagation()}
                   >
-                    {content}
+                    {rowActions(row)}
                   </td>
-                )
-              })}
-              {rowActions && (
-                <td
-                  className={bodyCellVariants({ align: 'right' })}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {rowActions(row)}
-                </td>
-              )}
-            </tr>
-          ))
+                )}
+              </tr>
+            )
+          })
         )}
       </tbody>
     </table>

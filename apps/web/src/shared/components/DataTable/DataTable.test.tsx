@@ -462,6 +462,83 @@ describe('onRowClick', () => {
   })
 })
 
+// ── Phase 1 Addition: PII mask retention ─────────────────────────────────────
+describe('maskedColumnIds data-ph-mask attribute', () => {
+  it('column with render function + in maskedColumnIds → td has data-ph-mask', () => {
+    const columns: ColumnDef<Row>[] = [
+      {
+        id: 'name',
+        header: 'Name',
+        render: (row) => <span>{row.name}</span>,
+      },
+    ]
+    const { container } = renderTable({ columns, maskedColumnIds: ['name'] })
+    const tds = container.querySelectorAll('td[data-ph-mask]')
+    expect(tds.length).toBe(rows.length)
+  })
+
+  it('column with key (no render) + in maskedColumnIds → td has data-ph-mask', () => {
+    const columns: ColumnDef<Row>[] = [
+      { id: 'amount', header: 'Amount', key: 'amount' },
+    ]
+    const { container } = renderTable({ columns, maskedColumnIds: ['amount'] })
+    const tds = container.querySelectorAll('td[data-ph-mask]')
+    expect(tds.length).toBe(rows.length)
+  })
+
+  it('column NOT in maskedColumnIds → td has NO data-ph-mask', () => {
+    const columns: ColumnDef<Row>[] = [
+      { id: 'name', header: 'Name', key: 'name' },
+    ]
+    const { container } = renderTable({ columns, maskedColumnIds: ['amount'] })
+    const tds = container.querySelectorAll('td')
+    for (const td of tds) {
+      expect(td.hasAttribute('data-ph-mask')).toBe(false)
+    }
+  })
+
+  it('null/undefined cell value in masked column → td still has data-ph-mask', () => {
+    type NullRow = { id: string; val: string | null }
+    const nullRows: NullRow[] = [{ id: '1', val: null }]
+    const columns: ColumnDef<NullRow>[] = [
+      { id: 'val', header: 'Val', key: 'val' },
+    ]
+    const { container } = render(
+      <DataTable<NullRow>
+        data={nullRows}
+        columns={columns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        maskedColumnIds={['val']}
+      />
+    )
+    const tds = container.querySelectorAll('td[data-ph-mask]')
+    expect(tds.length).toBe(1)
+  })
+})
+
+// ── Phase 1 Addition: rowSelection API skeleton ───────────────────────────────
+describe('rowSelection prop', () => {
+  it('DataTable without rowSelection renders no checkbox column', () => {
+    const { container } = renderTable()
+    const checkboxes = container.querySelectorAll('input[type="checkbox"]')
+    expect(checkboxes.length).toBe(0)
+  })
+
+  it('DataTable with rowSelection={{}} renders without crashing', () => {
+    const onRowSelectionChange = mock((_: Record<string, boolean>) => {})
+    expect(() =>
+      renderTable({
+        rowSelection: {},
+        onRowSelectionChange,
+      } as Parameters<typeof renderTable>[0])
+    ).not.toThrow()
+  })
+})
+
 // ── Critical Regression Test 8 ───────────────────────────────────────────────
 // Server-side filter boundary contract: DataTable never calls APIs.
 // It only emits via onFiltersChange — parents decide whether that triggers
