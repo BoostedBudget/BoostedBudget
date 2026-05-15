@@ -296,6 +296,31 @@ describe('useTablePreferences', () => {
     })
   })
 
+  // Test: two setters fired in sequence — neither save should lose the other's value
+  describe('concurrent setter writes', () => {
+    it('firing onSizingChange then onColumnOrderChange preserves both values in localStorage', () => {
+      mockUseUser.mockReturnValue({
+        user: mockClerkUser,
+        isLoaded: true,
+        isSignedIn: true,
+      })
+
+      const { result } = renderHook(() =>
+        useTablePreferences(TABLE_ID, KNOWN_IDS)
+      )
+
+      act(() => {
+        result.current.onSizingChange({ name: 200 })
+        result.current.onColumnOrderChange(['amount', 'name', 'date'])
+      })
+
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY)!)
+      // Both values must be present — stale closure would wipe one of them
+      expect(stored.sizing).toEqual({ name: 200 })
+      expect(stored.columnOrder).toEqual(['amount', 'name', 'date'])
+    })
+  })
+
   // Test 7: Re-mount with same user → prefs restored from localStorage
   describe('persistence across remounts', () => {
     it('restores prefs from localStorage on re-mount', () => {
