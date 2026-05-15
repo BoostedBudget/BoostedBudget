@@ -33,8 +33,6 @@ export interface TableHeaderCellProps {
   currentSortDirection?: SortDirection
   /** Called when sort changes */
   onSort?: (column: string, direction: SortDirection) => void
-  /** aria-sort value to forward to the sort button (mirrors th aria-sort for tests) */
-  ariaSort?: 'ascending' | 'descending' | 'none' | 'other'
 
   // Filtering props
   /** Enable filtering for this column */
@@ -64,7 +62,6 @@ export function TableHeaderCell({
   currentSortColumn,
   currentSortDirection = 'asc',
   onSort,
-  ariaSort,
   // Filtering
   filterable = false,
   filterType = 'select',
@@ -102,7 +99,6 @@ export function TableHeaderCell({
         <button
           type="button"
           onClick={handleSort}
-          aria-sort={ariaSort}
           className={[
             'inline-flex items-center gap-1 p-0 border-none bg-transparent font-[inherit] font-semibold cursor-pointer transition-colors duration-150',
             isActiveSortColumn

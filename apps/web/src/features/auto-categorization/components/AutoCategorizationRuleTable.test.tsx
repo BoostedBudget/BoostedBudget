@@ -339,7 +339,9 @@ describe('AutoCategorizationRuleTable', () => {
         />
       )
 
-      const nameHeader = screen.getByText('Name').closest('button')!
+      // WCAG 2.1: aria-sort belongs on the <th> (columnheader), not the sort button
+      const columnHeaders = screen.getAllByRole('columnheader')
+      const nameHeader = columnHeaders.find((h) => h.textContent?.includes('Name'))!
       expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
     })
   })
