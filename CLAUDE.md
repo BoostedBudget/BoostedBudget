@@ -90,6 +90,9 @@ config/
 - All auth via Clerk (JWT middleware), never custom auth
 - `*InRegion` method signatures for future multi-region
 - No money movement—suggestions only
+- DataTable (`shared/components/DataTable/`) — TanStack Table v8 facade; `BBColumnDef<T>` (`ColumnDef<T>`) is the only column type used in consumers; `data-ph-mask` always applied by DataTable's own `<td>` renderer — never delegate to flexRender
+- All 11 tabular UIs use shared `<DataTable>`; no raw `<table>` in `src/features/`
+- `useTablePreferences(tableId, knownColumnIds)` — localStorage persistence namespaced by Clerk userId + tableId; version-gated by `knownColumnIds.join(',')`
 
 ## Critical Rules
 
