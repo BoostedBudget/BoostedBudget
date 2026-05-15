@@ -301,7 +301,7 @@ export function WebhooksPage() {
             onFiltersChange={() => {}}
             loading={isLoading}
             onRowClick={(event) => setSelectedWebhookId(event.id ?? null)}
-            maskedColumnIds={[]}
+            maskedColumnIds={['event_id', 'error']}
             columnVisibility={columnVisibility}
             onColumnVisibilityChange={onColumnVisibilityChange}
             rowActions={(event) => (
