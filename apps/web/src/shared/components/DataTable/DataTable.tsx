@@ -4,6 +4,10 @@ import { cn } from '@/lib/utils'
 import { TableHeaderCell } from '../TableHeaderCell'
 import type { RangeValue } from '../ColumnFilterDropdown'
 import type { DataTableProps, SortState, SortDirection, ColumnDef } from './types'
+// Pre-import TanStack re-exports so the tanstack manualChunk is emitted even before
+// Phase 1 migration wires up the full headless API. Runtime cost: zero (type-only).
+// See docs/decisions/2026-05-15-tanstack-table-adoption.md § Bundle strategy.
+import '@/shared/lib/tanstack'
 
 const tableVariants = cva(
   'w-full border-collapse overflow-visible rounded-lg border border-border bg-card',

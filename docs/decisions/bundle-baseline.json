@@ -1,0 +1,59 @@
+{
+  "_meta": {
+    "description": "Bundle size baseline captured for ADR 2026-05-15-tanstack-table-adoption (Phase 0).",
+    "baseline_sha": "cc830cec",
+    "baseline_branch": "staging (post #1126 per-route bundle budgets)",
+    "measured_at": "2026-05-15",
+    "tool": "Vite 7 build + npx size-limit",
+    "note": "react-window had zero source imports and was tree-shaken; vendor delta after removal was 0 KB gz."
+  },
+  "before": {
+    "_label": "staging baseline (no TanStack, react-window present but tree-shaken)",
+    "vendor_gz_kb": 760.72,
+    "entry_gz_kb": 17.61,
+    "transactions_gz_kb": 15.07,
+    "accounts_gz_kb": 15.23,
+    "budgets_gz_kb": 19.68,
+    "rules_gz_kb": 14.20,
+    "reports_gz_kb": 3.22,
+    "net_worth_gz_kb": 4.82,
+    "savings_gz_kb": 6.92,
+    "dashboard_gz_kb": 18.00,
+    "auto_categorization_gz_kb": 12.07,
+    "admin_gz_kb": 18.17,
+    "billing_gz_kb": 11.53,
+    "legal_gz_kb": 14.87,
+    "profile_gz_kb": 9.83,
+    "css_gz_kb": 24.07,
+    "tanstack_gz_kb": null,
+    "react_window_node_modules_disk_kb": 216
+  },
+  "after": {
+    "_label": "Phase 0 result: TanStack v8.21.3 installed, react-window removed, tanstack manualChunk added",
+    "vendor_gz_kb": 760.72,
+    "entry_gz_kb": 17.61,
+    "transactions_gz_kb": 15.07,
+    "accounts_gz_kb": 15.23,
+    "budgets_gz_kb": 19.68,
+    "rules_gz_kb": 14.20,
+    "reports_gz_kb": 3.22,
+    "net_worth_gz_kb": 4.82,
+    "savings_gz_kb": 6.92,
+    "dashboard_gz_kb": 18.00,
+    "auto_categorization_gz_kb": 12.07,
+    "admin_gz_kb": 18.17,
+    "billing_gz_kb": 11.53,
+    "legal_gz_kb": 14.87,
+    "profile_gz_kb": 9.83,
+    "css_gz_kb": 24.07,
+    "tanstack_gz_kb": 0.09,
+    "react_window_node_modules_disk_kb": 0
+  },
+  "deltas": {
+    "vendor_gz_delta_kb": 0,
+    "react_window_removal_savings_gz_kb": 0,
+    "react_window_removal_conclusion": "No measurable vendor savings — react-window was already fully tree-shaken (0 imported symbols in apps/web/src/**).",
+    "tanstack_new_chunk_gz_kb": 0.09,
+    "tanstack_phase1_estimated_gz_kb": "14-18 (once DataTable is wired to useReactTable in Phase 1)"
+  }
+}
