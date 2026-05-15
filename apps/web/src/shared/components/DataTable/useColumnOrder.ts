@@ -1,5 +1,7 @@
 import { useState, useCallback, useMemo } from 'react'
 import type { ColumnDef } from './types'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 
 function moveItem<T>(arr: T[], fromIndex: number, toIndex: number): T[] {
   const next = [...arr]
@@ -18,8 +20,10 @@ export interface UseColumnOrderResult<T> {
 export function useColumnOrder<T>(
   columns: ColumnDef<T>[],
   controlledOrder: string[] | undefined,
-  onControlledChange: ((order: string[]) => void) | undefined
+  onControlledChange: ((order: string[]) => void) | undefined,
+  tableId?: string
 ): UseColumnOrderResult<T> {
+  const trackEvent = useTrackEvent()
   const [internalOrder, setInternalOrder] = useState<string[]>(
     () => controlledOrder ?? columns.map((c) => c.id)
   )
@@ -70,12 +74,20 @@ export function useColumnOrder<T>(
           )
         } else if (draggingId === colId) {
           const finalOrder = draftOrder ?? committedOrder
+          const fromIndex = committedOrder.indexOf(colId)
+          const toIndex = finalOrder.indexOf(colId)
           setOrder(finalOrder)
           setDraggingId(null)
           setDraftOrder(null)
           const label = columns.find((c) => c.id === colId)?.header
           const headerText = typeof label === 'string' ? label : colId
           setLiveText(`Dropped column ${headerText}.`)
+          trackEvent(ANALYTICS_EVENTS.DATATABLE_COLUMN_REORDERED, {
+            tableId,
+            columnId: colId,
+            fromIndex,
+            toIndex,
+          })
         }
         return
       }
@@ -118,7 +130,7 @@ export function useColumnOrder<T>(
         )
       }
     },
-    [draggingId, draftOrder, committedOrder, columns, setOrder]
+    [draggingId, draftOrder, committedOrder, columns, setOrder, trackEvent, tableId]
   )
 
   return { orderedColumns, draggingId, liveText, handleDragHandleKeyDown }

@@ -42,6 +42,8 @@ export interface DataTableProps<T> {
   data: T[]
   columns: ColumnDef<T>[]
   rowKey: (row: T) => string
+  /** Optional table identifier forwarded to analytics events (e.g. 'transactions'). */
+  tableId?: string
   sort: SortState
   onSortChange: (s: SortState) => void
   filters: FilterState
