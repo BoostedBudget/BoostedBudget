@@ -9,6 +9,8 @@
 import { Loader2, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useGetRuleExecutions } from '@boostedbudget/api-client/endpoints/automation-rules/automation-rules'
 import type { RuleExecution } from '@boostedbudget/api-client/models'
+import { DataTable } from '@/shared/components/DataTable'
+import type { ColumnDef } from '@/shared/components/DataTable'
 
 export interface RuleExecutionHistoryProps {
   /** Rule ID to fetch executions for */
@@ -123,61 +125,68 @@ export function RuleExecutionHistory({
     )
   }
 
+  const columns: ColumnDef<RuleExecution>[] = [
+    {
+      id: 'time',
+      header: 'Time',
+      render: (execution) => formatDateTime(execution.started_at),
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      render: (execution) => (
+        <span className={statusBadgeClass(execution.status)}>
+          {execution.status}
+        </span>
+      ),
+    },
+    {
+      id: 'duration',
+      header: 'Duration',
+      render: (execution) => formatDuration(execution.execution_duration_ms),
+    },
+    {
+      id: 'trigger',
+      header: 'Trigger',
+      render: (execution) => (
+        <span className="capitalize">{getTriggerType(execution.trigger_context)}</span>
+      ),
+    },
+    {
+      id: 'details',
+      header: 'Details',
+      render: (execution) => (
+        <span className="max-w-[200px] block">
+          {execution.status === 'failed' && execution.error_message && (
+            <span className="text-destructive text-xs">{execution.error_message}</span>
+          )}
+          {execution.status === 'completed' && (
+            <span className="text-success text-xs">Completed successfully</span>
+          )}
+          {execution.status === 'running' && (
+            <span className="text-info text-xs">In progress...</span>
+          )}
+          {execution.status === 'pending' && (
+            <span className="text-muted-foreground text-xs">Waiting to start</span>
+          )}
+        </span>
+      ),
+    },
+  ]
+
   return (
     <div className={`bg-background border border-border rounded-lg overflow-hidden ${className}`.trim()}>
       <h3 className="m-0 px-6 py-4 text-base font-semibold text-foreground border-b border-border">Execution History</h3>
 
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr>
-              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-muted border-b border-border">Time</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-muted border-b border-border">Status</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-muted border-b border-border">Duration</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-muted border-b border-border">Trigger</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-muted border-b border-border">Details</th>
-            </tr>
-          </thead>
-          <tbody>
-            {executions.map((execution: RuleExecution) => (
-              <tr key={execution.id} className="hover:[&>td]:bg-muted">
-                <td className="px-4 py-3 text-sm text-foreground border-b border-border align-top">{formatDateTime(execution.started_at)}</td>
-                <td className="px-4 py-3 text-sm text-foreground border-b border-border align-top">
-                  <span className={statusBadgeClass(execution.status)}>
-                    {execution.status}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-sm text-foreground border-b border-border align-top">{formatDuration(execution.execution_duration_ms)}</td>
-                <td className="px-4 py-3 text-sm text-foreground border-b border-border align-top capitalize">
-                  {getTriggerType(execution.trigger_context)}
-                </td>
-                <td className="px-4 py-3 text-sm text-foreground border-b border-border align-top max-w-[200px]">
-                  {execution.status === 'failed' && execution.error_message && (
-                    <span className="text-destructive text-xs">
-                      {execution.error_message}
-                    </span>
-                  )}
-                  {execution.status === 'completed' && (
-                    <span className="text-success text-xs">
-                      Completed successfully
-                    </span>
-                  )}
-                  {execution.status === 'running' && (
-                    <span className="text-info text-xs">
-                      In progress...
-                    </span>
-                  )}
-                  {execution.status === 'pending' && (
-                    <span className="text-muted-foreground text-xs">
-                      Waiting to start
-                    </span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DataTable<RuleExecution>
+        data={executions}
+        columns={columns}
+        rowKey={(e) => e.id}
+        sort={null}
+        onSortChange={() => {}}
+        filters={{}}
+        onFiltersChange={() => {}}
+      />
 
       {showPagination && (
         <div className="flex items-center justify-center gap-4 p-4 border-t border-border">

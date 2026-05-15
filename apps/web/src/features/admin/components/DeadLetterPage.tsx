@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
-import { RefreshCw, AlertCircle, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react'
+import { RefreshCw, AlertCircle, AlertTriangle } from 'lucide-react'
 import {
   useListAdminDeadLetterJobs,
   useGetAdminDeadLetterJobStats,
@@ -14,8 +14,12 @@ import { cn } from '@/lib/utils'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { useDeadLetterFilters } from '../hooks/useDeadLetterFilters'
 import { DeadLetterDetailModal } from './DeadLetterDetailModal'
+import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
+import type { ColumnDef } from '@/shared/components/DataTable'
 
 const PAGE_SIZE = 20
+
+export const ADMIN_DLQ_COLUMN_IDS = ['kind', 'queue', 'user_id', 'failed_at', 'status', 'notes'] as const
 
 const inputClass = 'px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:border-primary'
 const selectInputClass = `${inputClass} cursor-pointer transition-colors`
@@ -75,6 +79,77 @@ export function DeadLetterPage() {
 
   // Populate kind dropdown from stats
   const kindOptions = statsData?.by_kind ? Object.keys(statsData.by_kind) : []
+
+  const { columnVisibility, onColumnVisibilityChange } = useTablePreferences(
+    'admin-dead-letter',
+    [...ADMIN_DLQ_COLUMN_IDS]
+  )
+
+  type DeadLetterJob = typeof jobs[0]
+
+  const columns: ColumnDef<DeadLetterJob>[] = [
+    {
+      id: 'kind',
+      header: 'Kind',
+      render: (job) => (
+        <span className="font-mono text-[0.8125rem] font-medium">{job.kind}</span>
+      ),
+    },
+    {
+      id: 'queue',
+      header: 'Queue',
+      hideable: true,
+      render: (job) => (
+        <span className="font-mono text-[0.8125rem] text-muted-foreground">{job.queue}</span>
+      ),
+    },
+    {
+      id: 'user_id',
+      header: 'User ID',
+      render: (job) => (
+        <span className="font-mono text-[0.8125rem] text-muted-foreground max-w-[140px] overflow-hidden text-ellipsis whitespace-nowrap block">
+          {job.user_id ?? '—'}
+        </span>
+      ),
+    },
+    {
+      id: 'failed_at',
+      header: 'Failed At',
+      render: (job) => (
+        <span className="text-[0.8125rem] whitespace-nowrap">
+          {new Date(job.failed_at).toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      render: (job) => (
+        <span
+          className={cn(
+            'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
+            job.retried_at
+              ? 'bg-success/10 text-success'
+              : 'bg-destructive/10 text-destructive'
+          )}
+        >
+          {job.retried_at ? 'Retried' : 'Pending'}
+        </span>
+      ),
+    },
+    {
+      id: 'notes',
+      header: 'Notes',
+      hideable: true,
+      render: (job) => (
+        <span className="text-[0.8125rem] text-muted-foreground max-w-[160px] overflow-hidden text-ellipsis whitespace-nowrap block">
+          {job.notes
+            ? job.notes.substring(0, 40) + (job.notes.length > 40 ? '...' : '')
+            : '—'}
+        </span>
+      ),
+    },
+  ]
 
   const handleRetry = (jobId: number, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -281,110 +356,48 @@ export function DeadLetterPage() {
         </div>
       ) : (
         <>
-          <div className="overflow-x-auto border border-border rounded-[0.625rem] bg-card">
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Kind</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Queue</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">User ID</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Failed At</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Notes</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.map((job) => (
-                  <tr
-                    key={job.id}
-                    className="border-b border-border last:border-b-0 hover:bg-muted/50 cursor-pointer transition-colors duration-100"
-                    onClick={() => setSelectedJobId(job.id)}
-                  >
-                    <td className="px-4 py-3 text-foreground align-middle font-mono text-[0.8125rem] font-medium">
-                      {job.kind}
-                    </td>
-                    <td className="px-4 py-3 align-middle font-mono text-[0.8125rem] text-muted-foreground">
-                      {job.queue}
-                    </td>
-                    <td className="px-4 py-3 align-middle text-[0.8125rem] text-muted-foreground font-mono max-w-[140px] overflow-hidden text-ellipsis whitespace-nowrap" data-ph-mask>
-                      {job.user_id ?? '—'}
-                    </td>
-                    <td className="px-4 py-3 text-foreground align-middle text-[0.8125rem] whitespace-nowrap">
-                      {new Date(job.failed_at).toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-foreground align-middle">
-                      <span
-                        className={cn(
-                          'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
-                          job.retried_at
-                            ? 'bg-success/10 text-success'
-                            : 'bg-destructive/10 text-destructive'
-                        )}
-                      >
-                        {job.retried_at ? 'Retried' : 'Pending'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 align-middle text-[0.8125rem] text-muted-foreground max-w-[160px] overflow-hidden text-ellipsis whitespace-nowrap">
-                      {job.notes
-                        ? job.notes.substring(0, 40) + (job.notes.length > 40 ? '...' : '')
-                        : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-foreground align-middle">
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          className="inline-flex items-center px-2.5 py-1.5 border border-border rounded-md bg-background text-foreground text-[0.8125rem] font-medium cursor-pointer transition-colors hover:bg-primary hover:border-primary hover:text-primary-foreground disabled:opacity-45 disabled:cursor-not-allowed"
-                          onClick={(e) => handleRetry(job.id, e)}
-                          disabled={!!job.retried_at || retryMutation.isPending}
-                          aria-label={`Retry job ${job.id}`}
-                        >
-                          Retry
-                        </button>
-                        <button
-                          type="button"
-                          className="inline-flex items-center px-2.5 py-1.5 border border-destructive/30 rounded-md bg-background text-destructive text-[0.8125rem] font-medium cursor-pointer transition-colors hover:bg-destructive/10 disabled:opacity-45 disabled:cursor-not-allowed"
-                          onClick={(e) => { e.stopPropagation(); setConfirmDeleteJobId(job.id) }}
-                          disabled={deleteMutation.isPending}
-                          aria-label={`Delete job ${job.id}`}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between flex-wrap gap-3 text-sm text-muted-foreground">
-              <span>
-                Page {currentPage} of {totalPages}
-              </span>
-              <div className="flex gap-2">
+          <DataTable
+            data={jobs}
+            columns={columns}
+            rowKey={(job) => String(job.id)}
+            sort={null}
+            onSortChange={() => {}}
+            filters={{}}
+            onFiltersChange={() => {}}
+            loading={isLoading}
+            onRowClick={(job) => setSelectedJobId(job.id)}
+            maskedColumnIds={['user_id']}
+            columnVisibility={columnVisibility}
+            onColumnVisibilityChange={onColumnVisibilityChange}
+            rowActions={(job) => (
+              <div className="flex items-center gap-1.5">
                 <button
                   type="button"
-                  className={cn(buttonClass, 'gap-1')}
-                  onClick={() => setPage(currentPage - 1)}
-                  disabled={currentPage <= 1}
-                  aria-label="Previous page"
+                  className="inline-flex items-center px-2.5 py-1.5 border border-border rounded-md bg-background text-foreground text-[0.8125rem] font-medium cursor-pointer transition-colors hover:bg-primary hover:border-primary hover:text-primary-foreground disabled:opacity-45 disabled:cursor-not-allowed"
+                  onClick={(e) => handleRetry(job.id, e)}
+                  disabled={!!job.retried_at || retryMutation.isPending}
+                  aria-label={`Retry job ${job.id}`}
                 >
-                  <ChevronLeft size={16} /> Previous
+                  Retry
                 </button>
                 <button
                   type="button"
-                  className={cn(buttonClass, 'gap-1')}
-                  onClick={() => setPage(currentPage + 1)}
-                  disabled={!hasMore}
-                  aria-label="Next page"
+                  className="inline-flex items-center px-2.5 py-1.5 border border-destructive/30 rounded-md bg-background text-destructive text-[0.8125rem] font-medium cursor-pointer transition-colors hover:bg-destructive/10 disabled:opacity-45 disabled:cursor-not-allowed"
+                  onClick={() => setConfirmDeleteJobId(job.id)}
+                  disabled={deleteMutation.isPending}
+                  aria-label={`Delete job ${job.id}`}
                 >
-                  Next <ChevronRight size={16} />
+                  Delete
                 </button>
               </div>
-            </div>
-          )}
+            )}
+          />
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            hasMore={hasMore}
+            onPageChange={setPage}
+          />
         </>
       )}
 
