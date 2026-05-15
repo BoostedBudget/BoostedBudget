@@ -17,11 +17,14 @@ import { cn } from '@/lib/utils'
 import type { CategorizationRule } from '../types'
 import { formatPFCEnum } from '@/shared/categories/formatPfc'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
-import { DataTable } from '@/shared/components/DataTable'
+import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, SortState, FilterState } from '@/shared/components/DataTable'
 
 export type SortColumn = 'name' | 'status' | 'priority' | 'matches' | 'category'
 export type SortDirection = 'asc' | 'desc'
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const AUTOCAT_COLUMN_IDS = ['name', 'status', 'priority', 'conditions', 'category', 'matches'] as const
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const RULE_SORTABLE_COLUMNS = new Set([
@@ -147,6 +150,15 @@ export function AutoCategorizationRuleTable({
 }: AutoCategorizationRuleTableProps) {
   const hasActions = !!(onEdit || onDelete || onToggle)
 
+  const {
+    sizing,
+    onSizingChange,
+    columnOrder,
+    onColumnOrderChange,
+    columnVisibility,
+    onColumnVisibilityChange,
+  } = useTablePreferences('auto-categorization', [...AUTOCAT_COLUMN_IDS])
+
   const hasActiveFilters =
     (statusFilter?.length ?? 0) > 0 ||
     (categoryFilter?.length ?? 0) > 0 ||
@@ -206,6 +218,8 @@ export function AutoCategorizationRuleTable({
       id: 'name',
       header: 'Name',
       sortable: sortable,
+      resizable: true,
+      reorderable: true,
       sortAccessor: (r) => r.name,
       widthClass: 'min-w-[180px] max-md:min-w-[150px]',
       render: (r) => (
@@ -227,6 +241,9 @@ export function AutoCategorizationRuleTable({
       id: 'status',
       header: 'Status',
       sortable: sortable,
+      resizable: true,
+      reorderable: true,
+      defaultPinned: 'left' as const,
       sortAccessor: (r) => (r.enabled ? 'enabled' : 'disabled'),
       filter: statusOptions
         ? { type: 'select', options: statusOptions, multiSelect: true }
@@ -246,6 +263,9 @@ export function AutoCategorizationRuleTable({
       id: 'priority',
       header: 'Priority',
       sortable: sortable,
+      resizable: true,
+      reorderable: true,
+      hideable: true,
       sortAccessor: (r) => r.priority,
       align: 'center' as const,
       numeric: true,
@@ -255,12 +275,16 @@ export function AutoCategorizationRuleTable({
     {
       id: 'conditions',
       header: 'Conditions',
+      resizable: true,
+      reorderable: true,
       render: (r) => formatConditions(r.conditions, r.condition_logic),
     },
     {
       id: 'category',
       header: 'Category',
       sortable: sortable,
+      resizable: true,
+      reorderable: true,
       sortAccessor: (r) => getCategoryLabel(r),
       widthClass: 'min-w-[150px]',
       filter: categoryOptions
@@ -287,6 +311,9 @@ export function AutoCategorizationRuleTable({
       align: 'right' as const,
       numeric: true,
       sortable: sortable,
+      resizable: true,
+      reorderable: true,
+      hideable: true,
       sortAccessor: (r) => r.match_count,
       key: 'match_count' as keyof CategorizationRule,
     },
@@ -316,6 +343,12 @@ export function AutoCategorizationRuleTable({
       loading={loading}
       className={cn(loading ? 'autocat-table--loading' : '', className)}
       onRowClick={onRowClick}
+      columnSizing={sizing}
+      onColumnSizingChange={onSizingChange}
+      columnOrder={columnOrder}
+      onColumnOrderChange={onColumnOrderChange}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
       rowClassName={onRowClick ? () => 'autocat-table__row--clickable' : undefined}
       emptyState={
         <span className="px-4 py-12 text-center italic text-muted-foreground">
