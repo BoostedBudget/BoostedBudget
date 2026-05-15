@@ -83,6 +83,11 @@ function renderHeaderContent<T>(
       ? (!Array.isArray(rawFilterValue) ? rawFilterValue : null)
       : rawFilterValue
 
+  const ariaSort =
+    col.sortable && sort?.columnId === col.id
+      ? (sort.direction === 'asc' ? 'ascending' : 'descending') as 'ascending' | 'descending'
+      : undefined
+
   return (
     <TableHeaderCell
       label={col.header}
@@ -92,6 +97,7 @@ function renderHeaderContent<T>(
       currentSortColumn={sort?.columnId}
       currentSortDirection={sort?.direction ?? 'asc'}
       onSort={handleSort}
+      ariaSort={ariaSort}
       filterable={!!col.filter}
       filterType={col.filter?.type}
       filterOptions={selectFilter?.options}
