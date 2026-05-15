@@ -13,8 +13,6 @@ import { useListAdminUsers, useGetAdminUserDetail } from '@boostedbudget/api-cli
 import {
   Search,
   Users,
-  ChevronLeft,
-  ChevronRight,
   AlertCircle,
   Shield,
   CheckCircle2,
@@ -26,6 +24,8 @@ import { useUserFilters } from '../hooks/useUserFilters'
 import { useRegions } from '../../../shared/hooks/useRegions'
 import { UserDetailModal } from './UserDetailModal'
 import { SubscriptionOverrideModal } from './SubscriptionOverrideModal'
+import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
+import type { ColumnDef } from '@/shared/components/DataTable'
 
 const TIER_OPTIONS = [
   { value: '', label: 'All Tiers' },
@@ -104,6 +104,8 @@ const formatDate = (dateString: string | undefined | null): string => {
   })
 }
 
+export const ADMIN_USERS_COLUMN_IDS = ['email', 'tier', 'status', 'override_status', 'region', 'last_login', 'accounts', 'rules', 'referrals'] as const
+
 interface SelectedUser {
   id: string
   email: string
@@ -136,6 +138,106 @@ export function UsersPage() {
   const hasMore = data?.has_more ?? false
   const users = data?.users ?? []
   const isEmpty = !isLoading && users.length === 0
+
+  const { columnVisibility, onColumnVisibilityChange } = useTablePreferences(
+    'admin-users',
+    [...ADMIN_USERS_COLUMN_IDS]
+  )
+
+  type AdminUser = typeof users[0]
+
+  const columns: ColumnDef<AdminUser>[] = [
+    {
+      id: 'email',
+      header: 'Email',
+      defaultPinned: 'left',
+      render: (user) => (
+        <div className="flex items-center gap-1.5 font-medium">
+          {user.email}
+          {user.is_admin && (
+            <Shield className="text-amber-500 shrink-0" size={14} aria-label="Administrator" />
+          )}
+        </div>
+      ),
+    },
+    {
+      id: 'tier',
+      header: 'Tier',
+      render: (user) => {
+        const effectiveTier = user.manual_tier_override ?? user.subscription_tier
+        return (
+          <span className={cn('inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize', tierBadgeClass(effectiveTier))}>
+            {TIER_DISPLAY[effectiveTier] ?? effectiveTier}
+          </span>
+        )
+      },
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      render: (user) => (
+        <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium capitalize', statusBadgeClass(user.subscription_status))}>
+          {STATUS_ICON[user.subscription_status]}
+          {user.subscription_status}
+        </span>
+      ),
+    },
+    {
+      id: 'override_status',
+      header: 'Override Status',
+      hideable: true,
+      render: (user) => {
+        const overrideStatus = getOverrideStatus(user.manual_tier_override, user.manual_tier_ends_at)
+        return overrideStatus ? (
+          <span className={cn('inline-block px-2 py-0.5 rounded text-xs font-medium', overrideStatusClass(overrideStatus.variant))}>
+            {overrideStatus.label}
+          </span>
+        ) : (
+          <span className="text-muted-foreground text-sm">—</span>
+        )
+      },
+    },
+    {
+      id: 'region',
+      header: 'Region',
+      hideable: true,
+      render: (user) => (
+        <span className="font-mono text-[0.8125rem] text-muted-foreground">
+          {getRegionWithFlag(user.primary_region)}
+        </span>
+      ),
+    },
+    {
+      id: 'last_login',
+      header: 'Last Login',
+      hideable: true,
+      render: (user) => formatDate(user.last_login_at),
+    },
+    {
+      id: 'accounts',
+      header: 'Accounts',
+      align: 'center',
+      numeric: true,
+      hideable: true,
+      key: 'linked_accounts_count',
+    },
+    {
+      id: 'rules',
+      header: 'Rules',
+      align: 'center',
+      numeric: true,
+      hideable: true,
+      key: 'automation_rules_count',
+    },
+    {
+      id: 'referrals',
+      header: 'Referrals',
+      align: 'center',
+      numeric: true,
+      hideable: true,
+      key: 'referrals_count',
+    },
+  ]
 
   return (
     <div className="flex flex-col gap-6 p-6 min-h-full">
@@ -206,119 +308,38 @@ export function UsersPage() {
         </div>
       ) : (
         <>
-          <div className="overflow-x-auto border border-border rounded-[0.625rem] bg-card">
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Email</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Tier</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Override Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Region</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Last Login</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Accounts</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Rules</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Referrals</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((user) => {
-                  const effectiveTier = user.manual_tier_override ?? user.subscription_tier
-                  const overrideStatus = getOverrideStatus(user.manual_tier_override, user.manual_tier_ends_at)
-
-                  return (
-                    <tr
-                      key={user.id}
-                      className="border-b border-border last:border-b-0 hover:bg-muted/50 cursor-pointer transition-colors duration-100"
-                      onClick={() => setSelectedUserId(user.id)}
-                    >
-                      <td className="px-4 py-3 text-foreground align-middle">
-                        <div className="flex items-center gap-1.5 font-medium">
-                          {user.email}
-                          {user.is_admin && (
-                            <Shield className="text-amber-500 shrink-0" size={14} aria-label="Administrator" />
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-foreground align-middle">
-                        <span className={cn('inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize', tierBadgeClass(effectiveTier))}>
-                          {TIER_DISPLAY[effectiveTier] ?? effectiveTier}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-foreground align-middle">
-                        <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium capitalize', statusBadgeClass(user.subscription_status))}>
-                          {STATUS_ICON[user.subscription_status]}
-                          {user.subscription_status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-foreground align-middle">
-                        {overrideStatus ? (
-                          <span className={cn('inline-block px-2 py-0.5 rounded text-xs font-medium', overrideStatusClass(overrideStatus.variant))}>
-                            {overrideStatus.label}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground text-sm">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-foreground align-middle font-mono text-[0.8125rem] text-muted-foreground">
-                        {getRegionWithFlag(user.primary_region)}
-                      </td>
-                      <td className="px-4 py-3 text-foreground align-middle">{formatDate(user.last_login_at)}</td>
-                      <td className="px-4 py-3 text-foreground align-middle text-center tabular-nums">{user.linked_accounts_count}</td>
-                      <td className="px-4 py-3 text-foreground align-middle text-center tabular-nums">{user.automation_rules_count}</td>
-                      <td className="px-4 py-3 text-foreground align-middle text-center tabular-nums">{user.referrals_count}</td>
-                      <td className="px-4 py-3 text-foreground align-middle text-center">
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 px-3 py-1.5 border border-border rounded-md bg-background text-foreground text-[0.8125rem] font-medium cursor-pointer font-[inherit] transition-colors hover:bg-primary hover:border-primary hover:text-primary-foreground"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setOverrideUser({ id: user.id, email: user.email })
-                          }}
-                          aria-label={`Override subscription for ${user.email}`}
-                        >
-                          <Edit2 size={14} />
-                          Override
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <span className="text-sm text-muted-foreground">
-                Page {currentPage} of {totalPages}
-              </span>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 px-3.5 py-1.5 border border-border rounded-md bg-background text-foreground text-sm font-medium cursor-pointer font-[inherit] transition-colors hover:bg-muted disabled:opacity-45 disabled:cursor-not-allowed"
-                  onClick={() => setPage(currentPage - 1)}
-                  disabled={currentPage <= 1}
-                  aria-label="Previous page"
-                >
-                  <ChevronLeft size={16} />
-                  Previous
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 px-3.5 py-1.5 border border-border rounded-md bg-background text-foreground text-sm font-medium cursor-pointer font-[inherit] transition-colors hover:bg-muted disabled:opacity-45 disabled:cursor-not-allowed"
-                  onClick={() => setPage(currentPage + 1)}
-                  disabled={!hasMore}
-                  aria-label="Next page"
-                >
-                  Next
-                  <ChevronRight size={16} />
-                </button>
-              </div>
-            </div>
-          )}
+          <DataTable
+            data={users}
+            columns={columns}
+            rowKey={(u) => u.id}
+            sort={null}
+            onSortChange={() => {}}
+            filters={{}}
+            onFiltersChange={() => {}}
+            loading={isLoading}
+            onRowClick={(user) => setSelectedUserId(user.id)}
+            maskedColumnIds={['email']}
+            emptyState={<p className="py-12 px-4 text-center text-muted-foreground">No users found{hasActiveFilters ? '. Try adjusting your filters.' : '.'}</p>}
+            columnVisibility={columnVisibility}
+            onColumnVisibilityChange={onColumnVisibilityChange}
+            rowActions={(user) => (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 px-3 py-1.5 border border-border rounded-md bg-background text-foreground text-[0.8125rem] font-medium cursor-pointer font-[inherit] transition-colors hover:bg-primary hover:border-primary hover:text-primary-foreground"
+                onClick={() => setOverrideUser({ id: user.id, email: user.email })}
+                aria-label={`Override subscription for ${user.email}`}
+              >
+                <Edit2 size={14} />
+                Override
+              </button>
+            )}
+          />
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            hasMore={hasMore}
+            onPageChange={setPage}
+          />
         </>
       )}
 

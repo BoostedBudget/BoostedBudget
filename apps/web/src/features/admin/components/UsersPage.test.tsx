@@ -145,7 +145,7 @@ describe('UsersPage', () => {
       expect(screen.getByText('Accounts')).toBeInTheDocument()
       expect(screen.getByText('Rules')).toBeInTheDocument()
       expect(screen.getByText('Override Status')).toBeInTheDocument()
-      expect(screen.getByText('Action')).toBeInTheDocument()
+      expect(screen.getByText('Actions')).toBeInTheDocument()
 
       // Check user data
       expect(screen.getByText('admin@example.com')).toBeInTheDocument()
@@ -381,6 +381,38 @@ describe('UsersPage', () => {
       render(<UsersPage />, { wrapper: createWrapper() })
 
       expect(screen.getByText(/failed to load users/i)).toBeInTheDocument()
+    })
+  })
+
+  describe('Phase 6 – DataTable migration', () => {
+    it('renders data-ph-mask on email column cells', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: [mockUsers[0]] },
+        isLoading: false,
+        error: null,
+      })
+
+      const { container } = render(<UsersPage />, { wrapper: createWrapper() })
+
+      const maskedCells = container.querySelectorAll('td[data-ph-mask]')
+      expect(maskedCells.length).toBeGreaterThanOrEqual(1)
+    })
+
+    it('shows column visibility menu with hideable columns', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: mockListResponse,
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      const columnsBtn = screen.getByRole('button', { name: /columns/i })
+      fireEvent.click(columnsBtn)
+
+      expect(screen.getByRole('menuitemcheckbox', { name: /override status/i })).toBeInTheDocument()
+      expect(screen.getByRole('menuitemcheckbox', { name: /region/i })).toBeInTheDocument()
+      expect(screen.getByRole('menuitemcheckbox', { name: /referrals/i })).toBeInTheDocument()
     })
   })
 })
