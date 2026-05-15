@@ -39,8 +39,8 @@
         "@sentry/react": "^10.51.0",
         "@tailwindcss/vite": "^4.2.2",
         "@tanstack/react-query": "^5.100.10",
+        "@tanstack/react-table": "^8.21.3",
         "@types/react-datepicker": "^7.0.0",
-        "@types/react-window": "^2.0.0",
         "axios": "^1.16.1",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
@@ -59,7 +59,6 @@
         "react-redux": "^9.2.0",
         "react-router": "^7.14.1",
         "react-router-dom": "^7.14.1",
-        "react-window": "^2.2.7",
         "sonner": "^2.0.7",
         "tailwind-merge": "^3.5.0",
         "tailwindcss": "^4.1.18",
@@ -776,6 +775,10 @@
 
     "@tanstack/react-query": ["@tanstack/react-query@5.100.10", "", { "dependencies": { "@tanstack/query-core": "5.100.10" }, "peerDependencies": { "react": "^18 || ^19" } }, "sha512-FLaZf2RCrA/Zgp4aiu5tG3TyasTRO7aZ99skxQpr3Hg/zXOhu6yq5FZCYQ/tRaJtM9ylnoK8tFK7PolXQadv6Q=="],
 
+    "@tanstack/react-table": ["@tanstack/react-table@8.21.3", "", { "dependencies": { "@tanstack/table-core": "8.21.3" }, "peerDependencies": { "react": ">=16.8", "react-dom": ">=16.8" } }, "sha512-5nNMTSETP4ykGegmVkhjcS8tTLW6Vl4axfEGQN3v0zdHYbK4UfoqfPChclTrJ4EoK9QynqAu9oUf8VEmrpZ5Ww=="],
+
+    "@tanstack/table-core": ["@tanstack/table-core@8.21.3", "", {}, "sha512-ldZXEhOBb8Is7xLs01fR3YEc3DERiz5silj8tnGkFZytt1abEvl/GhUmCE0PMLaMPTa3Jk4HbKmRlHmu+gCftg=="],
+
     "@testing-library/dom": ["@testing-library/dom@10.4.1", "", { "dependencies": { "@babel/code-frame": "^7.10.4", "@babel/runtime": "^7.12.5", "@types/aria-query": "^5.0.1", "aria-query": "5.3.0", "dom-accessibility-api": "^0.5.9", "lz-string": "^1.5.0", "picocolors": "1.1.1", "pretty-format": "^27.0.2" } }, "sha512-o4PXJQidqJl82ckFaXUeoAW+XysPLauYI43Abki5hABd853iMhitooc6znOnczgbTYmEP6U6/y1ZyKAIsvMKGg=="],
 
     "@testing-library/jest-dom": ["@testing-library/jest-dom@6.9.1", "", { "dependencies": { "@adobe/css-tools": "^4.4.0", "aria-query": "^5.0.0", "css.escape": "^1.5.1", "dom-accessibility-api": "^0.6.3", "picocolors": "^1.1.1", "redent": "^3.0.0" } }, "sha512-zIcONa+hVtVSSep9UT3jZ5rizo2BsxgyDYU7WFD5eICBE7no3881HGeb/QkGfsJs6JTkY1aQhT7rIPC7e+0nnA=="],
@@ -841,8 +844,6 @@
     "@types/react-dom": ["@types/react-dom@19.2.3", "", { "peerDependencies": { "@types/react": "^19.2.0" } }, "sha512-jp2L/eY6fn+KgVVQAOqYItbF0VY/YApe5Mz2F0aykSO8gx31bYCZyvSeYxCHKvzHG5eZjc+zyaS5BrBWya2+kQ=="],
 
     "@types/react-plotly.js": ["@types/react-plotly.js@2.6.4", "", { "dependencies": { "@types/plotly.js": "*", "@types/react": "*" } }, "sha512-AU6w1u3qEGM0NmBA69PaOgNc0KPFA/+qkH6Uu9EBTJ45/WYOUoXi9AF5O15PRM2klpHSiHAAs4WnlI+OZAFmUA=="],
-
-    "@types/react-window": ["@types/react-window@2.0.0", "", { "dependencies": { "react-window": "*" } }, "sha512-E8hMDtImEpMk1SjswSvqoSmYvk7GEtyVaTa/GJV++FdDNuMVVEzpAClyJ0nqeKYBrMkGiyH6M1+rPLM0Nu1exQ=="],
 
     "@types/set-cookie-parser": ["@types/set-cookie-parser@2.4.10", "", { "dependencies": { "@types/node": "*" } }, "sha512-GGmQVGpQWUe5qglJozEjZV/5dyxbOOZ0LHe/lqyWssB88Y4svNfst0uqBVscdDeIKl5Jy5+aPSvy7mI9tYRguw=="],
 
@@ -1931,8 +1932,6 @@
     "react-router-dom": ["react-router-dom@7.14.1", "", { "dependencies": { "react-router": "7.14.1" }, "peerDependencies": { "react": ">=18", "react-dom": ">=18" } }, "sha512-ZkrQuwwhGibjQLqH1eCdyiZyLWglPxzxdl5tgwgKEyCSGC76vmAjleGocRe3J/MLfzMUIKwaFJWpFVJhK3d2xA=="],
 
     "react-style-singleton": ["react-style-singleton@2.2.3", "", { "dependencies": { "get-nonce": "^1.0.0", "tslib": "^2.0.0" }, "peerDependencies": { "@types/react": "*", "react": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc" }, "optionalPeers": ["@types/react"] }, "sha512-b6jSvxvVnyptAiLjbkWLE/lOnR4lfTtDAl+eUC7RZy+QQWc6wRzIV2CE6xBuMmDxc2qIihtDCZD5NPOFl7fRBQ=="],
-
-    "react-window": ["react-window@2.2.7", "", { "peerDependencies": { "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" } }, "sha512-SH5nvfUQwGHYyriDUAOt7wfPsfG9Qxd6OdzQxl5oQ4dsSsUicqQvjV7dR+NqZ4coY0fUn3w1jnC5PwzIUWEg5w=="],
 
     "readable-stream": ["readable-stream@2.3.8", "", { "dependencies": { "core-util-is": "~1.0.0", "inherits": "~2.0.3", "isarray": "~1.0.0", "process-nextick-args": "~2.0.0", "safe-buffer": "~5.1.1", "string_decoder": "~1.1.1", "util-deprecate": "~1.0.1" } }, "sha512-8p0AUk4XODgIewSi0l8Epjs+EVnWiK7NoDIEGU0HhE7+ZyY8D1IMY7odu5lRrFXGg71L15KG8QrPmum45RTtdA=="],
 

@@ -58,6 +58,9 @@ export default defineConfig({
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash][extname]',
         manualChunks(id: string) {
+          // TanStack table/virtual isolated from vendor so its budget is tracked separately
+          if (/@tanstack\/react-table|@tanstack\/react-virtual|@dnd-kit/.test(id)) return 'tanstack';
+
           // Stable budgetable vendor bucket — prevents Rollup from emitting
           // auto-named common chunks that slip past size-limit
           if (id.includes('node_modules')) return 'vendor';

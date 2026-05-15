@@ -90,6 +90,12 @@ export const ANALYTICS_EVENTS = {
   SAVINGS_SORT_CHANGED: 'savings_sort_changed',
 
   ACCOUNT_REPLACED_FILTERED: 'account_replaced_filtered',
+
+  // DataTable column interactions
+  DATATABLE_COLUMN_RESIZED: 'datatable_column_resized',
+  DATATABLE_COLUMN_REORDERED: 'datatable_column_reordered',
+  DATATABLE_COLUMN_PINNED: 'datatable_column_pinned',
+  DATATABLE_COLUMN_VISIBILITY_TOGGLED: 'datatable_column_visibility_toggled',
 } as const
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[keyof typeof ANALYTICS_EVENTS]

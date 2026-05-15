@@ -388,6 +388,49 @@ describe('TransactionTable', () => {
     })
   })
 
+  describe('Phase 5 – DataTable opt-in features', () => {
+    it('PII mask retention: amount column still has data-ph-mask after feature wiring', () => {
+      const { container } = renderTable()
+      const maskedTds = container.querySelectorAll('td[data-ph-mask]')
+      expect(maskedTds.length).toBe(3)
+    })
+
+    it('Resize handles render on columns with resizable:true', () => {
+      const { container } = renderTable()
+      const resizeHandles = container.querySelectorAll('[data-testid="resize-handle"]')
+      // date, merchant, account, category, amount all have resizable:true → 5 handles
+      expect(resizeHandles.length).toBeGreaterThan(0)
+    })
+
+    it('Drag handles render on columns with reorderable:true', () => {
+      const { container } = renderTable()
+      const dragHandles = container.querySelectorAll('[data-testid="drag-handle"]')
+      // date, merchant, account, category, amount are reorderable (not actions) → 5 handles
+      expect(dragHandles.length).toBeGreaterThan(0)
+    })
+
+    it('Amount td has data-pinned="right" because amount column has defaultPinned:right', () => {
+      const { container } = renderTable()
+      const pinnedTds = container.querySelectorAll('td[data-pinned="right"]')
+      // One per data row (3 transactions)
+      expect(pinnedTds.length).toBe(3)
+    })
+
+    it('Hideable columns (account and category) appear in ColumnVisibilityMenu', async () => {
+      const userEvent = await import('@testing-library/user-event')
+      const user = userEvent.default.setup()
+      renderTable()
+
+      // The "Columns" button is rendered when hideable columns exist and onColumnVisibilityChange is provided
+      const columnsButton = screen.getByRole('button', { name: /columns/i })
+      await user.click(columnsButton)
+
+      // account and category should appear as menu items
+      expect(screen.getByRole('menuitemcheckbox', { name: /account/i })).toBeInTheDocument()
+      expect(screen.getByRole('menuitemcheckbox', { name: /category/i })).toBeInTheDocument()
+    })
+  })
+
   describe('Inline Filtering', () => {
     const accountOptions = [
       { value: 'acc-1', label: 'My Checking' },

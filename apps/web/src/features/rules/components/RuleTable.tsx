@@ -9,13 +9,16 @@ import {
 import { cn } from '@/lib/utils'
 import type { AutomationRule } from '@boostedbudget/api-client/models'
 import { formatRelativeTime } from '@/shared/dates'
-import { DataTable } from '@/shared/components/DataTable'
+import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, SortState } from '@/shared/components/DataTable'
 import { RULE_TYPE_LABELS } from '../constants'
 import type { RuleType } from '../types'
 
 export type SortColumn = 'name' | 'type' | 'status' | 'trigger' | 'lastRun' | 'priority'
 export type SortDirection = 'asc' | 'desc'
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const RULE_COLUMN_IDS = ['select', 'name', 'type', 'status', 'trigger', 'lastRun', 'priority'] as const
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const RULE_SORTABLE_COLUMNS = new Set([
@@ -63,6 +66,15 @@ export function RuleTable({
   className = '',
 }: RuleTableProps) {
   const hasActions = !!(onEdit || onDelete || onToggle || onTest)
+
+  const {
+    sizing,
+    onSizingChange,
+    columnOrder,
+    onColumnOrderChange,
+    columnVisibility,
+    onColumnVisibilityChange,
+  } = useTablePreferences('rules', [...RULE_COLUMN_IDS])
 
   const allSelected = useMemo(
     () => rules.length > 0 && rules.every((rule) => selectedIds.includes(rule.id)),
@@ -145,6 +157,8 @@ export function RuleTable({
       id: 'name',
       header: 'Name',
       sortable,
+      resizable: true,
+      reorderable: true,
       render: (row) => (
         <div className="flex flex-col gap-1">
           <span className="font-medium text-foreground">{row.name}</span>
@@ -158,6 +172,8 @@ export function RuleTable({
       id: 'type',
       header: 'Type',
       sortable,
+      resizable: true,
+      reorderable: true,
       render: (row) => {
         const ruleType = row.rule_type as RuleType
         return <>{RULE_TYPE_LABELS[ruleType] || row.rule_type}</>
@@ -167,6 +183,9 @@ export function RuleTable({
       id: 'status',
       header: 'Status',
       sortable,
+      resizable: true,
+      reorderable: true,
+      defaultPinned: 'left' as const,
       render: (row) => (
         <span
           className={cn(
@@ -184,6 +203,8 @@ export function RuleTable({
       id: 'trigger',
       header: 'Trigger',
       sortable,
+      resizable: true,
+      reorderable: true,
       render: (row) => {
         const triggerType = row.trigger_config?.type || 'schedule'
         return (
@@ -207,6 +228,9 @@ export function RuleTable({
       id: 'lastRun',
       header: 'Last Run',
       sortable,
+      resizable: true,
+      reorderable: true,
+      hideable: true,
       render: (row) =>
         row.last_executed_at ? (
           <span title={new Date(row.last_executed_at).toLocaleString()}>
@@ -220,6 +244,9 @@ export function RuleTable({
       id: 'priority',
       header: 'Priority',
       sortable,
+      resizable: true,
+      reorderable: true,
+      hideable: true,
       render: (row) => <span className="tabular-nums text-muted-foreground">{row.priority}</span>,
     },
   ]
@@ -248,6 +275,13 @@ export function RuleTable({
       onFiltersChange={() => {}}
       loading={loading}
       onRowClick={onRowClick}
+      columnSizing={sizing}
+      onColumnSizingChange={onSizingChange}
+      tableId="rules"
+      columnOrder={columnOrder}
+      onColumnOrderChange={onColumnOrderChange}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
       rowClassName={(row) => {
         const parts: string[] = []
         if (onRowClick) parts.push('rule-table__row--clickable')
