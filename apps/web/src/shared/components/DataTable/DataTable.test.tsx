@@ -596,3 +596,227 @@ describe('server-side filter boundary', () => {
     }
   })
 })
+
+// Phase 3a: Column Resize
+describe('column resize', () => {
+  const resizableColumns: ColumnDef<Row>[] = [
+    { id: 'name', header: 'Name', key: 'name', resizable: true },
+    { id: 'amount', header: 'Amount', key: 'amount' },
+  ]
+
+  it('renders resize handle when resizable:true; NOT rendered when resizable is absent', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handles = container.querySelectorAll('[data-testid="resize-handle"]')
+    // Only the "name" column has resizable:true -> 1 handle
+    expect(handles.length).toBe(1)
+  })
+
+  it('resize handle has correct ARIA attributes', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    expect(handle).not.toBeNull()
+    expect(handle.getAttribute('role')).toBe('separator')
+    expect(handle.getAttribute('aria-orientation')).toBe('vertical')
+    const valuenow = handle.getAttribute('aria-valuenow')
+    expect(valuenow).not.toBeNull()
+    expect(Number(valuenow)).toBeGreaterThan(0)
+  })
+
+  it('keyboard ArrowRight increases column width by 8px', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    const before = Number(handle.getAttribute('aria-valuenow'))
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    const after = Number(handle.getAttribute('aria-valuenow'))
+    expect(after).toBe(before + 8)
+  })
+
+  it('keyboard ArrowLeft decreases column width by 8px', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    // bump up first so ArrowLeft won't hit MIN_WIDTH
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    const before = Number(handle.getAttribute('aria-valuenow'))
+    fireEvent.keyDown(handle, { key: 'ArrowLeft' })
+    const after = Number(handle.getAttribute('aria-valuenow'))
+    expect(after).toBe(before - 8)
+  })
+
+  it('keyboard Shift+ArrowRight increases width by 32px', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    const before = Number(handle.getAttribute('aria-valuenow'))
+    fireEvent.keyDown(handle, { key: 'ArrowRight', shiftKey: true })
+    const after = Number(handle.getAttribute('aria-valuenow'))
+    expect(after).toBe(before + 32)
+  })
+
+  it('keyboard Shift+ArrowLeft decreases width by 32px', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    fireEvent.keyDown(handle, { key: 'ArrowRight', shiftKey: true }) // up first
+    const before = Number(handle.getAttribute('aria-valuenow'))
+    fireEvent.keyDown(handle, { key: 'ArrowLeft', shiftKey: true })
+    const after = Number(handle.getAttribute('aria-valuenow'))
+    expect(after).toBe(before - 32)
+  })
+
+  it('keyboard Home resets width to defaultSize', () => {
+    const columnsWithDefault: ColumnDef<Row>[] = [
+      { id: 'name', header: 'Name', key: 'name', resizable: true, defaultSize: 120 },
+      { id: 'amount', header: 'Amount', key: 'amount' },
+    ]
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={columnsWithDefault}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    fireEvent.keyDown(handle, { key: 'ArrowRight', shiftKey: true }) // change width
+    fireEvent.keyDown(handle, { key: 'Home' })
+    expect(Number(handle.getAttribute('aria-valuenow'))).toBe(120)
+  })
+
+  it('width cannot be resized below 50px (min-width)', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    for (let i = 0; i < 50; i++) {
+      fireEvent.keyDown(handle, { key: 'ArrowLeft' })
+    }
+    expect(Number(handle.getAttribute('aria-valuenow'))).toBeGreaterThanOrEqual(50)
+  })
+
+  it('coarse pointer: resize handle is aria-hidden', () => {
+    const originalMatchMedia = window.matchMedia
+    window.matchMedia = mock((query: string) => ({
+      matches: query === '(pointer: fine)' ? false : true,
+      media: query,
+      onchange: null,
+      addListener: mock(() => {}),
+      removeListener: mock(() => {}),
+      addEventListener: mock(() => {}),
+      removeEventListener: mock(() => {}),
+      dispatchEvent: mock(() => true),
+    })) as unknown as typeof window.matchMedia
+
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    expect(handle).not.toBeNull() // still in DOM
+    expect(handle.getAttribute('aria-hidden')).toBe('true')
+
+    window.matchMedia = originalMatchMedia
+  })
+
+  it('controlled mode: accepts columnSizing and calls onColumnSizingChange', () => {
+    const onColumnSizingChange = mock((_: Record<string, number>) => {})
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnSizing={{ name: 200 }}
+        onColumnSizingChange={onColumnSizingChange}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    expect(Number(handle.getAttribute('aria-valuenow'))).toBe(200)
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    expect(onColumnSizingChange).toHaveBeenCalledWith({ name: 208 })
+  })
+
+  // TODO: PostHog event on resize -- skip in automated tests (PostHog not configured in test infra).
+  // Manual verification: confirm `column_resized` event fires with { column_id, new_width } in
+  // PostHog dashboard after dragging or keyboard-resizing a column header in staging/prod.
+})
