@@ -32,6 +32,8 @@ export type ColumnDef<T> = {
   defaultSize?: number
   /** Phase 3b: opt-in column reordering via drag-and-drop / keyboard */
   reorderable?: boolean
+  /** Phase 3c: opt-in sticky column pinning. Left-pin always honored; right-pin degrades to non-sticky on mobile (max-md). */
+  defaultPinned?: 'left' | 'right'
 }
 
 export interface DataTableProps<T> {

@@ -227,9 +227,12 @@ export function DataTable<T,>({
               scope="col"
               className={cn(
                 headerCellVariants({ align: col.align }),
-                col.widthClass
+                col.widthClass,
+                col.defaultPinned === 'left' && 'sticky left-0 z-20 bg-muted/50',
+                col.defaultPinned === 'right' && 'sticky right-0 z-20 bg-muted/50 max-md:relative max-md:right-auto'
               )}
               aria-sort={getAriaSort(sort, col.id)}
+              {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
             >
               <div className="flex items-center gap-1">
                 {col.reorderable && (
@@ -292,11 +295,16 @@ export function DataTable<T,>({
                   return (
                     <td
                       key={col.id}
-                      className={bodyCellVariants({
-                        align: col.align,
-                        numeric: col.numeric ?? false,
-                      })}
+                      className={cn(
+                        bodyCellVariants({
+                          align: col.align,
+                          numeric: col.numeric ?? false,
+                        }),
+                        col.defaultPinned === 'left' && 'sticky left-0 z-10 bg-card',
+                        col.defaultPinned === 'right' && 'sticky right-0 z-10 bg-card max-md:relative max-md:right-auto'
+                      )}
                       {...(isMasked && { 'data-ph-mask': '' })}
+                      {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
                     >
                       {content}
                     </td>

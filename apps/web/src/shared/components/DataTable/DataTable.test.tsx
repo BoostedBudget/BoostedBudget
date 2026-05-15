@@ -1070,3 +1070,136 @@ describe('column reorder', () => {
     expect(liveRegion!.getAttribute('aria-atomic')).toBe('true')
   })
 })
+
+// Phase 3c: Column Pin
+describe('column pin', () => {
+  const pinnedColumns: ColumnDef<Row>[] = [
+    { id: 'name', header: 'Name', key: 'name', defaultPinned: 'left' },
+    { id: 'amount', header: 'Amount', key: 'amount', defaultPinned: 'right' },
+  ]
+
+  it('left-pinned column th and td both get data-pinned="left"', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={pinnedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    // th
+    const pinnedTh = container.querySelector('th[data-pinned="left"]')
+    expect(pinnedTh).not.toBeNull()
+    // tds — one per data row
+    const pinnedTds = container.querySelectorAll('td[data-pinned="left"]')
+    expect(pinnedTds.length).toBe(rows.length)
+  })
+
+  it('right-pinned column th and td both get data-pinned="right"', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={pinnedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const pinnedTh = container.querySelector('th[data-pinned="right"]')
+    expect(pinnedTh).not.toBeNull()
+    const pinnedTds = container.querySelectorAll('td[data-pinned="right"]')
+    expect(pinnedTds.length).toBe(rows.length)
+  })
+
+  it('non-pinned column has no data-pinned attribute', () => {
+    const columns: ColumnDef<Row>[] = [
+      { id: 'name', header: 'Name', key: 'name' },
+    ]
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={columns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const anyPinned = container.querySelectorAll('[data-pinned]')
+    expect(anyPinned.length).toBe(0)
+  })
+
+  it('left-pinned th has sticky and left-0 classes', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={pinnedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const pinnedTh = container.querySelector('th[data-pinned="left"]')!
+    expect(pinnedTh.className).toContain('sticky')
+    expect(pinnedTh.className).toContain('left-0')
+  })
+
+  it('right-pinned th has sticky and right-0 classes', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={pinnedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const pinnedTh = container.querySelector('th[data-pinned="right"]')!
+    expect(pinnedTh.className).toContain('sticky')
+    expect(pinnedTh.className).toContain('right-0')
+  })
+
+  it('left-pinned td has sticky, left-0, and z-10 classes', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={pinnedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const pinnedTd = container.querySelector('td[data-pinned="left"]')!
+    expect(pinnedTd.className).toContain('sticky')
+    expect(pinnedTd.className).toContain('left-0')
+    expect(pinnedTd.className).toContain('z-10')
+  })
+
+  it('right-pinned td has max-md:relative class (mobile degradation)', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={pinnedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const pinnedTd = container.querySelector('td[data-pinned="right"]')!
+    expect(pinnedTd.className).toContain('max-md:relative')
+  })
+})
