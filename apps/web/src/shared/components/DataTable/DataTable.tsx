@@ -129,6 +129,7 @@ function renderHeaderContent<T>(
 interface SortableColHeaderProps {
   col: {
     id: string
+    header?: string | React.ReactNode
     reorderable?: boolean
     align?: 'left' | 'right' | 'center'
     widthClass?: string
@@ -157,6 +158,7 @@ function SortableColHeader({
     <th
       ref={col.reorderable ? setNodeRef : undefined}
       scope="col"
+      aria-label={typeof col.header === 'string' && col.reorderable ? col.header : undefined}
       className={cn(
         headerCellVariants({ align: col.align }),
         col.widthClass,
@@ -178,6 +180,7 @@ function SortableColHeader({
             isDragging={draggingId === col.id}
             onKeyDown={(e) => onDragHandleKeyDown(col.id, e)}
             listeners={isFinePointerDnd ? listeners as Record<string, unknown> : undefined}
+            columnLabel={typeof col.header === 'string' ? col.header : undefined}
           />
         )}
         {headerContent}
