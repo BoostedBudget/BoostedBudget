@@ -3,13 +3,16 @@ import { Settings, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
-import { DataTable } from '@/shared/components/DataTable'
+import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { BudgetWithMetrics } from '../types'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 
 export type SortColumn = 'name' | 'period' | 'amount' | 'progress' | 'remaining'
 export type SortDirection = 'asc' | 'desc'
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const BUDGET_COLUMN_IDS = ['name', 'period', 'amount', 'income', 'progress', 'remaining', 'categories'] as const
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const BUDGET_SORTABLE_COLUMNS = new Set([
@@ -80,6 +83,9 @@ export function BudgetTable({
   const hasActions = !!(onManage || onDelete)
   const hasActiveFilters = (periodFilter?.length ?? 0) > 0 || progressRange != null
 
+  const { sizing, onSizingChange, columnOrder, onColumnOrderChange, columnVisibility, onColumnVisibilityChange } =
+    useTablePreferences('budgets', [...BUDGET_COLUMN_IDS])
+
   // Bridge DataTable 3-state sort → BudgetTable (column, direction) callback
   const handleSortChange = useCallback(
     (newSort: SortState) => {
@@ -118,6 +124,8 @@ export function BudgetTable({
       id: 'name',
       header: 'Name',
       sortable,
+      resizable: true,
+      reorderable: true,
       widthClass: 'min-w-[200px] max-sm:min-w-[150px]',
       render: (row) => (
         <div className="flex items-center gap-2">
@@ -134,6 +142,8 @@ export function BudgetTable({
       id: 'period',
       header: 'Period',
       sortable,
+      resizable: true,
+      reorderable: true,
       render: (row) => <>{getPeriodLabel(row.period)}</>,
       filter:
         periodOptions && onPeriodFilterChange
@@ -144,6 +154,8 @@ export function BudgetTable({
       id: 'amount',
       header: 'Amount',
       sortable,
+      resizable: true,
+      reorderable: true,
       align: 'right',
       numeric: true,
       render: (row) => (
@@ -155,6 +167,9 @@ export function BudgetTable({
     {
       id: 'income',
       header: 'Income',
+      resizable: true,
+      reorderable: true,
+      hideable: true,
       align: 'right',
       numeric: true,
       render: (row) =>
@@ -166,6 +181,9 @@ export function BudgetTable({
       id: 'progress',
       header: 'Progress',
       sortable,
+      resizable: true,
+      reorderable: true,
+      defaultPinned: 'left' as const,
       widthClass: 'min-w-[140px]',
       render: (row) => {
         const percentUsed = Math.round(row.percent_used)
@@ -204,6 +222,8 @@ export function BudgetTable({
       id: 'remaining',
       header: 'Remaining',
       sortable,
+      resizable: true,
+      reorderable: true,
       align: 'right',
       render: (row) => (
         <span
@@ -221,6 +241,9 @@ export function BudgetTable({
     {
       id: 'categories',
       header: 'Categories',
+      resizable: true,
+      reorderable: true,
+      hideable: true,
       align: 'center',
       render: (row) => <>{row.categories?.length ?? 0}</>,
     },
@@ -250,6 +273,12 @@ export function BudgetTable({
       onFiltersChange={handleFiltersChange}
       loading={loading}
       onRowClick={onRowClick}
+      columnSizing={sizing}
+      onColumnSizingChange={onSizingChange}
+      columnOrder={columnOrder}
+      onColumnOrderChange={onColumnOrderChange}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
       rowClassName={(row) =>
         cn(
           onRowClick && 'budget-table__row--clickable',

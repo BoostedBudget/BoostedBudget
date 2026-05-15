@@ -151,7 +151,7 @@ test.describe('Transaction Sort', () => {
 
     // Click the amount column header sort button
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
-    const sortBtn = amountHeader.locator('button').first()
+    const sortBtn = amountHeader.getByRole('button', { name: /^Amount$/i })
 
     // Arm listener BEFORE the click so the request can't race past it
     const sortReqPromise = page.waitForRequest(
@@ -178,7 +178,7 @@ test.describe('Transaction Sort', () => {
 
     // Sort by amount ascending
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
-    const sortBtn = amountHeader.locator('button').first()
+    const sortBtn = amountHeader.getByRole('button', { name: /^Amount$/i })
 
     // Arm listener BEFORE the click so the request can't race past it
     const sortReqPromise = page.waitForRequest(
@@ -247,7 +247,7 @@ test.describe('Transaction Sort', () => {
       (req) => req.url().includes('sort_by=amount') && req.url().includes('offset=0'),
       { timeout: 5_000 }
     )
-    await amountHeader.locator('button').first().click()
+    await amountHeader.getByRole('button', { name: /^Amount$/i }).click()
     await sortReqPromise
 
     // Verify offset=0 was sent after the sort change

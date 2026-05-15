@@ -462,6 +462,83 @@ describe('onRowClick', () => {
   })
 })
 
+// ── Phase 1 Addition: PII mask retention ─────────────────────────────────────
+describe('maskedColumnIds data-ph-mask attribute', () => {
+  it('column with render function + in maskedColumnIds → td has data-ph-mask', () => {
+    const columns: ColumnDef<Row>[] = [
+      {
+        id: 'name',
+        header: 'Name',
+        render: (row) => <span>{row.name}</span>,
+      },
+    ]
+    const { container } = renderTable({ columns, maskedColumnIds: ['name'] })
+    const tds = container.querySelectorAll('td[data-ph-mask]')
+    expect(tds.length).toBe(rows.length)
+  })
+
+  it('column with key (no render) + in maskedColumnIds → td has data-ph-mask', () => {
+    const columns: ColumnDef<Row>[] = [
+      { id: 'amount', header: 'Amount', key: 'amount' },
+    ]
+    const { container } = renderTable({ columns, maskedColumnIds: ['amount'] })
+    const tds = container.querySelectorAll('td[data-ph-mask]')
+    expect(tds.length).toBe(rows.length)
+  })
+
+  it('column NOT in maskedColumnIds → td has NO data-ph-mask', () => {
+    const columns: ColumnDef<Row>[] = [
+      { id: 'name', header: 'Name', key: 'name' },
+    ]
+    const { container } = renderTable({ columns, maskedColumnIds: ['amount'] })
+    const tds = container.querySelectorAll('td')
+    for (const td of tds) {
+      expect(td.hasAttribute('data-ph-mask')).toBe(false)
+    }
+  })
+
+  it('null/undefined cell value in masked column → td still has data-ph-mask', () => {
+    type NullRow = { id: string; val: string | null }
+    const nullRows: NullRow[] = [{ id: '1', val: null }]
+    const columns: ColumnDef<NullRow>[] = [
+      { id: 'val', header: 'Val', key: 'val' },
+    ]
+    const { container } = render(
+      <DataTable<NullRow>
+        data={nullRows}
+        columns={columns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        maskedColumnIds={['val']}
+      />
+    )
+    const tds = container.querySelectorAll('td[data-ph-mask]')
+    expect(tds.length).toBe(1)
+  })
+})
+
+// ── Phase 1 Addition: rowSelection API skeleton ───────────────────────────────
+describe('rowSelection prop', () => {
+  it('DataTable without rowSelection renders no checkbox column', () => {
+    const { container } = renderTable()
+    const checkboxes = container.querySelectorAll('input[type="checkbox"]')
+    expect(checkboxes.length).toBe(0)
+  })
+
+  it('DataTable with rowSelection={{}} renders without crashing', () => {
+    const onRowSelectionChange = mock((_: Record<string, boolean>) => {})
+    expect(() =>
+      renderTable({
+        rowSelection: {},
+        onRowSelectionChange,
+      } as Parameters<typeof renderTable>[0])
+    ).not.toThrow()
+  })
+})
+
 // ── Critical Regression Test 8 ───────────────────────────────────────────────
 // Server-side filter boundary contract: DataTable never calls APIs.
 // It only emits via onFiltersChange — parents decide whether that triggers
@@ -517,5 +594,904 @@ describe('server-side filter boundary', () => {
     } finally {
       globalThis.fetch = originalFetch
     }
+  })
+})
+
+// Phase 3a: Column Resize
+describe('column resize', () => {
+  const resizableColumns: ColumnDef<Row>[] = [
+    { id: 'name', header: 'Name', key: 'name', resizable: true },
+    { id: 'amount', header: 'Amount', key: 'amount' },
+  ]
+
+  it('renders resize handle when resizable:true; NOT rendered when resizable is absent', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handles = container.querySelectorAll('[data-testid="resize-handle"]')
+    // Only the "name" column has resizable:true -> 1 handle
+    expect(handles.length).toBe(1)
+  })
+
+  it('resize handle has correct ARIA attributes', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    expect(handle).not.toBeNull()
+    expect(handle.getAttribute('role')).toBe('separator')
+    expect(handle.getAttribute('aria-orientation')).toBe('vertical')
+    const valuenow = handle.getAttribute('aria-valuenow')
+    expect(valuenow).not.toBeNull()
+    expect(Number(valuenow)).toBeGreaterThan(0)
+  })
+
+  it('keyboard ArrowRight increases column width by 8px', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    const before = Number(handle.getAttribute('aria-valuenow'))
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    const after = Number(handle.getAttribute('aria-valuenow'))
+    expect(after).toBe(before + 8)
+  })
+
+  it('keyboard ArrowLeft decreases column width by 8px', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    // bump up first so ArrowLeft won't hit MIN_WIDTH
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    const before = Number(handle.getAttribute('aria-valuenow'))
+    fireEvent.keyDown(handle, { key: 'ArrowLeft' })
+    const after = Number(handle.getAttribute('aria-valuenow'))
+    expect(after).toBe(before - 8)
+  })
+
+  it('keyboard Shift+ArrowRight increases width by 32px', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    const before = Number(handle.getAttribute('aria-valuenow'))
+    fireEvent.keyDown(handle, { key: 'ArrowRight', shiftKey: true })
+    const after = Number(handle.getAttribute('aria-valuenow'))
+    expect(after).toBe(before + 32)
+  })
+
+  it('keyboard Shift+ArrowLeft decreases width by 32px', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    fireEvent.keyDown(handle, { key: 'ArrowRight', shiftKey: true }) // up first
+    const before = Number(handle.getAttribute('aria-valuenow'))
+    fireEvent.keyDown(handle, { key: 'ArrowLeft', shiftKey: true })
+    const after = Number(handle.getAttribute('aria-valuenow'))
+    expect(after).toBe(before - 32)
+  })
+
+  it('keyboard Home resets width to defaultSize', () => {
+    const columnsWithDefault: ColumnDef<Row>[] = [
+      { id: 'name', header: 'Name', key: 'name', resizable: true, defaultSize: 120 },
+      { id: 'amount', header: 'Amount', key: 'amount' },
+    ]
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={columnsWithDefault}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    fireEvent.keyDown(handle, { key: 'ArrowRight', shiftKey: true }) // change width
+    fireEvent.keyDown(handle, { key: 'Home' })
+    expect(Number(handle.getAttribute('aria-valuenow'))).toBe(120)
+  })
+
+  it('width cannot be resized below 50px (min-width)', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    for (let i = 0; i < 50; i++) {
+      fireEvent.keyDown(handle, { key: 'ArrowLeft' })
+    }
+    expect(Number(handle.getAttribute('aria-valuenow'))).toBeGreaterThanOrEqual(50)
+  })
+
+  it('coarse pointer: resize handle is aria-hidden', () => {
+    const originalMatchMedia = window.matchMedia
+    window.matchMedia = mock((query: string) => ({
+      matches: query === '(pointer: fine)' ? false : true,
+      media: query,
+      onchange: null,
+      addListener: mock(() => {}),
+      removeListener: mock(() => {}),
+      addEventListener: mock(() => {}),
+      removeEventListener: mock(() => {}),
+      dispatchEvent: mock(() => true),
+    })) as unknown as typeof window.matchMedia
+
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    expect(handle).not.toBeNull() // still in DOM
+    expect(handle.getAttribute('aria-hidden')).toBe('true')
+
+    window.matchMedia = originalMatchMedia
+  })
+
+  it('controlled mode: accepts columnSizing and calls onColumnSizingChange', () => {
+    const onColumnSizingChange = mock((_: Record<string, number>) => {})
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={resizableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnSizing={{ name: 200 }}
+        onColumnSizingChange={onColumnSizingChange}
+      />
+    )
+    const handle = container.querySelector('[data-testid="resize-handle"]')!
+    expect(Number(handle.getAttribute('aria-valuenow'))).toBe(200)
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    expect(onColumnSizingChange).toHaveBeenCalledWith({ name: 208 })
+  })
+
+  // TODO: PostHog event on resize -- skip in automated tests (PostHog not configured in test infra).
+  // Manual verification: confirm `column_resized` event fires with { column_id, new_width } in
+  // PostHog dashboard after dragging or keyboard-resizing a column header in staging/prod.
+})
+
+// Phase 3b: Column Reorder
+describe('column reorder', () => {
+  const reorderableColumns: ColumnDef<Row>[] = [
+    { id: 'name', header: 'Name', key: 'name', reorderable: true },
+    { id: 'amount', header: 'Amount', key: 'amount', reorderable: true },
+  ]
+
+  it('renders drag handle when reorderable:true; NOT rendered when reorderable is absent', () => {
+    const mixedColumns: ColumnDef<Row>[] = [
+      { id: 'name', header: 'Name', key: 'name', reorderable: true },
+      { id: 'amount', header: 'Amount', key: 'amount' },
+    ]
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={mixedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handles = container.querySelectorAll('[data-testid="drag-handle"]')
+    expect(handles.length).toBe(1)
+  })
+
+  it('drag handle has aria-pressed=false when not dragging', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelectorAll('[data-testid="drag-handle"]')[0]!
+    expect(handle.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('Space key picks up column: aria-pressed becomes true and aria-live announces pickup', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelectorAll('[data-testid="drag-handle"]')[0]!
+    fireEvent.keyDown(handle, { key: ' ' })
+    expect(handle.getAttribute('aria-pressed')).toBe('true')
+    const liveRegion = container.querySelector('[aria-live="polite"]')!
+    expect(liveRegion.textContent).toMatch(/Picked up column Name/i)
+  })
+
+  it('ArrowRight moves picked-up column one position right; live region updates', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handles = container.querySelectorAll('[data-testid="drag-handle"]')
+    const nameHandle = handles[0]!
+    fireEvent.keyDown(nameHandle, { key: ' ' })        // pick up
+    fireEvent.keyDown(nameHandle, { key: 'ArrowRight' }) // move right
+    const liveRegion = container.querySelector('[aria-live="polite"]')!
+    expect(liveRegion.textContent).toMatch(/position 2/i)
+  })
+
+  it('Space again drops the column and calls onColumnOrderChange', () => {
+    const onColumnOrderChange = mock((_: string[]) => {})
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        onColumnOrderChange={onColumnOrderChange}
+      />
+    )
+    const handles = container.querySelectorAll('[data-testid="drag-handle"]')
+    const nameHandle = handles[0]!
+    fireEvent.keyDown(nameHandle, { key: ' ' })          // pick up
+    fireEvent.keyDown(nameHandle, { key: 'ArrowRight' }) // move
+    fireEvent.keyDown(nameHandle, { key: ' ' })          // drop
+    expect(onColumnOrderChange).toHaveBeenCalledTimes(1)
+    expect(onColumnOrderChange.mock.calls[0][0]).toEqual(['amount', 'name'])
+  })
+
+  it('Escape cancels reorder: column returns to original position, live announces cancel', () => {
+    const onColumnOrderChange = mock((_: string[]) => {})
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        onColumnOrderChange={onColumnOrderChange}
+      />
+    )
+    const handles = container.querySelectorAll('[data-testid="drag-handle"]')
+    const nameHandle = handles[0]!
+    fireEvent.keyDown(nameHandle, { key: ' ' })          // pick up
+    fireEvent.keyDown(nameHandle, { key: 'ArrowRight' }) // move
+    fireEvent.keyDown(nameHandle, { key: 'Escape' })     // cancel
+    // onColumnOrderChange must NOT have been called
+    expect(onColumnOrderChange).not.toHaveBeenCalled()
+    const liveRegion = container.querySelector('[aria-live="polite"]')!
+    expect(liveRegion.textContent).toMatch(/Cancelled/i)
+  })
+
+  it('ArrowLeft moves picked-up column one position left; live region updates', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnOrder={['name', 'amount']}
+      />
+    )
+    // Pick up 'amount' (index 1) and move left to index 0
+    const handles = container.querySelectorAll('[data-testid="drag-handle"]')
+    const amountHandle = handles[1]!
+    fireEvent.keyDown(amountHandle, { key: ' ' })        // pick up amount
+    fireEvent.keyDown(amountHandle, { key: 'ArrowLeft' }) // move left
+    const liveRegion = container.querySelector('[aria-live="polite"]')!
+    expect(liveRegion.textContent).toMatch(/position 1/i)
+  })
+
+  it('Enter key picks up column (alternate to Space)', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelectorAll('[data-testid="drag-handle"]')[0]!
+    fireEvent.keyDown(handle, { key: 'Enter' })
+    expect(handle.getAttribute('aria-pressed')).toBe('true')
+    const liveRegion = container.querySelector('[aria-live="polite"]')!
+    expect(liveRegion.textContent).toMatch(/Picked up column Name/i)
+  })
+
+  it('Enter key drops the column (alternate drop key)', () => {
+    const onColumnOrderChange = mock((_: string[]) => {})
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        onColumnOrderChange={onColumnOrderChange}
+      />
+    )
+    const handles = container.querySelectorAll('[data-testid="drag-handle"]')
+    const nameHandle = handles[0]!
+    fireEvent.keyDown(nameHandle, { key: 'Enter' })      // pick up via Enter
+    fireEvent.keyDown(nameHandle, { key: 'ArrowRight' }) // move right
+    fireEvent.keyDown(nameHandle, { key: 'Enter' })      // drop via Enter
+    expect(onColumnOrderChange).toHaveBeenCalledTimes(1)
+    expect(onColumnOrderChange.mock.calls[0][0]).toEqual(['amount', 'name'])
+  })
+
+  it('ArrowRight does nothing when not in dragging mode', () => {
+    const onColumnOrderChange = mock((_: string[]) => {})
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        onColumnOrderChange={onColumnOrderChange}
+      />
+    )
+    const handle = container.querySelectorAll('[data-testid="drag-handle"]')[0]!
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    expect(onColumnOrderChange).not.toHaveBeenCalled()
+  })
+
+  it('controlled mode: accepts columnOrder and renders columns in given order', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnOrder={['amount', 'name']}
+      />
+    )
+    const ths = container.querySelectorAll('th')
+    // First column header should be Amount
+    expect(ths[0].textContent).toContain('Amount')
+    expect(ths[1].textContent).toContain('Name')
+  })
+
+  it('aria-live region exists in DOM for screen reader announcements', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const liveRegion = container.querySelector('[aria-live="polite"]')
+    expect(liveRegion).not.toBeNull()
+    expect(liveRegion!.getAttribute('aria-atomic')).toBe('true')
+  })
+})
+
+// Phase 3d: Column Visibility
+describe('column visibility', () => {
+  const visibilityColumns: ColumnDef<Row>[] = [
+    { id: 'name', header: 'Name', key: 'name', hideable: true },
+    { id: 'amount', header: 'Amount', key: 'amount', hideable: true },
+    { id: 'id', header: 'ID', key: 'id' }, // non-hideable
+  ]
+
+  it('hideable column appears in ColumnVisibilityMenu; non-hideable does not', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={visibilityColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnVisibility={{name: true, amount: true}}
+        onColumnVisibilityChange={mock((_: Record<string, boolean>) => {})}
+      />
+    )
+    // Menu trigger should be present
+    expect(screen.getByRole('button', { name: /columns/i })).toBeInTheDocument()
+    // Open the menu
+    fireEvent.click(screen.getByRole('button', { name: /columns/i }))
+    // hideable columns should be in menu
+    const menuItems = screen.getAllByRole('menuitemcheckbox')
+    const labels = menuItems.map((el) => el.textContent)
+    expect(labels).toContain('Name')
+    expect(labels).toContain('Amount')
+    // non-hideable column should NOT appear
+    expect(labels).not.toContain('ID')
+  })
+
+  it('toggling a checkbox calls onColumnVisibilityChange with column id set to false', () => {
+    const onColumnVisibilityChange = mock((_: Record<string, boolean>) => {})
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={visibilityColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnVisibility={{ name: true, amount: true }}
+        onColumnVisibilityChange={onColumnVisibilityChange}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /columns/i }))
+    const nameItem = screen.getByRole('menuitemcheckbox', { name: 'Name' })
+    fireEvent.click(nameItem)
+    expect(onColumnVisibilityChange).toHaveBeenCalledWith({ name: false, amount: true })
+  })
+
+  it('hidden column (visibility[id]=false) is not rendered in the table', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={visibilityColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnVisibility={{ name: false, amount: true }}
+        onColumnVisibilityChange={mock((_: Record<string, boolean>) => {})}
+      />
+    )
+    // Name column header and cells should not be present
+    const ths = container.querySelectorAll('th')
+    const thTexts = Array.from(ths).map((th) => th.textContent)
+    expect(thTexts.some((t) => t?.includes('Name'))).toBe(false)
+    // Alice and Bob are row data but via the 'name' column — should be absent
+    expect(screen.queryByText('Alice')).toBeNull()
+    expect(screen.queryByText('Bob')).toBeNull()
+  })
+
+  it('hidden column still exists in orderedColumns: when made visible again it returns to same position', () => {
+    const { rerender, container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={visibilityColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnVisibility={{ name: false, amount: true }}
+        onColumnVisibilityChange={mock((_: Record<string, boolean>) => {})}
+      />
+    )
+    // name is hidden — check amount is first visible column in thead
+    let ths = container.querySelectorAll('th')
+    expect(ths[0].textContent).toContain('Amount')
+
+    // make name visible again
+    rerender(
+      <DataTable<Row>
+        data={rows}
+        columns={visibilityColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnVisibility={{ name: true, amount: true }}
+        onColumnVisibilityChange={mock((_: Record<string, boolean>) => {})}
+      />
+    )
+    // name should be back at position 0 (original order)
+    ths = container.querySelectorAll('th')
+    expect(ths[0].textContent).toContain('Name')
+  })
+
+  it('ColumnVisibilityMenu is not rendered when no column has hideable:true', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    // baseColumns have no hideable:true → no Columns button
+    expect(screen.queryByRole('button', { name: /columns/i })).toBeNull()
+  })
+
+  it('ColumnVisibilityMenu is not rendered when hideable columns exist but onColumnVisibilityChange is absent', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={visibilityColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        // onColumnVisibilityChange intentionally omitted — menu should not render
+      />
+    )
+    expect(screen.queryByRole('button', { name: /columns/i })).toBeNull()
+  })
+
+  it('ArrowDown moves focus to next menu item, ArrowUp wraps to last item', async () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={visibilityColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnVisibility={{}}
+        onColumnVisibilityChange={mock((_: Record<string, boolean>) => {})}
+      />
+    )
+    // Open menu
+    fireEvent.click(screen.getByRole('button', { name: /columns/i }))
+    const items = screen.getAllByRole('menuitemcheckbox')
+    // First item should be focused on open
+    expect(document.activeElement).toBe(items[0])
+    // ArrowDown moves focus to second item
+    fireEvent.keyDown(items[0], { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(items[1])
+    // ArrowUp from second item moves to first
+    fireEvent.keyDown(items[1], { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(items[0])
+  })
+})
+
+// Phase 3d: Density
+describe('density', () => {
+  it('density="compact" applies compact padding classes to body cells', () => {
+    const { container } = renderTable({ density: 'compact' })
+    const td = container.querySelector('tbody td')!
+    expect(td.className).toContain('px-2')
+    expect(td.className).toContain('py-1.5')
+    expect(td.className).toContain('text-xs')
+  })
+
+  it('density="spacious" applies spacious padding classes to body cells', () => {
+    const { container } = renderTable({ density: 'spacious' })
+    const td = container.querySelector('tbody td')!
+    expect(td.className).toContain('px-6')
+    expect(td.className).toContain('py-5')
+  })
+
+  it('default density (no prop) uses comfortable padding (unchanged behavior)', () => {
+    const { container } = renderTable()
+    const td = container.querySelector('tbody td')!
+    // comfortable defaults: px-4 py-3.5 (same as before)
+    expect(td.className).toContain('px-4')
+    expect(td.className).toContain('py-3.5')
+  })
+})
+
+// Phase 3c: Column Pin
+describe('column pin', () => {
+  const pinnedColumns: ColumnDef<Row>[] = [
+    { id: 'name', header: 'Name', key: 'name', defaultPinned: 'left' },
+    { id: 'amount', header: 'Amount', key: 'amount', defaultPinned: 'right' },
+  ]
+
+  it('left-pinned column th and td both get data-pinned="left"', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={pinnedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    // th
+    const pinnedTh = container.querySelector('th[data-pinned="left"]')
+    expect(pinnedTh).not.toBeNull()
+    // tds — one per data row
+    const pinnedTds = container.querySelectorAll('td[data-pinned="left"]')
+    expect(pinnedTds.length).toBe(rows.length)
+  })
+
+  it('right-pinned column th and td both get data-pinned="right"', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={pinnedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const pinnedTh = container.querySelector('th[data-pinned="right"]')
+    expect(pinnedTh).not.toBeNull()
+    const pinnedTds = container.querySelectorAll('td[data-pinned="right"]')
+    expect(pinnedTds.length).toBe(rows.length)
+  })
+
+  it('non-pinned column has no data-pinned attribute', () => {
+    const columns: ColumnDef<Row>[] = [
+      { id: 'name', header: 'Name', key: 'name' },
+    ]
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={columns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const anyPinned = container.querySelectorAll('[data-pinned]')
+    expect(anyPinned.length).toBe(0)
+  })
+
+  it('left-pinned th has sticky, left-0, and background classes', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={pinnedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const pinnedTh = container.querySelector('th[data-pinned="left"]')!
+    expect(pinnedTh.className).toContain('sticky')
+    expect(pinnedTh.className).toContain('left-0')
+    expect(pinnedTh.className).toContain('bg-muted')
+  })
+
+  it('right-pinned th has sticky, right-0, background, and mobile degradation classes', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={pinnedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const pinnedTh = container.querySelector('th[data-pinned="right"]')!
+    expect(pinnedTh.className).toContain('sticky')
+    expect(pinnedTh.className).toContain('right-0')
+    expect(pinnedTh.className).toContain('bg-muted')
+    expect(pinnedTh.className).toContain('max-md:relative')
+  })
+
+  it('left-pinned td has sticky, left-0, z-10, and bg-card classes', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={pinnedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const pinnedTd = container.querySelector('td[data-pinned="left"]')!
+    expect(pinnedTd.className).toContain('sticky')
+    expect(pinnedTd.className).toContain('left-0')
+    expect(pinnedTd.className).toContain('z-10')
+    expect(pinnedTd.className).toContain('bg-card')
+  })
+
+  it('right-pinned td has sticky, right-0, z-10, bg-card, and max-md:relative classes', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={pinnedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const pinnedTd = container.querySelector('td[data-pinned="right"]')!
+    expect(pinnedTd.className).toContain('sticky')
+    expect(pinnedTd.className).toContain('right-0')
+    expect(pinnedTd.className).toContain('z-10')
+    expect(pinnedTd.className).toContain('bg-card')
+    expect(pinnedTd.className).toContain('max-md:relative')
+  })
+})
+
+// ── Phase G1/RC2: columnheader a11y-name ─────────────────────────────────────
+describe('columnheader accessible name (RC2 — DragHandle pollution fix)', () => {
+  it('reorderable+sortable column: getByRole columnheader finds header by exact column label', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={[{ id: 'name', header: 'Account', sortable: true, reorderable: true, key: 'name' }]}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    // Without aria-label on <th>, "Name from Contents" would compute
+    // "Drag to reorder column Account" — anchored regex would fail.
+    // With aria-label={col.header} the header's accessible name is just "Account".
+    const header = screen.getByRole('columnheader', { name: /^Account$/i })
+    expect(header).toBeInTheDocument()
+  })
+
+  it('non-reorderable column: columnheader accessible name is derived from header text naturally', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={[{ id: 'name', header: 'Balance', sortable: true, key: 'name' }]}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    // Non-reorderable columns have no DragHandle — no pollution, no aria-label needed.
+    const header = screen.getByRole('columnheader', { name: /^Balance$/i })
+    expect(header).toBeInTheDocument()
+  })
+})
+
+// ── Phase G1/D2b: DragHandle column-specific accessible names ─────────────────
+describe('DragHandle column-specific accessible names (D2b — Codex finding)', () => {
+  const multiReorderColumns: ColumnDef<Row>[] = [
+    { id: 'name', header: 'Account', sortable: true, reorderable: true, key: 'name' },
+    { id: 'amount', header: 'Balance', sortable: true, reorderable: true, key: 'amount' },
+  ]
+
+  it('each drag handle has a unique column-specific accessible name', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={multiReorderColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    expect(screen.getByRole('button', { name: /reorder Account column/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /reorder Balance column/i })).toBeInTheDocument()
+  })
+
+  it('sort button is still found by exact column name (not confused with DragHandle)', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={multiReorderColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    // Sort button has accessible name "Account" (just the label text from TableHeaderCell)
+    // DragHandle has name "Reorder Account column" — does NOT match /^Account$/i
+    const sortBtn = screen.getByRole('columnheader', { name: /^Account$/i })
+      .querySelector('button:not([data-testid="drag-handle"])')
+    expect(sortBtn).not.toBeNull()
   })
 })

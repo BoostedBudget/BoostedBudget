@@ -185,7 +185,7 @@ test.describe('Spending Reports Page — TopMerchantsTable Sort', () => {
 
     // The page defaults to total:desc sort; click Merchant to switch
     const merchantHeader = page.getByRole('columnheader', { name: /merchant/i })
-    const sortBtn = merchantHeader.locator('button')
+    const sortBtn = merchantHeader.getByRole('button', { name: /^Merchant$/i })
     await expect(sortBtn).toBeVisible()
     await sortBtn.click()
 
@@ -202,7 +202,7 @@ test.describe('Spending Reports Page — TopMerchantsTable Sort', () => {
 
     // Total column already sorted desc by default — click once to get asc (or null→asc)
     const totalHeader = page.getByRole('columnheader', { name: /total/i })
-    const sortBtn = totalHeader.locator('button')
+    const sortBtn = totalHeader.getByRole('button', { name: /^Total$/i })
     await sortBtn.click()
 
     // After two clicks from initial desc state: null (3-state cycle: asc→desc→null)

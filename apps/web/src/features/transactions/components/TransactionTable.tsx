@@ -7,9 +7,11 @@ import type { Account } from '../../accounts/types'
 import { getCategoryColor } from '@/lib/category-colors'
 import { getEffectiveCategory, getEffectiveCategoryLabel } from '@/shared/categories/getEffectiveCategory'
 import { formatTransactionAmount, isOutflow } from '@/shared/transactions/amount'
-import { DataTable } from '@/shared/components/DataTable'
+import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
+
+const TRANSACTION_COLUMN_IDS = ['date', 'merchant', 'account', 'category', 'amount'] as const
 
 export type TransactionSortColumn = 'date' | 'merchant' | 'amount' | 'category'
 export type SortDirection = 'asc' | 'desc'
@@ -82,6 +84,15 @@ export function TransactionTable({
 }: TransactionTableProps) {
   const hasActions = !!(onEdit || onCategorize)
 
+  const {
+    sizing,
+    onSizingChange,
+    columnOrder,
+    onColumnOrderChange,
+    columnVisibility,
+    onColumnVisibilityChange,
+  } = useTablePreferences('transactions', [...TRANSACTION_COLUMN_IDS])
+
   const handleSortChange = useCallback(
     (newSort: SortState) => {
       if (!onSort || !sortable) return
@@ -123,6 +134,8 @@ export function TransactionTable({
       id: 'date',
       header: 'Date',
       sortable,
+      resizable: true,
+      reorderable: true,
       widthClass: 'whitespace-nowrap',
       render: (row) => (
         <span className="text-muted-foreground">
@@ -134,6 +147,8 @@ export function TransactionTable({
       id: 'merchant',
       header: 'Description',
       sortable,
+      resizable: true,
+      reorderable: true,
       widthClass: 'min-w-[200px] max-md:min-w-[150px]',
       render: (row) => (
         <div>
@@ -158,6 +173,9 @@ export function TransactionTable({
     {
       id: 'account',
       header: 'Account',
+      resizable: true,
+      reorderable: true,
+      hideable: true,
       render: (row) => {
         const account = accountsMap[row.account_id]
         const accountDisplayName = account ? account.nickname || account.name : 'Unknown'
@@ -181,6 +199,9 @@ export function TransactionTable({
       id: 'category',
       header: 'Category',
       sortable,
+      resizable: true,
+      reorderable: true,
+      hideable: true,
       render: (row) => {
         const effective = getEffectiveCategory(row)
         const categoryLabel = getEffectiveCategoryLabel(effective)
@@ -204,6 +225,9 @@ export function TransactionTable({
       id: 'amount',
       header: 'Amount',
       sortable,
+      resizable: true,
+      reorderable: true,
+      defaultPinned: 'right',
       align: 'right',
       numeric: true,
       render: (row) => {
@@ -246,6 +270,12 @@ export function TransactionTable({
       onFiltersChange={handleFiltersChange}
       loading={loading}
       onRowClick={onRowClick}
+      columnSizing={sizing}
+      onColumnSizingChange={onSizingChange}
+      columnOrder={columnOrder}
+      onColumnOrderChange={onColumnOrderChange}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
       rowClassName={(row) =>
         cn(
           onRowClick && 'transaction-table__row--clickable',

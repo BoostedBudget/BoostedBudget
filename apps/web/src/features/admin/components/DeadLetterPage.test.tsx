@@ -434,4 +434,43 @@ describe('DeadLetterPage', () => {
     expect(screen.getByLabelText(/filter by start date/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/filter by end date/i)).toBeInTheDocument()
   })
+
+  describe('Phase 6 – DataTable migration', () => {
+    it('renders data-ph-mask on user_id column cells', () => {
+      mockUseListAdminDeadLetterJobs.mockReturnValue({
+        data: { ...mockListResponse, jobs: [mockJobs[0]] },
+        isLoading: false,
+        error: null,
+      })
+      mockUseGetAdminDeadLetterJobStats.mockReturnValue({ data: undefined, isLoading: false, error: null })
+      mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: () => {}, isPending: false })
+      mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: () => {}, isPending: false })
+      mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({ mutate: () => {}, isPending: false })
+
+      const { container } = render(<DeadLetterPage />, { wrapper: createWrapper() })
+
+      const maskedCells = container.querySelectorAll('td[data-ph-mask]')
+      expect(maskedCells.length).toBeGreaterThanOrEqual(1)
+    })
+
+    it('shows column visibility menu with hideable columns', () => {
+      mockUseListAdminDeadLetterJobs.mockReturnValue({
+        data: mockListResponse,
+        isLoading: false,
+        error: null,
+      })
+      mockUseGetAdminDeadLetterJobStats.mockReturnValue({ data: undefined, isLoading: false, error: null })
+      mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: () => {}, isPending: false })
+      mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: () => {}, isPending: false })
+      mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({ mutate: () => {}, isPending: false })
+
+      render(<DeadLetterPage />, { wrapper: createWrapper() })
+
+      const columnsBtn = screen.getByRole('button', { name: /columns/i })
+      fireEvent.click(columnsBtn)
+
+      expect(screen.getByRole('menuitemcheckbox', { name: /queue/i })).toBeInTheDocument()
+      expect(screen.getByRole('menuitemcheckbox', { name: /notes/i })).toBeInTheDocument()
+    })
+  })
 })

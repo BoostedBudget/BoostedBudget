@@ -1,7 +1,8 @@
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BudgetTable } from './BudgetTable'
 import type { BudgetWithMetrics } from '../types'
+import { mockUseUser, mockClerkUser } from '@/test/mocks/clerk'
 
 const mockBudgets: BudgetWithMetrics[] = [
   {
@@ -338,6 +339,43 @@ describe('BudgetTable', () => {
       const nameButton = screen.getByText('Name').closest('button')!
       fireEvent.click(nameButton)
       expect(onSort).toHaveBeenCalledWith('name', 'desc')
+    })
+  })
+
+  describe('Phase 5 – DataTable opt-in features', () => {
+    beforeEach(() => {
+      mockUseUser.mockReturnValue({ user: mockClerkUser, isLoaded: true, isSignedIn: true })
+    })
+
+    it('renders data-ph-mask on amount, income, and remaining columns', () => {
+      const { container } = render(<BudgetTable budgets={mockBudgets} />)
+      const maskedTds = container.querySelectorAll('td[data-ph-mask]')
+      // amount + income + remaining = 3 masked cells per row × 3 rows = 9
+      expect(maskedTds.length).toBeGreaterThanOrEqual(3)
+    })
+
+    it('renders resize handles', () => {
+      const { container } = render(<BudgetTable budgets={mockBudgets} />)
+      expect(container.querySelectorAll('[data-testid="resize-handle"]').length).toBeGreaterThan(0)
+    })
+
+    it('renders drag handles', () => {
+      const { container } = render(<BudgetTable budgets={mockBudgets} />)
+      expect(container.querySelectorAll('[data-testid="drag-handle"]').length).toBeGreaterThan(0)
+    })
+
+    it('progress column th has data-pinned="left"', () => {
+      render(<BudgetTable budgets={mockBudgets} />)
+      const progressTh = screen.getByRole('columnheader', { name: /progress/i })
+      expect(progressTh).toHaveAttribute('data-pinned', 'left')
+    })
+
+    it('categories and income columns appear in visibility menu', () => {
+      render(<BudgetTable budgets={mockBudgets} />)
+      const columnsButton = screen.getByRole('button', { name: /columns/i })
+      fireEvent.click(columnsButton)
+      expect(screen.getByRole('menuitemcheckbox', { name: /categories/i })).toBeInTheDocument()
+      expect(screen.getByRole('menuitemcheckbox', { name: /income/i })).toBeInTheDocument()
     })
   })
 

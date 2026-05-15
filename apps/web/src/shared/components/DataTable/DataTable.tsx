@@ -1,9 +1,33 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { cva } from 'class-variance-authority'
 import { cn } from '@/lib/utils'
 import { TableHeaderCell } from '../TableHeaderCell'
 import type { RangeValue } from '../ColumnFilterDropdown'
+import {
+  useReactTable,
+  getCoreRowModel,
+} from '@/shared/lib/tanstack'
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import type { DataTableProps, SortState, SortDirection, ColumnDef } from './types'
+import { bbSortToTanStack } from './adapters/sortAdapter'
+import { bbFiltersToTanStack } from './adapters/filterAdapter'
+import { useColumnResize } from './useColumnResize'
+import { ResizeHandle } from './ResizeHandle'
+import { useColumnOrder } from './useColumnOrder'
+import { DragHandle } from './DragHandle'
+import { ColumnVisibilityMenu } from './ColumnVisibilityMenu'
 
 const tableVariants = cva(
   'w-full border-collapse overflow-visible rounded-lg border border-border bg-card',
@@ -19,7 +43,7 @@ const tableVariants = cva(
 )
 
 const headerCellVariants = cva(
-  'border-b border-border px-4 py-3 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground',
+  'relative border-b border-border px-4 py-3 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground',
   {
     variants: {
       align: { left: 'text-left', right: 'text-right', center: 'text-center' },
@@ -30,13 +54,18 @@ const headerCellVariants = cva(
 )
 
 const bodyCellVariants = cva(
-  'border-b border-border px-4 py-3.5 text-sm align-middle max-md:px-3 max-md:py-2.5',
+  'border-b border-border align-middle',
   {
     variants: {
       align: { left: 'text-left', right: 'text-right', center: 'text-center' },
       numeric: { true: 'tabular-nums', false: '' },
+      density: {
+        compact: 'px-2 py-1.5 text-xs',
+        comfortable: 'px-4 py-3.5 text-sm max-md:px-3 max-md:py-2.5',
+        spacious: 'px-6 py-5 text-sm',
+      },
     },
-    defaultVariants: { align: 'left', numeric: false },
+    defaultVariants: { align: 'left', numeric: false, density: 'comfortable' },
   }
 )
 
@@ -97,6 +126,70 @@ function renderHeaderContent<T>(
   )
 }
 
+interface SortableColHeaderProps {
+  col: {
+    id: string
+    header?: string | React.ReactNode
+    reorderable?: boolean
+    align?: 'left' | 'right' | 'center'
+    widthClass?: string
+    defaultPinned?: 'left' | 'right'
+  }
+  sortAriaVal: React.AriaAttributes['aria-sort']
+  draggingId: string | null
+  isFinePointerDnd: boolean
+  onDragHandleKeyDown: (colId: string, e: React.KeyboardEvent) => void
+  headerContent: React.ReactNode
+  resizeHandle: React.ReactNode
+}
+
+function SortableColHeader({
+  col,
+  sortAriaVal,
+  draggingId,
+  isFinePointerDnd,
+  onDragHandleKeyDown,
+  headerContent,
+  resizeHandle,
+}: SortableColHeaderProps) {
+  const { setNodeRef, transform, transition, isDragging: isDndDragging, listeners } = useSortable({ id: col.id })
+
+  return (
+    <th
+      ref={col.reorderable ? setNodeRef : undefined}
+      scope="col"
+      aria-label={typeof col.header === 'string' && col.reorderable ? col.header : undefined}
+      className={cn(
+        headerCellVariants({ align: col.align }),
+        col.widthClass,
+        col.defaultPinned === 'left' && 'sticky left-0 z-20 bg-muted/50',
+        col.defaultPinned === 'right' && 'sticky right-0 z-20 bg-muted/50 max-md:relative max-md:right-auto',
+        isDndDragging && col.reorderable && 'opacity-50',
+      )}
+      style={col.reorderable && transform ? {
+        transform: CSS.Transform.toString(transform),
+        transition: transition ?? undefined,
+        zIndex: isDndDragging ? 30 : undefined,
+      } : undefined}
+      aria-sort={sortAriaVal}
+      {...(col.defaultPinned ? { 'data-pinned': col.defaultPinned } : {})}
+    >
+      <div className="flex items-center gap-1">
+        {col.reorderable && (
+          <DragHandle
+            isDragging={draggingId === col.id}
+            onKeyDown={(e) => onDragHandleKeyDown(col.id, e)}
+            listeners={isFinePointerDnd ? listeners as Record<string, unknown> : undefined}
+            columnLabel={typeof col.header === 'string' ? col.header : undefined}
+          />
+        )}
+        {headerContent}
+      </div>
+      {resizeHandle}
+    </th>
+  )
+}
+
 export function DataTable<T,>({
   data,
   columns,
@@ -113,8 +206,51 @@ export function DataTable<T,>({
   rowClassName,
   maskedColumnIds = [],
   rowActions,
+  // rowSelection and onRowSelectionChange accepted but UI not yet implemented (Phase 1 skeleton)
+  rowSelection: _rowSelection,
+  onRowSelectionChange: _onRowSelectionChange,
+  columnSizing: controlledSizing,
+  onColumnSizingChange,
+  columnOrder: controlledColumnOrder,
+  onColumnOrderChange,
+  columnVisibility = {},
+  onColumnVisibilityChange,
+  density = 'comfortable',
+  tableId,
 }: DataTableProps<T>) {
-  const totalCols = columns.length + (rowActions ? 1 : 0)
+  // totalCols is computed after visibleColumns below
+
+  const { sizing, isFinePointer, colRefs, getWidth, handleKeyDown, handlePointerDown } =
+    useColumnResize(controlledSizing, onColumnSizingChange, tableId)
+
+  const {
+    orderedColumns,
+    draggingId,
+    liveText,
+    isFinePointer: isFinePointerDnd,
+    handleDragHandleKeyDown,
+    handleDragEnd,
+  } = useColumnOrder(columns, controlledColumnOrder, onColumnOrderChange, tableId)
+
+  // Phase 3d: filter out hidden columns for rendering; orderedColumns preserves full order
+  const visibleColumns = orderedColumns.filter(
+    (col) => !(col.hideable && columnVisibility[col.id] === false)
+  )
+
+  const hasHideableColumns = columns.some((col) => col.hideable)
+  const totalCols = visibleColumns.length + (rowActions ? 1 : 0)
+  const reorderableIds = visibleColumns.filter((c) => c.reorderable).map((c) => c.id)
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+
+  // Stable ref for <col> element lookups during pointer drag
+  const colElRefs = useRef<Map<string, HTMLTableColElement | null>>(new Map())
+  function setColRef(columnId: string) {
+    return (el: HTMLTableColElement | null) => {
+      colElRefs.current.set(columnId, el)
+      colRefs.current.set(columnId, el)
+    }
+  }
 
   const handleSort = useCallback(
     (colId: string, _dirFromCell: SortDirection) => {
@@ -137,90 +273,172 @@ export function DataTable<T,>({
     [filters, onFiltersChange]
   )
 
-  return (
-    <table
-      className={cn(tableVariants({ loading }), className)}
-      aria-busy={loading ? true : undefined}
-    >
-      {caption && (
-        <caption className="caption-top text-left text-sm font-semibold text-foreground mb-2">
-          {caption}
-        </caption>
-      )}
-      <thead>
-        <tr className="bg-muted/50">
-          {columns.map((col) => (
-            <th
-              key={col.id}
-              scope="col"
-              className={cn(
-                headerCellVariants({ align: col.align }),
-                col.widthClass
-              )}
-              aria-sort={getAriaSort(sort, col.id)}
-            >
-              {renderHeaderContent(col, sort, filters, handleSort, handleFilterChange)}
-            </th>
-          ))}
-          {rowActions && (
-            <th
-              scope="col"
-              className={headerCellVariants({ align: 'right', action: true })}
-            >
-              Actions
-            </th>
-          )}
-        </tr>
-      </thead>
-      <tbody>
-        {data.length === 0 ? (
-          <tr>
-            <td colSpan={totalCols}>{emptyState}</td>
-          </tr>
-        ) : (
-          data.map((row) => (
-            <tr
-              key={rowKey(row)}
-              className={cn(
-                'transition-colors',
-                onRowClick && 'cursor-pointer hover:bg-muted/50',
-                rowClassName?.(row)
-              )}
-              onClick={onRowClick ? () => onRowClick(row) : undefined}
-            >
-              {columns.map((col) => {
-                const isMasked = maskedColumnIds.includes(col.id)
-                const content = col.render
-                  ? col.render(row)
-                  : col.key !== undefined
-                    ? String(row[col.key] ?? '')
-                    : null
+  // Wire up TanStack's useReactTable for state management.
+  // manualSorting/manualFiltering/manualPagination = true → we own data fetching.
+  // We still render our own <td> markup (never flexRender) to keep data-ph-mask in our control.
+  // Sort and filter events are owned by handleSort/handleFilterChange above (not TanStack's
+  // onChange callbacks) — this preserves the data-ph-mask guarantee on <td> and the
+  // controlled server-state contract. TanStack state is kept in sync via the state: { sorting, columnFilters } props.
+  const table = useReactTable({
+    data,
+    columns: [],
+    getCoreRowModel: getCoreRowModel(),
+    manualSorting: true,
+    manualFiltering: true,
+    manualPagination: true,
+    state: {
+      sorting: bbSortToTanStack(sort),
+      columnFilters: bbFiltersToTanStack(filters),
+    },
+  })
 
-                return (
-                  <td
-                    key={col.id}
-                    className={bodyCellVariants({
-                      align: col.align,
-                      numeric: col.numeric ?? false,
-                    })}
-                    {...(isMasked && { 'data-ph-mask': '' })}
-                  >
-                    {content}
-                  </td>
-                )
-              })}
-              {rowActions && (
-                <td
-                  className={bodyCellVariants({ align: 'right' })}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {rowActions(row)}
-                </td>
-              )}
-            </tr>
-          ))
+  // Use TanStack's row model for iteration — row.original gives back the typed T.
+  const rows = table.getRowModel().rows
+
+  useEffect(() => {
+    if (hasHideableColumns && !onColumnVisibilityChange && import.meta.env.DEV) {
+      console.warn('[DataTable] Some columns have hideable:true but onColumnVisibilityChange is not provided — column visibility menu will not render.')
+    }
+  }, [hasHideableColumns, onColumnVisibilityChange])
+
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragEnd={(event) =>
+        handleDragEnd({ active: { id: event.active.id }, over: event.over ? { id: event.over.id } : null })
+      }
+    >
+      <div className="flex flex-col gap-2">
+        {/* aria-live region for screen reader announcements during column drag */}
+        <div aria-live="polite" aria-atomic="true" className="sr-only">
+          {liveText}
+        </div>
+        {hasHideableColumns && onColumnVisibilityChange && (
+          <div className="flex items-center justify-end">
+            <ColumnVisibilityMenu
+              columns={columns}
+              visibility={columnVisibility}
+              onChange={onColumnVisibilityChange}
+              tableId={tableId}
+            />
+          </div>
         )}
-      </tbody>
-    </table>
+        <table
+          className={cn(tableVariants({ loading }), className)}
+          aria-busy={loading ? true : undefined}
+        >
+          {caption && (
+            <caption className="caption-top text-left text-sm font-semibold text-foreground mb-2">
+              {caption}
+            </caption>
+          )}
+          <colgroup>
+            {visibleColumns.map((col) => (
+              <col
+                key={col.id}
+                ref={setColRef(col.id)}
+                style={sizing[col.id] ? { width: `${sizing[col.id]}px` } : undefined}
+              />
+            ))}
+            {rowActions && <col style={{ width: '96px' }} />}
+          </colgroup>
+          <thead>
+            <SortableContext items={reorderableIds} strategy={horizontalListSortingStrategy}>
+              <tr className="bg-muted/50">
+                {visibleColumns.map((col) => (
+                  <SortableColHeader
+                    key={col.id}
+                    col={col}
+                    sortAriaVal={getAriaSort(sort, col.id)}
+                    draggingId={draggingId}
+                    isFinePointerDnd={isFinePointerDnd}
+                    onDragHandleKeyDown={handleDragHandleKeyDown}
+                    headerContent={renderHeaderContent(col, sort, filters, handleSort, handleFilterChange)}
+                    resizeHandle={col.resizable ? (
+                      <ResizeHandle
+                        columnId={col.id}
+                        currentWidth={getWidth(col.id, col.defaultSize)}
+                        isCoarsePointer={!isFinePointer}
+                        onKeyDown={(e) => handleKeyDown(e, col.id, col.defaultSize)}
+                        onPointerDown={(e) =>
+                          handlePointerDown(e, col.id, colElRefs.current.get(col.id) ?? null)
+                        }
+                      />
+                    ) : null}
+                  />
+                ))}
+                {rowActions && (
+                  <th
+                    scope="col"
+                    className={headerCellVariants({ align: 'right', action: true })}
+                  >
+                    Actions
+                  </th>
+                )}
+              </tr>
+            </SortableContext>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={totalCols}>{emptyState}</td>
+              </tr>
+            ) : (
+              rows.map((tanStackRow) => {
+                const row = tanStackRow.original
+                return (
+                  <tr
+                    key={rowKey(row)}
+                    className={cn(
+                      'transition-colors',
+                      onRowClick && 'cursor-pointer hover:bg-muted/50',
+                      rowClassName?.(row)
+                    )}
+                    onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  >
+                    {visibleColumns.map((col) => {
+                      const isMasked = maskedColumnIds.includes(col.id)
+                      const content = col.render
+                        ? col.render(row)
+                        : col.key !== undefined
+                          ? String(row[col.key] ?? '')
+                          : null
+
+                      return (
+                        <td
+                          key={col.id}
+                          className={cn(
+                            bodyCellVariants({
+                              align: col.align,
+                              numeric: col.numeric ?? false,
+                              density,
+                            }),
+                            col.defaultPinned === 'left' && 'sticky left-0 z-10 bg-card',
+                            col.defaultPinned === 'right' && 'sticky right-0 z-10 bg-card max-md:relative max-md:right-auto'
+                          )}
+                          {...(isMasked && { 'data-ph-mask': '' })}
+                          {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
+                        >
+                          {content}
+                        </td>
+                      )
+                    })}
+                    {rowActions && (
+                      <td
+                        className={bodyCellVariants({ align: 'right', density })}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {rowActions(row)}
+                      </td>
+                    )}
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </DndContext>
   )
 }
