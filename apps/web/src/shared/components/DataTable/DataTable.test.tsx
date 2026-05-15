@@ -973,6 +973,25 @@ describe('column reorder', () => {
     expect(liveRegion.textContent).toMatch(/position 1/i)
   })
 
+  it('Enter key picks up column (alternate to Space)', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    const handle = container.querySelectorAll('[data-testid="drag-handle"]')[0]!
+    fireEvent.keyDown(handle, { key: 'Enter' })
+    expect(handle.getAttribute('aria-pressed')).toBe('true')
+    const liveRegion = container.querySelector('[aria-live="polite"]')!
+    expect(liveRegion.textContent).toMatch(/Picked up column Name/i)
+  })
+
   it('Enter key drops the column (alternate drop key)', () => {
     const onColumnOrderChange = mock((_: string[]) => {})
     const { container } = render(
@@ -989,7 +1008,7 @@ describe('column reorder', () => {
     )
     const handles = container.querySelectorAll('[data-testid="drag-handle"]')
     const nameHandle = handles[0]!
-    fireEvent.keyDown(nameHandle, { key: ' ' })          // pick up
+    fireEvent.keyDown(nameHandle, { key: 'Enter' })      // pick up via Enter
     fireEvent.keyDown(nameHandle, { key: 'ArrowRight' }) // move right
     fireEvent.keyDown(nameHandle, { key: 'Enter' })      // drop via Enter
     expect(onColumnOrderChange).toHaveBeenCalledTimes(1)

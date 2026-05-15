@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import type { ColumnDef } from './types'
 
 function moveItem<T>(arr: T[], fromIndex: number, toIndex: number): T[] {
@@ -12,7 +12,7 @@ export interface UseColumnOrderResult<T> {
   orderedColumns: ColumnDef<T>[]
   draggingId: string | null
   liveText: string
-  handleDragHandleKeyDown: (colId: string) => (e: React.KeyboardEvent) => void
+  handleDragHandleKeyDown: (colId: string, e: React.KeyboardEvent) => void
 }
 
 export function useColumnOrder<T>(
@@ -27,7 +27,16 @@ export function useColumnOrder<T>(
   const [draftOrder, setDraftOrder] = useState<string[] | null>(null)
   const [liveText, setLiveText] = useState('')
 
-  const committedOrder = controlledOrder ?? internalOrder
+  // Reconcile committed order when columns change: prune removed ids, append new ones.
+  // Done during render (not in an effect) to avoid cascading re-renders.
+  const committedOrder = useMemo(() => {
+    const base = controlledOrder ?? internalOrder
+    const colIds = new Set(columns.map((c) => c.id))
+    const pruned = base.filter((id) => colIds.has(id))
+    const newIds = columns.map((c) => c.id).filter((id) => !base.includes(id))
+    if (pruned.length === base.length && newIds.length === 0) return base
+    return [...pruned, ...newIds]
+  }, [controlledOrder, internalOrder, columns])
   const displayOrder = draftOrder ?? committedOrder
 
   const orderedColumns = displayOrder
@@ -46,10 +55,10 @@ export function useColumnOrder<T>(
   )
 
   const handleDragHandleKeyDown = useCallback(
-    (colId: string) => (e: React.KeyboardEvent) => {
+    (colId: string, e: React.KeyboardEvent) => {
       if (!columns.find((c) => c.id === colId)?.reorderable) return
 
-      if (e.key === ' ' || (e.key === 'Enter' && draggingId === colId)) {
+      if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault()
         if (draggingId === null) {
           setDraggingId(colId)
