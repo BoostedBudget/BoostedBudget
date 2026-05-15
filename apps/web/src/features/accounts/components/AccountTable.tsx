@@ -2,12 +2,15 @@ import { useCallback } from 'react'
 import { Edit, Trash2, EyeOff, Unplug } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { Account } from '@boostedbudget/api-client/models'
-import { DataTable } from '@/shared/components/DataTable'
+import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 
 export type SortColumn = 'institution' | 'name' | 'type' | 'balance'
 export type SortDirection = 'asc' | 'desc'
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const ACCOUNT_COLUMN_IDS = ['institution', 'name', 'type', 'mask', 'balance'] as const
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const ACCOUNT_SORTABLE_COLUMNS = new Set([
@@ -105,6 +108,9 @@ export function AccountTable({
     (typeFilter?.length ?? 0) > 0 ||
     balanceRange != null
 
+  const { sizing, onSizingChange, columnOrder, onColumnOrderChange, columnVisibility, onColumnVisibilityChange } =
+    useTablePreferences('accounts', [...ACCOUNT_COLUMN_IDS])
+
   const handleSortChange = useCallback(
     (newSort: SortState) => {
       if (!onSort || !sortable) return
@@ -146,6 +152,8 @@ export function AccountTable({
       id: 'institution',
       header: 'Institution',
       sortable,
+      resizable: true,
+      reorderable: true,
       widthClass: 'min-w-[120px] max-md:min-w-[100px]',
       render: (row) => (
         <span className="font-medium text-foreground">
@@ -161,6 +169,8 @@ export function AccountTable({
       id: 'name',
       header: 'Account',
       sortable,
+      resizable: true,
+      reorderable: true,
       widthClass: 'min-w-[180px] max-md:min-w-[150px]',
       render: (row) => {
         const isDisconnected = row.linked_item_status === 'disconnected'
@@ -199,6 +209,8 @@ export function AccountTable({
       id: 'type',
       header: 'Type',
       sortable,
+      resizable: true,
+      reorderable: true,
       render: (row) => <>{getAccountTypeLabel(row.type, row.subtype)}</>,
       filter:
         typeOptions && onTypeFilterChange
@@ -209,12 +221,18 @@ export function AccountTable({
       id: 'mask',
       header: 'Acct #',
       numeric: true,
+      resizable: true,
+      reorderable: true,
+      hideable: true,
       render: (row) => <>{row.mask ? `••••${row.mask}` : '—'}</>,
     },
     {
       id: 'balance',
       header: 'Balance',
       sortable,
+      resizable: true,
+      reorderable: true,
+      defaultPinned: 'right' as const,
       align: 'right',
       numeric: true,
       render: (row) => {
@@ -260,6 +278,12 @@ export function AccountTable({
       onFiltersChange={handleFiltersChange}
       loading={loading}
       onRowClick={onRowClick}
+      columnSizing={sizing}
+      onColumnSizingChange={onSizingChange}
+      columnOrder={columnOrder}
+      onColumnOrderChange={onColumnOrderChange}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
       rowClassName={(row) => {
         const isDisconnected = row.linked_item_status === 'disconnected'
         return cn(
