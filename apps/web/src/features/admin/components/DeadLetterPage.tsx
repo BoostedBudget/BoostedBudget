@@ -151,8 +151,7 @@ export function DeadLetterPage() {
     },
   ]
 
-  const handleRetry = (jobId: number, e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handleRetry = (jobId: number) => {
     retryMutation.mutate({ id: jobId }, {
       onSuccess: () => trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_RETRY, { job_id: jobId }),
     })
@@ -374,7 +373,7 @@ export function DeadLetterPage() {
                 <button
                   type="button"
                   className="inline-flex items-center px-2.5 py-1.5 border border-border rounded-md bg-background text-foreground text-[0.8125rem] font-medium cursor-pointer transition-colors hover:bg-primary hover:border-primary hover:text-primary-foreground disabled:opacity-45 disabled:cursor-not-allowed"
-                  onClick={(e) => handleRetry(job.id, e)}
+                  onClick={() => handleRetry(job.id)}
                   disabled={!!job.retried_at || retryMutation.isPending}
                   aria-label={`Retry job ${job.id}`}
                 >
