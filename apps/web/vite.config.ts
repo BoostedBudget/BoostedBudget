@@ -52,5 +52,32 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
+    rollupOptions: {
+      output: {
+        entryFileNames: 'assets/entry-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]',
+        manualChunks(id: string) {
+          // Stable budgetable vendor bucket — prevents Rollup from emitting
+          // auto-named common chunks that slip past size-limit
+          if (id.includes('node_modules')) return 'vendor';
+
+          if (!id.includes('/apps/web/src/')) return;
+          if (id.includes('/legal/')) return 'legal';
+          if (id.includes('/features/admin/')) return 'admin';
+          if (id.includes('/features/billing/') || id.includes('/features/pricing/') || id.includes('/features/subscription/')) return 'billing';
+          if (id.includes('/features/transactions/')) return 'transactions';
+          if (id.includes('/features/accounts/')) return 'accounts';
+          if (id.includes('/features/budgets/')) return 'budgets';
+          if (id.includes('/features/rules/')) return 'rules';
+          if (id.includes('/features/dashboard/')) return 'dashboard';
+          if (id.includes('/features/reports/')) return 'reports';
+          if (id.includes('/features/net-worth/')) return 'net-worth';
+          if (id.includes('/features/savings/')) return 'savings';
+          if (id.includes('/features/auto-categorization/')) return 'auto-categorization';
+          if (id.includes('/features/profile/') || id.includes('/features/deletion/')) return 'profile';
+        },
+      },
+    },
   },
 })
