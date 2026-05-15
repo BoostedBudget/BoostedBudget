@@ -233,9 +233,9 @@ describe('AccountBreakdownTable', () => {
         onSort={onSort}
       />
     )
-    // Click the Institution header button
+    // Click the Institution sort button (not the drag handle)
     const institutionBtn = screen.getAllByRole('button').find(
-      (b) => b.textContent?.includes('Institution') || b.closest('th')?.textContent?.includes('Institution')
+      (b) => b.textContent?.includes('Institution')
     )
     if (institutionBtn) fireEvent.click(institutionBtn)
     expect(onSort).toHaveBeenCalled()
