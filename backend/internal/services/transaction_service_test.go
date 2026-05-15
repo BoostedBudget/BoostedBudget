@@ -153,6 +153,10 @@ func (m *MockTransactionRepository) UpdateEffectiveCategoryNameByCustomCategoryI
 	return args.Get(0).(int64), args.Error(1)
 }
 
+func (m *MockTransactionRepository) GetByUserIDKeyset(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]domain.Transaction, *domain.TransactionCursor, error) {
+	return nil, nil, nil
+}
+
 // TestTransactionService_ListTransactions_EnforcesMaxLimit tests that the service enforces a maximum limit of 100
 func TestTransactionService_ListTransactions_EnforcesMaxLimit(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)

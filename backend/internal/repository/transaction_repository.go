@@ -144,6 +144,17 @@ type TransactionRepository interface {
 	// for all transactions in a user's account that are assigned to the given custom category.
 	// Used when a custom category is renamed. Returns the number of rows updated.
 	UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID string, customCategoryID string) (int64, error)
+
+	// GetByUserIDKeyset retrieves transactions using keyset (cursor) pagination.
+	// cursor=nil returns the first page. Fetches limit+1 rows to detect end-of-list.
+	// Returns a slice of up to limit transactions and the cursor for the next page (nil = end of list).
+	GetByUserIDKeyset(
+		ctx context.Context,
+		userID string,
+		filters domain.TransactionFilters,
+		cursor *domain.TransactionCursor,
+		limit int,
+	) ([]domain.Transaction, *domain.TransactionCursor, error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -1564,4 +1575,181 @@ func (r *transactionRepository) UpdateEffectiveCategoryNameByCustomCategoryID(ct
 		return 0, fmt.Errorf("failed to update effective category name: %w", err)
 	}
 	return ct.RowsAffected(), nil
+}
+
+// GetByUserIDKeyset retrieves transactions using keyset (cursor) pagination.
+// cursor=nil returns the first page. Fetches limit+1 rows to detect end-of-list.
+// Returns a slice of up to limit transactions and the cursor for the next page (nil = end of list).
+func (r *transactionRepository) GetByUserIDKeyset(
+	ctx context.Context,
+	userID string,
+	filters domain.TransactionFilters,
+	cursor *domain.TransactionCursor,
+	limit int,
+) ([]domain.Transaction, *domain.TransactionCursor, error) {
+	// Build base WHERE clause using existing helper (handles all filter conditions).
+	whereClause, args := buildWhereClause(userID, filters)
+
+	// Resolve sort column and direction from filters (or cursor if provided).
+	sortKey := filters.SortBy
+	if sortKey == "" {
+		sortKey = "date"
+	}
+	sortDir := strings.ToLower(filters.SortDir)
+	if sortDir == "" {
+		sortDir = "desc"
+	}
+
+	col, ok := sortColumnMap[sortKey]
+	if !ok {
+		col = sortColumnMap["date"]
+		sortKey = "date"
+	}
+
+	// If cursor is provided, append keyset predicate.
+	// Disjunction form prevents index skip for rows with the same sort value:
+	//   DESC: (col < $cv) OR (col = $cv AND id > $cid)
+	//   ASC:  (col > $cv) OR (col = $cv AND id > $cid)
+	// Note: id tiebreaker is always ASC so "id > $cid" works in both directions.
+	if cursor != nil {
+		argBase := len(args) + 1 // next placeholder index
+		if cursor.SV == nil {
+			// NULL sentinel: rows where sort column IS NULL come after non-NULL in DESC,
+			// and before non-NULL in ASC. For cursor position after a NULL row we only
+			// advance via the id tiebreaker.
+			// Predicate: (col IS NULL AND id > $cid)
+			args = append(args, cursor.ID.String())
+			whereClause += fmt.Sprintf(" AND (%s IS NULL AND id > $%d)", col, argBase)
+		} else {
+			var cmpOp string
+			if sortDir == "asc" {
+				cmpOp = ">"
+			} else {
+				cmpOp = "<"
+			}
+			args = append(args, *cursor.SV, cursor.ID.String())
+			// Use ::date cast for date sort column since the value is stored as a date string.
+			var colCast string
+			if sortKey == "date" {
+				colCast = col + "::date"
+				whereClause += fmt.Sprintf(
+					" AND ((%s %s $%d::date) OR (%s = $%d::date AND id > $%d))",
+					colCast, cmpOp, argBase, colCast, argBase, argBase+1,
+				)
+			} else {
+				whereClause += fmt.Sprintf(
+					" AND ((%s %s $%d) OR (%s = $%d AND id > $%d))",
+					col, cmpOp, argBase, col, argBase, argBase+1,
+				)
+			}
+		}
+	}
+
+	// Build ORDER BY: sort column direction + id ASC tiebreaker (always ASC).
+	dir := "DESC"
+	if sortDir == "asc" {
+		dir = "ASC"
+	}
+	orderBy := fmt.Sprintf("ORDER BY %s %s, id ASC", col, dir)
+
+	// Append LIMIT (fetch one extra to detect whether another page exists).
+	args = append(args, limit+1)
+	limitPlaceholder := len(args)
+
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM transactions
+		%s
+		%s
+		LIMIT $%d
+	`, transactionSelectExpr, whereClause, orderBy, limitPlaceholder)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to query transactions (keyset): %w", err)
+	}
+	defer rows.Close()
+
+	txs, err := r.scanTransactions(rows)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// If we fetched limit+1 rows, a next page exists.
+	// Build the cursor from rows[limit-1] (the last row of the current page).
+	if len(txs) == limit+1 {
+		last := txs[limit-1]
+		nextCursor, buildErr := buildKeysetCursor(last, sortKey, sortDir)
+		if buildErr != nil {
+			return nil, nil, fmt.Errorf("failed to build next cursor: %w", buildErr)
+		}
+		return txs[:limit], nextCursor, nil
+	}
+
+	// End of list — return all rows and nil cursor.
+	return txs, nil, nil
+}
+
+// buildKeysetCursor constructs a TransactionCursor from a transaction row.
+func buildKeysetCursor(tx domain.Transaction, sortKey, sortDir string) (*domain.TransactionCursor, error) {
+	txID, err := uuid.Parse(tx.ID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid transaction id %q: %w", tx.ID, err)
+	}
+
+	cursor := &domain.TransactionCursor{
+		V:  1,
+		K:  sortKey,
+		D:  sortDir,
+		ID: txID,
+	}
+
+	switch sortKey {
+	case "date":
+		// Use COALESCE(authorized_date, date) — prefer authorized_date when present.
+		effDate := tx.Date
+		if tx.AuthorizedDate != nil {
+			effDate = *tx.AuthorizedDate
+		}
+		sv := effDate.Format(time.DateOnly)
+		cursor.SV = &sv
+		utcDate := effDate.UTC()
+		cursor.SVT = &utcDate
+	case "merchant":
+		// COALESCE(merchant_name, name)
+		var sv string
+		if tx.MerchantName != nil {
+			sv = *tx.MerchantName
+		} else {
+			sv = tx.Name
+		}
+		cursor.SV = &sv
+	case "amount":
+		sv := fmt.Sprintf("%g", tx.Amount)
+		cursor.SV = &sv
+	case "category":
+		// COALESCE(effective_category_name, effective_pfc_primary, pfc_primary)
+		switch {
+		case tx.EffectiveCategoryName != nil:
+			cursor.SV = tx.EffectiveCategoryName
+		case tx.EffectivePFCPrimary != nil:
+			cursor.SV = tx.EffectivePFCPrimary
+		case tx.PFCPrimary != nil:
+			cursor.SV = tx.PFCPrimary
+		// nil SV = NULL sentinel
+		}
+	default:
+		sv := effDateStr(tx)
+		cursor.SV = &sv
+	}
+
+	return cursor, nil
+}
+
+// effDateStr returns COALESCE(authorized_date, date) formatted as a date string.
+func effDateStr(tx domain.Transaction) string {
+	if tx.AuthorizedDate != nil {
+		return tx.AuthorizedDate.Format(time.DateOnly)
+	}
+	return tx.Date.Format(time.DateOnly)
 }
