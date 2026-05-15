@@ -10,11 +10,36 @@ function moveItem<T>(arr: T[], fromIndex: number, toIndex: number): T[] {
   return next
 }
 
+/** Pure helper: move `activeId` to the position of `overId` in `ids`. */
+export function arrayMoveById(ids: string[], activeId: string, overId: string): string[] {
+  const fromIndex = ids.indexOf(activeId)
+  const toIndex = ids.indexOf(overId)
+  if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return ids
+  return moveItem(ids, fromIndex, toIndex)
+}
+
+function detectFinePointer(): boolean {
+  try {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
+    return window.matchMedia('(pointer: fine)').matches
+  } catch {
+    return true
+  }
+}
+
+// Minimal type covering only what handleDragEnd uses — avoids importing all of @dnd-kit/core.
+type DragEndEventMinimal = {
+  active: { id: string | number }
+  over: { id: string | number } | null
+}
+
 export interface UseColumnOrderResult<T> {
   orderedColumns: ColumnDef<T>[]
   draggingId: string | null
   liveText: string
+  isFinePointer: boolean
   handleDragHandleKeyDown: (colId: string, e: React.KeyboardEvent) => void
+  handleDragEnd: (event: DragEndEventMinimal) => void
 }
 
 export function useColumnOrder<T>(
@@ -30,6 +55,7 @@ export function useColumnOrder<T>(
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [draftOrder, setDraftOrder] = useState<string[] | null>(null)
   const [liveText, setLiveText] = useState('')
+  const [isFinePointer] = useState<boolean>(() => detectFinePointer())
 
   // Reconcile committed order when columns change: prune removed ids, append new ones.
   // Done during render (not in an effect) to avoid cascading re-renders.
@@ -133,5 +159,27 @@ export function useColumnOrder<T>(
     [draggingId, draftOrder, committedOrder, columns, setOrder, trackEvent, tableId]
   )
 
-  return { orderedColumns, draggingId, liveText, handleDragHandleKeyDown }
+  const handleDragEnd = useCallback(
+    (event: DragEndEventMinimal) => {
+      if (!isFinePointer) return
+      const { active, over } = event
+      if (!over || active.id === over.id) return
+      const activeId = String(active.id)
+      const overId = String(over.id)
+      const newOrder = arrayMoveById(committedOrder, activeId, overId)
+      if (newOrder === committedOrder) return
+      setOrder(newOrder)
+      const fromIndex = committedOrder.indexOf(activeId)
+      const toIndex = newOrder.indexOf(activeId)
+      trackEvent(ANALYTICS_EVENTS.DATATABLE_COLUMN_REORDERED, {
+        tableId,
+        columnId: activeId,
+        fromIndex,
+        toIndex,
+      })
+    },
+    [isFinePointer, committedOrder, setOrder, trackEvent, tableId]
+  )
+
+  return { orderedColumns, draggingId, liveText, isFinePointer, handleDragHandleKeyDown, handleDragEnd }
 }

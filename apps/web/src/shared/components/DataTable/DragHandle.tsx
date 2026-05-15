@@ -4,15 +4,17 @@ import { cn } from '@/lib/utils'
 interface DragHandleProps {
   isDragging: boolean
   onKeyDown: (e: React.KeyboardEvent) => void
+  listeners?: Record<string, unknown>
 }
 
-export function DragHandle({ isDragging, onKeyDown }: DragHandleProps) {
+export function DragHandle({ isDragging, onKeyDown, listeners }: DragHandleProps) {
   return (
     <button
       type="button"
       data-testid="drag-handle"
       aria-label="Drag to reorder column"
       aria-pressed={isDragging}
+      {...(listeners ?? {})}
       onKeyDown={onKeyDown}
       className={cn(
         'inline-flex items-center justify-center rounded p-0.5',
