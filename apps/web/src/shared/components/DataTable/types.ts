@@ -42,21 +42,9 @@ export interface DataTableProps<T> {
   data: T[]
   columns: ColumnDef<T>[]
   rowKey: (row: T) => string
-  /**
-   * @deprecated Use TanStack's sorting state internally. This prop will be removed in Phase 3.
-   */
   sort: SortState
-  /**
-   * @deprecated Use TanStack's onSortingChange internally. This prop will be removed in Phase 3.
-   */
   onSortChange: (s: SortState) => void
-  /**
-   * @deprecated Use TanStack's column filters internally. This prop will be removed in Phase 3.
-   */
   filters: FilterState
-  /**
-   * @deprecated Use TanStack's onColumnFiltersChange internally. This prop will be removed in Phase 3.
-   */
   onFiltersChange: (f: FilterState) => void
   emptyState?: ReactNode
   caption?: string
