@@ -366,7 +366,7 @@ export function DeadLetterPage() {
             onFiltersChange={() => {}}
             loading={isLoading}
             onRowClick={(job) => setSelectedJobId(job.id)}
-            maskedColumnIds={['user_id']}
+            maskedColumnIds={['user_id', 'notes']}
             columnVisibility={columnVisibility}
             onColumnVisibilityChange={onColumnVisibilityChange}
             rowActions={(job) => (
