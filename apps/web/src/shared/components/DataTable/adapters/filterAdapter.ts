@@ -4,7 +4,9 @@ import type { RangeValue } from '../../ColumnFilterDropdown'
 
 /**
  * Convert BoostedBudget's FilterState to TanStack's ColumnFiltersState array.
- * Null values are dropped (they represent "no filter active" for that column).
+ * Null values are intentionally dropped: TanStack represents "no filter" as absence
+ * from the array, not as null. tanStackFiltersToBb does NOT restore null keys — this
+ * asymmetry is intentional. Consumers must not rely on null keys surviving a round-trip.
  */
 export function bbFiltersToTanStack(
   filters: FilterState

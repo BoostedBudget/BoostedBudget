@@ -8,9 +8,8 @@ import {
   getCoreRowModel,
 } from '@/shared/lib/tanstack'
 import type { DataTableProps, SortState, SortDirection, ColumnDef } from './types'
-import { bbSortToTanStack, tanStackSortToBb } from './adapters/sortAdapter'
-import { bbFiltersToTanStack, tanStackFiltersToBb } from './adapters/filterAdapter'
-import { bbColumnsToTanStack } from './adapters/columnAdapter'
+import { bbSortToTanStack } from './adapters/sortAdapter'
+import { bbFiltersToTanStack } from './adapters/filterAdapter'
 
 const tableVariants = cva(
   'w-full border-collapse overflow-visible rounded-lg border border-border bg-card',
@@ -150,9 +149,12 @@ export function DataTable<T,>({
   // Wire up TanStack's useReactTable for state management.
   // manualSorting/manualFiltering/manualPagination = true → we own data fetching.
   // We still render our own <td> markup (never flexRender) to keep data-ph-mask in our control.
+  // Sort and filter events are owned by handleSort/handleFilterChange above (not TanStack's
+  // onChange callbacks) — this preserves the data-ph-mask guarantee on <td> and the
+  // controlled server-state contract. TanStack state is kept in sync via the state: { sorting, columnFilters } props.
   const table = useReactTable({
     data,
-    columns: bbColumnsToTanStack(columns),
+    columns: [],
     getCoreRowModel: getCoreRowModel(),
     manualSorting: true,
     manualFiltering: true,
@@ -160,18 +162,6 @@ export function DataTable<T,>({
     state: {
       sorting: bbSortToTanStack(sort),
       columnFilters: bbFiltersToTanStack(filters),
-    },
-    onSortingChange: (updater) => {
-      const prevSorting = bbSortToTanStack(sort)
-      const nextSorting =
-        typeof updater === 'function' ? updater(prevSorting) : updater
-      onSortChange(tanStackSortToBb(nextSorting))
-    },
-    onColumnFiltersChange: (updater) => {
-      const prevFilters = bbFiltersToTanStack(filters)
-      const nextFilters =
-        typeof updater === 'function' ? updater(prevFilters) : updater
-      onFiltersChange(tanStackFiltersToBb(nextFilters))
     },
   })
 

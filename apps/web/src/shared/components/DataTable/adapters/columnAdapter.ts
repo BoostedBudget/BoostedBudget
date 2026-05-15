@@ -1,23 +1,27 @@
-import type { TanStackColumnDef } from '@/shared/lib/tanstack'
 import type { ColumnDef } from '../types'
 
 /**
- * Translate BoostedBudget's BBColumnDef array into TanStack ColumnDef array
- * for use with useReactTable.
+ * DEAD CODE in Phase 1 — preserved for Phase 3 (resize/reorder state).
  *
- * NOTE: The `render` and `key` fields are intentionally NOT mapped to TanStack's
- * `cell` accessor — cell rendering stays entirely in the DataTable facade so that
- * data-ph-mask (GDPR/PII) attributes remain under our complete control.
+ * This function translates BoostedBudget's BBColumnDef array into TanStack ColumnDef array,
+ * but it is not currently used: DataTable passes columns: [] to useReactTable because
+ * rendering is owned by the facade loop below (never flexRender), and manualSorting: true
+ * means TanStack doesn't call accessorFn or any column.cell callback.
  *
- * TanStack only receives the minimal metadata it needs: id, header label,
- * enableSorting flag, and an accessorFn so its row model can build rows from data.
+ * When Phase 3 adds resize/reorder state management, this function will be re-imported and
+ * used to provide the column metadata TanStack needs for those features.
+ *
+ * Do not delete — mark for Phase 3 re-engagement.
  */
 export function bbColumnsToTanStack<T>(
-  columns: ColumnDef<T>[]
-): TanStackColumnDef<T>[] {
+  _columns: ColumnDef<T>[]
+): Array<Record<string, unknown>> {
+  // Return empty array — rendering and sort metadata are owned by DataTable facade.
+  // Phase 3: uncomment the original implementation below when resize/reorder state is added.
+  return []
+
+  /*
   return columns.map((col): TanStackColumnDef<T> => {
-    // Use accessorFn variant so TanStack can build a row model.
-    // The cell rendering function itself is NOT set here — we own <td> markup entirely.
     const accessorFn: (row: T) => unknown = col.sortAccessor
       ? col.sortAccessor
       : col.key !== undefined
@@ -31,4 +35,5 @@ export function bbColumnsToTanStack<T>(
       enableSorting: col.sortable ?? false,
     } as TanStackColumnDef<T>
   })
+  */
 }
