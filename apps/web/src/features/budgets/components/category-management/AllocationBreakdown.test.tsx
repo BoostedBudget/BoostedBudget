@@ -7,7 +7,9 @@ describe('AllocationBreakdown', () => {
   const createMockCategory = (overrides?: Partial<BudgetCategory>): BudgetCategory => ({
     id: 'cat-1',
     budget_id: 'budget-1',
-    category: ['Food and Drink', 'Restaurants'],
+    category_kind: 'pfc',
+    pfc_primary: 'FOOD_AND_DRINK',
+    pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
     allocated_amount: 500,
     spent_amount: 250,
     tags: [],
@@ -20,8 +22,8 @@ describe('AllocationBreakdown', () => {
   describe('Rendering', () => {
     it('should render segmented bar with proportional widths', () => {
       const categories = [
-        createMockCategory({ id: 'cat-1', category: ['Food'], allocated_amount: 1000 }),
-        createMockCategory({ id: 'cat-2', category: ['Transport'], allocated_amount: 500 }),
+        createMockCategory({ id: 'cat-1', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: undefined, allocated_amount: 1000 }),
+        createMockCategory({ id: 'cat-2', pfc_primary: 'TRANSPORTATION', pfc_detailed: undefined, allocated_amount: 500 }),
       ];
 
       render(
@@ -57,12 +59,16 @@ describe('AllocationBreakdown', () => {
       const categories = [
         createMockCategory({
           id: 'cat-1',
-          category: ['Food and Drink', 'Restaurants'],
+          category_kind: 'pfc',
+          pfc_primary: 'FOOD_AND_DRINK',
+          pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
           allocated_amount: 500,
         }),
         createMockCategory({
           id: 'cat-2',
-          category: ['Transportation', 'Gas'],
+          category_kind: 'pfc',
+          pfc_primary: 'TRANSPORTATION',
+          pfc_detailed: 'TRANSPORTATION_GAS',
           allocated_amount: 300,
         }),
       ];
@@ -75,9 +81,9 @@ describe('AllocationBreakdown', () => {
         />
       );
 
-      // Check legend items exist
-      expect(screen.getByText(/food and drink.*restaurants/i)).toBeInTheDocument();
-      expect(screen.getByText(/transportation.*gas/i)).toBeInTheDocument();
+      // Check legend items exist — no display fields so formatPFCEnum fallback is used
+      expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument();
+      expect(screen.getByText('Transportation › Gas')).toBeInTheDocument();
       expect(screen.getByText('$500.00')).toBeInTheDocument();
       expect(screen.getByText('$300.00')).toBeInTheDocument();
     });
@@ -172,7 +178,8 @@ describe('AllocationBreakdown', () => {
       const categories = [
         createMockCategory({
           id: 'cat-1',
-          category: ['Food'],
+          pfc_primary: 'FOOD_AND_DRINK',
+          pfc_detailed: undefined,
           allocated_amount: 500,
         }),
       ];
@@ -303,6 +310,42 @@ describe('AllocationBreakdown', () => {
       // Use getAllByText since it now appears in both header and live region
       const percentageElements = screen.getAllByText(/75%.*allocated/i);
       expect(percentageElements.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('Soft Warning — over-income amber banner', () => {
+    it('should show amber income warning when total allocated exceeds expected income', () => {
+      const categories = [
+        createMockCategory({ id: 'cat-1', allocated_amount: 800 }),
+        createMockCategory({ id: 'cat-2', allocated_amount: 400 }),
+      ];
+
+      render(
+        <AllocationBreakdown
+          categories={categories}
+          totalIncome={1000}
+          unallocated={-200}
+        />
+      );
+
+      // The visible (non-sr-only) warning text should mention exceeding income
+      expect(screen.getByText(/exceed.*expected income/i)).toBeInTheDocument();
+    });
+
+    it('should not show amber income warning when allocations are within income', () => {
+      const categories = [
+        createMockCategory({ id: 'cat-1', allocated_amount: 500 }),
+      ];
+
+      render(
+        <AllocationBreakdown
+          categories={categories}
+          totalIncome={1000}
+          unallocated={500}
+        />
+      );
+
+      expect(screen.queryByText(/exceed.*expected income/i)).not.toBeInTheDocument();
     });
   });
 

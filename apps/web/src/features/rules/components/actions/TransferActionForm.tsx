@@ -7,9 +7,8 @@
  */
 
 import { useCallback } from 'react'
-import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
+import { useActiveAccounts } from '@/features/accounts/hooks'
 import type { TransferAction } from '../../types'
-import './TransferActionForm.css'
 
 export interface TransferActionFormProps {
   /** Current action configuration */
@@ -51,7 +50,7 @@ export function TransferActionForm({
   disabled = false,
   className = '',
 }: TransferActionFormProps) {
-  const { data: accounts, isLoading } = useGetAccounts()
+  const { accounts: accountsList, isLoading } = useActiveAccounts()
 
   // Current amount type description
   const currentDescription = AMOUNT_TYPES.find(
@@ -61,22 +60,28 @@ export function TransferActionForm({
   // Handlers
   const handleFromAccountChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const selectedId = e.target.value
+      const account = (accountsList ?? []).find((a) => a.id === selectedId)
       onChange({
         ...action,
-        from_account_id: e.target.value,
+        from_account_id: selectedId,
+        from_user_account_id: account?.user_account_id,
       })
     },
-    [action, onChange]
+    [action, onChange, accountsList]
   )
 
   const handleToAccountChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const selectedId = e.target.value
+      const account = (accountsList ?? []).find((a) => a.id === selectedId)
       onChange({
         ...action,
-        to_account_id: e.target.value,
+        to_account_id: selectedId,
+        to_user_account_id: account?.user_account_id,
       })
     },
-    [action, onChange]
+    [action, onChange, accountsList]
   )
 
   const handleAmountTypeChange = useCallback(
@@ -111,14 +116,14 @@ export function TransferActionForm({
     [action, onChange]
   )
 
-  const accountsList = accounts?.accounts ?? []
+
 
   return (
-    <div className={`transfer-form ${className}`.trim()}>
+    <div className={`flex flex-col gap-5 ${className}`.trim()}>
       {/* Account Selection */}
-      <div className="transfer-form__row">
-        <div className="transfer-form__field">
-          <label htmlFor="from-account" className="transfer-form__label">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="from-account" className="text-sm font-medium text-foreground">
             From Account
           </label>
           <select
@@ -126,10 +131,10 @@ export function TransferActionForm({
             value={action.from_account_id}
             onChange={handleFromAccountChange}
             disabled={disabled || isLoading}
-            className="transfer-form__select"
+            className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <option value="">Select an account...</option>
-            {accountsList.map((account: { id: string; name: string; institution_name?: string | null }) => (
+            {(accountsList ?? []).map((account: { id: string; name: string; institution_name?: string | null }) => (
               <option key={account.id} value={account.id}>
                 {account.name}
                 {account.institution_name && ` (${account.institution_name})`}
@@ -138,8 +143,8 @@ export function TransferActionForm({
           </select>
         </div>
 
-        <div className="transfer-form__field">
-          <label htmlFor="to-account" className="transfer-form__label">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="to-account" className="text-sm font-medium text-foreground">
             To Account
           </label>
           <select
@@ -147,10 +152,10 @@ export function TransferActionForm({
             value={action.to_account_id}
             onChange={handleToAccountChange}
             disabled={disabled || isLoading}
-            className="transfer-form__select"
+            className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <option value="">Select an account...</option>
-            {accountsList.map((account: { id: string; name: string; institution_name?: string | null }) => (
+            {(accountsList ?? []).map((account: { id: string; name: string; institution_name?: string | null }) => (
               <option key={account.id} value={account.id}>
                 {account.name}
                 {account.institution_name && ` (${account.institution_name})`}
@@ -161,8 +166,8 @@ export function TransferActionForm({
       </div>
 
       {/* Amount Type */}
-      <div className="transfer-form__field">
-        <label htmlFor="amount-type" className="transfer-form__label">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="amount-type" className="text-sm font-medium text-foreground">
           Amount Type
         </label>
         <select
@@ -170,7 +175,7 @@ export function TransferActionForm({
           value={action.amount_type}
           onChange={handleAmountTypeChange}
           disabled={disabled}
-          className="transfer-form__select"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {AMOUNT_TYPES.map((type) => (
             <option key={type.value} value={type.value}>
@@ -179,19 +184,19 @@ export function TransferActionForm({
           ))}
         </select>
         {currentDescription && (
-          <p className="transfer-form__description">{currentDescription}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{currentDescription}</p>
         )}
       </div>
 
       {/* Amount Input (for fixed and percentage) */}
       {(action.amount_type === 'fixed' || action.amount_type === 'percentage') && (
-        <div className="transfer-form__field">
-          <label htmlFor="amount" className="transfer-form__label">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="amount" className="text-sm font-medium text-foreground">
             Amount
           </label>
-          <div className="transfer-form__input-group">
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
             {action.amount_type === 'fixed' && (
-              <span className="transfer-form__prefix">$</span>
+              <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
             )}
             <input
               id="amount"
@@ -201,10 +206,10 @@ export function TransferActionForm({
               disabled={disabled}
               min={0}
               max={action.amount_type === 'percentage' ? 100 : undefined}
-              className="transfer-form__input"
+              className="min-w-0 flex-1 border-none bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
             />
             {action.amount_type === 'percentage' && (
-              <span className="transfer-form__suffix">%</span>
+              <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">%</span>
             )}
           </div>
         </div>
@@ -212,12 +217,12 @@ export function TransferActionForm({
 
       {/* Threshold Input (for excess type) */}
       {action.amount_type === 'excess' && (
-        <div className="transfer-form__field">
-          <label htmlFor="threshold" className="transfer-form__label">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="threshold" className="text-sm font-medium text-foreground">
             Threshold
           </label>
-          <div className="transfer-form__input-group">
-            <span className="transfer-form__prefix">$</span>
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+            <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
             <input
               id="threshold"
               type="number"
@@ -225,10 +230,10 @@ export function TransferActionForm({
               onChange={handleThresholdChange}
               disabled={disabled}
               min={0}
-              className="transfer-form__input"
+              className="min-w-0 flex-1 border-none bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
             />
           </div>
-          <p className="transfer-form__description">
+          <p className="mt-1 text-xs text-muted-foreground">
             Transfer any amount above the threshold to the target account
           </p>
         </div>

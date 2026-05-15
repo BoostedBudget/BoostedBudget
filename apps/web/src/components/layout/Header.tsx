@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth, useUser, useClerk } from '@clerk/react-router'
 import { Navigation } from './Navigation'
@@ -5,6 +6,7 @@ import { UserDropdown } from './UserDropdown'
 import { MobileNav } from './MobileNav'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { NotificationBell, NotificationDrawer } from '@/features/notifications'
 
 interface HeaderProps {
   className?: string
@@ -14,6 +16,7 @@ export function Header({ className }: HeaderProps) {
   const { isSignedIn: isAuthenticated } = useAuth()
   const { user: clerkUser } = useUser()
   const { openSignIn, signOut } = useClerk()
+  const [notifOpen, setNotifOpen] = useState(false)
 
   // Map Clerk user to a format compatible with existing components
   const user = clerkUser ? {
@@ -34,11 +37,8 @@ export function Header({ className }: HeaderProps) {
     <header
       role="banner"
       className={cn(
-        'sticky top-0 z-50',
-        'bg-background/80 backdrop-blur-sm',
-        'border-b border-border',
-        'px-4 md:px-6 h-16',
-        'flex items-center justify-between',
+        'sticky top-0 z-50 bg-background/80 backdrop-blur-sm border-b border-border',
+        'px-4 md:px-6 h-16 flex items-center justify-between',
         className
       )}
     >
@@ -55,8 +55,16 @@ export function Header({ className }: HeaderProps) {
       {/* Desktop Navigation */}
       {isAuthenticated && <Navigation className="hidden md:flex" />}
 
+      {/* Notification Drawer */}
+      {isAuthenticated && (
+        <NotificationDrawer open={notifOpen} onClose={() => setNotifOpen(false)} />
+      )}
+
       {/* Right side actions */}
       <div className="flex items-center gap-4">
+        {/* Notification Bell */}
+        {isAuthenticated && <NotificationBell onOpen={() => setNotifOpen(true)} />}
+
         {/* Desktop: Login or User Dropdown */}
         {isAuthenticated ? (
           <UserDropdown user={user || {}} onLogout={handleLogout} className="hidden md:flex" />

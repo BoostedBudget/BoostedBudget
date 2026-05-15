@@ -22,7 +22,8 @@ Authorization: Bearer <your-jwt-token>
 
 ## Regions
 
-All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+Use the GET /api/v1/regions endpoint to discover available data residency regions.
+Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
@@ -51,6 +52,10 @@ export const getGetUserRulesResponseMock = (): CategorizationRule[] | null =>
         ]),
         type: faker.string.alpha({ length: { min: 10, max: 20 } }),
         value: {},
+        value_display: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
       })),
       null,
     ]),
@@ -71,11 +76,32 @@ export const getGetUserRulesResponseMock = (): CategorizationRule[] | null =>
     priority: faker.number.int(),
     source: faker.string.alpha({ length: { min: 10, max: 20 } }),
     tag_behavior: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    target_category: faker.helpers.arrayElement([
-      Array.from(
-        { length: faker.number.int({ min: 1, max: 10 }) },
-        (_, i) => i + 1,
-      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    target_custom_category_display: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    target_custom_category_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    target_kind: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    target_pfc_detailed: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    target_pfc_detailed_display: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    target_pfc_primary: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    target_pfc_primary_display: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),
     target_tags: faker.helpers.arrayElement([
@@ -105,6 +131,10 @@ export const getCreateRuleResponseMock = (
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: {},
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),
@@ -125,11 +155,32 @@ export const getCreateRuleResponseMock = (
   priority: faker.number.int(),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   tag_behavior: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  target_category: faker.helpers.arrayElement([
-    Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  target_custom_category_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_custom_category_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_detailed: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_detailed_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_primary_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   target_tags: faker.helpers.arrayElement([
@@ -160,6 +211,10 @@ export const getGetRuleByIDResponseMock = (
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: {},
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),
@@ -180,11 +235,32 @@ export const getGetRuleByIDResponseMock = (
   priority: faker.number.int(),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   tag_behavior: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  target_category: faker.helpers.arrayElement([
-    Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  target_custom_category_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_custom_category_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_detailed: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_detailed_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_primary_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   target_tags: faker.helpers.arrayElement([
@@ -215,6 +291,10 @@ export const getUpdateRuleResponseMock = (
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: {},
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),
@@ -235,11 +315,32 @@ export const getUpdateRuleResponseMock = (
   priority: faker.number.int(),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   tag_behavior: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  target_category: faker.helpers.arrayElement([
-    Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  target_custom_category_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_custom_category_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_detailed: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_detailed_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_primary_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   target_tags: faker.helpers.arrayElement([
@@ -270,6 +371,10 @@ export const getToggleRuleResponseMock = (
       ]),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: {},
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),
@@ -290,11 +395,32 @@ export const getToggleRuleResponseMock = (
   priority: faker.number.int(),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   tag_behavior: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  target_category: faker.helpers.arrayElement([
-    Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  target_custom_category_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_custom_category_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_detailed: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_detailed_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  target_pfc_primary_display: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   target_tags: faker.helpers.arrayElement([

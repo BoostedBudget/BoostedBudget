@@ -8,7 +8,6 @@
  * Route: /legal/terms (see App.tsx)
  */
 
-import './PrivacyPolicy.css'
 import { Link } from 'react-router-dom'
 
 export function TermsOfService() {
@@ -16,7 +15,7 @@ export function TermsOfService() {
     <div className="privacy-policy">
       <div className="privacy-policy-container">
         <h1>Terms of Service</h1>
-        <p className="last-updated">Last Updated: March 29, 2026</p>
+        <p className="last-updated">Last Updated: April 4, 2026</p>
 
         <section>
           <h2>1. Acceptance of Terms</h2>
@@ -194,11 +193,12 @@ export function TermsOfService() {
           </ul>
           <p>
             Your data is preserved in read-only mode. If you do not request deletion, we may retain
-            your account data for up to <strong>24 months</strong> after cancellation to allow
-            reactivation. After that period, we will delete or anonymize it unless a longer retention
+            your account data for up to <strong>6 months</strong> after cancellation. We will notify
+            you by email at 30 days and 7 days before your data is scheduled for permanent deletion.
+            After the retention period, we will delete or anonymize it unless a longer retention
             period is legally required. You may request deletion at any time (see our{' '}
             <Link to="/legal/privacy-policy">Privacy Policy</Link>). You can subscribe or resubscribe
-            at any time during the retention period to immediately restore full access to all features.
+            at any time during this period to immediately restore full access to all features.
           </p>
         </section>
 
@@ -537,7 +537,7 @@ export function TermsOfService() {
           <h2>Key Points Summary</h2>
           <ul>
             <li><strong>Free trial:</strong> 60 days, no credit card required, no ads</li>
-            <li><strong>After trial:</strong> Read-only access — data retained for up to 24 months (or until you request deletion)</li>
+            <li><strong>After trial:</strong> Read-only access — data retained for up to 6 months (or until you request deletion)</li>
             <li><strong>Refunds:</strong> No refunds for any billing period; access continues until period ends</li>
             <li><strong>Price changes:</strong> 30 days' email notice before any price increase</li>
             <li><strong>No money movement:</strong> We never move money on your behalf; not a bank or financial institution</li>

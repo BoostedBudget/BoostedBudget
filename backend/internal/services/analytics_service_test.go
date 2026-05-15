@@ -13,6 +13,9 @@ import (
 type mockAnalyticsRepository struct {
 	getCashFlowAggregationFn func(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error)
 	getCashFlowGroupedFn     func(ctx context.Context, userID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error)
+	getSpendingByCategoryFn  func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error)
+	getSpendingByMerchantFn  func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error)
+	getSpendingTrendsFn      func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error)
 }
 
 func (m *mockAnalyticsRepository) GetCashFlowAggregation(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
@@ -25,6 +28,27 @@ func (m *mockAnalyticsRepository) GetCashFlowAggregation(ctx context.Context, us
 func (m *mockAnalyticsRepository) GetCashFlowGrouped(ctx context.Context, userID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
 	if m.getCashFlowGroupedFn != nil {
 		return m.getCashFlowGroupedFn(ctx, userID, filters)
+	}
+	return nil, nil
+}
+
+func (m *mockAnalyticsRepository) GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+	if m.getSpendingByCategoryFn != nil {
+		return m.getSpendingByCategoryFn(ctx, userID, filters)
+	}
+	return nil, nil
+}
+
+func (m *mockAnalyticsRepository) GetSpendingByMerchant(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error) {
+	if m.getSpendingByMerchantFn != nil {
+		return m.getSpendingByMerchantFn(ctx, userID, filters, limit)
+	}
+	return nil, nil
+}
+
+func (m *mockAnalyticsRepository) GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error) {
+	if m.getSpendingTrendsFn != nil {
+		return m.getSpendingTrendsFn(ctx, userID, filters)
 	}
 	return nil, nil
 }
@@ -369,4 +393,503 @@ func TestAbsFloat(t *testing.T) {
 			t.Errorf("absFloat(%f) = %f, expected %f", tt.input, result, tt.expected)
 		}
 	}
+}
+
+// TestFormatCategoryName_UsesCuratedRegistry verifies analytics uses the curated PFC registry
+// (via PFCPrimaryDisplayName) and outputs "Food And Drink" not "Food And Drink".
+func TestFormatCategoryName_UsesCuratedRegistry(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"FOOD_AND_DRINK", "Food And Drink"}, // curated registry uses "And" not "&"
+		{"TRANSPORTATION", "Transportation"},
+		{"GENERAL_MERCHANDISE", "General Merchandise"},
+		{"UNCATEGORIZED", "Uncategorized"},
+		{"PERSONAL_CARE", "Personal Care"},
+		{"HOME_IMPROVEMENT", "Home Improvement"},
+		{"ENTERTAINMENT", "Entertainment"},
+	}
+
+	for _, tt := range tests {
+		result := PFCPrimaryDisplayName(tt.input)
+		if result != tt.expected {
+			t.Errorf("PFCPrimaryDisplayName(%q) = %q, expected %q", tt.input, result, tt.expected)
+		}
+	}
+}
+
+func TestAnalyticsService_GetSpendingByCategory(t *testing.T) {
+	ctx := context.Background()
+	loc := time.UTC
+
+	t.Run("returns categories with percentages and display names", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				return []domain.SpendingByCategory{
+					{Category: "FOOD_AND_DRINK", Total: 300.0, TransactionCount: 20},
+					{Category: "TRANSPORTATION", Total: 100.0, TransactionCount: 8},
+					{Category: "ENTERTAINMENT", Total: 100.0, TransactionCount: 5},
+				}, nil
+			},
+		}
+
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+		}
+
+		result, err := service.GetSpendingByCategory(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if result.TotalSpent != 500.0 {
+			t.Errorf("expected total 500, got %f", result.TotalSpent)
+		}
+		if len(result.Categories) != 3 {
+			t.Fatalf("expected 3 categories, got %d", len(result.Categories))
+		}
+
+		// First category: FOOD_AND_DRINK
+		cat := result.Categories[0]
+		if cat.Category != "FOOD_AND_DRINK" {
+			t.Errorf("expected FOOD_AND_DRINK, got %s", cat.Category)
+		}
+		if cat.PFCPrimaryDisplay != "Food And Drink" {
+			t.Errorf("expected 'Food And Drink', got %s", cat.PFCPrimaryDisplay)
+		}
+		// 300/500 * 100 = 60%
+		if cat.Percentage != 60.0 {
+			t.Errorf("expected 60%%, got %f", cat.Percentage)
+		}
+	})
+
+	t.Run("repository error is returned", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				return nil, errors.New("db error")
+			},
+		}
+
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+		}
+
+		_, err := service.GetSpendingByCategory(ctx, "user-123", filters)
+		if err == nil {
+			t.Error("expected error from repository")
+		}
+	})
+
+	t.Run("returns empty categories when no data", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				return []domain.SpendingByCategory{}, nil
+			},
+		}
+
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+		}
+
+		result, err := service.GetSpendingByCategory(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.TotalSpent != 0 {
+			t.Errorf("expected total 0, got %f", result.TotalSpent)
+		}
+		if len(result.Categories) != 0 {
+			t.Errorf("expected 0 categories, got %d", len(result.Categories))
+		}
+	})
+
+	t.Run("primary enum gets PrimaryDisplayName", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				return []domain.SpendingByCategory{
+					{Category: "FOOD_AND_DRINK", Total: 200.0, TransactionCount: 10},
+				}, nil
+			},
+		}
+
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+			// No Category filter — top-level, primary enums expected
+		}
+
+		result, err := service.GetSpendingByCategory(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Categories) != 1 {
+			t.Fatalf("expected 1 category, got %d", len(result.Categories))
+		}
+		cat := result.Categories[0]
+		// Primary enum should use PrimaryDisplayName: "Food And Drink"
+		if cat.PFCPrimaryDisplay != "Food And Drink" {
+			t.Errorf("primary enum: expected PFCPrimaryDisplay 'Food And Drink', got %q", cat.PFCPrimaryDisplay)
+		}
+	})
+
+	t.Run("detailed enum drill-down gets DetailedDisplayName not PrimaryDisplayName", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				// Drill-down: repository returns detailed-level enums
+				return []domain.SpendingByCategory{
+					{Category: "FOOD_AND_DRINK_FAST_FOOD", Total: 120.0, TransactionCount: 8},
+					{Category: "FOOD_AND_DRINK_COFFEE", Total: 80.0, TransactionCount: 5},
+				}, nil
+			},
+		}
+
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+			Category:  "FOOD_AND_DRINK", // drill-down filter
+		}
+
+		result, err := service.GetSpendingByCategory(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Categories) != 2 {
+			t.Fatalf("expected 2 categories, got %d", len(result.Categories))
+		}
+
+		// Find FOOD_AND_DRINK_FAST_FOOD
+		var fastFood *domain.SpendingByCategory
+		for i := range result.Categories {
+			if result.Categories[i].Category == "FOOD_AND_DRINK_FAST_FOOD" {
+				fastFood = &result.Categories[i]
+			}
+		}
+		if fastFood == nil {
+			t.Fatal("FOOD_AND_DRINK_FAST_FOOD not found in results")
+		}
+		// Detailed enum should use DetailedDisplayName: "Fast Food", NOT the primary "Food And Drink"
+		if fastFood.PFCPrimaryDisplay != "Fast Food" {
+			t.Errorf("detailed enum: expected PFCPrimaryDisplay 'Fast Food', got %q", fastFood.PFCPrimaryDisplay)
+		}
+	})
+}
+
+func TestAnalyticsService_GetSpendingByMerchant(t *testing.T) {
+	ctx := context.Background()
+	loc := time.UTC
+
+	t.Run("returns merchants with percentages", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingByMerchantFn: func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error) {
+				if limit != 10 {
+					t.Errorf("expected limit 10, got %d", limit)
+				}
+				return []domain.SpendingByMerchant{
+					{MerchantName: "Starbucks", Total: 150.0, TransactionCount: 15},
+					{MerchantName: "Amazon", Total: 350.0, TransactionCount: 5},
+				}, nil
+			},
+		}
+
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+		}
+
+		result, err := service.GetSpendingByMerchant(ctx, "user-123", filters, 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(result.Merchants) != 2 {
+			t.Fatalf("expected 2 merchants, got %d", len(result.Merchants))
+		}
+		if result.TopN != 10 {
+			t.Errorf("expected TopN 10, got %d", result.TopN)
+		}
+
+		// Amazon has total 350, Starbucks 150, total = 500
+		// Amazon: 350/500*100 = 70%
+		amazonIdx := -1
+		for i, m := range result.Merchants {
+			if m.MerchantName == "Amazon" {
+				amazonIdx = i
+			}
+		}
+		if amazonIdx == -1 {
+			t.Fatal("Amazon not found in merchants")
+		}
+		if result.Merchants[amazonIdx].Percentage != 70.0 {
+			t.Errorf("expected Amazon 70%%, got %f", result.Merchants[amazonIdx].Percentage)
+		}
+	})
+
+	t.Run("repository error is returned", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingByMerchantFn: func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error) {
+				return nil, errors.New("db error")
+			},
+		}
+
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+		}
+
+		_, err := service.GetSpendingByMerchant(ctx, "user-123", filters, 10)
+		if err == nil {
+			t.Error("expected error from repository")
+		}
+	})
+}
+
+func TestAnalyticsService_GetSpendingTrends(t *testing.T) {
+	ctx := context.Background()
+	loc := time.UTC
+
+	t.Run("groups rows into periods and identifies top categories", func(t *testing.T) {
+		jan := time.Date(2024, 1, 1, 0, 0, 0, 0, loc)
+		feb := time.Date(2024, 2, 1, 0, 0, 0, 0, loc)
+
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingTrendsFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error) {
+				return []domain.SpendingTrendRow{
+					{PeriodStart: jan, Category: "FOOD_AND_DRINK", Total: 200.0},
+					{PeriodStart: jan, Category: "TRANSPORTATION", Total: 80.0},
+					{PeriodStart: feb, Category: "FOOD_AND_DRINK", Total: 230.0},
+					{PeriodStart: feb, Category: "TRANSPORTATION", Total: 90.0},
+				}, nil
+			},
+		}
+
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 2, 29, 0, 0, 0, 0, loc),
+		}
+
+		result, err := service.GetSpendingTrends(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(result.Periods) != 2 {
+			t.Fatalf("expected 2 periods, got %d", len(result.Periods))
+		}
+
+		// Check top categories identified (by total spend across all periods)
+		// FOOD_AND_DRINK: 200+230=430, TRANSPORTATION: 80+90=170
+		if len(result.TopCategories) == 0 {
+			t.Error("expected top categories to be identified")
+		}
+		if result.TopCategories[0] != "FOOD_AND_DRINK" {
+			t.Errorf("expected FOOD_AND_DRINK first, got %s", result.TopCategories[0])
+		}
+
+		// Check first period
+		period := result.Periods[0]
+		if period.PeriodStart != "2024-01-01" {
+			t.Errorf("expected period start 2024-01-01, got %s", period.PeriodStart)
+		}
+		if period.Total != 280.0 { // 200+80
+			t.Errorf("expected period total 280, got %f", period.Total)
+		}
+		if len(period.Categories) != 2 {
+			t.Errorf("expected 2 categories in period, got %d", len(period.Categories))
+		}
+	})
+
+	t.Run("buckets categories beyond top 5 as Other", func(t *testing.T) {
+		jan := time.Date(2024, 1, 1, 0, 0, 0, 0, loc)
+
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingTrendsFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error) {
+				return []domain.SpendingTrendRow{
+					{PeriodStart: jan, Category: "CAT_A", Total: 100.0},
+					{PeriodStart: jan, Category: "CAT_B", Total: 90.0},
+					{PeriodStart: jan, Category: "CAT_C", Total: 80.0},
+					{PeriodStart: jan, Category: "CAT_D", Total: 70.0},
+					{PeriodStart: jan, Category: "CAT_E", Total: 60.0},
+					{PeriodStart: jan, Category: "CAT_F", Total: 50.0}, // Should become "Other"
+					{PeriodStart: jan, Category: "CAT_G", Total: 40.0}, // Should become "Other"
+				}, nil
+			},
+		}
+
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 1, 31, 0, 0, 0, 0, loc),
+		}
+
+		result, err := service.GetSpendingTrends(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// TopCategories should have exactly 5
+		if len(result.TopCategories) != 5 {
+			t.Errorf("expected 5 top categories, got %d", len(result.TopCategories))
+		}
+
+		// Period should have 6 entries: 5 top + Other
+		period := result.Periods[0]
+		if len(period.Categories) != 6 {
+			t.Errorf("expected 6 categories (5 top + Other), got %d", len(period.Categories))
+		}
+
+		// Find "Other"
+		var otherTotal float64
+		for _, c := range period.Categories {
+			if c.Category == "OTHER" {
+				otherTotal = c.Total
+			}
+		}
+		if otherTotal != 90.0 { // 50+40
+			t.Errorf("expected Other total 90, got %f", otherTotal)
+		}
+	})
+
+	t.Run("repository error is returned", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingTrendsFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error) {
+				return nil, errors.New("db error")
+			},
+		}
+
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 1, 31, 0, 0, 0, 0, loc),
+		}
+
+		_, err := service.GetSpendingTrends(ctx, "user-123", filters)
+		if err == nil {
+			t.Error("expected error from repository")
+		}
+	})
+}
+
+func TestAnalyticsService_GetSpendingByCategory_CustomCategory(t *testing.T) {
+	ctx := context.Background()
+	loc := time.UTC
+
+	t.Run("custom category row uses server-resolved display name not pfcDisplayName", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				// Repository resolves the UUID to the user's custom-category name
+				return []domain.SpendingByCategory{
+					{
+						Category:          "custom:7a93a4f0-dead-beef-1234-abcdef012345",
+						PFCPrimaryDisplay: "My Coffee Budget",
+						Total:             150.0,
+						TransactionCount:  5,
+					},
+				}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+		}
+		result, err := service.GetSpendingByCategory(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Categories) != 1 {
+			t.Fatalf("expected 1 category, got %d", len(result.Categories))
+		}
+		cat := result.Categories[0]
+		if cat.PFCPrimaryDisplay != "My Coffee Budget" {
+			t.Errorf("expected PFCPrimaryDisplay 'My Coffee Budget', got %q (uuid must not be passed through pfcDisplayName)", cat.PFCPrimaryDisplay)
+		}
+		if cat.Category != "custom:7a93a4f0-dead-beef-1234-abcdef012345" {
+			t.Errorf("expected raw category token preserved, got %q", cat.Category)
+		}
+	})
+
+	t.Run("two custom categories with same display name remain separate rows", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				return []domain.SpendingByCategory{
+					{Category: "custom:uuid-aaa-111", PFCPrimaryDisplay: "Groceries", Total: 100.0, TransactionCount: 3},
+					{Category: "custom:uuid-bbb-222", PFCPrimaryDisplay: "Groceries", Total: 80.0, TransactionCount: 2},
+				}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+		}
+		result, err := service.GetSpendingByCategory(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Categories) != 2 {
+			t.Fatalf("expected 2 separate rows (not merged despite same display name), got %d", len(result.Categories))
+		}
+	})
+}
+
+func TestAnalyticsService_GetSpendingTrends_CustomCategory(t *testing.T) {
+	ctx := context.Background()
+	loc := time.UTC
+
+	t.Run("custom category trend row uses CategoryDisplay field from repository", func(t *testing.T) {
+		jan := time.Date(2024, 1, 1, 0, 0, 0, 0, loc)
+		mockRepo := &mockAnalyticsRepository{
+			getSpendingTrendsFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error) {
+				return []domain.SpendingTrendRow{
+					{
+						PeriodStart:     jan,
+						Category:        "custom:uuid-aaa-111",
+						CategoryDisplay: "My Coffee Budget",
+						Total:           150.0,
+					},
+				}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 1, 31, 0, 0, 0, 0, loc),
+		}
+		result, err := service.GetSpendingTrends(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Periods) != 1 {
+			t.Fatalf("expected 1 period, got %d", len(result.Periods))
+		}
+		cats := result.Periods[0].Categories
+		if len(cats) != 1 {
+			t.Fatalf("expected 1 category in period, got %d", len(cats))
+		}
+		if cats[0].PFCPrimaryDisplay != "My Coffee Budget" {
+			t.Errorf("expected PFCPrimaryDisplay 'My Coffee Budget', got %q (uuid must not leak through pfcDisplayName)", cats[0].PFCPrimaryDisplay)
+		}
+	})
 }

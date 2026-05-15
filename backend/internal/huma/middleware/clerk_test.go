@@ -62,6 +62,10 @@ func (m *mockUserIdentityRepository) UpdateLastUsed(ctx context.Context, clerkUs
 	return m.updateLastUsedErr
 }
 
+func (m *mockUserIdentityRepository) UpdatePrimaryIdentityEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	return nil
+}
+
 type mockRegistrationService struct {
 	registerUserFunc func(ctx context.Context, clerkUserID, email string, emailVerified bool) (*domain.User, error)
 }

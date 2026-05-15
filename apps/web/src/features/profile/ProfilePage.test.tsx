@@ -12,6 +12,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { ThemeProvider } from '@/shared/theme'
 import { ProfilePage } from './ProfilePage'
 import type { User } from './types'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
@@ -41,18 +42,20 @@ import { mockToastSuccess, mockToastError } from '@/test/mocks/sonner'
 // Test wrapper with React Router and QueryClient
 function renderWithProviders(ui: React.ReactElement, { initialUrl = '/profile' } = {}) {
   return render(
-    <QueryClientProvider client={new QueryClient({
-      defaultOptions: {
-        queries: { retry: false, gcTime: 0 },
-        mutations: { retry: false },
-      },
-    })}>
-      <MemoryRouter initialEntries={[initialUrl]}>
-        <Routes>
-          <Route path="/profile" element={ui} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>
+    <ThemeProvider defaultTheme="system">
+      <QueryClientProvider client={new QueryClient({
+        defaultOptions: {
+          queries: { retry: false, gcTime: 0 },
+          mutations: { retry: false },
+        },
+      })}>
+        <MemoryRouter initialEntries={[initialUrl]}>
+          <Routes>
+            <Route path="/profile" element={ui} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    </ThemeProvider>
   )
 }
 
@@ -336,7 +339,7 @@ describe('ProfilePage', () => {
     it('should submit updated region via API after confirmation', async () => {
       configureMutateSuccess({
         ...mockUser,
-        primary_region: 'lhr',
+        primary_region: 'ewr',
       })
 
       renderWithProviders(<ProfilePage />)
@@ -348,10 +351,10 @@ describe('ProfilePage', () => {
       const user = userEvent.setup({ delay: null })
       const regionSelect = screen.getByLabelText(/region/i)
 
-      await user.selectOptions(regionSelect, 'lhr')
+      await user.selectOptions(regionSelect, 'ewr')
 
       await waitFor(() => {
-        expect((regionSelect as HTMLSelectElement).value).toBe('lhr')
+        expect((regionSelect as HTMLSelectElement).value).toBe('ewr')
       })
 
       const saveButton = screen.getByRole('button', { name: /save/i })
@@ -366,7 +369,7 @@ describe('ProfilePage', () => {
 
       await waitFor(() => {
         expect(mockUpdateUserProfileMutate).toHaveBeenCalledWith(
-          { data: { email: 'test@example.com', primary_region: 'lhr' } },
+          { data: { primary_region: 'ewr' } },
           expect.any(Object)
         )
       })
@@ -394,7 +397,9 @@ describe('ProfilePage', () => {
       await user.click(saveButton)
 
       await waitFor(() => {
-        expect(mockToastSuccess).toHaveBeenCalledWith('Profile updated successfully!')
+        expect(mockToastSuccess).toHaveBeenCalledWith(
+          'Profile updated. Check your inbox to verify your new email address.',
+        )
       })
     })
 
@@ -443,18 +448,20 @@ describe('ProfilePage', () => {
 
       // Rerender to reflect the pending state
       rerender(
-        <QueryClientProvider client={new QueryClient({
-          defaultOptions: {
-            queries: { retry: false, gcTime: 0 },
-            mutations: { retry: false },
-          },
-        })}>
-          <MemoryRouter initialEntries={['/profile']}>
-            <Routes>
-              <Route path="/profile" element={<ProfilePage />} />
-            </Routes>
-          </MemoryRouter>
-        </QueryClientProvider>
+        <ThemeProvider defaultTheme="system">
+          <QueryClientProvider client={new QueryClient({
+            defaultOptions: {
+              queries: { retry: false, gcTime: 0 },
+              mutations: { retry: false },
+            },
+          })}>
+            <MemoryRouter initialEntries={['/profile']}>
+              <Routes>
+                <Route path="/profile" element={<ProfilePage />} />
+              </Routes>
+            </MemoryRouter>
+          </QueryClientProvider>
+        </ThemeProvider>
       )
 
       await waitFor(() => {

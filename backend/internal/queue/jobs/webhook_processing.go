@@ -49,12 +49,29 @@ type ItemErrorService interface {
 	ProcessWebhook(ctx context.Context, itemID, errorType, errorCode, errorMessage string) error
 }
 
+// InvestmentSyncService defines the methods needed to process HOLDINGS and
+// INVESTMENTS_TRANSACTIONS webhooks. Issue #659: Plaid Investments.
+type InvestmentSyncService interface {
+	// ProcessWebhook routes HOLDINGS and INVESTMENTS_TRANSACTIONS webhooks to the
+	// appropriate sync function.
+	ProcessWebhook(ctx context.Context, webhook *domain.WebhookEvent) error
+}
+
+// LiabilitySyncService defines the methods needed to process LIABILITIES webhooks.
+// Issue #910: Plaid Liabilities — Credit, Mortgage, Student Loans.
+type LiabilitySyncService interface {
+	// ProcessWebhook routes LIABILITIES webhooks to SyncLiabilities.
+	ProcessWebhook(ctx context.Context, webhook *domain.WebhookEvent) error
+}
+
 // WebhookProcessingWorker processes webhook events from the queue.
 type WebhookProcessingWorker struct {
 	river.WorkerDefaults[WebhookProcessingArgs]
 
 	webhookRepo        WebhookRepository
 	transactionSyncSvc TransactionSyncService
+	investmentSyncSvc  InvestmentSyncService
+	liabilitySyncSvc   LiabilitySyncService
 	itemErrorSvc       ItemErrorService
 	logger             *slog.Logger
 }
@@ -63,6 +80,8 @@ type WebhookProcessingWorker struct {
 type WebhookProcessingWorkerDeps struct {
 	WebhookRepo        WebhookRepository
 	TransactionSyncSvc TransactionSyncService
+	InvestmentSyncSvc  InvestmentSyncService
+	LiabilitySyncSvc   LiabilitySyncService
 	ItemErrorSvc       ItemErrorService
 	Logger             *slog.Logger
 }
@@ -76,6 +95,8 @@ func NewWebhookProcessingWorker(deps WebhookProcessingWorkerDeps) *WebhookProces
 	return &WebhookProcessingWorker{
 		webhookRepo:        deps.WebhookRepo,
 		transactionSyncSvc: deps.TransactionSyncSvc,
+		investmentSyncSvc:  deps.InvestmentSyncSvc,
+		liabilitySyncSvc:   deps.LiabilitySyncSvc,
 		itemErrorSvc:       deps.ItemErrorSvc,
 		logger:             logger,
 	}
@@ -98,17 +119,15 @@ func (w *WebhookProcessingWorker) Work(ctx context.Context, job *river.Job[Webho
 		"attempt", job.Attempt,
 	)
 
-	start := time.Now()
+	startTime := time.Now()
 	defer func() {
 		status := "success"
 		if err != nil {
 			status = "failed"
 		}
 		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
-		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
+		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(startTime).Seconds())
 	}()
-
-	startTime := time.Now()
 
 	// Fetch webhook from database
 	webhook, err := w.webhookRepo.GetByID(ctx, args.WebhookID)
@@ -141,19 +160,11 @@ func (w *WebhookProcessingWorker) Work(ctx context.Context, job *river.Job[Webho
 	case "ITEM":
 		err = w.processItemWebhook(ctx, webhook)
 	case "LIABILITIES":
-		// Phase 2 (#241): Deferred to follow-up issue. Logged and acknowledged.
-		w.logger.Info("liabilities webhook received, processing deferred",
-			"job_id", job.ID,
-			"webhook_id", args.WebhookID,
-		)
-		return nil
-	case "HOLDINGS":
-		// Phase 2 (#241): Deferred to issue #659. Logged and acknowledged.
-		w.logger.Info("holdings webhook received, processing deferred",
-			"job_id", job.ID,
-			"webhook_id", args.WebhookID,
-		)
-		return nil
+		// Issue #910: Plaid Liabilities — full sync via LiabilitySyncService.
+		err = w.processLiabilitiesWebhook(ctx, webhook)
+	case "HOLDINGS", "INVESTMENTS_TRANSACTIONS":
+		// Issue #659: Plaid Investments — routed to InvestmentSyncService.
+		err = w.processInvestmentWebhook(ctx, webhook)
 	default:
 		w.logger.Warn("unknown webhook type, skipping",
 			"job_id", job.ID,
@@ -188,6 +199,18 @@ func (w *WebhookProcessingWorker) processTransactionsWebhook(ctx context.Context
 	return w.transactionSyncSvc.ProcessWebhook(ctx, webhook)
 }
 
+// processInvestmentWebhook handles HOLDINGS and INVESTMENTS_TRANSACTIONS webhook processing.
+// Issue #659: Plaid Investments
+func (w *WebhookProcessingWorker) processInvestmentWebhook(ctx context.Context, webhook *domain.WebhookEvent) error {
+	return w.investmentSyncSvc.ProcessWebhook(ctx, webhook)
+}
+
+// processLiabilitiesWebhook handles LIABILITIES webhook processing.
+// Issue #910: Plaid Liabilities
+func (w *WebhookProcessingWorker) processLiabilitiesWebhook(ctx context.Context, webhook *domain.WebhookEvent) error {
+	return w.liabilitySyncSvc.ProcessWebhook(ctx, webhook)
+}
+
 // processItemWebhook handles ITEM webhook processing (errors, status changes)
 func (w *WebhookProcessingWorker) processItemWebhook(ctx context.Context, webhook *domain.WebhookEvent) error {
 	// Extract error details from webhook
@@ -195,7 +218,6 @@ func (w *WebhookProcessingWorker) processItemWebhook(ctx context.Context, webhoo
 		return errors.New("ITEM webhook missing item_id")
 	}
 
-	// Get error details from webhook code
 	errorType := ""
 	if webhook.WebhookCode != nil {
 		errorType = *webhook.WebhookCode
@@ -206,10 +228,7 @@ func (w *WebhookProcessingWorker) processItemWebhook(ctx context.Context, webhoo
 		errorCode = *webhook.ErrorCode
 	}
 
-	// Error message can be extracted from payload if needed
-	errorMessage := ""
-
-	return w.itemErrorSvc.ProcessWebhook(ctx, *webhook.ItemID, errorType, errorCode, errorMessage)
+	return w.itemErrorSvc.ProcessWebhook(ctx, *webhook.ItemID, errorType, errorCode, "")
 }
 
 // WebhookProcessingUniqueOpts returns the recommended uniqueness options.

@@ -16,7 +16,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { GridStack } from 'gridstack';
 import 'gridstack/dist/gridstack.min.css';
-import './DashboardGrid.css';
 
 import { WidgetWrapper } from './WidgetWrapper';
 import { getWidget } from './registry';

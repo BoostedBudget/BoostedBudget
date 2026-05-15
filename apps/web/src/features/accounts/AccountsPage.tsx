@@ -3,12 +3,15 @@ import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { useQueryClient } from '@tanstack/react-query'
 import { Eye, EyeOff, Landmark } from 'lucide-react'
+import { toast } from 'sonner'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { PlaidLinkButton } from './PlaidLinkButton'
 import { AccountCard } from './AccountCard'
 import { AccountTable, type SortColumn as AccountSortColumn, type SortDirection } from './components/AccountTable'
 import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
 import { UpgradeBanner } from './UpgradeBanner'
+import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { AccountCustomizationModal } from './components/AccountCustomizationModal'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
@@ -24,7 +27,7 @@ import { useTierLimits } from '../subscription/hooks/useTierLimits'
 import { useAccountCustomization } from './hooks/useAccountCustomization'
 import { useAccountFilters } from './hooks/useAccountFilters'
 import type { Account, UpdateAccountRequest } from './types'
-import './AccountsPage.css'
+import { isReplaced } from './hooks/useActiveAccounts'
 
 // Get initial view from localStorage
 function getInitialView(): ListView {
@@ -38,25 +41,17 @@ function getInitialView(): ListView {
 }
 
 export function AccountsPage() {
-  // Query client for optimistic updates
   const queryClient = useQueryClient()
 
-  // Issue #307: Show/hide hidden accounts toggle
   const [showHidden, setShowHidden] = useState(false)
-
-  // Issue #584: View toggle state (cards/table)
   const [view, setView] = useState<ListView>(getInitialView)
-
-  // Issue #307: Modal state
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [accountToDelete, setAccountToDelete] = useState<Account | null>(null)
 
-  // Issue #590: Sorting state
-  const [sortColumn, setSortColumn] = useState<AccountSortColumn | undefined>(undefined)
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
-
-  // Issue #590: Inline filter state (URL-synced)
   const {
+    sort,
+    setSort,
     institutionFilter,
     typeFilter,
     balanceRange,
@@ -65,9 +60,11 @@ export function AccountsPage() {
     setBalanceRange,
   } = useAccountFilters()
 
+  const sortColumn = sort?.columnId as AccountSortColumn | undefined
+  const sortDirection: SortDirection = sort?.direction ?? 'asc'
+
   const trackEvent = useTrackEvent()
 
-  // Use generated query hook for fetching accounts (always include hidden for toggle/counts)
   const {
     data: accountsData,
     isLoading: accountsLoading,
@@ -75,65 +72,74 @@ export function AccountsPage() {
     refetch: refetchAccounts,
   } = useGetAccounts({ include_hidden: 'true' })
 
-  // Use generated mutation hook for deleting accounts
   const deleteAccountMutation = useDeleteAccount()
 
-  // Derive accounts from query data (no local state sync needed)
   const accounts = accountsData?.accounts ?? []
-
-  // Query key for optimistic updates
   const accountsQueryKey = getGetAccountsQueryKey({ include_hidden: 'true' })
 
-  // Fetch user profile using the hook
   const { user, loading: userLoading, refetch: refetchProfile } = useProfile()
-
-  // Fetch subscription tiers for limit enforcement
   const { tiers, loading: tiersLoading } = useSubscriptionTiers()
 
-  // Combined loading state
   const loading = accountsLoading || userLoading
-
-  // Error message
   const error = accountsError ? 'Failed to load accounts. Please try again.' : null
 
-  // Issue #307: Account customization hook
   const {
     updateAccount,
     isUpdating,
   } = useAccountCustomization()
 
-  // Handle successful account linking - reload accounts and profile
   function handleAccountsLinked() {
     refetchAccounts()
     refetchProfile()
   }
 
-  // Handle account deletion
-  async function handleDeleteAccount(accountId: string) {
+  async function handleDeleteAccount(account: Account) {
     try {
-      await deleteAccountMutation.mutateAsync({ id: accountId })
+      await deleteAccountMutation.mutateAsync({ id: account.id })
       trackEvent(ANALYTICS_EVENTS.ACCOUNT_REMOVED)
-      // Refetch accounts after successful deletion
+      setAccountToDelete(null)
       await refetchAccounts()
     } catch (err) {
       console.error('Failed to delete account:', err)
-      // Error will be shown from query error state
+      toast.error('Failed to delete account. Please try again.')
     }
   }
 
-  // Issue #307: Handle edit button click
+  function isLastAccountForItem(account: Account): boolean {
+    const allAccounts = accountsData?.accounts ?? []
+    const activeAccountsForItem = allAccounts.filter(
+      a => a.linked_item_id === account.linked_item_id && !isReplaced(a)
+    )
+    return activeAccountsForItem.length === 1
+  }
+
+  function buildDeleteDescription(account: Account): React.ReactNode {
+    const displayName = account.nickname || account.official_name || account.name
+    const maskPart = account.mask ? ` (...${account.mask})` : ''
+    const isLast = isLastAccountForItem(account)
+    return (
+      <span>
+        You are about to permanently delete <strong>{displayName}{maskPart}</strong>.
+        <br />Your transactions will be preserved.
+        <br />Balance history will be removed.
+        {isLast && (
+          <>
+            <br />The bank connection to <strong>{account.institution_name}</strong> will also be removed.
+          </>
+        )}
+      </span>
+    )
+  }
+
   const handleEditAccount = useCallback((account: Account) => {
     setSelectedAccount(account)
     setIsModalOpen(true)
   }, [])
 
-  // Issue #590: Handle sort change
   const handleSort = useCallback((column: AccountSortColumn, direction: SortDirection) => {
-    setSortColumn(column)
-    setSortDirection(direction)
-  }, [])
+    setSort({ columnId: column, direction })
+  }, [setSort])
 
-  // Issue #590: Create filter options from accounts data
   const institutionOptions = useMemo<FilterOption[]>(() => {
     const accs = accountsData?.accounts ?? []
     const institutions = new Set<string>()
@@ -168,11 +174,6 @@ export function AccountsPage() {
       }))
   }, [accountsData?.accounts])
 
-  // Issue #590: Filter handlers from useAccountFilters hook (URL-synced)
-  // setInstitutionFilter, setTypeFilter, setBalanceRange come from the hook
-
-  // Issue #307: Handle save from modal
-  // Issue #171: Now passes full account for user_account_id resolution
   const handleSaveAccount = useCallback(async (account: Account, changes: Partial<UpdateAccountRequest>) => {
     const updatedAccount = await updateAccount(account, changes)
     if (updatedAccount) {
@@ -189,21 +190,17 @@ export function AccountsPage() {
     }
   }, [updateAccount, queryClient, accountsQueryKey])
 
-  // Issue #307: Filter and sort accounts
-  // Use accountsData?.accounts directly in deps to avoid unstable reference
   const displayedAccounts = useMemo(() => {
     const accs = accountsData?.accounts ?? []
     let filtered = accs
 
-    // Issue #171: Always filter out replaced accounts (they're soft-deleted after Plaid re-link)
-    filtered = filtered.filter(acc => acc.status !== 'replaced')
+    filtered = filtered.filter(acc => !isReplaced(acc))
 
     // Filter hidden accounts unless showHidden is true
     if (!showHidden) {
       filtered = filtered.filter(acc => !acc.is_hidden)
     }
 
-    // Issue #590: Apply inline filters
     if (institutionFilter.length > 0) {
       filtered = filtered.filter(acc =>
         acc.institution_name && institutionFilter.includes(acc.institution_name)
@@ -226,7 +223,6 @@ export function AccountsPage() {
       })
     }
 
-    // Issue #590: If user has selected a sort column, use that
     if (sortColumn) {
       return [...filtered].sort((a, b) => {
         let comparison = 0
@@ -276,18 +272,15 @@ export function AccountsPage() {
     })
   }, [accountsData?.accounts, showHidden, sortColumn, sortDirection, institutionFilter, typeFilter, balanceRange])
 
-  // Account counts (excluding replaced accounts)
   const { hiddenCount, activeAccountsCount } = useMemo(() => {
     const accs = accountsData?.accounts ?? []
-    const activeAccounts = accs.filter(acc => acc.status !== 'replaced')
+    const activeAccounts = accs.filter(acc => !isReplaced(acc))
     return {
       hiddenCount: activeAccounts.filter(acc => acc.is_hidden).length,
       activeAccountsCount: activeAccounts.length,
     }
   }, [accountsData?.accounts])
 
-  // Calculate tier limits using hook
-  // Issue #171: Use activeAccountsCount to exclude replaced accounts
   const { isAtLimit, shouldShowUpgradeBanner, accountCountDisplay } = useTierLimits({
     user,
     tiers,
@@ -296,18 +289,21 @@ export function AccountsPage() {
 
   if (loading || tiersLoading) {
     return (
-      <div className="accounts-page responsive">
-        <div className="loading">Loading your accounts...</div>
+      <div className="p-8 max-w-[1200px] mx-auto">
+        <div className="text-center py-12 px-4">Loading your accounts...</div>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="accounts-page responsive">
-        <div className="error-state">
-          <p className="error-message">{error}</p>
-          <button onClick={() => refetchAccounts()} className="btn-retry">
+      <div className="p-8 max-w-[1200px] mx-auto">
+        <div className="text-center py-12 px-4">
+          <p className="text-destructive mb-4 text-lg">{error}</p>
+          <button
+            onClick={() => refetchAccounts()}
+            className="px-6 py-3 text-base bg-primary text-primary-foreground border-none rounded cursor-pointer hover:bg-primary/90 transition-colors"
+          >
             Retry
           </button>
         </div>
@@ -316,14 +312,13 @@ export function AccountsPage() {
   }
 
   return (
-    <div className="accounts-page responsive">
-      <div className="accounts-header">
-        <h1>My Accounts</h1>
-        <div className="accounts-header__actions">
-          {/* Issue #307: Show hidden toggle */}
+    <div className="p-8 max-w-[1200px] mx-auto max-sm:p-4">
+      <div className="flex justify-between items-center mb-8 max-sm:flex-col max-sm:items-start max-sm:gap-4">
+        <h1 className="m-0 text-3xl text-foreground">My Accounts</h1>
+        <div className="flex items-center gap-3 max-sm:w-full max-sm:flex-wrap">
           {hiddenCount > 0 && (
             <button
-              className="accounts-header__toggle"
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded border cursor-pointer transition-colors focus:outline-none focus:ring-2 focus:ring-primary/50 ${showHidden ? 'bg-info/10 border-primary text-primary' : 'bg-muted text-foreground border-border hover:bg-accent'}`}
               onClick={() => setShowHidden(!showHidden)}
               aria-pressed={showHidden}
             >
@@ -340,16 +335,17 @@ export function AccountsPage() {
               )}
             </button>
           )}
-          {/* Issue #584: View toggle */}
           <ListViewToggle
             view={view}
             onChange={setView}
             storageKey={STORAGE_KEY_LIST_VIEW}
           />
-          <PlaidLinkButton
-            onSuccess={handleAccountsLinked}
-            disabled={isAtLimit}
-          />
+          <ReadOnlyGuard>
+            <PlaidLinkButton
+              onSuccess={handleAccountsLinked}
+              disabled={isAtLimit}
+            />
+          </ReadOnlyGuard>
         </div>
       </div>
 
@@ -361,33 +357,33 @@ export function AccountsPage() {
           title="Connect your first bank account"
           description="Link your bank to automatically track balances, transactions, and spending — all in one place."
           action={
-            <PlaidLinkButton
-              onSuccess={handleAccountsLinked}
-              disabled={isAtLimit}
-            />
+            <ReadOnlyGuard>
+              <PlaidLinkButton
+                onSuccess={handleAccountsLinked}
+                disabled={isAtLimit}
+              />
+            </ReadOnlyGuard>
           }
           className="mt-8"
         />
       ) : (
-        <div className="accounts-list">
-          <p className="accounts-count">
+        <div>
+          <p className="text-base text-muted-foreground mb-4">
             {accountCountDisplay}
             {hiddenCount > 0 && !showHidden && (
-              <span className="accounts-count__hidden"> ({hiddenCount} hidden)</span>
+              <span className="text-muted-foreground italic"> ({hiddenCount} hidden)</span>
             )}
           </p>
 
-          {/* Issue #584: Conditional rendering based on view */}
           {view === 'table' ? (
             <AccountTable
               accounts={displayedAccounts}
               onEdit={handleEditAccount}
-              onDelete={(account) => handleDeleteAccount(account.id)}
+              onDelete={(account) => setAccountToDelete(account)}
               sortable
               sortColumn={sortColumn}
               sortDirection={sortDirection}
               onSort={handleSort}
-              // Issue #590: Inline column filters (URL-synced via useAccountFilters)
               institutionOptions={institutionOptions}
               institutionFilter={institutionFilter}
               onInstitutionFilterChange={setInstitutionFilter}
@@ -398,12 +394,12 @@ export function AccountsPage() {
               onBalanceRangeChange={setBalanceRange}
             />
           ) : (
-            <div className="accounts-grid">
+            <div className="grid gap-6 max-sm:grid-cols-1" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
               {displayedAccounts.map((account) => (
                 <AccountCard
                   key={account.id}
                   account={account}
-                  onDelete={handleDeleteAccount}
+                  onDelete={(acc) => setAccountToDelete(acc)}
                   onEdit={handleEditAccount}
                 />
               ))}
@@ -412,13 +408,22 @@ export function AccountsPage() {
         </div>
       )}
 
-      {/* Issue #307: Customization modal */}
       <AccountCustomizationModal
         account={selectedAccount}
         open={isModalOpen}
         onOpenChange={setIsModalOpen}
         onSave={handleSaveAccount}
         isSaving={isUpdating}
+      />
+
+      <ConfirmationDialog
+        open={accountToDelete !== null}
+        onOpenChange={(open) => { if (!open) setAccountToDelete(null) }}
+        onConfirm={() => accountToDelete && handleDeleteAccount(accountToDelete)}
+        title="Delete Account"
+        description={accountToDelete ? buildDeleteDescription(accountToDelete) : ''}
+        confirmText={accountToDelete ? (accountToDelete.nickname || accountToDelete.official_name || accountToDelete.name) : ''}
+        loading={deleteAccountMutation.isPending}
       />
     </div>
   )

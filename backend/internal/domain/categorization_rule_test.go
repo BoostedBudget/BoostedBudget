@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,13 +18,14 @@ func TestCategorizationRule_Validate(t *testing.T) {
 		{
 			name: "valid rule with category action",
 			rule: CategorizationRule{
-				UserID:         "user-123",
-				Name:           "Coffee Shops",
-				Conditions:     []RuleCondition{{Type: ConditionMerchantContains, Value: "starbucks"}},
-				ConditionLogic: "AND",
-				TargetCategory: []string{"Food & Drink", "Coffee Shops"},
-				TagBehavior:    "add",
-				Source:         "manual",
+				UserID:           "user-123",
+				Name:             "Coffee Shops",
+				Conditions:       []RuleCondition{{Type: ConditionMerchantContains, Value: "starbucks"}},
+				ConditionLogic:   "AND",
+				TargetKind:       ptrStr("pfc"),
+				TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
+				TagBehavior:      "add",
+				Source:           "manual",
 			},
 			wantErr: false,
 		},
@@ -43,14 +45,15 @@ func TestCategorizationRule_Validate(t *testing.T) {
 		{
 			name: "valid rule with both category and tags",
 			rule: CategorizationRule{
-				UserID:         "user-123",
-				Name:           "Rideshare",
-				Conditions:     []RuleCondition{{Type: ConditionMerchantContains, Value: "uber"}},
-				ConditionLogic: "AND",
-				TargetCategory: []string{"Transportation", "Rideshare"},
-				TargetTags:     []string{"transportation"},
-				TagBehavior:    "add",
-				Source:         "manual",
+				UserID:           "user-123",
+				Name:             "Rideshare",
+				Conditions:       []RuleCondition{{Type: ConditionMerchantContains, Value: "uber"}},
+				ConditionLogic:   "AND",
+				TargetKind:       ptrStr("pfc"),
+				TargetPFCPrimary: ptrStr("TRANSPORTATION"),
+				TargetTags:       []string{"transportation"},
+				TagBehavior:      "add",
+				Source:           "manual",
 			},
 			wantErr: false,
 		},
@@ -60,7 +63,7 @@ func TestCategorizationRule_Validate(t *testing.T) {
 				Name:           "Test Rule",
 				Conditions:     []RuleCondition{{Type: ConditionMerchantContains, Value: "test"}},
 				ConditionLogic: "AND",
-				TargetCategory: []string{"Test"},
+				TargetTags:     []string{"test-tag"},
 				TagBehavior:    "add",
 				Source:         "manual",
 			},
@@ -73,7 +76,7 @@ func TestCategorizationRule_Validate(t *testing.T) {
 				UserID:         "user-123",
 				Conditions:     []RuleCondition{{Type: ConditionMerchantContains, Value: "test"}},
 				ConditionLogic: "AND",
-				TargetCategory: []string{"Test"},
+				TargetTags:     []string{"test-tag"},
 				TagBehavior:    "add",
 				Source:         "manual",
 			},
@@ -87,7 +90,7 @@ func TestCategorizationRule_Validate(t *testing.T) {
 				Name:           string(make([]byte, 101)), // 101 characters
 				Conditions:     []RuleCondition{{Type: ConditionMerchantContains, Value: "test"}},
 				ConditionLogic: "AND",
-				TargetCategory: []string{"Test"},
+				TargetTags:     []string{"test-tag"},
 				TagBehavior:    "add",
 				Source:         "manual",
 			},
@@ -114,7 +117,7 @@ func TestCategorizationRule_Validate(t *testing.T) {
 				Name:           "Empty Conditions Rule",
 				Conditions:     []RuleCondition{},
 				ConditionLogic: "AND",
-				TargetCategory: []string{"Test"},
+				TargetTags:     []string{"test-tag"},
 				TagBehavior:    "add",
 				Source:         "manual",
 			},
@@ -128,7 +131,7 @@ func TestCategorizationRule_Validate(t *testing.T) {
 				Name:           "Invalid Logic Rule",
 				Conditions:     []RuleCondition{{Type: ConditionMerchantContains, Value: "test"}},
 				ConditionLogic: "XOR",
-				TargetCategory: []string{"Test"},
+				TargetTags:     []string{"test-tag"},
 				TagBehavior:    "add",
 				Source:         "manual",
 			},
@@ -156,7 +159,7 @@ func TestCategorizationRule_Validate(t *testing.T) {
 				Name:           "Invalid Source Rule",
 				Conditions:     []RuleCondition{{Type: ConditionMerchantContains, Value: "test"}},
 				ConditionLogic: "AND",
-				TargetCategory: []string{"Test"},
+				TargetTags:     []string{"test-tag"},
 				TagBehavior:    "add",
 				Source:         "unknown",
 			},
@@ -170,7 +173,7 @@ func TestCategorizationRule_Validate(t *testing.T) {
 				Name:           "Invalid Condition Type Rule",
 				Conditions:     []RuleCondition{{Type: ConditionType("invalid_type"), Value: "test"}},
 				ConditionLogic: "AND",
-				TargetCategory: []string{"Test"},
+				TargetTags:     []string{"test-tag"},
 				TagBehavior:    "add",
 				Source:         "manual",
 			},
@@ -203,25 +206,26 @@ func TestCategorizationRule_HasCategoryAction(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "has category action (assigns category)",
+			name: "has category action (assigns pfc category)",
 			rule: CategorizationRule{
-				TargetCategory: []string{"Food & Drink"},
+				TargetKind:       ptrStr("pfc"),
+				TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
 			},
 			want: true,
 		},
 		{
-			name: "no category action (nil)",
+			name: "no category action (nil target_kind)",
 			rule: CategorizationRule{
-				TargetCategory: nil,
+				TargetKind: nil,
 			},
 			want: false,
 		},
 		{
-			name: "has category action (empty slice = clear/uncategorized)",
+			name: "has category action (clear target_kind)",
 			rule: CategorizationRule{
-				TargetCategory: []string{},
+				TargetKind: ptrStr("clear"),
 			},
-			want: true, // Issue #404: Empty slice is now "clear category" action
+			want: true,
 		},
 	}
 
@@ -243,30 +247,32 @@ func TestCategorizationRule_IsClearCategoryAction(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "assigns category (not clear)",
+			name: "assigns pfc category (not clear)",
 			rule: CategorizationRule{
-				TargetCategory: []string{"Food & Drink"},
+				TargetKind:       ptrStr("pfc"),
+				TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
 			},
 			want: false,
 		},
 		{
-			name: "no action (nil, not clear)",
+			name: "no action (nil target_kind, not clear)",
 			rule: CategorizationRule{
-				TargetCategory: nil,
+				TargetKind: nil,
 			},
 			want: false,
 		},
 		{
-			name: "clears category (empty slice = uncategorized)",
+			name: "clears category (target_kind=clear)",
 			rule: CategorizationRule{
-				TargetCategory: []string{},
+				TargetKind: ptrStr("clear"),
 			},
 			want: true,
 		},
 		{
-			name: "multi-level category (not clear)",
+			name: "assigns custom category (not clear)",
 			rule: CategorizationRule{
-				TargetCategory: []string{"Food & Drink", "Coffee Shops"},
+				TargetKind:             ptrStr("custom"),
+				TargetCustomCategoryID: ptrStr("cat-uuid-123"),
 			},
 			want: false,
 		},
@@ -325,23 +331,24 @@ func TestCategorizationRule_JSONMarshaling(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 
 	original := &CategorizationRule{
-		ID:             "rule-550e8400-e29b-41d4-a716-446655440000",
-		UserID:         "user-650e8400-e29b-41d4-a716-446655440001",
-		Name:           "Coffee Shops",
-		Description:    strPtr("Categorize coffee shop purchases"),
-		Enabled:        true,
-		Priority:       10,
-		Conditions:     []RuleCondition{{Type: ConditionMerchantContains, Value: "starbucks"}},
-		ConditionLogic: "AND",
-		TargetCategory: []string{"Food & Drink", "Coffee Shops"},
-		TargetTags:     []string{"recurring"},
-		TagBehavior:    "add",
-		Source:         "manual",
-		MatchCount:     42,
-		OverrideCount:  3,
-		LastMatchedAt:  &now,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:               "rule-550e8400-e29b-41d4-a716-446655440000",
+		UserID:           "user-650e8400-e29b-41d4-a716-446655440001",
+		Name:             "Coffee Shops",
+		Description:      strPtr("Categorize coffee shop purchases"),
+		Enabled:          true,
+		Priority:         10,
+		Conditions:       []RuleCondition{{Type: ConditionMerchantContains, Value: "starbucks"}},
+		ConditionLogic:   "AND",
+		TargetKind:       ptrStr("pfc"),
+		TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		TargetTags:       []string{"recurring"},
+		TagBehavior:      "add",
+		Source:           "manual",
+		MatchCount:       42,
+		OverrideCount:    3,
+		LastMatchedAt:    &now,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 
 	// Marshal to JSON
@@ -451,7 +458,8 @@ func TestConditionType_IsValid(t *testing.T) {
 		ConditionAmountRange,
 		ConditionAccountID,
 		ConditionPaymentChannel,
-		ConditionExistingCategory,
+		ConditionExistingPFCPrimary,
+		ConditionExistingPFCDetailed,
 		ConditionDateRange,
 	}
 
@@ -467,5 +475,134 @@ func TestConditionType_IsValid(t *testing.T) {
 	invalidType := ConditionType("invalid")
 	if invalidType.IsValid() {
 		t.Errorf("IsValid() = true, want false for invalid type")
+	}
+}
+
+// ============================================================================
+// PFC enum validation (Group E — Issue #1062)
+// ============================================================================
+
+func baseRule() CategorizationRule {
+	return CategorizationRule{
+		UserID:           "user-1",
+		Name:             "Test Rule",
+		ConditionLogic:   "AND",
+		TagBehavior:      "add",
+		Source:           "manual",
+		TargetKind:       ptrStr("pfc"),
+		TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		Conditions: []RuleCondition{
+			{Type: ConditionMerchantContains, Value: "starbucks"},
+		},
+	}
+}
+
+func TestValidate_RejectsUnknownPFCPrimary(t *testing.T) {
+	r := baseRule()
+	r.Conditions = []RuleCondition{
+		{Type: ConditionExistingPFCPrimary, Value: "FAKE_PRIMARY"},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected error for unknown PFC primary, got nil")
+	}
+	if !strings.Contains(err.Error(), "FAKE_PRIMARY") {
+		t.Errorf("error message should mention the bad enum, got: %s", err.Error())
+	}
+}
+
+func TestValidate_RejectsUnknownPFCDetailed(t *testing.T) {
+	r := baseRule()
+	r.Conditions = []RuleCondition{
+		{Type: ConditionExistingPFCDetailed, Value: "FOOD_AND_DRINK_NONEXISTENT"},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected error for unknown PFC detailed, got nil")
+	}
+}
+
+func TestValidate_AcceptsAllCuratedPFCDetailedEnums(t *testing.T) {
+	// Spot-check a handful of known curated detailed enums.
+	knownEnums := []string{
+		"FOOD_AND_DRINK_FAST_FOOD",
+		"FOOD_AND_DRINK_GROCERIES",
+		"TRANSPORTATION_GAS",
+		"LOAN_DISBURSEMENTS_AUTO", // PFCv2 addition
+		"INCOME_WAGES",
+	}
+	for _, enum := range knownEnums {
+		r := baseRule()
+		r.Conditions = []RuleCondition{
+			{Type: ConditionExistingPFCDetailed, Value: enum},
+		}
+		if err := r.Validate(); err != nil {
+			t.Errorf("expected no error for valid detailed enum %q, got: %s", enum, err.Error())
+		}
+	}
+}
+
+func TestValidate_RejectsDetailedWithUnknownPrimaryPrefix(t *testing.T) {
+	r := baseRule()
+	// "LOAN_PAYMENTS_AUTO" is not in PFCv2 detailed (LOAN_DISBURSEMENTS_AUTO is)
+	r.Conditions = []RuleCondition{
+		{Type: ConditionExistingPFCDetailed, Value: "FAKE_PRIMARY_CHILD"},
+	}
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected error for detailed enum with unknown primary prefix, got nil")
+	}
+}
+
+func TestValidate_AcceptsKnownPFCPrimaryCondition(t *testing.T) {
+	// existing_pfc_primary accepts known PFC primary enum values
+	knownPrimaries := []string{"FOOD_AND_DRINK", "TRANSPORTATION", "INCOME", "ENTERTAINMENT"}
+	for _, val := range knownPrimaries {
+		r := baseRule()
+		r.Conditions = []RuleCondition{
+			{Type: ConditionExistingPFCPrimary, Value: val},
+		}
+		if err := r.Validate(); err != nil {
+			t.Errorf("existing_pfc_primary %q should be accepted, got error: %s", val, err.Error())
+		}
+	}
+}
+
+func TestValidate_AcceptsKnownPFCPrimary(t *testing.T) {
+	r := baseRule()
+	r.Conditions = []RuleCondition{
+		{Type: ConditionExistingPFCPrimary, Value: "FOOD_AND_DRINK"},
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("expected no error for valid PFC primary, got: %s", err.Error())
+	}
+}
+
+func TestValidate_AcceptsRuleWithBothPFCPrimaryAndDetailed(t *testing.T) {
+	// A rule can have both condition types simultaneously (AND/OR logic); each is validated independently.
+	r := baseRule()
+	r.ConditionLogic = "OR"
+	r.Conditions = []RuleCondition{
+		{Type: ConditionExistingPFCPrimary, Value: "FOOD_AND_DRINK"},
+		{Type: ConditionExistingPFCDetailed, Value: "FOOD_AND_DRINK_GROCERIES"},
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("expected no error for valid PFC primary + detailed pair, got: %s", err.Error())
+	}
+}
+
+func TestValidate_RejectsRuleWithMismatchedPFCPrimaryAndDetailed(t *testing.T) {
+	// The two conditions are validated independently: a mismatched pair (primary=INCOME, detailed=FOOD_AND_DRINK_GROCERIES)
+	// still has both as individually valid enums — validation does NOT cross-check the pair.
+	// This is intentional: OR rules can match different aspects of a transaction.
+	r := baseRule()
+	r.ConditionLogic = "OR"
+	r.Conditions = []RuleCondition{
+		{Type: ConditionExistingPFCPrimary, Value: "INCOME"},
+		{Type: ConditionExistingPFCDetailed, Value: "FOOD_AND_DRINK_GROCERIES"},
+	}
+	// Both enums are individually valid, so validation should pass.
+	if err := r.Validate(); err != nil {
+		t.Fatalf("individually valid enums should not be rejected even when mismatched: %s", err.Error())
 	}
 }

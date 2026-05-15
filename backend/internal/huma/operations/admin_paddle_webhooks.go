@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/maxnussbaum/BoostedBudget/internal/dateutil"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
@@ -116,15 +116,11 @@ func (h *AdminHandler) buildWebhookEventFilters(input *ListPaddleWebhooksInput) 
 			filters.Processed = &b
 		}
 	}
-	if input.StartDate != "" {
-		if t, err := parseDate(input.StartDate); err == nil {
-			filters.StartDate = &t
-		}
+	if t, _ := dateutil.ParseOptionalDate(input.StartDate, "start_date"); t != nil {
+		filters.StartDate = t
 	}
-	if input.EndDate != "" {
-		if t, err := parseDate(input.EndDate); err == nil {
-			filters.EndDate = &t
-		}
+	if t, _ := dateutil.ParseOptionalDate(input.EndDate, "end_date"); t != nil {
+		filters.EndDate = t
 	}
 	return filters
 }
@@ -217,14 +213,6 @@ func timeRangeToHours(timeRange string) int {
 	default: // "24h"
 		return 24
 	}
-}
-
-// parseDate parses an ISO 8601 date string (RFC3339 or date-only "2006-01-02").
-func parseDate(s string) (time.Time, error) {
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t, nil
-	}
-	return time.Parse("2006-01-02", s)
 }
 
 // RegisterAdminPaddleWebhooksOperations registers the Paddle webhook admin endpoints.

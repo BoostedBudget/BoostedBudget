@@ -21,7 +21,7 @@ describe('TermsOfService', () => {
 
   it('renders "Last Updated" date', () => {
     renderWithRouter(<TermsOfService />)
-    expect(screen.getByText(/last updated: march/i)).toBeInTheDocument()
+    expect(screen.getByText(/last updated: april/i)).toBeInTheDocument()
   })
 
   it('renders all major sections', () => {
@@ -141,9 +141,9 @@ describe('TermsOfService', () => {
     expect(screen.getByText(/cannot be excluded or limited under applicable law/i)).toBeInTheDocument()
   })
 
-  it('renders 24-month data retention instead of indefinite', () => {
+  it('renders 6-month data retention instead of indefinite', () => {
     renderWithRouter(<TermsOfService />)
-    expect(screen.getAllByText(/24 months/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/6 months/i).length).toBeGreaterThan(0)
     expect(screen.queryByText(/preserved indefinitely/i)).not.toBeInTheDocument()
   })
 

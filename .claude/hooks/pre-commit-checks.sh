@@ -7,7 +7,8 @@
 #   1. Backend compilation:   go build ./...
 #   2. Backend vet:           go vet ./...
 #   3. Backend lint:          golangci-lint run (skipped if not installed)
-#   4. Frontend lint:         bun run lint (ESLint --max-warnings 0)
+#   4. Frontend typecheck:    bun run typecheck (tsc --noEmit)
+#   5. Frontend lint:         bun run lint (ESLint --max-warnings 0)
 
 set -euo pipefail
 
@@ -48,6 +49,29 @@ run_check() {
     snippet=$(printf '%s' "$output" | head -20)
     ERRORS="${ERRORS}\n    Output:\n$(printf '%s' "$snippet" | sed 's/^/      /')\n"
     return 1
+  fi
+}
+
+# Like run_check but failures are warnings only (non-blocking).
+run_warn() {
+  local label="$1"
+  local dir="$2"
+  shift 2
+  local cmd_str="$*"
+
+  printf '  %-45s' "$label"
+  local output
+  if output=$(cd "$dir" && eval "$cmd_str" 2>&1); then
+    printf '✅\n'
+    return 0
+  else
+    local error_count
+    error_count=$(printf '%s' "$output" | grep -c 'error TS' || true)
+    printf '⚠️  (%d TS error(s) — non-blocking)\n' "$error_count"
+    local snippet
+    snippet=$(printf '%s' "$output" | grep 'error TS' | head -5)
+    WARNINGS="${WARNINGS}\n  • ${label} — ${error_count} error(s)\n    Fix: cd ${dir} && ${cmd_str}\n$(printf '%s' "$snippet" | sed 's/^/    /')\n"
+    return 0
   fi
 }
 
@@ -100,11 +124,17 @@ printf '\n'
 printf 'Frontend:\n'
 
 if command -v bun &>/dev/null; then
+  # TypeScript type check (CI: 'tsc --noEmit')
+  run_check "bun run typecheck  (tsc --noEmit)" \
+    "$PROJECT_ROOT/apps/web" \
+    "bun run typecheck"
+
   # ESLint (CI: 'bun run lint' → 'eslint . --ext ts,tsx --max-warnings 0')
   run_check "bun run lint       (ESLint)" \
     "$PROJECT_ROOT/apps/web" \
     "bun run lint"
 else
+  printf '  %-45s⚠️  (bun not installed)\n' "bun run typecheck  (tsc --noEmit)"
   printf '  %-45s⚠️  (bun not installed)\n' "bun run lint"
   WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"
 fi

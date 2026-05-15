@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -20,12 +21,13 @@ var (
 
 // notificationRepository implements NotificationRepository using PostgreSQL
 type notificationRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewNotificationRepository creates a new NotificationRepository instance
-func NewNotificationRepository(db DB) NotificationRepository {
-	return &notificationRepository{db: db}
+func NewNotificationRepository(db DB, enc *appcrypto.FieldEncryptor) NotificationRepository {
+	return &notificationRepository{db: db, enc: enc}
 }
 
 // Create creates a new notification in the database
@@ -45,24 +47,32 @@ func (r *notificationRepository) Create(ctx context.Context, notification *domai
 		return fmt.Errorf("invalid notification: %w", err)
 	}
 
+	encActionURL, err := r.enc.EncryptNullableString(notification.ActionURL)
+	if err != nil {
+		return fmt.Errorf("encrypt action_url: %w", err)
+	}
+
 	query := `
 		INSERT INTO notifications
 		(id, user_id, type, title, message, action_url, action_label,
-		 read, sent_email, email_sent_at, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		 read, sent_email, email_sent_at, interaction_pattern, transfer_suggestion_id,
+		 created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		notification.ID,
 		notification.UserID,
 		notification.Type,
 		notification.Title,
 		notification.Message,
-		notification.ActionURL,
+		encActionURL,
 		notification.ActionLabel,
 		notification.Read,
 		notification.SentEmail,
 		notification.EmailSentAt,
+		notification.InteractionPattern,
+		notification.TransferSuggestionID,
 		notification.CreatedAt,
 		notification.UpdatedAt,
 	)
@@ -84,6 +94,11 @@ func (r *notificationRepository) Update(ctx context.Context, notification *domai
 	// Update timestamp
 	notification.UpdatedAt = time.Now()
 
+	encActionURL, err := r.enc.EncryptNullableString(notification.ActionURL)
+	if err != nil {
+		return fmt.Errorf("encrypt action_url: %w", err)
+	}
+
 	query := `
 		UPDATE notifications
 		SET type = $2,
@@ -94,7 +109,9 @@ func (r *notificationRepository) Update(ctx context.Context, notification *domai
 		    read = $7,
 		    sent_email = $8,
 		    email_sent_at = $9,
-		    updated_at = $10
+		    interaction_pattern = $10,
+		    transfer_suggestion_id = $11,
+		    updated_at = $12
 		WHERE id = $1
 	`
 
@@ -103,11 +120,13 @@ func (r *notificationRepository) Update(ctx context.Context, notification *domai
 		notification.Type,
 		notification.Title,
 		notification.Message,
-		notification.ActionURL,
+		encActionURL,
 		notification.ActionLabel,
 		notification.Read,
 		notification.SentEmail,
 		notification.EmailSentAt,
+		notification.InteractionPattern,
+		notification.TransferSuggestionID,
 		notification.UpdatedAt,
 	)
 
@@ -122,12 +141,23 @@ func (r *notificationRepository) Update(ctx context.Context, notification *domai
 	return nil
 }
 
+// decryptNotification decrypts the encrypted fields on a Notification in place.
+func (r *notificationRepository) decryptNotification(n *domain.Notification) error {
+	var err error
+	n.ActionURL, err = r.enc.DecryptNullableString(n.ActionURL)
+	if err != nil {
+		return fmt.Errorf("decrypt action_url: %w", err)
+	}
+	return nil
+}
+
 // GetByUserID retrieves notifications for a specific user with pagination
 // Returns notifications ordered by created_at DESC (most recent first)
 func (r *notificationRepository) GetByUserID(ctx context.Context, userID string, limit int) ([]domain.Notification, error) {
 	query := `
 		SELECT id, user_id, type, title, message, action_url, action_label,
-		       read, sent_email, email_sent_at, created_at, updated_at
+		       read, sent_email, email_sent_at, interaction_pattern, transfer_suggestion_id,
+		       created_at, updated_at
 		FROM notifications
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -154,11 +184,16 @@ func (r *notificationRepository) GetByUserID(ctx context.Context, userID string,
 			&n.Read,
 			&n.SentEmail,
 			&n.EmailSentAt,
+			&n.InteractionPattern,
+			&n.TransferSuggestionID,
 			&n.CreatedAt,
 			&n.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan notification: %w", err)
+		}
+		if err := r.decryptNotification(&n); err != nil {
+			return nil, fmt.Errorf("failed to decrypt notification: %w", err)
 		}
 		notifications = append(notifications, n)
 	}
@@ -233,7 +268,8 @@ func (r *notificationRepository) GetUnreadCount(ctx context.Context, userID stri
 func (r *notificationRepository) GetUnsentEmails(ctx context.Context, limit int) ([]domain.Notification, error) {
 	query := `
 		SELECT id, user_id, type, title, message, action_url, action_label,
-		       read, sent_email, email_sent_at, created_at, updated_at
+		       read, sent_email, email_sent_at, interaction_pattern, transfer_suggestion_id,
+		       created_at, updated_at
 		FROM notifications
 		WHERE sent_email = false
 		ORDER BY created_at ASC
@@ -260,11 +296,16 @@ func (r *notificationRepository) GetUnsentEmails(ctx context.Context, limit int)
 			&n.Read,
 			&n.SentEmail,
 			&n.EmailSentAt,
+			&n.InteractionPattern,
+			&n.TransferSuggestionID,
 			&n.CreatedAt,
 			&n.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan notification: %w", err)
+		}
+		if err := r.decryptNotification(&n); err != nil {
+			return nil, fmt.Errorf("failed to decrypt notification: %w", err)
 		}
 		notifications = append(notifications, n)
 	}
@@ -279,6 +320,22 @@ func (r *notificationRepository) GetUnsentEmails(ctx context.Context, limit int)
 	}
 
 	return notifications, nil
+}
+
+// MarkAllAsRead marks all unread notifications as read for a user.
+// Returns the number of notifications marked as read.
+func (r *notificationRepository) MarkAllAsRead(ctx context.Context, userID string) (int64, error) {
+	query := `
+		UPDATE notifications
+		SET read = true,
+		    updated_at = $2
+		WHERE user_id = $1 AND read = false
+	`
+	ct, err := r.db.Exec(ctx, query, userID, time.Now())
+	if err != nil {
+		return 0, fmt.Errorf("failed to mark all notifications as read: %w", err)
+	}
+	return ct.RowsAffected(), nil
 }
 
 // Compile-time check to ensure notificationRepository implements NotificationRepository

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -50,14 +51,18 @@ type TransactionService interface {
 	// Returns the updated transaction
 	UpdateTransactionTags(ctx context.Context, userID, transactionID string, tags []string) (*domain.Transaction, error)
 
-	// UpdateTransactionCategory updates the category override on a transaction
-	// Returns the updated transaction
-	UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error)
+	// UpdateTransactionCategory updates the category override on a transaction using the PFC v2 discriminated union.
+	// overrideKind must be "pfc", "custom", or "clear".
+	UpdateTransactionCategory(ctx context.Context, userID, transactionID string, overrideKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string) (*domain.Transaction, error)
 
-	// GetDistinctPlaidCategories returns distinct Plaid category names from user's transactions
-	// Uses primary category level (e.g., "Food and Drink") for consistency across the application
-	// Used by rule editor to populate "existing_category" dropdown
+	// GetDistinctPlaidCategories returns raw `personal_finance_category->>'primary'` enums
+	// observed in user transactions (e.g., "FOOD_AND_DRINK"). NOT a legacy Category[0] source.
+	// DEPRECATED: Consumers should prefer pfc.AllPrimaries() for the curated list.
+	// This method is kept for backward compatibility until confirmed no external consumers remain.
 	GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error)
+
+	// ListByBudgetCategory returns transactions matching a budget category with PFC display enrichment.
+	ListByBudgetCategory(ctx context.Context, userID string, budgetCategory *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error)
 }
 
 // TransactionListResponse contains paginated transaction results with metadata
@@ -71,13 +76,15 @@ type TransactionListResponse struct {
 
 // transactionService implements TransactionService
 type transactionService struct {
-	repo repository.TransactionRepository
+	repo             repository.TransactionRepository
+	customCategoryRepo repository.CustomCategoryRepository
 }
 
 // NewTransactionService creates a new TransactionService instance
-func NewTransactionService(repo repository.TransactionRepository) TransactionService {
+func NewTransactionService(repo repository.TransactionRepository, customCategoryRepo repository.CustomCategoryRepository) TransactionService {
 	return &transactionService{
-		repo: repo,
+		repo:             repo,
+		customCategoryRepo: customCategoryRepo,
 	}
 }
 
@@ -143,6 +150,16 @@ func (s *transactionService) ListTransactions(
 	totalCount, err := s.repo.CountByUserID(ctx, userID, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count transactions: %w", err)
+	}
+
+	// Enrich each transaction with PFC display names and custom-category display names.
+	ptrs := make([]*domain.Transaction, len(transactions))
+	for i := range transactions {
+		transactions[i].PopulatePFCDisplay()
+		ptrs[i] = &transactions[i]
+	}
+	if err := s.enrichCustomCategoryDisplay(ctx, userID, ptrs); err != nil {
+		return nil, err
 	}
 
 	// Calculate has_more flag for pagination
@@ -222,6 +239,10 @@ func (s *transactionService) GetTransactionByID(ctx context.Context, userID, tra
 		return nil, repository.ErrTransactionNotFound
 	}
 
+	tx.PopulatePFCDisplay()
+	if err := s.enrichCustomCategoryDisplay(ctx, userID, []*domain.Transaction{tx}); err != nil {
+		return nil, err
+	}
 	return tx, nil
 }
 
@@ -251,26 +272,60 @@ func (s *transactionService) UpdateTransactionTags(ctx context.Context, userID, 
 	tx.Tags = tags
 	tx.TagsSource = tagsSource
 
+	tx.PopulatePFCDisplay()
 	return tx, nil
 }
 
-// UpdateTransactionCategory updates the category override on a transaction
-func (s *transactionService) UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error) {
+// UpdateTransactionCategory updates the category override on a transaction using the PFC v2 discriminated union.
+func (s *transactionService) UpdateTransactionCategory(ctx context.Context, userID, transactionID string, overrideKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string) (*domain.Transaction, error) {
 	// Verify ownership before update
 	if _, err := s.GetTransactionByID(ctx, userID, transactionID); err != nil {
 		return nil, err
 	}
 
-	// Update category in database
-	// Note: The repo UPDATE sets original_category = COALESCE(original_category, category)
-	// to preserve the original Plaid category on first manual edit
-	if err := s.repo.UpdateCategory(ctx, transactionID, userID, category, domain.CategorySourceManual); err != nil {
+	// Map kind to nullable for clear semantics
+	var kindPtr *string
+	if overrideKind != "clear" {
+		kindPtr = &overrideKind
+	}
+
+	if err := s.repo.UpdateCategory(ctx, transactionID, userID, kindPtr, pfcPrimary, pfcDetailed, customCategoryID, domain.CategorySourceManual); err != nil {
 		return nil, fmt.Errorf("failed to update transaction category: %w", err)
 	}
 
-	// Re-fetch the transaction to get all updated fields including original_category
-	// This ensures the API response includes the original_category set by the DB update
 	return s.GetTransactionByID(ctx, userID, transactionID)
+}
+
+// enrichCustomCategoryDisplay fetches custom-category names in one batched query and sets
+// CustomCategoryOverrideDisplay on each transaction. Transactions without a custom override
+// have their display field set to nil. No-ops when no transaction has a custom override ID.
+func (s *transactionService) enrichCustomCategoryDisplay(ctx context.Context, userID string, txs []*domain.Transaction) error {
+	ids := make([]string, 0, len(txs))
+	seen := make(map[string]struct{}, len(txs))
+	for _, tx := range txs {
+		if tx.CustomCategoryOverrideID != nil {
+			id := *tx.CustomCategoryOverrideID
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, ids)
+	if err != nil {
+		return err
+	}
+	for _, tx := range txs {
+		if tx.CustomCategoryOverrideID != nil {
+			if name, ok := names[*tx.CustomCategoryOverrideID]; ok {
+				tx.CustomCategoryOverrideDisplay = &name
+			}
+		}
+	}
+	return nil
 }
 
 // GetDistinctPlaidCategories returns distinct Plaid categories from user's transactions
@@ -286,4 +341,21 @@ func (s *transactionService) GetDistinctPlaidCategories(ctx context.Context, use
 	}
 
 	return categories, nil
+}
+
+// ListByBudgetCategory returns transactions for a budget category, enriched with PFC display fields.
+func (s *transactionService) ListByBudgetCategory(ctx context.Context, userID string, budgetCategory *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
+	transactions, totalCount, totalAmount, err := s.repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCategory, startDate, endDate, limit, offset)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("list transactions for budget category: %w", err)
+	}
+	ptrs := make([]*domain.Transaction, len(transactions))
+	for i := range transactions {
+		transactions[i].PopulatePFCDisplay()
+		ptrs[i] = &transactions[i]
+	}
+	if err := s.enrichCustomCategoryDisplay(ctx, userID, ptrs); err != nil {
+		return nil, 0, 0, err
+	}
+	return transactions, totalCount, totalAmount, nil
 }

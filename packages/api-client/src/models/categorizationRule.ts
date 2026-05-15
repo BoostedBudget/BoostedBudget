@@ -22,7 +22,8 @@ Authorization: Bearer <your-jwt-token>
 
 ## Regions
 
-All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+Use the GET /api/v1/regions endpoint to discover available data residency regions.
+Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
@@ -45,8 +46,13 @@ export interface CategorizationRule {
   priority: number;
   source: string;
   tag_behavior: string;
-  /** @nullable */
-  target_category?: string[] | null;
+  target_custom_category_display?: string;
+  target_custom_category_id?: string;
+  target_kind?: string;
+  target_pfc_detailed?: string;
+  target_pfc_detailed_display?: string;
+  target_pfc_primary?: string;
+  target_pfc_primary_display?: string;
   /** @nullable */
   target_tags?: string[] | null;
   updated_at: string;

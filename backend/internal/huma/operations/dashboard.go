@@ -4,10 +4,10 @@ import (
 	"context"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
+	"github.com/maxnussbaum/BoostedBudget/internal/dateutil"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
@@ -131,32 +131,18 @@ func parseFilters(accountTypes, asOfDate, startDate, endDate, granularity string
 		}
 	}
 
-	// Parse as_of_date (YYYY-MM-DD format)
-	if asOfDate != "" {
-		parsed, err := time.Parse("2006-01-02", asOfDate)
-		if err != nil {
-			return nil, huma.Error400BadRequest("Invalid as_of_date format, expected YYYY-MM-DD")
-		}
-		filters.AsOfDate = &parsed
+	asOf, err := dateutil.ParseOptionalDate(asOfDate, "as_of_date")
+	if err != nil {
+		return nil, err
 	}
+	filters.AsOfDate = asOf
 
-	// Parse start_date (YYYY-MM-DD format)
-	if startDate != "" {
-		parsed, err := time.Parse("2006-01-02", startDate)
-		if err != nil {
-			return nil, huma.Error400BadRequest("Invalid start_date format, expected YYYY-MM-DD")
-		}
-		filters.StartDate = &parsed
+	start, end, err := dateutil.ParseOptionalDateRange(startDate, endDate)
+	if err != nil {
+		return nil, err
 	}
-
-	// Parse end_date (YYYY-MM-DD format)
-	if endDate != "" {
-		parsed, err := time.Parse("2006-01-02", endDate)
-		if err != nil {
-			return nil, huma.Error400BadRequest("Invalid end_date format, expected YYYY-MM-DD")
-		}
-		filters.EndDate = &parsed
-	}
+	filters.StartDate = start
+	filters.EndDate = end
 
 	// Parse granularity (daily, weekly, monthly)
 	if granularity != "" {

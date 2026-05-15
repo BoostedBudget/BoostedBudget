@@ -3,6 +3,8 @@ package domain
 import (
 	"errors"
 	"time"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/pfc"
 )
 
 // TransactionSource represents the source of a transaction data
@@ -85,40 +87,111 @@ type Transaction struct {
 	ExternalMetadata *string `json:"external_metadata,omitempty" db:"external_metadata"`
 
 	// Core transaction fields (standardized across all providers)
-	Amount         float64    `json:"amount" db:"amount"`                                             // Positive=credit, Negative=debit (Plaid convention)
-	Date           time.Time  `json:"date" db:"date"`                                                 // Transaction date
-	AuthorizedDate *time.Time `json:"authorized_date,omitempty" db:"authorized_date"`                 // Authorization date (may differ from settlement)
-	Name           string     `json:"name" db:"name"`                                                 // Transaction description
-	MerchantName   *string    `json:"merchant_name,omitempty" db:"merchant_name"`                     // Merchant name if available
+	Amount         float64    `json:"amount" db:"amount"`                                    // Positive=outflow, Negative=inflow (Plaid PFCv2)
+	Date           time.Time  `json:"date" db:"date"`
+	AuthorizedDate *time.Time `json:"authorized_date,omitempty" db:"authorized_date"`
+	Name           string     `json:"name" db:"name"`
+	MerchantName   *string    `json:"merchant_name,omitempty" db:"merchant_name"`
 
-	// Categorization (standardized format)
-	Category                *string `json:"category,omitempty" db:"category"`                           // JSON array of category strings
-	PersonalFinanceCategory *string `json:"personal_finance_category,omitempty" db:"personal_finance_category"` // Detailed categorization with confidence
+	// PFCv2 source columns (from Plaid)
+	PFCPrimary           *string `json:"pfc_primary,omitempty" db:"pfc_primary"`
+	PFCDetailed          *string `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
+	PFCConfidenceLevel   *string `json:"pfc_confidence_level,omitempty" db:"pfc_confidence_level"`
+	PFCCategoryIconURL   *string `json:"pfc_category_icon_url,omitempty" db:"pfc_category_icon_url"`
+
+	// PFC display names (not stored in DB)
+	PFCPrimaryDisplay          *string `json:"pfc_primary_display,omitempty" db:"-"`
+	PFCDetailedDisplay         *string `json:"pfc_detailed_display,omitempty" db:"-"`
+	PFCPrimaryOverrideDisplay  *string `json:"pfc_primary_override_display,omitempty" db:"-"`
+	PFCDetailedOverrideDisplay *string `json:"pfc_detailed_override_display,omitempty" db:"-"`
+
+	// Custom category display name (not stored in DB)
+	CustomCategoryOverrideDisplay *string `json:"custom_category_override_display,omitempty" db:"-"`
 
 	// Payment details
-	PaymentChannel *string `json:"payment_channel,omitempty" db:"payment_channel"` // online, in store, other
-	Pending        bool    `json:"pending" db:"pending"`                           // Whether transaction is pending
+	PaymentChannel *string `json:"payment_channel,omitempty" db:"payment_channel"`
+	Pending        bool    `json:"pending" db:"pending"`
 
 	// User customization
-	UserNotes *string `json:"user_notes,omitempty" db:"user_notes"` // User-added notes or annotations
+	UserNotes *string `json:"user_notes,omitempty" db:"user_notes"`
 
-	// Category override (Issue #345: Manual Transaction Category & Tag Editing)
-	CategoryOverride     *string        `json:"category_override,omitempty" db:"category_override"`         // User's chosen category override (JSON array)
-	CategorySourceField  CategorySource `json:"category_source" db:"category_source"`                       // 'plaid', 'rule', or 'manual'
-	CategoryOverrideDate *time.Time     `json:"category_override_date,omitempty" db:"category_override_date"` // When category was last edited
-	OriginalCategory     *string        `json:"original_category,omitempty" db:"original_category"`         // Preserved Plaid category (JSON array)
+	// Category override — discriminated union (category_override_kind determines which branch is active)
+	CategoryOverrideKind       *string        `json:"category_override_kind,omitempty" db:"category_override_kind"`
+	PFCPrimaryOverride         *string        `json:"pfc_primary_override,omitempty" db:"pfc_primary_override"`
+	PFCDetailedOverride        *string        `json:"pfc_detailed_override,omitempty" db:"pfc_detailed_override"`
+	CustomCategoryOverrideID   *string        `json:"custom_category_override_id,omitempty" db:"custom_category_override_id"`
+	CategorySourceField        CategorySource `json:"category_source" db:"category_source"`
+	CategoryOverrideDate       *time.Time     `json:"category_override_date,omitempty" db:"category_override_date"`
 
-	// Tags (Issue #345: Manual Transaction Category & Tag Editing)
-	Tags       []string    `json:"tags" db:"tags"`               // Array of tag names
-	TagsSource []TagSource `json:"tags_source" db:"tags_source"` // Source tracking for each tag
+	// Effective category columns (denormalized, generated or app-maintained)
+	EffectivePFCPrimary   *string `json:"effective_pfc_primary,omitempty" db:"effective_pfc_primary"`
+	EffectivePFCDetailed  *string `json:"effective_pfc_detailed,omitempty" db:"effective_pfc_detailed"`
+	EffectiveCategoryName *string `json:"effective_category_name,omitempty" db:"effective_category_name"`
+
+	// Tags
+	Tags       []string    `json:"tags" db:"tags"`
+	TagsSource []TagSource `json:"tags_source" db:"tags_source"`
 
 	// Timestamps
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 
 	// Associated data (populated on demand, not stored in DB)
-	// Used by rule engine to evaluate account_type conditions
 	Account *Account `json:"account,omitempty" db:"-"`
+}
+
+// EffectiveCategoryKind is the discriminator for which category dimension is active.
+type EffectiveCategoryKind string
+
+const (
+	EffectiveCategoryKindPFC    EffectiveCategoryKind = "pfc"
+	EffectiveCategoryKindCustom EffectiveCategoryKind = "custom"
+)
+
+// EffectiveCategory is the resolved category for a transaction — either PFC or custom, never both.
+type EffectiveCategory struct {
+	Kind               EffectiveCategoryKind `json:"kind"`
+	PFCPrimary         *string               `json:"pfc_primary,omitempty"`
+	PFCDetailed        *string               `json:"pfc_detailed,omitempty"`
+	PFCPrimaryDisplay  *string               `json:"pfc_primary_display,omitempty"`
+	PFCDetailedDisplay *string               `json:"pfc_detailed_display,omitempty"`
+	CustomCategoryID   *string               `json:"custom_category_id,omitempty"`
+}
+
+// GetEffectiveCategory resolves the active category for this transaction.
+// Priority: override (custom > pfc) > source PFC > nil (uncategorized).
+// Display fields on the returned EffectiveCategory are populated from the pfc registry.
+func (t *Transaction) GetEffectiveCategory() *EffectiveCategory {
+	if t.CategoryOverrideKind != nil {
+		switch *t.CategoryOverrideKind {
+		case "custom":
+			return &EffectiveCategory{Kind: EffectiveCategoryKindCustom, CustomCategoryID: t.CustomCategoryOverrideID}
+		case "pfc":
+			ec := &EffectiveCategory{Kind: EffectiveCategoryKindPFC, PFCPrimary: t.PFCPrimaryOverride, PFCDetailed: t.PFCDetailedOverride}
+			if t.PFCPrimaryOverride != nil && *t.PFCPrimaryOverride != "" {
+				d := pfc.PrimaryDisplayName(*t.PFCPrimaryOverride)
+				ec.PFCPrimaryDisplay = &d
+			}
+			if t.PFCPrimaryOverride != nil && t.PFCDetailedOverride != nil && *t.PFCDetailedOverride != "" {
+				d := pfc.DetailedDisplayName(*t.PFCPrimaryOverride, *t.PFCDetailedOverride)
+				ec.PFCDetailedDisplay = &d
+			}
+			return ec
+		}
+	}
+	if t.PFCPrimary != nil {
+		ec := &EffectiveCategory{Kind: EffectiveCategoryKindPFC, PFCPrimary: t.PFCPrimary, PFCDetailed: t.PFCDetailed}
+		if *t.PFCPrimary != "" {
+			d := pfc.PrimaryDisplayName(*t.PFCPrimary)
+			ec.PFCPrimaryDisplay = &d
+		}
+		if t.PFCDetailed != nil && *t.PFCDetailed != "" {
+			d := pfc.DetailedDisplayName(*t.PFCPrimary, *t.PFCDetailed)
+			ec.PFCDetailedDisplay = &d
+		}
+		return ec
+	}
+	return nil
 }
 
 // Validate checks that the Transaction has all required fields and valid values.
@@ -165,6 +238,30 @@ func (t *Transaction) Validate() error {
 	return nil
 }
 
+// IsOutflow returns true when the transaction is an outflow (positive amount = spending/debit under Plaid PFCv2).
+func (t Transaction) IsOutflow() bool { return t.Amount > 0 }
+
+// IsInflow returns true when the transaction is an inflow (negative amount = refund/income under Plaid PFCv2).
+func (t Transaction) IsInflow() bool { return t.Amount < 0 }
+
+// ExpenseAmount returns the transaction amount when it is an outflow, and 0 otherwise.
+// Always non-negative.
+func (t Transaction) ExpenseAmount() float64 {
+	if t.Amount > 0 {
+		return t.Amount
+	}
+	return 0
+}
+
+// IncomeAmount returns the absolute transaction amount when it is an inflow, and 0 otherwise.
+// Always non-negative.
+func (t Transaction) IncomeAmount() float64 {
+	if t.Amount < 0 {
+		return -t.Amount
+	}
+	return 0
+}
+
 // TransactionFilters represents optional filters for querying transactions.
 // All fields are optional pointers - nil means no filter applied for that field.
 // Used by repository layer to build dynamic WHERE clauses.
@@ -182,14 +279,12 @@ type TransactionFilters struct {
 	// EndDate filters transactions on or before this date (inclusive)
 	EndDate *time.Time
 
-	// Category filters transactions containing this category string (deprecated: use Categories)
-	// Uses ILIKE for case-insensitive partial matching against JSONB category field
-	Category *string
+	// PFCPrimaries filters by effective PFC primary enum(s) (OR logic within).
+	// Matches the effective category: override if set, else source pfc_primary.
+	PFCPrimaries []string
 
-	// Categories filters transactions matching any of these categories (OR logic within)
-	// Matches against both category_override and original category fields
-	// Issue #529: Multi-category filter support
-	Categories []string
+	// CustomCategoryIDs filters by effective custom category override ID(s) (OR logic within).
+	CustomCategoryIDs []string
 
 	// Search filters transactions by merchant name or transaction name
 	// Uses ILIKE for case-insensitive partial matching
@@ -207,7 +302,20 @@ type TransactionFilters struct {
 	// Issue #529: Amount range filter support
 	MaxAmount *float64
 
-	// AmountType filters transactions by direction: "income" (positive), "expense" (negative), or nil for both
+	// AmountType filters transactions by direction: "income" (amount < 0, inflow), "expense" (amount > 0, outflow), or nil for both
 	// Issue #529: Transaction type filter support
 	AmountType *string
+
+	// UserAccountID filters transactions by logical account identity (user_accounts.id).
+	// Stable across re-links: returns transactions from both old and new chain members
+	// for this logical account. Use instead of AccountID when the caller has a
+	// user_account_id (e.g. the frontend after re-link transparency work in #1109).
+	UserAccountID *string
+
+	// SortBy specifies the column to sort by. Allowed values: date, merchant, amount, category.
+	// Defaults to "date" when empty. Validated by Huma enum tag at the operation layer.
+	SortBy string
+
+	// SortDir specifies sort direction. Allowed values: asc, desc. Defaults to "desc" when empty.
+	SortDir string
 }

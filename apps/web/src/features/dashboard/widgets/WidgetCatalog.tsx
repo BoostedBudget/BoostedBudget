@@ -63,8 +63,8 @@ function WidgetCard({ definition, onAdd, isAdded }: WidgetCardProps) {
         relative p-4 rounded-lg border-2 transition-all
         ${
           isAdded
-            ? 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 opacity-60'
-            : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-600 hover:shadow-md cursor-pointer bg-white dark:bg-gray-800'
+            ? 'border-border bg-muted opacity-60'
+            : 'border-border hover:border-blue-300 dark:hover:border-blue-600 hover:shadow-md cursor-pointer bg-card'
         }
       `}
       onClick={isAdded ? undefined : onAdd}
@@ -74,17 +74,17 @@ function WidgetCard({ definition, onAdd, isAdded }: WidgetCardProps) {
           <WidgetIcon iconName={definition.icon} className="h-5 w-5" />
         </div>
         <div className="flex-1 min-w-0">
-          <h4 className="text-sm font-medium text-gray-900 dark:text-white">
+          <h4 className="text-sm font-medium text-foreground">
             {definition.title}
           </h4>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-2">
+          <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
             {definition.description}
           </p>
           <div className="flex items-center gap-2 mt-2">
-            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 capitalize">
+            <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground capitalize">
               {definition.category}
             </span>
-            <span className="text-xs text-gray-400">
+            <span className="text-xs text-muted-foreground">
               {definition.defaultSize.w}×{definition.defaultSize.h}
             </span>
           </div>
@@ -93,12 +93,12 @@ function WidgetCard({ definition, onAdd, isAdded }: WidgetCardProps) {
 
       {!isAdded && (
         <div className="absolute top-2 right-2">
-          <Plus className="h-5 w-5 text-gray-400" />
+          <Plus className="h-5 w-5 text-muted-foreground" />
         </div>
       )}
 
       {isAdded && (
-        <div className="absolute top-2 right-2 text-xs text-gray-500 dark:text-gray-400">
+        <div className="absolute top-2 right-2 text-xs text-muted-foreground">
           Added
         </div>
       )}
@@ -165,19 +165,19 @@ export function WidgetCatalog({
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="w-full max-w-2xl p-6 bg-white dark:bg-gray-900 rounded-2xl"
+        className="w-full max-w-2xl p-6 bg-card rounded-2xl"
         showCloseButton={false}
       >
         <DialogDescription className="sr-only">
           Browse and add widgets to your dashboard
         </DialogDescription>
         <DialogHeader className="flex flex-row items-center justify-between mb-6">
-          <DialogTitle className="text-lg font-semibold text-gray-900 dark:text-white">
+          <DialogTitle className="text-lg font-semibold text-foreground">
             Add Widget
           </DialogTitle>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+            className="text-muted-foreground hover:text-foreground transition-colors"
           >
             <XIcon className="h-6 w-6" />
           </button>
@@ -186,7 +186,7 @@ export function WidgetCatalog({
         <div className="space-y-6">
           {categories.map(([category, widgets]) => (
             <div key={category}>
-              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3">
+              <h3 className="text-sm font-medium text-muted-foreground mb-3">
                 {categoryLabels[category] || category}
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -203,8 +203,8 @@ export function WidgetCatalog({
           ))}
         </div>
 
-        <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
-          <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+        <div className="mt-6 pt-4 border-t border-border">
+          <p className="text-xs text-muted-foreground text-center">
             Drag widgets to reorder • Resize from corners • Click × to remove
           </p>
         </div>

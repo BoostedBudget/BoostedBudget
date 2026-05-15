@@ -373,3 +373,7 @@ dogfood-output/
 # Git worktrees
 .worktrees/
 .worktrees/
+.worktrees
+
+# Plans/docs (local only)
+docs/plans/

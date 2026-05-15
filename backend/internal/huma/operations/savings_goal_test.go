@@ -285,6 +285,33 @@ func TestDeleteSavingsGoal_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestCreateSavingsGoalRequest_DeadlineDecoding tests JSON unmarshaling of deadline
+// field (RFC3339 format required, bare YYYY-MM-DD rejected).
+func TestCreateSavingsGoalRequest_DeadlineDecoding(t *testing.T) {
+	t.Run("rejects bare YYYY-MM-DD date string", func(t *testing.T) {
+		var req domain.CreateSavingsGoalRequest
+		err := json.Unmarshal([]byte(`{"name":"Test","target_amount":1000,"account_id":"550e8400-e29b-41d4-a716-446655440000","deadline":"2026-12-31"}`), &req)
+		assert.Error(t, err, "bare YYYY-MM-DD should fail to unmarshal into *time.Time")
+	})
+
+	t.Run("accepts RFC3339 datetime string", func(t *testing.T) {
+		var req domain.CreateSavingsGoalRequest
+		err := json.Unmarshal([]byte(`{"name":"Test","target_amount":1000,"account_id":"550e8400-e29b-41d4-a716-446655440000","deadline":"2026-12-31T00:00:00Z"}`), &req)
+		require.NoError(t, err)
+		require.NotNil(t, req.Deadline)
+		assert.Equal(t, 2026, req.Deadline.Year())
+		assert.Equal(t, 12, int(req.Deadline.Month()))
+		assert.Equal(t, 31, req.Deadline.Day())
+	})
+
+	t.Run("accepts missing deadline as nil", func(t *testing.T) {
+		var req domain.CreateSavingsGoalRequest
+		err := json.Unmarshal([]byte(`{"name":"Test","target_amount":1000,"account_id":"550e8400-e29b-41d4-a716-446655440000"}`), &req)
+		require.NoError(t, err)
+		assert.Nil(t, req.Deadline)
+	})
+}
+
 // TestSavingsGoalRouteRegistration tests that routes are properly registered.
 func TestSavingsGoalRouteRegistration(t *testing.T) {
 	mockService := &mockSavingsGoalService{

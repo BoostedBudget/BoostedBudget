@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: '1.26.1'
+  GO_VERSION: '1.26.3'
   NODE_VERSION: '20'
 
 jobs:
@@ -53,6 +53,111 @@ jobs:
               - 'backend/migrations/**'
             workflow:
               - '.github/workflows/**'
+
+  # =============================================================================
+  # E2E Tests (starts immediately — no needs — so it gets runner priority over
+  # jobs that wait for detect-changes. Builds its own backend binary.)
+  # =============================================================================
+  e2e-test:
+    name: E2E Tests
+    if: always() && !cancelled()
+    runs-on: [self-hosted, macOS, mac-mini]
+    environment: e2e  # Access Clerk secrets from e2e environment
+    env:
+      UNIQUE_WORKSPACE: workspace-e2e-test-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace (fix permission issues)
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install workspace dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: bunx playwright install --with-deps chromium
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build backend binary
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: |
+          mkdir -p bin
+          go build -o bin/server ./cmd/server
+
+      - name: Make backend binary executable
+        run: chmod +x $GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
+
+      - name: Install golang-migrate
+        run: |
+          # Install golang-migrate to user bin (no sudo needed on self-hosted runners)
+          mkdir -p $HOME/bin
+          curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz | tar -xz
+          mv migrate $HOME/bin/
+          echo "$HOME/bin" >> $GITHUB_PATH
+          $HOME/bin/migrate --version
+
+      - name: Run E2E tests
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        env:
+          CI: true
+          CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          TEST_CLERK_EMAIL: ${{ secrets.TEST_CLERK_EMAIL }}
+          TEST_CLERK_PASSWORD: ${{ secrets.TEST_CLERK_PASSWORD }}
+          E2E_CLERK_USER_ID: ${{ secrets.E2E_CLERK_USER_ID }}
+        run: bun run test:e2e
+
+      - name: Upload E2E test results
+        id: upload-playwright-report
+        if: success() || failure()
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: playwright-report-${{ github.run_id }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/playwright-report/
+          retention-days: 1
+          if-no-files-found: warn
+
+      - name: Report if E2E report upload failed
+        if: steps.upload-playwright-report.outcome == 'failure'
+        run: echo "::warning::E2E test report upload failed (storage quota/network). Test results valid."
+
+      - name: Upload E2E test videos (on failure)
+        id: upload-playwright-videos
+        if: failure()
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: playwright-videos-${{ github.run_id }}
+          path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/test-results/
+          retention-days: 1
+          if-no-files-found: warn
+
+      - name: Report if E2E videos upload failed
+        if: steps.upload-playwright-videos.outcome == 'failure'
+        run: echo "::warning::E2E videos upload failed (storage quota/network). Test results valid."
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # OpenAPI Spec Validation (ensures spec is committed when backend changes)
@@ -252,22 +357,6 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: go tool cover -html=coverage.out -o coverage.html
 
-      - name: Restore backend binary cache
-        id: cache-backend-binary
-        uses: actions/cache/restore@v5
-        with:
-          path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
-          key: backend-binary-${{ runner.os }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', 'backend/go.sum') }}
-
-      - name: Build backend binary (for E2E tests)
-        if: steps.cache-backend-binary.outputs.cache-hit != 'true'
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
-        run: |
-          echo "::group::Building backend binary"
-          mkdir -p bin
-          go build -o bin/server ./cmd/server
-          echo "::endgroup::"
-
       - name: Upload backend coverage report
         id: upload-backend-coverage
         uses: actions/upload-artifact@v7
@@ -290,13 +379,6 @@ jobs:
         with:
           path: ~/go/pkg/mod
           key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
-
-      - name: Save backend binary cache
-        if: always() && steps.cache-backend-binary.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
-          key: backend-binary-${{ runner.os }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', 'backend/go.sum') }}
 
       - name: Final workspace cleanup
         if: always()
@@ -386,128 +468,6 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # E2E Tests (runs in parallel with backend/frontend tests)
-  # =============================================================================
-  e2e-test:
-    name: E2E Tests
-    needs: [detect-changes]
-    if: always() && !cancelled()
-    runs-on: [self-hosted, macOS, mac-mini]
-    environment: e2e  # Access Clerk secrets from e2e environment
-    env:
-      UNIQUE_WORKSPACE: workspace-e2e-test-${{ github.run_id }}
-
-    steps:
-      - name: Clean workspace (fix permission issues)
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          path: ${{ env.UNIQUE_WORKSPACE }}
-          clean: false
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install workspace dependencies
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
-        run: bun install --frozen-lockfile
-
-      - name: Install Playwright browsers
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
-        run: bunx playwright install --with-deps chromium
-
-      - name: Restore backend binary from cache
-        id: cache-backend-binary
-        uses: actions/cache/restore@v5
-        with:
-          path: ${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
-          key: backend-binary-${{ runner.os }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', 'backend/go.sum') }}
-          restore-keys: |
-            backend-binary-${{ runner.os }}-
-
-      - name: Set up Go (for building backend if needed)
-        if: steps.cache-backend-binary.outputs.cache-hit != 'true'
-        uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Build backend binary (cache miss fallback)
-        if: steps.cache-backend-binary.outputs.cache-hit != 'true'
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
-        run: |
-          mkdir -p bin
-          go build -o bin/server ./cmd/server
-
-      - name: Verify backend binary exists
-        run: |
-          if [ ! -f "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server" ]; then
-            echo "::error::Backend binary not found. Run backend tests first to populate cache."
-            exit 1
-          fi
-
-      - name: Make backend binary executable
-        run: chmod +x $GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
-
-      - name: Install golang-migrate
-        run: |
-          # Install golang-migrate to user bin (no sudo needed on self-hosted runners)
-          mkdir -p $HOME/bin
-          curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz | tar -xz
-          mv migrate $HOME/bin/
-          echo "$HOME/bin" >> $GITHUB_PATH
-          $HOME/bin/migrate --version
-
-      - name: Run E2E tests
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
-        env:
-          CI: true
-          CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
-          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
-          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
-          TEST_CLERK_EMAIL: ${{ secrets.TEST_CLERK_EMAIL }}
-          TEST_CLERK_PASSWORD: ${{ secrets.TEST_CLERK_PASSWORD }}
-        run: bun run test:e2e
-
-      - name: Upload E2E test results
-        id: upload-playwright-report
-        if: success() || failure()
-        uses: actions/upload-artifact@v7
-        continue-on-error: true
-        with:
-          name: playwright-report-${{ github.run_id }}
-          path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/playwright-report/
-          retention-days: 1
-          if-no-files-found: warn
-
-      - name: Report if E2E report upload failed
-        if: steps.upload-playwright-report.outcome == 'failure'
-        run: echo "::warning::E2E test report upload failed (storage quota/network). Test results valid."
-
-      - name: Upload E2E test videos (on failure)
-        id: upload-playwright-videos
-        if: failure()
-        uses: actions/upload-artifact@v7
-        continue-on-error: true
-        with:
-          name: playwright-videos-${{ github.run_id }}
-          path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/test-results/
-          retention-days: 1
-          if-no-files-found: warn
-
-      - name: Report if E2E videos upload failed
-        if: steps.upload-playwright-videos.outcome == 'failure'
-        run: echo "::warning::E2E videos upload failed (storage quota/network). Test results valid."
-
-      - name: Final workspace cleanup
-        if: always()
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-
-  # =============================================================================
   # Migration Integration Tests
   # =============================================================================
   migration-tests:
@@ -582,6 +542,8 @@ jobs:
             -e POSTGRES_PASSWORD=test \
             -e POSTGRES_DB=test \
             -p 5432 \
+            --memory=512m \
+            --shm-size=256m \
             --health-cmd pg_isready \
             --health-interval 10s \
             --health-timeout 5s \
@@ -810,9 +772,73 @@ jobs:
       - name: Final workspace cleanup
         if: always()
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-  # ===========================================================================
+
+  # =============================================================================
+  # Lighthouse CI Audit (Performance, Accessibility, Best Practices, SEO)
+  # =============================================================================
+  # DISABLED: Lighthouse CI has macOS-specific Chrome isolation issues on self-hosted
+  # Mac Mini runners (LHCI uses --headless=new which interferes with running Chrome
+  # sessions). Re-enable when migrating CI to Ubicloud Linux runners (#996).
+  # Audits the landing page with 3 runs (median scoring) against hard thresholds:
+  #   Performance >= 80, Accessibility >= 95, Best Practices >= 90, SEO >= 95
+  # Uses dynamic port allocation (45000-49900) to prevent concurrent run collisions.
+  # No artifacts stored — assertions only, workspace cleaned up after.
+  lighthouse-audit:
+    name: Lighthouse CI Audit
+    needs: detect-changes
+    if: false  # Disabled — re-enable on Ubicloud Linux runners (#996)
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-lighthouse-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+          fetch-depth: 1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install workspace dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bun install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: bun run build
+
+      - name: Allocate dynamic LHCI port
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # Derive isolated port range from GITHUB_RUN_ID (same pattern as E2E tests)
+          # LHCI range: 45000-49900 (50 ranges of 100 ports, supports 50 concurrent jobs)
+          PORT_OFFSET=$(( (${RUN_ID:-0} % 50) * 100 ))
+          LHCI_PORT=$(( 45000 + PORT_OFFSET ))
+          echo "LHCI_PORT=${LHCI_PORT}" >> "$GITHUB_ENV"
+          echo "Allocated LHCI port ${LHCI_PORT}"
+
+      - name: Run Lighthouse CI
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        env:
+          LHCI_PORT: ${{ env.LHCI_PORT }}
+        run: npx lhci autorun
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
   # Bundle Size Check (size-limit + orphan-chunk guard)
-  # ===========================================================================
+  # =============================================================================
   # Hard fails if any JS chunk exceeds its per-route budget OR if a Rollup-emitted
   # chunk has no budget entry at all. Budgets set at baseline + 20% (vendor +25%).
   bundle-size:

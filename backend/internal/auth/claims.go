@@ -7,15 +7,18 @@ import (
 
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/clerk/clerk-sdk-go/v2/user"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
-// Default values for subscription and region
-const (
-	// DefaultSubscriptionTier is the default tier for new users
-	DefaultSubscriptionTier = "free"
-	// DefaultPrimaryRegion is the default region (IAD = us-east-1)
-	DefaultPrimaryRegion = "iad"
-)
+// DefaultSubscriptionTier is the default tier for new users.
+const DefaultSubscriptionTier = "free"
+
+// DefaultPrimaryRegion returns the configured default region code.
+// This is a function rather than a constant because the value comes from
+// config/regions.yaml, loaded at startup via domain.InitRegionRegistry.
+func DefaultPrimaryRegion() string {
+	return domain.DefaultRegionCode()
+}
 
 // CustomClaims represents the custom claims from BoostedBudget JWT template.
 // This struct must match the JWT template configured in Clerk Dashboard.
@@ -99,7 +102,7 @@ func ExtractSubscriptionTier(claims *clerk.SessionClaims) string {
 }
 
 // ExtractPrimaryRegion extracts the primary region from Clerk claims.
-// Returns DefaultPrimaryRegion ("iad") if not found.
+// Returns DefaultPrimaryRegion() if not found.
 // The region should be set in the user's public metadata in Clerk.
 //
 // Supports two claim formats:
@@ -107,7 +110,7 @@ func ExtractSubscriptionTier(claims *clerk.SessionClaims) string {
 //   - map[string]interface{} (tests, legacy)
 func ExtractPrimaryRegion(claims *clerk.SessionClaims) string {
 	if claims == nil || claims.Custom == nil {
-		return DefaultPrimaryRegion
+		return DefaultPrimaryRegion()
 	}
 
 	// Try typed CustomClaims first (production with CustomClaimsConstructor)
@@ -115,7 +118,7 @@ func ExtractPrimaryRegion(claims *clerk.SessionClaims) string {
 		if customClaims.PrimaryRegion != "" {
 			return customClaims.PrimaryRegion
 		}
-		return DefaultPrimaryRegion
+		return DefaultPrimaryRegion()
 	}
 
 	// Fallback: handle map[string]interface{} (tests, legacy)
@@ -125,7 +128,7 @@ func ExtractPrimaryRegion(claims *clerk.SessionClaims) string {
 		}
 	}
 
-	return DefaultPrimaryRegion
+	return DefaultPrimaryRegion()
 }
 
 // FetchEmailFromClerkAPI gets user email from Clerk Backend API.

@@ -22,7 +22,8 @@ Authorization: Bearer <your-jwt-token>
 
 ## Regions
 
-All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+Use the GET /api/v1/regions endpoint to discover available data residency regions.
+Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
@@ -81,9 +82,17 @@ export const getGetCurrentSubscriptionResponseMock = (
   $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
   amount: faker.string.alpha({ length: { min: 10, max: 20 } }),
   billing_interval: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  cancel_at_period_end: faker.datatype.boolean(),
   currency: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  current_period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  current_period_end: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   next_billing_date: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  scheduled_change_at: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),

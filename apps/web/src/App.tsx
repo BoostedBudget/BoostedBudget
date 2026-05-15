@@ -23,10 +23,10 @@ import { LandingPage } from './features/landing'
 import { AdminRoute, AdminLayout } from './features/admin'
 import { NotFoundPage } from './features/not-found/NotFoundPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { useTheme } from './shared/theme'
 import { posthog } from './shared/lib/posthog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
 import { PageSkeleton } from './shared/components/PageSkeleton'
-import './App.css'
 
 const ProfilePage = lazy(() =>
   import('./features/profile/ProfilePage').then(m => ({ default: m.ProfilePage }))
@@ -67,6 +67,15 @@ const RulesPage = lazy(() =>
 const RuleBuilder = lazy(() =>
   import('./features/rules').then(m => ({ default: m.RuleBuilder }))
 )
+const SpendingReportsPage = lazy(() =>
+  import('./features/reports').then(m => ({ default: m.SpendingReportsPage }))
+)
+const NetWorthPage = lazy(() =>
+  import('./features/net-worth').then(m => ({ default: m.NetWorthPage }))
+)
+const SavingsPage = lazy(() =>
+  import('./features/savings').then(m => ({ default: m.SavingsPage }))
+)
 const PrivacyPolicy = lazy(() =>
   import('./legal/PrivacyPolicy').then(m => ({ default: m.PrivacyPolicy }))
 )
@@ -91,11 +100,14 @@ const HealthDashboardPage = lazy(() =>
 const WebhooksPage = lazy(() =>
   import('./features/admin').then(m => ({ default: m.WebhooksPage }))
 )
-
+const DeadLetterPage = lazy(() =>
+  import('./features/admin').then(m => ({ default: m.DeadLetterPage }))
+)
 
 function App() {
   const { isSignedIn: isAuthenticated } = useAuth()
   const location = useLocation()
+  const { resolvedTheme } = useTheme()
   const [, setConsentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
 
   usePostHogIdentify()
@@ -191,7 +203,7 @@ function App() {
   }
 
   return (
-    <div className={`app ${isLandingPage ? 'app--landing' : ''}`}>
+    <div className={`w-full${isLandingPage ? ' landing-page' : ''}`}>
       {!isLandingPage && <Header />}
 
       {isLandingPage ? (
@@ -199,7 +211,7 @@ function App() {
           <Route path="/" element={<LandingPage />} />
         </Routes>
       ) : (
-        <main className="app-main">
+        <main className="flex flex-col gap-8 mb-12 pt-4">
           <Routes>
             <Route
               path="/"
@@ -249,6 +261,42 @@ function App() {
                   <PremiumRoute>
                     <Suspense fallback={<PageSkeleton />}>
                       <TransactionsPage />
+                    </Suspense>
+                  </PremiumRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/reports"
+              element={
+                <ProtectedRoute>
+                  <PremiumRoute>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <SpendingReportsPage />
+                    </Suspense>
+                  </PremiumRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/net-worth"
+              element={
+                <ProtectedRoute>
+                  <PremiumRoute>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <NetWorthPage />
+                    </Suspense>
+                  </PremiumRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/savings"
+              element={
+                <ProtectedRoute>
+                  <PremiumRoute>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <SavingsPage />
                     </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
@@ -386,16 +434,17 @@ function App() {
               <Route path="users" element={<Suspense fallback={<PageSkeleton />}><UsersPage /></Suspense>} />
               <Route path="health" element={<Suspense fallback={<PageSkeleton />}><HealthDashboardPage /></Suspense>} />
               <Route path="webhooks" element={<Suspense fallback={<PageSkeleton />}><WebhooksPage /></Suspense>} />
+              <Route path="dead-letter" element={<Suspense fallback={<PageSkeleton />}><DeadLetterPage /></Suspense>} />
             </Route>
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>
       )}
 
-      {!isLandingPage && <AppFooter />}
+      <AppFooter />
 
       <CookieConsent onConsentChange={handleConsentChange} />
-      <Toaster position="bottom-right" richColors />
+      <Toaster position="bottom-right" richColors theme={resolvedTheme} />
     </div>
   )
 }

@@ -21,7 +21,9 @@ const mockRules: CategorizationRule[] = [
     priority: 1,
     conditions: [{ type: 'merchant_contains', value: 'coffee' }],
     condition_logic: 'AND',
-    target_category: ['Food and Drink', 'Coffee'],
+    target_kind: 'pfc',
+    target_pfc_primary: 'FOOD_AND_DRINK',
+    target_pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
     target_tags: ['daily', 'caffeine'],
     tag_behavior: 'add',
     source: 'manual',
@@ -43,7 +45,9 @@ const mockRules: CategorizationRule[] = [
       { type: 'amount_less_than', value: 200 },
     ],
     condition_logic: 'OR',
-    target_category: ['Shopping', 'Groceries'],
+    target_kind: 'pfc',
+    target_pfc_primary: 'GENERAL_MERCHANDISE',
+    target_pfc_detailed: 'GENERAL_MERCHANDISE_GROCERIES',
     target_tags: null,
     tag_behavior: 'add',
     source: 'ai',
@@ -61,7 +65,9 @@ const mockRules: CategorizationRule[] = [
     priority: 3,
     conditions: [{ type: 'amount_equals', value: 9.99 }],
     condition_logic: 'AND',
-    target_category: ['Bills', 'Subscription'],
+    target_kind: 'pfc',
+    target_pfc_primary: 'RENT_AND_UTILITIES',
+    target_pfc_detailed: 'RENT_AND_UTILITIES_TELEPHONE',
     tag_behavior: 'replace',
     source: 'template',
     match_count: 0,
@@ -132,12 +138,13 @@ describe('AutoCategorizationRuleTable', () => {
       expect(screen.getByText('2 conditions (OR)')).toBeInTheDocument()
     })
 
-    it('should display target category', () => {
+    it('should display target category using display fields (fallback to formatPFCEnum)', () => {
+      // These mock rules have no display fields, so formatPFCEnum fallback is used
       render(<AutoCategorizationRuleTable rules={mockRules} />)
 
-      expect(screen.getByText('Food and Drink')).toBeInTheDocument()
-      expect(screen.getByText('Shopping')).toBeInTheDocument()
-      expect(screen.getByText('Bills')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink › Coffee')).toBeInTheDocument()
+      expect(screen.getByText('General Merchandise › Groceries')).toBeInTheDocument()
+      expect(screen.getByText('Rent And Utilities › Telephone')).toBeInTheDocument()
     })
 
     it('should display match count', () => {

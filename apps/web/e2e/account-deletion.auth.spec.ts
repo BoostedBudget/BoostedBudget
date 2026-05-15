@@ -229,8 +229,8 @@ test.describe.skip('Account Deletion - Authenticated', () => {
     // This verifies the flow completes without errors
   })
 
-  // SKIPPED: Issue #615 - Deletion response UI not implemented
-  test.skip('should display scheduled deletion date after request', async ({ page }) => {
+  // FIXME: Issue #615 - Deletion response UI not implemented
+  test.fixme('should display scheduled deletion date after request', async ({ page }) => {
     // Mock deletion request with scheduled date
     await page.route('**/api/v1/user/delete', route => {
       route.fulfill({
@@ -258,8 +258,8 @@ test.describe.skip('Account Deletion - Authenticated', () => {
     await expect(page.getByText(datePattern)).toBeVisible()
   })
 
-  // SKIPPED: Issue #615 - Deletion response UI not implemented
-  test.skip('should display cancellation URL after deletion request', async ({ page }) => {
+  // FIXME: Issue #615 - Deletion response UI not implemented
+  test.fixme('should display cancellation URL after deletion request', async ({ page }) => {
     await page.route('**/api/v1/user/delete', route => {
       route.fulfill({
         status: 200,
@@ -310,8 +310,8 @@ test.describe.skip('Account Deletion - Authenticated', () => {
     await expect(page.getByText('Are you absolutely sure?')).toBeVisible()
   })
 
-  // SKIPPED: Issue #615 - Deletion response UI (loading state) not implemented
-  test.skip('should prevent multiple simultaneous deletion requests', async ({ page }) => {
+  // FIXME: Issue #615 - Deletion response UI (loading state) not implemented
+  test.fixme('should prevent multiple simultaneous deletion requests', async ({ page }) => {
     // Mock slow deletion request
     await page.route('**/api/v1/user/delete', async route => {
       await page.waitForTimeout(2000) // Simulate slow request

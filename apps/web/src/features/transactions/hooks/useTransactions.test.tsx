@@ -604,4 +604,128 @@ describe('useTransactions', () => {
       expect(result.current.data).toBeNull()
     })
   })
+
+  describe('Sorting', () => {
+    it('should not include sort params when sortBy and sortDir are omitted', async () => {
+      configureQuery({ data: mockTransactionsResponse })
+
+      const { result } = renderHook(() => useTransactions(), {
+        wrapper: createWrapper(),
+      })
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      const lastCallParams = mockUseGetTransactions.mock.calls.at(-1)?.[0] as Record<string, unknown>
+      expect(lastCallParams?.sort_by).toBeUndefined()
+      expect(lastCallParams?.sort_dir).toBeUndefined()
+    })
+
+    it('should forward sortBy=amount and sortDir=asc to the query', async () => {
+      configureQuery({ data: mockTransactionsResponse })
+
+      const { result } = renderHook(
+        () => useTransactions({ sortBy: 'amount', sortDir: 'asc' }),
+        { wrapper: createWrapper() }
+      )
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      const lastCallParams = mockUseGetTransactions.mock.calls.at(-1)?.[0] as Record<string, unknown>
+      expect(lastCallParams?.sort_by).toBe('amount')
+      expect(lastCallParams?.sort_dir).toBe('asc')
+    })
+
+    it('should forward sortBy=merchant to the query', async () => {
+      configureQuery({ data: mockTransactionsResponse })
+
+      const { result } = renderHook(
+        () => useTransactions({ sortBy: 'merchant', sortDir: 'desc' }),
+        { wrapper: createWrapper() }
+      )
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      const lastCallParams = mockUseGetTransactions.mock.calls.at(-1)?.[0] as Record<string, unknown>
+      expect(lastCallParams?.sort_by).toBe('merchant')
+      expect(lastCallParams?.sort_dir).toBe('desc')
+    })
+
+    it('should forward sortBy=category to the query', async () => {
+      configureQuery({ data: mockTransactionsResponse })
+
+      const { result } = renderHook(
+        () => useTransactions({ sortBy: 'category', sortDir: 'asc' }),
+        { wrapper: createWrapper() }
+      )
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      const lastCallParams = mockUseGetTransactions.mock.calls.at(-1)?.[0] as Record<string, unknown>
+      expect(lastCallParams?.sort_by).toBe('category')
+    })
+
+    it('should reset offset to 0 when sortBy changes', async () => {
+      configureQuery({ data: mockTransactionsResponse })
+
+      const { result, rerender } = renderHook(
+        ({ sortBy }: { sortBy: 'date' | 'amount' }) =>
+          useTransactions({ sortBy, sortDir: 'desc' }),
+        {
+          wrapper: createWrapper(),
+          initialProps: { sortBy: 'date' as 'date' | 'amount' },
+        }
+      )
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      act(() => {
+        result.current.nextPage()
+      })
+      expect(result.current.currentPage).toBe(1)
+
+      rerender({ sortBy: 'amount' })
+
+      await waitFor(() => {
+        expect(result.current.currentPage).toBe(0)
+      })
+    })
+
+    it('should reset offset to 0 when sortDir changes', async () => {
+      configureQuery({ data: mockTransactionsResponse })
+
+      const { result, rerender } = renderHook(
+        ({ sortDir }: { sortDir: 'asc' | 'desc' }) =>
+          useTransactions({ sortBy: 'date', sortDir }),
+        {
+          wrapper: createWrapper(),
+          initialProps: { sortDir: 'desc' as 'asc' | 'desc' },
+        }
+      )
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+
+      act(() => {
+        result.current.nextPage()
+      })
+      expect(result.current.currentPage).toBe(1)
+
+      rerender({ sortDir: 'asc' })
+
+      await waitFor(() => {
+        expect(result.current.currentPage).toBe(0)
+      })
+    })
+  })
 })

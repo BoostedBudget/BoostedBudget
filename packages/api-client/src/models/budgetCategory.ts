@@ -22,7 +22,8 @@ Authorization: Bearer <your-jwt-token>
 
 ## Regions
 
-All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+Use the GET /api/v1/regions endpoint to discover available data residency regions.
+Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
@@ -32,11 +33,15 @@ export interface BudgetCategory {
   readonly $schema?: string;
   allocated_amount: number;
   budget_id: string;
-  /** @nullable */
-  category: string[] | null;
+  category_kind: string;
   created_at: string;
+  custom_category_id?: string;
   id: string;
   match_logic: string;
+  pfc_detailed?: string;
+  pfc_detailed_display?: string;
+  pfc_primary?: string;
+  pfc_primary_display?: string;
   spent_amount: number;
   /** @nullable */
   tags: string[] | null;

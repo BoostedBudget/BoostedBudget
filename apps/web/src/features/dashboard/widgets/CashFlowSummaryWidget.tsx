@@ -61,18 +61,18 @@ function SummaryCard({
         <div className={`p-1.5 rounded-lg ${colorClasses[color]}`}>
           <Icon className="h-4 w-4" />
         </div>
-        <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+        <span className="text-sm font-medium text-muted-foreground">
           {title}
         </span>
       </div>
 
       <div className="flex-1 flex flex-col justify-center">
-        <div className="text-2xl font-bold text-gray-900 dark:text-white">
+        <div className="text-2xl font-bold text-foreground">
           {formatCurrency(value)}
         </div>
 
         {count !== undefined && (
-          <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+          <div className="text-xs text-muted-foreground mt-0.5">
             {count} transaction{count !== 1 ? 's' : ''}
           </div>
         )}
@@ -93,7 +93,7 @@ function SummaryCard({
               )}
               {formatPercent(changePercent)}
             </span>
-            <span className="text-xs text-gray-500 dark:text-gray-400">
+            <span className="text-xs text-muted-foreground">
               vs prior period
             </span>
           </div>
@@ -122,7 +122,7 @@ function CashFlowSummaryWidget(_props: WidgetProps) {
 
   if (!context?.filters.startDate || !context?.filters.endDate) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400">
+      <div className="flex items-center justify-center h-full text-muted-foreground">
         Select a date range to view cash flow
       </div>
     );

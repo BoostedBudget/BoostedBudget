@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -39,7 +38,7 @@ type TransactionSyncService interface {
 	// If sync fails on page N, cursor is already at page N-1, so retry continues from there.
 	//
 	// Process:
-	// 1. Decrypt access token using EncryptionService
+	// 1. Get plaintext access token (decrypted by repository layer on read)
 	// 2. Loop: call PlaidService.TransactionsSync with cursor
 	// 3. Aggregate Added/Modified/Removed from each page
 	// 4. Update cursor in database IMMEDIATELY after each page
@@ -65,7 +64,6 @@ type transactionSyncService struct {
 	profileRepo               repository.ProfileRepository          // For fetching user subscription tier (historical depth)
 	balanceSnapshotRepo       repository.BalanceSnapshotRepository  // Issue #353: For storing balance snapshots
 	plaidService              PlaidService
-	encryptionService         EncryptionService
 	subscriptionService       *SubscriptionService          // For tier-based historical depth limit
 	ruleApplicationService    RuleApplicationService        // Issue #346: Apply categorization rules to new transactions
 	budgetSyncService         BudgetSyncService             // Issue #494: Sync budget amounts after transaction sync
@@ -81,7 +79,6 @@ func NewTransactionSyncService(
 	profileRepo repository.ProfileRepository,
 	balanceSnapshotRepo repository.BalanceSnapshotRepository,
 	plaidService PlaidService,
-	encryptionService EncryptionService,
 	subscriptionService *SubscriptionService,
 	ruleApplicationService RuleApplicationService,
 	budgetSyncService BudgetSyncService,               // Issue #494: Sync budget amounts
@@ -100,7 +97,6 @@ func NewTransactionSyncService(
 		profileRepo:               profileRepo,
 		balanceSnapshotRepo:       balanceSnapshotRepo,
 		plaidService:              plaidService,
-		encryptionService:         encryptionService,
 		subscriptionService:       subscriptionService,
 		ruleApplicationService:    ruleApplicationService,
 		budgetSyncService:         budgetSyncService,
@@ -110,7 +106,6 @@ func NewTransactionSyncService(
 
 // ProcessWebhook processes a single TRANSACTIONS webhook event
 func (s *transactionSyncService) ProcessWebhook(ctx context.Context, webhook *domain.WebhookEvent) error {
-	// Validate webhook is not nil
 	if webhook == nil {
 		return errors.New("webhook event is nil")
 	}
@@ -215,11 +210,8 @@ func (s *transactionSyncService) SyncTransactions(
 		s.logger.Info("re-sync using cursor", "item_id", linkedItem.ID)
 	}
 
-	// Step 3: Decrypt access token
-	accessToken, err := s.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt access token: %w", err)
-	}
+	// Step 3: Get plaintext access token (populated by repo layer on read)
+	accessToken := linkedItem.AccessToken
 
 	// Step 4: Initialize result aggregation
 	result := &domain.TransactionSyncResult{
@@ -404,13 +396,11 @@ func (s *transactionSyncService) mapPlaidTransaction(
 	accountMap map[string]string,
 	userAccountMap map[string]string,
 ) (*domain.Transaction, error) {
-	// Map Plaid account_id to internal account UUID
 	internalAccountID, found := accountMap[plaidTxn.AccountId]
 	if !found {
 		return nil, fmt.Errorf("account not found for plaid_account_id %s", plaidTxn.AccountId)
 	}
 
-	// Map to stable UserAccountID if available
 	var userAccountID *string
 	if len(userAccountMap) > 0 {
 		if uaID, found := userAccountMap[plaidTxn.AccountId]; found {
@@ -418,112 +408,19 @@ func (s *transactionSyncService) mapPlaidTransaction(
 		}
 	}
 
-	// Parse transaction date (required)
-	date, err := time.Parse("2006-01-02", plaidTxn.Date)
+	tx, err := MapPlaidTransactionBase(plaidTxn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse transaction date %s: %w", plaidTxn.Date, err)
-	}
-
-	// Parse authorized_date (optional)
-	var authorizedDate *time.Time
-	if plaidTxn.AuthorizedDate.Get() != nil {
-		ad, err := time.Parse("2006-01-02", *plaidTxn.AuthorizedDate.Get())
-		if err == nil { // Ignore parse errors for optional field
-			authorizedDate = &ad
-		}
-	}
-
-	// Serialize external metadata (Plaid-specific fields)
-	externalMetadata, err := s.buildExternalMetadata(plaidTxn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize external metadata: %w", err)
-	}
-
-	// Serialize category array as JSON
-	var categoryJSON *string
-	if len(plaidTxn.Category) > 0 {
-		catBytes, _ := json.Marshal(plaidTxn.Category)
-		catStr := string(catBytes)
-		categoryJSON = &catStr
-	}
-
-	// Serialize personal finance category as JSON
-	var pfCategoryJSON *string
-	if plaidTxn.PersonalFinanceCategory.IsSet() {
-		pfBytes, _ := json.Marshal(plaidTxn.PersonalFinanceCategory.Get())
-		pfStr := string(pfBytes)
-		pfCategoryJSON = &pfStr
-	}
-
-	// Extract optional fields
-	var paymentChannel *string
-	if plaidTxn.PaymentChannel != "" {
-		paymentChannel = &plaidTxn.PaymentChannel
-	}
-
-	var merchantName *string
-	if plaidTxn.MerchantName.Get() != nil {
-		merchantName = plaidTxn.MerchantName.Get()
+		return nil, fmt.Errorf("failed to map plaid transaction %s: %w", plaidTxn.GetTransactionId(), err)
 	}
 
 	externalID := plaidTxn.GetTransactionId()
+	tx.UserID = userID
+	tx.AccountID = internalAccountID
+	tx.LinkedItemID = linkedItemID
+	tx.UserAccountID = userAccountID
+	tx.ExternalTransactionID = &externalID
 
-	return &domain.Transaction{
-		UserID:                  userID,
-		AccountID:               internalAccountID,
-		LinkedItemID:            linkedItemID,
-		UserAccountID:           userAccountID,
-		Source:                  domain.SourcePlaid,
-		ExternalTransactionID:   &externalID,
-		ExternalMetadata:        externalMetadata,
-		Amount:                  plaidTxn.Amount,
-		Date:                    date,
-		AuthorizedDate:          authorizedDate,
-		Name:                    plaidTxn.Name,
-		MerchantName:            merchantName,
-		Category:                categoryJSON,
-		OriginalCategory:        categoryJSON,
-		PersonalFinanceCategory: pfCategoryJSON,
-		PaymentChannel:          paymentChannel,
-		Pending:                 plaidTxn.GetPending(),
-		UserNotes:               nil,
-	}, nil
-}
-
-// buildExternalMetadata creates JSON metadata from Plaid-specific fields
-// that don't have direct domain equivalents.
-func (s *transactionSyncService) buildExternalMetadata(plaidTxn plaid.Transaction) (*string, error) {
-	metadata := make(map[string]interface{})
-
-	// Include Plaid-specific fields
-	if plaidTxn.Website.Get() != nil {
-		metadata["website"] = *plaidTxn.Website.Get()
-	}
-
-	// Location data
-	location := plaidTxn.Location
-	if location.City.Get() != nil || location.Region.Get() != nil {
-		metadata["location"] = location
-	}
-
-	// Payment metadata
-	paymentMeta := plaidTxn.PaymentMeta
-	if paymentMeta.ReferenceNumber.Get() != nil || paymentMeta.PpdId.Get() != nil {
-		metadata["payment_meta"] = paymentMeta
-	}
-
-	// Only serialize if we have data
-	if len(metadata) == 0 {
-		return nil, nil
-	}
-
-	bytes, err := json.Marshal(metadata)
-	if err != nil {
-		return nil, err
-	}
-
-	metadataStr := string(bytes)
-	return &metadataStr, nil
+	return tx, nil
 }
 
 // processAddedTransactions stores newly added transactions in the database.

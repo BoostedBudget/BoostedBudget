@@ -19,11 +19,19 @@ func RegisterAllRoutesForSpec(api huma.API) {
 		},
 	}
 
+	// Create minimal region config for spec generation
+	minimalRegionConfig := &config.RegionConfig{
+		ServerRegion:  "iad",
+		DefaultRegion: "iad",
+		Regions:       map[string]config.RegionDefinition{"iad": {DisplayName: "USA (Virginia)"}},
+	}
+
 	// Create handlers with nil dependencies
 	// These handlers won't be called - they're just needed for type signatures
 	healthHandler := &HealthHandler{Version: "1.0.0"}
 	metricsHandler := &MetricsHandler{}
 	subscriptionTiersHandler := NewSubscriptionTiersHandler(minimalTierConfig)
+	regionsHandler := NewRegionsHandler(minimalRegionConfig)
 	tagHandler := &TagHandler{}
 	transactionHandler := &TransactionHandler{}
 	categoryHandler := &CategoryHandler{}
@@ -54,6 +62,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #821: QA auth bypass (zero-value OK—handler not called during spec generation)
 	qaBypassHandler := &QAAuthBypassHandler{}
+
+	// Issue #952: Notification Center — Transfer Suggestion API
+	transferSuggestionHandler := &TransferSuggestionHandler{}
 
 	// Register all routes
 	RegisterHealthRoutes(api, healthHandler)
@@ -89,4 +100,10 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #821: QA auth bypass
 	RegisterQAAuthBypassRoutes(api, qaBypassHandler)
+
+	// Issue #974: Dynamic region configuration
+	RegisterRegionRoutes(api, regionsHandler)
+
+	// Issue #952: Notification Center — Transfer Suggestion API
+	RegisterTransferSuggestionRoutes(api, transferSuggestionHandler)
 }

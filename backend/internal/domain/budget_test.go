@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// ptrStr is a helper to get a pointer to a string literal in tests.
+func ptrStr(s string) *string { return &s }
+
 // TestBudget_Validate tests that Budget validates required fields
 func TestBudget_Validate(t *testing.T) {
 	validStartDate := time.Now()
@@ -20,25 +23,27 @@ func TestBudget_Validate(t *testing.T) {
 		{
 			name: "valid monthly budget",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Monthly Groceries",
-				Period:       BudgetPeriodMonthly,
-				StartDate:    validStartDate,
-				Amount:       500.00,
-				CurrencyCode: "USD",
+				UserID:         "user-123",
+				Name:           "Monthly Groceries",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         500.00,
+				ExpectedIncome: 500.00,
+				CurrencyCode:   "USD",
 			},
 			wantErr: false,
 		},
 		{
 			name: "valid custom period budget with end date",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Vacation Budget",
-				Period:       BudgetPeriodCustom,
-				StartDate:    validStartDate,
-				EndDate:      &validEndDate,
-				Amount:       2000.00,
-				CurrencyCode: "USD",
+				UserID:         "user-123",
+				Name:           "Vacation Budget",
+				Period:         BudgetPeriodCustom,
+				StartDate:      validStartDate,
+				EndDate:        &validEndDate,
+				Amount:         2000.00,
+				ExpectedIncome: 2000.00,
+				CurrencyCode:   "USD",
 			},
 			wantErr: false,
 		},
@@ -133,11 +138,12 @@ func TestBudget_Validate(t *testing.T) {
 		{
 			name: "missing currency_code",
 			budget: Budget{
-				UserID:    "user-123",
-				Name:      "Test Budget",
-				Period:    BudgetPeriodMonthly,
-				StartDate: validStartDate,
-				Amount:    100.00,
+				UserID:         "user-123",
+				Name:           "Test Budget",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         100.00,
+				ExpectedIncome: 100.00,
 			},
 			wantErr: true,
 			errMsg:  "currency_code is required",
@@ -145,12 +151,13 @@ func TestBudget_Validate(t *testing.T) {
 		{
 			name: "custom period without end_date",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Custom Budget",
-				Period:       BudgetPeriodCustom,
-				StartDate:    validStartDate,
-				Amount:       100.00,
-				CurrencyCode: "USD",
+				UserID:         "user-123",
+				Name:           "Custom Budget",
+				Period:         BudgetPeriodCustom,
+				StartDate:      validStartDate,
+				Amount:         100.00,
+				ExpectedIncome: 100.00,
+				CurrencyCode:   "USD",
 			},
 			wantErr: true,
 			errMsg:  "end_date is required for custom period budgets",
@@ -158,13 +165,14 @@ func TestBudget_Validate(t *testing.T) {
 		{
 			name: "end_date before start_date",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Test Budget",
-				Period:       BudgetPeriodCustom,
-				StartDate:    validEndDate, // later date as start
-				EndDate:      &validStartDate, // earlier date as end
-				Amount:       100.00,
-				CurrencyCode: "USD",
+				UserID:         "user-123",
+				Name:           "Test Budget",
+				Period:         BudgetPeriodCustom,
+				StartDate:      validEndDate,   // later date as start
+				EndDate:        &validStartDate, // earlier date as end
+				Amount:         100.00,
+				ExpectedIncome: 100.00,
+				CurrencyCode:   "USD",
 			},
 			wantErr: true,
 			errMsg:  "end_date must be after start_date",
@@ -184,6 +192,54 @@ func TestBudget_Validate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBudget_Validate_RequiresExpectedIncomePositive tests Issue #1048 domain invariant:
+// expected_income must be positive after service reconciliation sets it.
+func TestBudget_Validate_RequiresExpectedIncomePositive(t *testing.T) {
+	validStartDate := time.Now()
+
+	base := Budget{
+		UserID:       "user-123",
+		Name:         "Test Budget",
+		Period:       BudgetPeriodMonthly,
+		StartDate:    validStartDate,
+		Amount:       100.00,
+		CurrencyCode: "USD",
+	}
+
+	t.Run("zero expected_income is rejected", func(t *testing.T) {
+		b := base
+		b.ExpectedIncome = 0
+		err := b.Validate()
+		if err == nil {
+			t.Fatal("Validate() expected error for ExpectedIncome=0, got nil")
+		}
+		if !contains(err.Error(), "expected_income") {
+			t.Errorf("error should mention expected_income, got: %v", err)
+		}
+	})
+
+	t.Run("negative expected_income is rejected", func(t *testing.T) {
+		b := base
+		b.ExpectedIncome = -1.0
+		err := b.Validate()
+		if err == nil {
+			t.Fatal("Validate() expected error for ExpectedIncome=-1, got nil")
+		}
+		if !contains(err.Error(), "expected_income") {
+			t.Errorf("error should mention expected_income, got: %v", err)
+		}
+	})
+
+	t.Run("positive expected_income is accepted", func(t *testing.T) {
+		b := base
+		b.ExpectedIncome = 100.00
+		err := b.Validate()
+		if err != nil {
+			t.Errorf("Validate() unexpected error for ExpectedIncome=100: %v", err)
+		}
+	})
 }
 
 // TestBudgetPeriod_IsValid tests the IsValid helper for budget periods
@@ -444,7 +500,8 @@ func TestBudgetCategory_Validate(t *testing.T) {
 			name: "valid category",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink", "Coffee Shops"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				SpentAmount:     50.00,
 			},
@@ -453,36 +510,38 @@ func TestBudgetCategory_Validate(t *testing.T) {
 		{
 			name: "missing budget_id",
 			category: BudgetCategory{
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 			},
 			wantErr: true,
 			errMsg:  "budget_id is required",
 		},
 		{
-			name: "missing category",
+			name: "missing pfc_primary",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
+				CategoryKind:    "pfc",
 				AllocatedAmount: 100.00,
 			},
 			wantErr: true,
-			errMsg:  "category is required",
+			errMsg:  "pfc_primary is required when category_kind is pfc",
 		},
 		{
-			name: "empty category array",
+			name: "missing category_kind",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{},
 				AllocatedAmount: 100.00,
 			},
 			wantErr: true,
-			errMsg:  "category is required",
+			errMsg:  "category_kind must be pfc or custom",
 		},
 		{
 			name: "negative allocated_amount",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: -50.00,
 			},
 			wantErr: true,
@@ -492,7 +551,8 @@ func TestBudgetCategory_Validate(t *testing.T) {
 			name: "negative spent_amount",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				SpentAmount:     -25.00,
 			},
@@ -674,7 +734,8 @@ func TestBudget_JSONMarshaling(t *testing.T) {
 			{
 				ID:              "cat-1",
 				BudgetID:        "budget-550e8400-e29b-41d4-a716-446655440000",
-				Category:        []string{"Food & Drink", "Groceries"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 300.00,
 				SpentAmount:     150.00,
 			},
@@ -730,8 +791,8 @@ func TestIncomeSourceType_IsValid(t *testing.T) {
 		want       bool
 	}{
 		{
-			name:       "plaid_category valid",
-			sourceType: IncomeSourceTypePlaidCategory,
+			name:       "pfc_primary valid",
+			sourceType: IncomeSourceTypePFCPrimary,
 			want:       true,
 		},
 		{
@@ -774,10 +835,10 @@ func TestIncomeSource_Validate(t *testing.T) {
 		errMsg  string
 	}{
 		{
-			name: "valid plaid_category source",
+			name: "valid pfc_primary source",
 			source: IncomeSource{
-				Type:  IncomeSourceTypePlaidCategory,
-				Value: "Payroll",
+				Type:  IncomeSourceTypePFCPrimary,
+				Value: "INCOME",
 			},
 			wantErr: false,
 		},
@@ -881,23 +942,24 @@ func TestMatchLogic_IsValid(t *testing.T) {
 	}
 }
 
-// TestBudget_UnallocatedAmount tests the UnallocatedAmount calculation for envelope budgeting
+// TestBudget_UnallocatedAmount tests the UnallocatedAmount calculation for envelope budgeting.
+// UnallocatedAmount must use ExpectedIncome, not IncomeAmount (Issue #1048).
 func TestBudget_UnallocatedAmount(t *testing.T) {
 	tests := []struct {
-		name         string
-		incomeAmount float64
-		categories   []BudgetCategory
-		want         float64
+		name           string
+		expectedIncome float64
+		categories     []BudgetCategory
+		want           float64
 	}{
 		{
-			name:         "no allocations",
-			incomeAmount: 5000.00,
-			categories:   []BudgetCategory{},
-			want:         5000.00,
+			name:           "no allocations",
+			expectedIncome: 5000.00,
+			categories:     []BudgetCategory{},
+			want:           5000.00,
 		},
 		{
-			name:         "partial allocation",
-			incomeAmount: 5000.00,
+			name:           "partial allocation",
+			expectedIncome: 5000.00,
 			categories: []BudgetCategory{
 				{AllocatedAmount: 2000.00},
 				{AllocatedAmount: 1500.00},
@@ -905,16 +967,16 @@ func TestBudget_UnallocatedAmount(t *testing.T) {
 			want: 1500.00, // 5000 - 3500
 		},
 		{
-			name:         "fully allocated",
-			incomeAmount: 5000.00,
+			name:           "fully allocated",
+			expectedIncome: 5000.00,
 			categories: []BudgetCategory{
 				{AllocatedAmount: 5000.00},
 			},
 			want: 0.00,
 		},
 		{
-			name:         "over allocated (negative)",
-			incomeAmount: 5000.00,
+			name:           "over allocated (negative)",
+			expectedIncome: 5000.00,
 			categories: []BudgetCategory{
 				{AllocatedAmount: 3000.00},
 				{AllocatedAmount: 3000.00},
@@ -922,18 +984,18 @@ func TestBudget_UnallocatedAmount(t *testing.T) {
 			want: -1000.00, // 5000 - 6000
 		},
 		{
-			name:         "zero income zero allocations",
-			incomeAmount: 0,
-			categories:   []BudgetCategory{},
-			want:         0,
+			name:           "zero expected income zero allocations",
+			expectedIncome: 0,
+			categories:     []BudgetCategory{},
+			want:           0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			budget := Budget{
-				IncomeAmount: tt.incomeAmount,
-				Categories:   tt.categories,
+				ExpectedIncome: tt.expectedIncome,
+				Categories:     tt.categories,
 			}
 			if got := budget.UnallocatedAmount(); got != tt.want {
 				t.Errorf("UnallocatedAmount() = %v, want %v", got, tt.want)
@@ -942,54 +1004,168 @@ func TestBudget_UnallocatedAmount(t *testing.T) {
 	}
 }
 
-// TestBudget_IsFullyAllocated tests the IsFullyAllocated check for envelope budgeting
+// TestBudget_UnallocatedAmount_UsesExpectedIncome confirms that UnallocatedAmount uses
+// ExpectedIncome (not IncomeAmount) as the basis for calculation (Issue #1048).
+func TestBudget_UnallocatedAmount_UsesExpectedIncome(t *testing.T) {
+	budget := Budget{
+		IncomeAmount:   3000.00, // old field — should NOT be used
+		ExpectedIncome: 5000.00, // new field — MUST be used
+		Categories: []BudgetCategory{
+			{AllocatedAmount: 2000.00},
+		},
+	}
+	// Should be 5000 - 2000 = 3000, not 3000 - 2000 = 1000
+	want := 3000.00
+	if got := budget.UnallocatedAmount(); got != want {
+		t.Errorf("UnallocatedAmount() = %v, want %v (must use ExpectedIncome, not IncomeAmount)", got, want)
+	}
+}
+
+// TestBudget_IsFullyAllocated tests the IsFullyAllocated check for envelope budgeting.
+// IsFullyAllocated must use ExpectedIncome (Issue #1048).
 func TestBudget_IsFullyAllocated(t *testing.T) {
 	tests := []struct {
-		name         string
-		incomeAmount float64
-		categories   []BudgetCategory
-		want         bool
+		name           string
+		expectedIncome float64
+		categories     []BudgetCategory
+		want           bool
 	}{
 		{
-			name:         "not fully allocated",
-			incomeAmount: 5000.00,
-			categories:   []BudgetCategory{{AllocatedAmount: 3000.00}},
-			want:         false,
+			name:           "not fully allocated",
+			expectedIncome: 5000.00,
+			categories:     []BudgetCategory{{AllocatedAmount: 3000.00}},
+			want:           false,
 		},
 		{
-			name:         "exactly fully allocated",
-			incomeAmount: 5000.00,
-			categories:   []BudgetCategory{{AllocatedAmount: 5000.00}},
-			want:         true,
+			name:           "exactly fully allocated",
+			expectedIncome: 5000.00,
+			categories:     []BudgetCategory{{AllocatedAmount: 5000.00}},
+			want:           true,
 		},
 		{
-			name:         "over allocated",
-			incomeAmount: 5000.00,
-			categories:   []BudgetCategory{{AllocatedAmount: 6000.00}},
-			want:         true, // Still considered "fully" allocated
+			name:           "over allocated",
+			expectedIncome: 5000.00,
+			categories:     []BudgetCategory{{AllocatedAmount: 6000.00}},
+			want:           true, // Still considered "fully" allocated
 		},
 		{
-			name:         "zero income is always fully allocated",
-			incomeAmount: 0,
-			categories:   []BudgetCategory{},
-			want:         true,
+			name:           "zero expected income is always fully allocated",
+			expectedIncome: 0,
+			categories:     []BudgetCategory{},
+			want:           true,
 		},
 		{
-			name:         "zero income with allocations",
-			incomeAmount: 0,
-			categories:   []BudgetCategory{{AllocatedAmount: 100.00}},
-			want:         true,
+			name:           "zero expected income with allocations",
+			expectedIncome: 0,
+			categories:     []BudgetCategory{{AllocatedAmount: 100.00}},
+			want:           true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			budget := Budget{
-				IncomeAmount: tt.incomeAmount,
-				Categories:   tt.categories,
+				ExpectedIncome: tt.expectedIncome,
+				Categories:     tt.categories,
 			}
 			if got := budget.IsFullyAllocated(); got != tt.want {
 				t.Errorf("IsFullyAllocated() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBudget_ExceedsExpectedIncome tests the ExceedsExpectedIncome helper (Issue #1048).
+func TestBudget_ExceedsExpectedIncome(t *testing.T) {
+	tests := []struct {
+		name           string
+		expectedIncome float64
+		categories     []BudgetCategory
+		want           bool
+	}{
+		{
+			name:           "total allocated below expected income",
+			expectedIncome: 5000.00,
+			categories:     []BudgetCategory{{AllocatedAmount: 4000.00}},
+			want:           false,
+		},
+		{
+			name:           "total allocated exactly equals expected income",
+			expectedIncome: 5000.00,
+			categories:     []BudgetCategory{{AllocatedAmount: 5000.00}},
+			want:           false,
+		},
+		{
+			name:           "total allocated exceeds expected income",
+			expectedIncome: 5000.00,
+			categories: []BudgetCategory{
+				{AllocatedAmount: 3000.00},
+				{AllocatedAmount: 3000.00},
+			},
+			want: true,
+		},
+		{
+			name:           "multiple categories under expected income",
+			expectedIncome: 5000.00,
+			categories: []BudgetCategory{
+				{AllocatedAmount: 1000.00},
+				{AllocatedAmount: 2000.00},
+				{AllocatedAmount: 1500.00},
+			},
+			want: false, // 4500 < 5000
+		},
+		{
+			name:           "no categories never exceeds",
+			expectedIncome: 5000.00,
+			categories:     []BudgetCategory{},
+			want:           false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			budget := Budget{
+				ExpectedIncome: tt.expectedIncome,
+				Categories:     tt.categories,
+			}
+			if got := budget.ExceedsExpectedIncome(); got != tt.want {
+				t.Errorf("ExceedsExpectedIncome() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBudget_ExceedsExpectedIncome_Zero verifies no division/panic when ExpectedIncome is 0 (Issue #1048).
+func TestBudget_ExceedsExpectedIncome_Zero(t *testing.T) {
+	tests := []struct {
+		name           string
+		expectedIncome float64
+		categories     []BudgetCategory
+		want           bool
+	}{
+		{
+			name:           "zero expected income no allocations",
+			expectedIncome: 0,
+			categories:     []BudgetCategory{},
+			want:           false,
+		},
+		{
+			name:           "zero expected income with allocations",
+			expectedIncome: 0,
+			categories:     []BudgetCategory{{AllocatedAmount: 100.00}},
+			want:           true, // 100 > 0
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Must not panic
+			budget := Budget{
+				ExpectedIncome: tt.expectedIncome,
+				Categories:     tt.categories,
+			}
+			if got := budget.ExceedsExpectedIncome(); got != tt.want {
+				t.Errorf("ExceedsExpectedIncome() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -1008,15 +1184,16 @@ func TestBudget_Validate_IncomeFields(t *testing.T) {
 		{
 			name: "valid budget with income",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Monthly Budget",
-				Period:       BudgetPeriodMonthly,
-				StartDate:    validStartDate,
-				Amount:       500.00,
-				CurrencyCode: "USD",
-				IncomeAmount: 5000.00,
+				UserID:         "user-123",
+				Name:           "Monthly Budget",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         500.00,
+				ExpectedIncome: 500.00,
+				CurrencyCode:   "USD",
+				IncomeAmount:   5000.00,
 				IncomeSources: []IncomeSource{
-					{Type: IncomeSourceTypePlaidCategory, Value: "Payroll"},
+					{Type: IncomeSourceTypePFCPrimary, Value: "Payroll"},
 				},
 			},
 			wantErr: false,
@@ -1024,38 +1201,41 @@ func TestBudget_Validate_IncomeFields(t *testing.T) {
 		{
 			name: "valid budget without income (backward compatible)",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Monthly Budget",
-				Period:       BudgetPeriodMonthly,
-				StartDate:    validStartDate,
-				Amount:       500.00,
-				CurrencyCode: "USD",
+				UserID:         "user-123",
+				Name:           "Monthly Budget",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         500.00,
+				ExpectedIncome: 500.00,
+				CurrencyCode:   "USD",
 			},
 			wantErr: false,
 		},
 		{
 			name: "zero income is valid",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Monthly Budget",
-				Period:       BudgetPeriodMonthly,
-				StartDate:    validStartDate,
-				Amount:       500.00,
-				CurrencyCode: "USD",
-				IncomeAmount: 0,
+				UserID:         "user-123",
+				Name:           "Monthly Budget",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         500.00,
+				ExpectedIncome: 500.00,
+				CurrencyCode:   "USD",
+				IncomeAmount:   0,
 			},
 			wantErr: false,
 		},
 		{
 			name: "negative income_amount",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Monthly Budget",
-				Period:       BudgetPeriodMonthly,
-				StartDate:    validStartDate,
-				Amount:       500.00,
-				CurrencyCode: "USD",
-				IncomeAmount: -100.00,
+				UserID:         "user-123",
+				Name:           "Monthly Budget",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         500.00,
+				ExpectedIncome: 500.00,
+				CurrencyCode:   "USD",
+				IncomeAmount:   -100.00,
 			},
 			wantErr: true,
 			errMsg:  "income_amount cannot be negative",
@@ -1063,13 +1243,14 @@ func TestBudget_Validate_IncomeFields(t *testing.T) {
 		{
 			name: "invalid income source in array",
 			budget: Budget{
-				UserID:       "user-123",
-				Name:         "Monthly Budget",
-				Period:       BudgetPeriodMonthly,
-				StartDate:    validStartDate,
-				Amount:       500.00,
-				CurrencyCode: "USD",
-				IncomeAmount: 5000.00,
+				UserID:         "user-123",
+				Name:           "Monthly Budget",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         500.00,
+				ExpectedIncome: 500.00,
+				CurrencyCode:   "USD",
+				IncomeAmount:   5000.00,
 				IncomeSources: []IncomeSource{
 					{Type: IncomeSourceType("invalid"), Value: "test"},
 				},
@@ -1080,14 +1261,15 @@ func TestBudget_Validate_IncomeFields(t *testing.T) {
 		{
 			name: "empty income sources array is valid",
 			budget: Budget{
-				UserID:        "user-123",
-				Name:          "Monthly Budget",
-				Period:        BudgetPeriodMonthly,
-				StartDate:     validStartDate,
-				Amount:        500.00,
-				CurrencyCode:  "USD",
-				IncomeAmount:  5000.00,
-				IncomeSources: []IncomeSource{},
+				UserID:         "user-123",
+				Name:           "Monthly Budget",
+				Period:         BudgetPeriodMonthly,
+				StartDate:      validStartDate,
+				Amount:         500.00,
+				ExpectedIncome: 500.00,
+				CurrencyCode:   "USD",
+				IncomeAmount:   5000.00,
+				IncomeSources:  []IncomeSource{},
 			},
 			wantErr: false,
 		},
@@ -1120,7 +1302,8 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "valid category_only (default)",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicCategoryOnly,
 			},
@@ -1130,7 +1313,8 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "valid empty match_logic defaults to category_only",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      "", // Empty is valid, defaults to category_only
 			},
@@ -1140,7 +1324,6 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "valid tag_only with tags",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{}, // Can be empty for tag_only
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicTagOnly,
 				Tags:            []string{"groceries", "food"},
@@ -1151,7 +1334,8 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "valid 'and' logic with both category and tags",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicAnd,
 				Tags:            []string{"essential"},
@@ -1162,7 +1346,8 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "valid 'or' logic with both category and tags",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicOr,
 				Tags:            []string{"groceries"},
@@ -1173,7 +1358,8 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "invalid match_logic value",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogic("invalid"),
 			},
@@ -1184,7 +1370,6 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "tag_only without tags",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{},
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicTagOnly,
 				Tags:            []string{},
@@ -1196,7 +1381,8 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "'and' logic without tags",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicAnd,
 				Tags:            []string{},
@@ -1208,7 +1394,8 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "category_only with tags is valid (tags ignored)",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicCategoryOnly,
 				Tags:            []string{"groceries"}, // Tags present but match_logic is category_only
@@ -1247,14 +1434,15 @@ func TestBudget_JSONMarshaling_WithIncomeFields(t *testing.T) {
 		IsActive:     true,
 		IncomeAmount: 5000.00,
 		IncomeSources: []IncomeSource{
-			{Type: IncomeSourceTypePlaidCategory, Value: "Payroll", Description: "Main job"},
+			{Type: IncomeSourceTypePFCPrimary, Value: "Payroll", Description: "Main job"},
 			{Type: IncomeSourceTypeTag, Value: "freelance"},
 		},
 		Categories: []BudgetCategory{
 			{
 				ID:              "cat-1",
 				BudgetID:        "budget-123",
-				Category:        []string{"Food & Drink"},
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 500.00,
 				Tags:            []string{"groceries", "essential"},
 				MatchLogic:      MatchLogicOr,

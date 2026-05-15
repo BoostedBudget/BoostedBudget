@@ -85,14 +85,23 @@ func (s *budgetAlertNotificationService) SendBudgetAlert(
 
 	// 2. Create in-app notification (CRITICAL - return error on failure)
 	notification := &domain.Notification{
-		UserID:    userID,
-		Type:      "budget_alert",
-		Title:     title,
-		Message:   message,
-		Read:      false,
-		SentEmail: false,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		UserID:             userID,
+		Type:               "budget_alert",
+		Title:              title,
+		Message:            message,
+		InteractionPattern: "acknowledgeable",
+		Read:               false,
+		SentEmail:          false,
+		CreatedAt:          time.Now(),
+		UpdatedAt:          time.Now(),
+	}
+
+	// Set budget action URL if budget_id is in the data
+	if budgetID, ok := data["budget_id"].(string); ok && budgetID != "" {
+		url := "/budgets/" + budgetID
+		notification.ActionURL = &url
+		actionLabel := "View Budget"
+		notification.ActionLabel = &actionLabel
 	}
 
 	if err := s.notificationRepo.Create(ctx, notification); err != nil {
