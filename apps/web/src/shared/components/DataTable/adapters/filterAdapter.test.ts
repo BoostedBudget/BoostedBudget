@@ -69,4 +69,12 @@ describe('filter adapter round-trip', () => {
     expect(roundTripped['a']).toEqual(['y'])
     expect(roundTripped['b']).toEqual(['x'])
   })
+
+  it('does not restore null keys on round-trip (documented asymmetry)', () => {
+    const original: FilterState = { account: ['bank1'], amount: null }
+    const roundTripped = tanStackFiltersToBb(bbFiltersToTanStack(original))
+    // null keys are dropped — 'amount' will be absent, not null
+    expect(roundTripped).toEqual({ account: ['bank1'] })
+    expect('amount' in roundTripped).toBe(false)
+  })
 })
