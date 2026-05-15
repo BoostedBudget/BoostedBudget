@@ -5,14 +5,15 @@ interface DragHandleProps {
   isDragging: boolean
   onKeyDown: (e: React.KeyboardEvent) => void
   listeners?: Record<string, unknown>
+  columnLabel?: string
 }
 
-export function DragHandle({ isDragging, onKeyDown, listeners }: DragHandleProps) {
+export function DragHandle({ isDragging, onKeyDown, listeners, columnLabel }: DragHandleProps) {
   return (
     <button
       type="button"
       data-testid="drag-handle"
-      aria-label="Drag to reorder column"
+      aria-label={columnLabel ? `Reorder ${columnLabel} column` : 'Drag to reorder column'}
       aria-pressed={isDragging}
       {...(listeners ?? {})}
       onKeyDown={onKeyDown}

@@ -174,7 +174,7 @@ test.describe('Rules Page — Table View', () => {
     await page.getByTitle('Table view').click()
 
     const nameHeader = page.getByRole('columnheader', { name: /name/i })
-    await nameHeader.locator('button:not([aria-label="Drag to reorder column"])').click()
+    await nameHeader.getByRole('button', { name: /^Name$/i }).click()
     await expect(nameHeader).toHaveAttribute('aria-sort', /ascending|descending/)
   })
 })

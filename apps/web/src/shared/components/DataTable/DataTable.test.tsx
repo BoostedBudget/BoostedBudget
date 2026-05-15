@@ -1413,3 +1413,85 @@ describe('column pin', () => {
     expect(pinnedTd.className).toContain('max-md:relative')
   })
 })
+
+// ── Phase G1/RC2: columnheader a11y-name ─────────────────────────────────────
+describe('columnheader accessible name (RC2 — DragHandle pollution fix)', () => {
+  it('reorderable+sortable column: getByRole columnheader finds header by exact column label', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={[{ id: 'name', header: 'Account', sortable: true, reorderable: true, key: 'name' }]}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    // Without aria-label on <th>, "Name from Contents" would compute
+    // "Drag to reorder column Account" — anchored regex would fail.
+    // With aria-label={col.header} the header's accessible name is just "Account".
+    const header = screen.getByRole('columnheader', { name: /^Account$/i })
+    expect(header).toBeInTheDocument()
+  })
+
+  it('non-reorderable column: columnheader accessible name is derived from header text naturally', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={[{ id: 'name', header: 'Balance', sortable: true, key: 'name' }]}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    // Non-reorderable columns have no DragHandle — no pollution, no aria-label needed.
+    const header = screen.getByRole('columnheader', { name: /^Balance$/i })
+    expect(header).toBeInTheDocument()
+  })
+})
+
+// ── Phase G1/D2b: DragHandle column-specific accessible names ─────────────────
+describe('DragHandle column-specific accessible names (D2b — Codex finding)', () => {
+  const multiReorderColumns: ColumnDef<Row>[] = [
+    { id: 'name', header: 'Account', sortable: true, reorderable: true, key: 'name' },
+    { id: 'amount', header: 'Balance', sortable: true, reorderable: true, key: 'amount' },
+  ]
+
+  it('each drag handle has a unique column-specific accessible name', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={multiReorderColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    expect(screen.getByRole('button', { name: /reorder Account column/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /reorder Balance column/i })).toBeInTheDocument()
+  })
+
+  it('sort button is still found by exact column name (not confused with DragHandle)', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={multiReorderColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    // Sort button has accessible name "Account" (just the label text from TableHeaderCell)
+    // DragHandle has name "Reorder Account column" — does NOT match /^Account$/i
+    const sortBtn = screen.getByRole('columnheader', { name: /^Account$/i })
+      .querySelector('button:not([data-testid="drag-handle"])')
+    expect(sortBtn).not.toBeNull()
+  })
+})
