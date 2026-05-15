@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { cn } from '@/lib/utils'
 import type { ColumnDef } from './types'
 
@@ -16,6 +16,7 @@ export function ColumnVisibilityMenu<T,>({
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
 
   const hideableColumns = columns.filter((col) => col.hideable)
 
@@ -26,6 +27,13 @@ export function ColumnVisibilityMenu<T,>({
   function toggle(colId: string) {
     onChange({ ...visibility, [colId]: !isVisible(colId) })
   }
+
+  // Focus first item when menu opens
+  useEffect(() => {
+    if (open) {
+      itemRefs.current[0]?.focus()
+    }
+  }, [open])
 
   // Close on outside click
   useEffect(() => {
@@ -44,13 +52,27 @@ export function ColumnVisibilityMenu<T,>({
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [open])
 
-  // Keyboard: Escape closes
-  function handleMenuKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
-    if (e.key === 'Escape') {
-      setOpen(false)
-      triggerRef.current?.focus()
-    }
-  }
+  // Keyboard: Escape closes and returns focus; Arrow keys move between items (roving focus)
+  const handleMenuKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === 'Escape') {
+        setOpen(false)
+        triggerRef.current?.focus()
+        return
+      }
+      const items = itemRefs.current.filter(Boolean) as HTMLButtonElement[]
+      const focused = document.activeElement
+      const idx = items.indexOf(focused as HTMLButtonElement)
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        items[(idx + 1) % items.length]?.focus()
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        items[(idx - 1 + items.length) % items.length]?.focus()
+      }
+    },
+    []
+  )
 
   return (
     <div className="relative inline-block">
@@ -89,14 +111,16 @@ export function ColumnVisibilityMenu<T,>({
           onKeyDown={handleMenuKeyDown}
           className="absolute right-0 z-50 mt-1 min-w-[160px] rounded-md border border-border bg-popover p-1 shadow-md"
         >
-          {hideableColumns.map((col) => {
+          {hideableColumns.map((col, i) => {
             const checked = isVisible(col.id)
             return (
               <button
                 key={col.id}
+                ref={(el) => { itemRefs.current[i] = el }}
                 type="button"
                 role="menuitemcheckbox"
                 aria-checked={checked}
+                tabIndex={-1}
                 onClick={() => toggle(col.id)}
                 className={cn(
                   'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm',

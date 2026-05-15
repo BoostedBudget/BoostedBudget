@@ -1202,6 +1202,49 @@ describe('column visibility', () => {
     // baseColumns have no hideable:true → no Columns button
     expect(screen.queryByRole('button', { name: /columns/i })).toBeNull()
   })
+
+  it('ColumnVisibilityMenu is not rendered when hideable columns exist but onColumnVisibilityChange is absent', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={visibilityColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        // onColumnVisibilityChange intentionally omitted — menu should not render
+      />
+    )
+    expect(screen.queryByRole('button', { name: /columns/i })).toBeNull()
+  })
+
+  it('ArrowDown moves focus to next menu item, ArrowUp wraps to last item', async () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={visibilityColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnVisibility={{}}
+        onColumnVisibilityChange={mock((_: Record<string, boolean>) => {})}
+      />
+    )
+    // Open menu
+    fireEvent.click(screen.getByRole('button', { name: /columns/i }))
+    const items = screen.getAllByRole('menuitemcheckbox')
+    // First item should be focused on open
+    expect(document.activeElement).toBe(items[0])
+    // ArrowDown moves focus to second item
+    fireEvent.keyDown(items[0], { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(items[1])
+    // ArrowUp from second item moves to first
+    fireEvent.keyDown(items[1], { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(items[0])
+  })
 })
 
 // Phase 3d: Density
@@ -1210,7 +1253,7 @@ describe('density', () => {
     const { container } = renderTable({ density: 'compact' })
     const td = container.querySelector('tbody td')!
     expect(td.className).toContain('px-2')
-    expect(td.className).toContain('py-1')
+    expect(td.className).toContain('py-1.5')
     expect(td.className).toContain('text-xs')
   })
 
