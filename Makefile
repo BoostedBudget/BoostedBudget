@@ -297,6 +297,7 @@ clean:
 # =============================================================================
 
 # Run Lighthouse CI audit against the local build
+.PHONY: lighthouse
 lighthouse:
 	@echo "========================================"
 	@echo "Running Lighthouse CI audit"
@@ -307,18 +308,25 @@ lighthouse:
 	@npx lhci autorun
 	@echo "✅ Lighthouse audit complete"
 
-# Check bundle size against configured budgets
+# Check per-route bundle size against configured budgets.
+# Enforces two gates:
+#   1. Orphan-chunk guard: fails if any built JS chunk has no .size-limit.json entry
+#   2. size-limit: fails if any named chunk exceeds its budget
+.PHONY: check-bundle-size
 check-bundle-size:
 	@echo "========================================"
 	@echo "Checking bundle size"
 	@echo "========================================"
 	@echo "Building frontend..."
 	@cd apps/web && bun run build
-	@echo "Checking sizes..."
+	@echo "Checking for unbudgeted chunks..."
+	@./scripts/check-orphan-chunks.sh
+	@echo "Checking sizes against budgets..."
 	@npx size-limit
 	@echo "✅ Bundle size check complete"
 
 # Run both lighthouse and bundle size checks
+.PHONY: perf-check
 perf-check: lighthouse check-bundle-size
 	@echo "========================================"
 	@echo "✅ All performance checks complete!"

@@ -772,6 +772,7 @@ jobs:
       - name: Final workspace cleanup
         if: always()
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
   # =============================================================================
   # Lighthouse CI Audit (Performance, Accessibility, Best Practices, SEO)
   # =============================================================================
@@ -836,10 +837,10 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
-  # Bundle Size Check (size-limit)
+  # Bundle Size Check (size-limit + orphan-chunk guard)
   # =============================================================================
-  # Hard fails if gzipped JS or CSS bundle exceeds configured budgets.
-  # Budgets set to current baseline + 10% buffer to catch accidental dependency bloat.
+  # Hard fails if any JS chunk exceeds its per-route budget OR if a Rollup-emitted
+  # chunk has no budget entry at all. Budgets set at baseline + 20% (vendor +25%).
   bundle-size:
     name: Bundle Size Check
     needs: detect-changes
@@ -868,13 +869,9 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bun install --frozen-lockfile
 
-      - name: Build frontend
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
-        run: bun run build
-
       - name: Check bundle size
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
-        run: npx size-limit
+        run: make check-bundle-size
 
       - name: Final workspace cleanup
         if: always()

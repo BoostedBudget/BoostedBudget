@@ -1,14 +1,18 @@
 [
-  {
-    "name": "Main JS bundle",
-    "path": "apps/web/dist/assets/*.js",
-    "limit": "976 KB",
-    "gzip": true
-  },
-  {
-    "name": "Main CSS bundle",
-    "path": "apps/web/dist/assets/*.css",
-    "limit": "52 KB",
-    "gzip": true
-  }
+  { "name": "entry",               "path": "apps/web/dist/assets/entry-*.js",               "limit": "18 KB",  "gzip": true },
+  { "name": "vendor",              "path": "apps/web/dist/assets/vendor-*.js",              "limit": "911 KB", "gzip": true },
+  { "name": "dashboard",          "path": "apps/web/dist/assets/dashboard-*.js",           "limit": "19 KB",  "gzip": true },
+  { "name": "transactions",        "path": "apps/web/dist/assets/transactions-*.js",        "limit": "19 KB",  "gzip": true },
+  { "name": "accounts",            "path": "apps/web/dist/assets/accounts-*.js",            "limit": "19 KB",  "gzip": true },
+  { "name": "budgets",             "path": "apps/web/dist/assets/budgets-*.js",             "limit": "25 KB",  "gzip": true },
+  { "name": "rules",               "path": "apps/web/dist/assets/rules-*.js",               "limit": "16 KB",  "gzip": true },
+  { "name": "auto-categorization", "path": "apps/web/dist/assets/auto-categorization-*.js", "limit": "15 KB",  "gzip": true },
+  { "name": "reports",             "path": "apps/web/dist/assets/reports-*.js",             "limit": "4 KB",   "gzip": true },
+  { "name": "net-worth",           "path": "apps/web/dist/assets/net-worth-*.js",           "limit": "6 KB",   "gzip": true },
+  { "name": "savings",             "path": "apps/web/dist/assets/savings-*.js",             "limit": "9 KB",   "gzip": true },
+  { "name": "profile",             "path": "apps/web/dist/assets/profile-*.js",             "limit": "12 KB",  "gzip": true },
+  { "name": "billing",             "path": "apps/web/dist/assets/billing-*.js",             "limit": "12 KB",  "gzip": true },
+  { "name": "admin",               "path": "apps/web/dist/assets/admin-*.js",               "limit": "22 KB",  "gzip": true },
+  { "name": "legal",               "path": "apps/web/dist/assets/legal-*.js",               "limit": "16 KB",  "gzip": true },
+  { "name": "css",                 "path": "apps/web/dist/assets/*.css",                    "limit": "68 KB",  "gzip": true }
 ]

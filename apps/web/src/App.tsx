@@ -1,5 +1,7 @@
+import { useEffect, Suspense, lazy } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@clerk/react-router'
+import { Toaster } from 'sonner'
 import { useCookieState } from './shared/hooks/useCookieState'
 import {
   CookieConsent,
@@ -13,37 +15,94 @@ import {
 import { ProtectedRoute } from './auth'
 import { PremiumRoute } from './auth/PremiumRoute'
 import { Header, AppFooter } from './components/layout'
-import { ProfilePage } from './features/profile/ProfilePage'
-import { PricingPage } from './features/pricing/PricingPage'
-import { SubscriptionManagementPage } from './features/billing/SubscriptionManagementPage'
-import { CheckoutSuccessPage } from './features/billing/CheckoutSuccessPage'
 import { SubscriptionManagementSkeleton } from './features/billing/components/SubscriptionManagementSkeleton'
 import { SubscriptionErrorState } from './features/billing/components/SubscriptionErrorState'
-import { AccountsPage } from './features/accounts/AccountsPage'
-import { PlaidOAuthCallback } from './features/accounts/PlaidOAuthCallback'
-import { TransactionsPage } from './features/transactions/TransactionsPage'
-import { DashboardPage } from './features/dashboard/components/DashboardPage'
 import { useUpdatePrivacySettings } from '@boostedbudget/api-client/endpoints/privacy/privacy'
 import type { PrivacySettings as PrivacySettingsType } from './features/profile/types'
-import { PrivacyPolicy } from './legal/PrivacyPolicy'
-import { TermsOfService } from './legal/TermsOfService'
-import { CookiePolicy } from './legal/CookiePolicy'
-import { CancelDeletionPage } from './features/deletion/components/CancelDeletionPage'
-import { AutoCategorizationPageWrapper } from './features/auto-categorization/components/AutoCategorizationPageWrapper'
-import { BudgetsPage, BudgetDetailPage } from './features/budgets'
-import { RulesPage, RuleBuilder } from './features/rules'
-import { SpendingReportsPage } from './features/reports'
-import { NetWorthPage } from './features/net-worth'
-import { SavingsPage } from './features/savings'
 import { LandingPage } from './features/landing'
-import { AdminRoute, AdminLayout, AdminDashboardPage, UsersPage, HealthDashboardPage, WebhooksPage, DeadLetterPage } from './features/admin'
+import { AdminRoute, AdminLayout } from './features/admin'
 import { NotFoundPage } from './features/not-found/NotFoundPage'
-import { Toaster } from 'sonner'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { useEffect, Suspense } from 'react'
 import { useTheme } from './shared/theme'
 import { posthog } from './shared/lib/posthog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
+import { PageSkeleton } from './shared/components/PageSkeleton'
+
+const ProfilePage = lazy(() =>
+  import('./features/profile/ProfilePage').then(m => ({ default: m.ProfilePage }))
+)
+const PricingPage = lazy(() =>
+  import('./features/pricing/PricingPage').then(m => ({ default: m.PricingPage }))
+)
+const SubscriptionManagementPage = lazy(() =>
+  import('./features/billing/SubscriptionManagementPage').then(m => ({ default: m.SubscriptionManagementPage }))
+)
+const CheckoutSuccessPage = lazy(() =>
+  import('./features/billing/CheckoutSuccessPage').then(m => ({ default: m.CheckoutSuccessPage }))
+)
+const AccountsPage = lazy(() =>
+  import('./features/accounts/AccountsPage').then(m => ({ default: m.AccountsPage }))
+)
+const PlaidOAuthCallback = lazy(() =>
+  import('./features/accounts/PlaidOAuthCallback').then(m => ({ default: m.PlaidOAuthCallback }))
+)
+const TransactionsPage = lazy(() =>
+  import('./features/transactions/TransactionsPage').then(m => ({ default: m.TransactionsPage }))
+)
+const DashboardPage = lazy(() =>
+  import('./features/dashboard/components/DashboardPage').then(m => ({ default: m.DashboardPage }))
+)
+const BudgetsPage = lazy(() =>
+  import('./features/budgets').then(m => ({ default: m.BudgetsPage }))
+)
+const BudgetDetailPage = lazy(() =>
+  import('./features/budgets').then(m => ({ default: m.BudgetDetailPage }))
+)
+const AutoCategorizationPageWrapper = lazy(() =>
+  import('./features/auto-categorization/components/AutoCategorizationPageWrapper').then(m => ({ default: m.AutoCategorizationPageWrapper }))
+)
+const RulesPage = lazy(() =>
+  import('./features/rules').then(m => ({ default: m.RulesPage }))
+)
+const RuleBuilder = lazy(() =>
+  import('./features/rules').then(m => ({ default: m.RuleBuilder }))
+)
+const SpendingReportsPage = lazy(() =>
+  import('./features/reports').then(m => ({ default: m.SpendingReportsPage }))
+)
+const NetWorthPage = lazy(() =>
+  import('./features/net-worth').then(m => ({ default: m.NetWorthPage }))
+)
+const SavingsPage = lazy(() =>
+  import('./features/savings').then(m => ({ default: m.SavingsPage }))
+)
+const PrivacyPolicy = lazy(() =>
+  import('./legal/PrivacyPolicy').then(m => ({ default: m.PrivacyPolicy }))
+)
+const TermsOfService = lazy(() =>
+  import('./legal/TermsOfService').then(m => ({ default: m.TermsOfService }))
+)
+const CookiePolicy = lazy(() =>
+  import('./legal/CookiePolicy').then(m => ({ default: m.CookiePolicy }))
+)
+const CancelDeletionPage = lazy(() =>
+  import('./features/deletion/components/CancelDeletionPage').then(m => ({ default: m.CancelDeletionPage }))
+)
+const AdminDashboardPage = lazy(() =>
+  import('./features/admin').then(m => ({ default: m.AdminDashboardPage }))
+)
+const UsersPage = lazy(() =>
+  import('./features/admin').then(m => ({ default: m.UsersPage }))
+)
+const HealthDashboardPage = lazy(() =>
+  import('./features/admin').then(m => ({ default: m.HealthDashboardPage }))
+)
+const WebhooksPage = lazy(() =>
+  import('./features/admin').then(m => ({ default: m.WebhooksPage }))
+)
+const DeadLetterPage = lazy(() =>
+  import('./features/admin').then(m => ({ default: m.DeadLetterPage }))
+)
 
 function App() {
   const { isSignedIn: isAuthenticated } = useAuth()
@@ -163,7 +222,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
-                    <DashboardPage />
+                    <Suspense fallback={<PageSkeleton />}>
+                      <DashboardPage />
+                    </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
@@ -174,7 +235,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
-                    <PlaidOAuthCallback />
+                    <Suspense fallback={<PageSkeleton />}>
+                      <PlaidOAuthCallback />
+                    </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
@@ -184,7 +247,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
-                    <AccountsPage />
+                    <Suspense fallback={<PageSkeleton />}>
+                      <AccountsPage />
+                    </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
@@ -194,7 +259,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
-                    <TransactionsPage />
+                    <Suspense fallback={<PageSkeleton />}>
+                      <TransactionsPage />
+                    </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
@@ -204,7 +271,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
-                    <SpendingReportsPage />
+                    <Suspense fallback={<PageSkeleton />}>
+                      <SpendingReportsPage />
+                    </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
@@ -214,7 +283,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
-                    <NetWorthPage />
+                    <Suspense fallback={<PageSkeleton />}>
+                      <NetWorthPage />
+                    </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
@@ -224,7 +295,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
-                    <SavingsPage />
+                    <Suspense fallback={<PageSkeleton />}>
+                      <SavingsPage />
+                    </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
@@ -234,7 +307,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
-                    <BudgetsPage />
+                    <Suspense fallback={<PageSkeleton />}>
+                      <BudgetsPage />
+                    </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
@@ -244,7 +319,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
-                    <BudgetDetailPage />
+                    <Suspense fallback={<PageSkeleton />}>
+                      <BudgetDetailPage />
+                    </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
@@ -254,7 +331,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
-                    <AutoCategorizationPageWrapper />
+                    <Suspense fallback={<PageSkeleton />}>
+                      <AutoCategorizationPageWrapper />
+                    </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
@@ -264,7 +343,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
-                    <RulesPage />
+                    <Suspense fallback={<PageSkeleton />}>
+                      <RulesPage />
+                    </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
@@ -274,7 +355,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
-                    <RuleBuilder />
+                    <Suspense fallback={<PageSkeleton />}>
+                      <RuleBuilder />
+                    </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
@@ -284,7 +367,9 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
-                    <RuleBuilder />
+                    <Suspense fallback={<PageSkeleton />}>
+                      <RuleBuilder />
+                    </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
@@ -293,15 +378,17 @@ function App() {
               path="/profile"
               element={
                 <ProtectedRoute>
-                  <ProfilePage onPrivacySettingsChange={handlePrivacySettingsChange} />
+                  <Suspense fallback={<PageSkeleton />}>
+                    <ProfilePage onPrivacySettingsChange={handlePrivacySettingsChange} />
+                  </Suspense>
                 </ProtectedRoute>
               }
             />
-            <Route path="/legal/privacy-policy" element={<PrivacyPolicy />} />
-            <Route path="/privacy" element={<PrivacyPolicy />} />
-            <Route path="/legal/terms" element={<TermsOfService />} />
-            <Route path="/legal/cookie-policy" element={<CookiePolicy />} />
-            <Route path="/pricing" element={<PricingPage />} />
+            <Route path="/legal/privacy-policy" element={<Suspense fallback={<PageSkeleton />}><PrivacyPolicy /></Suspense>} />
+            <Route path="/privacy" element={<Suspense fallback={<PageSkeleton />}><PrivacyPolicy /></Suspense>} />
+            <Route path="/legal/terms" element={<Suspense fallback={<PageSkeleton />}><TermsOfService /></Suspense>} />
+            <Route path="/legal/cookie-policy" element={<Suspense fallback={<PageSkeleton />}><CookiePolicy /></Suspense>} />
+            <Route path="/pricing" element={<Suspense fallback={<PageSkeleton />}><PricingPage /></Suspense>} />
             <Route
               path="/billing/manage"
               element={
@@ -325,11 +412,13 @@ function App() {
               path="/billing/success"
               element={
                 <ProtectedRoute>
-                  <CheckoutSuccessPage />
+                  <Suspense fallback={<PageSkeleton />}>
+                    <CheckoutSuccessPage />
+                  </Suspense>
                 </ProtectedRoute>
               }
             />
-            <Route path="/cancel-deletion/:token?" element={<CancelDeletionPage />} />
+            <Route path="/cancel-deletion/:token?" element={<Suspense fallback={<PageSkeleton />}><CancelDeletionPage /></Suspense>} />
 
             <Route
               path="/admin"
@@ -341,11 +430,11 @@ function App() {
                 </ProtectedRoute>
               }
             >
-              <Route index element={<AdminDashboardPage />} />
-              <Route path="users" element={<UsersPage />} />
-              <Route path="health" element={<HealthDashboardPage />} />
-              <Route path="webhooks" element={<WebhooksPage />} />
-              <Route path="dead-letter" element={<DeadLetterPage />} />
+              <Route index element={<Suspense fallback={<PageSkeleton />}><AdminDashboardPage /></Suspense>} />
+              <Route path="users" element={<Suspense fallback={<PageSkeleton />}><UsersPage /></Suspense>} />
+              <Route path="health" element={<Suspense fallback={<PageSkeleton />}><HealthDashboardPage /></Suspense>} />
+              <Route path="webhooks" element={<Suspense fallback={<PageSkeleton />}><WebhooksPage /></Suspense>} />
+              <Route path="dead-letter" element={<Suspense fallback={<PageSkeleton />}><DeadLetterPage /></Suspense>} />
             </Route>
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
