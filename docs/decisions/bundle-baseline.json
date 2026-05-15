@@ -47,7 +47,8 @@
     "profile_gz_kb": 9.83,
     "css_gz_kb": 24.07,
     "tanstack_gz_kb": 0.09,
-    "react_window_node_modules_disk_kb": 0
+    "react_window_node_modules_disk_kb": null,
+    "react_window_removal_note": "Package uninstalled; was 216 KB on disk."
   },
   "deltas": {
     "vendor_gz_delta_kb": 0,

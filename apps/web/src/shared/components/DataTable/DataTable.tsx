@@ -5,7 +5,7 @@ import { TableHeaderCell } from '../TableHeaderCell'
 import type { RangeValue } from '../ColumnFilterDropdown'
 import type { DataTableProps, SortState, SortDirection, ColumnDef } from './types'
 // Pre-import TanStack re-exports so the tanstack manualChunk is emitted even before
-// Phase 1 migration wires up the full headless API. Runtime cost: zero (type-only).
+// Phase 1 migration wires up the full headless API. Runtime cost: zero (tree-shaken by Rollup since no exported values are consumed here).
 // See docs/decisions/2026-05-15-tanstack-table-adoption.md § Bundle strategy.
 import '@/shared/lib/tanstack'
 
