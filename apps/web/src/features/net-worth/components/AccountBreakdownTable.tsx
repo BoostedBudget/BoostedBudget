@@ -1,11 +1,14 @@
 import { useCallback } from 'react'
 import { TrendingUp } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
-import { DataTable } from '@/shared/components/DataTable'
+import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import type { AccountBreakdownRow } from '../types'
 import type { SortColumn, SortDirection } from '../hooks/useNetWorthBreakdownFilters'
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const NET_WORTH_BREAKDOWN_COLUMN_IDS = ['institution', 'name', 'type', 'balance', 'percent'] as const
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const NET_WORTH_SORTABLE_COLUMNS = new Set([
@@ -63,6 +66,7 @@ interface AccountSectionProps extends Pick<
   rows: AccountBreakdownRow[]
   total: number
   percentLabel: string
+  tableId: string
 }
 
 function AccountSection({
@@ -70,6 +74,7 @@ function AccountSection({
   rows,
   total,
   percentLabel,
+  tableId,
   sortColumn,
   sortDirection,
   onSort,
@@ -82,6 +87,15 @@ function AccountSection({
   balanceRange,
   onBalanceRangeChange,
 }: AccountSectionProps) {
+  const {
+    sizing,
+    onSizingChange,
+    columnOrder,
+    onColumnOrderChange,
+    columnVisibility,
+    onColumnVisibilityChange,
+  } = useTablePreferences(tableId, [...NET_WORTH_BREAKDOWN_COLUMN_IDS])
+
   const emptyLabel = title === 'Assets' ? 'asset' : 'liability'
 
   const sort: SortState = sortColumn
@@ -136,6 +150,8 @@ function AccountSection({
       id: 'institution',
       header: 'Institution',
       sortable: true,
+      resizable: true,
+      reorderable: true,
       key: 'institutionName',
       filter:
         institutionOptions && onInstitutionFilterChange
@@ -151,12 +167,17 @@ function AccountSection({
       id: 'name',
       header: 'Account',
       sortable: true,
+      resizable: true,
+      reorderable: true,
       key: 'name',
     },
     {
       id: 'type',
       header: 'Type',
       sortable: true,
+      resizable: true,
+      reorderable: true,
+      hideable: true,
       render: (row) => (
         <span className="text-muted-foreground capitalize">{row.type}</span>
       ),
@@ -169,6 +190,8 @@ function AccountSection({
       id: 'balance',
       header: 'Balance',
       sortable: true,
+      resizable: true,
+      reorderable: true,
       align: 'right',
       numeric: true,
       render: (row) => formatCurrency(row.currentBalance, row.currencyCode),
@@ -178,6 +201,8 @@ function AccountSection({
       id: 'percent',
       header: percentLabel,
       sortable: true,
+      resizable: true,
+      reorderable: true,
       align: 'right',
       numeric: true,
       render: (row) => (
@@ -202,6 +227,12 @@ function AccountSection({
       onFiltersChange={handleFiltersChange}
       caption={`${title} — ${formatCurrency(total)}`}
       maskedColumnIds={['balance']}
+      columnSizing={sizing}
+      onColumnSizingChange={onSizingChange}
+      columnOrder={columnOrder}
+      onColumnOrderChange={onColumnOrderChange}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
       emptyState={
         <span className="block px-4 py-6 text-sm text-muted-foreground text-center">
           No {emptyLabel} accounts match the current filters.
@@ -273,6 +304,7 @@ export function AccountBreakdownTable({
         rows={assets}
         total={assetsTotal}
         percentLabel="% of Assets"
+        tableId="net-worth-breakdown-assets"
         {...sectionProps}
       />
       <AccountSection
@@ -280,6 +312,7 @@ export function AccountBreakdownTable({
         rows={liabilities}
         total={liabilitiesTotal}
         percentLabel="% of Liabilities"
+        tableId="net-worth-breakdown-liabilities"
         {...sectionProps}
       />
     </div>
