@@ -34,6 +34,8 @@ export type ColumnDef<T> = {
   reorderable?: boolean
   /** Phase 3c: opt-in sticky column pinning. Left-pin always honored; right-pin degrades to non-sticky on mobile (max-md). */
   defaultPinned?: 'left' | 'right'
+  /** Phase 3d: opt-in column visibility toggle. Column appears in ColumnVisibilityMenu when true. */
+  hideable?: boolean
 }
 
 export interface DataTableProps<T> {
@@ -80,4 +82,15 @@ export interface DataTableProps<T> {
    */
   columnOrder?: string[]
   onColumnOrderChange?: (order: string[]) => void
+  /**
+   * Phase 3d: controlled column visibility. Keys are column IDs, values are booleans.
+   * Only columns with hideable:true participate; others are always visible.
+   */
+  columnVisibility?: Record<string, boolean>
+  onColumnVisibilityChange?: (visibility: Record<string, boolean>) => void
+  /**
+   * Phase 3d: table density — controls cell padding.
+   * 'compact' | 'comfortable' (default) | 'spacious'
+   */
+  density?: 'compact' | 'comfortable' | 'spacious'
 }
