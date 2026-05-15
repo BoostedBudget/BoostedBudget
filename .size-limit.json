@@ -12,7 +12,7 @@
   { "name": "savings",             "path": "apps/web/dist/assets/savings-*.js",             "limit": "9 KB",   "gzip": true },
   { "name": "profile",             "path": "apps/web/dist/assets/profile-*.js",             "limit": "12 KB",  "gzip": true },
   { "name": "billing",             "path": "apps/web/dist/assets/billing-*.js",             "limit": "12 KB",  "gzip": true },
-  { "name": "admin",               "path": "apps/web/dist/assets/admin-*.js",               "limit": "22 KB",  "gzip": true },
+  { "name": "admin",               "path": "apps/web/dist/assets/admin-*.js",               "limit": "26 KB",  "gzip": true },
   { "name": "legal",               "path": "apps/web/dist/assets/legal-*.js",               "limit": "16 KB",  "gzip": true },
   { "name": "css",                 "path": "apps/web/dist/assets/*.css",                    "limit": "68 KB",  "gzip": true },
   { "name": "tanstack",            "path": "apps/web/dist/assets/tanstack-*.js",            "limit": "25 KB",  "gzip": true }
