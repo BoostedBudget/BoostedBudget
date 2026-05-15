@@ -8,6 +8,13 @@ import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetM
 import type { BudgetCategory } from '../../budgets/types'
 import { CATEGORY_COLORS, DEFAULT_CATEGORY_COLOR } from '@/lib/category-colors'
 
+/** Convert #RRGGBB to the rgb() form that happy-dom may normalize to. */
+function hexToRgb(hex: string): string {
+  const m = hex.replace(/^#/, '').match(/.{2}/g)
+  if (!m || m.length < 3) return hex
+  return `rgb(${parseInt(m[0], 16)}, ${parseInt(m[1], 16)}, ${parseInt(m[2], 16)})`
+}
+
 const createBudgetCategoryMatch = (
   matchReason: 'category' | 'tag' | 'both' = 'category',
   categoryOverrides: Partial<BudgetCategory> = {}
@@ -15,7 +22,9 @@ const createBudgetCategoryMatch = (
   category: {
     id: 'cat-1',
     budget_id: 'budget-1',
-    category: ['Food and Drink', 'Restaurants'],
+    category_kind: 'pfc',
+    pfc_primary: 'FOOD_AND_DRINK',
+    pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
     allocated_amount: 500,
     spent_amount: 250,
     created_at: '2025-01-01T00:00:00Z',
@@ -59,11 +68,12 @@ describe('TransactionCard', () => {
     linked_item_id: 'item-789',
     source: 'plaid',
     external_transaction_id: 'plaid-txn-abc',
-    amount: -25.50,
+    amount: 25.50, // PFCv2: positive = outflow (spending)
     date: '2025-10-25',
     name: 'Starbucks',
     merchant_name: 'Starbucks Coffee',
-    category: '["Food and Drink", "Coffee"]',
+    pfc_primary: 'FOOD_AND_DRINK',
+    pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
     pending: false,
     created_at: '2025-10-25T10:00:00Z',
     updated_at: '2025-10-25T10:00:00Z',
@@ -76,20 +86,22 @@ describe('TransactionCard', () => {
       expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
     })
 
-    it('should render transaction amount as debit (negative)', () => {
+    it('should render transaction amount as outflow/spending (positive = -$X under PFCv2)', () => {
       render(<TransactionCard transaction={mockTransaction} />)
+      // PFCv2: positive amount = outflow, displayed as -$
       expect(screen.getByText('-$25.50')).toBeInTheDocument()
     })
 
-    it('should render transaction amount as credit (positive)', () => {
-      const creditTransaction: Transaction = {
+    it('should render transaction amount as outflow/spending (positive = -$X under PFCv2)', () => {
+      const outflowTransaction: Transaction = {
         ...mockTransaction,
         amount: 1000.00,
-        name: 'Salary Deposit',
+        name: 'Grocery Purchase',
       }
 
-      render(<TransactionCard transaction={creditTransaction} />)
-      expect(screen.getByText('+$1,000.00')).toBeInTheDocument()
+      render(<TransactionCard transaction={outflowTransaction} />)
+      // PFCv2: positive amount = outflow, displayed as -$
+      expect(screen.getByText('-$1,000.00')).toBeInTheDocument()
     })
 
     it('should render transaction date in readable format', () => {
@@ -118,142 +130,115 @@ describe('TransactionCard', () => {
   })
 
   describe('Category Display', () => {
-    it('should display primary category from JSON string', () => {
+    it('should display detailed PFC label when both primary and detailed are set', () => {
       const transactionWithCategories: Transaction = {
         ...mockTransaction,
         merchant_name: 'Local Restaurant',
-        category: '["Food and Drink", "Restaurants"]',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+        // No display fields — falls back to formatPFCEnum
       }
       render(<TransactionCard transaction={transactionWithCategories} />)
-      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument()
     })
 
-    it('should display primary category when only one exists', () => {
+    it('should display primary PFC when no detailed is set', () => {
       const transactionWithPrimaryOnly: Transaction = {
         ...mockTransaction,
-        category: '["Travel"]',
+        pfc_primary: 'TRAVEL',
+        pfc_detailed: null,
+        // No display fields — falls back to formatPFCEnum
       }
       render(<TransactionCard transaction={transactionWithPrimaryOnly} />)
-      expect(screen.getByText(/Travel/i)).toBeInTheDocument()
+      expect(screen.getByText('Travel')).toBeInTheDocument()
     })
 
-    it('should display primary category even when secondary exists', () => {
+    it('should prefer detailed over primary in the rendered label', () => {
       const transactionWithSecondary: Transaction = {
         ...mockTransaction,
-        category: '["Shops", "Clothing"]',
+        pfc_primary: 'GENERAL_MERCHANDISE',
+        pfc_detailed: 'GENERAL_MERCHANDISE_CLOTHING_AND_ACCESSORIES',
+        // No display fields — falls back to formatPFCEnum
       }
       render(<TransactionCard transaction={transactionWithSecondary} />)
-      expect(screen.getByText(/Shops/i)).toBeInTheDocument()
+      expect(screen.getByText('General Merchandise › Clothing And Accessories')).toBeInTheDocument()
     })
 
-    it('should handle null category gracefully', () => {
+    it('should handle null pfc_primary gracefully', () => {
       const transactionWithoutCategory: Transaction = {
         ...mockTransaction,
-        category: null,
+        pfc_primary: null,
+        pfc_detailed: null,
       }
 
       render(<TransactionCard transaction={transactionWithoutCategory} />)
       expect(screen.getByText('Uncategorized')).toBeInTheDocument()
     })
 
-    it('should handle invalid JSON category gracefully', () => {
-      const transactionWithInvalidCategory: Transaction = {
-        ...mockTransaction,
-        category: 'not-valid-json',
-      }
-
-      render(<TransactionCard transaction={transactionWithInvalidCategory} />)
-      expect(screen.getByText('Uncategorized')).toBeInTheDocument()
-    })
-
-    it('should handle empty category array', () => {
-      const transactionWithEmptyCategory: Transaction = {
-        ...mockTransaction,
-        category: '[]',
-      }
-
-      render(<TransactionCard transaction={transactionWithEmptyCategory} />)
-      expect(screen.getByText('Uncategorized')).toBeInTheDocument()
-    })
-
-    it('should display category_override when present', () => {
+    it('should display PFC override when category_override_kind is pfc', () => {
       const transactionWithOverride: Transaction = {
         ...mockTransaction,
         merchant_name: 'Local Store',
-        category: '["Food and Drink", "Restaurants"]',
-        category_override: '["Shopping", "Groceries"]',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+        category_override_kind: 'pfc',
+        pfc_primary_override: 'GENERAL_MERCHANDISE',
+        pfc_detailed_override: 'GENERAL_MERCHANDISE_GROCERIES',
+        category_source: 'manual',
+        // No display fields — falls back to formatPFCEnum
       }
       render(<TransactionCard transaction={transactionWithOverride} />)
-      expect(screen.getByText(/Shopping/i)).toBeInTheDocument()
-      expect(screen.queryByText(/Food and Drink/i)).not.toBeInTheDocument()
+      expect(screen.getByText('General Merchandise › Groceries')).toBeInTheDocument()
+      // Original primary should not appear since override takes precedence
+      expect(screen.queryByText('Food And Drink › Restaurants')).not.toBeInTheDocument()
     })
 
-    it('should fall back to category when override is null', () => {
+    it('should display custom category override when category_override_kind is custom', () => {
+      const transactionWithCustom: Transaction = {
+        ...mockTransaction,
+        pfc_primary: 'FOOD_AND_DRINK',
+        category_override_kind: 'custom',
+        custom_category_override_id: 'custom-cat-uuid-123',
+        custom_category_override_display: 'My Custom Groceries',
+        category_source: 'manual',
+      }
+      render(<TransactionCard transaction={transactionWithCustom} />)
+      expect(screen.getByText('My Custom Groceries')).toBeInTheDocument()
+    })
+
+    it('should fall back to source PFC when no override is set', () => {
       const transactionWithoutOverride: Transaction = {
         ...mockTransaction,
         merchant_name: 'Local Restaurant',
-        category: '["Food and Drink", "Restaurants"]',
-        category_override: null,
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+        category_override_kind: null,
+        // No display fields — falls back to formatPFCEnum
       }
       render(<TransactionCard transaction={transactionWithoutOverride} />)
-      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
-    })
-
-    it('should fall back to category when override is empty and source not manual', () => {
-      const transactionWithEmptyOverride: Transaction = {
-        ...mockTransaction,
-        merchant_name: 'Local Restaurant',
-        category: '["Food and Drink", "Restaurants"]',
-        category_override: '[]',
-        category_source: 'plaid',
-      }
-      render(<TransactionCard transaction={transactionWithEmptyOverride} />)
-      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument()
     })
   })
 
   describe('Explicit Uncategorized Display', () => {
-    it('should display Uncategorized when manually cleared', () => {
+    it('should display Uncategorized when pfc_primary is null and no override', () => {
       const explicitlyUncategorized: Transaction = {
         ...mockTransaction,
-        category: '["Food and Drink", "Coffee"]',
-        category_override: '[]',
+        pfc_primary: null,
+        pfc_detailed: null,
+        category_override_kind: null,
         category_source: 'manual',
       }
       render(<TransactionCard transaction={explicitlyUncategorized} />)
       expect(screen.getByText('Uncategorized')).toBeInTheDocument()
-      expect(screen.queryByText(/Food and Drink/i)).not.toBeInTheDocument()
-    })
-
-    it('should display Uncategorized when manual override is null', () => {
-      const explicitlyUncategorized: Transaction = {
-        ...mockTransaction,
-        category: '["Food and Drink", "Coffee"]',
-        category_override: null,
-        category_source: 'manual',
-      }
-      render(<TransactionCard transaction={explicitlyUncategorized} />)
-      expect(screen.getByText('Uncategorized')).toBeInTheDocument()
-      expect(screen.queryByText(/Food and Drink/i)).not.toBeInTheDocument()
-    })
-
-    it('should show warning indicator for explicitly uncategorized', () => {
-      const explicitlyUncategorized: Transaction = {
-        ...mockTransaction,
-        category: '["Food and Drink", "Coffee"]',
-        category_override: '[]',
-        category_source: 'manual',
-      }
-      const { container } = render(<TransactionCard transaction={explicitlyUncategorized} />)
-      const warningIndicator = container.querySelector('.transaction-card__uncategorized-warning')
-      expect(warningIndicator).toBeInTheDocument()
     })
 
     it('should show warning indicator for any uncategorized', () => {
       const neverCategorized: Transaction = {
         ...mockTransaction,
-        category: null,
-        category_override: null,
+        pfc_primary: null,
+        pfc_detailed: null,
+        category_override_kind: null,
       }
       const { container } = render(<TransactionCard transaction={neverCategorized} />)
       const warningIndicator = container.querySelector('.transaction-card__uncategorized-warning')
@@ -264,19 +249,6 @@ describe('TransactionCard', () => {
       const { container } = render(<TransactionCard transaction={mockTransaction} />)
       const warningIndicator = container.querySelector('.transaction-card__uncategorized-warning')
       expect(warningIndicator).not.toBeInTheDocument()
-    })
-
-    it('should display original_category when available', () => {
-      const withOriginalCategory: Transaction = {
-        ...mockTransaction,
-        category: '["Food and Drink", "Coffee"]',
-        category_override: '[]',
-        category_source: 'manual',
-        original_category: '["Food and Drink", "Coffee"]',
-      }
-      render(<TransactionCard transaction={withOriginalCategory} />)
-      const card = screen.getByRole('article')
-      expect(card).toHaveAttribute('data-original-category', '["Food and Drink", "Coffee"]')
     })
   })
 
@@ -369,24 +341,24 @@ describe('TransactionCard', () => {
   })
 
   describe('Amount Formatting', () => {
-    it('should format small amounts with 2 decimals', () => {
+    it('should format small inflow amounts with 2 decimals (negative = +$ under PFCv2)', () => {
       const smallTransaction: Transaction = {
         ...mockTransaction,
-        amount: -1.23,
+        amount: -1.23, // PFCv2: negative = inflow
       }
 
       render(<TransactionCard transaction={smallTransaction} />)
-      expect(screen.getByText('-$1.23')).toBeInTheDocument()
+      expect(screen.getByText('+$1.23')).toBeInTheDocument()
     })
 
-    it('should format large amounts with comma separators', () => {
+    it('should format large inflow amounts with comma separators (negative = +$ under PFCv2)', () => {
       const largeTransaction: Transaction = {
         ...mockTransaction,
-        amount: -123456.78,
+        amount: -123456.78, // PFCv2: negative = inflow
       }
 
       render(<TransactionCard transaction={largeTransaction} />)
-      expect(screen.getByText('-$123,456.78')).toBeInTheDocument()
+      expect(screen.getByText('+$123,456.78')).toBeInTheDocument()
     })
 
     it('should handle zero amount', () => {
@@ -399,27 +371,29 @@ describe('TransactionCard', () => {
       expect(screen.getByText('$0.00')).toBeInTheDocument()
     })
 
-    it('should apply debit styling to negative', () => {
-      render(<TransactionCard transaction={mockTransaction} />)
-      const amountElement = screen.getByText('-$25.50')
+    it('should apply inflow/success styling to negative amount (PFCv2: negative = inflow)', () => {
+      const inflowTransaction: Transaction = {
+        ...mockTransaction,
+        amount: -25.50, // PFCv2: negative = inflow
+      }
+      render(<TransactionCard transaction={inflowTransaction} />)
+      const amountElement = screen.getByText('+$25.50')
       expect(
-        amountElement.classList.contains('debit') ||
-        amountElement.classList.contains('negative') ||
-        amountElement.classList.contains('text-red-600')
+        amountElement.classList.contains('text-success') ||
+        amountElement.classList.contains('text-green-600')
       ).toBe(true)
     })
 
-    it('should apply credit styling to positive', () => {
-      const creditTransaction: Transaction = {
+    it('should apply outflow/destructive styling to positive amount (PFCv2: positive = outflow)', () => {
+      const outflowTransaction: Transaction = {
         ...mockTransaction,
-        amount: 100.00,
+        amount: 100.00, // PFCv2: positive = outflow/spending
       }
-      render(<TransactionCard transaction={creditTransaction} />)
-      const amountElement = screen.getByText('+$100.00')
+      render(<TransactionCard transaction={outflowTransaction} />)
+      const amountElement = screen.getByText('-$100.00')
       expect(
-        amountElement.classList.contains('credit') ||
-        amountElement.classList.contains('positive') ||
-        amountElement.classList.contains('text-green-600')
+        amountElement.classList.contains('text-destructive') ||
+        amountElement.classList.contains('text-red-600')
       ).toBe(true)
     })
   })
@@ -549,15 +523,17 @@ describe('TransactionCard', () => {
       expect(screen.getByText(/Very Long Merchant/)).toBeInTheDocument()
     })
 
-    it('should handle transactions with multiple category levels', () => {
+    it('should handle transactions with both primary and detailed PFC', () => {
       const multiCategoryTransaction: Transaction = {
         ...mockTransaction,
-        category: '["Food and Drink", "Restaurants", "Fast Food", "Coffee Shops"]',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD',
+        // No display fields — falls back to formatPFCEnum
       }
 
       render(<TransactionCard transaction={multiCategoryTransaction} />)
-      // Should show primary category for consistency
-      expect(screen.getByText(/Food and Drink/i)).toBeInTheDocument()
+      // Effective label prefers detailed over primary
+      expect(screen.getByText('Food And Drink › Fast Food')).toBeInTheDocument()
     })
   })
 
@@ -569,8 +545,9 @@ describe('TransactionCard', () => {
         <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
       )
 
-      // Badge should be present with the category name
-      expect(screen.getByRole('link', { name: /Budget: Food and Drink/i })).toBeInTheDocument()
+      // Badge should be present with the budget category name
+      // The BudgetCategory in the mock has no display fields, so formatPFCEnum is used
+      expect(screen.getByRole('link', { name: /Food And Drink/i })).toBeInTheDocument()
     })
 
     it('should not render badge when budgetMatch is null', () => {
@@ -738,70 +715,89 @@ describe('TransactionCard', () => {
   })
 
   describe('Category Color Dot', () => {
-    it('should render category color dot before category text', () => {
+    it('should render category color dot when no icon URL is present', () => {
       const { container } = render(<TransactionCard transaction={mockTransaction} />)
 
       const colorDot = container.querySelector('.transaction-card__category-dot')
       expect(colorDot).toBeInTheDocument()
     })
 
-    it('should apply correct color for known category', () => {
+    it('should render category icon img when pfc_category_icon_url is set', () => {
+      const iconURL = 'https://plaid-category-icons.plaid.com/PFC_FOOD_AND_DRINK.png'
+      const txWithIcon: Transaction = { ...mockTransaction, pfc_category_icon_url: iconURL }
+      const { container } = render(<TransactionCard transaction={txWithIcon} />)
+
+      const icon = container.querySelector('.transaction-card__category-icon') as HTMLImageElement | null
+      expect(icon).toBeInTheDocument()
+      expect(icon?.src).toBe(iconURL)
+      expect(container.querySelector('.transaction-card__category-dot')).not.toBeInTheDocument()
+    })
+
+    it('should show color dot (not icon) when pfc_category_icon_url is null', () => {
+      const txNoIcon: Transaction = { ...mockTransaction, pfc_category_icon_url: null }
+      const { container } = render(<TransactionCard transaction={txNoIcon} />)
+
+      expect(container.querySelector('.transaction-card__category-dot')).toBeInTheDocument()
+      expect(container.querySelector('.transaction-card__category-icon')).not.toBeInTheDocument()
+    })
+
+    it('should apply correct color for known PFC primary category', () => {
       const transactionWithKnownCategory: Transaction = {
         ...mockTransaction,
-        category: '["Food and Drink", "Restaurants"]',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: null,
       }
 
       const { container } = render(<TransactionCard transaction={transactionWithKnownCategory} />)
 
-      const colorDot = container.querySelector('.transaction-card__category-dot')
+      const colorDot = container.querySelector('.transaction-card__category-dot') as HTMLElement | null
       expect(colorDot).toBeInTheDocument()
-      expect(colorDot).toHaveStyle({ backgroundColor: CATEGORY_COLORS['Food and Drink'] })
-    })
-
-    it('should apply fallback color for unknown category', () => {
-      const transactionWithUnknownCategory: Transaction = {
-        ...mockTransaction,
-        category: '["Random Unknown Category"]',
-      }
-
-      const { container } = render(<TransactionCard transaction={transactionWithUnknownCategory} />)
-
-      const colorDot = container.querySelector('.transaction-card__category-dot')
-      expect(colorDot).toBeInTheDocument()
-      expect(colorDot).toHaveStyle({ backgroundColor: DEFAULT_CATEGORY_COLOR })
+      // Check via DOM style property — toHaveStyle crashes in bun/jest-dom on failure
+      const rendered = colorDot?.style.backgroundColor ?? ''
+      const expected = CATEGORY_COLORS['FOOD_AND_DRINK']
+      // happy-dom may normalize hex → rgb; accept either form
+      const expectedRgb = hexToRgb(expected)
+      expect([expected, expectedRgb]).toContain(rendered)
     })
 
     it('should apply fallback color for uncategorized transactions', () => {
       const uncategorizedTransaction: Transaction = {
         ...mockTransaction,
-        category: null,
+        pfc_primary: null,
+        pfc_detailed: null,
       }
 
       const { container } = render(<TransactionCard transaction={uncategorizedTransaction} />)
 
-      const colorDot = container.querySelector('.transaction-card__category-dot')
+      const colorDot = container.querySelector('.transaction-card__category-dot') as HTMLElement | null
       expect(colorDot).toBeInTheDocument()
-      expect(colorDot).toHaveStyle({ backgroundColor: DEFAULT_CATEGORY_COLOR })
+      const rendered = colorDot?.style.backgroundColor ?? ''
+      const expectedRgb = hexToRgb(DEFAULT_CATEGORY_COLOR)
+      expect([DEFAULT_CATEGORY_COLOR, expectedRgb]).toContain(rendered)
     })
   })
 
   describe('Income/Expense Arrows', () => {
-    it('should display up arrow for income', () => {
-      const incomeTransaction: Transaction = {
+    it('should display expense arrow for outflow (positive amount under PFCv2)', () => {
+      const outflowTransaction: Transaction = {
         ...mockTransaction,
-        amount: 1000.00,
+        amount: 25.50, // PFCv2: positive = outflow/spending
       }
-      render(<TransactionCard transaction={incomeTransaction} />)
-
-      expect(screen.getByTestId('income-arrow')).toBeInTheDocument()
-      expect(screen.queryByTestId('expense-arrow')).not.toBeInTheDocument()
-    })
-
-    it('should display down arrow for expense', () => {
-      render(<TransactionCard transaction={mockTransaction} />)
+      render(<TransactionCard transaction={outflowTransaction} />)
 
       expect(screen.getByTestId('expense-arrow')).toBeInTheDocument()
       expect(screen.queryByTestId('income-arrow')).not.toBeInTheDocument()
+    })
+
+    it('should display income arrow for inflow (negative amount under PFCv2)', () => {
+      const inflowTransaction: Transaction = {
+        ...mockTransaction,
+        amount: -25.50, // PFCv2: negative = inflow/refund
+      }
+      render(<TransactionCard transaction={inflowTransaction} />)
+
+      expect(screen.getByTestId('income-arrow')).toBeInTheDocument()
+      expect(screen.queryByTestId('expense-arrow')).not.toBeInTheDocument()
     })
 
     it('should not display any arrow for zero amount', () => {
@@ -954,5 +950,65 @@ describe('TransactionCard', () => {
       expect(editButton).toHaveAttribute('aria-label')
       expect(categorizeButton).toHaveAttribute('aria-label')
     })
+  })
+})
+
+// ============================================================================
+// Issue #1058: PFC fallback tests (D5)
+// ============================================================================
+
+describe('TransactionCard — PFC v2 source fields (Issue #1073)', () => {
+  const baseTxn: Transaction = {
+    id: 'txn-pfc',
+    user_id: 'user-1',
+    account_id: 'acc-1',
+    linked_item_id: 'item-1',
+    source: 'plaid',
+    external_transaction_id: 'plaid-ext-1',
+    amount: -12.45,
+    date: '2024-01-15',
+    name: 'KFC',
+    pending: false,
+    tags: [],
+    created_at: '2024-01-15T00:00:00Z',
+    updated_at: '2024-01-15T00:00:00Z',
+    category_source: 'plaid',
+  }
+
+  it('shows humanized PFC primary when only pfc_primary is set (no display fields)', () => {
+    const txn: Transaction = {
+      ...baseTxn,
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_confidence_level: 'VERY_HIGH',
+      // No display field — formatPFCEnum fallback
+    }
+
+    render(<TransactionCard transaction={txn} />)
+
+    expect(screen.getByText('Food And Drink')).toBeTruthy()
+  })
+
+  it('does not show the uncategorized warning when pfc_primary is set', () => {
+    const txn: Transaction = {
+      ...baseTxn,
+      pfc_primary: 'FOOD_AND_DRINK',
+    }
+
+    render(<TransactionCard transaction={txn} />)
+
+    const warnings = screen.queryAllByTitle('Uncategorized')
+    expect(warnings).toHaveLength(0)
+  })
+
+  it('shows Uncategorized when pfc_primary is null even though source is plaid', () => {
+    const txn: Transaction = {
+      ...baseTxn,
+      pfc_primary: null,
+      category_source: 'plaid',
+    }
+
+    render(<TransactionCard transaction={txn} />)
+
+    expect(screen.getByText('Uncategorized')).toBeTruthy()
   })
 })

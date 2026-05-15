@@ -14,6 +14,7 @@ import {
   setMockUpdateUserProfileIsPending,
 } from '@/test/mocks/profile-api'
 import { mockToastSuccess, mockToastError } from '@/test/mocks/sonner'
+import { mockPosthogIdentify } from '@/test/mocks/posthog'
 
 describe('ProfileForm', () => {
   const mockUser: User = {
@@ -35,6 +36,7 @@ describe('ProfileForm', () => {
     mockUpdateUserProfileMutate.mockClear()
     mockToastSuccess.mockClear()
     mockToastError.mockClear()
+    mockPosthogIdentify.mockClear()
     setMockUpdateUserProfileIsPending(false)
   })
 
@@ -66,15 +68,14 @@ describe('ProfileForm', () => {
       expect(screen.getByRole('button', { name: /save changes/i })).toBeInTheDocument()
     })
 
-    it('should render all valid region options', () => {
+    it('should render all valid region options from API', () => {
       render(<ProfileForm user={mockUser} />)
 
       const regionSelect = screen.getByLabelText(/primary region/i) as HTMLSelectElement
       const options = Array.from(regionSelect.options).map((o) => o.value)
 
       expect(options).toContain('iad')
-      expect(options).toContain('lhr')
-      expect(options).toContain('syd')
+      expect(options).toContain('ewr')
     })
   })
 
@@ -141,12 +142,18 @@ describe('ProfileForm', () => {
           { data: { email: 'updated@example.com' } },
           expect.any(Object)
         )
-        expect(mockToastSuccess).toHaveBeenCalledWith('Profile updated successfully!')
+        expect(mockToastSuccess).toHaveBeenCalledWith(
+          'Profile updated. Check your inbox to verify your new email address.',
+        )
+        expect(mockPosthogIdentify).toHaveBeenCalledWith(
+          mockUser.id,
+          { email: 'updated@example.com' },
+        )
       })
     })
 
     it('should update region when changed after confirmation', async () => {
-      const updatedUser = { ...mockUser, primary_region: 'lhr' }
+      const updatedUser = { ...mockUser, primary_region: 'ewr' }
       configureMutateSuccess(updatedUser)
 
       const user = userEvent.setup({ delay: null })
@@ -155,7 +162,7 @@ describe('ProfileForm', () => {
       const regionSelect = screen.getByLabelText(/primary region/i)
       const saveButton = screen.getByRole('button', { name: /save changes/i })
 
-      await user.selectOptions(regionSelect, 'lhr')
+      await user.selectOptions(regionSelect, 'ewr')
       await user.click(saveButton)
 
       await waitFor(() => {
@@ -167,7 +174,7 @@ describe('ProfileForm', () => {
 
       await waitFor(() => {
         expect(mockUpdateUserProfileMutate).toHaveBeenCalledWith(
-          { data: { email: 'test@example.com', primary_region: 'lhr' } },
+          { data: { primary_region: 'ewr' } },
           expect.any(Object)
         )
       })
@@ -194,6 +201,20 @@ describe('ProfileForm', () => {
 
       await waitFor(() => {
         expect(mockToastError).toHaveBeenCalledWith('Failed to update profile. Please try again.')
+      })
+    })
+
+    it('should show duplicate-email error when server returns 409', async () => {
+      configureMutateError(new Error('409 Conflict: email already in use'))
+
+      const user = userEvent.setup({ delay: null })
+      render(<ProfileForm user={mockUser} />)
+
+      await updateEmailField(user, 'taken@example.com')
+      await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+      await waitFor(() => {
+        expect(mockToastError).toHaveBeenCalledWith('That email address is already in use.')
       })
     })
 
@@ -234,6 +255,20 @@ describe('ProfileForm', () => {
     })
   })
 
+  describe('Email verification', () => {
+    it('should show verification notice when email is not verified', () => {
+      const unverifiedUser = { ...mockUser, email_verified: false }
+      render(<ProfileForm user={unverifiedUser} />)
+      expect(screen.getByText(/verify your email/i)).toBeInTheDocument()
+      expect(screen.getByText(/continue signing in with your previous email/i)).toBeInTheDocument()
+    })
+
+    it('should not show verification notice when email is verified', () => {
+      render(<ProfileForm user={mockUser} />)
+      expect(screen.queryByText(/verify your email/i)).not.toBeInTheDocument()
+    })
+  })
+
   describe('Form state management', () => {
     it('should track form field changes', async () => {
       const user = userEvent.setup({ delay: null })
@@ -245,8 +280,8 @@ describe('ProfileForm', () => {
       await updateEmailField(user, 'new@example.com')
       expect(emailInput).toHaveValue('new@example.com')
 
-      await user.selectOptions(regionSelect, 'lhr')
-      expect(regionSelect).toHaveValue('lhr')
+      await user.selectOptions(regionSelect, 'ewr')
+      expect(regionSelect).toHaveValue('ewr')
     })
 
     it('should reset form to updated user data after successful submission', async () => {

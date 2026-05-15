@@ -9,7 +9,6 @@
 import { Loader2, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useGetRuleExecutions } from '@boostedbudget/api-client/endpoints/automation-rules/automation-rules'
 import type { RuleExecution } from '@boostedbudget/api-client/models'
-import './RuleExecutionHistory.css'
 
 export interface RuleExecutionHistoryProps {
   /** Rule ID to fetch executions for */
@@ -70,12 +69,22 @@ export function RuleExecutionHistory({
   const totalPages = limit ? Math.ceil(total / limit) : 1
   const showPagination = limit && total > limit
 
+  const statusBadgeClass = (status: string) => {
+    const base = 'inline-block px-2 py-0.5 text-xs font-medium rounded-full'
+    switch (status) {
+      case 'completed': return `${base} status-completed bg-success/10 text-success`
+      case 'failed': return `${base} status-failed bg-destructive/10 text-destructive`
+      case 'running': return `${base} status-running bg-info/10 text-info`
+      default: return `${base} status-pending bg-muted text-muted-foreground`
+    }
+  }
+
   // Loading state
   if (isLoading) {
     return (
-      <div className={`rule-execution-history ${className}`.trim()}>
-        <div className="rule-execution-history__loading">
-          <Loader2 className="rule-execution-history__spinner" />
+      <div className={`bg-background border border-border rounded-lg overflow-hidden ${className}`.trim()}>
+        <div className="flex flex-col items-center justify-center py-12 px-8 text-center gap-4">
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
           <p>Loading execution history...</p>
         </div>
       </div>
@@ -85,14 +94,14 @@ export function RuleExecutionHistory({
   // Error state
   if (error) {
     return (
-      <div className={`rule-execution-history ${className}`.trim()}>
-        <div className="rule-execution-history__error">
-          <AlertCircle className="rule-execution-history__error-icon" />
+      <div className={`bg-background border border-border rounded-lg overflow-hidden ${className}`.trim()}>
+        <div className="flex flex-col items-center justify-center py-12 px-8 text-center gap-4">
+          <AlertCircle className="w-8 h-8 text-destructive" />
           <p>Error loading execution history</p>
           <button
             type="button"
             onClick={() => refetch()}
-            className="rule-execution-history__retry-btn"
+            className="px-4 py-2 text-sm font-medium text-foreground bg-muted border border-border rounded-md cursor-pointer hover:bg-accent transition-colors"
             aria-label="Retry loading"
           >
             Retry
@@ -105,9 +114,9 @@ export function RuleExecutionHistory({
   // Empty state
   if (executions.length === 0) {
     return (
-      <div className={`rule-execution-history ${className}`.trim()}>
-        <h3 className="rule-execution-history__title">Execution History</h3>
-        <div className="rule-execution-history__empty">
+      <div className={`bg-background border border-border rounded-lg overflow-hidden ${className}`.trim()}>
+        <h3 className="m-0 px-6 py-4 text-base font-semibold text-foreground border-b border-border">Execution History</h3>
+        <div className="p-8 text-center text-muted-foreground">
           <p>No executions yet</p>
         </div>
       </div>
@@ -115,53 +124,51 @@ export function RuleExecutionHistory({
   }
 
   return (
-    <div className={`rule-execution-history ${className}`.trim()}>
-      <h3 className="rule-execution-history__title">Execution History</h3>
+    <div className={`bg-background border border-border rounded-lg overflow-hidden ${className}`.trim()}>
+      <h3 className="m-0 px-6 py-4 text-base font-semibold text-foreground border-b border-border">Execution History</h3>
 
-      <div className="rule-execution-history__table-container">
-        <table className="rule-execution-history__table">
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse">
           <thead>
             <tr>
-              <th>Time</th>
-              <th>Status</th>
-              <th>Duration</th>
-              <th>Trigger</th>
-              <th>Details</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-muted border-b border-border">Time</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-muted border-b border-border">Status</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-muted border-b border-border">Duration</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-muted border-b border-border">Trigger</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-muted border-b border-border">Details</th>
             </tr>
           </thead>
           <tbody>
             {executions.map((execution: RuleExecution) => (
-              <tr key={execution.id}>
-                <td>{formatDateTime(execution.started_at)}</td>
-                <td>
-                  <span
-                    className={`rule-execution-history__status rule-execution-history__status--${execution.status}`}
-                  >
+              <tr key={execution.id} className="hover:[&>td]:bg-muted">
+                <td className="px-4 py-3 text-sm text-foreground border-b border-border align-top">{formatDateTime(execution.started_at)}</td>
+                <td className="px-4 py-3 text-sm text-foreground border-b border-border align-top">
+                  <span className={statusBadgeClass(execution.status)}>
                     {execution.status}
                   </span>
                 </td>
-                <td>{formatDuration(execution.execution_duration_ms)}</td>
-                <td className="rule-execution-history__trigger">
+                <td className="px-4 py-3 text-sm text-foreground border-b border-border align-top">{formatDuration(execution.execution_duration_ms)}</td>
+                <td className="px-4 py-3 text-sm text-foreground border-b border-border align-top capitalize">
                   {getTriggerType(execution.trigger_context)}
                 </td>
-                <td className="rule-execution-history__details">
+                <td className="px-4 py-3 text-sm text-foreground border-b border-border align-top max-w-[200px]">
                   {execution.status === 'failed' && execution.error_message && (
-                    <span className="rule-execution-history__error-msg">
+                    <span className="text-destructive text-xs">
                       {execution.error_message}
                     </span>
                   )}
                   {execution.status === 'completed' && (
-                    <span className="rule-execution-history__success">
+                    <span className="text-success text-xs">
                       Completed successfully
                     </span>
                   )}
                   {execution.status === 'running' && (
-                    <span className="rule-execution-history__running">
+                    <span className="text-info text-xs">
                       In progress...
                     </span>
                   )}
                   {execution.status === 'pending' && (
-                    <span className="rule-execution-history__pending">
+                    <span className="text-muted-foreground text-xs">
                       Waiting to start
                     </span>
                   )}
@@ -173,29 +180,29 @@ export function RuleExecutionHistory({
       </div>
 
       {showPagination && (
-        <div className="rule-execution-history__pagination">
+        <div className="flex items-center justify-center gap-4 p-4 border-t border-border">
           <button
             type="button"
             onClick={() => onPageChange?.(currentPage - 1)}
             disabled={currentPage === 0}
-            className="rule-execution-history__page-btn"
+            className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-foreground border border-border rounded-md cursor-pointer hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             aria-label="Previous page"
           >
-            <ChevronLeft aria-hidden="true" />
+            <ChevronLeft aria-hidden="true" className="w-4 h-4" />
             Prev
           </button>
-          <span className="rule-execution-history__page-info">
+          <span className="text-sm text-muted-foreground">
             Page {currentPage + 1} of {totalPages}
           </span>
           <button
             type="button"
             onClick={() => onPageChange?.(currentPage + 1)}
             disabled={currentPage >= totalPages - 1}
-            className="rule-execution-history__page-btn"
+            className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-foreground border border-border rounded-md cursor-pointer hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             aria-label="Next page"
           >
             Next
-            <ChevronRight aria-hidden="true" />
+            <ChevronRight aria-hidden="true" className="w-4 h-4" />
           </button>
         </div>
       )}

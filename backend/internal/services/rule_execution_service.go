@@ -5,7 +5,9 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -48,11 +51,6 @@ type RuleExecutionService interface {
 	// Issue #38: Rules API Endpoints - Test endpoint.
 	TestRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleTestResult, error)
 
-	// SetUserGetter sets the user getter for tier checking.
-	SetUserGetter(getter UserGetter)
-
-	// SetSubscriptionChecker sets the subscription checker for limit enforcement.
-	SetSubscriptionChecker(checker SubscriptionChecker)
 }
 
 // ruleExecutionService implements RuleExecutionService.
@@ -62,9 +60,9 @@ type ruleExecutionService struct {
 	ruleRepo            repository.AutomationRulesRepository
 	savingsGoalRepo     repository.SavingsGoalRepository
 	notificationService NotificationService
-	userGetter          UserGetter
-	subscriptionChecker SubscriptionChecker
+	notificationRepo    repository.NotificationRepository
 	analytics           phclient.Analytics
+	chainResolver       AccountChainResolver // Issue #1109: resolves active account IDs across re-links
 }
 
 // NotificationService defines the interface for sending notifications.
@@ -87,16 +85,6 @@ func NewRuleExecutionService(
 	}
 }
 
-// SetUserGetter sets the user getter for tier checking.
-func (s *ruleExecutionService) SetUserGetter(getter UserGetter) {
-	s.userGetter = getter
-}
-
-// SetSubscriptionChecker sets the subscription checker for limit enforcement.
-func (s *ruleExecutionService) SetSubscriptionChecker(checker SubscriptionChecker) {
-	s.subscriptionChecker = checker
-}
-
 // SetAnalytics sets the analytics client for event capture.
 func (s *ruleExecutionService) SetAnalytics(analytics phclient.Analytics) {
 	s.analytics = analytics
@@ -105,6 +93,17 @@ func (s *ruleExecutionService) SetAnalytics(analytics phclient.Analytics) {
 // SetSavingsGoalRepo sets the savings goal repository for savings goal executor.
 func (s *ruleExecutionService) SetSavingsGoalRepo(repo repository.SavingsGoalRepository) {
 	s.savingsGoalRepo = repo
+}
+
+// SetNotificationRepo sets the notification repository for creating transfer suggestion notifications.
+func (s *ruleExecutionService) SetNotificationRepo(repo repository.NotificationRepository) {
+	s.notificationRepo = repo
+}
+
+// SetChainResolver injects the chain resolver to map user_account_id → active account_id.
+// Issue #1109: Used by executeTransferSuggestion and executeSavingsGoal.
+func (s *ruleExecutionService) SetChainResolver(resolver AccountChainResolver) {
+	s.chainResolver = resolver
 }
 
 // ExecuteRule executes a single rule with the given trigger data.
@@ -283,6 +282,7 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 		}
 	}
 
+	result.PopulatePFCDisplay()
 	return result, nil
 }
 
@@ -306,6 +306,10 @@ func (s *ruleExecutionService) simulateAction(rule *domain.AutomationRule, trigg
 		simulatedAction["to_account_id"] = actions.Transfer.ToAccountID
 		simulatedAction["amount"] = amount
 		simulatedAction["amount_type"] = actions.Transfer.AmountType
+		// Issue #1109: Expose stable user_account_id for transparency if available
+		if actions.Transfer.FromUserAccountID != "" {
+			simulatedAction["from_user_account_id"] = actions.Transfer.FromUserAccountID
+		}
 
 	case domain.RuleTypeBudgetAlert:
 		if actions.Alert == nil {
@@ -385,7 +389,69 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 		Status:          domain.SuggestionStatusPending,
 	}
 
-	return s.suggestionRepo.Create(ctx, suggestion)
+	// Issue #1109: Resolve stable user_account_id → current active account_id (backfilled by migration 000070).
+	if transfer.FromUserAccountID != "" {
+		suggestion.FromUserAccountID = ptrString(transfer.FromUserAccountID)
+		if s.chainResolver != nil {
+			if activeFromID, err := s.chainResolver.ResolveActiveID(ctx, transfer.FromUserAccountID); err == nil {
+				suggestion.FromAccountID = ptrString(activeFromID)
+			} else if !errors.Is(err, ErrNoActiveAccount) {
+				slog.Warn("chain resolve failed for from_account; using raw id", "error", err)
+			}
+		}
+	}
+	if transfer.ToUserAccountID != "" {
+		suggestion.ToUserAccountID = ptrString(transfer.ToUserAccountID)
+		if s.chainResolver != nil {
+			if activeToID, err := s.chainResolver.ResolveActiveID(ctx, transfer.ToUserAccountID); err == nil {
+				suggestion.ToAccountID = ptrString(activeToID)
+			} else if !errors.Is(err, ErrNoActiveAccount) {
+				slog.Warn("chain resolve failed for to_account; using raw id", "error", err)
+			}
+		}
+	}
+	if transfer.FromUserAccountID != "" || transfer.ToUserAccountID != "" {
+		observability.AccountsReplacedFiltered.WithLabelValues("automation").Inc()
+	}
+
+	if err := s.suggestionRepo.Create(ctx, suggestion); err != nil {
+		return err
+	}
+
+	s.createTransferSuggestionNotification(ctx, suggestion)
+	return nil
+}
+
+// createTransferSuggestionNotification creates an accept_reject notification for a new transfer suggestion.
+// This is non-blocking: errors are logged and ignored so a notification failure never blocks rule execution.
+func (s *ruleExecutionService) createTransferSuggestionNotification(ctx context.Context, suggestion *domain.TransferSuggestion) {
+	if s.notificationRepo == nil {
+		return
+	}
+
+	message := ""
+	if suggestion.Reason != nil {
+		message = *suggestion.Reason
+	}
+
+	suggestionID := suggestion.ID
+	notification := &domain.Notification{
+		UserID:               suggestion.UserID,
+		Type:                 "transfer_suggestion",
+		Title:                "Transfer Suggestion",
+		Message:              message,
+		InteractionPattern:   "accept_reject",
+		TransferSuggestionID: &suggestionID,
+		Read:                 false,
+		SentEmail:            false,
+	}
+
+	if err := s.notificationRepo.Create(ctx, notification); err != nil {
+		slog.Warn("failed to create transfer suggestion notification",
+			"suggestion_id", suggestion.ID,
+			"error", err,
+		)
+	}
 }
 
 // calculateTransferAmount calculates the transfer amount based on action type.
@@ -479,7 +545,12 @@ func (s *ruleExecutionService) executeCategoryRollover(ctx context.Context, rule
 		suggestion.FromAccountID = ptrString(rollover.SourceBudgetCategoryID)
 	}
 
-	return s.suggestionRepo.Create(ctx, suggestion)
+	if err := s.suggestionRepo.Create(ctx, suggestion); err != nil {
+		return err
+	}
+
+	s.createTransferSuggestionNotification(ctx, suggestion)
+	return nil
 }
 
 // calculateRolloverAmount calculates the rollover amount based on rollover type.
@@ -540,22 +611,42 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 	// Create reason string
 	reason := fmt.Sprintf("Savings contribution to '%s' from rule '%s'", goal.Name, rule.Name)
 
-	// Create transfer suggestion from source account to savings goal's linked account
+	// Issue #1109: Resolve savings goal's account to current active account_id via stable user_account_id.
+	toAccountID := goal.AccountID
+	if goal.UserAccountID != nil && *goal.UserAccountID != "" && s.chainResolver != nil {
+		if activeID, err := s.chainResolver.ResolveActiveID(ctx, *goal.UserAccountID); err == nil {
+			toAccountID = activeID
+			observability.AccountsReplacedFiltered.WithLabelValues("automation").Inc()
+		} else if !errors.Is(err, ErrNoActiveAccount) {
+			slog.Warn("chain resolve failed for savings goal account; using raw id", "error", err)
+		}
+	}
+
+	// Create transfer suggestion from source account to savings goal's linked account.
 	suggestion := &domain.TransferSuggestion{
 		ID:              uuid.New().String(),
 		UserID:          rule.UserID,
 		RuleID:          ptrString(rule.ID),
 		RuleExecutionID: ptrString(executionID),
 		FromAccountID:   ptrString(savingsGoalAction.FromAccountID),
-		ToAccountID:     ptrString(goal.AccountID), // Savings goal's linked account
+		ToAccountID:     ptrString(toAccountID),
 		Amount:          amount,
 		CurrencyCode:    "USD",
 		Reason:          &reason,
 		Source:          domain.SuggestionSourceRule,
 		Status:          domain.SuggestionStatusPending,
 	}
+	// Propagate stable user_account_id so monitoring can re-resolve post-relink.
+	if goal.UserAccountID != nil {
+		suggestion.ToUserAccountID = goal.UserAccountID
+	}
 
-	return s.suggestionRepo.Create(ctx, suggestion)
+	if err := s.suggestionRepo.Create(ctx, suggestion); err != nil {
+		return err
+	}
+
+	s.createTransferSuggestionNotification(ctx, suggestion)
+	return nil
 }
 
 // calculateSavingsGoalAmount calculates the contribution amount based on action type.

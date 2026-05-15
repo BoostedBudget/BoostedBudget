@@ -55,12 +55,13 @@ const mockTransactions: Transaction[] = [
     account_id: 'acc-1',
     linked_item_id: 'item-1',
     source: 'plaid',
-    amount: -45.99,
+    amount: 45.99, // PFCv2: positive = outflow (spending)
     date: '2025-01-15',
     authorized_date: '2025-01-14',
     name: 'AMAZON.COM',
     merchant_name: 'Amazon',
-    category: '["Shopping", "Online"]',
+    pfc_primary: 'SHOPPING',
+    pfc_detailed: 'SHOPPING_GENERAL_MERCHANDISE',
     pending: false,
     tags: ['subscription', 'household'],
     created_at: '2025-01-15T00:00:00Z',
@@ -72,11 +73,12 @@ const mockTransactions: Transaction[] = [
     account_id: 'acc-2',
     linked_item_id: 'item-1',
     source: 'plaid',
-    amount: 2500.0,
+    amount: -2500.0, // PFCv2: negative = inflow (payroll income)
     date: '2025-01-10',
     name: 'DIRECT DEPOSIT - PAYROLL',
     merchant_name: null,
-    category: '["Income", "Salary"]',
+    pfc_primary: 'INCOME',
+    pfc_detailed: 'INCOME_WAGES',
     pending: false,
     created_at: '2025-01-10T00:00:00Z',
     updated_at: '2025-01-10T00:00:00Z',
@@ -87,11 +89,12 @@ const mockTransactions: Transaction[] = [
     account_id: 'acc-1',
     linked_item_id: 'item-1',
     source: 'plaid',
-    amount: -12.5,
+    amount: 12.5, // PFCv2: positive = outflow (food purchase)
     date: '2025-01-12',
     name: 'UBER EATS',
     merchant_name: 'Uber Eats',
-    category: '["Food and Drink", "Restaurants"]',
+    pfc_primary: 'FOOD_AND_DRINK',
+    pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
     pending: true,
     created_at: '2025-01-12T00:00:00Z',
     updated_at: '2025-01-12T00:00:00Z',
@@ -156,9 +159,10 @@ describe('TransactionTable', () => {
     it('should display category labels', () => {
       renderTable()
 
-      expect(screen.getByText('Shopping')).toBeInTheDocument()
-      expect(screen.getByText('Income')).toBeInTheDocument()
-      expect(screen.getByText('Food and Drink')).toBeInTheDocument()
+      // No display fields on these test transactions — formatPFCEnum fallback is used
+      expect(screen.getByText('Shopping › General Merchandise')).toBeInTheDocument()
+      expect(screen.getByText('Income › Wages')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument()
     })
 
     it('should display pending badge for pending transactions', () => {
@@ -200,14 +204,38 @@ describe('TransactionTable', () => {
   })
 
   describe('Amount Styling', () => {
-    it('should apply credit class to positive amounts', () => {
+    it('should apply debit class to outflows (positive amounts under PFCv2)', () => {
       renderTable()
-      expect(screen.getByText('+$2,500.00')).toHaveClass('transaction-table__amount--credit')
+      // txn-1 amount=45.99 is an outflow: displays as '-$45.99' with debit styling
+      expect(screen.getByText('-$45.99')).toHaveClass('transaction-table__amount--debit')
     })
 
-    it('should apply debit class to negative amounts', () => {
+    it('should apply credit class to inflows (negative amounts under PFCv2)', () => {
       renderTable()
-      expect(screen.getByText('-$45.99')).toHaveClass('transaction-table__amount--debit')
+      // txn-2 amount=-2500.0 is an inflow: displays as '+$2,500.00' with credit styling
+      expect(screen.getByText('+$2,500.00')).toHaveClass('transaction-table__amount--credit')
+    })
+  })
+
+  describe('PII Masking', () => {
+    it('should apply data-ph-mask to the amount <td> via maskedColumnIds prop', () => {
+      const { container } = renderTable()
+      // The amount column <td> must carry data-ph-mask (PostHog session replay protection).
+      // This test locks in the maskedColumnIds={['amount']} prop on <DataTable> so a future
+      // re-render cannot silently un-mask the column (e.g. by moving text outside the <td>).
+      const maskedTds = container.querySelectorAll('td[data-ph-mask]')
+      // One masked <td> per transaction row
+      expect(maskedTds.length).toBe(3)
+    })
+
+    it('should not apply data-ph-mask to non-amount columns', () => {
+      const { container } = renderTable()
+      // Verify masking is column-scoped: date, description, account, and category cells are NOT masked
+      const allTds = container.querySelectorAll('td')
+      const maskedTds = Array.from(container.querySelectorAll('td[data-ph-mask]'))
+      const unmaskedTds = Array.from(allTds).filter((td) => !td.hasAttribute('data-ph-mask'))
+      // Must have more unmasked than masked — most columns are unmasked
+      expect(unmaskedTds.length).toBeGreaterThan(maskedTds.length)
     })
   })
 
@@ -309,8 +337,9 @@ describe('TransactionTable', () => {
         sortDirection: 'asc',
       })
 
-      const dateHeader = screen.getByText('Date').closest('button')!
-      expect(dateHeader).toHaveAttribute('aria-sort', 'ascending')
+      // aria-sort lives on <th> (correct HTML semantics), not the sort button
+      const dateTh = screen.getByRole('columnheader', { name: /date/i })
+      expect(dateTh).toHaveAttribute('aria-sort', 'ascending')
     })
   })
 

@@ -1,0 +1,10 @@
+// Issue #952: Notification Center — barrel exports
+export { NotificationBell } from './components/NotificationBell'
+export { NotificationDrawer } from './components/NotificationDrawer'
+export { NotificationItem } from './components/NotificationItem'
+export { NotificationEmptyState } from './components/NotificationEmptyState'
+export { NotificationAcceptReject } from './components/NotificationAcceptReject'
+export { useNotifications } from './hooks/useNotifications'
+export type { UseNotificationsResult } from './hooks/useNotifications'
+export type { InteractionPattern, NotificationUrgency, NotificationTypeConfig } from './types'
+export { NOTIFICATION_TYPE_CONFIG, URGENCY_COLOR_CLASS } from './constants'

@@ -438,4 +438,25 @@ describe('SavingsGoalActionForm', () => {
       expect(screen.getByLabelText(/^amount$/i)).toBeInTheDocument()
     })
   })
+
+  describe('Re-link chain transparency (Issue #1109)', () => {
+    it('includes from_user_account_id in onChange payload when account has user_account_id', () => {
+      const onChange = mock(() => {})
+      // mockAccounts fixtures do not have user_account_id — expect undefined
+      renderWithProviders(
+        <SavingsGoalActionForm action={defaultAction} onChange={onChange} />
+      )
+
+      fireEvent.change(screen.getByLabelText(/from account/i), {
+        target: { value: 'acc-1' },
+      })
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          from_account_id: 'acc-1',
+          from_user_account_id: undefined,
+        })
+      )
+    })
+  })
 })

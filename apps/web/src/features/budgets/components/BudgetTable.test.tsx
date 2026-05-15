@@ -40,8 +40,9 @@ const mockBudgets: BudgetWithMetrics[] = [
     ],
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
-    income_amount: 0,
+    income_amount: 800,
     income_sources: [],
+    expected_income: 2000,
     // Computed metrics
     total_allocated: 500,
     total_spent: 325,
@@ -124,6 +125,7 @@ describe('BudgetTable', () => {
       expect(screen.getByText('Progress')).toBeInTheDocument()
       expect(screen.getByText('Remaining')).toBeInTheDocument()
       expect(screen.getByText('Categories')).toBeInTheDocument()
+      expect(screen.getByText('Income')).toBeInTheDocument()
 
       expect(screen.getByText('Monthly Groceries')).toBeInTheDocument()
       expect(screen.getByText('Entertainment')).toBeInTheDocument()
@@ -137,9 +139,11 @@ describe('BudgetTable', () => {
       expect(screen.getByText('Weekly')).toBeInTheDocument()
       expect(screen.getByText('Yearly')).toBeInTheDocument()
 
-      expect(screen.getByText('$500.00')).toBeInTheDocument()
+      // Amount column shows expected_income when set, otherwise falls back to amount.
+      // budget-1 has expected_income: 2000, budget-2 has no expected_income (amount 100),
+      // budget-3 has no expected_income (amount 2000).
+      expect(screen.getAllByText('$2,000.00').length).toBeGreaterThan(0)
       expect(screen.getAllByText('$100.00').length).toBeGreaterThan(0)
-      expect(screen.getByText('$2,000.00')).toBeInTheDocument()
     })
 
     it('should display category counts and status badges', () => {
@@ -165,6 +169,26 @@ describe('BudgetTable', () => {
     })
   })
 
+  describe('Income Column', () => {
+    it('renders Income column header', () => {
+      render(<BudgetTable budgets={mockBudgets} />)
+      expect(screen.getByText('Income')).toBeInTheDocument()
+    })
+
+    it('renders income amount in income column for budget with expected_income', () => {
+      render(<BudgetTable budgets={mockBudgets} />)
+      // budget-1 has income_amount: 800, expected_income: 2000
+      expect(screen.getByText('$800.00 / $2,000.00')).toBeInTheDocument()
+    })
+
+    it('renders dash for budget without expected_income', () => {
+      render(<BudgetTable budgets={mockBudgets} />)
+      // budget-2 and budget-3 have no expected_income; should show '—'
+      const dashes = screen.getAllByText('—')
+      expect(dashes.length).toBeGreaterThanOrEqual(1)
+    })
+  })
+
   describe('Progress & Remaining', () => {
     it('should display progress bars with correct percentages', () => {
       render(<BudgetTable budgets={mockBudgets} />)
@@ -185,6 +209,16 @@ describe('BudgetTable', () => {
 
       const negativeRemaining = screen.getByText('-$500.00')
       expect(negativeRemaining).toHaveClass('budget-table__remaining--negative')
+    })
+  })
+
+  describe('PII Masking (data-ph-mask)', () => {
+    it('masks Amount, Income, and Remaining cells for every budget row', () => {
+      const { container } = render(<BudgetTable budgets={mockBudgets} />)
+
+      // 3 budgets × 3 masked financial cells (Amount, Income, Remaining) = 9 total
+      const maskedCells = container.querySelectorAll('td[data-ph-mask]')
+      expect(maskedCells.length).toBe(mockBudgets.length * 3)
     })
   })
 
@@ -222,6 +256,34 @@ describe('BudgetTable', () => {
       screen.getAllByRole('button', { name: /manage|delete/i }).forEach((btn) => {
         expect(btn).toBeDisabled()
       })
+    })
+  })
+
+  describe('Actions do not propagate to row click (Issue #1051)', () => {
+    it('clicking Manage button does NOT call onRowClick', () => {
+      const onManage = mock(() => {})
+      const onRowClick = mock(() => {})
+      render(
+        <BudgetTable budgets={mockBudgets} onManage={onManage} onDelete={() => {}} onRowClick={onRowClick} />
+      )
+
+      fireEvent.click(screen.getAllByRole('button', { name: /manage/i })[0])
+
+      expect(onManage).toHaveBeenCalledWith(mockBudgets[0])
+      expect(onRowClick).not.toHaveBeenCalled()
+    })
+
+    it('clicking Delete button does NOT call onRowClick', () => {
+      const onDelete = mock(() => {})
+      const onRowClick = mock(() => {})
+      render(
+        <BudgetTable budgets={mockBudgets} onManage={() => {}} onDelete={onDelete} onRowClick={onRowClick} />
+      )
+
+      fireEvent.click(screen.getAllByRole('button', { name: /delete/i })[0])
+
+      expect(onDelete).toHaveBeenCalledWith(mockBudgets[0].id)
+      expect(onRowClick).not.toHaveBeenCalled()
     })
   })
 
@@ -269,10 +331,12 @@ describe('BudgetTable', () => {
         />
       )
 
-      const nameHeader = screen.getByText('Name').closest('button')!
-      expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
+      // aria-sort lives on <th>, not the sort button
+      const nameTh = screen.getByRole('columnheader', { name: /name/i })
+      expect(nameTh).toHaveAttribute('aria-sort', 'ascending')
 
-      fireEvent.click(nameHeader)
+      const nameButton = screen.getByText('Name').closest('button')!
+      fireEvent.click(nameButton)
       expect(onSort).toHaveBeenCalledWith('name', 'desc')
     })
   })

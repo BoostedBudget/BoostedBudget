@@ -22,7 +22,8 @@ Authorization: Bearer <your-jwt-token>
 
 ## Regions
 
-All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+Use the GET /api/v1/regions endpoint to discover available data residency regions.
+Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
@@ -33,6 +34,7 @@ import type { RequestHandlerOptions } from "msw";
 
 import type {
   GetUnreadCountOutputBody,
+  MarkAllNotificationsReadOutputBody,
   MarkNotificationReadOutputBody,
   Notification,
 } from "../../models";
@@ -56,14 +58,30 @@ export const getGetNotificationsResponseMock = (): Notification[] | null =>
       undefined,
     ]),
     id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    interaction_pattern: faker.string.alpha({ length: { min: 10, max: 20 } }),
     message: faker.string.alpha({ length: { min: 10, max: 20 } }),
     read: faker.datatype.boolean(),
     sent_email: faker.datatype.boolean(),
     title: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    transfer_suggestion_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
     type: faker.string.alpha({ length: { min: 10, max: 20 } }),
     updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   }));
+
+export const getMarkAllNotificationsAsReadResponseMock = (
+  overrideResponse: Partial<
+    Extract<MarkAllNotificationsReadOutputBody, object>
+  > = {},
+): MarkAllNotificationsReadOutputBody => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  count: faker.number.int(),
+  message: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
 
 export const getGetUnreadNotificationCountResponseMock = (
   overrideResponse: Partial<Extract<GetUnreadCountOutputBody, object>> = {},
@@ -103,6 +121,34 @@ export const getGetNotificationsMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getGetNotificationsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getMarkAllNotificationsAsReadMockHandler = (
+  overrideResponse?:
+    | MarkAllNotificationsReadOutputBody
+    | ((
+        info: Parameters<Parameters<typeof http.patch>[1]>[0],
+      ) =>
+        | Promise<MarkAllNotificationsReadOutputBody>
+        | MarkAllNotificationsReadOutputBody),
+  options?: RequestHandlerOptions,
+) => {
+  return http.patch(
+    "*/api/v1/notifications/read-all",
+    async (info: Parameters<Parameters<typeof http.patch>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getMarkAllNotificationsAsReadResponseMock(),
         { status: 200 },
       );
     },
@@ -165,6 +211,7 @@ export const getMarkNotificationAsReadMockHandler = (
 };
 export const getNotificationsMock = () => [
   getGetNotificationsMockHandler(),
+  getMarkAllNotificationsAsReadMockHandler(),
   getGetUnreadNotificationCountMockHandler(),
   getMarkNotificationAsReadMockHandler(),
 ];

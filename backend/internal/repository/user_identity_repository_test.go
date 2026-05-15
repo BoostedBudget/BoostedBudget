@@ -21,7 +21,7 @@ func setupMockIdentityDB(t *testing.T) (pgxmock.PgxPoolIface, UserIdentityReposi
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewUserIdentityRepository(mock)
+	repo := NewUserIdentityRepository(mock, newTestFieldEncryptor(t))
 	return mock, repo
 }
 
@@ -36,19 +36,22 @@ func TestGetByClerkID_Success(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
+	// DB stores encrypted values; repo decrypts them after scan
+	encClerkUserID := "ENC$TENC[" + clerkUserID + "]"
+
 	// Expected identity data
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "clerk_user_id", "provider", "provider_user_id",
 		"email", "email_verified", "is_primary",
 		"created_at", "updated_at", "last_used_at",
 	}).AddRow(
-		identityID, userID, clerkUserID, "google-oauth2", "123456789",
-		"test@example.com", true, true,
+		identityID, userID, encClerkUserID, "google-oauth2", "ENC$TENC[123456789]",
+		"ENC$TENC[test@example.com]", true, true,
 		now, now, &now,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE clerk_user_id = $1`)).
-		WithArgs(clerkUserID).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE clerk_user_id_blind_idx = $1`)).
+		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
 	// Execute
@@ -76,8 +79,8 @@ func TestGetByClerkID_NotFound(t *testing.T) {
 	ctx := context.Background()
 	clerkUserID := "google-oauth2|nonexistent"
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE clerk_user_id = $1`)).
-		WithArgs(clerkUserID).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE clerk_user_id_blind_idx = $1`)).
+		WithArgs(pgxmock.AnyArg()).
 		WillReturnError(pgx.ErrNoRows)
 
 	// Execute
@@ -100,19 +103,20 @@ func TestGetByUserID_Success(t *testing.T) {
 	now := time.Now()
 
 	// Expected multiple identities (Google + Microsoft)
+	// DB stores encrypted values; repo decrypts them after scan
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "clerk_user_id", "provider", "provider_user_id",
 		"email", "email_verified", "is_primary",
 		"created_at", "updated_at", "last_used_at",
 	}).
 		AddRow(
-			uuid.New().String(), userID, "google-oauth2|123", "google-oauth2", "123",
-			"user@gmail.com", true, true,
+			uuid.New().String(), userID, "ENC$TENC[google-oauth2|123]", "google-oauth2", "ENC$TENC[123]",
+			"ENC$TENC[user@gmail.com]", true, true,
 			now, now, &now,
 		).
 		AddRow(
-			uuid.New().String(), userID, "microsoft|456", "microsoft", "456",
-			"user@outlook.com", true, false,
+			uuid.New().String(), userID, "ENC$TENC[microsoft|456]", "microsoft", "ENC$TENC[456]",
+			"ENC$TENC[user@outlook.com]", true, false,
 			now, now, nil,
 		)
 
@@ -172,20 +176,22 @@ func TestCreate_Success(t *testing.T) {
 	userID := uuid.New().String()
 	identity := domain.NewUserIdentity(userID, "google-oauth2|123456", "test@gmail.com", true, true)
 
-	// Expect INSERT query
-	mock.ExpectExec(`INSERT INTO user_identities \( id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at \) VALUES`).
+	// Expect INSERT query — clerk_user_id, provider_user_id, and email are now encrypted;
+	// clerk_user_id_blind_idx is the new 12th argument
+	mock.ExpectExec(`INSERT INTO user_identities \( id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at, clerk_user_id_blind_idx \) VALUES`).
 		WithArgs(
 			pgxmock.AnyArg(), // id (generated UUID)
 			identity.UserID,
-			identity.ClerkUserID,
+			pgxmock.AnyArg(), // clerk_user_id (encrypted)
 			identity.Provider,
-			identity.ProviderUserID,
-			identity.Email,
+			pgxmock.AnyArg(), // provider_user_id (encrypted)
+			pgxmock.AnyArg(), // email (encrypted)
 			identity.EmailVerified,
 			identity.IsPrimary,
 			pgxmock.AnyArg(), // created_at
 			pgxmock.AnyArg(), // updated_at
 			identity.LastUsedAt,
+			pgxmock.AnyArg(), // clerk_user_id_blind_idx
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
@@ -208,19 +214,21 @@ func TestCreate_DuplicateClerkUserID(t *testing.T) {
 	identity := domain.NewUserIdentity(userID, "google-oauth2|123456", "test@gmail.com", true, true)
 
 	// Simulate unique constraint violation on clerk_user_id
+	// clerk_user_id, provider_user_id, and email are now encrypted; clerk_user_id_blind_idx added
 	mock.ExpectExec(`INSERT INTO user_identities`).
 		WithArgs(
-			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // id
 			identity.UserID,
-			identity.ClerkUserID,
+			pgxmock.AnyArg(), // clerk_user_id (encrypted)
 			identity.Provider,
-			identity.ProviderUserID,
-			identity.Email,
+			pgxmock.AnyArg(), // provider_user_id (encrypted)
+			pgxmock.AnyArg(), // email (encrypted)
 			identity.EmailVerified,
 			identity.IsPrimary,
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // created_at
+			pgxmock.AnyArg(), // updated_at
 			identity.LastUsedAt,
+			pgxmock.AnyArg(), // clerk_user_id_blind_idx
 		).
 		WillReturnError(errors.New("pq: duplicate key value violates unique constraint \"user_identities_clerk_user_id_key\""))
 
@@ -241,12 +249,12 @@ func TestUpdateLastUsed_Success(t *testing.T) {
 	ctx := context.Background()
 	clerkUserID := "google-oauth2|123456"
 
-	// Expect UPDATE query
-	mock.ExpectExec(`UPDATE user_identities SET last_used_at = \$1, updated_at = \$2 WHERE clerk_user_id = \$3`).
+	// Expect UPDATE query — WHERE now uses blind index, not plaintext clerk_user_id
+	mock.ExpectExec(`UPDATE user_identities SET last_used_at = \$1, updated_at = \$2 WHERE clerk_user_id_blind_idx = \$3`).
 		WithArgs(
 			pgxmock.AnyArg(), // last_used_at (current time)
 			pgxmock.AnyArg(), // updated_at (current time)
-			clerkUserID,
+			pgxmock.AnyArg(), // blind index of clerkUserID
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
@@ -266,12 +274,12 @@ func TestUpdateLastUsed_NotFound(t *testing.T) {
 	ctx := context.Background()
 	clerkUserID := "google-oauth2|nonexistent"
 
-	// Expect UPDATE query that affects 0 rows
-	mock.ExpectExec(`UPDATE user_identities SET last_used_at = \$1, updated_at = \$2 WHERE clerk_user_id = \$3`).
+	// Expect UPDATE query that affects 0 rows — WHERE now uses blind index
+	mock.ExpectExec(`UPDATE user_identities SET last_used_at = \$1, updated_at = \$2 WHERE clerk_user_id_blind_idx = \$3`).
 		WithArgs(
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
-			clerkUserID,
+			pgxmock.AnyArg(), // blind index of clerkUserID
 		).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
@@ -281,5 +289,70 @@ func TestUpdateLastUsed_NotFound(t *testing.T) {
 	// Assert
 	assert.Error(t, err)
 	assert.Equal(t, ErrIdentityNotFound, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUserIdentityRepository_UpdatePrimaryIdentityEmailTx_Success tests successful email update
+// on the primary identity within an existing transaction.
+func TestUserIdentityRepository_UpdatePrimaryIdentityEmailTx_Success(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	mock, repo := setupMockIdentityDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	plainEmail := "newemail@example.com"
+
+	mock.ExpectBegin()
+	tx, err := mock.Begin(ctx)
+	require.NoError(t, err)
+
+	mock.ExpectExec(`UPDATE user_identities SET email = \$1, email_verified = false, updated_at = \$2 WHERE user_id = \$3 AND is_primary = true`).
+		WithArgs(
+			pgxmock.AnyArg(), // encrypted email
+			pgxmock.AnyArg(), // updated_at
+			userID,
+		).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err = repo.UpdatePrimaryIdentityEmailTx(ctx, tx, userID, plainEmail)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUserIdentityRepository_UpdatePrimaryIdentityEmailTx_NoIdentity tests that 0 rows affected
+// is treated as a no-op (not an error) when the user has no primary identity.
+func TestUserIdentityRepository_UpdatePrimaryIdentityEmailTx_NoIdentity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	mock, repo := setupMockIdentityDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	plainEmail := "newemail@example.com"
+
+	mock.ExpectBegin()
+	tx, err := mock.Begin(ctx)
+	require.NoError(t, err)
+
+	mock.ExpectExec(`UPDATE user_identities SET email = \$1, email_verified = false, updated_at = \$2 WHERE user_id = \$3 AND is_primary = true`).
+		WithArgs(
+			pgxmock.AnyArg(), // encrypted email
+			pgxmock.AnyArg(), // updated_at
+			userID,
+		).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err = repo.UpdatePrimaryIdentityEmailTx(ctx, tx, userID, plainEmail)
+
+	// 0 rows affected is a no-op — no error expected
+	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

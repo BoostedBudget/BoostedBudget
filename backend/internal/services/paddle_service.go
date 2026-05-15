@@ -33,6 +33,11 @@ var (
 
 	// ErrSubscriptionNotFound is returned when attempting operations on a non-existent subscription.
 	ErrSubscriptionNotFound = errors.New("paddle subscription not found")
+
+	// ErrPaddleCustomerOwnershipMismatch is returned by EnsureCustomer when a Paddle customer is found by
+	// email but its custom_data.user_id does not match the calling user. Reusing would attach a different
+	// user's billing history to the current user.
+	ErrPaddleCustomerOwnershipMismatch = errors.New("paddle customer belongs to a different user")
 )
 
 // PaddleService defines the interface for Paddle payment operations.
@@ -41,6 +46,11 @@ type PaddleService interface {
 	// CreateCustomer creates a new Paddle customer for the specified user.
 	// Returns the Paddle customer ID (e.g., "ctm_01h...") to store in database.
 	CreateCustomer(ctx context.Context, userID, email string) (string, error)
+
+	// EnsureCustomer returns a Paddle customer ID for the specified user email.
+	// If a local record is missing but Paddle already has a customer for the email,
+	// the existing customer is reused instead of treating the conflict as fatal.
+	EnsureCustomer(ctx context.Context, userID, email string) (string, error)
 
 	// GetCustomer retrieves a Paddle customer by ID.
 	GetCustomer(ctx context.Context, customerID string) (*paddle.Customer, error)
@@ -66,27 +76,105 @@ type PaddleService interface {
 	// CancelSubscription cancels a subscription at the end of current billing period.
 	CancelSubscription(ctx context.Context, subscriptionID string) error
 
+	// CancelSubscriptionImmediately cancels a subscription effective immediately (no grace period).
+	// Issue #1006: Paddle cleanup during account deletion.
+	CancelSubscriptionImmediately(ctx context.Context, subscriptionID string) error
+
 	// PreviewUpdate calculates proration for a subscription tier change.
-	// Shows what the customer will be charged/credited immediately.
 	PreviewUpdate(
 		ctx context.Context,
 		subscriptionID, newPriceID string,
 	) (prorationAmount, currency, nextChargeDate string, err error)
 
 	// GetBillingPortalURL generates a URL for the Paddle billing portal session.
-	// Allows users to manage payment methods and view billing history.
 	GetBillingPortalURL(ctx context.Context, customerID string) (string, error)
+
+	// UpdateCustomerEmail updates the email address of an existing Paddle customer.
+	UpdateCustomerEmail(ctx context.Context, customerID, email string) error
+
+	// ArchiveAndAnonymizeCustomer archives the customer and anonymizes their email (GDPR PII erasure).
+	// Issue #1006: Paddle cleanup during account deletion.
+	ArchiveAndAnonymizeCustomer(ctx context.Context, customerID, anonymizedEmail string) error
 
 	// GetClient returns the underlying Paddle SDK.
 	// Useful for operations not covered by this service interface.
 	GetClient() *paddle.SDK
 }
 
+type paddleClient interface {
+	CreateCustomer(ctx context.Context, req *paddle.CreateCustomerRequest) (*paddle.Customer, error)
+	ListCustomersByEmail(ctx context.Context, email string) ([]*paddle.Customer, error)
+	GetCustomer(ctx context.Context, req *paddle.GetCustomerRequest) (*paddle.Customer, error)
+	UpdateCustomer(ctx context.Context, req *paddle.UpdateCustomerRequest) (*paddle.Customer, error)
+	CreateTransaction(ctx context.Context, req *paddle.CreateTransactionRequest) (*paddle.Transaction, error)
+	GetSubscription(ctx context.Context, req *paddle.GetSubscriptionRequest) (*paddle.Subscription, error)
+	UpdateSubscription(ctx context.Context, req *paddle.UpdateSubscriptionRequest) (*paddle.Subscription, error)
+	CancelSubscription(ctx context.Context, req *paddle.CancelSubscriptionRequest) (*paddle.Subscription, error)
+	PreviewSubscriptionUpdate(ctx context.Context, req *paddle.PreviewSubscriptionUpdateRequest) (*paddle.SubscriptionPreview, error)
+}
+
+type paddleSDKClient struct {
+	sdk *paddle.SDK
+}
+
+func (c *paddleSDKClient) CreateCustomer(ctx context.Context, req *paddle.CreateCustomerRequest) (*paddle.Customer, error) {
+	return c.sdk.CreateCustomer(ctx, req)
+}
+
+func (c *paddleSDKClient) ListCustomersByEmail(ctx context.Context, email string) ([]*paddle.Customer, error) {
+	collection, err := c.sdk.ListCustomers(ctx, &paddle.ListCustomersRequest{
+		Email:  []string{email},
+		Status: []string{string(paddle.StatusActive), string(paddle.StatusArchived)},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	customers := make([]*paddle.Customer, 0, 1)
+	if err := collection.Iter(ctx, func(customer *paddle.Customer) (bool, error) {
+		customers = append(customers, customer)
+		return true, nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return customers, nil
+}
+
+func (c *paddleSDKClient) GetCustomer(ctx context.Context, req *paddle.GetCustomerRequest) (*paddle.Customer, error) {
+	return c.sdk.GetCustomer(ctx, req)
+}
+
+func (c *paddleSDKClient) UpdateCustomer(ctx context.Context, req *paddle.UpdateCustomerRequest) (*paddle.Customer, error) {
+	return c.sdk.UpdateCustomer(ctx, req)
+}
+
+func (c *paddleSDKClient) CreateTransaction(ctx context.Context, req *paddle.CreateTransactionRequest) (*paddle.Transaction, error) {
+	return c.sdk.CreateTransaction(ctx, req)
+}
+
+func (c *paddleSDKClient) GetSubscription(ctx context.Context, req *paddle.GetSubscriptionRequest) (*paddle.Subscription, error) {
+	return c.sdk.GetSubscription(ctx, req)
+}
+
+func (c *paddleSDKClient) UpdateSubscription(ctx context.Context, req *paddle.UpdateSubscriptionRequest) (*paddle.Subscription, error) {
+	return c.sdk.UpdateSubscription(ctx, req)
+}
+
+func (c *paddleSDKClient) CancelSubscription(ctx context.Context, req *paddle.CancelSubscriptionRequest) (*paddle.Subscription, error) {
+	return c.sdk.CancelSubscription(ctx, req)
+}
+
+func (c *paddleSDKClient) PreviewSubscriptionUpdate(ctx context.Context, req *paddle.PreviewSubscriptionUpdateRequest) (*paddle.SubscriptionPreview, error) {
+	return c.sdk.PreviewSubscriptionUpdate(ctx, req)
+}
+
 // paddleService implements PaddleService with a configured Paddle SDK client
 type paddleService struct {
-	client *paddle.SDK
-	config *config.Config
-	logger *slog.Logger
+	client    paddleClient
+	rawClient *paddle.SDK
+	config    *config.Config
+	logger    *slog.Logger
 }
 
 // NewPaddleService creates a new PaddleService with validated configuration.
@@ -128,15 +216,16 @@ func NewPaddleService(cfg *config.Config, logger *slog.Logger) (PaddleService, e
 	)
 
 	return &paddleService{
-		client: client,
-		config: cfg,
-		logger: logger,
+		client:    &paddleSDKClient{sdk: client},
+		rawClient: client,
+		config:    cfg,
+		logger:    logger,
 	}, nil
 }
 
 // GetClient returns the initialized Paddle SDK.
 func (s *paddleService) GetClient() *paddle.SDK {
-	return s.client
+	return s.rawClient
 }
 
 // CreateCustomer creates a new Paddle customer.
@@ -157,6 +246,10 @@ func (s *paddleService) CreateCustomer(ctx context.Context, userID, email string
 	// Call Paddle API
 	customer, err := s.client.CreateCustomer(ctx, req)
 	if err != nil {
+		if errors.Is(err, paddle.ErrCustomerAlreadyExists) {
+			return "", fmt.Errorf("failed to create Paddle customer: %w", err)
+		}
+
 		s.logger.Error("Failed to create Paddle customer",
 			"user_id", userID,
 			"error", err,
@@ -167,6 +260,86 @@ func (s *paddleService) CreateCustomer(ctx context.Context, userID, email string
 	s.logger.Info("Paddle customer created successfully",
 		"user_id", userID,
 		"customer_id", customer.ID,
+	)
+
+	return customer.ID, nil
+}
+
+// EnsureCustomer returns a usable Paddle customer ID for the given user email.
+func (s *paddleService) EnsureCustomer(ctx context.Context, userID, email string) (string, error) {
+	customerID, err := s.CreateCustomer(ctx, userID, email)
+	if err == nil {
+		return customerID, nil
+	}
+
+	if !errors.Is(err, paddle.ErrCustomerAlreadyExists) {
+		return "", err
+	}
+
+	s.logger.Warn("Paddle customer already exists; resolving by email",
+		"user_id", userID,
+		"email", email,
+	)
+
+	customers, lookupErr := s.client.ListCustomersByEmail(ctx, email)
+	if lookupErr != nil {
+		return "", fmt.Errorf("failed to look up existing Paddle customer by email: %w", lookupErr)
+	}
+
+	if len(customers) != 1 {
+		return "", fmt.Errorf("expected exactly 1 Paddle customer for email %s, got %d", email, len(customers))
+	}
+
+	if customers[0].ID == "" {
+		return "", fmt.Errorf("existing Paddle customer for email %s is missing an ID", email)
+	}
+
+	if customers[0].Status == paddle.StatusArchived {
+		return s.unarchiveCustomerForUser(ctx, customers[0], userID, email)
+	}
+
+	if err := s.verifyCustomerOwnership(customers[0], userID); err != nil {
+		return "", err
+	}
+	return customers[0].ID, nil
+}
+
+// verifyCustomerOwnership fails closed when the Paddle customer's custom_data.user_id does not
+// match the caller's userID. Used on both active and archived email-fallback paths.
+func (s *paddleService) verifyCustomerOwnership(customer *paddle.Customer, userID string) error {
+	ownerID, _ := customer.CustomData["user_id"].(string)
+	if ownerID == "" || ownerID != userID {
+		s.logger.Warn("Paddle customer ownership mismatch; failing closed",
+			"user_id", userID,
+			"customer_id", customer.ID,
+			"customer_status", string(customer.Status),
+			"customer_owner_id", ownerID,
+		)
+		return fmt.Errorf("paddle customer %s (status=%s): %w", customer.ID, customer.Status, ErrPaddleCustomerOwnershipMismatch)
+	}
+	return nil
+}
+
+// unarchiveCustomerForUser reactivates an archived Paddle customer whose custom_data.user_id
+// matches the current user. Reusing a customer belonging to a different user would expose that
+// user's Paddle portal history to the caller.
+func (s *paddleService) unarchiveCustomerForUser(ctx context.Context, customer *paddle.Customer, userID, email string) (string, error) {
+	if err := s.verifyCustomerOwnership(customer, userID); err != nil {
+		return "", err
+	}
+
+	_, err := s.client.UpdateCustomer(ctx, &paddle.UpdateCustomerRequest{
+		CustomerID: customer.ID,
+		Status:     paddle.NewPatchField(paddle.StatusActive),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to unarchive Paddle customer %s: %w", customer.ID, err)
+	}
+
+	s.logger.Info("Paddle customer unarchived and reused",
+		"user_id", userID,
+		"customer_id", customer.ID,
+		"previous_status", "archived",
 	)
 
 	return customer.ID, nil
@@ -284,34 +457,14 @@ func (s *paddleService) UpdateSubscription(
 		return nil, fmt.Errorf("failed to fetch current subscription: %w", err)
 	}
 
-	var prorationMode paddle.ProrationBillingMode
-	switch prorationBillingMode {
-	case "prorated_immediately":
-		prorationMode = paddle.ProrationBillingModeProratedImmediately
-	case "full_immediately":
-		prorationMode = paddle.ProrationBillingModeFullImmediately
-	case "full_next_billing_period":
-		prorationMode = paddle.ProrationBillingModeFullNextBillingPeriod
-	default:
-		prorationMode = paddle.ProrationBillingModeProratedImmediately
-	}
+	prorationMode := parseProrationMode(prorationBillingMode)
 
 	patchedProrationMode := paddle.NewPatchField(prorationMode)
 
-	var updatedItems []paddle.UpdateSubscriptionItems
-	var catalogItem *paddle.SubscriptionUpdateItemFromCatalog
-	if len(currentSub.Items) > 0 {
-		catalogItem = &paddle.SubscriptionUpdateItemFromCatalog{
-			PriceID:  newPriceID,
-			Quantity: currentSub.Items[0].Quantity,
-		}
-	} else {
-		catalogItem = &paddle.SubscriptionUpdateItemFromCatalog{
-			PriceID:  newPriceID,
-			Quantity: 1,
-		}
+	catalogItem := buildCatalogItem(newPriceID, currentSub)
+	updatedItems := []paddle.UpdateSubscriptionItems{
+		*paddle.NewUpdateSubscriptionItemsSubscriptionUpdateItemFromCatalog(catalogItem),
 	}
-	updatedItems = append(updatedItems, *paddle.NewUpdateSubscriptionItemsSubscriptionUpdateItemFromCatalog(catalogItem))
 
 	patchedItems := paddle.NewPatchField(updatedItems)
 
@@ -368,6 +521,41 @@ func (s *paddleService) CancelSubscription(ctx context.Context, subscriptionID s
 	return nil
 }
 
+// CancelSubscriptionImmediately cancels a subscription effective immediately (used during account deletion).
+// Issue #1006: Used during account deletion to stop billing with no grace period.
+func (s *paddleService) CancelSubscriptionImmediately(ctx context.Context, subscriptionID string) error {
+	s.logger.Info("canceling Paddle subscription immediately", "subscription_id", subscriptionID)
+
+	effectiveFrom := paddle.EffectiveFromImmediately
+	req := &paddle.CancelSubscriptionRequest{
+		SubscriptionID: subscriptionID,
+		EffectiveFrom:  &effectiveFrom,
+	}
+
+	canceledSub, err := s.client.CancelSubscription(ctx, req)
+	if err != nil {
+		// Already cancelled is idempotent success — Paddle returns this error on repeat cancels
+		if errors.Is(err, paddle.ErrSubscriptionIsCanceledActionInvalid) {
+			s.logger.Info("Paddle subscription already cancelled, treating as success",
+				"subscription_id", subscriptionID,
+			)
+			return nil
+		}
+		s.logger.Error("failed to cancel Paddle subscription immediately",
+			"subscription_id", subscriptionID,
+			"error", err,
+		)
+		return fmt.Errorf("failed to cancel Paddle subscription immediately: %w", err)
+	}
+
+	s.logger.Info("Paddle subscription cancelled immediately",
+		"subscription_id", subscriptionID,
+		"status", canceledSub.Status,
+	)
+
+	return nil
+}
+
 // PreviewUpdate calculates proration for a subscription tier change.
 func (s *paddleService) PreviewUpdate(
 	ctx context.Context,
@@ -383,20 +571,10 @@ func (s *paddleService) PreviewUpdate(
 		return "", "", "", fmt.Errorf("failed to fetch current subscription: %w", err)
 	}
 
-	var updatedItems []paddle.PreviewSubscriptionUpdateItems
-	var catalogItem *paddle.SubscriptionUpdateItemFromCatalog
-	if len(currentSub.Items) > 0 {
-		catalogItem = &paddle.SubscriptionUpdateItemFromCatalog{
-			PriceID:  newPriceID,
-			Quantity: currentSub.Items[0].Quantity,
-		}
-	} else {
-		catalogItem = &paddle.SubscriptionUpdateItemFromCatalog{
-			PriceID:  newPriceID,
-			Quantity: 1,
-		}
+	catalogItem := buildCatalogItem(newPriceID, currentSub)
+	updatedItems := []paddle.PreviewSubscriptionUpdateItems{
+		*paddle.NewPreviewSubscriptionUpdateItemsSubscriptionUpdateItemFromCatalog(catalogItem),
 	}
-	updatedItems = append(updatedItems, *paddle.NewPreviewSubscriptionUpdateItemsSubscriptionUpdateItemFromCatalog(catalogItem))
 
 	patchedItems := paddle.NewPatchField(updatedItems)
 	prorationMode := paddle.ProrationBillingModeProratedImmediately
@@ -435,6 +613,74 @@ func (s *paddleService) PreviewUpdate(
 	)
 
 	return prorationAmt, curr, nextCharge, nil
+}
+
+// buildCatalogItem constructs a subscription catalog item, defaulting quantity to 1 if no items exist.
+func buildCatalogItem(priceID string, currentSub *paddle.Subscription) *paddle.SubscriptionUpdateItemFromCatalog {
+	quantity := 1
+	if len(currentSub.Items) > 0 {
+		quantity = currentSub.Items[0].Quantity
+	}
+	return &paddle.SubscriptionUpdateItemFromCatalog{
+		PriceID:  priceID,
+		Quantity: quantity,
+	}
+}
+
+// parseProrationMode converts a string to the corresponding ProrationBillingMode enum.
+// Defaults to ProratedImmediately for unknown values.
+func parseProrationMode(mode string) paddle.ProrationBillingMode {
+	switch mode {
+	case "prorated_immediately":
+		return paddle.ProrationBillingModeProratedImmediately
+	case "full_immediately":
+		return paddle.ProrationBillingModeFullImmediately
+	case "full_next_billing_period":
+		return paddle.ProrationBillingModeFullNextBillingPeriod
+	default:
+		return paddle.ProrationBillingModeProratedImmediately
+	}
+}
+
+// ArchiveAndAnonymizeCustomer archives the Paddle customer and anonymizes their email (GDPR PII erasure).
+// Issue #1006: Used during account deletion to comply with GDPR data retention requirements.
+func (s *paddleService) ArchiveAndAnonymizeCustomer(ctx context.Context, customerID, anonymizedEmail string) error {
+	s.logger.Info("archiving and anonymizing Paddle customer", "customer_id", customerID)
+
+	_, err := s.client.UpdateCustomer(ctx, &paddle.UpdateCustomerRequest{
+		CustomerID: customerID,
+		Email:      paddle.NewPatchField(anonymizedEmail),
+		Status:     paddle.NewPatchField(paddle.StatusArchived),
+	})
+	if err != nil {
+		// Already archived is idempotent success — Paddle returns this error on repeat archives
+		if errors.Is(err, paddle.ErrEntityArchived) {
+			s.logger.Info("Paddle customer already archived, treating as success",
+				"customer_id", customerID,
+			)
+			return nil
+		}
+		s.logger.Error("failed to archive and anonymize Paddle customer",
+			"customer_id", customerID,
+			"error", err,
+		)
+		return fmt.Errorf("failed to archive and anonymize Paddle customer: %w", err)
+	}
+
+	s.logger.Info("Paddle customer archived and anonymized", "customer_id", customerID)
+	return nil
+}
+
+// UpdateCustomerEmail updates the email address of an existing Paddle customer.
+func (s *paddleService) UpdateCustomerEmail(ctx context.Context, customerID, email string) error {
+	_, err := s.client.UpdateCustomer(ctx, &paddle.UpdateCustomerRequest{
+		CustomerID: customerID,
+		Email:      paddle.NewPatchField(email),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update Paddle customer email: %w", err)
+	}
+	return nil
 }
 
 // GetBillingPortalURL generates a URL for the Paddle billing portal session.

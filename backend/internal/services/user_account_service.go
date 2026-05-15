@@ -32,6 +32,10 @@ type UserAccountService interface {
 	// UpdateCustomization updates user account customization fields.
 	// Returns the updated UserAccount.
 	UpdateCustomization(ctx context.Context, id, userID string, req *domain.UpdateUserAccountRequest) (*domain.UserAccount, error)
+
+	// SetHidden updates the is_hidden flag on a UserAccount.
+	// Used by DeleteAccount to hide the UserAccount when its last active account is deleted.
+	SetHidden(ctx context.Context, userAccountID string, hidden bool) error
 }
 
 // userAccountService implements UserAccountService
@@ -63,14 +67,8 @@ func (s *userAccountService) MatchOrCreate(
 	if existing != nil {
 		// Found existing - this is a re-link scenario
 		// Check if type/subtype needs updating
-		existingType := ""
-		existingSubtype := ""
-		if existing.PrimaryType != nil {
-			existingType = *existing.PrimaryType
-		}
-		if existing.PrimarySubtype != nil {
-			existingSubtype = *existing.PrimarySubtype
-		}
+		existingType := derefPtr(existing.PrimaryType)
+		existingSubtype := derefPtr(existing.PrimarySubtype)
 
 		if existingType != accountType || existingSubtype != accountSubtype {
 			// Update type/subtype from new Plaid data
@@ -78,6 +76,17 @@ func (s *userAccountService) MatchOrCreate(
 			if err != nil {
 				// Non-fatal: log and continue (customizations preserved)
 				// In production, would log warning here
+			}
+		}
+
+		// Un-hide if previously hidden (re-link after account deletion).
+		// Only update in-memory state on success to keep DB and caller in sync.
+		if existing.IsHidden {
+			if err := s.repo.UpdateHidden(ctx, existing.ID, false); err != nil {
+				// Non-fatal: log and continue (TODO: add logger to userAccountService)
+				_ = err
+			} else {
+				existing.IsHidden = false
 			}
 		}
 
@@ -199,10 +208,23 @@ func (s *userAccountService) UpdateCustomization(
 	return existing, nil
 }
 
+// SetHidden updates the is_hidden flag on a UserAccount.
+func (s *userAccountService) SetHidden(ctx context.Context, userAccountID string, hidden bool) error {
+	return s.repo.UpdateHidden(ctx, userAccountID, hidden)
+}
+
 // strPtrIfNotEmpty returns a pointer to s if s is not empty, otherwise nil
 func strPtrIfNotEmpty(s string) *string {
 	if s == "" {
 		return nil
 	}
 	return &s
+}
+
+// derefPtr safely dereferences a pointer to string, returning empty string if nil
+func derefPtr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }

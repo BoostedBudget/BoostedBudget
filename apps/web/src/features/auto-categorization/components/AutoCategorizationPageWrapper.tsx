@@ -19,8 +19,9 @@ import { useEffect, useMemo } from 'react'
 import { AutoCategorizationPage } from './AutoCategorizationPage'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
-import { useGetUserCategories, useGetPlaidCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
-import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
+import { useGetUserCategories, useGetPlaidPrimaryCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
+import type { Primary } from '@boostedbudget/api-client/models/primary'
+import { useActiveAccounts } from '@/features/accounts/hooks'
 import { useGetUserTags } from '@boostedbudget/api-client/endpoints/tags/tags'
 import { useProfile } from '../../profile/hooks/useProfile'
 import type { CustomCategory } from '../../categories/types'
@@ -36,31 +37,31 @@ export function AutoCategorizationPageWrapper() {
 
   // Fetch data using generated hooks
   const { data: customCategoriesData } = useGetUserCategories()
-  const { data: plaidCategoriesData } = useGetPlaidCategories()
-  const { data: accountsData } = useGetAccounts()
+  const { data: plaidPrimariesData } = useGetPlaidPrimaryCategories()
+  const { accounts: activeAccounts } = useActiveAccounts()
   const { data: userTagsData } = useGetUserTags()
 
-  // Convert CustomCategory[] to string[][] format for AutoCategorizationPage
+  // Convert CustomCategory[] to string[][] format for AutoCategorizationPage.
+  // PFC v2 (#1073): use parent_pfc_primary hint when present.
   const categories = useMemo(() => {
     const customCategories = (customCategoriesData as unknown as CustomCategory[]) ?? []
     return customCategories.map((cat: CustomCategory) =>
-      cat.parent_category
-        ? [cat.parent_category, cat.name]
+      cat.parent_pfc_primary
+        ? [cat.parent_pfc_primary, cat.name]
         : [cat.name]
     )
   }, [customCategoriesData])
 
-  const plaidCategories = (plaidCategoriesData as unknown as string[]) ?? []
-  const accounts = accountsData?.accounts ?? []
+  const plaidPrimaries = (plaidPrimariesData as unknown as Primary[]) ?? []
+  // Issue #1109: useActiveAccounts already excludes replaced accounts
+  const accounts = activeAccounts ?? []
   const tags = (userTagsData as unknown as UserTag[]) ?? []
-
-  // Get user's effective tier (includes manual overrides if active)
   const userTier = user?.effective_tier ?? user?.subscription_tier ?? 'premium'
 
   return (
     <AutoCategorizationPage
       categories={categories}
-      plaidCategories={plaidCategories}
+      plaidPrimaries={plaidPrimaries}
       accounts={accounts}
       tags={tags}
       maxRules={undefined}

@@ -1,5 +1,6 @@
 // Categorization rule types matching backend domain models and API schemas
 // Issue #346: Custom Transaction Categorization Rules
+// Issue #1073: PFC v2 canonical — discriminated target shape, removed legacy existing_category
 
 /**
  * Condition types supported by the rule engine
@@ -16,7 +17,8 @@ export type ConditionType =
   | 'account_id'
   | 'account_type'
   | 'payment_channel'
-  | 'existing_category'
+  | 'existing_pfc_primary'
+  | 'existing_pfc_detailed'
   | 'date_range'
 
 /**
@@ -34,9 +36,19 @@ export const CONDITION_TYPE_LABELS: Record<ConditionType, string> = {
   account_id: 'Account is',
   account_type: 'Account type is',
   payment_channel: 'Payment channel is',
-  existing_category: 'Current category is',
+  existing_pfc_primary: 'PFC Primary',
+  existing_pfc_detailed: 'PFC Detailed',
   date_range: 'Date between',
 }
+
+/**
+ * Target dimension discriminator for a rule's category action.
+ * - 'pfc': set transaction's PFC override to target_pfc_primary[/target_pfc_detailed]
+ * - 'custom': set transaction's custom override to target_custom_category_id
+ * - 'clear': clear any existing override on the transaction
+ * - undefined/null: rule has no category action (tags-only)
+ */
+export type RuleTargetKind = 'pfc' | 'custom' | 'clear'
 
 /**
  * A single condition within a categorization rule
@@ -45,6 +57,7 @@ export interface RuleCondition {
   type: ConditionType
   value: string | number | string[] | AmountRangeValue | DateRangeValue
   operator?: string // for amount comparisons
+  value_display?: string // populated by backend for PFC-typed conditions
 }
 
 /**
@@ -81,7 +94,7 @@ export type RuleSource = 'manual' | 'ai' | 'template'
 
 /**
  * User-defined categorization rule
- * Matches backend domain.CategorizationRule schema
+ * Matches backend domain.CategorizationRule schema (PFC v2 discriminated target)
  */
 export interface CategorizationRule {
   id: string
@@ -92,7 +105,14 @@ export interface CategorizationRule {
   priority: number
   conditions: RuleCondition[]
   condition_logic: ConditionLogic
-  target_category?: string[] | null
+  // Discriminated target (PFC v2)
+  target_kind?: RuleTargetKind | null
+  target_pfc_primary?: string | null
+  target_pfc_detailed?: string | null
+  target_pfc_primary_display?: string | null
+  target_pfc_detailed_display?: string | null
+  target_custom_category_id?: string | null
+  target_custom_category_display?: string | null
   target_tags?: string[] | null
   tag_behavior: TagBehavior
   source: RuleSource
@@ -112,7 +132,10 @@ export interface CreateRuleRequest {
   priority?: number
   conditions: RuleCondition[]
   condition_logic?: ConditionLogic
-  target_category?: string[]
+  target_kind?: RuleTargetKind
+  target_pfc_primary?: string
+  target_pfc_detailed?: string
+  target_custom_category_id?: string
   target_tags?: string[]
   tag_behavior?: TagBehavior
 }
@@ -127,7 +150,10 @@ export interface UpdateRuleRequest {
   priority?: number
   conditions?: RuleCondition[]
   condition_logic?: ConditionLogic
-  target_category?: string[]
+  target_kind?: RuleTargetKind
+  target_pfc_primary?: string
+  target_pfc_detailed?: string
+  target_custom_category_id?: string
   target_tags?: string[]
   tag_behavior?: TagBehavior
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // AnalyticsRepository defines the interface for analytics data access.
@@ -17,6 +18,16 @@ type AnalyticsRepository interface {
 
 	// GetCashFlowGrouped returns cash flow data grouped by period (daily/weekly/monthly)
 	GetCashFlowGrouped(ctx context.Context, userID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error)
+
+	// GetSpendingByCategory returns expense totals grouped by effective category.
+	// When filters.Category is set, returns subcategory breakdown for that primary category.
+	GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error)
+
+	// GetSpendingByMerchant returns expense totals grouped by merchant, ordered by total desc.
+	GetSpendingByMerchant(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error)
+
+	// GetSpendingTrends returns monthly expense totals per category for trend analysis.
+	GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error)
 }
 
 // analyticsRepository implements AnalyticsRepository using PostgreSQL
@@ -30,11 +41,13 @@ func NewAnalyticsRepository(db DB) AnalyticsRepository {
 }
 
 // GetCashFlowAggregation returns aggregated income and expenses for a date range.
-// Income: transactions where amount > 0 (credits)
-// Expenses: transactions where amount < 0 (debits, returned as positive value)
+// Income: amount < 0 (inflow/credit)
+// Expenses: amount > 0 (outflow/debit, PFCv2)
 // Filters out pending transactions by default.
 // Can optionally filter by account types and include/exclude transfers.
 func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
 	// Build dynamic query based on filters
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	argIndex := 4
@@ -42,12 +55,12 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 	// Base query - joins with accounts to filter by account type
 	query := `
 		SELECT
-			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) as income,
-			COUNT(CASE WHEN t.amount > 0 THEN 1 END) as income_count,
-			COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0) as expenses,
-			COUNT(CASE WHEN t.amount < 0 THEN 1 END) as expense_count
+			COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0) as income,
+			COUNT(CASE WHEN t.amount < 0 THEN 1 END) as income_count,
+			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) as expenses,
+			COUNT(CASE WHEN t.amount > 0 THEN 1 END) as expense_count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id
+		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
@@ -65,11 +78,10 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
-	// Optional filter: exclude transfers (based on personal_finance_category)
-	// Transfers typically have primary category like "TRANSFER_IN" or "TRANSFER_OUT"
+	// Exclude transfers using effective PFC primary (respects category overrides).
+	// A user who overrides TRANSFER_IN → FOOD_AND_DRINK expresses intent that it is spending.
 	if !filters.IncludeTransfers {
-		query += ` AND (t.personal_finance_category IS NULL OR
-			COALESCE(t.personal_finance_category->>'primary', '') NOT LIKE 'TRANSFER%')`
+		query += ` AND ` + effectiveTransferExpr() + ` NOT LIKE 'TRANSFER%'`
 	}
 
 	var agg domain.CashFlowAggregation
@@ -90,6 +102,8 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 // Uses PostgreSQL DATE_TRUNC for period grouping.
 // Returns data ordered by period_start ASC for chart display.
 func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
 	// Determine the DATE_TRUNC interval based on grouping
 	var truncInterval string
 	switch filters.Grouping {
@@ -111,11 +125,11 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 	query := fmt.Sprintf(`
 		SELECT
 			DATE_TRUNC('%s', t.date)::date as period_start,
-			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) as income,
-			COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0) as expenses,
+			COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0) as income,
+			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) as expenses,
 			COUNT(*) as transaction_count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id
+		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
@@ -133,10 +147,8 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
-	// Optional filter: exclude transfers
 	if !filters.IncludeTransfers {
-		query += ` AND (t.personal_finance_category IS NULL OR
-			COALESCE(t.personal_finance_category->>'primary', '') NOT LIKE 'TRANSFER%')`
+		query += ` AND ` + effectiveTransferExpr() + ` NOT LIKE 'TRANSFER%'`
 	}
 
 	// Group and order
@@ -257,4 +269,221 @@ func advancePeriod(t time.Time, grouping string) time.Time {
 	default: // daily
 		return t.AddDate(0, 0, 1)
 	}
+}
+
+// effectiveCategoryExpr returns the SQL expression for the effective PFC category.
+// Priority: pfc override → raw pfc → 'UNCATEGORIZED'. Custom overrides are expressed
+// as 'custom:<uuid>' so they group separately from PFC categories.
+func effectiveCategoryExpr(subcategory bool) string {
+	if subcategory {
+		return `CASE
+			WHEN t.category_override_kind = 'custom' THEN 'custom:' || t.custom_category_override_id::text
+			WHEN t.category_override_kind = 'pfc'    THEN COALESCE(t.pfc_detailed_override, t.pfc_primary_override, 'UNCATEGORIZED')
+			ELSE                                          COALESCE(t.pfc_detailed, t.pfc_primary, 'UNCATEGORIZED')
+		END`
+	}
+	return `CASE
+		WHEN t.category_override_kind = 'custom' THEN 'custom:' || t.custom_category_override_id::text
+		WHEN t.category_override_kind = 'pfc'    THEN COALESCE(t.pfc_primary_override, 'UNCATEGORIZED')
+		ELSE                                          COALESCE(t.pfc_primary, 'UNCATEGORIZED')
+	END`
+}
+
+// effectiveCategoryDisplayExpr returns the SQL expression for the human-readable display name
+// of the effective category. Reads the denormalized effective_category_name column directly,
+// eliminating the need for a LEFT JOIN on custom_categories.
+func effectiveCategoryDisplayExpr() string {
+	return `t.effective_category_name`
+}
+
+// effectiveTransferExpr returns the SQL expression for the effective PFC primary used
+// in transfer filtering. Reads the denormalized effective_pfc_primary column directly.
+// effective_pfc_primary is NULL for custom-kind rows (never match TRANSFER%), so
+// COALESCE to '' ensures the NOT LIKE filter still works correctly.
+func effectiveTransferExpr() string {
+	return `COALESCE(t.effective_pfc_primary, '')`
+}
+
+// spendingBaseQuery returns the common WHERE clause args and starting argIndex for spending queries.
+func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{}) (string, []interface{}, int) {
+	args := baseArgs
+	argIndex := len(args) + 1
+	clause := ""
+
+	if len(filters.AccountTypes) > 0 {
+		placeholders := make([]string, len(filters.AccountTypes))
+		for i, at := range filters.AccountTypes {
+			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+			args = append(args, at)
+			argIndex++
+		}
+		clause += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
+	}
+
+	if !filters.IncludeTransfers {
+		clause += ` AND ` + effectiveTransferExpr() + ` NOT LIKE 'TRANSFER%'`
+	}
+
+	return clause, args, argIndex
+}
+
+// GetSpendingByCategory returns expense totals grouped by effective primary category.
+// When filters.Category is non-empty, returns the detailed subcategory breakdown.
+func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+	// Canary counter: the JOIN uses a.status = 'active', filtering replaced accounts (Issue #1109).
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+	isDrillDown := filters.Category != ""
+	catExpr := effectiveCategoryExpr(isDrillDown)
+
+	args := []interface{}{userID, filters.StartDate, filters.EndDate}
+
+	var categoryFilter string
+	if isDrillDown {
+		args = append(args, filters.Category)
+		primaryCatExpr := effectiveCategoryExpr(false)
+		categoryFilter = fmt.Sprintf(" AND %s = $4", primaryCatExpr)
+	}
+
+	extraClause, args, _ := buildSpendingFilter(filters, args)
+	displayExpr := effectiveCategoryDisplayExpr()
+
+	query := fmt.Sprintf(`
+		SELECT
+			%s as category,
+			%s as category_display,
+			COALESCE(SUM(ABS(t.amount)), 0) as total,
+			COUNT(*) as transaction_count
+		FROM transactions t
+		LEFT JOIN accounts a ON t.account_id = a.id
+		WHERE t.user_id = $1
+		  AND t.date >= $2
+		  AND t.date <= $3
+		  AND t.amount > 0
+		  AND t.pending = false
+		%s%s
+		GROUP BY category, category_display
+		ORDER BY total DESC
+	`, catExpr, displayExpr, categoryFilter, extraClause)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get spending by category: %w", err)
+	}
+	defer rows.Close()
+
+	var results []domain.SpendingByCategory
+	for rows.Next() {
+		var row domain.SpendingByCategory
+		if err := rows.Scan(&row.Category, &row.PFCPrimaryDisplay, &row.Total, &row.TransactionCount); err != nil {
+			return nil, fmt.Errorf("failed to scan spending by category: %w", err)
+		}
+		results = append(results, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating spending by category rows: %w", err)
+	}
+
+	return results, nil
+}
+
+// GetSpendingByMerchant returns expense totals grouped by merchant name, ordered by total descending.
+// Null merchant names are coalesced to "Unknown".
+func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
+	args := []interface{}{userID, filters.StartDate, filters.EndDate}
+	extraClause, args, argIndex := buildSpendingFilter(filters, args)
+
+	args = append(args, limit)
+	limitPlaceholder := fmt.Sprintf("$%d", argIndex)
+
+	query := fmt.Sprintf(`
+		SELECT
+			COALESCE(t.merchant_name, 'Unknown') as merchant_name,
+			COALESCE(SUM(ABS(t.amount)), 0) as total,
+			COUNT(*) as transaction_count
+		FROM transactions t
+		LEFT JOIN accounts a ON t.account_id = a.id
+		WHERE t.user_id = $1
+		  AND t.date >= $2
+		  AND t.date <= $3
+		  AND t.amount > 0
+		  AND t.pending = false
+		%s
+		GROUP BY merchant_name
+		ORDER BY total DESC
+		LIMIT %s
+	`, extraClause, limitPlaceholder)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get spending by merchant: %w", err)
+	}
+	defer rows.Close()
+
+	var results []domain.SpendingByMerchant
+	for rows.Next() {
+		var row domain.SpendingByMerchant
+		if err := rows.Scan(&row.MerchantName, &row.Total, &row.TransactionCount); err != nil {
+			return nil, fmt.Errorf("failed to scan spending by merchant: %w", err)
+		}
+		results = append(results, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating spending by merchant rows: %w", err)
+	}
+
+	return results, nil
+}
+
+// GetSpendingTrends returns monthly expense totals per category for trend chart data.
+// Results are ordered by period_start ASC, total DESC.
+func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
+	catExpr := effectiveCategoryExpr(false)
+	args := []interface{}{userID, filters.StartDate, filters.EndDate}
+	extraClause, args, _ := buildSpendingFilter(filters, args)
+
+	displayExprTrends := effectiveCategoryDisplayExpr()
+	query := fmt.Sprintf(`
+		SELECT
+			DATE_TRUNC('month', t.date)::date as period_start,
+			%s as category,
+			%s as category_display,
+			COALESCE(SUM(ABS(t.amount)), 0) as total
+		FROM transactions t
+		LEFT JOIN accounts a ON t.account_id = a.id
+		WHERE t.user_id = $1
+		  AND t.date >= $2
+		  AND t.date <= $3
+		  AND t.amount > 0
+		  AND t.pending = false
+		%s
+		GROUP BY period_start, category, category_display
+		ORDER BY period_start ASC, total DESC
+	`, catExpr, displayExprTrends, extraClause)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get spending trends: %w", err)
+	}
+	defer rows.Close()
+
+	var results []domain.SpendingTrendRow
+	for rows.Next() {
+		var row domain.SpendingTrendRow
+		if err := rows.Scan(&row.PeriodStart, &row.Category, &row.CategoryDisplay, &row.Total); err != nil {
+			return nil, fmt.Errorf("failed to scan spending trend row: %w", err)
+		}
+		results = append(results, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating spending trends rows: %w", err)
+	}
+
+	return results, nil
 }

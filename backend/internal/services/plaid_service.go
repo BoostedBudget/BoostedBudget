@@ -142,6 +142,22 @@ type PlaidService interface {
 	//
 	// Plaid Staging Validation - AccountsGet abstraction for testability
 	AccountsGet(ctx context.Context, accessToken string) (*plaid.AccountsGetResponse, error)
+
+	// InvestmentsHoldingsGet fetches current investment holdings and securities.
+	// Returns a full snapshot (no cursor/delta) — callers should replace, not merge.
+	// Issue #659: Plaid Investments
+	InvestmentsHoldingsGet(ctx context.Context, accessToken string) (*plaid.InvestmentsHoldingsGetResponse, error)
+
+	// InvestmentsTransactionsGet fetches investment transactions within a date range.
+	// Uses offset/count pagination (not cursor-based). Caller handles the pagination loop.
+	// Issue #659: Plaid Investments
+	InvestmentsTransactionsGet(ctx context.Context, accessToken, startDate, endDate string, offset, count int32) (*plaid.InvestmentsTransactionsGetResponse, error)
+
+	// LiabilitiesGet fetches current liability data for all accounts in a linked item.
+	// Returns a full snapshot (no cursor/delta) of credit, mortgage, and student loan liabilities.
+	// Callers should replace existing data, not merge.
+	// Issue #910: Plaid Liabilities
+	LiabilitiesGet(ctx context.Context, accessToken string) (*plaid.LiabilitiesGetResponse, error)
 }
 
 // plaidService implements PlaidService with a configured Plaid API client
@@ -200,7 +216,8 @@ func (s *plaidService) GetClient() *plaid.APIClient {
 // The link token is a short-lived (30 minute) credential that enables the frontend
 // to initialize Plaid Link for connecting bank accounts. Configured with:
 //   - User identification (client_user_id from Clerk)
-//   - Products: TRANSACTIONS only (account data + transaction history)
+//   - Required products: TRANSACTIONS (account data + transaction history)
+//   - Optional products: LIABILITIES + INVESTMENTS (enabled when available, no error when absent)
 //   - OAuth redirect URI for institutions like Chase, Capital One, Wells Fargo
 //   - Country codes (US) and language (English)
 //
@@ -237,12 +254,18 @@ func (s *plaidService) CreateLinkToken(ctx context.Context, userID string) (*dom
 		*plaid.NewLinkTokenCreateRequestUser(userID), // User identifier (dereferenced from pointer)
 	)
 
-	// Set products: Phase 2 (#241) - TRANSACTIONS + LIABILITIES + INVESTMENTS
+	// Required product: TRANSACTIONS is core to the budgeting app
 	// Issue #237: AUTH removed (only supports checking/savings, caused NO_AUTH_ACCOUNTS for credit cards/CDs)
-	// Issue #241: LIABILITIES and INVESTMENTS added (full processing deferred to follow-up issues)
 	// Balance data is automatically included in /accounts/get response (FREE)
 	request.SetProducts([]plaid.Products{
 		plaid.PRODUCTS_TRANSACTIONS,
+	})
+
+	// Optional products: enabled when available, no error when absent
+	// Issue #976: LIABILITIES + INVESTMENTS moved from required to optional — required products
+	// cause ITEM_ERROR (NO_LIABILITY_ACCOUNTS / NO_INVESTMENT_ACCOUNTS) when the user's
+	// institution has no accounts of that type (e.g. BoA with only checking/savings).
+	request.SetOptionalProducts([]plaid.Products{
 		plaid.PRODUCTS_LIABILITIES,
 		plaid.PRODUCTS_INVESTMENTS,
 	})
@@ -330,9 +353,14 @@ func (s *plaidService) CreateUpdateModeLinkToken(ctx context.Context, userID str
 	// Common mistake: Using item_id instead of access_token (SetAccessToken needs access_token!)
 	request.SetAccessToken(accessToken)
 
-	// Set products: same 3 as CreateLinkToken (TRANSACTIONS + LIABILITIES + INVESTMENTS, Phase 2 #241)
+	// Required product: TRANSACTIONS only (same as CreateLinkToken)
 	request.SetProducts([]plaid.Products{
 		plaid.PRODUCTS_TRANSACTIONS,
+	})
+
+	// Optional products: LIABILITIES + INVESTMENTS (same as CreateLinkToken)
+	// Issue #976: moved from required to optional to avoid NO_LIABILITY_ACCOUNTS errors
+	request.SetOptionalProducts([]plaid.Products{
 		plaid.PRODUCTS_LIABILITIES,
 		plaid.PRODUCTS_INVESTMENTS,
 	})
@@ -542,6 +570,77 @@ func (s *plaidService) AccountsGet(ctx context.Context, accessToken string) (*pl
 		return nil, fmt.Errorf("plaid AccountsGet failed: %w", err)
 	}
 
+	return &resp, nil
+}
+
+// InvestmentsHoldingsGet calls Plaid /investments/holdings/get.
+// Returns all current holdings and associated securities for the item.
+// Issue #659: Plaid Investments
+func (s *plaidService) InvestmentsHoldingsGet(ctx context.Context, accessToken string) (*plaid.InvestmentsHoldingsGetResponse, error) {
+	if accessToken == "" {
+		return nil, fmt.Errorf("access token cannot be empty")
+	}
+
+	request := plaid.NewInvestmentsHoldingsGetRequest(accessToken)
+	resp, _, err := s.client.PlaidApi.InvestmentsHoldingsGet(ctx).
+		InvestmentsHoldingsGetRequest(*request).
+		Execute()
+	if err != nil {
+		return nil, fmt.Errorf("plaid InvestmentsHoldingsGet failed: %w", err)
+	}
+	return &resp, nil
+}
+
+// InvestmentsTransactionsGet calls Plaid /investments/transactions/get.
+// Fetches investment transactions within a date range using offset/count pagination.
+// Issue #659: Plaid Investments
+func (s *plaidService) InvestmentsTransactionsGet(ctx context.Context, accessToken, startDate, endDate string, offset, count int32) (*plaid.InvestmentsTransactionsGetResponse, error) {
+	if accessToken == "" {
+		return nil, fmt.Errorf("access token cannot be empty")
+	}
+	if startDate == "" {
+		return nil, fmt.Errorf("start_date is required")
+	}
+	if endDate == "" {
+		return nil, fmt.Errorf("end_date is required")
+	}
+
+	request := plaid.NewInvestmentsTransactionsGetRequest(accessToken, startDate, endDate)
+
+	if offset > 0 || count > 0 {
+		options := plaid.NewInvestmentsTransactionsGetRequestOptions()
+		if offset > 0 {
+			options.SetOffset(offset)
+		}
+		if count > 0 {
+			options.SetCount(count)
+		}
+		request.SetOptions(*options)
+	}
+
+	resp, _, err := s.client.PlaidApi.InvestmentsTransactionsGet(ctx).
+		InvestmentsTransactionsGetRequest(*request).
+		Execute()
+	if err != nil {
+		return nil, fmt.Errorf("plaid InvestmentsTransactionsGet failed: %w", err)
+	}
+	return &resp, nil
+}
+
+// LiabilitiesGet calls Plaid /liabilities/get.
+// Returns full liability snapshot: credit card, mortgage, and student loan data.
+// Issue #910: Plaid Liabilities
+func (s *plaidService) LiabilitiesGet(ctx context.Context, accessToken string) (*plaid.LiabilitiesGetResponse, error) {
+	if accessToken == "" {
+		return nil, fmt.Errorf("access token cannot be empty")
+	}
+	request := plaid.NewLiabilitiesGetRequest(accessToken)
+	resp, _, err := s.client.PlaidApi.LiabilitiesGet(ctx).
+		LiabilitiesGetRequest(*request).
+		Execute()
+	if err != nil {
+		return nil, fmt.Errorf("plaid LiabilitiesGet failed: %w", err)
+	}
 	return &resp, nil
 }
 

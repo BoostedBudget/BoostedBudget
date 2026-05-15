@@ -10,13 +10,12 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { ArrowLeft, Save } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import {
   useCreateAutomationRule,
   useUpdateAutomationRule,
   useGetAutomationRuleByID,
-  useGetAutomationRules,
 } from '@boostedbudget/api-client/endpoints/automation-rules/automation-rules'
-import { useRuleTierLimits } from '../hooks/useRuleTierLimits'
 import {
   RULE_TYPE_LABELS,
   RULE_TYPE_DESCRIPTIONS,
@@ -42,7 +41,6 @@ import {
   RolloverActionForm,
   SavingsGoalActionForm,
 } from './actions'
-import './RuleBuilder.css'
 
 interface FormErrors {
   name?: string
@@ -108,13 +106,6 @@ export function RuleBuilder() {
   // Mutations
   const createMutation = useCreateAutomationRule()
   const updateMutation = useUpdateAutomationRule()
-
-  // Fetch rules for tier limits display
-  const { data: rulesData } = useGetAutomationRules()
-  const currentRuleCount = rulesData?.length ?? 0
-
-  // Tier limits (simplified - all tiers have unlimited rules)
-  const tierLimits = useRuleTierLimits({ currentRuleCount })
 
   // Form state
   const [name, setName] = useState('')
@@ -348,7 +339,7 @@ export function RuleBuilder() {
   // Loading state
   if (isEditMode && loadingRule) {
     return (
-      <div className="rule-builder__loading">
+      <div className="flex flex-col items-center justify-center px-6 py-16 text-center text-muted-foreground">
         <p>Loading rule...</p>
       </div>
     )
@@ -356,24 +347,28 @@ export function RuleBuilder() {
 
   const isPending = createMutation.isPending || updateMutation.isPending
 
+  // Shared input class
+  const inputClass = 'w-full rounded-lg border border-input bg-background px-3.5 py-2.5 text-sm text-foreground transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+  const inputErrorClass = 'border-destructive focus:border-destructive focus:ring-destructive/30'
+
   return (
-    <div className="rule-builder">
-      <header className="rule-builder__header">
+    <div className="mx-auto max-w-[800px] p-6">
+      <header className="mb-6 flex items-center gap-4">
         <button
           type="button"
           onClick={handleCancel}
-          className="rule-builder__back-btn"
+          className="flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-transparent text-muted-foreground transition-all hover:bg-muted hover:text-foreground [&>svg]:h-5 [&>svg]:w-5"
           aria-label="Go back"
         >
           <ArrowLeft aria-hidden="true" />
         </button>
-        <h1 className="rule-builder__title">
+        <h1 className="text-2xl font-semibold text-foreground">
           {isEditMode ? 'Edit Rule' : 'Create Automation Rule'}
         </h1>
       </header>
 
       <form
-        className="rule-builder__form"
+        className="flex flex-col gap-6"
         aria-label="Rule builder form"
         onSubmit={(e) => {
           e.preventDefault()
@@ -381,11 +376,11 @@ export function RuleBuilder() {
         }}
       >
         {/* Basic Info Section */}
-        <section className="rule-builder__section">
-          <h2 className="rule-builder__section-title">Basic Information</h2>
+        <section className="rounded-xl border border-border bg-card p-5">
+          <h2 className="mb-4 text-base font-semibold text-foreground">Basic Information</h2>
 
-          <div className="rule-builder__field">
-            <label htmlFor="rule-name" className="rule-builder__label">
+          <div className="mb-4">
+            <label htmlFor="rule-name" className="mb-1.5 block text-sm font-medium text-foreground">
               Rule Name *
             </label>
             <input
@@ -397,15 +392,15 @@ export function RuleBuilder() {
                 if (submitted) setErrors((prev) => ({ ...prev, name: undefined }))
               }}
               placeholder="Enter rule name"
-              className={`rule-builder__input ${errors.name ? 'rule-builder__input--error' : ''}`}
+              className={cn(inputClass, errors.name && inputErrorClass)}
             />
             {errors.name && (
-              <p className="rule-builder__error">{errors.name}</p>
+              <p className="mt-1.5 text-xs text-destructive">{errors.name}</p>
             )}
           </div>
 
-          <div className="rule-builder__field">
-            <label htmlFor="rule-description" className="rule-builder__label">
+          <div className="mb-4">
+            <label htmlFor="rule-description" className="mb-1.5 block text-sm font-medium text-foreground">
               Description
             </label>
             <textarea
@@ -414,19 +409,19 @@ export function RuleBuilder() {
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Describe what this rule does"
               rows={3}
-              className="rule-builder__textarea"
+              className={cn(inputClass, 'min-h-16 resize-y font-[inherit]')}
             />
           </div>
 
-          <div className="rule-builder__field">
-            <label htmlFor="rule-type" className="rule-builder__label">
+          <div className="mb-4">
+            <label htmlFor="rule-type" className="mb-1.5 block text-sm font-medium text-foreground">
               Rule Type *
             </label>
             <select
               id="rule-type"
               value={ruleType}
               onChange={handleRuleTypeChange}
-              className={`rule-builder__select ${errors.ruleType ? 'rule-builder__select--error' : ''}`}
+              className={cn(inputClass, 'cursor-pointer', errors.ruleType && inputErrorClass)}
             >
               <option value="">Select a rule type...</option>
               {RULE_TYPES.map((type) => (
@@ -436,17 +431,17 @@ export function RuleBuilder() {
               ))}
             </select>
             {ruleType && (
-              <p className="rule-builder__hint">
+              <p className="mt-1.5 text-xs text-muted-foreground">
                 {RULE_TYPE_DESCRIPTIONS[ruleType as RuleType]}
               </p>
             )}
             {errors.ruleType && (
-              <p className="rule-builder__error">{errors.ruleType}</p>
+              <p className="mt-1.5 text-xs text-destructive">{errors.ruleType}</p>
             )}
           </div>
 
-          <div className="rule-builder__field">
-            <label htmlFor="rule-priority" className="rule-builder__label">
+          <div>
+            <label htmlFor="rule-priority" className="mb-1.5 block text-sm font-medium text-foreground">
               Priority
             </label>
             <input
@@ -456,27 +451,26 @@ export function RuleBuilder() {
               onChange={(e) => setPriority(parseInt(e.target.value, 10) || 0)}
               min={1}
               max={100}
-              className="rule-builder__input rule-builder__input--small"
+              className={cn(inputClass, 'w-32')}
             />
-            <p className="rule-builder__hint">
+            <p className="mt-1.5 text-xs text-muted-foreground">
               Lower numbers run first. Default is 10.
             </p>
           </div>
         </section>
 
         {/* Trigger Section */}
-        <section className="rule-builder__section">
-          <h2 className="rule-builder__section-title">Trigger</h2>
+        <section className="rounded-xl border border-border bg-card p-5">
+          <h2 className="mb-4 text-base font-semibold text-foreground">Trigger</h2>
           <TriggerSelector
             config={triggerConfig}
             onChange={setTriggerConfig}
-            canUseEventTriggers={tierLimits.canUseEventTriggers}
           />
         </section>
 
         {/* Conditions Section */}
-        <section className="rule-builder__section">
-          <h2 className="rule-builder__section-title">Conditions (Optional)</h2>
+        <section className="rounded-xl border border-border bg-card p-5">
+          <h2 className="mb-4 text-base font-semibold text-foreground">Conditions (Optional)</h2>
           <ConditionBuilder
             conditions={conditions}
             logic={conditionLogic}
@@ -487,8 +481,8 @@ export function RuleBuilder() {
 
         {/* Action Section */}
         {ruleType && (
-          <section className="rule-builder__section">
-            <h2 className="rule-builder__section-title">Action Configuration</h2>
+          <section className="rounded-xl border border-border bg-card p-5">
+            <h2 className="mb-4 text-base font-semibold text-foreground">Action Configuration</h2>
             {ruleType === 'budget_alert' && (
               <BudgetAlertActionForm
                 action={alertAction}
@@ -516,12 +510,12 @@ export function RuleBuilder() {
           </section>
         )}
 
-        {/* Actions */}
-        <div className="rule-builder__actions">
+        {/* Form Actions */}
+        <div className="flex justify-end gap-3 pt-2">
           <button
             type="button"
             onClick={handleCancel}
-            className="rule-builder__btn rule-builder__btn--secondary"
+            className="inline-flex items-center gap-2 rounded-lg bg-muted px-5 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/80 dark:bg-muted/50 dark:hover:bg-muted/40"
             aria-label="Cancel"
           >
             Cancel
@@ -529,7 +523,7 @@ export function RuleBuilder() {
           <button
             type="submit"
             disabled={isPending}
-            className="rule-builder__btn rule-builder__btn--primary"
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:h-4 [&>svg]:w-4"
             aria-label="Save rule"
           >
             <Save aria-hidden="true" />

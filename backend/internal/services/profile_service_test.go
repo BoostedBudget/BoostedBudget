@@ -3,16 +3,32 @@ package services
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
+
+// TestMain initializes the domain region registry before running tests.
+func TestMain(m *testing.M) {
+	domain.InitRegionRegistry(
+		map[string]domain.RegionInfo{
+			"iad": {Code: "iad", DisplayName: "USA (Virginia)", Country: "USA", City: "Virginia", Flag: "🇺🇸", FlyRegion: "iad"},
+			"ewr": {Code: "ewr", DisplayName: "USA (New Jersey)", Country: "USA", City: "New Jersey", Flag: "🇺🇸", FlyRegion: "ewr"},
+		},
+		"iad",
+		"iad",
+	)
+	os.Exit(m.Run())
+}
 
 // MockProfileRepository is a mock implementation of ProfileRepository
 type MockProfileRepository struct {
@@ -131,12 +147,59 @@ func (m *MockProfileRepository) GetUsersWithActivePaddleSubscriptions(ctx contex
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
+// Retention tracking stubs (#930)
+func (m *MockProfileRepository) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+	return "", nil
+}
+func (m *MockProfileRepository) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
+	return nil
+}
+func (m *MockProfileRepository) ClearRetentionDates(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepository) SetRetentionNotice30dSent(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepository) SetRetentionNotice7dSent(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepository) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+func (m *MockProfileRepository) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+func (m *MockProfileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+
+func (m *MockProfileRepository) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	// If no expectation registered, return safe default (no pre-encryption user found).
+	// This avoids needing to add GetUserByEmail mocks to all tests that don't care about
+	// the encryption fallback path (#1001).
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "GetUserByEmail" {
+			args := m.Called(ctx, email)
+			if args.Get(0) == nil {
+				return nil, args.Error(1)
+			}
+			return args.Get(0).(*domain.User), args.Error(1)
+		}
+	}
+	return nil, repository.ErrUserNotFound
+}
+
+func (m *MockProfileRepository) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	args := m.Called(ctx, tx, userID, plainEmail)
+	return args.Error(0)
+}
+
 // TestGetProfile_ExistingUser tests retrieving an existing user
 // NOTE: After PR #197, GetProfile now receives internal user UUID, not Clerk ID
 func TestGetProfile_ExistingUser(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
-	service := NewProfileService(mockRepo)
+	service := NewProfileService(NewProfileServiceDeps{Repo: mockRepo})
 	ctx := context.Background()
 
 	userID := uuid.New().String()
@@ -174,7 +237,7 @@ func TestGetProfile_ExistingUser(t *testing.T) {
 func TestGetProfile_UserNotFound(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
-	service := NewProfileService(mockRepo)
+	service := NewProfileService(NewProfileServiceDeps{Repo: mockRepo})
 	ctx := context.Background()
 
 	userID := uuid.New().String()
@@ -197,7 +260,7 @@ func TestGetProfile_UserNotFound(t *testing.T) {
 func TestGetProfile_RepositoryError(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
-	service := NewProfileService(mockRepo)
+	service := NewProfileService(NewProfileServiceDeps{Repo: mockRepo})
 	ctx := context.Background()
 
 	userID := uuid.New().String()
@@ -219,7 +282,7 @@ func TestGetProfile_RepositoryError(t *testing.T) {
 func TestGetProfile_UpdateLastLoginError(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
-	service := NewProfileService(mockRepo)
+	service := NewProfileService(NewProfileServiceDeps{Repo: mockRepo})
 	ctx := context.Background()
 
 	userID := uuid.New().String()
@@ -247,16 +310,15 @@ func TestGetProfile_UpdateLastLoginError(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
-// TestUpdateProfile_Success tests successful profile update
+// TestUpdateProfile_Success tests successful profile update with email change
+// (transactional path). After the refactor, email changes go through Begin/Commit.
 // NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Clerk ID
 func TestUpdateProfile_Success(t *testing.T) {
 	// Setup
-	mockRepo := new(MockProfileRepository)
-	service := NewProfileService(mockRepo)
 	ctx := context.Background()
-
 	userID := uuid.New().String()
 	clerkUserID := "user_507f1f77bcf86cd799439011"
+
 	existingUser := &domain.User{
 		ID:                 userID,
 		ClerkUserID:        clerkUserID,
@@ -267,17 +329,40 @@ func TestUpdateProfile_Success(t *testing.T) {
 	}
 
 	newEmail := "new@example.com"
-	req := &domain.UpdateProfileRequest{
-		Email: &newEmail,
+	updatedUser := &domain.User{
+		ID:                 userID,
+		ClerkUserID:        clerkUserID,
+		Email:              newEmail,
+		EmailVerified:      false,
+		SubscriptionTier:   "free",
+		SubscriptionStatus: "active",
+		PrimaryRegion:      "iad",
 	}
 
-	// Mock expectations - now using GetUserByID with internal UUID
-	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
-	mockRepo.On("UpdateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
-		return u.Email == newEmail && u.PrimaryRegion == "iad"
-	})).Return(nil)
+	mockRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockDB := new(mockTxBeginner)
+	tx := new(mockTx)
+	mockJQ := new(mockProfileJobQueue)
 
-	// Execute - pass internal UUID, not Clerk ID
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil).Once()
+	mockDB.On("Begin", ctx).Return(tx, nil)
+	mockRepo.On("UpdateUserEmailTx", ctx, tx, userID, newEmail).Return(nil)
+	mockIdentityRepo.On("UpdatePrimaryIdentityEmailTx", ctx, tx, userID, newEmail).Return(nil)
+	tx.On("Commit", ctx).Return(nil)
+	mockJQ.On("Enqueue", ctx, mock.Anything).Return(&queue.JobResult{ID: 1, Kind: "email_change_propagation"}, nil)
+	mockRepo.On("GetUserByID", ctx, userID).Return(updatedUser, nil).Once()
+
+	service := NewProfileService(NewProfileServiceDeps{
+		Repo:         mockRepo,
+		IdentityRepo: mockIdentityRepo,
+		DB:           mockDB,
+		JobQueue:     mockJQ,
+	})
+
+	req := &domain.UpdateProfileRequest{Email: &newEmail}
+
+	// Execute
 	user, err := service.UpdateProfile(ctx, userID, req)
 
 	// Assert
@@ -285,6 +370,8 @@ func TestUpdateProfile_Success(t *testing.T) {
 	assert.NotNil(t, user)
 	assert.Equal(t, newEmail, user.Email)
 	mockRepo.AssertExpectations(t)
+	mockDB.AssertExpectations(t)
+	tx.AssertExpectations(t)
 }
 
 // TestUpdateProfile_InvalidEmail tests email validation
@@ -292,7 +379,7 @@ func TestUpdateProfile_Success(t *testing.T) {
 func TestUpdateProfile_InvalidEmail(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
-	service := NewProfileService(mockRepo)
+	service := NewProfileService(NewProfileServiceDeps{Repo: mockRepo})
 	ctx := context.Background()
 
 	userID := uuid.New().String()
@@ -327,7 +414,7 @@ func TestUpdateProfile_InvalidEmail(t *testing.T) {
 func TestUpdateProfile_InvalidRegion(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
-	service := NewProfileService(mockRepo)
+	service := NewProfileService(NewProfileServiceDeps{Repo: mockRepo})
 	ctx := context.Background()
 
 	userID := uuid.New().String()
@@ -362,7 +449,7 @@ func TestUpdateProfile_InvalidRegion(t *testing.T) {
 func TestUpdateProfile_ValidRegion(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
-	service := NewProfileService(mockRepo)
+	service := NewProfileService(NewProfileServiceDeps{Repo: mockRepo})
 	ctx := context.Background()
 
 	userID := uuid.New().String()
@@ -374,7 +461,7 @@ func TestUpdateProfile_ValidRegion(t *testing.T) {
 		PrimaryRegion: "iad",
 	}
 
-	newRegion := "lhr"
+	newRegion := "iad"
 	req := &domain.UpdateProfileRequest{
 		PrimaryRegion: &newRegion,
 	}
@@ -400,7 +487,7 @@ func TestUpdateProfile_ValidRegion(t *testing.T) {
 func TestUpdateProfile_UserNotFound(t *testing.T) {
 	// Setup
 	mockRepo := new(MockProfileRepository)
-	service := NewProfileService(mockRepo)
+	service := NewProfileService(NewProfileServiceDeps{Repo: mockRepo})
 	ctx := context.Background()
 
 	userID := uuid.New().String()
@@ -422,14 +509,12 @@ func TestUpdateProfile_UserNotFound(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
-// TestUpdateProfile_UpdateError tests handling of update errors
+// TestUpdateProfile_UpdateError tests handling of update errors during email change
+// (transactional path: UpdateUserEmailTx fails).
 // NOTE: After PR #197, UpdateProfile now receives internal user UUID, not Clerk ID
 func TestUpdateProfile_UpdateError(t *testing.T) {
 	// Setup
-	mockRepo := new(MockProfileRepository)
-	service := NewProfileService(mockRepo)
 	ctx := context.Background()
-
 	userID := uuid.New().String()
 	clerkUserID := "user_507f1f77bcf86cd799439011"
 	existingUser := &domain.User{
@@ -440,21 +525,152 @@ func TestUpdateProfile_UpdateError(t *testing.T) {
 	}
 
 	newEmail := "new@example.com"
-	req := &domain.UpdateProfileRequest{
-		Email: &newEmail,
-	}
 
-	// Mock expectations - now using GetUserByID with internal UUID
+	mockRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockDB := new(mockTxBeginner)
+	tx := new(mockTx)
+	mockJQ := new(mockProfileJobQueue)
+
 	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
-	mockRepo.On("UpdateUser", ctx, mock.Anything).Return(errors.New("update failed"))
+	mockDB.On("Begin", ctx).Return(tx, nil)
+	mockRepo.On("UpdateUserEmailTx", ctx, tx, userID, newEmail).Return(errors.New("update failed"))
 
-	// Execute - pass internal UUID, not Clerk ID
+	service := NewProfileService(NewProfileServiceDeps{
+		Repo:         mockRepo,
+		IdentityRepo: mockIdentityRepo,
+		DB:           mockDB,
+		JobQueue:     mockJQ,
+	})
+
+	req := &domain.UpdateProfileRequest{Email: &newEmail}
+
+	// Execute
 	user, err := service.UpdateProfile(ctx, userID, req)
 
 	// Assert
 	assert.Error(t, err)
 	assert.Nil(t, user)
 	mockRepo.AssertExpectations(t)
+	mockDB.AssertExpectations(t)
+}
+
+// TestUpdateProfile_EmailAndRegionChange verifies that when both email and region change
+// simultaneously, the region UpdateUser call uses the re-fetched (new) email, not the
+// stale pre-transaction email. Regression test for the stale-email overwrite bug.
+func TestUpdateProfile_EmailAndRegionChange(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	clerkUserID := "user_abc"
+
+	oldEmail := "old@example.com"
+	newEmail := "new@example.com"
+	newRegion := "ewr"
+
+	existingUser := &domain.User{
+		ID:            userID,
+		ClerkUserID:   clerkUserID,
+		Email:         oldEmail,
+		PrimaryRegion: "iad",
+	}
+	// After the email transaction commits, the DB reflects new email + email_verified=false.
+	afterEmailCommit := &domain.User{
+		ID:            userID,
+		ClerkUserID:   clerkUserID,
+		Email:         newEmail,
+		EmailVerified: false,
+		PrimaryRegion: "iad",
+	}
+
+	mockRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockDB := new(mockTxBeginner)
+	tx := new(mockTx)
+	mockJQ := new(mockProfileJobQueue)
+
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil).Once()
+	mockDB.On("Begin", ctx).Return(tx, nil)
+	mockRepo.On("UpdateUserEmailTx", ctx, tx, userID, newEmail).Return(nil)
+	mockIdentityRepo.On("UpdatePrimaryIdentityEmailTx", ctx, tx, userID, newEmail).Return(nil)
+	tx.On("Commit", ctx).Return(nil)
+	// Re-fetch after email commit — must happen BEFORE region UpdateUser.
+	mockRepo.On("GetUserByID", ctx, userID).Return(afterEmailCommit, nil).Once()
+	// UpdateUser for region change must carry the NEW email, not the old one.
+	mockRepo.On("UpdateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
+		return u.Email == newEmail && u.PrimaryRegion == newRegion
+	})).Return(nil)
+	mockJQ.On("Enqueue", ctx, mock.Anything).Return(&queue.JobResult{ID: 1, Kind: "email_change_propagation"}, nil)
+
+	service := NewProfileService(NewProfileServiceDeps{
+		Repo:         mockRepo,
+		IdentityRepo: mockIdentityRepo,
+		DB:           mockDB,
+		JobQueue:     mockJQ,
+	})
+
+	req := &domain.UpdateProfileRequest{Email: &newEmail, PrimaryRegion: &newRegion}
+
+	user, err := service.UpdateProfile(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.Equal(t, newEmail, user.Email)
+	assert.Equal(t, newRegion, user.PrimaryRegion)
+	mockRepo.AssertExpectations(t)
+	mockDB.AssertExpectations(t)
+	tx.AssertExpectations(t)
+	mockJQ.AssertExpectations(t)
+}
+
+// TestUpdateProfile_NilJobQueue verifies that email change succeeds gracefully
+// when jobQueue is nil (e.g., River not configured because Plaid is disabled).
+func TestUpdateProfile_NilJobQueue(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	clerkUserID := "user_abc"
+	newEmail := "new@example.com"
+
+	existingUser := &domain.User{
+		ID:            userID,
+		ClerkUserID:   clerkUserID,
+		Email:         "old@example.com",
+		PrimaryRegion: "iad",
+	}
+	updatedUser := &domain.User{
+		ID:            userID,
+		ClerkUserID:   clerkUserID,
+		Email:         newEmail,
+		EmailVerified: false,
+		PrimaryRegion: "iad",
+	}
+
+	mockRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockDB := new(mockTxBeginner)
+	tx := new(mockTx)
+
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil).Once()
+	mockDB.On("Begin", ctx).Return(tx, nil)
+	mockRepo.On("UpdateUserEmailTx", ctx, tx, userID, newEmail).Return(nil)
+	mockIdentityRepo.On("UpdatePrimaryIdentityEmailTx", ctx, tx, userID, newEmail).Return(nil)
+	tx.On("Commit", ctx).Return(nil)
+	mockRepo.On("GetUserByID", ctx, userID).Return(updatedUser, nil).Once()
+
+	service := NewProfileService(NewProfileServiceDeps{
+		Repo:         mockRepo,
+		IdentityRepo: mockIdentityRepo,
+		DB:           mockDB,
+		JobQueue:     nil, // explicitly nil — no panic expected
+	})
+
+	req := &domain.UpdateProfileRequest{Email: &newEmail}
+
+	user, err := service.UpdateProfile(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.Equal(t, newEmail, user.Email)
+	mockRepo.AssertExpectations(t)
+	mockDB.AssertExpectations(t)
+	tx.AssertExpectations(t)
 }
 
 // TestValidateEmail tests email validation function
@@ -494,8 +710,8 @@ func TestValidateRegion(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid iad", "iad", false},
-		{"valid lhr", "lhr", false},
-		{"valid syd", "syd", false},
+		{"lhr now invalid", "lhr", true},
+		{"syd now invalid", "syd", true},
 		{"invalid region", "invalid-region", true},
 		{"invalid empty", "", true},
 		{"invalid us-west-1", "us-west-1", true},
@@ -512,4 +728,263 @@ func TestValidateRegion(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Mocks for transactional email-change tests
+// ---------------------------------------------------------------------------
+
+// mockTxBeginner implements TxBeginner for testing.
+type mockTxBeginner struct {
+	mock.Mock
+}
+
+func (m *mockTxBeginner) Begin(ctx context.Context) (pgx.Tx, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(pgx.Tx), args.Error(1)
+}
+
+// mockTx implements pgx.Tx for testing. Only Commit and Rollback carry
+// test-relevant behaviour; everything else panics (not exercised).
+type mockTx struct {
+	mock.Mock
+}
+
+func (m *mockTx) Begin(ctx context.Context) (pgx.Tx, error) { panic("not implemented") }
+func (m *mockTx) Commit(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+func (m *mockTx) Rollback(ctx context.Context) error                     { return nil }
+func (m *mockTx) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error) {
+	panic("not implemented")
+}
+func (m *mockTx) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
+	panic("not implemented")
+}
+func (m *mockTx) LargeObjects() pgx.LargeObjects     { panic("not implemented") }
+func (m *mockTx) Prepare(ctx context.Context, name, sql string) (*pgconn.StatementDescription, error) {
+	panic("not implemented")
+}
+func (m *mockTx) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
+	panic("not implemented")
+}
+func (m *mockTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	panic("not implemented")
+}
+func (m *mockTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	panic("not implemented")
+}
+func (m *mockTx) Conn() *pgx.Conn { panic("not implemented") }
+
+// mockProfileJobQueue implements queue.JobQueue for profile tests.
+// We use a separate name to avoid conflicts with MockJobQueue in account_service_test.go.
+type mockProfileJobQueue struct {
+	mock.Mock
+}
+
+func (m *mockProfileJobQueue) Enqueue(ctx context.Context, job queue.Job, opts ...queue.EnqueueOption) (*queue.JobResult, error) {
+	args := m.Called(ctx, job)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*queue.JobResult), args.Error(1)
+}
+
+func (m *mockProfileJobQueue) EnqueueTx(ctx context.Context, tx pgx.Tx, job queue.Job, opts ...queue.EnqueueOption) (*queue.JobResult, error) {
+	args := m.Called(ctx, tx, job)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*queue.JobResult), args.Error(1)
+}
+
+func (m *mockProfileJobQueue) EnqueueMany(ctx context.Context, jobList []queue.Job, opts ...queue.EnqueueOption) ([]*queue.JobResult, error) {
+	args := m.Called(ctx, jobList)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*queue.JobResult), args.Error(1)
+}
+
+func (m *mockProfileJobQueue) EnqueueManyTx(ctx context.Context, tx pgx.Tx, jobList []queue.Job, opts ...queue.EnqueueOption) ([]*queue.JobResult, error) {
+	args := m.Called(ctx, tx, jobList)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*queue.JobResult), args.Error(1)
+}
+
+// ---------------------------------------------------------------------------
+// Email-change transaction tests
+// ---------------------------------------------------------------------------
+
+// TestUpdateProfile_EmailChange_PropagatesAndResetsVerified verifies that when
+// the email changes, the service updates both users and user_identities inside
+// a transaction and enqueues an email-change propagation job.
+func TestUpdateProfile_EmailChange_PropagatesAndResetsVerified(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	clerkUserID := "user_abc123"
+	oldEmail := "old@example.com"
+	newEmail := "new@example.com"
+
+	existingUser := &domain.User{
+		ID:                 userID,
+		ClerkUserID:        clerkUserID,
+		Email:              oldEmail,
+		EmailVerified:      true,
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		PrimaryRegion:      "iad",
+	}
+	updatedUser := &domain.User{
+		ID:                 userID,
+		ClerkUserID:        clerkUserID,
+		Email:              newEmail,
+		EmailVerified:      false, // reset by UpdateUserEmailTx
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		PrimaryRegion:      "iad",
+	}
+
+	mockRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockDB := new(mockTxBeginner)
+	tx := new(mockTx)
+	mockJQ := new(mockProfileJobQueue)
+
+	// First GetUserByID returns the existing user (before update)
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil).Once()
+	// Begin returns our mock transaction
+	mockDB.On("Begin", ctx).Return(tx, nil)
+	// Transactional updates
+	mockRepo.On("UpdateUserEmailTx", ctx, tx, userID, newEmail).Return(nil)
+	mockIdentityRepo.On("UpdatePrimaryIdentityEmailTx", ctx, tx, userID, newEmail).Return(nil)
+	tx.On("Commit", ctx).Return(nil)
+	// Enqueue propagation job
+	mockJQ.On("Enqueue", ctx, mock.MatchedBy(func(job interface{}) bool {
+		args, ok := job.(emailChangePropagationArgs)
+		return ok && args.UserID == userID && args.ClerkUserID == clerkUserID
+	})).Return(&queue.JobResult{ID: 1, Kind: "email_change_propagation"}, nil)
+	// Second GetUserByID returns the committed state
+	mockRepo.On("GetUserByID", ctx, userID).Return(updatedUser, nil).Once()
+
+	service := NewProfileService(NewProfileServiceDeps{
+		Repo:         mockRepo,
+		IdentityRepo: mockIdentityRepo,
+		DB:           mockDB,
+		JobQueue:     mockJQ,
+	})
+
+	req := &domain.UpdateProfileRequest{Email: &newEmail}
+	result, err := service.UpdateProfile(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, newEmail, result.Email)
+	assert.False(t, result.EmailVerified)
+
+	mockRepo.AssertExpectations(t)
+	mockIdentityRepo.AssertExpectations(t)
+	mockDB.AssertExpectations(t)
+	tx.AssertExpectations(t)
+	mockJQ.AssertExpectations(t)
+}
+
+// TestUpdateProfile_EmailUnchanged_NoJobEnqueued verifies that when the
+// requested email matches the current email, no transaction is started and
+// no propagation job is enqueued.
+func TestUpdateProfile_EmailUnchanged_NoJobEnqueued(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	sameEmail := "same@example.com"
+
+	existingUser := &domain.User{
+		ID:                 userID,
+		ClerkUserID:        "user_xyz",
+		Email:              sameEmail,
+		EmailVerified:      true,
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		PrimaryRegion:      "iad",
+	}
+
+	mockRepo := new(MockProfileRepository)
+	mockDB := new(mockTxBeginner)
+	mockJQ := new(mockProfileJobQueue)
+
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
+	// Email unchanged → simple UpdateUser path
+	mockRepo.On("UpdateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
+		return u.Email == sameEmail
+	})).Return(nil)
+
+	service := NewProfileService(NewProfileServiceDeps{
+		Repo:     mockRepo,
+		DB:       mockDB,
+		JobQueue: mockJQ,
+	})
+
+	req := &domain.UpdateProfileRequest{Email: &sameEmail}
+	result, err := service.UpdateProfile(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	// Begin should never have been called
+	mockDB.AssertNotCalled(t, "Begin", mock.Anything)
+	// Enqueue should never have been called
+	mockJQ.AssertNotCalled(t, "Enqueue", mock.Anything, mock.Anything)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestUpdateProfile_DuplicateEmail_ReturnsError verifies that when
+// UpdateUserEmailTx returns ErrDuplicateEmail, the error propagates and
+// no propagation job is enqueued.
+func TestUpdateProfile_DuplicateEmail_ReturnsError(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	clerkUserID := "user_dup"
+	newEmail := "taken@example.com"
+
+	existingUser := &domain.User{
+		ID:                 userID,
+		ClerkUserID:        clerkUserID,
+		Email:              "original@example.com",
+		EmailVerified:      true,
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		PrimaryRegion:      "iad",
+	}
+
+	mockRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockDB := new(mockTxBeginner)
+	tx := new(mockTx)
+	mockJQ := new(mockProfileJobQueue)
+
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
+	mockDB.On("Begin", ctx).Return(tx, nil)
+	mockRepo.On("UpdateUserEmailTx", ctx, tx, userID, newEmail).Return(repository.ErrDuplicateEmail)
+
+	service := NewProfileService(NewProfileServiceDeps{
+		Repo:         mockRepo,
+		IdentityRepo: mockIdentityRepo,
+		DB:           mockDB,
+		JobQueue:     mockJQ,
+	})
+
+	req := &domain.UpdateProfileRequest{Email: &newEmail}
+	result, err := service.UpdateProfile(ctx, userID, req)
+
+	assert.Nil(t, result)
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, repository.ErrDuplicateEmail))
+	// Enqueue should never have been called
+	mockJQ.AssertNotCalled(t, "Enqueue", mock.Anything, mock.Anything)
+	mockRepo.AssertExpectations(t)
+	mockDB.AssertExpectations(t)
 }

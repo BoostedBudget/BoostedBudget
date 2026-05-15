@@ -9,8 +9,7 @@
 import { useCallback, useMemo } from 'react'
 import { useBudgets } from '../../../budgets/hooks/useBudgets'
 import type { RolloverAction, RolloverType } from '../../types'
-import { formatCategoryPath } from '../../../budgets/types'
-import './RolloverActionForm.css'
+import { formatBudgetCategoryLabel } from '../../../budgets/types'
 
 export interface RolloverActionFormProps {
   /** Current action configuration */
@@ -152,14 +151,14 @@ export function RolloverActionForm({
   )
 
   return (
-    <div className={`rollover-form ${className}`.trim()}>
+    <div className={`flex flex-col gap-6 ${className}`.trim()}>
       {/* Source Section */}
-      <div className="rollover-form__section">
-        <h4 className="rollover-form__section-title">Source</h4>
+      <div className="rounded-xl border border-border bg-muted p-4">
+        <h4 className="mb-4 text-sm font-semibold uppercase tracking-wide text-foreground">Source</h4>
 
-        <div className="rollover-form__row">
-          <div className="rollover-form__field">
-            <label htmlFor="source-budget" className="rollover-form__label">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="source-budget" className="text-sm font-medium text-foreground">
               Source Budget
             </label>
             <select
@@ -167,7 +166,7 @@ export function RolloverActionForm({
               value={sourceBudget?.id ?? ''}
               onChange={handleSourceBudgetChange}
               disabled={disabled || loading}
-              className="rollover-form__select"
+              className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <option value="">Select a budget...</option>
               {budgets.map((budget) => (
@@ -178,8 +177,8 @@ export function RolloverActionForm({
             </select>
           </div>
 
-          <div className="rollover-form__field">
-            <label htmlFor="source-category" className="rollover-form__label">
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="source-category" className="text-sm font-medium text-foreground">
               Source Category
             </label>
             <select
@@ -187,12 +186,12 @@ export function RolloverActionForm({
               value={action.source_budget_category_id}
               onChange={handleSourceCategoryChange}
               disabled={disabled || !sourceBudget}
-              className="rollover-form__select"
+              className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <option value="">Select a category...</option>
               {sourceBudget?.categories?.map((category) => (
                 <option key={category.id} value={category.id}>
-                  {formatCategoryPath(category.category)}
+                  {formatBudgetCategoryLabel(category)}
                 </option>
               ))}
             </select>
@@ -201,12 +200,12 @@ export function RolloverActionForm({
       </div>
 
       {/* Target Section */}
-      <div className="rollover-form__section">
-        <h4 className="rollover-form__section-title">Target</h4>
+      <div className="rounded-xl border border-border bg-muted p-4">
+        <h4 className="mb-4 text-sm font-semibold uppercase tracking-wide text-foreground">Target</h4>
 
-        <div className="rollover-form__row">
-          <div className="rollover-form__field">
-            <label htmlFor="target-budget" className="rollover-form__label">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="target-budget" className="text-sm font-medium text-foreground">
               Target Budget
             </label>
             <select
@@ -214,7 +213,7 @@ export function RolloverActionForm({
               value={targetBudget?.id ?? ''}
               onChange={handleTargetBudgetChange}
               disabled={disabled || loading}
-              className="rollover-form__select"
+              className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <option value="">Select a budget...</option>
               {budgets.map((budget) => (
@@ -225,8 +224,8 @@ export function RolloverActionForm({
             </select>
           </div>
 
-          <div className="rollover-form__field">
-            <label htmlFor="target-category" className="rollover-form__label">
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="target-category" className="text-sm font-medium text-foreground">
               Target Category
             </label>
             <select
@@ -234,12 +233,12 @@ export function RolloverActionForm({
               value={action.target_budget_category_id ?? ''}
               onChange={handleTargetCategoryChange}
               disabled={disabled}
-              className="rollover-form__select"
+              className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <option value="">Unallocated Funds</option>
               {targetBudget?.categories?.map((category) => (
                 <option key={category.id} value={category.id}>
-                  {formatCategoryPath(category.category)}
+                  {formatBudgetCategoryLabel(category)}
                 </option>
               ))}
             </select>
@@ -248,11 +247,11 @@ export function RolloverActionForm({
       </div>
 
       {/* Rollover Type Section */}
-      <div className="rollover-form__section">
-        <h4 className="rollover-form__section-title">Rollover Configuration</h4>
+      <div className="rounded-xl border border-border bg-muted p-4">
+        <h4 className="mb-4 text-sm font-semibold uppercase tracking-wide text-foreground">Rollover Configuration</h4>
 
-        <div className="rollover-form__field">
-          <label htmlFor="rollover-type" className="rollover-form__label">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="rollover-type" className="text-sm font-medium text-foreground">
             Rollover Type
           </label>
           <select
@@ -260,7 +259,7 @@ export function RolloverActionForm({
             value={action.rollover_type}
             onChange={handleRolloverTypeChange}
             disabled={disabled}
-            className="rollover-form__select"
+            className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {ROLLOVER_TYPES.map((type) => (
               <option key={type.value} value={type.value}>
@@ -269,18 +268,18 @@ export function RolloverActionForm({
             ))}
           </select>
           {currentDescription && (
-            <p className="rollover-form__description">{currentDescription}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{currentDescription}</p>
           )}
         </div>
 
         {/* Cap Amount (for capped type) */}
         {action.rollover_type === 'capped' && (
-          <div className="rollover-form__field">
-            <label htmlFor="cap-amount" className="rollover-form__label">
+          <div className="mt-4 flex flex-col gap-1.5">
+            <label htmlFor="cap-amount" className="text-sm font-medium text-foreground">
               Cap Amount
             </label>
-            <div className="rollover-form__input-group">
-              <span className="rollover-form__prefix">$</span>
+            <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+              <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
               <input
                 id="cap-amount"
                 type="number"
@@ -288,7 +287,7 @@ export function RolloverActionForm({
                 onChange={handleCapAmountChange}
                 disabled={disabled}
                 min={0}
-                className="rollover-form__input"
+                className="min-w-0 flex-1 border-none bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
               />
             </div>
           </div>
@@ -296,11 +295,11 @@ export function RolloverActionForm({
 
         {/* Percentage (for percentage type) */}
         {action.rollover_type === 'percentage' && (
-          <div className="rollover-form__field">
-            <label htmlFor="percentage" className="rollover-form__label">
+          <div className="mt-4 flex flex-col gap-1.5">
+            <label htmlFor="percentage" className="text-sm font-medium text-foreground">
               Percentage
             </label>
-            <div className="rollover-form__input-group">
+            <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
               <input
                 id="percentage"
                 type="number"
@@ -309,9 +308,9 @@ export function RolloverActionForm({
                 disabled={disabled}
                 min={0}
                 max={100}
-                className="rollover-form__input"
+                className="min-w-0 flex-1 border-none bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
               />
-              <span className="rollover-form__suffix">%</span>
+              <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">%</span>
             </div>
           </div>
         )}

@@ -122,7 +122,7 @@ Every implementation task MUST end with these steps in order:
 2. Run `code-simplifier` subagent to clean up code
 3. Run ALL tests to validate:
    cd backend && go test ./... -v
-   cd apps/web && bun run test && bun run lint
+   cd apps/web && bun run test && bun run typecheck && bun run lint
    cd apps/web && bun run test:e2e -- --reporter=line
 4. Run Codex adversarial review on changes for a second opinion (see below)
 5. Run `/commit-push-pr` to commit, push, and create PR with "Closes #N"
@@ -141,6 +141,20 @@ skip this step even when changes seem straightforward.
 - [ ] ALL tests pass (backend + frontend + e2e + lint)
 - [ ] Codex review completed (second opinion on changes)
 - [ ] PR body includes `Closes #N` to auto-close the issue
+
+### Codex Secondary Planning (MANDATORY for brainstorming/design)
+When performing brainstorming, design, or planning work (e.g., `superpowers:brainstorming`,
+`superpowers:writing-plans`, `/smart-plan`), ALWAYS launch a `codex:codex-rescue` agent
+in the background to get a secondary perspective on the design decisions. This applies to:
+- Architecture/design proposals during brainstorming
+- Trade-off analysis between approaches
+- Spec reviews before finalizing
+- Implementation plan reviews before execution
+
+The Codex agent should be given the full context of the design and asked to critically
+evaluate risks, blind spots, and alternatives. Its findings should be incorporated into
+the final spec/plan before proceeding to implementation. Do not skip this step — a second
+set of eyes catches assumptions that a single planning pass misses.
 
 ### Task Tracking (MANDATORY)
 **When formulating a plan, ALWAYS use TaskCreate to track TODOs:**
@@ -162,6 +176,7 @@ Out-of-sync causes infinite dashboard reset loops. Increment when adding/removin
 | Command | Trigger | What it does |
 |---------|---------|-------------|
 | `/smart-plan` | Starting a GitHub issue | Brainstorm → explore code → reason → plan |
+| `/requirements-gap-analysis` | After finishing a feature | Audit requirements, Codex co-review, identify gaps, plan remaining work |
 | `/plan-next-task` | Deciding what to work on | Fetch open issues, prioritize P0-P3, recommend next |
 | `/new-endpoint` | Adding REST API endpoint | Scaffold handler+service+repo+tests+Orval types |
 | `/new-component` | Adding frontend feature/page | Scaffold types+hook+page+card+tests+route |
@@ -293,6 +308,20 @@ Out-of-sync causes infinite dashboard reset loops. Increment when adding/removin
 6. Run `make generate-openapi` and `make generate-api-client`
 
 **Example**: Adding new `email` queue - Add to queues list in service, frontend auto-renders from API response.
+
+## Analytics & AI Chatbot Direction
+
+The analytics layer (`backend/internal/services/analytics_service.go`, `repository/analytics_repository.go`) is intentionally designed to expand well beyond spending reports. Planned domains include net worth analytics, savings rate tracking, budget vs. actual, subscription detection, and more.
+
+**Long-term goal**: These analytics functions will serve as tool-callable functions for an in-app AI financial assistant. When adding new analytics endpoints:
+
+1. **Token efficiency** — Return pre-computed summaries (totals, percentages, change amounts) so the AI doesn't waste tokens doing arithmetic. Never return raw transaction dumps when aggregates suffice.
+2. **Single-responsibility** — Each service method should answer exactly one well-defined question. Compose at the API layer, not inside service methods.
+3. **Consistent filters** — All analytics methods should accept the same `SpendingFilters` / `CashFlowFilters` pattern so the AI can apply uniform date/account-type constraints across all tools.
+4. **One DB round-trip** — Each repository method should be a single efficient SQL query (no N+1). The AI may call many tools per turn; latency compounds.
+5. **Structured, named fields** — Use explicit `json` tags with snake_case names; avoid generic maps. Predictable schema = fewer tokens for the AI to interpret.
+
+When implementing new analytics features, ask: "Could an LLM use this as a function call to answer a user's financial question?" If yes, design the signature accordingly.
 
 ## Key Files
 

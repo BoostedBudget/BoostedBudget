@@ -1,12 +1,24 @@
-import './PrivacyPolicy.css'
 import { Link } from 'react-router-dom'
 
 export function PrivacyPolicy() {
   return (
-    <div className="privacy-policy">
-      <div className="privacy-policy-container">
-        <h1>Privacy Policy</h1>
-        <p className="last-updated">Last Updated: March 29, 2026</p>
+    <div className="min-h-screen bg-muted py-8 px-4 sm:px-2">
+      <div className="max-w-[900px] mx-auto bg-card px-12 py-12 rounded-lg shadow-[0_2px_8px_rgba(0,0,0,0.1)] sm:px-6 sm:py-8 xs:px-4 xs:py-6
+        [&_h2]:text-foreground [&_h2]:text-[1.75rem] [&_h2]:mt-8 [&_h2]:mb-4 [&_h2]:border-l-4 [&_h2]:border-primary [&_h2]:pl-4
+        [&_h3]:text-foreground [&_h3]:text-xl [&_h3]:mt-6 [&_h3]:mb-3
+        [&_h4]:text-foreground [&_h4]:text-base [&_h4]:mt-4 [&_h4]:mb-2 [&_h4]:font-semibold
+        [&_p]:leading-[1.7] [&_p]:text-foreground [&_p]:mb-4
+        [&_ul]:list-disc [&_ul]:ml-8 [&_ul]:mb-4
+        [&_li]:leading-[1.7] [&_li]:text-foreground [&_li]:mb-2
+        [&_li_strong]:text-foreground
+        [&_strong]:text-foreground [&_strong]:font-semibold
+        [&_hr]:border-none [&_hr]:border-t-2 [&_hr]:border-border [&_hr]:my-12
+        [&_section]:mb-10
+        sm:[&_h2]:text-2xl sm:[&_h3]:text-[1.15rem] sm:[&_ul]:ml-6">
+        <h1 className="text-foreground text-4xl mb-2 border-b-[3px] border-primary pb-4 sm:text-[2rem] xs:text-[1.75rem]">
+          Privacy Policy
+        </h1>
+        <p className="text-muted-foreground italic mb-8 text-[0.95rem]">Last Updated: April 4, 2026</p>
 
         <section>
           <h2>1. Introduction</h2>
@@ -32,6 +44,12 @@ export function PrivacyPolicy() {
             <li><strong>Authentication Tokens:</strong> Encrypted access tokens for third-party financial institutions</li>
             <li><strong>Usage Data:</strong> Application usage statistics, feature interactions, error logs</li>
           </ul>
+          <p>
+            Sensitive personal and financial fields stored in our application database are encrypted at the
+            application level before storage. For technical details, see Section 4.2. Note: third-party
+            processors (such as Plaid, Clerk, and Paddle) handle data under their own security practices
+            as described in Section 5.
+          </p>
 
           <h3>2.2 Automatically Collected Information</h3>
           <ul>
@@ -53,7 +71,7 @@ export function PrivacyPolicy() {
             <li><strong>Security:</strong> Detect fraud, prevent abuse, ensure platform security</li>
             <li><strong>Compliance:</strong> Meet legal obligations, respond to lawful requests</li>
           </ul>
-          <p className="important-note">
+          <p className="bg-warning/10 border-l-4 border-warning rounded px-4 py-4 my-6 [&_strong]:text-foreground">
             <strong>Important:</strong> BoostedBudget provides financial suggestions and automation only.
             We do not move money on your behalf. All automation rules create suggestions that you review and execute manually.
           </p>
@@ -81,12 +99,60 @@ export function PrivacyPolicy() {
           </p>
 
           <h3>4.2 Security Measures</h3>
+
+          <h4>Application-Level Encryption</h4>
+          <p>
+            Sensitive personal and financial fields stored in our application database are encrypted using{' '}
+            <strong>AES-256-GCM</strong> (Advanced Encryption Standard with Galois/Counter Mode) before
+            being written to disk. This provides defense-in-depth: even in the unlikely event of
+            unauthorized database access, those fields remain unreadable without the encryption key. Each
+            encryption operation uses a unique random value, so identical data produces different encrypted
+            outputs — preventing pattern analysis. The encrypted categories are listed in "What We Encrypt"
+            below; not every attribute in our system falls under this layer.
+          </p>
+
+          <h4>What We Encrypt</h4>
+          <p>The following categories of data are protected by application-level encryption:</p>
           <ul>
-            <li><strong>Encryption:</strong> Data encrypted in transit (TLS 1.3) and at rest (AES-256)</li>
+            <li>Personal identifiers (email addresses, user IDs, customer IDs)</li>
+            <li>Financial account information (account numbers, institution names, account masks)</li>
+            <li>Physical addresses (property addresses on mortgages, servicer addresses on student loans)</li>
+            <li>Transaction metadata and external identifiers</li>
+            <li>Webhook payloads from financial and payment integrations</li>
+            <li>Audit log details (change records, IP addresses)</li>
+          </ul>
+
+          <h4>Display Masking</h4>
+          <p>
+            When sensitive data is shown in the app, we apply display masking to limit exposure.
+            Examples: email addresses appear as <code>u***@example.com</code>, account numbers as{' '}
+            <code>****9012</code>, and street numbers in physical addresses are hidden.
+          </p>
+
+          <h4>Encrypted Lookups (Blind Indexes)</h4>
+          <p>
+            Because encrypted values cannot be searched directly, we use deterministic HMAC-SHA256 blind
+            indexes stored in separate columns for fields that require equality lookups (such as email and
+            account identifiers). This allows us to find your records without storing plaintext in queryable columns.
+          </p>
+
+          <h4>Encryption in Transit</h4>
+          <p>
+            Data in transit between your browser and our service is protected by HTTPS/TLS.
+          </p>
+
+          <h4>Key Management</h4>
+          <p>
+            Encryption keys are stored separately from encrypted data. The key used to derive lookup
+            indexes is cryptographically derived from — but distinct from — the key used for field
+            encryption, providing separation between the two operations.
+          </p>
+
+          <h4>Additional Controls</h4>
+          <ul>
             <li><strong>Access Controls:</strong> Role-based access, principle of least privilege</li>
             <li><strong>Authentication:</strong> Clerk-powered authentication with industry-standard security</li>
-            <li><strong>Token Protection:</strong> Financial institution tokens encrypted with dedicated encryption keys</li>
-            <li><strong>Audit Logging:</strong> All data access and modifications are logged for security monitoring</li>
+            <li><strong>Audit Logging:</strong> Security-relevant administrative actions and certain data modifications are logged for monitoring</li>
             <li><strong>Regular Security Audits:</strong> Periodic security assessments and vulnerability scanning</li>
           </ul>
         </section>
@@ -218,9 +284,10 @@ export function PrivacyPolicy() {
           <h3>8.4 Cancelled Accounts (No Deletion Request)</h3>
           <p>
             If you cancel your subscription but do not request account deletion, we may retain your
-            account data in read-only mode for up to <strong>24 months</strong> to allow reactivation.
-            After that period, we will delete or anonymize your data unless a longer retention period
-            is legally required. You may request deletion at any time per Section 8.2.
+            account data in read-only mode for up to <strong>6 months</strong> to allow reactivation.
+            We will notify you by email at 30 days and 7 days before your data is scheduled for
+            permanent deletion. After the retention period, we will delete your data unless a longer
+            retention period is legally required. You may request deletion at any time per Section 8.2.
           </p>
 
           <h3>8.5 Removed Household Members</h3>
@@ -330,7 +397,9 @@ export function PrivacyPolicy() {
 
         <hr />
 
-        <div className="privacy-summary">
+        <div className="bg-info/10 border-2 border-info rounded-lg p-8 mt-8
+          [&_h2]:border-none [&_h2]:mt-0 [&_h2]:text-primary [&_h2]:pl-0
+          [&_p]:mb-4">
           <h2>Summary</h2>
           <p>
             BoostedBudget is committed to protecting your privacy and providing transparency about how we
@@ -338,7 +407,7 @@ export function PrivacyPolicy() {
             Your data is securely stored in the United States with plans for multi-region expansion. You have
             full control over your privacy settings, cookie preferences, and can request data export or deletion at any time.
           </p>
-          <p className="contact-cta">
+          <p className="text-[1.1rem] text-center mt-6 pt-4 border-t border-info/30 [&_strong]:text-primary">
             <strong>Questions?</strong> Contact us at privacy@boostedbudget.com
           </p>
         </div>

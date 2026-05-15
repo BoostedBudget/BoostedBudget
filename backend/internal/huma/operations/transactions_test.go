@@ -26,6 +26,7 @@ type mockTransactionService struct {
 	updateCategoryErr error
 	categories       []string
 	categoriesErr    error
+	capturedFilters  domain.TransactionFilters
 }
 
 func (m *mockTransactionService) ListTransactions(
@@ -35,6 +36,7 @@ func (m *mockTransactionService) ListTransactions(
 	limit int,
 	offset int,
 ) (*services.TransactionListResponse, error) {
+	m.capturedFilters = filters
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
@@ -60,7 +62,7 @@ func (m *mockTransactionService) UpdateTransactionTags(ctx context.Context, user
 	return tx, nil
 }
 
-func (m *mockTransactionService) UpdateTransactionCategory(ctx context.Context, userID, transactionID string, category []string) (*domain.Transaction, error) {
+func (m *mockTransactionService) UpdateTransactionCategory(ctx context.Context, userID, transactionID string, overrideKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string) (*domain.Transaction, error) {
 	if m.updateCategoryErr != nil {
 		return nil, m.updateCategoryErr
 	}
@@ -74,6 +76,10 @@ func (m *mockTransactionService) GetDistinctPlaidCategories(ctx context.Context,
 	return m.categories, nil
 }
 
+func (m *mockTransactionService) ListByBudgetCategory(ctx context.Context, userID string, budgetCategory *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
+	return nil, 0, 0, nil
+}
+
 // Helper to create a test transaction
 func createTestTransaction(userID string) *domain.Transaction {
 	now := time.Now()
@@ -84,7 +90,7 @@ func createTestTransaction(userID string) *domain.Transaction {
 		AccountID:    "acc-123",
 		LinkedItemID: "item-123",
 		Source:       domain.SourcePlaid,
-		Amount:       -42.50,
+		Amount:       42.50,
 		Date:         now,
 		Name:         "Test Transaction",
 		MerchantName: &merchantName,
@@ -145,7 +151,7 @@ func TestGetTransactions_WithFilters(t *testing.T) {
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
 		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
 		AccountIDs:         "acc-1,acc-2,acc-3",
-		Categories:         "Food,Shopping",
+		PFCPrimaries:       "FOOD_AND_DRINK,SHOPPING",
 		Search:             "coffee",
 		Pending:            "true",
 		MinAmount:          "10.00",
@@ -349,11 +355,13 @@ func TestUpdateTransactionCategory_Success(t *testing.T) {
 
 	handler := NewTransactionHandler(mockService)
 
+	pfcPrimary := "FOOD_AND_DRINK"
 	input := &UpdateTransactionCategoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
 		ID:                 "tx-123",
 		Body: UpdateTransactionCategoryBody{
-			Category: []string{"Food and Drink", "Restaurants"},
+			Kind:       "pfc",
+			PFCPrimary: &pfcPrimary,
 		},
 	}
 
@@ -371,11 +379,13 @@ func TestUpdateTransactionCategory_NotFound(t *testing.T) {
 
 	handler := NewTransactionHandler(mockService)
 
+	pfcPrimary := "FOOD_AND_DRINK"
 	input := &UpdateTransactionCategoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		ID:                 "nonexistent",
 		Body: UpdateTransactionCategoryBody{
-			Category: []string{"Food"},
+			Kind:       "pfc",
+			PFCPrimary: &pfcPrimary,
 		},
 	}
 
@@ -523,4 +533,143 @@ func TestTransactionListResponseJSON(t *testing.T) {
 	var errorResp map[string]interface{}
 	err := json.Unmarshal(resp.Body.Bytes(), &errorResp)
 	require.NoError(t, err, "Error response should be valid JSON")
+}
+
+func TestGetTransactions_UserAccountIDFilter(t *testing.T) {
+	// Verify that ?user_account_id=<uuid> is parsed from the query string
+	// and forwarded to the service layer as filters.UserAccountID (Issue #1109).
+	userID := "user-123"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []domain.Transaction{},
+			TotalCount:   0,
+			Limit:        50,
+			Offset:       0,
+			HasMore:      false,
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	userAccountID := "some-uuid-stable-acct"
+	input := &GetTransactionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
+		UserAccountID:      userAccountID,
+	}
+
+	_, err := handler.GetTransactions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, mockService.capturedFilters.UserAccountID,
+		"UserAccountID should be plumbed through as filters.UserAccountID")
+	assert.Equal(t, userAccountID, *mockService.capturedFilters.UserAccountID,
+		"captured UserAccountID should match input")
+}
+
+
+// TestGetTransactions_SortDefaults tests that empty sort params produce default
+// SortBy="date" and SortDir="desc" in filters forwarded to the service.
+func TestGetTransactions_SortDefaults(t *testing.T) {
+	userID := "user-sort-def"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
+		// SortBy and SortDir intentionally left empty — Huma default fills them
+	}
+
+	_, err := handler.GetTransactions(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, "date", mockService.capturedFilters.SortBy,
+		"default SortBy should be 'date'")
+	assert.Equal(t, "desc", mockService.capturedFilters.SortDir,
+		"default SortDir should be 'desc'")
+}
+
+// TestGetTransactions_SortByAmount tests that sort_by=amount&sort_dir=asc
+// propagates through to filters.
+func TestGetTransactions_SortByAmount(t *testing.T) {
+	userID := "user-sort-amount"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
+		SortBy:             "amount",
+		SortDir:            "asc",
+	}
+
+	_, err := handler.GetTransactions(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, "amount", mockService.capturedFilters.SortBy)
+	assert.Equal(t, "asc", mockService.capturedFilters.SortDir)
+}
+
+// TestGetTransactions_SortByMerchant tests that sort_by=merchant&sort_dir=desc
+// propagates through to filters.
+func TestGetTransactions_SortByMerchant(t *testing.T) {
+	userID := "user-sort-merchant"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
+		SortBy:             "merchant",
+		SortDir:            "desc",
+	}
+
+	_, err := handler.GetTransactions(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, "merchant", mockService.capturedFilters.SortBy)
+	assert.Equal(t, "desc", mockService.capturedFilters.SortDir)
+}
+
+// TestGetTransactions_SortByInvalid tests that an unknown sort_by value is rejected by Huma's
+// enum validation. In the test environment, auth fails too, so Huma returns 401 with both
+// errors in the body. The enum error being present confirms the validation fired.
+func TestGetTransactions_SortByInvalid(t *testing.T) {
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{},
+	}
+	_, api := humatest.New(t)
+	handler := NewTransactionHandler(mockService)
+	RegisterTransactionRoutes(api, handler)
+
+	resp := api.Get("/api/v1/transactions?sort_by=hax")
+	// Auth also fails in test, so status is 401 (higher priority than 422).
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+	assert.Contains(t, resp.Body.String(), "expected value to be one of")
+}
+
+// TestGetTransactions_SortByCategory tests that sort_by=category&sort_dir=asc
+// propagates through to filters.
+func TestGetTransactions_SortByCategory(t *testing.T) {
+	userID := "user-sort-cat"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
+		SortBy:             "category",
+		SortDir:            "asc",
+	}
+
+	_, err := handler.GetTransactions(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, "category", mockService.capturedFilters.SortBy)
+	assert.Equal(t, "asc", mockService.capturedFilters.SortDir)
 }

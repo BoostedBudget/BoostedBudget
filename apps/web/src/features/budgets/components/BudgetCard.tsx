@@ -7,16 +7,16 @@
  */
 
 import { Link } from 'react-router-dom';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { BudgetProgressBar } from './BudgetProgressBar';
 import { computeBudgetMetrics } from '../types';
+import { getBudgetDetailPath } from '../constants';
 import type { Budget } from '../types';
-import './BudgetCard.css';
 
 export interface BudgetCardProps {
   /** The budget to display */
   budget: Budget;
-  /** Callback when edit is clicked */
-  onEdit?: (budget: Budget) => void;
   /** Callback when delete is clicked */
   onDelete?: (budgetId: string) => void;
 }
@@ -71,85 +71,97 @@ function formatPeriod(period: string): string {
  * />
  * ```
  */
-export function BudgetCard({ budget, onEdit, onDelete }: BudgetCardProps) {
+export function BudgetCard({ budget, onDelete }: BudgetCardProps) {
   const metrics = computeBudgetMetrics(budget);
   const categoryCount = budget.categories?.length || 0;
-
-  const handleEdit = () => {
-    onEdit?.(budget);
-  };
 
   const handleDelete = () => {
     onDelete?.(budget.id);
   };
 
   return (
-    <div className="budget-card">
-      <div className="budget-card__header">
-        <div className="budget-card__title-row">
-          <h3 className="budget-card__name">{budget.name}</h3>
-          {budget.is_active && <span className="budget-card__badge">Active</span>}
+    <div
+      data-testid="budget-card"
+      className="bg-card border border-border rounded-xl p-6 flex flex-col gap-4 transition-shadow hover:shadow-md"
+    >
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-2">
+          <h3 className="m-0 text-lg font-semibold text-foreground">{budget.name}</h3>
+          {budget.is_active && <Badge variant="success">Active</Badge>}
         </div>
         {budget.description && (
-          <p className="budget-card__description">{budget.description}</p>
+          <p className="m-0 text-sm text-muted-foreground">{budget.description}</p>
         )}
       </div>
 
-      <div className="budget-card__meta">
-        <span className="budget-card__period">{formatPeriod(budget.period)}</span>
-        <span className="budget-card__dates">
+      <div className="flex justify-between items-center text-sm">
+        <span className="font-medium text-foreground">{formatPeriod(budget.period)}</span>
+        <span className="budget-card__dates text-muted-foreground">
           {formatDate(budget.start_date)}
           {budget.end_date && ` - ${formatDate(budget.end_date)}`}
         </span>
       </div>
 
-      <div className="budget-card__amount" data-ph-mask>
+      <div className="text-2xl font-bold text-foreground" data-ph-mask>
         {formatCurrency(budget.amount, budget.currency_code)}
       </div>
 
       <BudgetProgressBar
         spent={metrics.total_spent}
-        total={budget.amount}
+        total={budget.expected_income ?? budget.amount}
         currencyCode={budget.currency_code}
         size="medium"
       />
 
-      <div className="budget-card__footer">
-        <span className="budget-card__remaining" data-ph-mask>
+      {/* Issue #1048: Income progress row */}
+      {(budget.expected_income ?? 0) > 0 && (
+        <div className="flex flex-col gap-1">
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <span>Income</span>
+            <span data-ph-mask>
+              {formatCurrency(budget.income_amount ?? 0, budget.currency_code)} of {formatCurrency(budget.expected_income!, budget.currency_code)} expected
+            </span>
+          </div>
+          <div
+            className="h-1 bg-muted rounded-full overflow-hidden"
+            role="progressbar"
+            aria-label="Income received"
+            aria-valuenow={Math.round(((budget.income_amount ?? 0) / budget.expected_income!) * 100)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div
+              className="h-full rounded-full bg-success transition-[width] duration-300"
+              style={{ width: `${Math.min(((budget.income_amount ?? 0) / budget.expected_income!) * 100, 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="flex justify-between items-center text-sm text-muted-foreground">
+        <span className="font-medium" data-ph-mask>
           {formatCurrency(metrics.remaining_amount, budget.currency_code)} remaining
         </span>
-        <span className="budget-card__categories">
+        <span>
           {categoryCount} {categoryCount === 1 ? 'category' : 'categories'}
         </span>
       </div>
 
-      <Link
-        to={`/budgets/${budget.id}`}
-        className="budget-card__manage-link"
-      >
-        Manage Categories
-      </Link>
+      <Button asChild variant="outline" className="w-full">
+        <Link to={getBudgetDetailPath(budget.id)}>Manage budget</Link>
+      </Button>
 
-      {(onEdit || onDelete) && (
-        <div className="budget-card__actions">
-          {onEdit && (
-            <button
-              className="budget-card__btn budget-card__btn--edit"
-              onClick={handleEdit}
-              aria-label="Edit budget"
-            >
-              Edit
-            </button>
-          )}
-          {onDelete && (
-            <button
-              className="budget-card__btn budget-card__btn--delete"
-              onClick={handleDelete}
-              aria-label="Delete budget"
-            >
-              Delete
-            </button>
-          )}
+      {onDelete && (
+        <div className="flex gap-2 mt-2 pt-4 border-t border-border">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleDelete}
+            aria-label="Delete budget"
+            className="text-destructive border-destructive hover:bg-destructive/10 hover:text-destructive"
+          >
+            Delete
+          </Button>
         </div>
       )}
     </div>

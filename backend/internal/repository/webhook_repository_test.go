@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pashagolub/pgxmock/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,7 +21,8 @@ func TestWebhookEventCreate_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
 	ctx := context.Background()
 
 	// Test webhook event
@@ -42,16 +43,17 @@ func TestWebhookEventCreate_Success(t *testing.T) {
 		Processed:       false,
 	}
 
-	// Mock the INSERT query
+	// Mock the INSERT query — payload and item_id are encrypted, blind index is added
 	mock.ExpectQuery(`INSERT INTO webhook_events`).
 		WithArgs(
 			"TRANSACTIONS",
 			&webhookCode,
-			&itemID,
+			pgxmock.AnyArg(), // encrypted item_id
+			pgxmock.AnyArg(), // item_id_blind_idx
 			pgxmock.AnyArg(), // error_code
 			&newTxCount,
 			pgxmock.AnyArg(), // removed_transactions
-			payload,
+			pgxmock.AnyArg(), // encrypted payload
 			&signature,
 			true,
 			false,
@@ -75,7 +77,8 @@ func TestWebhookEventCreate_DatabaseError(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
 	ctx := context.Background()
 
 	payload := json.RawMessage(`{"webhook_type":"TRANSACTIONS"}`)
@@ -84,8 +87,8 @@ func TestWebhookEventCreate_DatabaseError(t *testing.T) {
 		Payload:     payload,
 	}
 
-	// Mock database error - need to match 10 arguments for pgxmock v4
-	args := make([]interface{}, 10)
+	// Mock database error - 11 args now (added item_id_blind_idx)
+	args := make([]interface{}, 11)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -106,7 +109,8 @@ func TestWebhookEventMarkProcessed_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
 	ctx := context.Background()
 	webhookID := "test-id-123"
 
@@ -128,7 +132,8 @@ func TestWebhookEventMarkProcessed_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
 	ctx := context.Background()
 	webhookID := "nonexistent-id"
 
@@ -150,21 +155,22 @@ func TestWebhookEventGetUnprocessed_Multiple(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
 	ctx := context.Background()
 
 	// Use pointers for nullable columns (pgxmock v4 requirement)
 	webhookCode1 := "DEFAULT_UPDATE"
 	webhookCode2 := "ERROR"
-	itemID1 := "item-1"
-	itemID2 := "item-2"
+	itemID1 := "ENC$TENC[item-1]"
+	itemID2 := "ENC$TENC[item-2]"
 	errorCode := "ITEM_LOGIN_REQUIRED"
 	newTransactions := 5
 	signature1 := "sig-1"
 	signature2 := "sig-2"
 	now := time.Now()
 
-	// Mock SELECT query
+	// Mock SELECT query — payload column is now TEXT (encrypted string)
 	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
 		"new_transactions", "removed_transactions", "payload",
@@ -173,13 +179,13 @@ func TestWebhookEventGetUnprocessed_Multiple(t *testing.T) {
 	}).
 		AddRow(
 			"id-1", "TRANSACTIONS", &webhookCode1, &itemID1, nil,
-			&newTransactions, nil, json.RawMessage(`{}`),
+			&newTransactions, nil, "ENC$TENC[{}]",
 			&signature1, true, false, nil,
 			now, now,
 		).
 		AddRow(
 			"id-2", "ITEM", &webhookCode2, &itemID2, &errorCode,
-			nil, nil, json.RawMessage(`{}`),
+			nil, nil, "ENC$TENC[{}]",
 			&signature2, true, false, nil,
 			now, now,
 		)
@@ -203,7 +209,8 @@ func TestWebhookEventGetUnprocessed_Empty(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
 	ctx := context.Background()
 
 	// Mock empty result
@@ -231,7 +238,8 @@ func TestWebhookEventGetByItemID_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
 	ctx := context.Background()
 	itemID := "test-item-123"
 	limit := 10
@@ -241,8 +249,10 @@ func TestWebhookEventGetByItemID_Success(t *testing.T) {
 	newTransactions := 3
 	signature := "sig-1"
 	now := time.Now()
+	// DB stores encrypted item_id; the repo will decrypt it back to "test-item-123"
+	encItemID := "ENC$TENC[" + itemID + "]"
 
-	// Mock SELECT query with item_id filter
+	// Mock SELECT query — WHERE clause now uses item_id_blind_idx, not item_id
 	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
 		"new_transactions", "removed_transactions", "payload",
@@ -250,20 +260,20 @@ func TestWebhookEventGetByItemID_Success(t *testing.T) {
 		"created_at", "updated_at",
 	}).
 		AddRow(
-			"id-1", "TRANSACTIONS", &webhookCode, &itemID, nil,
-			&newTransactions, nil, json.RawMessage(`{}`),
+			"id-1", "TRANSACTIONS", &webhookCode, &encItemID, nil,
+			&newTransactions, nil, "ENC$TENC[{}]",
 			&signature, true, true, &now,
 			now, now,
 		)
 
-	mock.ExpectQuery(`SELECT .+ FROM webhook_events WHERE item_id`).
-		WithArgs(itemID, limit).
+	mock.ExpectQuery(`SELECT .+ FROM webhook_events WHERE item_id_blind_idx`).
+		WithArgs(pgxmock.AnyArg(), limit). // blind index value + limit
 		WillReturnRows(rows)
 
 	// Execute
 	events, err := repo.GetByItemID(ctx, itemID, limit)
 
-	// Assert
+	// Assert — repo decrypts, so ItemID should be the original plaintext
 	assert.NoError(t, err)
 	assert.Len(t, events, 1)
 	assert.Equal(t, itemID, *events[0].ItemID)
@@ -275,7 +285,8 @@ func TestWebhookEventGetByItemID_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
 	ctx := context.Background()
 	itemID := "nonexistent-item"
 	limit := 10
@@ -288,8 +299,8 @@ func TestWebhookEventGetByItemID_NotFound(t *testing.T) {
 		"created_at", "updated_at",
 	})
 
-	mock.ExpectQuery(`SELECT .+ FROM webhook_events WHERE item_id`).
-		WithArgs(itemID, limit).
+	mock.ExpectQuery(`SELECT .+ FROM webhook_events WHERE item_id_blind_idx`).
+		WithArgs(pgxmock.AnyArg(), limit). // blind index value + limit
 		WillReturnRows(rows)
 
 	// Execute
@@ -317,7 +328,8 @@ func TestWebhookRepository_Update_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
 	ctx := context.Background()
 
 	// Create webhook event with processing metadata
@@ -362,7 +374,8 @@ func TestWebhookRepository_Update_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
 	ctx := context.Background()
 
 	event := &domain.WebhookEvent{
@@ -396,21 +409,22 @@ func TestWebhookRepository_GetUnprocessedByType_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
 	ctx := context.Background()
 
 	// Use pointers for nullable columns (pgxmock v4 requirement)
 	webhookCode1 := "DEFAULT_UPDATE"
 	webhookCode2 := "INITIAL_UPDATE"
-	itemID1 := "item-1"
-	itemID2 := "item-2"
+	itemID1 := "ENC$TENC[item-1]"
+	itemID2 := "ENC$TENC[item-2]"
 	newTx1 := 5
 	newTx2 := 10
 	signature1 := "sig-1"
 	signature2 := "sig-2"
 	now := time.Now()
 
-	// Mock SELECT query filtered by webhook_type
+	// Mock SELECT query filtered by webhook_type — payload is now TEXT (encrypted string)
 	rows := pgxmock.NewRows([]string{
 		"id", "webhook_type", "webhook_code", "item_id", "error_code",
 		"new_transactions", "removed_transactions", "payload",
@@ -421,14 +435,14 @@ func TestWebhookRepository_GetUnprocessedByType_Success(t *testing.T) {
 	}).
 		AddRow(
 			"id-1", "TRANSACTIONS", &webhookCode1, &itemID1, nil,
-			&newTx1, nil, json.RawMessage(`{}`),
+			&newTx1, nil, "ENC$TENC[{}]",
 			&signature1, true, false, nil,
 			nil, nil, nil, 0, nil,
 			now, now,
 		).
 		AddRow(
 			"id-2", "TRANSACTIONS", &webhookCode2, &itemID2, nil,
-			&newTx2, nil, json.RawMessage(`{}`),
+			&newTx2, nil, "ENC$TENC[{}]",
 			&signature2, true, false, nil,
 			nil, nil, nil, 0, nil,
 			now, now,
@@ -456,12 +470,13 @@ func TestWebhookRepository_GetUnprocessedByType_OnlyTransactions(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
 	ctx := context.Background()
 
 	// Use pointers for nullable columns (pgxmock v4 requirement)
 	webhookCode := "DEFAULT_UPDATE"
-	itemID := "item-1"
+	itemID := "ENC$TENC[item-1]"
 	newTransactions := 5
 	signature := "sig-1"
 	now := time.Now()
@@ -477,7 +492,7 @@ func TestWebhookRepository_GetUnprocessedByType_OnlyTransactions(t *testing.T) {
 	}).
 		AddRow(
 			"id-1", "TRANSACTIONS", &webhookCode, &itemID, nil,
-			&newTransactions, nil, json.RawMessage(`{}`),
+			&newTransactions, nil, "ENC$TENC[{}]",
 			&signature, true, false, nil,
 			nil, nil, nil, 0, nil,
 			now, now,
@@ -504,7 +519,8 @@ func TestWebhookRepository_GetUnprocessedByType_RespectsRetryTime(t *testing.T) 
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
 	ctx := context.Background()
 
 	// Mock empty result (webhooks exist but next_retry_at is in future)
@@ -537,7 +553,8 @@ func TestWebhookRepository_GetUnprocessedByType_OrdersByCreatedAt(t *testing.T) 
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
 	ctx := context.Background()
 
 	older := time.Now().Add(-2 * time.Hour)
@@ -545,8 +562,8 @@ func TestWebhookRepository_GetUnprocessedByType_OrdersByCreatedAt(t *testing.T) 
 
 	// Use pointers for nullable columns (pgxmock v4 requirement)
 	webhookCode := "DEFAULT_UPDATE"
-	itemID1 := "item-1"
-	itemID2 := "item-2"
+	itemID1 := "ENC$TENC[item-1]"
+	itemID2 := "ENC$TENC[item-2]"
 	newTx1 := 5
 	newTx2 := 3
 	signature1 := "sig-1"
@@ -563,14 +580,14 @@ func TestWebhookRepository_GetUnprocessedByType_OrdersByCreatedAt(t *testing.T) 
 	}).
 		AddRow(
 			"id-older", "TRANSACTIONS", &webhookCode, &itemID1, nil,
-			&newTx1, nil, json.RawMessage(`{}`),
+			&newTx1, nil, "ENC$TENC[{}]",
 			&signature1, true, false, nil,
 			nil, nil, nil, 0, nil,
 			older, older,
 		).
 		AddRow(
 			"id-newer", "TRANSACTIONS", &webhookCode, &itemID2, nil,
-			&newTx2, nil, json.RawMessage(`{}`),
+			&newTx2, nil, "ENC$TENC[{}]",
 			&signature2, true, false, nil,
 			nil, nil, nil, 0, nil,
 			newer, newer,

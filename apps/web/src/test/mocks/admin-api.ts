@@ -65,6 +65,54 @@ export const mockUseReplayAdminPaddleWebhook = mock(() => ({
   isError: false,
 }))
 
+// === DLQ hooks (Issue #633) ===
+export const mockUseListAdminDeadLetterJobs = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+}))
+
+export const mockUseGetAdminDeadLetterJobStats = mock(() => ({
+  data: undefined,
+  isLoading: false,
+  error: null,
+}))
+
+export const mockUseGetAdminDeadLetterJobDetail = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+}))
+
+export const mockUseGetAdminDeadLetterJobArgs = mock(() => ({
+  data: undefined,
+  isLoading: false,
+  error: null,
+  refetch: mock(() => Promise.resolve()),
+}))
+
+export const mockUseRetryAdminDeadLetterJob = mock(() => ({
+  mutate: mock(() => {}),
+  isPending: false,
+  isSuccess: false,
+  isError: false,
+}))
+
+export const mockUseAddAdminDeadLetterJobNotes = mock(() => ({
+  mutate: mock(() => {}),
+  isPending: false,
+}))
+
+export const mockUseDeleteAdminDeadLetterJob = mock(() => ({
+  mutate: mock(() => {}),
+  isPending: false,
+}))
+
+export const mockUseBulkDeleteAdminDeadLetterJobs = mock(() => ({
+  mutate: mock(() => {}),
+  isPending: false,
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/admin/admin', () => ({
   ...RealAdminModule,
@@ -76,4 +124,12 @@ mock.module('@boostedbudget/api-client/endpoints/admin/admin', () => ({
   useGetAdminPaddleWebhookStats: mockUseGetAdminPaddleWebhookStats,
   useGetAdminPaddleWebhookDetail: mockUseGetAdminPaddleWebhookDetail,
   useReplayAdminPaddleWebhook: mockUseReplayAdminPaddleWebhook,
+  useListAdminDeadLetterJobs: mockUseListAdminDeadLetterJobs,
+  useGetAdminDeadLetterJobStats: mockUseGetAdminDeadLetterJobStats,
+  useGetAdminDeadLetterJobDetail: mockUseGetAdminDeadLetterJobDetail,
+  useGetAdminDeadLetterJobArgs: mockUseGetAdminDeadLetterJobArgs,
+  useRetryAdminDeadLetterJob: mockUseRetryAdminDeadLetterJob,
+  useAddAdminDeadLetterJobNotes: mockUseAddAdminDeadLetterJobNotes,
+  useDeleteAdminDeadLetterJob: mockUseDeleteAdminDeadLetterJob,
+  useBulkDeleteAdminDeadLetterJobs: mockUseBulkDeleteAdminDeadLetterJobs,
 }))

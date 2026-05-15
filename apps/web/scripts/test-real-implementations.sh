@@ -19,11 +19,10 @@
 # - useDashboardLayout.test.tsx - Dashboard layout hook
 # - useDashboardOnboarding.test.ts - Dashboard onboarding hook
 # - useBudgetFilters.test.ts - Budget filters hook
-# - useBudgets.test.ts - Budgets hook
-# - useSavingsGoals.test.tsx - Savings goals hook
+# - useBudgets.test.tsx - Budgets hook
+# - useSavingsGoals.test.tsx - Savings goals hook (features/savings/hooks/)
 # - useBudgetDetail.test.tsx - Budget detail hook
 # - useAvailableCategories.test.tsx - Available categories hook
-# - useRuleTierLimits.test.ts - Rule tier limits hook
 
 set -e
 
@@ -51,19 +50,20 @@ TEST_FILES=(
     "$FRONTEND_DIR/src/features/dashboard/hooks/useDashboardLayout.test.tsx"
     "$FRONTEND_DIR/src/features/dashboard/hooks/useDashboardOnboarding.test.ts"
     "$FRONTEND_DIR/src/features/budgets/hooks/useBudgetFilters.test.ts"
-    "$FRONTEND_DIR/src/features/budgets/hooks/useBudgets.test.ts"
-    "$FRONTEND_DIR/src/features/budgets/hooks/useSavingsGoals.test.tsx"
+    "$FRONTEND_DIR/src/features/budgets/hooks/useBudgets.test.tsx"
+    "$FRONTEND_DIR/src/features/savings/hooks/useSavingsGoals.test.tsx"
     "$FRONTEND_DIR/src/features/budgets/hooks/useBudgetDetail.test.tsx"
     "$FRONTEND_DIR/src/features/budgets/hooks/useAvailableCategories.test.tsx"
-    "$FRONTEND_DIR/src/features/rules/hooks/useRuleTierLimits.test.ts"
 )
 
 # Preload files for real implementation tests (absolute paths)
-# Only DOM, testing-library, and savings-goals-api (for useSavingsGoals.test.tsx)
+# Only DOM, testing-library, and minimal API-level mocks needed by each test
 # NO wrapper-level mocks that would interfere with testing real hook implementations
 PRELOAD_FILES=(
     "$FRONTEND_DIR/src/test/happydom.ts"
     "$FRONTEND_DIR/src/test/testing-library.ts"
+    # Clerk mock: DashboardContext → useActiveAccounts → useUser() (Issue #1109 W4-D)
+    "$FRONTEND_DIR/src/test/mocks/clerk.tsx"
     "$FRONTEND_DIR/src/test/mocks/savings-goals-api.ts"
 )
 

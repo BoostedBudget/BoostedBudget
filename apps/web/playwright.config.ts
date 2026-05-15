@@ -44,7 +44,14 @@ export default defineConfig({
   testDir: './e2e',
 
   // Maximum time one test can run
-  timeout: 15 * 1000,
+  // CI runs on a shared Mac Mini (4 runners) with heavy job contention — 30s gives headroom
+  timeout: process.env.CI ? 30 * 1000 : 15 * 1000,
+
+  // Global assertion timeout (default is 5s — too tight under CI resource contention)
+  // Raises all expect() calls to 10s so below-fold content and slow renders don't time out
+  expect: {
+    timeout: 10 * 1000,
+  },
 
   // Run tests in files in parallel
   fullyParallel: true,
@@ -54,6 +61,9 @@ export default defineConfig({
 
   // Retry on CI only
   retries: process.env.CI ? 2 : 0,
+
+  // Stop after 5 failures in CI — prevents 12+ min of timeout waste when PostgreSQL dies
+  maxFailures: process.env.CI ? 5 : undefined,
 
   // Opt out of parallel tests on CI
   // Limit to 2 workers locally to prevent memory exhaustion (was 8 on 8-core system)
@@ -152,6 +162,8 @@ export default defineConfig({
       url: `http://localhost:${backendPort}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
+      stdout: 'pipe',
+      stderr: 'pipe',
     },
   ],
 });

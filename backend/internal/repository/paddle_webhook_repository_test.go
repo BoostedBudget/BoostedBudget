@@ -24,7 +24,8 @@ func setupPaddleWebhookMockDB(t *testing.T) (pgxmock.PgxPoolIface, PaddleWebhook
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewPaddleWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewPaddleWebhookRepository(mock, enc)
 	return mock, repo
 }
 
@@ -52,7 +53,7 @@ func TestPaddleWebhookCreate_Success(t *testing.T) {
 			pgxmock.AnyArg(), // id (generated UUID)
 			event.EventID,
 			event.EventType,
-			event.Payload,
+			pgxmock.AnyArg(), // encrypted payload
 			event.Signature,
 			event.SignatureValid,
 			event.Processed,
@@ -93,10 +94,10 @@ func TestCreate_DuplicateEventID(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO paddle_webhook_events`)).
 		WithArgs(
-			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // id
 			event.EventID,
 			event.EventType,
-			event.Payload,
+			pgxmock.AnyArg(), // encrypted payload
 			event.Signature,
 			event.SignatureValid,
 			event.Processed,
@@ -131,10 +132,10 @@ func TestCreate_DatabaseError(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO paddle_webhook_events`)).
 		WithArgs(
-			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // id
 			event.EventID,
 			event.EventType,
-			event.Payload,
+			pgxmock.AnyArg(), // encrypted payload
 			event.Signature,
 			event.SignatureValid,
 			event.Processed,
@@ -169,7 +170,7 @@ func TestGetByID_Found(t *testing.T) {
 		id,
 		"evt_01h1234567890",
 		"subscription.created",
-		json.RawMessage(`{"data": {}}`),
+		`ENC$TENC[{"data": {}}]`, // encrypted payload (TEXT column)
 		&signature,
 		true,
 		true,
@@ -256,7 +257,7 @@ func TestGetByEventID_Found(t *testing.T) {
 		uuid.New().String(),
 		eventID,
 		"subscription.created",
-		json.RawMessage(`{"data": {}}`),
+		`ENC$TENC[{"data": {}}]`, // encrypted TEXT payload
 		&signature,
 		true,
 		false,
@@ -452,15 +453,15 @@ func TestGetUnprocessed_ReturnsMultiple(t *testing.T) {
 	}).
 		AddRow(
 			uuid.New().String(), "evt_01h1111", "subscription.created",
-			json.RawMessage(`{}`), &signature, true, false, nil, nil, 0, now, now,
+			`ENC$TENC[{}]`, &signature, true, false, nil, nil, 0, now, now,
 		).
 		AddRow(
 			uuid.New().String(), "evt_01h2222", "subscription.updated",
-			json.RawMessage(`{}`), &signature, true, false, nil, nil, 0, now, now,
+			`ENC$TENC[{}]`, &signature, true, false, nil, nil, 0, now, now,
 		).
 		AddRow(
 			uuid.New().String(), "evt_01h3333", "transaction.completed",
-			json.RawMessage(`{}`), &signature, true, false, nil, nil, 0, now, now,
+			`ENC$TENC[{}]`, &signature, true, false, nil, nil, 0, now, now,
 		)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, event_id, event_type, payload`)).
@@ -542,11 +543,11 @@ func TestGetUnprocessedByType_Success(t *testing.T) {
 	}).
 		AddRow(
 			uuid.New().String(), "evt_01h1111", eventType,
-			json.RawMessage(`{}`), &signature, true, false, nil, nil, 0, now, now,
+			`ENC$TENC[{}]`, &signature, true, false, nil, nil, 0, now, now,
 		).
 		AddRow(
 			uuid.New().String(), "evt_01h2222", eventType,
-			json.RawMessage(`{}`), &signature, true, false, nil, nil, 0, now, now,
+			`ENC$TENC[{}]`, &signature, true, false, nil, nil, 0, now, now,
 		)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, event_id, event_type, payload`)).
@@ -642,11 +643,11 @@ func TestGetRecentWebhooks_Success(t *testing.T) {
 	}).
 		AddRow(
 			uuid.New().String(), "evt_newest", "subscription.created",
-			json.RawMessage(`{}`), &signature, true, true, &now, nil, 0, now, now,
+			`ENC$TENC[{}]`, &signature, true, true, &now, nil, 0, now, now,
 		).
 		AddRow(
 			uuid.New().String(), "evt_older", "transaction.completed",
-			json.RawMessage(`{}`), &signature, true, true, &now, nil, 0, now.Add(-1*time.Hour), now,
+			`ENC$TENC[{}]`, &signature, true, true, &now, nil, 0, now.Add(-1*time.Hour), now,
 		)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, event_id, event_type, payload`)).
@@ -675,7 +676,7 @@ func addWebhookEventRow(rows *pgxmock.Rows, eventID, eventType string, processed
 	sig := "ts=1614280549;h1=abc123"
 	return rows.AddRow(
 		uuid.New().String(), eventID, eventType,
-		json.RawMessage(`{}`), &sig, true, processed, nil, nil, 0, now, now,
+		`ENC$TENC[{}]`, &sig, true, processed, nil, nil, 0, now, now,
 	)
 }
 

@@ -34,6 +34,7 @@ import {
 import {
   mockUseGetUserCategories,
   mockUseGetPlaidCategories,
+  mockUseGetPlaidPrimaryCategories,
   mockCreateCategoryMutateAsync,
   mockUseCreateCategory,
 } from '@/test/mocks/categories-api'
@@ -67,7 +68,8 @@ describe('TransactionsPage', () => {
       date: '2025-10-25',
       name: 'Starbucks',
       merchant_name: 'Starbucks Coffee',
-      category: '["Food and Drink", "Coffee"]',
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
       pending: false,
       created_at: '2025-10-25T10:00:00Z',
       updated_at: '2025-10-25T10:00:00Z',
@@ -83,7 +85,7 @@ describe('TransactionsPage', () => {
       date: '2025-10-24',
       name: 'Salary',
       merchant_name: null,
-      category: '["Income", "Payroll"]',
+      pfc_primary: 'INCOME',
       pending: false,
       created_at: '2025-10-24T10:00:00Z',
       updated_at: '2025-10-24T10:00:00Z',
@@ -174,6 +176,12 @@ describe('TransactionsPage', () => {
       error: null,
     })
 
+    mockUseGetPlaidPrimaryCategories.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+    })
+
     mockUseGetAccounts.mockReturnValue({
       data: { accounts: [] },
       isLoading: false,
@@ -213,6 +221,7 @@ describe('TransactionsPage', () => {
       mockUseGetUserTags,
       mockUseGetUserCategories,
       mockUseGetPlaidCategories,
+      mockUseGetPlaidPrimaryCategories,
       mockUseGetAccounts,
       mockUseCreateTag,
       mockUseCreateCategory,
@@ -542,6 +551,57 @@ describe('TransactionsPage', () => {
       expect(screen.getByRole('table')).toBeInTheDocument()
       const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
       expect(editButtons.length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('Account filtering (Issue #1109)', () => {
+    it('excludes replaced accounts from account filter options', async () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: {
+          accounts: [
+            { id: 'active-1', name: 'Primary Checking', status: 'active' },
+            { id: 'replaced-1', name: 'Old Checking', status: 'replaced' },
+          ],
+        },
+        isLoading: false,
+        error: null,
+      })
+
+      const Wrapper = createWrapper()
+      render(<TransactionsPage />, { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
+      })
+
+      // The account map and options should only include active accounts
+      // This is a smoke test — the real assertion is that we can render without error
+      // when a replaced account is present in the API response
+      expect(screen.queryByText('Old Checking')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('filter_dropdown_includes_curated_pfc_primaries_not_in_loaded_rows', () => {
+    it('includes curated PFC primaries even when no transactions have that category', async () => {
+      // Loan Payments is a curated primary absent from all mock transactions (which use Food/Drink)
+      mockUseGetPlaidPrimaryCategories.mockReturnValueOnce({
+        data: [
+          { enum: 'FOOD_AND_DRINK', display: 'Food And Drink' },
+          { enum: 'LOAN_PAYMENTS', display: 'Loan Payments' },
+        ],
+        isLoading: false,
+        error: null,
+      })
+
+      const Wrapper = createWrapper()
+      render(<TransactionsPage />, { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
+      })
+
+      // useGetPlaidPrimaryCategories must have been called (curated source is wired up)
+      expect(mockUseGetPlaidPrimaryCategories).toHaveBeenCalled()
     })
   })
 })

@@ -9,6 +9,8 @@
 
 import { Navigate, useLocation } from 'react-router-dom'
 import { useProfile } from '@/features/profile/hooks/useProfile'
+import { ReadOnlyProvider } from './ReadOnlyContext'
+import { ReadOnlyBanner } from './ReadOnlyBanner'
 
 interface PremiumRouteProps {
   children: React.ReactNode
@@ -19,18 +21,18 @@ interface PremiumRouteProps {
  */
 function LoadingSkeleton() {
   return (
-    <div data-testid="premium-loading" className="flex justify-center items-center min-h-screen bg-gray-50">
+    <div data-testid="premium-loading" className="flex justify-center items-center min-h-screen bg-muted">
       <div className="w-full max-w-md p-6 space-y-4">
         {/* Skeleton header */}
-        <div className="h-6 bg-gray-200 rounded animate-pulse w-1/3"></div>
+        <div className="h-6 bg-skeleton rounded animate-pulse w-1/3"></div>
         {/* Skeleton content blocks */}
         <div className="space-y-3">
-          <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
-          <div className="h-4 bg-gray-200 rounded animate-pulse w-5/6"></div>
-          <div className="h-4 bg-gray-200 rounded animate-pulse w-4/6"></div>
+          <div className="h-4 bg-skeleton rounded animate-pulse"></div>
+          <div className="h-4 bg-skeleton rounded animate-pulse w-5/6"></div>
+          <div className="h-4 bg-skeleton rounded animate-pulse w-4/6"></div>
         </div>
         {/* Skeleton card */}
-        <div className="h-32 bg-gray-200 rounded-lg animate-pulse mt-4"></div>
+        <div className="h-32 bg-skeleton rounded-lg animate-pulse mt-4"></div>
       </div>
     </div>
   )
@@ -48,13 +50,13 @@ function ProfileError({ error }: ProfileErrorProps) {
   console.error('[PremiumRoute] Profile API error:', error?.message, error)
 
   return (
-    <div data-testid="profile-error" className="flex justify-center items-center min-h-screen bg-gray-50 dark:bg-gray-900">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 max-w-md text-center">
+    <div data-testid="profile-error" className="flex justify-center items-center min-h-screen bg-background">
+      <div className="bg-card rounded-lg shadow-lg p-8 max-w-md text-center">
         <div className="text-red-600 text-5xl mb-4" aria-hidden="true">⚠️</div>
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+        <h2 className="text-xl font-semibold text-foreground mb-2">
           Unable to Load Profile
         </h2>
-        <p className="text-gray-600 dark:text-gray-400 mb-6">
+        <p className="text-muted-foreground mb-6">
           Please try refreshing the page. If the problem persists, try signing out and back in.
         </p>
         {/* Issue #698: Always show error message for E2E/QA debugging */}
@@ -94,17 +96,38 @@ export function PremiumRoute({ children }: PremiumRouteProps) {
     return <LoadingSkeleton />
   }
 
-  const hasActiveSubscription = user.subscription_status === 'active' || user.subscription_status === 'trial'
+  // Active: full access
+  const isActive = user.subscription_status === 'active'
+    || user.subscription_status === 'trial'
+    || user.subscription_status === 'trialing'
 
-  if (!hasActiveSubscription) {
+  // Read-only: view data but cannot mutate
+  const isReadOnly = user.subscription_status === 'inactive'
+    || user.subscription_status === 'cancelled'
+
+  if (isActive) {
     return (
-      <Navigate
-        to="/pricing"
-        state={{ from: location, frozen: true }}
-        replace
-      />
+      <ReadOnlyProvider isReadOnly={false} subscriptionStatus={user.subscription_status}>
+        {children}
+      </ReadOnlyProvider>
     )
   }
 
-  return <>{children}</>
+  if (isReadOnly) {
+    return (
+      <ReadOnlyProvider isReadOnly={true} subscriptionStatus={user.subscription_status}>
+        <ReadOnlyBanner status={user.subscription_status} />
+        {children}
+      </ReadOnlyProvider>
+    )
+  }
+
+  // Fallback for past_due, etc. — keep existing redirect behavior
+  return (
+    <Navigate
+      to="/pricing"
+      state={{ from: location, frozen: true }}
+      replace
+    />
+  )
 }

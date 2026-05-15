@@ -166,7 +166,7 @@ describe('CategoryEditor', () => {
 
       await waitFor(() => {
         const selectedOption = screen.getByRole('option', { name: 'Food & Dining' })
-        expect(selectedOption).toHaveClass('selected')
+        expect(selectedOption).toHaveClass('bg-primary/5')
       })
     })
   })
@@ -381,6 +381,183 @@ describe('CategoryEditor', () => {
       // Should still render with default color
       const colorIndicator = screen.getByTestId('category-color')
       expect(colorIndicator).toHaveStyle({ backgroundColor: '#6B7280' })
+    })
+  })
+
+  describe('plaidPrimaries merging', () => {
+    const plaidPrimaries = [
+      { enum: 'FOOD_AND_DRINK', display: 'Food And Drink' },
+      { enum: 'TRANSPORTATION', display: 'Transportation' },
+      { enum: 'INCOME', display: 'Income' },
+    ]
+
+    it('merges_custom_and_plaid_primaries', async () => {
+      const Wrapper = createWrapper()
+      render(
+        <CategoryEditor
+          {...defaultProps}
+          availableCategories={[mockCategories[0]]} // only Food & Dining
+          plaidPrimaries={plaidPrimaries}
+          selectedCategory={[]}
+        />,
+        { wrapper: Wrapper }
+      )
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: 'Food & Dining' })).toBeInTheDocument()
+        expect(screen.getByRole('option', { name: 'Transportation' })).toBeInTheDocument()
+        expect(screen.getByRole('option', { name: 'Income' })).toBeInTheDocument()
+      })
+    })
+
+    it('dedupes_case_insensitive_custom_wins', async () => {
+      const customEntertainment: CustomCategory = {
+        id: 'ent-custom',
+        user_id: 'user-1',
+        name: 'entertainment', // lowercase version
+        color: '#ABCDEF',
+        usage_count: 2,
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:00:00Z',
+      }
+
+      const Wrapper = createWrapper()
+      render(
+        <CategoryEditor
+          {...defaultProps}
+          availableCategories={[customEntertainment]}
+          plaidPrimaries={[{ enum: 'ENTERTAINMENT', display: 'Entertainment' }]}
+          selectedCategory={[]}
+        />,
+        { wrapper: Wrapper }
+      )
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        // Exactly one entry matching "entertainment" (custom wins, keeps custom casing)
+        const options = screen.getAllByRole('option')
+        const entOptions = options.filter(opt =>
+          opt.getAttribute('aria-label')?.toLowerCase() === 'entertainment'
+        )
+        expect(entOptions).toHaveLength(1)
+      })
+    })
+
+    it('reserves_uncategorized_sentinel', async () => {
+      const uncatCustom: CustomCategory = {
+        id: 'uncat-custom',
+        user_id: 'user-1',
+        name: 'Uncategorized',
+        color: '#000000',
+        usage_count: 0,
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:00:00Z',
+      }
+
+      const Wrapper = createWrapper()
+      render(
+        <CategoryEditor
+          {...defaultProps}
+          availableCategories={[uncatCustom]}
+          plaidPrimaries={[{ enum: 'OTHER', display: 'Uncategorized' }]}
+          selectedCategory={[]}
+        />,
+        { wrapper: Wrapper }
+      )
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        const options = screen.getAllByRole('option')
+        // The merged list should NOT include any custom/PFC entry named Uncategorized
+        // (the hardcoded sentinel at the top is rendered separately with aria-label="Uncategorized")
+        const uncatOptions = options.filter(opt =>
+          opt.getAttribute('aria-label') === 'Uncategorized'
+        )
+        // Only the hardcoded sentinel should appear (1 occurrence)
+        expect(uncatOptions).toHaveLength(1)
+      })
+    })
+
+    it('sorts_alphabetically', async () => {
+      const Wrapper = createWrapper()
+      render(
+        <CategoryEditor
+          {...defaultProps}
+          availableCategories={[]}
+          plaidPrimaries={[
+            { enum: 'TRANSPORTATION', display: 'Transportation' },
+            { enum: 'FOOD_AND_DRINK', display: 'Food And Drink' },
+            { enum: 'INCOME', display: 'Income' },
+          ]}
+          selectedCategory={[]}
+        />,
+        { wrapper: Wrapper }
+      )
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        const options = screen.getAllByRole('option')
+        const labels = options
+          .map(o => o.getAttribute('aria-label'))
+          .filter(Boolean)
+          .filter(l => l !== 'Uncategorized')
+        expect(labels).toEqual(['Food And Drink', 'Income', 'Transportation'])
+      })
+    })
+
+    it('falls_back_when_plaidPrimaries_undefined', async () => {
+      const Wrapper = createWrapper()
+      render(
+        <CategoryEditor
+          {...defaultProps}
+          plaidPrimaries={undefined}
+          selectedCategory={[]}
+        />,
+        { wrapper: Wrapper }
+      )
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        // Original custom categories still shown
+        expect(screen.getByRole('option', { name: 'Food & Dining' })).toBeInTheDocument()
+        expect(screen.getByRole('option', { name: 'Shopping' })).toBeInTheDocument()
+      })
+    })
+
+    it('dropdown_renders_actual_option_nodes_after_open', async () => {
+      const Wrapper = createWrapper()
+      render(
+        <CategoryEditor
+          {...defaultProps}
+          plaidPrimaries={plaidPrimaries}
+          selectedCategory={[]}
+        />,
+        { wrapper: Wrapper }
+      )
+
+      const button = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(button)
+
+      await waitFor(() => {
+        const listbox = screen.getByRole('listbox')
+        expect(listbox).toBeInTheDocument()
+        const optionNodes = screen.getAllByRole('option')
+        // Uncategorized + custom (3) + PFC-only (Transportation, Income — Food And Drink deduped with Food & Dining? No, different names)
+        // Actually: custom = Food & Dining, Shopping, Entertainment (3); PFC = Food And Drink, Transportation, Income (3 distinct)
+        // Total = 3 + 3 + 1 (Uncategorized sentinel) = 7
+        expect(optionNodes.length).toBeGreaterThan(3)
+      })
     })
   })
 })

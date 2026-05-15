@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, spyOn, setSystemTime, mock } from 'bun:test'
 import { render, screen, renderHook, act } from '@testing-library/react'
-import { format, subDays, startOfMonth, endOfMonth } from 'date-fns'
+import { format, startOfMonth, endOfMonth, startOfWeek, startOfYear, subMonths } from 'date-fns'
 import type { ReactNode } from 'react'
 
 // Must be hoisted before DashboardProvider import (bun:test hoists mock.module calls)
@@ -95,7 +95,7 @@ describe('DashboardContext', () => {
   })
 
   describe('Filter State', () => {
-    it('should have default date range for month timeframe', () => {
+    it('should have default date range for this_month timeframe', () => {
       const { result } = renderHook(() => useDashboardContext(), { wrapper })
 
       expect(result.current.filters.startDate).toBe(
@@ -163,95 +163,95 @@ describe('DashboardContext', () => {
   })
 
   describe('Timeframe', () => {
-    it('should have default timeframe of month', () => {
+    it('should have default timeframe of this_month', () => {
       const { result } = renderHook(() => useDashboardContext(), { wrapper })
 
-      expect(result.current.timeframe).toBe('month')
+      expect(result.current.timeframe).toBe('this_month')
     })
 
     it('should update timeframe with setTimeframe', () => {
       const { result } = renderHook(() => useDashboardContext(), { wrapper })
 
       act(() => {
-        result.current.setTimeframe('week')
+        result.current.setTimeframe('this_week')
       })
 
-      expect(result.current.timeframe).toBe('week')
+      expect(result.current.timeframe).toBe('this_week')
     })
 
-    it('should update date range when timeframe changes to week', () => {
+    it('should update date range when timeframe changes to this_week', () => {
       const { result } = renderHook(() => useDashboardContext(), { wrapper })
 
       act(() => {
-        result.current.setTimeframe('week')
+        result.current.setTimeframe('this_week')
       })
 
+      // June 15 2024 is Saturday — Monday of that week is June 10
       expect(result.current.filters.startDate).toBe(
-        format(subDays(mockToday, 7), 'yyyy-MM-dd')
+        format(startOfWeek(mockToday, { weekStartsOn: 1 }), 'yyyy-MM-dd')
       )
       expect(result.current.filters.endDate).toBe(
         format(mockToday, 'yyyy-MM-dd')
       )
     })
 
-    it('should update date range when timeframe changes to 3months', () => {
+    it('should update date range when timeframe changes to last_3_months', () => {
       const { result } = renderHook(() => useDashboardContext(), { wrapper })
 
       act(() => {
-        result.current.setTimeframe('3months')
+        result.current.setTimeframe('last_3_months')
       })
 
+      // last_3_months: start = 1st of 3 months ago, end = last day of last month
       expect(result.current.filters.startDate).toBe(
-        format(subDays(mockToday, 90), 'yyyy-MM-dd')
+        format(startOfMonth(subMonths(mockToday, 3)), 'yyyy-MM-dd')
+      )
+      expect(result.current.filters.endDate).toBe(
+        format(endOfMonth(subMonths(mockToday, 1)), 'yyyy-MM-dd')
+      )
+    })
+
+    it('should update date range when timeframe changes to last_6_months', () => {
+      const { result } = renderHook(() => useDashboardContext(), { wrapper })
+
+      act(() => {
+        result.current.setTimeframe('last_6_months')
+      })
+
+      // last_6_months: start = 1st of 6 months ago, end = last day of last month
+      expect(result.current.filters.startDate).toBe(
+        format(startOfMonth(subMonths(mockToday, 6)), 'yyyy-MM-dd')
+      )
+      expect(result.current.filters.endDate).toBe(
+        format(endOfMonth(subMonths(mockToday, 1)), 'yyyy-MM-dd')
+      )
+    })
+
+    it('should update date range when timeframe changes to ytd', () => {
+      const { result } = renderHook(() => useDashboardContext(), { wrapper })
+
+      act(() => {
+        result.current.setTimeframe('ytd')
+      })
+
+      // ytd: Jan 1 of current year → today
+      expect(result.current.filters.startDate).toBe(
+        format(startOfYear(mockToday), 'yyyy-MM-dd')
       )
       expect(result.current.filters.endDate).toBe(
         format(mockToday, 'yyyy-MM-dd')
       )
     })
 
-    it('should update date range when timeframe changes to 6months', () => {
-      const { result } = renderHook(() => useDashboardContext(), { wrapper })
-
-      act(() => {
-        result.current.setTimeframe('6months')
-      })
-
-      expect(result.current.filters.startDate).toBe(
-        format(subDays(mockToday, 180), 'yyyy-MM-dd')
-      )
-      expect(result.current.filters.endDate).toBe(
-        format(mockToday, 'yyyy-MM-dd')
-      )
-    })
-
-    it('should update date range when timeframe changes to year', () => {
-      const { result } = renderHook(() => useDashboardContext(), { wrapper })
-
-      act(() => {
-        result.current.setTimeframe('year')
-      })
-
-      expect(result.current.filters.startDate).toBe(
-        format(subDays(mockToday, 365), 'yyyy-MM-dd')
-      )
-      expect(result.current.filters.endDate).toBe(
-        format(mockToday, 'yyyy-MM-dd')
-      )
-    })
-
-    it('should use 30-day default for custom timeframe', () => {
+    it('should have no default dates for custom timeframe', () => {
       const { result } = renderHook(() => useDashboardContext(), { wrapper })
 
       act(() => {
         result.current.setTimeframe('custom')
       })
 
-      expect(result.current.filters.startDate).toBe(
-        format(subDays(mockToday, 30), 'yyyy-MM-dd')
-      )
-      expect(result.current.filters.endDate).toBe(
-        format(mockToday, 'yyyy-MM-dd')
-      )
+      expect(result.current.filters.startDate).toBeUndefined()
+      expect(result.current.filters.endDate).toBeUndefined()
     })
 
     it('should preserve custom dates when on custom timeframe', () => {
@@ -284,7 +284,7 @@ describe('DashboardContext', () => {
       })
 
       act(() => {
-        result.current.setTimeframe('month')
+        result.current.setTimeframe('this_month')
       })
 
       expect(result.current.filters.startDate).toBe(
@@ -387,12 +387,22 @@ describe('DashboardContext', () => {
 
     it('should provide hasAccounts: true when accounts exist', () => {
       mockUseGetAccounts.mockReturnValue({
-        data: { accounts: [{ id: '1', name: 'Checking' }] },
+        data: { accounts: [{ id: '1', name: 'Checking', status: 'active' }] },
         isLoading: false,
         error: null,
       })
       const { result } = renderHook(() => useDashboardContext(), { wrapper })
       expect(result.current.hasAccounts).toBe(true)
+    })
+
+    it('should provide hasAccounts: false when only replaced accounts exist (Issue #1109)', () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [{ id: '1', name: 'Old Checking', status: 'replaced' }] },
+        isLoading: false,
+        error: null,
+      })
+      const { result } = renderHook(() => useDashboardContext(), { wrapper })
+      expect(result.current.hasAccounts).toBe(false)
     })
 
     it('should provide hasAccounts: false when data is undefined', () => {

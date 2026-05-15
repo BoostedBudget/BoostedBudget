@@ -14,7 +14,6 @@ type Config struct {
 	Port               string
 	Environment        string
 	Version            string
-	PrimaryRegion      string
 	CORSAllowedOrigins string
 
 	// HTTP server timeouts and limits
@@ -71,6 +70,12 @@ type Config struct {
 	DeletionWorkerInterval  string
 	DeletionTokenSecret     string
 
+	// Retention Configuration (#930: 6-month read-only period before auto-deletion)
+	RetentionPeriodMonths int // env: RETENTION_PERIOD_MONTHS, default: 6
+
+	// DLQ Configuration (#633: Dead Letter Queue admin UI + cleanup)
+	DLQRetentionDays int // env: DLQ_RETENTION_DAYS, default: 30
+
 	// Frontend URL (for cancellation links)
 	FrontendURL string
 
@@ -96,7 +101,6 @@ func Load() (*Config, error) {
 		Port:               getEnv("PORT", "8080"),
 		Environment:        getEnv("ENVIRONMENT", "development"),
 		Version:            getEnv("VERSION", "0.1.0"),
-		PrimaryRegion:      getEnv("PRIMARY_REGION", "iad"),
 		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "*"),
 
 		// HTTP server timeouts and limits
@@ -152,6 +156,12 @@ func Load() (*Config, error) {
 		DeletionGracePeriodDays: getEnvAsInt("DELETION_GRACE_PERIOD_DAYS", 30),
 		DeletionWorkerInterval:  getEnv("DELETION_WORKER_INTERVAL", "1h"),
 		DeletionTokenSecret:     getEnv("DELETION_TOKEN_SECRET", ""),
+
+		// Retention Configuration (#930)
+		RetentionPeriodMonths: getEnvAsInt("RETENTION_PERIOD_MONTHS", 6),
+
+		// DLQ Configuration (#633)
+		DLQRetentionDays: getEnvAsInt("DLQ_RETENTION_DAYS", 30),
 
 		// Frontend URL
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),

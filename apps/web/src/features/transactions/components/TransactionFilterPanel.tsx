@@ -16,6 +16,7 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet'
 import type { TransactionFilters, DatePreset, StatusFilter } from '../types'
+import { PRESETS } from '@/shared/dates'
 import {
   TransactionDateFilter,
   TransactionStatusFilter,
@@ -119,15 +120,8 @@ export function TransactionFilterPanel({
     if (datePreset === 'custom' && filters.start_date && filters.end_date) {
       return `${filters.start_date} - ${filters.end_date}`
     }
-    const presetLabels: Record<DatePreset, string> = {
-      '7d': '7 days',
-      '30d': '30 days',
-      '90d': '90 days',
-      '1y': '1 year',
-      all: 'All time',
-      custom: 'Custom',
-    }
-    return presetLabels[datePreset]
+    const match = PRESETS.find((p) => p.value === datePreset)
+    return match?.label ?? datePreset
   }
 
   const getStatusDisplayValue = () => {
@@ -156,18 +150,18 @@ export function TransactionFilterPanel({
           <SheetTrigger asChild>
             <button
               type="button"
-              className="w-full flex items-center justify-between px-4 py-3 bg-white border border-gray-200 rounded-lg shadow-sm hover:bg-gray-50 transition-colors"
+              className="w-full flex items-center justify-between px-4 py-3 bg-card border border-border rounded-lg shadow-sm hover:bg-accent transition-colors"
             >
               <div className="flex items-center gap-2">
-                <FunnelIcon className="w-5 h-5 text-gray-500" />
-                <span className="font-medium text-gray-900">Date & Status</span>
+                <FunnelIcon className="w-5 h-5 text-muted-foreground" />
+                <span className="font-medium text-foreground">Date & Status</span>
                 {dateStatusActiveCount > 0 && (
                   <span className="inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
                     {dateStatusActiveCount}
                   </span>
                 )}
               </div>
-              <ChevronDownIcon className="w-5 h-5 text-gray-400" />
+              <ChevronDownIcon className="w-5 h-5 text-muted-foreground" />
             </button>
           </SheetTrigger>
 
@@ -204,7 +198,7 @@ export function TransactionFilterPanel({
                     onDatePresetChange('all')
                     onStatusFilterChange('all')
                   }}
-                  className="flex-1 px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                  className="flex-1 px-4 py-2 text-sm text-muted-foreground border border-input rounded-lg hover:bg-accent transition-colors"
                 >
                   Clear All
                 </button>
@@ -232,16 +226,16 @@ export function TransactionFilterPanel({
 
   // Desktop: Collapsible panel
   return (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-sm mb-4">
+    <div className="bg-card border border-border rounded-lg shadow-sm mb-4">
       {/* Header with toggle */}
       <button
         type="button"
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50 rounded-lg transition-colors"
+        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-accent rounded-lg transition-colors"
       >
         <div className="flex items-center gap-2">
-          <FunnelIcon className="w-5 h-5 text-gray-500" />
-          <span className="font-medium text-gray-900">Date & Status</span>
+          <FunnelIcon className="w-5 h-5 text-muted-foreground" />
+          <span className="font-medium text-foreground">Date & Status</span>
           {dateStatusActiveCount > 0 && (
             <span className="inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
               {dateStatusActiveCount}
@@ -249,7 +243,7 @@ export function TransactionFilterPanel({
           )}
         </div>
         <ChevronDownIcon
-          className={`w-5 h-5 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+          className={`w-5 h-5 text-muted-foreground transition-transform ${isExpanded ? 'rotate-180' : ''}`}
         />
       </button>
 
@@ -263,7 +257,7 @@ export function TransactionFilterPanel({
               onDatePresetChange('all')
               onStatusFilterChange('all')
             }}
-            className="text-xs text-gray-500 hover:text-gray-700 underline"
+            className="text-xs text-muted-foreground hover:text-foreground underline"
           >
             Clear all
           </button>
@@ -272,7 +266,7 @@ export function TransactionFilterPanel({
 
       {/* Expanded filter controls */}
       {isExpanded && (
-        <div className="px-4 pb-4 border-t border-gray-100">
+        <div className="px-4 pb-4 border-t border-border/50">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
             {/* Date Filter */}
             <TransactionDateFilter
@@ -295,14 +289,14 @@ export function TransactionFilterPanel({
 
           {/* Clear all button */}
           {hasDateStatusFilters && (
-            <div className="mt-4 pt-4 border-t border-gray-100 flex justify-end">
+            <div className="mt-4 pt-4 border-t border-border/50 flex justify-end">
               <button
                 type="button"
                 onClick={() => {
                   onDatePresetChange('all')
                   onStatusFilterChange('all')
                 }}
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-colors"
               >
                 <XMarkIcon className="w-4 h-4" />
                 Clear filters

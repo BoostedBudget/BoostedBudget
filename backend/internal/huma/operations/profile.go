@@ -2,12 +2,14 @@ package operations
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
@@ -62,11 +64,13 @@ func (h *ProfileHandler) GetProfile(ctx context.Context, input *GetProfileInput)
 func (h *ProfileHandler) UpdateProfile(ctx context.Context, input *UpdateProfileInput) (*UpdateProfileOutput, error) {
 	user, err := h.service.UpdateProfile(ctx, input.UserID, &input.Body)
 	if err != nil {
-		switch err {
-		case services.ErrInvalidEmail:
+		switch {
+		case errors.Is(err, services.ErrInvalidEmail):
 			return nil, huma.Error400BadRequest("Invalid email address")
-		case services.ErrInvalidRegion:
+		case errors.Is(err, services.ErrInvalidRegion):
 			return nil, huma.Error400BadRequest("Invalid primary region")
+		case errors.Is(err, repository.ErrDuplicateEmail):
+			return nil, huma.Error409Conflict("Email address already in use")
 		default:
 			return nil, humaerrors.LoggingMapError(ctx, err)
 		}

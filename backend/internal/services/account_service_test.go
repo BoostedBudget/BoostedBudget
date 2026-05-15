@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
@@ -75,6 +77,30 @@ func (m *MockPlaidService) AccountsGet(ctx context.Context, accessToken string) 
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*plaid.AccountsGetResponse), args.Error(1)
+}
+
+func (m *MockPlaidService) InvestmentsHoldingsGet(ctx context.Context, accessToken string) (*plaid.InvestmentsHoldingsGetResponse, error) {
+	args := m.Called(ctx, accessToken)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*plaid.InvestmentsHoldingsGetResponse), args.Error(1)
+}
+
+func (m *MockPlaidService) InvestmentsTransactionsGet(ctx context.Context, accessToken, startDate, endDate string, offset, count int32) (*plaid.InvestmentsTransactionsGetResponse, error) {
+	args := m.Called(ctx, accessToken, startDate, endDate, offset, count)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*plaid.InvestmentsTransactionsGetResponse), args.Error(1)
+}
+
+func (m *MockPlaidService) LiabilitiesGet(ctx context.Context, accessToken string) (*plaid.LiabilitiesGetResponse, error) {
+	args := m.Called(ctx, accessToken)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*plaid.LiabilitiesGetResponse), args.Error(1)
 }
 
 type MockEncryptionService struct {
@@ -211,6 +237,16 @@ func (m *MockLinkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Cont
 	return args.Error(0)
 }
 
+func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
+	args := m.Called(ctx, id, date)
+	return args.Error(0)
+}
+
+func (m *MockLinkedItemRepository) UpdateLiabilitiesLastSyncedAt(ctx context.Context, id string, t time.Time) error {
+	args := m.Called(ctx, id, t)
+	return args.Error(0)
+}
+
 type MockAccountRepository struct {
 	mock.Mock
 }
@@ -277,8 +313,8 @@ func (m *MockAccountRepository) UpdateDisplayOrders(ctx context.Context, userID 
 	return args.Error(0)
 }
 
-func (m *MockAccountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
-	args := m.Called(ctx, userID, includeHidden)
+func (m *MockAccountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts repository.AccountFilterOptions) ([]domain.Account, error) {
+	args := m.Called(ctx, userID, opts)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -316,6 +352,21 @@ func (m *MockAccountRepository) UpdateStatus(ctx context.Context, accountID, use
 func (m *MockAccountRepository) CountActiveByLinkedItemID(ctx context.Context, linkedItemID string) (int, error) {
 	args := m.Called(ctx, linkedItemID)
 	return args.Int(0), args.Error(1)
+}
+
+// Issue #1010: Cross-user fingerprint ownership check
+func (m *MockAccountRepository) CheckFingerprintOwnership(ctx context.Context, fingerprintBlindIdx, excludeUserID string) (*repository.FingerprintOwnership, error) {
+	args := m.Called(ctx, fingerprintBlindIdx, excludeUserID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*repository.FingerprintOwnership), args.Error(1)
+}
+
+// Issue #1010: Expire accounts by fingerprint to release uniqueness constraint
+func (m *MockAccountRepository) ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) error {
+	args := m.Called(ctx, fingerprintBlindIdx)
+	return args.Error(0)
 }
 
 type MockUserRepository struct {
@@ -434,12 +485,76 @@ func (m *MockUserRepository) GetUsersWithActivePaddleSubscriptions(ctx context.C
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
+// GetSubscriptionStatusByUserID returns subscription status for the read-only middleware (#930)
+func (m *MockUserRepository) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+	args := m.Called(ctx, userID)
+	return args.String(0), args.Error(1)
+}
+
+// Retention tracking methods (#930)
+
+func (m *MockUserRepository) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
+	args := m.Called(ctx, userID, startedAt, expiresAt)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) ClearRetentionDates(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) SetRetentionNotice30dSent(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) SetRetentionNotice7dSent(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	args := m.Called(ctx, email)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	args := m.Called(ctx, tx, userID, plainEmail)
+	return args.Error(0)
+}
+
 // TestAccountService_LinkAccounts_Success tests successful account linking flow
 func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	// Given: All dependencies mocked with successful responses
 	mockPlaid := new(MockPlaidService)
 	mockSubscription := &SubscriptionService{} // Will need actual implementation
-	mockEncryption := new(MockEncryptionService)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockAccountRepo := new(MockAccountRepository)
 	mockUserRepo := new(MockUserRepository)
@@ -461,15 +576,13 @@ func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	// Mock current account count (user has 2 accounts, limit is 8)
 	mockAccountRepo.On("CountByUserID", ctx, userID).Return(2, nil)
 
-	// Mock encryption of access token
+	// AccessToken is now stored directly; repo layer handles encryption on write
 	accessToken := "access-sandbox-token-abc123"
-	encryptedToken := "encrypted-base64-token"
-	mockEncryption.On("Encrypt", accessToken).Return(encryptedToken, nil)
 
-	// Mock linked item creation
+	// Mock linked item creation — service sets AccessToken, repo encrypts on write
 	mockLinkedItemRepo.On("Create", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
 		return item.UserID == userID &&
-			item.AccessTokenEncrypted == encryptedToken &&
+			item.AccessToken == accessToken &&
 			item.InstitutionName == institutionName
 	})).Return(nil)
 
@@ -483,7 +596,6 @@ func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	_ = NewAccountService(
 		mockPlaid,
 		mockSubscription,
-		mockEncryption,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -642,7 +754,6 @@ func TestAccountService_GetAccounts(t *testing.T) {
 	// Setup mocks
 	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
-	mockEncryptionService := new(MockEncryptionService)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockUserRepo := new(MockUserRepository)
 
@@ -650,7 +761,6 @@ func TestAccountService_GetAccounts(t *testing.T) {
 	service := NewAccountService(
 		mockPlaidService,
 		nil, // SubscriptionService not needed for GetAccounts
-		mockEncryptionService,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -710,7 +820,6 @@ func TestAccountService_GetAccounts_Empty(t *testing.T) {
 	// Setup mocks
 	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
-	mockEncryptionService := new(MockEncryptionService)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockUserRepo := new(MockUserRepository)
 
@@ -718,7 +827,6 @@ func TestAccountService_GetAccounts_Empty(t *testing.T) {
 	service := NewAccountService(
 		mockPlaidService,
 		nil,
-		mockEncryptionService,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -758,7 +866,6 @@ func TestAccountService_GetAccounts_WithInternalUUID(t *testing.T) {
 	// Setup mocks
 	mockAccountRepo := new(MockAccountRepository)
 	mockPlaidService := new(MockPlaidService)
-	mockEncryptionService := new(MockEncryptionService)
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockUserRepo := new(MockUserRepository)
 
@@ -766,7 +873,6 @@ func TestAccountService_GetAccounts_WithInternalUUID(t *testing.T) {
 	service := NewAccountService(
 		mockPlaidService,
 		nil,
-		mockEncryptionService,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -1147,37 +1253,241 @@ func TestDeleteAccount_EnqueueErrorDoesNotFailDeletion(t *testing.T) {
 	mockJobQueue.AssertExpectations(t)
 }
 
+// ===========================================================================
+// UserAccount Hiding Tests (Issue #978: Account Deletion)
+// ===========================================================================
+
+// TestDeleteAccount_HidesUserAccountWhenLastAccount tests that when the last active account
+// referencing a UserAccount is deleted, SetHidden(true) is called on the UserAccount.
+func TestDeleteAccount_HidesUserAccountWhenLastAccount(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockJobQueue := &MockJobQueue{}
+	mockUserAccountSvc := &MockUserAccountService{}
+
+	userAccountID := uuid.New().String()
+
+	svc := NewAccountService(
+		nil, // plaid not needed
+		nil, // subscription not needed
+		nil, // linkedItemRepo not needed
+		mockAccountRepo,
+		nil, // userRepo not needed
+		nil, // db not needed
+		WithJobQueue(mockJobQueue),
+		WithUserAccountService(mockUserAccountSvc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{
+		ID:            accountID,
+		LinkedItemID:  linkedItemID,
+		UserID:        userID,
+		UserAccountID: &userAccountID,
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "item_cleanup"
+	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
+	// No remaining active accounts for this user_account
+	mockAccountRepo.On("GetByUserAccountAndStatus", ctx, userAccountID, string(domain.AccountStatusActive)).
+		Return([]domain.Account{}, nil)
+	mockUserAccountSvc.On("SetHidden", ctx, userAccountID, true).Return(nil)
+
+	err := svc.DeleteAccount(ctx, accountID, userID)
+
+	require.NoError(t, err, "DeleteAccount should succeed")
+	mockAccountRepo.AssertExpectations(t)
+	mockUserAccountSvc.AssertExpectations(t)
+}
+
+// TestDeleteAccount_DoesNotHideWhenOtherAccountsRemain tests that SetHidden is NOT called
+// when other active accounts still reference the UserAccount.
+func TestDeleteAccount_DoesNotHideWhenOtherAccountsRemain(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockJobQueue := &MockJobQueue{}
+	mockUserAccountSvc := &MockUserAccountService{}
+
+	userAccountID := uuid.New().String()
+
+	svc := NewAccountService(
+		nil,
+		nil,
+		nil,
+		mockAccountRepo,
+		nil,
+		nil,
+		WithJobQueue(mockJobQueue),
+		WithUserAccountService(mockUserAccountSvc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+	otherAccountID := uuid.New().String()
+
+	account := &domain.Account{
+		ID:            accountID,
+		LinkedItemID:  linkedItemID,
+		UserID:        userID,
+		UserAccountID: &userAccountID,
+	}
+
+	// Another active account still references this user_account
+	remainingAccount := domain.Account{
+		ID:            otherAccountID,
+		LinkedItemID:  linkedItemID,
+		UserID:        userID,
+		UserAccountID: &userAccountID,
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(1, nil)
+	mockAccountRepo.On("GetByUserAccountAndStatus", ctx, userAccountID, string(domain.AccountStatusActive)).
+		Return([]domain.Account{remainingAccount}, nil)
+
+	err := svc.DeleteAccount(ctx, accountID, userID)
+
+	require.NoError(t, err, "DeleteAccount should succeed")
+	mockAccountRepo.AssertExpectations(t)
+	mockJobQueue.AssertExpectations(t)
+	// SetHidden must NOT be called when other accounts remain
+	mockUserAccountSvc.AssertNotCalled(t, "SetHidden", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestDeleteAccount_SkipsHidingWhenUserAccountSvcNil tests that the hiding logic is skipped
+// entirely when userAccountSvc is nil (optional dependency).
+func TestDeleteAccount_SkipsHidingWhenUserAccountSvcNil(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockJobQueue := &MockJobQueue{}
+
+	userAccountID := uuid.New().String()
+
+	svc := NewAccountService(
+		nil,
+		nil,
+		nil,
+		mockAccountRepo,
+		nil,
+		nil,
+		WithJobQueue(mockJobQueue),
+		// No WithUserAccountService — intentionally nil
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{
+		ID:            accountID,
+		LinkedItemID:  linkedItemID,
+		UserID:        userID,
+		UserAccountID: &userAccountID,
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "item_cleanup"
+	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
+	// GetByUserAccountAndStatus should NOT be called when userAccountSvc is nil
+
+	err := svc.DeleteAccount(ctx, accountID, userID)
+
+	require.NoError(t, err, "DeleteAccount should succeed even without userAccountSvc")
+	mockAccountRepo.AssertExpectations(t)
+	mockAccountRepo.AssertNotCalled(t, "GetByUserAccountAndStatus", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestDeleteAccount_SkipsHidingWhenUserAccountIDNil tests that the hiding logic is skipped
+// when account.UserAccountID is nil (legacy accounts not yet linked to a UserAccount).
+func TestDeleteAccount_SkipsHidingWhenUserAccountIDNil(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockJobQueue := &MockJobQueue{}
+	mockUserAccountSvc := &MockUserAccountService{}
+
+	svc := NewAccountService(
+		nil,
+		nil,
+		nil,
+		mockAccountRepo,
+		nil,
+		nil,
+		WithJobQueue(mockJobQueue),
+		WithUserAccountService(mockUserAccountSvc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	// UserAccountID is nil — legacy account
+	account := &domain.Account{
+		ID:            accountID,
+		LinkedItemID:  linkedItemID,
+		UserID:        userID,
+		UserAccountID: nil,
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "item_cleanup"
+	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
+
+	err := svc.DeleteAccount(ctx, accountID, userID)
+
+	require.NoError(t, err, "DeleteAccount should succeed even when UserAccountID is nil")
+	mockAccountRepo.AssertExpectations(t)
+	// SetHidden and GetByUserAccountAndStatus should NOT be called
+	mockUserAccountSvc.AssertNotCalled(t, "SetHidden", mock.Anything, mock.Anything, mock.Anything)
+	mockAccountRepo.AssertNotCalled(t, "GetByUserAccountAndStatus", mock.Anything, mock.Anything, mock.Anything)
+}
+
 // TestDisconnectInstitution_Success tests successful institution disconnection
 func TestDisconnectInstitution_Success(t *testing.T) {
 	// Setup mocks
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
-	mockEncryptionSvc := &MockEncryptionService{}
 	mockPlaidService := &MockPlaidService{}
 
 	service := &accountService{
 		linkedItemRepo: mockLinkedItemRepo,
-		encryptionSvc:  mockEncryptionSvc,
 		plaidService:   mockPlaidService,
 	}
 
 	ctx := context.Background()
 	linkedItemID := uuid.New().String()
 	userID := uuid.New().String()
-	encryptedToken := "encrypted-token-123"
 	accessToken := "access-sandbox-test-token"
 
+	// AccessToken is populated by the repository layer (repo-layer encryption)
 	linkedItem := &domain.LinkedItem{
-		ID:                   linkedItemID,
-		UserID:               userID,
-		ItemID:               "plaid-item-123",
-		AccessTokenEncrypted: encryptedToken,
-		InstitutionID:        "ins_123",
-		InstitutionName:      "Chase",
+		ID:              linkedItemID,
+		UserID:          userID,
+		ItemID:          "plaid-item-123",
+		AccessToken:     accessToken,
+		InstitutionID:   "ins_123",
+		InstitutionName: "Chase",
 	}
 
 	// Mock all steps
 	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
-	mockEncryptionSvc.On("Decrypt", encryptedToken).Return(accessToken, nil)
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
 	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(nil)
 
@@ -1187,7 +1497,6 @@ func TestDisconnectInstitution_Success(t *testing.T) {
 	// Assert
 	require.NoError(t, err, "DisconnectInstitution should succeed")
 	mockLinkedItemRepo.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
 	mockPlaidService.AssertExpectations(t)
 }
 
@@ -1215,76 +1524,34 @@ func TestDisconnectInstitution_LinkedItemNotFound(t *testing.T) {
 	mockLinkedItemRepo.AssertExpectations(t)
 }
 
-// TestDisconnectInstitution_DecryptionError tests when decryption fails
-func TestDisconnectInstitution_DecryptionError(t *testing.T) {
-	// Setup mocks
-	mockLinkedItemRepo := &MockLinkedItemRepository{}
-	mockEncryptionSvc := &MockEncryptionService{}
-
-	service := &accountService{
-		linkedItemRepo: mockLinkedItemRepo,
-		encryptionSvc:  mockEncryptionSvc,
-	}
-
-	ctx := context.Background()
-	linkedItemID := uuid.New().String()
-	userID := uuid.New().String()
-	encryptedToken := "encrypted-token-123"
-
-	linkedItem := &domain.LinkedItem{
-		ID:                   linkedItemID,
-		UserID:               userID,
-		ItemID:               "plaid-item-123",
-		AccessTokenEncrypted: encryptedToken,
-		InstitutionID:        "ins_123",
-		InstitutionName:      "Chase",
-	}
-
-	// Mock linked item found but decryption fails
-	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
-	mockEncryptionSvc.On("Decrypt", encryptedToken).Return("", assert.AnError)
-
-	// Execute
-	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
-
-	// Assert
-	require.Error(t, err, "DisconnectInstitution should return decryption error")
-	assert.Contains(t, err.Error(), "failed to decrypt access token")
-	mockLinkedItemRepo.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
-}
-
 // TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds tests when Plaid fails but DB deletion succeeds
 func TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds(t *testing.T) {
 	// Setup mocks
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
-	mockEncryptionSvc := &MockEncryptionService{}
 	mockPlaidService := &MockPlaidService{}
 
 	service := &accountService{
 		linkedItemRepo: mockLinkedItemRepo,
-		encryptionSvc:  mockEncryptionSvc,
 		plaidService:   mockPlaidService,
 	}
 
 	ctx := context.Background()
 	linkedItemID := uuid.New().String()
 	userID := uuid.New().String()
-	encryptedToken := "encrypted-token-123"
 	accessToken := "access-sandbox-test-token"
 
+	// AccessToken is populated by the repository layer (repo-layer encryption)
 	linkedItem := &domain.LinkedItem{
-		ID:                   linkedItemID,
-		UserID:               userID,
-		ItemID:               "plaid-item-123",
-		AccessTokenEncrypted: encryptedToken,
-		InstitutionID:        "ins_123",
-		InstitutionName:      "Chase",
+		ID:              linkedItemID,
+		UserID:          userID,
+		ItemID:          "plaid-item-123",
+		AccessToken:     accessToken,
+		InstitutionID:   "ins_123",
+		InstitutionName: "Chase",
 	}
 
 	// Mock Plaid removal fails but database deletion succeeds
 	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
-	mockEncryptionSvc.On("Decrypt", encryptedToken).Return(accessToken, nil)
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(assert.AnError)
 	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(nil)
 
@@ -1294,7 +1561,6 @@ func TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds(t *testing.T) {
 	// Assert - Should succeed even if Plaid fails (we still clean up database)
 	require.NoError(t, err, "DisconnectInstitution should succeed even if Plaid fails")
 	mockLinkedItemRepo.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
 	mockPlaidService.AssertExpectations(t)
 }
 
@@ -1302,33 +1568,30 @@ func TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds(t *testing.T) {
 func TestDisconnectInstitution_DatabaseDeletionError(t *testing.T) {
 	// Setup mocks
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
-	mockEncryptionSvc := &MockEncryptionService{}
 	mockPlaidService := &MockPlaidService{}
 
 	service := &accountService{
 		linkedItemRepo: mockLinkedItemRepo,
-		encryptionSvc:  mockEncryptionSvc,
 		plaidService:   mockPlaidService,
 	}
 
 	ctx := context.Background()
 	linkedItemID := uuid.New().String()
 	userID := uuid.New().String()
-	encryptedToken := "encrypted-token-123"
 	accessToken := "access-sandbox-test-token"
 
+	// AccessToken is populated by the repository layer (repo-layer encryption)
 	linkedItem := &domain.LinkedItem{
-		ID:                   linkedItemID,
-		UserID:               userID,
-		ItemID:               "plaid-item-123",
-		AccessTokenEncrypted: encryptedToken,
-		InstitutionID:        "ins_123",
-		InstitutionName:      "Chase",
+		ID:              linkedItemID,
+		UserID:          userID,
+		ItemID:          "plaid-item-123",
+		AccessToken:     accessToken,
+		InstitutionID:   "ins_123",
+		InstitutionName: "Chase",
 	}
 
 	// Mock database deletion fails
 	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
-	mockEncryptionSvc.On("Decrypt", encryptedToken).Return(accessToken, nil)
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
 	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(assert.AnError)
 
@@ -1338,7 +1601,6 @@ func TestDisconnectInstitution_DatabaseDeletionError(t *testing.T) {
 	// Assert
 	require.Error(t, err, "DisconnectInstitution should return database deletion error")
 	mockLinkedItemRepo.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
 	mockPlaidService.AssertExpectations(t)
 }
 
@@ -1695,10 +1957,10 @@ func TestGetAccountsFiltered_ExcludeHidden(t *testing.T) {
 		{ID: uuid.New().String(), UserID: userID, Name: "Checking", IsHidden: false},
 		{ID: uuid.New().String(), UserID: userID, Name: "Savings", IsHidden: false},
 	}
-	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, false).Return(visibleAccounts, nil)
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, repository.AccountFilterOptions{IncludeHidden: false}).Return(visibleAccounts, nil)
 
 	// Execute - don't include hidden
-	result, err := service.GetAccountsFiltered(ctx, userID, false)
+	result, err := service.GetAccountsFiltered(ctx, userID, AccountFilterOptions{IncludeHidden: false})
 
 	// Assert
 	require.NoError(t, err)
@@ -1730,10 +1992,10 @@ func TestGetAccountsFiltered_IncludeHidden(t *testing.T) {
 		{ID: uuid.New().String(), UserID: userID, Name: "Savings", IsHidden: false},
 		{ID: uuid.New().String(), UserID: userID, Name: "Hidden Card", IsHidden: true},
 	}
-	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, true).Return(allAccounts, nil)
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, repository.AccountFilterOptions{IncludeHidden: true}).Return(allAccounts, nil)
 
 	// Execute - include hidden
-	result, err := service.GetAccountsFiltered(ctx, userID, true)
+	result, err := service.GetAccountsFiltered(ctx, userID, AccountFilterOptions{IncludeHidden: true})
 
 	// Assert
 	require.NoError(t, err)
@@ -1759,7 +2021,7 @@ func TestGetAccountsFiltered_UserNotFound(t *testing.T) {
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(nil, assert.AnError)
 
 	// Execute
-	result, err := service.GetAccountsFiltered(ctx, userID, false)
+	result, err := service.GetAccountsFiltered(ctx, userID, AccountFilterOptions{})
 
 	// Assert - should return empty list for non-existent user (consistent with GetAccounts)
 	require.NoError(t, err)
@@ -1812,15 +2074,16 @@ func (m *MockJobQueue) EnqueueManyTx(ctx context.Context, tx pgx.Tx, jobs []queu
 // Auto-Sync Tests (Issue #658: Auto-sync after Plaid account linking)
 // ===========================================================================
 
-// TestAccountService_LinkAccounts_EnqueuesSyncJob tests that a PlaidSyncJob is enqueued
-// after successful account linking with a 5-second delay.
+// TestAccountService_LinkAccounts_EnqueuesSyncJob tests that all three sync jobs are
+// enqueued after successful account linking: plaid_sync, investment_holdings_sync, and
+// investment_transactions_sync.
 // Issue #658: Auto-sync transactions after Plaid account linking
+// Issue #659: Investment sync after linking
 func TestAccountService_LinkAccounts_EnqueuesSyncJob(t *testing.T) {
 	// This test verifies that:
-	// 1. A PlaidSyncJob is enqueued after successful account linking
-	// 2. The job has a 5-second delay
-	// 3. The job has the correct user_id and item_id
-	// 4. Uniqueness options are applied to prevent duplicate syncs
+	// 1. plaid_sync job is enqueued (transaction sync)
+	// 2. investment_holdings_sync job is enqueued (Issue #659)
+	// 3. investment_transactions_sync job is enqueued (Issue #659)
 
 	// Setup mocks
 	mockJobQueue := &MockJobQueue{}
@@ -1840,10 +2103,20 @@ func TestAccountService_LinkAccounts_EnqueuesSyncJob(t *testing.T) {
 		return job.Kind() == "plaid_sync"
 	}), mock.Anything).Return(&queue.JobResult{ID: 123, Kind: "plaid_sync"}, nil)
 
+	// Mock: Enqueue should be called with investment_holdings_sync job (Issue #659)
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "investment_holdings_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 124, Kind: "investment_holdings_sync"}, nil)
+
+	// Mock: Enqueue should be called with investment_transactions_sync job (Issue #659)
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "investment_transactions_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 125, Kind: "investment_transactions_sync"}, nil)
+
 	// Call enqueueInitialSync directly
 	service.enqueueInitialSync(ctx, linkedItemID, userID)
 
-	// Assert: Enqueue was called
+	// Assert: All three Enqueue calls were made
 	mockJobQueue.AssertExpectations(t)
 }
 
@@ -1945,6 +2218,11 @@ func (m *MockUserAccountService) UpdateCustomization(ctx context.Context, id, us
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.UserAccount), args.Error(1)
+}
+
+func (m *MockUserAccountService) SetHidden(ctx context.Context, userAccountID string, hidden bool) error {
+	args := m.Called(ctx, userAccountID, hidden)
+	return args.Error(0)
 }
 
 // NOTE: MockUserAccountRepository is defined in user_account_service_test.go
@@ -2283,7 +2561,7 @@ func TestAccountService_LinkAccounts_Relink_NewItemHasEmptyCursor(t *testing.T) 
 func TestAccountService_LinkAccounts_Relink_EnqueuesSyncJob(t *testing.T) {
 	// Given: Re-link creates new linked_item
 	// When: Processing completes
-	// Then: PlaidSyncJob should be enqueued for the new item (not old item)
+	// Then: All sync jobs should be enqueued for the new item (not old item)
 
 	mockJobQueue := &MockJobQueue{}
 
@@ -2296,17 +2574,25 @@ func TestAccountService_LinkAccounts_Relink_EnqueuesSyncJob(t *testing.T) {
 	newLinkedItemID := uuid.New().String()
 	userID := uuid.New().String()
 
-	// Mock: Enqueue called with new item's ID
+	// Mock: All three sync jobs enqueued with new item's ID
 	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
 		return job.Kind() == "plaid_sync"
 	}), mock.Anything).Return(&queue.JobResult{ID: 123, Kind: "plaid_sync"}, nil)
+
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "investment_holdings_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 124, Kind: "investment_holdings_sync"}, nil)
+
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "investment_transactions_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 125, Kind: "investment_transactions_sync"}, nil)
 
 	// Execute: Enqueue sync for new item
 	service.enqueueInitialSync(ctx, newLinkedItemID, userID)
 
 	// Assert
 	mockJobQueue.AssertExpectations(t)
-	t.Log("✓ Sync job enqueued for new linked_item")
+	t.Log("✓ All sync jobs enqueued for new linked_item")
 }
 
 // TestAccountService_LinkAccounts_MultipleAccounts_AllLinked tests multi-account handling
@@ -2812,7 +3098,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_FullFlow(t *testing.T) {
 	publicToken := "public-sandbox-integration-test"
 	accessToken := "access-sandbox-integration-test"
 	plaidItemID := "plaid-item-integration-test"
-	encryptedToken := "encrypted-integration-test-token"
 	newItemID := uuid.New().String()
 	oldItemID := uuid.New().String()
 	oldAccount1ID := uuid.New().String()
@@ -2842,9 +3127,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_FullFlow(t *testing.T) {
 	mockPlaidSvc := &MockPlaidService{}
 	mockPlaidSvc.On("GetClient").Return(plaidClient)
 
-	mockEncryptionSvc := &MockEncryptionService{}
-	mockEncryptionSvc.On("Encrypt", accessToken).Return(encryptedToken, nil)
-
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockAccountRepo := &MockAccountRepository{}
 	mockUserRepo := &MockUserRepository{}
@@ -2873,9 +3155,10 @@ func TestLinkAccounts_Integration_DisconnectedRelink_FullFlow(t *testing.T) {
 		Return(disconnectedItem, nil)
 
 	// Step 8: create new linked item — use Run to set ID so replaced_by_id can be verified
+	// AccessToken is set by service; repo layer handles encryption on write
 	mockLinkedItemRepo.On("Create", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
 		return item.UserID == userID &&
-			item.AccessTokenEncrypted == encryptedToken &&
+			item.AccessToken == accessToken &&
 			item.Status == domain.LinkedItemStatusActive &&
 			item.Cursor == nil
 	})).Run(func(args mock.Arguments) {
@@ -2917,7 +3200,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_FullFlow(t *testing.T) {
 	svc := NewAccountService(
 		mockPlaidSvc,
 		newTestSubscriptionService(t),
-		mockEncryptionSvc,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -2944,7 +3226,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_FullFlow(t *testing.T) {
 	mockAccountRepo.AssertExpectations(t)
 	mockUserRepo.AssertExpectations(t)
 	mockPlaidSvc.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
 	mockUserAccountSvc.AssertExpectations(t)
 }
 
@@ -2960,7 +3241,6 @@ func TestLinkAccounts_Integration_ActiveTakesPrecedence(t *testing.T) {
 	publicToken := "public-sandbox-active-test"
 	accessToken := "access-sandbox-active-test"
 	plaidItemID := "plaid-item-active-test"
-	encryptedToken := "encrypted-active-test-token"
 	newItemID := uuid.New().String()
 	activeItemID := uuid.New().String()
 	oldAccountID := uuid.New().String()
@@ -2981,9 +3261,6 @@ func TestLinkAccounts_Integration_ActiveTakesPrecedence(t *testing.T) {
 
 	mockPlaidSvc := &MockPlaidService{}
 	mockPlaidSvc.On("GetClient").Return(plaidClient)
-
-	mockEncryptionSvc := &MockEncryptionService{}
-	mockEncryptionSvc.On("Encrypt", accessToken).Return(encryptedToken, nil)
 
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockAccountRepo := &MockAccountRepository{}
@@ -3031,7 +3308,6 @@ func TestLinkAccounts_Integration_ActiveTakesPrecedence(t *testing.T) {
 	svc := NewAccountService(
 		mockPlaidSvc,
 		newTestSubscriptionService(t),
-		mockEncryptionSvc,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3052,7 +3328,6 @@ func TestLinkAccounts_Integration_ActiveTakesPrecedence(t *testing.T) {
 	mockAccountRepo.AssertExpectations(t)
 	mockUserRepo.AssertExpectations(t)
 	mockPlaidSvc.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
 	mockUserAccountSvc.AssertExpectations(t)
 }
 
@@ -3068,7 +3343,6 @@ func TestLinkAccounts_Integration_FreshLink_NoExistingItem(t *testing.T) {
 	publicToken := "public-sandbox-fresh-test"
 	accessToken := "access-sandbox-fresh-test"
 	plaidItemID := "plaid-item-fresh-test"
-	encryptedToken := "encrypted-fresh-test-token"
 	newItemID := uuid.New().String()
 	userAccountID := uuid.New().String()
 
@@ -3085,9 +3359,6 @@ func TestLinkAccounts_Integration_FreshLink_NoExistingItem(t *testing.T) {
 
 	mockPlaidSvc := &MockPlaidService{}
 	mockPlaidSvc.On("GetClient").Return(plaidClient)
-
-	mockEncryptionSvc := &MockEncryptionService{}
-	mockEncryptionSvc.On("Encrypt", accessToken).Return(encryptedToken, nil)
 
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockAccountRepo := &MockAccountRepository{}
@@ -3123,7 +3394,6 @@ func TestLinkAccounts_Integration_FreshLink_NoExistingItem(t *testing.T) {
 	svc := NewAccountService(
 		mockPlaidSvc,
 		newTestSubscriptionService(t),
-		mockEncryptionSvc,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3148,7 +3418,6 @@ func TestLinkAccounts_Integration_FreshLink_NoExistingItem(t *testing.T) {
 	mockAccountRepo.AssertExpectations(t)
 	mockUserRepo.AssertExpectations(t)
 	mockPlaidSvc.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
 	mockUserAccountSvc.AssertExpectations(t)
 }
 
@@ -3164,7 +3433,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_ErrorPropagates(t *testing.
 	publicToken := "public-sandbox-error-test"
 	accessToken := "access-sandbox-error-test"
 	plaidItemID := "plaid-item-error-test"
-	encryptedToken := "encrypted-error-test-token"
 
 	plaidAccounts := []map[string]interface{}{
 		{
@@ -3179,9 +3447,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_ErrorPropagates(t *testing.
 
 	mockPlaidSvc := &MockPlaidService{}
 	mockPlaidSvc.On("GetClient").Return(plaidClient)
-
-	mockEncryptionSvc := &MockEncryptionService{}
-	mockEncryptionSvc.On("Encrypt", accessToken).Return(encryptedToken, nil)
 
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockAccountRepo := &MockAccountRepository{}
@@ -3203,7 +3468,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_ErrorPropagates(t *testing.
 	svc := NewAccountService(
 		mockPlaidSvc,
 		newTestSubscriptionService(t),
-		mockEncryptionSvc,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3226,5 +3490,591 @@ func TestLinkAccounts_Integration_DisconnectedRelink_ErrorPropagates(t *testing.
 	mockAccountRepo.AssertExpectations(t)
 	mockUserRepo.AssertExpectations(t)
 	mockPlaidSvc.AssertExpectations(t)
-	mockEncryptionSvc.AssertExpectations(t)
+}
+
+// ============================================================================
+// Issue #1010: Cross-user Plaid item uniqueness — fingerprint ownership tests
+// ============================================================================
+
+// noopEncryptionSvc is an identity encryption service used for testing.
+// BlindIndex will still produce real HMAC-SHA256 values using the test key.
+type noopEncryptionSvc struct{}
+
+func (n *noopEncryptionSvc) Encrypt(plaintext string) (string, error) {
+	return "NOOP_" + plaintext, nil
+}
+
+func (n *noopEncryptionSvc) Decrypt(ciphertext string) (string, error) {
+	return strings.TrimPrefix(ciphertext, "NOOP_"), nil
+}
+
+func newTestFieldEncryptor(t *testing.T) *appcrypto.FieldEncryptor {
+	t.Helper()
+	svc := &noopEncryptionSvc{}
+	key := []byte("12345678901234567890123456789012") // 32 bytes
+	enc, err := appcrypto.NewFieldEncryptor(svc, key)
+	require.NoError(t, err)
+	return enc
+}
+
+// newTestPlaidServerWithPersistentID creates a mock Plaid server that returns
+// persistent_account_id in account objects. It extends newTestPlaidServer.
+func newTestPlaidServerWithPersistentID(t *testing.T, accessToken, plaidItemID string, accounts []map[string]interface{}) (*httptest.Server, *plaid.APIClient) {
+	return newTestPlaidServer(t, accessToken, plaidItemID, accounts)
+}
+
+// TestLinkAccounts_FingerprintCheck_BlocksAnotherUserActiveItem verifies that
+// LinkAccounts returns ErrAccountOwnedByAnotherUser when a Plaid account's
+// persistent fingerprint is already owned by a different user (active item).
+//
+// Issue #1010: Cross-user Plaid item uniqueness
+func TestLinkAccounts_FingerprintCheck_BlocksAnotherUserActiveItem(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	otherUserID := uuid.New().String()
+	institutionID := "ins_test" // must match mock server item.institution_id
+	institutionName := "Test Bank"
+	publicToken := "public-sandbox-fingerprint-block"
+	accessToken := "access-sandbox-fingerprint-block"
+	plaidItemID := "plaid-item-fingerprint-block"
+	persistentAccountID := "persistent-acct-block-test"
+
+	enc := newTestFieldEncryptor(t)
+	expectedPersistentBlind := enc.BlindIndex("pid:" + persistentAccountID)
+
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id":           "plaid-acct-block-1",
+			"persistent_account_id": persistentAccountID,
+			"balances":             map[string]interface{}{"available": 100.0, "current": 110.0, "iso_currency_code": "USD"},
+			"mask":                 "1234",
+			"name":                 "Checking",
+			"subtype":              "checking",
+			"type":                 "depository",
+		},
+	}
+	_, plaidClient := newTestPlaidServerWithPersistentID(t, accessToken, plaidItemID, plaidAccounts)
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
+
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, repository.ErrLinkedItemNotFound)
+
+	// Persistent fingerprint is owned by another user with an active item
+	otherItemID := uuid.New().String()
+	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedPersistentBlind, userID).
+		Return(&repository.FingerprintOwnership{
+			UserID:       otherUserID,
+			LinkedItemID: otherItemID,
+			ItemStatus:   domain.LinkedItemStatusActive,
+		}, nil)
+
+	svc := NewAccountService(
+		mockPlaidSvc,
+		newTestSubscriptionService(t),
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+		WithEncryptor(enc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	result, err := svc.LinkAccounts(ctx, userID, publicToken, institutionID, institutionName)
+
+	require.Error(t, err, "should block when another user's active item owns the fingerprint")
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, repository.ErrAccountOwnedByAnotherUser)
+
+	mockAccountRepo.AssertNotCalled(t, "CreateBatch", mock.Anything, mock.Anything)
+	mockLinkedItemRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+
+	mockAccountRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
+	mockPlaidSvc.AssertExpectations(t)
+}
+
+// TestLinkAccounts_FingerprintCheck_BlocksTTLNotExpired verifies that a fingerprint
+// owned by another user with a disconnected item < 90 days ago blocks the link.
+//
+// Issue #1010: Cross-user Plaid item uniqueness
+func TestLinkAccounts_FingerprintCheck_BlocksTTLNotExpired(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	otherUserID := uuid.New().String()
+	institutionID := "ins_test"
+	institutionName := "Test Bank"
+	publicToken := "public-sandbox-fingerprint-ttl"
+	accessToken := "access-sandbox-fingerprint-ttl"
+	plaidItemID := "plaid-item-fingerprint-ttl"
+	persistentAccountID := "persistent-acct-ttl-test"
+
+	enc := newTestFieldEncryptor(t)
+	expectedPersistentBlind := enc.BlindIndex("pid:" + persistentAccountID)
+
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id":           "plaid-acct-ttl-1",
+			"persistent_account_id": persistentAccountID,
+			"balances":             map[string]interface{}{"available": 100.0, "current": 110.0, "iso_currency_code": "USD"},
+			"mask":                 "5678",
+			"name":                 "Savings",
+			"subtype":              "savings",
+			"type":                 "depository",
+		},
+	}
+	_, plaidClient := newTestPlaidServerWithPersistentID(t, accessToken, plaidItemID, plaidAccounts)
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
+
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, repository.ErrLinkedItemNotFound)
+
+	// Disconnected 30 days ago — within 90-day TTL, should still block
+	statusChangedAt := time.Now().Add(-30 * 24 * time.Hour)
+	otherItemID := uuid.New().String()
+	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedPersistentBlind, userID).
+		Return(&repository.FingerprintOwnership{
+			UserID:          otherUserID,
+			LinkedItemID:    otherItemID,
+			ItemStatus:      domain.LinkedItemStatusDisconnected,
+			StatusChangedAt: &statusChangedAt,
+		}, nil)
+
+	svc := NewAccountService(
+		mockPlaidSvc,
+		newTestSubscriptionService(t),
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+		WithEncryptor(enc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	result, err := svc.LinkAccounts(ctx, userID, publicToken, institutionID, institutionName)
+
+	require.Error(t, err, "should block when another user disconnected < 90 days ago")
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, repository.ErrAccountOwnedByAnotherUser)
+
+	mockAccountRepo.AssertNotCalled(t, "CreateBatch", mock.Anything, mock.Anything)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestLinkAccounts_FingerprintCheck_AllowsAfterTTLExpiry verifies that a fingerprint
+// owned by another user with a disconnected item >= 90 days ago releases and allows link.
+//
+// Issue #1010: Cross-user Plaid item uniqueness
+func TestLinkAccounts_FingerprintCheck_AllowsAfterTTLExpiry(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	otherUserID := uuid.New().String()
+	institutionID := "ins_test"
+	institutionName := "Test Bank"
+	publicToken := "public-sandbox-fingerprint-expired"
+	accessToken := "access-sandbox-fingerprint-expired"
+	plaidItemID := "plaid-item-fingerprint-expired"
+	newItemID := uuid.New().String()
+	persistentAccountID := "persistent-acct-expired-test"
+	mask := "9012"
+
+	enc := newTestFieldEncryptor(t)
+	expectedPersistentBlind := enc.BlindIndex("pid:" + persistentAccountID)
+	// Fallback fingerprint (institution_id comes from the Plaid item response: "ins_test")
+	expectedFallbackBlind := enc.BlindIndex("fb:" + institutionID + "\x00" + mask + "\x00" + "depository" + "\x00" + "checking")
+
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id":           "plaid-acct-expired-1",
+			"persistent_account_id": persistentAccountID,
+			"balances":             map[string]interface{}{"available": 100.0, "current": 110.0, "iso_currency_code": "USD"},
+			"mask":                 mask,
+			"name":                 "Checking",
+			"subtype":              "checking",
+			"type":                 "depository",
+		},
+	}
+	_, plaidClient := newTestPlaidServerWithPersistentID(t, accessToken, plaidItemID, plaidAccounts)
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
+
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, repository.ErrLinkedItemNotFound)
+
+	// Disconnected 91 days ago — TTL expired, should release and allow
+	statusChangedAt := time.Now().Add(-91 * 24 * time.Hour)
+	otherItemID := uuid.New().String()
+	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedPersistentBlind, userID).
+		Return(&repository.FingerprintOwnership{
+			UserID:          otherUserID,
+			LinkedItemID:    otherItemID,
+			ItemStatus:      domain.LinkedItemStatusDisconnected,
+			StatusChangedAt: &statusChangedAt,
+		}, nil)
+
+	// Persistent fingerprint expired → release it
+	mockAccountRepo.On("ExpireAccountsByFingerprint", ctx, expectedPersistentBlind).Return(nil)
+
+	// Fallback fingerprint not owned by anyone
+	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedFallbackBlind, userID).
+		Return(nil, nil)
+
+	// Proceed with normal link flow
+	mockLinkedItemRepo.On("Create", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
+		return item.UserID == userID && item.Status == domain.LinkedItemStatusActive
+	})).Run(func(args mock.Arguments) {
+		args.Get(1).(*domain.LinkedItem).ID = newItemID
+	}).Return(nil)
+
+	mockAccountRepo.On("CreateBatch", ctx, mock.MatchedBy(func(accounts []domain.Account) bool {
+		return len(accounts) == 1 && accounts[0].UserID == userID
+	})).Return(nil)
+
+	svc := NewAccountService(
+		mockPlaidSvc,
+		newTestSubscriptionService(t),
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+		WithEncryptor(enc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	result, err := svc.LinkAccounts(ctx, userID, publicToken, institutionID, institutionName)
+
+	require.NoError(t, err, "should succeed when TTL has expired")
+	require.NotNil(t, result)
+
+	mockAccountRepo.AssertExpectations(t)
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
+	mockPlaidSvc.AssertExpectations(t)
+}
+
+// TestLinkAccounts_FingerprintCheck_AllowsSameUser verifies that linking an account
+// with a fingerprint owned by the same user (re-link) is allowed.
+//
+// Issue #1010: Cross-user Plaid item uniqueness
+func TestLinkAccounts_FingerprintCheck_AllowsSameUser(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_test"
+	institutionName := "Test Bank"
+	publicToken := "public-sandbox-fingerprint-sameuser"
+	accessToken := "access-sandbox-fingerprint-sameuser"
+	plaidItemID := "plaid-item-fingerprint-sameuser"
+	newItemID := uuid.New().String()
+	mask := "3456"
+
+	enc := newTestFieldEncryptor(t)
+	// No persistent_account_id — only fallback fingerprint
+	expectedFallbackBlind := enc.BlindIndex("fb:" + institutionID + "\x00" + mask + "\x00" + "depository" + "\x00" + "savings")
+
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id": "plaid-acct-sameuser-1",
+			// No persistent_account_id
+			"balances": map[string]interface{}{"available": 500.0, "current": 500.0, "iso_currency_code": "USD"},
+			"mask":     mask,
+			"name":     "Savings",
+			"subtype":  "savings",
+			"type":     "depository",
+		},
+	}
+	_, plaidClient := newTestPlaidServer(t, accessToken, plaidItemID, plaidAccounts)
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
+
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, repository.ErrLinkedItemNotFound)
+
+	// Fallback fingerprint — no other user owns it (same-user re-link means excludeUserID filters it out)
+	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedFallbackBlind, userID).
+		Return(nil, nil)
+
+	// Proceed with normal link
+	mockLinkedItemRepo.On("Create", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
+		return item.UserID == userID && item.Status == domain.LinkedItemStatusActive
+	})).Run(func(args mock.Arguments) {
+		args.Get(1).(*domain.LinkedItem).ID = newItemID
+	}).Return(nil)
+
+	mockAccountRepo.On("CreateBatch", ctx, mock.MatchedBy(func(accounts []domain.Account) bool {
+		return len(accounts) == 1
+	})).Return(nil)
+
+	svc := NewAccountService(
+		mockPlaidSvc,
+		newTestSubscriptionService(t),
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+		WithEncryptor(enc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	result, err := svc.LinkAccounts(ctx, userID, publicToken, institutionID, institutionName)
+
+	require.NoError(t, err, "same-user re-link should succeed")
+	require.NotNil(t, result)
+
+	mockAccountRepo.AssertExpectations(t)
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockPlaidSvc.AssertExpectations(t)
+}
+
+// TestLinkAccounts_FingerprintCheck_RaceConditionHandled verifies that when a DB
+// UNIQUE constraint violation occurs on CreateBatch (race condition where two users
+// simultaneously link the same account), ErrAccountOwnedByAnotherUser is returned.
+//
+// Issue #1010: Cross-user Plaid item uniqueness
+func TestLinkAccounts_FingerprintCheck_RaceConditionHandled(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_test"
+	institutionName := "Test Bank"
+	publicToken := "public-sandbox-fingerprint-race"
+	accessToken := "access-sandbox-fingerprint-race"
+	plaidItemID := "plaid-item-fingerprint-race"
+	newItemID := uuid.New().String()
+	mask := "7890"
+
+	enc := newTestFieldEncryptor(t)
+	expectedFallbackBlind := enc.BlindIndex("fb:" + institutionID + "\x00" + mask + "\x00" + "depository" + "\x00" + "checking")
+
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id": "plaid-acct-race-1",
+			"balances":   map[string]interface{}{"available": 100.0, "current": 100.0, "iso_currency_code": "USD"},
+			"mask":       mask,
+			"name":       "Checking",
+			"subtype":    "checking",
+			"type":       "depository",
+		},
+	}
+	_, plaidClient := newTestPlaidServer(t, accessToken, plaidItemID, plaidAccounts)
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
+
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, repository.ErrLinkedItemNotFound)
+
+	// App-level check passes (no ownership found — race: other user hasn't committed yet)
+	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedFallbackBlind, userID).
+		Return(nil, nil)
+
+	// Linked item creates successfully
+	mockLinkedItemRepo.On("Create", ctx, mock.Anything).
+		Run(func(args mock.Arguments) {
+			args.Get(1).(*domain.LinkedItem).ID = newItemID
+		}).Return(nil)
+
+	// CreateBatch hits UNIQUE constraint violation (race condition)
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything).
+		Return(repository.ErrAccountOwnedByAnotherUser)
+
+	svc := NewAccountService(
+		mockPlaidSvc,
+		newTestSubscriptionService(t),
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+		WithEncryptor(enc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	result, err := svc.LinkAccounts(ctx, userID, publicToken, institutionID, institutionName)
+
+	require.Error(t, err, "race condition should return ErrAccountOwnedByAnotherUser")
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, repository.ErrAccountOwnedByAnotherUser)
+
+	mockAccountRepo.AssertExpectations(t)
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockPlaidSvc.AssertExpectations(t)
+}
+
+// TestLinkAccounts_FingerprintCheck_NilMaskAndSubtypeUseSentinels verifies that when
+// a Plaid account has no mask and no subtype, the fallback fingerprint blind index
+// uses the sentinel values "__NO_MASK__" and "__NO_SUBTYPE__" instead of empty strings.
+//
+// Issue #1010: Cross-user Plaid item uniqueness — sentinel values for nil fields
+func TestLinkAccounts_FingerprintCheck_NilMaskAndSubtypeUseSentinels(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_test"
+	institutionName := "Test Bank"
+	publicToken := "public-sandbox-sentinel"
+	accessToken := "access-sandbox-sentinel"
+	plaidItemID := "plaid-item-sentinel"
+	newItemID := uuid.New().String()
+
+	enc := newTestFieldEncryptor(t)
+	// Sentinel values used when mask and subtype are absent from the Plaid response
+	expectedFallbackBlind := enc.BlindIndex("fb:" + institutionID + "\x00" + "__NO_MASK__" + "\x00" + "depository" + "\x00" + "__NO_SUBTYPE__")
+
+	// Account with no mask and no subtype
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id": "plaid-acct-sentinel-1",
+			"balances":   map[string]interface{}{"available": 100.0, "current": 100.0, "iso_currency_code": "USD"},
+			// mask intentionally omitted — nil
+			"name": "Checking",
+			// subtype intentionally omitted — nil
+			"type": "depository",
+		},
+	}
+	_, plaidClient := newTestPlaidServer(t, accessToken, plaidItemID, plaidAccounts)
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
+
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, repository.ErrLinkedItemNotFound)
+
+	// The fallback fingerprint must use sentinels — this is the key assertion
+	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedFallbackBlind, userID).
+		Return(nil, nil)
+
+	mockLinkedItemRepo.On("Create", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
+		return item.UserID == userID && item.Status == domain.LinkedItemStatusActive
+	})).Run(func(args mock.Arguments) {
+		args.Get(1).(*domain.LinkedItem).ID = newItemID
+	}).Return(nil)
+
+	mockAccountRepo.On("CreateBatch", ctx, mock.MatchedBy(func(accounts []domain.Account) bool {
+		return len(accounts) == 1
+	})).Return(nil)
+
+	svc := NewAccountService(
+		mockPlaidSvc,
+		newTestSubscriptionService(t),
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+		WithEncryptor(enc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+
+	result, err := svc.LinkAccounts(ctx, userID, publicToken, institutionID, institutionName)
+
+	require.NoError(t, err, "nil mask/subtype should succeed using sentinel values")
+	require.NotNil(t, result)
+
+	// AssertExpectations verifies CheckFingerprintOwnership was called with the sentinel-based blind
+	mockAccountRepo.AssertExpectations(t)
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockPlaidSvc.AssertExpectations(t)
+}
+
+// TestAccountService_ListActiveByUser_ExcludesReplaced verifies that ListActiveByUser
+// returns only active accounts, excluding replaced and expired (Issue #1109).
+func TestAccountService_ListActiveByUser_ExcludesReplaced(t *testing.T) {
+	mockAccountRepo := new(MockAccountRepository)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockUserRepo := new(MockUserRepository)
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	// GetByUserID now returns only active accounts (replaced filtered at repo layer)
+	activeAccounts := []domain.Account{
+		{
+			ID:     "account-active",
+			UserID: userID,
+			Name:   "Active Checking",
+			Type:   "depository",
+			Status: domain.AccountStatusActive,
+		},
+	}
+
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeAccounts, nil)
+
+	svc := NewAccountService(
+		nil, // plaid not needed
+		nil, // subscription not needed
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil, // db not needed
+	)
+
+	result, err := svc.ListActiveByUser(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Len(t, result, 1)
+	assert.Equal(t, "account-active", result[0].ID)
+	assert.Equal(t, domain.AccountStatusActive, result[0].Status)
+
+	mockAccountRepo.AssertExpectations(t)
 }

@@ -22,11 +22,14 @@ Authorization: Bearer <your-jwt-token>
 
 ## Regions
 
-All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+Use the GET /api/v1/regions endpoint to discover available data residency regions.
+Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
 import type { GetTransactionsAmountType } from "./getTransactionsAmountType";
+import type { GetTransactionsSortBy } from "./getTransactionsSortBy";
+import type { GetTransactionsSortDir } from "./getTransactionsSortDir";
 
 export type GetTransactionsParams = {
   /**
@@ -57,13 +60,13 @@ export type GetTransactionsParams = {
    */
   end_date?: string;
   /**
-   * Filter by category (deprecated: use categories)
+   * Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)
    */
-  category?: string;
+  pfc_primaries?: string;
   /**
-   * Filter by multiple categories (comma-separated)
+   * Filter by custom category UUIDs (comma-separated)
    */
-  categories?: string;
+  custom_category_ids?: string;
   /**
    * Search in merchant name or transaction name
    */
@@ -84,4 +87,16 @@ export type GetTransactionsParams = {
    * Filter by transaction type
    */
   amount_type?: GetTransactionsAmountType;
+  /**
+   * Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members
+   */
+  user_account_id?: string;
+  /**
+   * Column to sort by
+   */
+  sort_by?: GetTransactionsSortBy;
+  /**
+   * Sort direction
+   */
+  sort_dir?: GetTransactionsSortDir;
 };

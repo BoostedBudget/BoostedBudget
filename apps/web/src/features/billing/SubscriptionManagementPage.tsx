@@ -112,6 +112,7 @@ export function SubscriptionManagementPage() {
       await updateSubscription({
         newTier: targetTier,
         billingInterval,
+        currentBillingInterval: subscription.billing_interval as 'month' | 'year',
         prorationBillingMode,
       })
       toast.success(message)
@@ -155,6 +156,9 @@ export function SubscriptionManagementPage() {
     setShowPlanChangeModal(true)
   }
 
+  const nextBillingDate =
+    subscription.next_billing_date ?? subscription.current_period_end ?? ''
+
   // Helper to build subscription data for modals
   const getModalSubscriptionData = () => ({
     tier: subscription.tier,
@@ -162,7 +166,7 @@ export function SubscriptionManagementPage() {
     billing_interval: subscription.billing_interval,
     amount: subscription.amount,
     currency: subscription.currency,
-    next_billing_date: subscription.next_billing_date || subscription.current_period_end,
+    next_billing_date: nextBillingDate,
     features: formatTierFeatures(currentTierData),
   })
 
@@ -230,9 +234,9 @@ export function SubscriptionManagementPage() {
           />
         )}
 
-        <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow-sm space-y-2">
-          <p className="text-sm text-gray-600 dark:text-gray-400">Your plan will automatically activate after your trial ends.</p>
-          <p className="text-sm text-gray-600 dark:text-gray-400">You'll be charged {subscription.currency} {actualAmount}/{billingPeriod} starting on {trialEndDate}.</p>
+        <div className="rounded-lg bg-card p-6 shadow-sm space-y-2">
+          <p className="text-sm text-muted-foreground">Your plan will automatically activate after your trial ends.</p>
+          <p className="text-sm text-muted-foreground">You'll be charged {subscription.currency} {actualAmount}/{billingPeriod} starting on {trialEndDate}.</p>
         </div>
 
         <div className="space-y-3">
@@ -353,7 +357,7 @@ export function SubscriptionManagementPage() {
       )}
 
       <BillingDetails
-        nextBillingDate={subscription.next_billing_date || subscription.current_period_end}
+        nextBillingDate={nextBillingDate}
         amount={subscription.amount}
         currency={subscription.currency}
         billingInterval={subscription.billing_interval}

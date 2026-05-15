@@ -10,6 +10,7 @@
 
 import { test, expect, type Page } from '@playwright/test'
 import { acceptCookieConsent } from './helpers/auth'
+import { mockAuthDependencies } from './helpers/api-mocks'
 
 // Mock data for transactions
 const mockTransactions = {
@@ -21,11 +22,12 @@ const mockTransactions = {
       linked_item_id: 'item-1',
       source: 'plaid',
       external_transaction_id: 'plaid-txn-1',
-      amount: -25.50,
+      amount: 25.50,
       date: '2025-11-15',
       name: 'Coffee Shop',
       merchant_name: 'Starbucks',
-      category: '["Food and Drink", "Coffee"]',
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
       pending: false,
       tags: ['Food'],
       created_at: '2025-11-15T10:00:00Z',
@@ -38,11 +40,12 @@ const mockTransactions = {
       linked_item_id: 'item-1',
       source: 'plaid',
       external_transaction_id: 'plaid-txn-2',
-      amount: -150.00,
+      amount: 150.00,
       date: '2025-11-14',
       name: 'Grocery Store',
       merchant_name: 'Whole Foods',
-      category: '["Shopping", "Groceries"]',
+      pfc_primary: 'GENERAL_MERCHANDISE',
+      pfc_detailed: 'GENERAL_MERCHANDISE_GROCERIES',
       pending: false,
       tags: [],
       created_at: '2025-11-14T10:00:00Z',
@@ -137,6 +140,9 @@ async function mockTransactionAPIs(
     tagsStatus = 200,
     categoriesStatus = 200,
   } = overrides
+
+  // Mock auth-dependent endpoints (PremiumRoute blocks rendering until /user/profile resolves)
+  await mockAuthDependencies(page)
 
   // Mock transactions endpoint
   await page.route('**/api/v1/transactions**', (route) => {

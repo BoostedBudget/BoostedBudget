@@ -1,5 +1,5 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
 import type { CategorizationRule } from '../types'
 
@@ -21,7 +21,9 @@ describe('AutoCategorizationRuleCard', () => {
       { type: 'amount_greater_than', value: 5 },
     ],
     condition_logic: 'AND',
-    target_category: ['Food & Drink', 'Coffee'],
+    target_kind: 'pfc',
+    target_pfc_primary: 'FOOD_AND_DRINK',
+    target_pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
     target_tags: ['morning', 'caffeine'],
     tag_behavior: 'add',
     source: 'manual',
@@ -83,10 +85,11 @@ describe('AutoCategorizationRuleCard', () => {
       expect(screen.getByText('Conditions (AND)')).toBeInTheDocument()
     })
 
-    it('should render target category as breadcrumb', () => {
+    it('should render target category using display fields when present', () => {
+      // When display fields are absent, formatPFCEnum fallback is used
       renderCard()
 
-      expect(screen.getByText('Food & Drink > Coffee')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink › Coffee')).toBeInTheDocument()
     })
 
     it('should render target tags', () => {
@@ -217,7 +220,8 @@ describe('AutoCategorizationRuleCard', () => {
       const deleteButton = screen.getByRole('button', { name: 'Delete' })
       fireEvent.click(deleteButton)
 
-      const confirmButton = screen.getAllByRole('button', { name: 'Delete' })[1]
+      const dialog = await screen.findByRole('alertdialog')
+      const confirmButton = within(dialog).getByRole('button', { name: 'Delete' })
       fireEvent.click(confirmButton)
 
       await waitFor(() => {
@@ -225,7 +229,7 @@ describe('AutoCategorizationRuleCard', () => {
       })
     })
 
-    it('should show Deleting... while deleting', async () => {
+    it('should disable confirm button while deleting', async () => {
       let resolveDelete: (value?: unknown) => void
       mockOnDelete.mockImplementation(() => new Promise((resolve) => {
         resolveDelete = resolve
@@ -236,14 +240,20 @@ describe('AutoCategorizationRuleCard', () => {
       const deleteButton = screen.getByRole('button', { name: 'Delete' })
       fireEvent.click(deleteButton)
 
-      const confirmButton = screen.getAllByRole('button', { name: 'Delete' })[1]
+      const dialog = await screen.findByRole('alertdialog')
+      const confirmButton = within(dialog).getByRole('button', { name: 'Delete' })
       fireEvent.click(confirmButton)
 
-      expect(screen.getByRole('button', { name: 'Deleting...' })).toBeInTheDocument()
+      // While deleting, the confirm button should be disabled
+      expect(confirmButton).toBeDisabled()
 
-      resolveDelete!()
+      // Wrap promise resolution in act() to ensure React processes the state update
+      await act(async () => {
+        resolveDelete!()
+      })
       await waitFor(() => {
-        expect(screen.queryByText('Deleting...')).not.toBeInTheDocument()
+        // Dialog closes after delete completes
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
       })
     })
   })
@@ -350,14 +360,53 @@ describe('AutoCategorizationRuleCard', () => {
       expect(screen.getByText('online')).toBeInTheDocument()
     })
 
-    it('should display existing_category condition', () => {
+    it('should display existing_pfc_primary condition', () => {
       renderCard({
         ...mockRule,
-        conditions: [{ type: 'existing_category' as const, value: 'Food & Drink' }],
+        conditions: [{ type: 'existing_pfc_primary' as const, value: 'FOOD_AND_DRINK' }],
       })
 
-      expect(screen.getByText('Current category is')).toBeInTheDocument()
-      expect(screen.getByText('Food & Drink')).toBeInTheDocument()
+      expect(screen.getByText('PFC Primary')).toBeInTheDocument()
+      // formatPFCPrimary converts enum → "Food And Drink" display string
+      expect(screen.getByText('Food And Drink')).toBeInTheDocument()
+    })
+
+    it('formatConditionValue_renders_pfc_primary_with_curated_display', () => {
+      renderCard({
+        ...mockRule,
+        conditions: [{ type: 'existing_pfc_primary' as const, value: 'FOOD_AND_DRINK' }],
+      })
+
+      expect(screen.getByText('Food And Drink')).toBeInTheDocument()
+    })
+
+    it('prefers server-supplied value_display over local formatter for pfc_primary condition', () => {
+      renderCard({
+        ...mockRule,
+        conditions: [{ type: 'existing_pfc_primary' as const, value: 'FOOD_AND_DRINK', value_display: 'Food & Drink (server)' }],
+      })
+
+      expect(screen.getByText('Food & Drink (server)')).toBeInTheDocument()
+      expect(screen.queryByText('Food And Drink')).not.toBeInTheDocument()
+    })
+
+    it('prefers server-supplied value_display over local formatter for pfc_detailed condition', () => {
+      renderCard({
+        ...mockRule,
+        conditions: [{ type: 'existing_pfc_detailed' as const, value: 'FOOD_AND_DRINK_GROCERIES', value_display: 'Groceries (server)' }],
+      })
+
+      expect(screen.getByText('Groceries (server)')).toBeInTheDocument()
+      expect(screen.queryByText('Food And Drink › Groceries')).not.toBeInTheDocument()
+    })
+
+    it('formatConditionValue_renders_pfc_detailed_with_breadcrumb', () => {
+      renderCard({
+        ...mockRule,
+        conditions: [{ type: 'existing_pfc_detailed' as const, value: 'FOOD_AND_DRINK_GROCERIES' }],
+      })
+
+      expect(screen.getByText('Food And Drink › Groceries')).toBeInTheDocument()
     })
 
     it('should display date_range with only start date', () => {
