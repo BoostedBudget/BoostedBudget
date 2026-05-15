@@ -44,6 +44,7 @@ const statusBadgeClass = (processed: boolean, hasError: boolean): string => {
 
 const selectInputClass = 'px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm font-[inherit] cursor-pointer transition-colors focus:outline-none focus:border-primary'
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const ADMIN_WEBHOOKS_COLUMN_IDS = ['event_type', 'event_id', 'status', 'attempts', 'error', 'created_at'] as const
 
 export function WebhooksPage() {

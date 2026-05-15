@@ -117,6 +117,15 @@ export function useTablePreferences(
     () => (userId ? loadPrefs(userId, tableId, knownColumnIds) : DEFAULT_PREFS)
   )
 
+  // Derived state: when Clerk resolves userId after the initial null render, reload prefs.
+  // Calling setState during render (React's recommended pattern for derived state) avoids
+  // an extra commit cycle compared to useEffect.
+  const [lastLoadedUserId, setLastLoadedUserId] = useState(userId)
+  if (userId !== lastLoadedUserId) {
+    setLastLoadedUserId(userId)
+    setPrefs(userId ? loadPrefs(userId, tableId, knownColumnIds) : DEFAULT_PREFS)
+  }
+
   const onSizingChange = useCallback(
     (newSizing: Record<string, number>) => {
       if (!userId) return
