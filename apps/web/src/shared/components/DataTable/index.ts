@@ -12,3 +12,5 @@ export type {
 export { ResizeHandle } from './ResizeHandle'
 export { useColumnResize } from './useColumnResize'
 export { ColumnVisibilityMenu } from './ColumnVisibilityMenu'
+export { useTablePreferences } from './useTablePreferences'
+export type { UseTablePreferencesResult } from './useTablePreferences'
