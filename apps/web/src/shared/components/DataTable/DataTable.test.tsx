@@ -1135,7 +1135,7 @@ describe('column pin', () => {
     expect(anyPinned.length).toBe(0)
   })
 
-  it('left-pinned th has sticky and left-0 classes', () => {
+  it('left-pinned th has sticky, left-0, and background classes', () => {
     const { container } = render(
       <DataTable<Row>
         data={rows}
@@ -1150,9 +1150,10 @@ describe('column pin', () => {
     const pinnedTh = container.querySelector('th[data-pinned="left"]')!
     expect(pinnedTh.className).toContain('sticky')
     expect(pinnedTh.className).toContain('left-0')
+    expect(pinnedTh.className).toContain('bg-muted')
   })
 
-  it('right-pinned th has sticky and right-0 classes', () => {
+  it('right-pinned th has sticky, right-0, background, and mobile degradation classes', () => {
     const { container } = render(
       <DataTable<Row>
         data={rows}
@@ -1167,9 +1168,11 @@ describe('column pin', () => {
     const pinnedTh = container.querySelector('th[data-pinned="right"]')!
     expect(pinnedTh.className).toContain('sticky')
     expect(pinnedTh.className).toContain('right-0')
+    expect(pinnedTh.className).toContain('bg-muted')
+    expect(pinnedTh.className).toContain('max-md:relative')
   })
 
-  it('left-pinned td has sticky, left-0, and z-10 classes', () => {
+  it('left-pinned td has sticky, left-0, z-10, and bg-card classes', () => {
     const { container } = render(
       <DataTable<Row>
         data={rows}
@@ -1185,9 +1188,10 @@ describe('column pin', () => {
     expect(pinnedTd.className).toContain('sticky')
     expect(pinnedTd.className).toContain('left-0')
     expect(pinnedTd.className).toContain('z-10')
+    expect(pinnedTd.className).toContain('bg-card')
   })
 
-  it('right-pinned td has max-md:relative class (mobile degradation)', () => {
+  it('right-pinned td has sticky, right-0, z-10, bg-card, and max-md:relative classes', () => {
     const { container } = render(
       <DataTable<Row>
         data={rows}
@@ -1200,6 +1204,10 @@ describe('column pin', () => {
       />
     )
     const pinnedTd = container.querySelector('td[data-pinned="right"]')!
+    expect(pinnedTd.className).toContain('sticky')
+    expect(pinnedTd.className).toContain('right-0')
+    expect(pinnedTd.className).toContain('z-10')
+    expect(pinnedTd.className).toContain('bg-card')
     expect(pinnedTd.className).toContain('max-md:relative')
   })
 })
