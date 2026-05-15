@@ -60,7 +60,7 @@ Full numbers in `docs/decisions/bundle-baseline.json`.
 | css | 24.07 KB | 24.07 KB | 0 KB |
 | **tanstack** | _(none)_ | **0.09 KB** | +0.09 KB |
 
-The `tanstack` chunk (0.09 KB gz in Phase 0) reflects only the re-export stub in `src/shared/lib/tanstack.ts`. Phase 1, when `DataTable` is wired to `useReactTable`, is estimated at 14–18 KB gz against the 25 KB budget.
+The `tanstack` chunk (0.09 KB gz in Phase 0) is a Rollup edge artifact — TanStack library code is fully tree-shaken since no consuming code imports exported values yet. The chunk will grow to ~14–18 KB gz in Phase 1 when `useReactTable` is wired into DataTable against the 25 KB budget.
 
 ### react-window removal
 
