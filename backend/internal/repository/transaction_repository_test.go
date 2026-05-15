@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
@@ -2799,4 +2800,236 @@ func TestTransactionRepository_GetByUserIDWithFilters_SortBy(t *testing.T) {
 			assert.NoError(t, err, "query did not contain expected ORDER BY clause")
 		})
 	}
+}
+
+// makeKeysetRow returns a pgxmock row with minimal values for GetByUserIDKeyset tests.
+// The id must be a valid UUID string.
+func makeKeysetRow(id, userID string, amount float64, txDate time.Time, merchantName *string) []interface{} {
+	return []interface{}{
+		id, userID, "account-1", "item-1",
+		"plaid", nil, nil,
+		amount, txDate, nil, "Test Merchant", merchantName,
+		nil, nil, nil, nil,
+		nil, false, nil, txDate, txDate,
+		nil, nil,
+		nil, nil, nil, nil, nil, nil,
+		nil, nil, nil,
+	}
+}
+
+// TestGetByUserIDKeyset_Date_Desc_FirstPage verifies that the first page (cursor=nil)
+// for date/desc sort emits no keyset predicate and uses LIMIT limit+1.
+func TestGetByUserIDKeyset_Date_Desc_FirstPage(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-keyset-1"
+	limit := 2
+	filters := domain.TransactionFilters{SortBy: "date", SortDir: "desc"}
+
+	now := time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC)
+	txID1 := "00000000-0000-0000-0000-000000000001"
+	txID2 := "00000000-0000-0000-0000-000000000002"
+
+	// Return exactly limit rows (no next page).
+	rows := pgxmock.NewRows(transactionSelectColumns).
+		AddRow(makeKeysetRow(txID1, userID, -10.00, now, nil)...).
+		AddRow(makeKeysetRow(txID2, userID, -20.00, now, nil)...)
+
+	// First page: no keyset predicate, ORDER BY date DESC, LIMIT = limit+1 = 3.
+	pattern := "SELECT .+ FROM transactions WHERE user_id .+" +
+		regexp.QuoteMeta("ORDER BY COALESCE(authorized_date, date) DESC, id ASC") +
+		`.+LIMIT`
+	mock.ExpectQuery(pattern).
+		WithArgs(userID, limit+1).
+		WillReturnRows(rows)
+
+	txs, nextCursor, err := repo.GetByUserIDKeyset(ctx, userID, filters, nil, limit)
+	require.NoError(t, err)
+	assert.Len(t, txs, 2, "should return 2 rows (no next page)")
+	assert.Nil(t, nextCursor, "cursor should be nil when fewer than limit+1 rows returned")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetByUserIDKeyset_Date_Desc_SecondPage verifies that a non-nil cursor injects
+// the correct keyset predicate for date/desc sort.
+func TestGetByUserIDKeyset_Date_Desc_SecondPage(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-keyset-2"
+	limit := 2
+	filters := domain.TransactionFilters{SortBy: "date", SortDir: "desc"}
+
+	now := time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC)
+	txID1 := "00000000-0000-0000-0000-000000000011"
+	txID2 := "00000000-0000-0000-0000-000000000012"
+	txID3 := "00000000-0000-0000-0000-000000000013"
+
+	// Cursor from prior page.
+	cursorDate := "2025-06-15"
+	cursorID, _ := uuid.Parse("00000000-0000-0000-0000-000000000010")
+	cursor := &domain.TransactionCursor{
+		V: 1, K: "date", D: "desc",
+		SV: &cursorDate,
+		ID: cursorID,
+	}
+
+	// Return limit+1 rows to signal a next page exists.
+	rows := pgxmock.NewRows(transactionSelectColumns).
+		AddRow(makeKeysetRow(txID1, userID, -10.00, now, nil)...).
+		AddRow(makeKeysetRow(txID2, userID, -20.00, now, nil)...).
+		AddRow(makeKeysetRow(txID3, userID, -30.00, now, nil)...)
+
+	// Second page: keyset predicate must appear, ORDER BY date DESC, LIMIT = limit+1.
+	pattern := "SELECT .+ FROM transactions WHERE user_id .+" +
+		regexp.QuoteMeta("COALESCE(authorized_date, date)::date") +
+		`.+` + regexp.QuoteMeta("ORDER BY COALESCE(authorized_date, date) DESC, id ASC") +
+		`.+LIMIT`
+	mock.ExpectQuery(pattern).
+		WithArgs(userID, cursorDate, cursorID.String(), limit+1).
+		WillReturnRows(rows)
+
+	txs, nextCursor, err := repo.GetByUserIDKeyset(ctx, userID, filters, cursor, limit)
+	require.NoError(t, err)
+	assert.Len(t, txs, limit, "should return exactly limit rows when limit+1 fetched")
+	require.NotNil(t, nextCursor, "cursor should be non-nil when limit+1 rows returned")
+	assert.Equal(t, "date", nextCursor.K)
+	assert.Equal(t, "desc", nextCursor.D)
+	require.NotNil(t, nextCursor.SV)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetByUserIDKeyset_Merchant_Asc_FirstPage verifies merchant/asc first page.
+func TestGetByUserIDKeyset_Merchant_Asc_FirstPage(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-keyset-3"
+	limit := 5
+	filters := domain.TransactionFilters{SortBy: "merchant", SortDir: "asc"}
+
+	now := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+	merchant := "Acme Corp"
+	txID1 := "00000000-0000-0000-0000-000000000021"
+
+	// Return fewer than limit rows — no next page.
+	rows := pgxmock.NewRows(transactionSelectColumns).
+		AddRow(makeKeysetRow(txID1, userID, -15.00, now, &merchant)...)
+
+	pattern := "SELECT .+ FROM transactions WHERE user_id .+" +
+		regexp.QuoteMeta("ORDER BY COALESCE(merchant_name, name) ASC, id ASC") +
+		`.+LIMIT`
+	mock.ExpectQuery(pattern).
+		WithArgs(userID, limit+1).
+		WillReturnRows(rows)
+
+	txs, nextCursor, err := repo.GetByUserIDKeyset(ctx, userID, filters, nil, limit)
+	require.NoError(t, err)
+	assert.Len(t, txs, 1)
+	assert.Nil(t, nextCursor)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetByUserIDKeyset_Amount_Desc_SecondPage verifies amount/desc second page cursor predicate.
+func TestGetByUserIDKeyset_Amount_Desc_SecondPage(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-keyset-4"
+	limit := 3
+	filters := domain.TransactionFilters{SortBy: "amount", SortDir: "desc"}
+
+	now := time.Date(2025, 4, 1, 0, 0, 0, 0, time.UTC)
+	txID1 := "00000000-0000-0000-0000-000000000031"
+	txID2 := "00000000-0000-0000-0000-000000000032"
+	txID3 := "00000000-0000-0000-0000-000000000033"
+	txID4 := "00000000-0000-0000-0000-000000000034"
+
+	cursorSV := "-50"
+	cursorID, _ := uuid.Parse("00000000-0000-0000-0000-000000000030")
+	cursor := &domain.TransactionCursor{
+		V: 1, K: "amount", D: "desc",
+		SV: &cursorSV,
+		ID: cursorID,
+	}
+
+	// Return limit+1 rows to trigger next cursor.
+	rows := pgxmock.NewRows(transactionSelectColumns).
+		AddRow(makeKeysetRow(txID1, userID, -60.00, now, nil)...).
+		AddRow(makeKeysetRow(txID2, userID, -70.00, now, nil)...).
+		AddRow(makeKeysetRow(txID3, userID, -80.00, now, nil)...).
+		AddRow(makeKeysetRow(txID4, userID, -90.00, now, nil)...)
+
+	pattern := "SELECT .+ FROM transactions WHERE user_id .+" +
+		regexp.QuoteMeta("amount") +
+		`.+` + regexp.QuoteMeta("ORDER BY amount DESC, id ASC") +
+		`.+LIMIT`
+	mock.ExpectQuery(pattern).
+		WithArgs(userID, cursorSV, cursorID.String(), limit+1).
+		WillReturnRows(rows)
+
+	txs, nextCursor, err := repo.GetByUserIDKeyset(ctx, userID, filters, cursor, limit)
+	require.NoError(t, err)
+	assert.Len(t, txs, limit)
+	require.NotNil(t, nextCursor)
+	assert.Equal(t, "amount", nextCursor.K)
+	assert.Equal(t, "desc", nextCursor.D)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetByUserIDKeyset_Category_Asc_FirstPage verifies category/asc first page.
+func TestGetByUserIDKeyset_Category_Asc_FirstPage(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-keyset-5"
+	limit := 4
+	filters := domain.TransactionFilters{SortBy: "category", SortDir: "asc"}
+
+	now := time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC)
+	txID1 := "00000000-0000-0000-0000-000000000041"
+	txID2 := "00000000-0000-0000-0000-000000000042"
+
+	rows := pgxmock.NewRows(transactionSelectColumns).
+		AddRow(makeKeysetRow(txID1, userID, -5.00, now, nil)...).
+		AddRow(makeKeysetRow(txID2, userID, -10.00, now, nil)...)
+
+	pattern := "SELECT .+ FROM transactions WHERE user_id .+" +
+		regexp.QuoteMeta("ORDER BY COALESCE(effective_category_name, effective_pfc_primary, pfc_primary) ASC, id ASC") +
+		`.+LIMIT`
+	mock.ExpectQuery(pattern).
+		WithArgs(userID, limit+1).
+		WillReturnRows(rows)
+
+	txs, nextCursor, err := repo.GetByUserIDKeyset(ctx, userID, filters, nil, limit)
+	require.NoError(t, err)
+	assert.Len(t, txs, 2)
+	assert.Nil(t, nextCursor, "fewer than limit+1 rows means no next page")
+
+	require.NoError(t, mock.ExpectationsWereMet())
 }
