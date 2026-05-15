@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import type { SpendingByMerchantResponse } from '@boostedbudget/api-client/models'
 import { formatCurrencyFull } from '@/shared/charts'
-import { DataTable } from '@/shared/components/DataTable'
+import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, SortState } from '@/shared/components/DataTable'
 import type { SpendingMerchant } from '../types'
 
@@ -14,12 +14,17 @@ interface TopMerchantsTableProps {
   onSortChange: (s: SortState) => void
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
+export const TOP_MERCHANTS_COLUMN_IDS = ['merchant_name', 'total', 'transaction_count', 'percentage'] as const
+
 const columns: ColumnDef<SpendingMerchant>[] = [
-  { id: 'merchant_name', header: 'Merchant', sortable: true, key: 'merchant_name' },
+  { id: 'merchant_name', header: 'Merchant', sortable: true, resizable: true, reorderable: true, key: 'merchant_name' },
   {
     id: 'total',
     header: 'Total',
     sortable: true,
+    resizable: true,
+    reorderable: true,
     align: 'right',
     numeric: true,
     render: (row) => formatCurrencyFull(row.total),
@@ -28,6 +33,9 @@ const columns: ColumnDef<SpendingMerchant>[] = [
     id: 'transaction_count',
     header: 'Transactions',
     sortable: true,
+    resizable: true,
+    reorderable: true,
+    hideable: true,
     align: 'right',
     numeric: true,
     render: (row) => <span className="text-muted-foreground">{row.transaction_count}</span>,
@@ -36,6 +44,8 @@ const columns: ColumnDef<SpendingMerchant>[] = [
     id: 'percentage',
     header: '%',
     sortable: true,
+    resizable: true,
+    reorderable: true,
     align: 'right',
     numeric: true,
     render: (row) => <span className="text-muted-foreground">{row.percentage.toFixed(1)}%</span>,
@@ -63,6 +73,15 @@ export function TopMerchantsTable({
   sort,
   onSortChange,
 }: TopMerchantsTableProps) {
+  const {
+    sizing,
+    onSizingChange,
+    columnOrder,
+    onColumnOrderChange,
+    columnVisibility,
+    onColumnVisibilityChange,
+  } = useTablePreferences('top-merchants', [...TOP_MERCHANTS_COLUMN_IDS])
+
   const sortedMerchants = useMemo(
     () => sortMerchants(data?.merchants ?? [], sort),
     [data?.merchants, sort]
@@ -93,6 +112,12 @@ export function TopMerchantsTable({
         onFiltersChange={() => {}}
         maskedColumnIds={['total']}
         onRowClick={onMerchantClick ? (row) => onMerchantClick(row.merchant_name) : undefined}
+        columnSizing={sizing}
+        onColumnSizingChange={onSizingChange}
+        columnOrder={columnOrder}
+        onColumnOrderChange={onColumnOrderChange}
+        columnVisibility={columnVisibility}
+        onColumnVisibilityChange={onColumnVisibilityChange}
         className="border-0 rounded-none bg-transparent"
         emptyState={
           <p className="px-4 py-3 text-sm text-muted-foreground">No merchant data for this period.</p>
