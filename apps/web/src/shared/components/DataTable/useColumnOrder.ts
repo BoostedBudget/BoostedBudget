@@ -49,7 +49,7 @@ export function useColumnOrder<T>(
     (colId: string) => (e: React.KeyboardEvent) => {
       if (!columns.find((c) => c.id === colId)?.reorderable) return
 
-      if (e.key === ' ') {
+      if (e.key === ' ' || (e.key === 'Enter' && draggingId === colId)) {
         e.preventDefault()
         if (draggingId === null) {
           setDraggingId(colId)
@@ -57,7 +57,7 @@ export function useColumnOrder<T>(
           const label = columns.find((c) => c.id === colId)?.header
           const headerText = typeof label === 'string' ? label : colId
           setLiveText(
-            `Picked up column ${headerText}. Use arrow keys to move, Space to drop, Escape to cancel.`
+            `Picked up column ${headerText}. Use arrow keys to move, Space or Enter to drop, Escape to cancel.`
           )
         } else if (draggingId === colId) {
           const finalOrder = draftOrder ?? committedOrder

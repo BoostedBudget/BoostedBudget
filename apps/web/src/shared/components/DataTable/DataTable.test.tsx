@@ -951,6 +951,51 @@ describe('column reorder', () => {
     expect(liveRegion.textContent).toMatch(/Cancelled/i)
   })
 
+  it('ArrowLeft moves picked-up column one position left; live region updates', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnOrder={['name', 'amount']}
+      />
+    )
+    // Pick up 'amount' (index 1) and move left to index 0
+    const handles = container.querySelectorAll('[data-testid="drag-handle"]')
+    const amountHandle = handles[1]!
+    fireEvent.keyDown(amountHandle, { key: ' ' })        // pick up amount
+    fireEvent.keyDown(amountHandle, { key: 'ArrowLeft' }) // move left
+    const liveRegion = container.querySelector('[aria-live="polite"]')!
+    expect(liveRegion.textContent).toMatch(/position 1/i)
+  })
+
+  it('Enter key drops the column (alternate drop key)', () => {
+    const onColumnOrderChange = mock((_: string[]) => {})
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={reorderableColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        onColumnOrderChange={onColumnOrderChange}
+      />
+    )
+    const handles = container.querySelectorAll('[data-testid="drag-handle"]')
+    const nameHandle = handles[0]!
+    fireEvent.keyDown(nameHandle, { key: ' ' })          // pick up
+    fireEvent.keyDown(nameHandle, { key: 'ArrowRight' }) // move right
+    fireEvent.keyDown(nameHandle, { key: 'Enter' })      // drop via Enter
+    expect(onColumnOrderChange).toHaveBeenCalledTimes(1)
+    expect(onColumnOrderChange.mock.calls[0][0]).toEqual(['amount', 'name'])
+  })
+
   it('ArrowRight does nothing when not in dragging mode', () => {
     const onColumnOrderChange = mock((_: string[]) => {})
     const { container } = render(
