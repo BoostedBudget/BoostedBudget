@@ -6,10 +6,10 @@
  * Shows execution time, status, duration, and trigger type.
  */
 
-import { Loader2, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Loader2, AlertCircle } from 'lucide-react'
 import { useGetRuleExecutions } from '@boostedbudget/api-client/endpoints/automation-rules/automation-rules'
 import type { RuleExecution } from '@boostedbudget/api-client/models'
-import { DataTable } from '@/shared/components/DataTable'
+import { DataTable, TablePagination } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
 
 export interface RuleExecutionHistoryProps {
@@ -189,30 +189,13 @@ export function RuleExecutionHistory({
       />
 
       {showPagination && (
-        <div className="flex items-center justify-center gap-4 p-4 border-t border-border">
-          <button
-            type="button"
-            onClick={() => onPageChange?.(currentPage - 1)}
-            disabled={currentPage === 0}
-            className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-foreground border border-border rounded-md cursor-pointer hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            aria-label="Previous page"
-          >
-            <ChevronLeft aria-hidden="true" className="w-4 h-4" />
-            Prev
-          </button>
-          <span className="text-sm text-muted-foreground">
-            Page {currentPage + 1} of {totalPages}
-          </span>
-          <button
-            type="button"
-            onClick={() => onPageChange?.(currentPage + 1)}
-            disabled={currentPage >= totalPages - 1}
-            className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-foreground border border-border rounded-md cursor-pointer hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            aria-label="Next page"
-          >
-            Next
-            <ChevronRight aria-hidden="true" className="w-4 h-4" />
-          </button>
+        <div className="p-4 border-t border-border">
+          <TablePagination
+            currentPage={currentPage + 1}
+            totalPages={totalPages}
+            hasMore={currentPage < totalPages - 1}
+            onPageChange={(p) => onPageChange?.(p - 1)}
+          />
         </div>
       )}
     </div>
