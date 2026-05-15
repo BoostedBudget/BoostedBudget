@@ -302,6 +302,7 @@ export function WebhooksPage() {
             loading={isLoading}
             onRowClick={(event) => setSelectedWebhookId(event.id ?? null)}
             maskedColumnIds={['event_id', 'error']}
+            tableId="admin-webhooks"
             columnVisibility={columnVisibility}
             onColumnVisibilityChange={onColumnVisibilityChange}
             rowActions={(event) => (

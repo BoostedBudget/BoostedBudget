@@ -227,6 +227,7 @@ function AccountSection({
       onFiltersChange={handleFiltersChange}
       caption={`${title} — ${formatCurrency(total)}`}
       maskedColumnIds={['balance']}
+      tableId={tableId}
       columnSizing={sizing}
       onColumnSizingChange={onSizingChange}
       columnOrder={columnOrder}

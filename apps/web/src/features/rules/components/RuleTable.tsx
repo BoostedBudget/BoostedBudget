@@ -18,7 +18,7 @@ export type SortColumn = 'name' | 'type' | 'status' | 'trigger' | 'lastRun' | 'p
 export type SortDirection = 'asc' | 'desc'
 
 // eslint-disable-next-line react-refresh/only-export-components
-export const RULE_COLUMN_IDS = ['name', 'type', 'status', 'trigger', 'lastRun', 'priority'] as const
+export const RULE_COLUMN_IDS = ['select', 'name', 'type', 'status', 'trigger', 'lastRun', 'priority'] as const
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const RULE_SORTABLE_COLUMNS = new Set([
@@ -277,6 +277,7 @@ export function RuleTable({
       onRowClick={onRowClick}
       columnSizing={sizing}
       onColumnSizingChange={onSizingChange}
+      tableId="rules"
       columnOrder={columnOrder}
       onColumnOrderChange={onColumnOrderChange}
       columnVisibility={columnVisibility}
