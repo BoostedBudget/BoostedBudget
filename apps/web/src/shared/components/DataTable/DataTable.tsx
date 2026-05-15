@@ -235,7 +235,7 @@ export function DataTable<T,>({
                 {col.reorderable && (
                   <DragHandle
                     isDragging={draggingId === col.id}
-                    onKeyDown={handleDragHandleKeyDown(col.id)}
+                    onKeyDown={(e) => handleDragHandleKeyDown(col.id, e)}
                   />
                 )}
                 {renderHeaderContent(col, sort, filters, handleSort, handleFilterChange)}
