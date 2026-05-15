@@ -17,10 +17,10 @@ export interface UseTablePreferencesResult {
   onColumnVisibilityChange: (visibility: Record<string, boolean>) => void
 }
 
-const DEFAULT_PREFS = {
-  sizing: {} as Record<string, number>,
-  columnOrder: [] as string[],
-  columnVisibility: {} as Record<string, boolean>,
+const DEFAULT_PREFS: Pick<TablePrefs, 'sizing' | 'columnOrder' | 'columnVisibility'> = {
+  sizing: {},
+  columnOrder: [],
+  columnVisibility: {},
 }
 
 function storageKey(userId: string, tableId: string): string {
@@ -40,7 +40,7 @@ function loadPrefs(
   userId: string,
   tableId: string,
   knownColumnIds: string[]
-): { sizing: Record<string, number>; columnOrder: string[]; columnVisibility: Record<string, boolean> } {
+): Pick<TablePrefs, 'sizing' | 'columnOrder' | 'columnVisibility'> {
   const key = storageKey(userId, tableId)
   const expectedVersion = knownColumnIds.join(',')
   const knownSet = new Set(knownColumnIds)
@@ -63,12 +63,7 @@ function loadPrefs(
 
   // Version mismatch → reset to defaults and persist
   if (parsed.version !== expectedVersion) {
-    const reset: TablePrefs = {
-      version: expectedVersion,
-      sizing: {},
-      columnOrder: [],
-      columnVisibility: {},
-    }
+    const reset: TablePrefs = { version: expectedVersion, ...DEFAULT_PREFS }
     try {
       localStorage.setItem(key, JSON.stringify(reset))
     } catch {
@@ -77,29 +72,25 @@ function loadPrefs(
     return DEFAULT_PREFS
   }
 
-  // Filter out unknown column ids from all prefs
-  const sizing = filterByKnownIds(parsed.sizing ?? {}, knownSet)
-  const columnOrder = (parsed.columnOrder ?? []).filter((id) => knownSet.has(id))
-  const columnVisibility = filterByKnownIds(parsed.columnVisibility ?? {}, knownSet)
-
-  return { sizing, columnOrder, columnVisibility }
+  return {
+    sizing: filterByKnownIds(parsed.sizing ?? {}, knownSet),
+    columnOrder: (parsed.columnOrder ?? []).filter((id) => knownSet.has(id)),
+    columnVisibility: filterByKnownIds(parsed.columnVisibility ?? {}, knownSet),
+  }
 }
 
 function savePrefs(
   userId: string,
   tableId: string,
   knownColumnIds: string[],
-  prefs: { sizing: Record<string, number>; columnOrder: string[]; columnVisibility: Record<string, boolean> }
+  prefs: Pick<TablePrefs, 'sizing' | 'columnOrder' | 'columnVisibility'>
 ): void {
   const key = storageKey(userId, tableId)
-  const data: TablePrefs = {
-    version: knownColumnIds.join(','),
-    sizing: prefs.sizing,
-    columnOrder: prefs.columnOrder,
-    columnVisibility: prefs.columnVisibility,
-  }
   try {
-    localStorage.setItem(key, JSON.stringify(data))
+    localStorage.setItem(
+      key,
+      JSON.stringify({ version: knownColumnIds.join(','), ...prefs })
+    )
   } catch {
     // ignore storage quota errors
   }
@@ -120,61 +111,54 @@ export function useTablePreferences(
   const { user } = useUser()
   const userId = user?.id ?? null
 
-  const initialPrefs = userId
-    ? loadPrefs(userId, tableId, knownColumnIds)
-    : DEFAULT_PREFS
-
-  const [sizing, setSizing] = useState<Record<string, number>>(initialPrefs.sizing)
-  const [columnOrder, setColumnOrder] = useState<string[]>(initialPrefs.columnOrder)
-  const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(
-    initialPrefs.columnVisibility
+  // Single state atom — prevents stale-closure cross-field overwrites when two setters
+  // fire in the same render cycle. Lazy initializer runs only once (on mount).
+  const [prefs, setPrefs] = useState<Pick<TablePrefs, 'sizing' | 'columnOrder' | 'columnVisibility'>>(
+    () => (userId ? loadPrefs(userId, tableId, knownColumnIds) : DEFAULT_PREFS)
   )
 
   const onSizingChange = useCallback(
     (newSizing: Record<string, number>) => {
       if (!userId) return
-      setSizing(newSizing)
-      savePrefs(userId, tableId, knownColumnIds, {
-        sizing: newSizing,
-        columnOrder,
-        columnVisibility,
+      setPrefs((prev) => {
+        const next = { ...prev, sizing: newSizing }
+        savePrefs(userId, tableId, knownColumnIds, next)
+        return next
       })
     },
-    [userId, tableId, knownColumnIds, columnOrder, columnVisibility]
+    [userId, tableId, knownColumnIds]
   )
 
   const onColumnOrderChange = useCallback(
     (newOrder: string[]) => {
       if (!userId) return
-      setColumnOrder(newOrder)
-      savePrefs(userId, tableId, knownColumnIds, {
-        sizing,
-        columnOrder: newOrder,
-        columnVisibility,
+      setPrefs((prev) => {
+        const next = { ...prev, columnOrder: newOrder }
+        savePrefs(userId, tableId, knownColumnIds, next)
+        return next
       })
     },
-    [userId, tableId, knownColumnIds, sizing, columnVisibility]
+    [userId, tableId, knownColumnIds]
   )
 
   const onColumnVisibilityChange = useCallback(
     (newVisibility: Record<string, boolean>) => {
       if (!userId) return
-      setColumnVisibility(newVisibility)
-      savePrefs(userId, tableId, knownColumnIds, {
-        sizing,
-        columnOrder,
-        columnVisibility: newVisibility,
+      setPrefs((prev) => {
+        const next = { ...prev, columnVisibility: newVisibility }
+        savePrefs(userId, tableId, knownColumnIds, next)
+        return next
       })
     },
-    [userId, tableId, knownColumnIds, sizing, columnOrder]
+    [userId, tableId, knownColumnIds]
   )
 
   return {
-    sizing,
+    sizing: prefs.sizing,
     onSizingChange,
-    columnOrder,
+    columnOrder: prefs.columnOrder,
     onColumnOrderChange,
-    columnVisibility,
+    columnVisibility: prefs.columnVisibility,
     onColumnVisibilityChange,
   }
 }
