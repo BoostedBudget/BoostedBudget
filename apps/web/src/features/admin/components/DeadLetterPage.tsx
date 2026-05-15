@@ -19,6 +19,7 @@ import type { ColumnDef } from '@/shared/components/DataTable'
 
 const PAGE_SIZE = 20
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const ADMIN_DLQ_COLUMN_IDS = ['kind', 'queue', 'user_id', 'failed_at', 'status', 'notes'] as const
 
 const inputClass = 'px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:border-primary'

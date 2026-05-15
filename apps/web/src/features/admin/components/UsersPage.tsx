@@ -104,6 +104,7 @@ const formatDate = (dateString: string | undefined | null): string => {
   })
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const ADMIN_USERS_COLUMN_IDS = ['email', 'tier', 'status', 'override_status', 'region', 'last_login', 'accounts', 'rules', 'referrals'] as const
 
 interface SelectedUser {
@@ -327,7 +328,7 @@ export function UsersPage() {
                 type="button"
                 className="inline-flex items-center gap-1 px-3 py-1.5 border border-border rounded-md bg-background text-foreground text-[0.8125rem] font-medium cursor-pointer font-[inherit] transition-colors hover:bg-primary hover:border-primary hover:text-primary-foreground"
                 onClick={() => setOverrideUser({ id: user.id, email: user.email })}
-                aria-label={`Override subscription for ${user.email}`}
+                aria-label="Override subscription"
               >
                 <Edit2 size={14} />
                 Override
