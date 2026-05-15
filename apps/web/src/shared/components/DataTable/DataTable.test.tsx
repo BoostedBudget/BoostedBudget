@@ -1071,6 +1071,165 @@ describe('column reorder', () => {
   })
 })
 
+// Phase 3d: Column Visibility
+describe('column visibility', () => {
+  const visibilityColumns: ColumnDef<Row>[] = [
+    { id: 'name', header: 'Name', key: 'name', hideable: true },
+    { id: 'amount', header: 'Amount', key: 'amount', hideable: true },
+    { id: 'id', header: 'ID', key: 'id' }, // non-hideable
+  ]
+
+  it('hideable column appears in ColumnVisibilityMenu; non-hideable does not', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={visibilityColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnVisibility={{name: true, amount: true}}
+        onColumnVisibilityChange={mock((_: Record<string, boolean>) => {})}
+      />
+    )
+    // Menu trigger should be present
+    expect(screen.getByRole('button', { name: /columns/i })).toBeInTheDocument()
+    // Open the menu
+    fireEvent.click(screen.getByRole('button', { name: /columns/i }))
+    // hideable columns should be in menu
+    const menuItems = screen.getAllByRole('menuitemcheckbox')
+    const labels = menuItems.map((el) => el.textContent)
+    expect(labels).toContain('Name')
+    expect(labels).toContain('Amount')
+    // non-hideable column should NOT appear
+    expect(labels).not.toContain('ID')
+  })
+
+  it('toggling a checkbox calls onColumnVisibilityChange with column id set to false', () => {
+    const onColumnVisibilityChange = mock((_: Record<string, boolean>) => {})
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={visibilityColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnVisibility={{ name: true, amount: true }}
+        onColumnVisibilityChange={onColumnVisibilityChange}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /columns/i }))
+    const nameItem = screen.getByRole('menuitemcheckbox', { name: 'Name' })
+    fireEvent.click(nameItem)
+    expect(onColumnVisibilityChange).toHaveBeenCalledWith({ name: false, amount: true })
+  })
+
+  it('hidden column (visibility[id]=false) is not rendered in the table', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={visibilityColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnVisibility={{ name: false, amount: true }}
+        onColumnVisibilityChange={mock((_: Record<string, boolean>) => {})}
+      />
+    )
+    // Name column header and cells should not be present
+    const ths = container.querySelectorAll('th')
+    const thTexts = Array.from(ths).map((th) => th.textContent)
+    expect(thTexts.some((t) => t?.includes('Name'))).toBe(false)
+    // Alice and Bob are row data but via the 'name' column — should be absent
+    expect(screen.queryByText('Alice')).toBeNull()
+    expect(screen.queryByText('Bob')).toBeNull()
+  })
+
+  it('hidden column still exists in orderedColumns: when made visible again it returns to same position', () => {
+    const { rerender, container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={visibilityColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnVisibility={{ name: false, amount: true }}
+        onColumnVisibilityChange={mock((_: Record<string, boolean>) => {})}
+      />
+    )
+    // name is hidden — check amount is first visible column in thead
+    let ths = container.querySelectorAll('th')
+    expect(ths[0].textContent).toContain('Amount')
+
+    // make name visible again
+    rerender(
+      <DataTable<Row>
+        data={rows}
+        columns={visibilityColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnVisibility={{ name: true, amount: true }}
+        onColumnVisibilityChange={mock((_: Record<string, boolean>) => {})}
+      />
+    )
+    // name should be back at position 0 (original order)
+    ths = container.querySelectorAll('th')
+    expect(ths[0].textContent).toContain('Name')
+  })
+
+  it('ColumnVisibilityMenu is not rendered when no column has hideable:true', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+      />
+    )
+    // baseColumns have no hideable:true → no Columns button
+    expect(screen.queryByRole('button', { name: /columns/i })).toBeNull()
+  })
+})
+
+// Phase 3d: Density
+describe('density', () => {
+  it('density="compact" applies compact padding classes to body cells', () => {
+    const { container } = renderTable({ density: 'compact' })
+    const td = container.querySelector('tbody td')!
+    expect(td.className).toContain('px-2')
+    expect(td.className).toContain('py-1')
+    expect(td.className).toContain('text-xs')
+  })
+
+  it('density="spacious" applies spacious padding classes to body cells', () => {
+    const { container } = renderTable({ density: 'spacious' })
+    const td = container.querySelector('tbody td')!
+    expect(td.className).toContain('px-6')
+    expect(td.className).toContain('py-5')
+  })
+
+  it('default density (no prop) uses comfortable padding (unchanged behavior)', () => {
+    const { container } = renderTable()
+    const td = container.querySelector('tbody td')!
+    // comfortable defaults: px-4 py-3.5 (same as before)
+    expect(td.className).toContain('px-4')
+    expect(td.className).toContain('py-3.5')
+  })
+})
+
 // Phase 3c: Column Pin
 describe('column pin', () => {
   const pinnedColumns: ColumnDef<Row>[] = [

@@ -11,3 +11,4 @@ export type {
 } from './types'
 export { ResizeHandle } from './ResizeHandle'
 export { useColumnResize } from './useColumnResize'
+export { ColumnVisibilityMenu } from './ColumnVisibilityMenu'

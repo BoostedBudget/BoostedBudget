@@ -14,6 +14,7 @@ import { useColumnResize } from './useColumnResize'
 import { ResizeHandle } from './ResizeHandle'
 import { useColumnOrder } from './useColumnOrder'
 import { DragHandle } from './DragHandle'
+import { ColumnVisibilityMenu } from './ColumnVisibilityMenu'
 
 const tableVariants = cva(
   'w-full border-collapse overflow-visible rounded-lg border border-border bg-card',
@@ -40,13 +41,18 @@ const headerCellVariants = cva(
 )
 
 const bodyCellVariants = cva(
-  'border-b border-border px-4 py-3.5 text-sm align-middle max-md:px-3 max-md:py-2.5',
+  'border-b border-border align-middle',
   {
     variants: {
       align: { left: 'text-left', right: 'text-right', center: 'text-center' },
       numeric: { true: 'tabular-nums', false: '' },
+      density: {
+        compact: 'px-2 py-1.5 text-xs',
+        comfortable: 'px-4 py-3.5 text-sm max-md:px-3 max-md:py-2.5',
+        spacious: 'px-6 py-5 text-sm',
+      },
     },
-    defaultVariants: { align: 'left', numeric: false },
+    defaultVariants: { align: 'left', numeric: false, density: 'comfortable' },
   }
 )
 
@@ -130,8 +136,11 @@ export function DataTable<T,>({
   onColumnSizingChange,
   columnOrder: controlledColumnOrder,
   onColumnOrderChange,
+  columnVisibility = {},
+  onColumnVisibilityChange,
+  density = 'comfortable',
 }: DataTableProps<T>) {
-  const totalCols = columns.length + (rowActions ? 1 : 0)
+  // totalCols is computed after visibleColumns below
 
   const { sizing, isFinePointer, colRefs, getWidth, handleKeyDown, handlePointerDown } =
     useColumnResize(controlledSizing, onColumnSizingChange)
@@ -141,6 +150,14 @@ export function DataTable<T,>({
     controlledColumnOrder,
     onColumnOrderChange
   )
+
+  // Phase 3d: filter out hidden columns for rendering; orderedColumns preserves full order
+  const visibleColumns = orderedColumns.filter(
+    (col) => !(col.hideable && columnVisibility[col.id] === false)
+  )
+
+  const hasHideableColumns = columns.some((col) => col.hideable)
+  const totalCols = visibleColumns.length + (rowActions ? 1 : 0)
 
   // Stable ref for <col> element lookups during pointer drag
   const colElRefs = useRef<Map<string, HTMLTableColElement | null>>(new Map())
@@ -195,135 +212,146 @@ export function DataTable<T,>({
   const rows = table.getRowModel().rows
 
   return (
-    <>
+    <div className="flex flex-col gap-2">
       {/* aria-live region for screen reader announcements during column drag */}
       <div aria-live="polite" aria-atomic="true" className="sr-only">
         {liveText}
       </div>
+      {/* Phase 3d: column visibility toolbar — only rendered when at least one column has hideable:true */}
+      {hasHideableColumns && onColumnVisibilityChange && (
+        <div className="flex items-center justify-end">
+          <ColumnVisibilityMenu
+            columns={columns}
+            visibility={columnVisibility}
+            onChange={onColumnVisibilityChange}
+          />
+        </div>
+      )}
       <table
         className={cn(tableVariants({ loading }), className)}
         aria-busy={loading ? true : undefined}
       >
-      {caption && (
-        <caption className="caption-top text-left text-sm font-semibold text-foreground mb-2">
-          {caption}
-        </caption>
-      )}
-      <colgroup>
-        {orderedColumns.map((col) => (
-          <col
-            key={col.id}
-            ref={setColRef(col.id)}
-            style={sizing[col.id] ? { width: `${sizing[col.id]}px` } : undefined}
-          />
-        ))}
-        {rowActions && <col style={{ width: '96px' }} />}
-      </colgroup>
-      <thead>
-        <tr className="bg-muted/50">
-          {orderedColumns.map((col) => (
-            <th
+        {caption && (
+          <caption className="caption-top text-left text-sm font-semibold text-foreground mb-2">
+            {caption}
+          </caption>
+        )}
+        <colgroup>
+          {visibleColumns.map((col) => (
+            <col
               key={col.id}
-              scope="col"
-              className={cn(
-                headerCellVariants({ align: col.align }),
-                col.widthClass,
-                col.defaultPinned === 'left' && 'sticky left-0 z-20 bg-muted/50',
-                col.defaultPinned === 'right' && 'sticky right-0 z-20 bg-muted/50 max-md:relative max-md:right-auto'
-              )}
-              aria-sort={getAriaSort(sort, col.id)}
-              {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
-            >
-              <div className="flex items-center gap-1">
-                {col.reorderable && (
-                  <DragHandle
-                    isDragging={draggingId === col.id}
-                    onKeyDown={(e) => handleDragHandleKeyDown(col.id, e)}
+              ref={setColRef(col.id)}
+              style={sizing[col.id] ? { width: `${sizing[col.id]}px` } : undefined}
+            />
+          ))}
+          {rowActions && <col style={{ width: '96px' }} />}
+        </colgroup>
+        <thead>
+          <tr className="bg-muted/50">
+            {visibleColumns.map((col) => (
+              <th
+                key={col.id}
+                scope="col"
+                className={cn(
+                  headerCellVariants({ align: col.align }),
+                  col.widthClass,
+                  col.defaultPinned === 'left' && 'sticky left-0 z-20 bg-muted/50',
+                  col.defaultPinned === 'right' && 'sticky right-0 z-20 bg-muted/50 max-md:relative max-md:right-auto'
+                )}
+                aria-sort={getAriaSort(sort, col.id)}
+                {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
+              >
+                <div className="flex items-center gap-1">
+                  {col.reorderable && (
+                    <DragHandle
+                      isDragging={draggingId === col.id}
+                      onKeyDown={(e) => handleDragHandleKeyDown(col.id, e)}
+                    />
+                  )}
+                  {renderHeaderContent(col, sort, filters, handleSort, handleFilterChange)}
+                </div>
+                {col.resizable && (
+                  <ResizeHandle
+                    columnId={col.id}
+                    currentWidth={getWidth(col.id, col.defaultSize)}
+                    isCoarsePointer={!isFinePointer}
+                    onKeyDown={(e) => handleKeyDown(e, col.id, col.defaultSize)}
+                    onPointerDown={(e) =>
+                      handlePointerDown(e, col.id, colElRefs.current.get(col.id) ?? null)
+                    }
                   />
                 )}
-                {renderHeaderContent(col, sort, filters, handleSort, handleFilterChange)}
-              </div>
-              {col.resizable && (
-                <ResizeHandle
-                  columnId={col.id}
-                  currentWidth={getWidth(col.id, col.defaultSize)}
-                  isCoarsePointer={!isFinePointer}
-                  onKeyDown={(e) => handleKeyDown(e, col.id, col.defaultSize)}
-                  onPointerDown={(e) =>
-                    handlePointerDown(e, col.id, colElRefs.current.get(col.id) ?? null)
-                  }
-                />
-              )}
-            </th>
-          ))}
-          {rowActions && (
-            <th
-              scope="col"
-              className={headerCellVariants({ align: 'right', action: true })}
-            >
-              Actions
-            </th>
-          )}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.length === 0 ? (
-          <tr>
-            <td colSpan={totalCols}>{emptyState}</td>
-          </tr>
-        ) : (
-          rows.map((tanStackRow) => {
-            const row = tanStackRow.original
-            return (
-              <tr
-                key={rowKey(row)}
-                className={cn(
-                  'transition-colors',
-                  onRowClick && 'cursor-pointer hover:bg-muted/50',
-                  rowClassName?.(row)
-                )}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
+              </th>
+            ))}
+            {rowActions && (
+              <th
+                scope="col"
+                className={headerCellVariants({ align: 'right', action: true })}
               >
-                {orderedColumns.map((col) => {
-                  const isMasked = maskedColumnIds.includes(col.id)
-                  const content = col.render
-                    ? col.render(row)
-                    : col.key !== undefined
-                      ? String(row[col.key] ?? '')
-                      : null
+                Actions
+              </th>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr>
+              <td colSpan={totalCols}>{emptyState}</td>
+            </tr>
+          ) : (
+            rows.map((tanStackRow) => {
+              const row = tanStackRow.original
+              return (
+                <tr
+                  key={rowKey(row)}
+                  className={cn(
+                    'transition-colors',
+                    onRowClick && 'cursor-pointer hover:bg-muted/50',
+                    rowClassName?.(row)
+                  )}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                >
+                  {visibleColumns.map((col) => {
+                    const isMasked = maskedColumnIds.includes(col.id)
+                    const content = col.render
+                      ? col.render(row)
+                      : col.key !== undefined
+                        ? String(row[col.key] ?? '')
+                        : null
 
-                  return (
+                    return (
+                      <td
+                        key={col.id}
+                        className={cn(
+                          bodyCellVariants({
+                            align: col.align,
+                            numeric: col.numeric ?? false,
+                            density,
+                          }),
+                          col.defaultPinned === 'left' && 'sticky left-0 z-10 bg-card',
+                          col.defaultPinned === 'right' && 'sticky right-0 z-10 bg-card max-md:relative max-md:right-auto'
+                        )}
+                        {...(isMasked && { 'data-ph-mask': '' })}
+                        {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
+                      >
+                        {content}
+                      </td>
+                    )
+                  })}
+                  {rowActions && (
                     <td
-                      key={col.id}
-                      className={cn(
-                        bodyCellVariants({
-                          align: col.align,
-                          numeric: col.numeric ?? false,
-                        }),
-                        col.defaultPinned === 'left' && 'sticky left-0 z-10 bg-card',
-                        col.defaultPinned === 'right' && 'sticky right-0 z-10 bg-card max-md:relative max-md:right-auto'
-                      )}
-                      {...(isMasked && { 'data-ph-mask': '' })}
-                      {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
+                      className={bodyCellVariants({ align: 'right', density })}
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      {content}
+                      {rowActions(row)}
                     </td>
-                  )
-                })}
-                {rowActions && (
-                  <td
-                    className={bodyCellVariants({ align: 'right' })}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {rowActions(row)}
-                  </td>
-                )}
-              </tr>
-            )
-          })
-        )}
-      </tbody>
-    </table>
-    </>
+                  )}
+                </tr>
+              )
+            })
+          )}
+        </tbody>
+      </table>
+    </div>
   )
 }
