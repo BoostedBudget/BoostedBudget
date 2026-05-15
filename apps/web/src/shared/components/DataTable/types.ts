@@ -26,6 +26,10 @@ export type ColumnDef<T> = {
         searchable?: boolean
       }
     | { type: 'range'; unit?: 'number' | 'currency' | 'percent' }
+  /** Phase 3a: opt-in per-column resize handle */
+  resizable?: boolean
+  /** Default pixel width used for resize reset (Home key) and initial sizing */
+  defaultSize?: number
 }
 
 export interface DataTableProps<T> {
@@ -60,4 +64,10 @@ export interface DataTableProps<T> {
   rowSelection?: RowSelectionState
   /** Called when row selection changes (Phase 1 skeleton — no UI rendered yet). */
   onRowSelectionChange?: (selection: RowSelectionState) => void
+  /**
+   * Phase 3a: controlled column sizing. Keys are column IDs, values are pixel widths.
+   * If omitted, DataTable manages sizing internally with useState.
+   */
+  columnSizing?: Record<string, number>
+  onColumnSizingChange?: (sizing: Record<string, number>) => void
 }

@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import { cva } from 'class-variance-authority'
 import { cn } from '@/lib/utils'
 import { TableHeaderCell } from '../TableHeaderCell'
@@ -10,6 +10,8 @@ import {
 import type { DataTableProps, SortState, SortDirection, ColumnDef } from './types'
 import { bbSortToTanStack } from './adapters/sortAdapter'
 import { bbFiltersToTanStack } from './adapters/filterAdapter'
+import { useColumnResize } from './useColumnResize'
+import { ResizeHandle } from './ResizeHandle'
 
 const tableVariants = cva(
   'w-full border-collapse overflow-visible rounded-lg border border-border bg-card',
@@ -25,7 +27,7 @@ const tableVariants = cva(
 )
 
 const headerCellVariants = cva(
-  'border-b border-border px-4 py-3 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground',
+  'relative border-b border-border px-4 py-3 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground',
   {
     variants: {
       align: { left: 'text-left', right: 'text-right', center: 'text-center' },
@@ -122,8 +124,22 @@ export function DataTable<T,>({
   // rowSelection and onRowSelectionChange accepted but UI not yet implemented (Phase 1 skeleton)
   rowSelection: _rowSelection,
   onRowSelectionChange: _onRowSelectionChange,
+  columnSizing: controlledSizing,
+  onColumnSizingChange,
 }: DataTableProps<T>) {
   const totalCols = columns.length + (rowActions ? 1 : 0)
+
+  const { sizing, isFinePointer, colRefs, getWidth, handleKeyDown, handlePointerDown } =
+    useColumnResize(controlledSizing, onColumnSizingChange)
+
+  // Stable ref for <col> element lookups during pointer drag
+  const colElRefs = useRef<Map<string, HTMLTableColElement | null>>(new Map())
+  function setColRef(columnId: string) {
+    return (el: HTMLTableColElement | null) => {
+      colElRefs.current.set(columnId, el)
+      colRefs.current.set(columnId, el)
+    }
+  }
 
   const handleSort = useCallback(
     (colId: string, _dirFromCell: SortDirection) => {
@@ -178,6 +194,16 @@ export function DataTable<T,>({
           {caption}
         </caption>
       )}
+      <colgroup>
+        {columns.map((col) => (
+          <col
+            key={col.id}
+            ref={setColRef(col.id)}
+            style={sizing[col.id] ? { width: `${sizing[col.id]}px` } : undefined}
+          />
+        ))}
+        {rowActions && <col style={{ width: '96px' }} />}
+      </colgroup>
       <thead>
         <tr className="bg-muted/50">
           {columns.map((col) => (
@@ -191,6 +217,17 @@ export function DataTable<T,>({
               aria-sort={getAriaSort(sort, col.id)}
             >
               {renderHeaderContent(col, sort, filters, handleSort, handleFilterChange)}
+              {col.resizable && (
+                <ResizeHandle
+                  columnId={col.id}
+                  currentWidth={getWidth(col.id, col.defaultSize)}
+                  isCoarsePointer={!isFinePointer}
+                  onKeyDown={(e) => handleKeyDown(e, col.id, col.defaultSize)}
+                  onPointerDown={(e) =>
+                    handlePointerDown(e, col.id, colElRefs.current.get(col.id) ?? null)
+                  }
+                />
+              )}
             </th>
           ))}
           {rowActions && (

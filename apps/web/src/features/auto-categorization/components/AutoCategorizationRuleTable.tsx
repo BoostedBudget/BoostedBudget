@@ -290,9 +290,7 @@ export function AutoCategorizationRuleTable({
       sortAccessor: (r) => r.match_count,
       key: 'match_count' as keyof CategorizationRule,
     },
-  // Use a boolean flag in deps — the function reference changes every parent render
-  // but presence/absence is what gates the range filter config on the priority column.
-  ], [sortable, statusOptions, categoryOptions, !!onPriorityRangeChange])
+  ], [sortable, statusOptions, categoryOptions, onPriorityRangeChange])
 
   // Pre-filters empty state: no data and no active filters → return external div
   if (rules.length === 0 && !hasActiveFilters) {
