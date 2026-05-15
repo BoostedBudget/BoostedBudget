@@ -12,6 +12,8 @@ import { bbSortToTanStack } from './adapters/sortAdapter'
 import { bbFiltersToTanStack } from './adapters/filterAdapter'
 import { useColumnResize } from './useColumnResize'
 import { ResizeHandle } from './ResizeHandle'
+import { useColumnOrder } from './useColumnOrder'
+import { DragHandle } from './DragHandle'
 
 const tableVariants = cva(
   'w-full border-collapse overflow-visible rounded-lg border border-border bg-card',
@@ -126,11 +128,19 @@ export function DataTable<T,>({
   onRowSelectionChange: _onRowSelectionChange,
   columnSizing: controlledSizing,
   onColumnSizingChange,
+  columnOrder: controlledColumnOrder,
+  onColumnOrderChange,
 }: DataTableProps<T>) {
   const totalCols = columns.length + (rowActions ? 1 : 0)
 
   const { sizing, isFinePointer, colRefs, getWidth, handleKeyDown, handlePointerDown } =
     useColumnResize(controlledSizing, onColumnSizingChange)
+
+  const { orderedColumns, draggingId, liveText, handleDragHandleKeyDown } = useColumnOrder(
+    columns,
+    controlledColumnOrder,
+    onColumnOrderChange
+  )
 
   // Stable ref for <col> element lookups during pointer drag
   const colElRefs = useRef<Map<string, HTMLTableColElement | null>>(new Map())
@@ -185,17 +195,22 @@ export function DataTable<T,>({
   const rows = table.getRowModel().rows
 
   return (
-    <table
-      className={cn(tableVariants({ loading }), className)}
-      aria-busy={loading ? true : undefined}
-    >
+    <>
+      {/* aria-live region for screen reader announcements during column drag */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {liveText}
+      </div>
+      <table
+        className={cn(tableVariants({ loading }), className)}
+        aria-busy={loading ? true : undefined}
+      >
       {caption && (
         <caption className="caption-top text-left text-sm font-semibold text-foreground mb-2">
           {caption}
         </caption>
       )}
       <colgroup>
-        {columns.map((col) => (
+        {orderedColumns.map((col) => (
           <col
             key={col.id}
             ref={setColRef(col.id)}
@@ -206,7 +221,7 @@ export function DataTable<T,>({
       </colgroup>
       <thead>
         <tr className="bg-muted/50">
-          {columns.map((col) => (
+          {orderedColumns.map((col) => (
             <th
               key={col.id}
               scope="col"
@@ -216,7 +231,15 @@ export function DataTable<T,>({
               )}
               aria-sort={getAriaSort(sort, col.id)}
             >
-              {renderHeaderContent(col, sort, filters, handleSort, handleFilterChange)}
+              <div className="flex items-center gap-1">
+                {col.reorderable && (
+                  <DragHandle
+                    isDragging={draggingId === col.id}
+                    onKeyDown={handleDragHandleKeyDown(col.id)}
+                  />
+                )}
+                {renderHeaderContent(col, sort, filters, handleSort, handleFilterChange)}
+              </div>
               {col.resizable && (
                 <ResizeHandle
                   columnId={col.id}
@@ -258,7 +281,7 @@ export function DataTable<T,>({
                 )}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
               >
-                {columns.map((col) => {
+                {orderedColumns.map((col) => {
                   const isMasked = maskedColumnIds.includes(col.id)
                   const content = col.render
                     ? col.render(row)
@@ -293,5 +316,6 @@ export function DataTable<T,>({
         )}
       </tbody>
     </table>
+    </>
   )
 }

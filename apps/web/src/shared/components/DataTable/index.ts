@@ -1,4 +1,6 @@
 export { DataTable } from './DataTable'
+export { DragHandle } from './DragHandle'
+export { useColumnOrder } from './useColumnOrder'
 export type {
   ColumnDef,
   DataTableProps,

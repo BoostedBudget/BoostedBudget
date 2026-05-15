@@ -30,6 +30,8 @@ export type ColumnDef<T> = {
   resizable?: boolean
   /** Default pixel width used for resize reset (Home key) and initial sizing */
   defaultSize?: number
+  /** Phase 3b: opt-in column reordering via drag-and-drop / keyboard */
+  reorderable?: boolean
 }
 
 export interface DataTableProps<T> {
@@ -70,4 +72,10 @@ export interface DataTableProps<T> {
    */
   columnSizing?: Record<string, number>
   onColumnSizingChange?: (sizing: Record<string, number>) => void
+  /**
+   * Phase 3b: controlled column order (array of column ids).
+   * If omitted, DataTable manages order internally with useState.
+   */
+  columnOrder?: string[]
+  onColumnOrderChange?: (order: string[]) => void
 }
