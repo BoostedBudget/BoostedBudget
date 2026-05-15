@@ -28,4 +28,5 @@ export type {
   ColumnFiltersState,
   PaginationState,
   VisibilityState,
+  RowSelectionState,
 } from '@tanstack/react-table'

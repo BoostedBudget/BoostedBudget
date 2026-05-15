@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import type { RangeValue } from '../ColumnFilterDropdown'
+import type { RowSelectionState } from '@/shared/lib/tanstack'
 
 export type { RangeValue }
 
@@ -31,9 +32,21 @@ export interface DataTableProps<T> {
   data: T[]
   columns: ColumnDef<T>[]
   rowKey: (row: T) => string
+  /**
+   * @deprecated Use TanStack's sorting state internally. This prop will be removed in Phase 3.
+   */
   sort: SortState
+  /**
+   * @deprecated Use TanStack's onSortingChange internally. This prop will be removed in Phase 3.
+   */
   onSortChange: (s: SortState) => void
+  /**
+   * @deprecated Use TanStack's column filters internally. This prop will be removed in Phase 3.
+   */
   filters: FilterState
+  /**
+   * @deprecated Use TanStack's onColumnFiltersChange internally. This prop will be removed in Phase 3.
+   */
   onFiltersChange: (f: FilterState) => void
   emptyState?: ReactNode
   caption?: string
@@ -43,4 +56,8 @@ export interface DataTableProps<T> {
   rowClassName?: (row: T) => string
   maskedColumnIds?: string[]
   rowActions?: (row: T) => ReactNode
+  /** Row selection state (Phase 1 skeleton — no UI rendered yet). */
+  rowSelection?: RowSelectionState
+  /** Called when row selection changes (Phase 1 skeleton — no UI rendered yet). */
+  onRowSelectionChange?: (selection: RowSelectionState) => void
 }
