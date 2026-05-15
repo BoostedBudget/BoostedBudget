@@ -1,4 +1,6 @@
 import { useState, useCallback, useRef } from 'react'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 
 const MIN_WIDTH = 50
 const STEP = 8
@@ -38,8 +40,10 @@ export interface ColumnResizeState {
 
 export function useColumnResize(
   controlledSizing: Record<string, number> | undefined,
-  onControlledChange: ((sizing: Record<string, number>) => void) | undefined
+  onControlledChange: ((sizing: Record<string, number>) => void) | undefined,
+  tableId?: string
 ): ColumnResizeState {
+  const trackEvent = useTrackEvent()
   const [internalSizing, setInternalSizing] = useState<Record<string, number>>(
     () => controlledSizing ?? {}
   )
@@ -92,9 +96,10 @@ export function useColumnResize(
 
       if (next !== null) {
         setSizing((prev) => ({ ...prev, [columnId]: Math.max(MIN_WIDTH, next!) }))
+        trackEvent(ANALYTICS_EVENTS.DATATABLE_COLUMN_RESIZED, { tableId, columnId })
       }
     },
-    [getWidth, setSizing]
+    [getWidth, setSizing, trackEvent, tableId]
   )
 
   const handlePointerDown = useCallback(
@@ -117,6 +122,7 @@ export function useColumnResize(
       function onUp(upEvent: PointerEvent) {
         const newWidth = Math.max(MIN_WIDTH, startWidth + (upEvent.clientX - startX))
         setSizing((prev) => ({ ...prev, [columnId]: newWidth }))
+        trackEvent(ANALYTICS_EVENTS.DATATABLE_COLUMN_RESIZED, { tableId, columnId })
         target.releasePointerCapture(upEvent.pointerId)
         target.removeEventListener('pointermove', onMove)
         target.removeEventListener('pointerup', onUp)
@@ -125,7 +131,7 @@ export function useColumnResize(
       target.addEventListener('pointermove', onMove)
       target.addEventListener('pointerup', onUp)
     },
-    [isFinePointer, getWidth, setSizing]
+    [isFinePointer, getWidth, setSizing, trackEvent, tableId]
   )
 
   return { sizing, isFinePointer, colRefs, getWidth, handleKeyDown, handlePointerDown }

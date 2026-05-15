@@ -139,16 +139,18 @@ export function DataTable<T,>({
   columnVisibility = {},
   onColumnVisibilityChange,
   density = 'comfortable',
+  tableId,
 }: DataTableProps<T>) {
   // totalCols is computed after visibleColumns below
 
   const { sizing, isFinePointer, colRefs, getWidth, handleKeyDown, handlePointerDown } =
-    useColumnResize(controlledSizing, onColumnSizingChange)
+    useColumnResize(controlledSizing, onColumnSizingChange, tableId)
 
   const { orderedColumns, draggingId, liveText, handleDragHandleKeyDown } = useColumnOrder(
     columns,
     controlledColumnOrder,
-    onColumnOrderChange
+    onColumnOrderChange,
+    tableId
   )
 
   // Phase 3d: filter out hidden columns for rendering; orderedColumns preserves full order
@@ -229,6 +231,7 @@ export function DataTable<T,>({
             columns={columns}
             visibility={columnVisibility}
             onChange={onColumnVisibilityChange}
+            tableId={tableId}
           />
         </div>
       )}

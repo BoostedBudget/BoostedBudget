@@ -1,18 +1,23 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { cn } from '@/lib/utils'
 import type { ColumnDef } from './types'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 
 interface ColumnVisibilityMenuProps<T> {
   columns: ColumnDef<T>[]
   visibility: Record<string, boolean>
   onChange: (visibility: Record<string, boolean>) => void
+  tableId?: string
 }
 
 export function ColumnVisibilityMenu<T,>({
   columns,
   visibility,
   onChange,
+  tableId,
 }: ColumnVisibilityMenuProps<T>) {
+  const trackEvent = useTrackEvent()
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -25,7 +30,13 @@ export function ColumnVisibilityMenu<T,>({
   }
 
   function toggle(colId: string) {
-    onChange({ ...visibility, [colId]: !isVisible(colId) })
+    const newVisible = !isVisible(colId)
+    onChange({ ...visibility, [colId]: newVisible })
+    trackEvent(ANALYTICS_EVENTS.DATATABLE_COLUMN_VISIBILITY_TOGGLED, {
+      tableId,
+      columnId: colId,
+      visible: newVisible,
+    })
   }
 
   // Focus first item when menu opens
