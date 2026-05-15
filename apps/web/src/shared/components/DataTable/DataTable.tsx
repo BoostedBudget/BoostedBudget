@@ -217,7 +217,10 @@ export function DataTable<T,>({
       <div aria-live="polite" aria-atomic="true" className="sr-only">
         {liveText}
       </div>
-      {/* Phase 3d: column visibility toolbar — only rendered when at least one column has hideable:true */}
+      {/* Phase 3d: column visibility toolbar — only rendered when at least one column has hideable:true AND onColumnVisibilityChange is provided */}
+      {hasHideableColumns && !onColumnVisibilityChange && import.meta.env.DEV && (
+        console.warn('[DataTable] Some columns have hideable:true but onColumnVisibilityChange is not provided — column visibility menu will not render.') as never
+      )}
       {hasHideableColumns && onColumnVisibilityChange && (
         <div className="flex items-center justify-end">
           <ColumnVisibilityMenu
