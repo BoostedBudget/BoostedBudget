@@ -44,6 +44,12 @@ export interface TransactionTableProps {
   onCategoryFilterChange?: (value: string[]) => void
   amountRange?: RangeValue | null
   onAmountRangeChange?: (value: RangeValue | null) => void
+  /** Infinite scroll: called when user scrolls near the bottom */
+  onScrollEnd?: () => void
+  /** Infinite scroll: whether more pages exist */
+  hasMore?: boolean
+  /** Infinite scroll: whether a fetch is in progress */
+  isFetchingMore?: boolean
 }
 
 function formatDate(dateStr: string | null | undefined): string {
@@ -81,6 +87,9 @@ export function TransactionTable({
   onCategoryFilterChange,
   amountRange,
   onAmountRangeChange,
+  onScrollEnd,
+  hasMore,
+  isFetchingMore,
 }: TransactionTableProps) {
   const hasActions = !!(onEdit || onCategorize)
 
@@ -285,6 +294,17 @@ export function TransactionTable({
       }
       className={cn(loading && 'transaction-table--loading', className)}
       maskedColumnIds={['amount']}
+      virtualization={onScrollEnd ? {
+        enabled: true,
+        estimateRowHeight: 56,
+        overscan: 8,
+        dynamicRowHeight: true,
+        scrollContainerHeight: 'calc(100dvh - 240px)',
+        onScrollEnd,
+        hasMore,
+        isFetchingMore,
+        prefetchRows: 5,
+      } : undefined}
       emptyState={
         <p className="py-12 px-6 text-center text-muted-foreground">
           No transactions found.
