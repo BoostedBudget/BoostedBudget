@@ -5,6 +5,9 @@
 import { mock } from 'bun:test'
 import * as RealTransactionsModule from '@boostedbudget/api-client/endpoints/transactions/transactions'
 
+// === getTransactions (raw fetcher — used by useInfiniteTransactions) ===
+export const mockGetTransactions = mock(() => Promise.resolve({ transactions: [], limit: 50 }))
+
 // === useGetTransactions ===
 export const mockRefetchTransactions = mock(() => Promise.resolve({}))
 export const mockUseGetTransactions = mock(() => ({
@@ -34,6 +37,7 @@ export const mockGetTransactionsQueryKey = mock(() => ['transactions'])
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/transactions/transactions', () => ({
   ...RealTransactionsModule,
+  getTransactions: mockGetTransactions,
   useGetTransactions: mockUseGetTransactions,
   useUpdateTransactionTags: mockUseUpdateTransactionTags,
   useUpdateTransactionCategory: mockUseUpdateTransactionCategory,
