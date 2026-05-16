@@ -21,6 +21,8 @@ var (
 	// ErrInvalidAmountRange is returned when min_amount is greater than max_amount
 	// Issue #529: Amount range filter validation
 	ErrInvalidAmountRange = errors.New("min_amount must be less than or equal to max_amount")
+	// ErrCursorSortMismatch is returned when a cursor's sort key/dir does not match the current filters.
+	ErrCursorSortMismatch = errors.New("cursor sort key/direction does not match filters")
 )
 
 const (
@@ -41,6 +43,17 @@ type TransactionService interface {
 		filters domain.TransactionFilters,
 		limit int,
 		offset int,
+	) (*TransactionListResponse, error)
+
+	// ListTransactionsByCursor retrieves transactions using keyset (cursor) pagination.
+	// cursor=nil returns the first page. Returns NextCursor=nil when there are no more pages.
+	// Validates that the cursor's sort key/direction matches filters.SortBy/SortDir.
+	ListTransactionsByCursor(
+		ctx context.Context,
+		userID string,
+		filters domain.TransactionFilters,
+		cursor *domain.TransactionCursor,
+		limit int,
 	) (*TransactionListResponse, error)
 
 	// GetTransactionByID retrieves a transaction by its ID
@@ -65,13 +78,16 @@ type TransactionService interface {
 	ListByBudgetCategory(ctx context.Context, userID string, budgetCategory *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error)
 }
 
-// TransactionListResponse contains paginated transaction results with metadata
+// TransactionListResponse contains paginated transaction results with metadata.
+// The offset-based path populates TotalCount, Offset, and HasMore.
+// The cursor-based path populates NextCursor and leaves the offset fields zero/false.
 type TransactionListResponse struct {
-	Transactions []domain.Transaction `json:"transactions"`
-	TotalCount   int                  `json:"total_count"`
-	Limit        int                  `json:"limit"`
-	Offset       int                  `json:"offset"`
-	HasMore      bool                 `json:"has_more"`
+	Transactions []*domain.Transaction `json:"transactions"`
+	TotalCount   int                   `json:"total_count,omitempty"`
+	Limit        int                   `json:"limit"`
+	Offset       int                   `json:"offset,omitempty"`
+	HasMore      bool                  `json:"has_more,omitempty"`
+	NextCursor   *string               `json:"next_cursor,omitempty"`
 }
 
 // transactionService implements TransactionService
@@ -167,11 +183,81 @@ func (s *transactionService) ListTransactions(
 	hasMore := (offset + len(transactions)) < totalCount
 
 	return &TransactionListResponse{
-		Transactions: transactions,
+		Transactions: ptrs,
 		TotalCount:   totalCount,
 		Limit:        limit,
 		Offset:       offset,
 		HasMore:      hasMore,
+	}, nil
+}
+
+// ListTransactionsByCursor retrieves transactions using keyset (cursor) pagination.
+//
+// Validation:
+// - Enforces 1 ≤ limit ≤ 100 (defaults to 50 when limit=0)
+// - Validates cursor sort key/dir matches filters.SortBy/SortDir
+//
+// Cursor encoding:
+// - Fetches limit+1 rows via the repository to detect end-of-list
+// - Encodes the last returned row as the next-page cursor (nil when no more pages)
+func (s *transactionService) ListTransactionsByCursor(
+	ctx context.Context,
+	userID string,
+	filters domain.TransactionFilters,
+	cursor *domain.TransactionCursor,
+	limit int,
+) (*TransactionListResponse, error) {
+	// Validate and apply default limit
+	if limit <= 0 {
+		limit = DefaultLimit
+	}
+	if limit > MaxLimit {
+		return nil, ErrInvalidLimit
+	}
+
+	// Validate cursor matches current sort parameters
+	if cursor != nil {
+		if cursor.K != filters.SortBy || cursor.D != filters.SortDir {
+			return nil, ErrCursorSortMismatch
+		}
+	}
+
+	// Sanitize search input to prevent SQL injection
+	if filters.Search != nil {
+		sanitized := sanitizeSearchInput(*filters.Search)
+		filters.Search = &sanitized
+	}
+
+	// Fetch from repository (repo returns limit rows + next cursor, nil cursor = end of list)
+	transactions, nextRepoCursor, err := s.repo.GetByUserIDKeyset(ctx, userID, filters, cursor, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transactions by cursor: %w", err)
+	}
+
+	// Enrich each transaction with PFC display names and custom-category display names.
+	ptrs := make([]*domain.Transaction, len(transactions))
+	for i := range transactions {
+		transactions[i].PopulatePFCDisplay()
+		ptrs[i] = &transactions[i]
+	}
+	if err := s.enrichCustomCategoryDisplay(ctx, userID, ptrs); err != nil {
+		return nil, err
+	}
+
+	// Encode next cursor as opaque string (nil when no more pages)
+	var encodedCursor *string
+	if nextRepoCursor != nil {
+		s2, encErr := domain.EncodeTransactionCursor(*nextRepoCursor)
+		if encErr != nil {
+			return nil, fmt.Errorf("failed to encode next cursor: %w", encErr)
+		}
+		encodedCursor = &s2
+	}
+
+	return &TransactionListResponse{
+		Transactions: ptrs,
+		Limit:        limit,
+		NextCursor:   encodedCursor,
 	}, nil
 }
 
