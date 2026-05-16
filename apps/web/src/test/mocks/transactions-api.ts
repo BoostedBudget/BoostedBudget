@@ -31,6 +31,18 @@ export const mockUseUpdateTransactionCategory = mock(() => ({
   isPending: false,
 }))
 
+// === useInfiniteTransactions ===
+export const mockFetchNextPage = mock(() => Promise.resolve())
+export const mockUseInfiniteTransactions = mock(() => ({
+  transactions: [],
+  fetchNextPage: mockFetchNextPage,
+  hasNextPage: false,
+  isFetchingNextPage: false,
+  isLoading: false,
+  isError: false,
+  updateTransaction: mock(() => Promise.resolve()),
+}))
+
 // Query key mock
 export const mockGetTransactionsQueryKey = mock(() => ['transactions'])
 

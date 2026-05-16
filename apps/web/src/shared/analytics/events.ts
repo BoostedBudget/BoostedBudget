@@ -96,6 +96,9 @@ export const ANALYTICS_EVENTS = {
   DATATABLE_COLUMN_REORDERED: 'datatable_column_reordered',
   DATATABLE_COLUMN_PINNED: 'datatable_column_pinned',
   DATATABLE_COLUMN_VISIBILITY_TOGGLED: 'datatable_column_visibility_toggled',
+
+  // Transactions infinite scroll (#1128)
+  TRANSACTIONS_PAGE_LOADED_MORE: 'transactions_page_loaded_more',
 } as const
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[keyof typeof ANALYTICS_EVENTS]
