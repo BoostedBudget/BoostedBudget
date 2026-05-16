@@ -297,8 +297,6 @@ export function DataTable<T,>({
   // Use TanStack's row model for iteration — row.original gives back the typed T.
   const rows = table.getRowModel().rows
 
-  // ── Virtualization ────────────────────────────────────────────────────────
-  // Scroll container ref (used only when virtualization.enabled).
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const virtualizer = useVirtualizer({
@@ -315,29 +313,19 @@ export function DataTable<T,>({
 
   const virtualItems = virtualizer.getVirtualItems()
 
-  // Fire onScrollEnd once per zone entry (when last virtualItem nears end of list)
   const scrollEndFiredRef = useRef(false)
   useEffect(() => {
-    if (!virtualization?.enabled) return
-    if (!virtualization.onScrollEnd || !virtualization.hasMore || virtualization.isFetchingMore) return
-    if (virtualItems.length === 0) return
+    if (!virtualization?.enabled || !virtualization.onScrollEnd || !virtualization.hasMore || virtualization.isFetchingMore || virtualItems.length === 0) return
     const lastIndex = virtualItems[virtualItems.length - 1].index
     const prefetch = virtualization.prefetchRows ?? 5
-    if (lastIndex >= rows.length - prefetch) {
-      if (!scrollEndFiredRef.current) {
-        scrollEndFiredRef.current = true
-        virtualization.onScrollEnd()
-      }
-    } else {
+    if (lastIndex >= rows.length - prefetch && !scrollEndFiredRef.current) {
+      scrollEndFiredRef.current = true
+      virtualization.onScrollEnd()
+    } else if (lastIndex < rows.length - prefetch) {
       scrollEndFiredRef.current = false
     }
   }, [virtualItems, rows.length, virtualization])
 
-  useEffect(() => {
-    if (hasHideableColumns && !onColumnVisibilityChange && import.meta.env.DEV) {
-      console.warn('[DataTable] Some columns have hideable:true but onColumnVisibilityChange is not provided — column visibility menu will not render.')
-    }
-  }, [hasHideableColumns, onColumnVisibilityChange])
 
   // Shared thead renderer (used by both virtualized and non-virtualized paths)
   const theadEl = (
@@ -379,36 +367,27 @@ export function DataTable<T,>({
     </thead>
   )
 
-  // Shared <td> row renderer (preserves data-ph-mask invariant in both paths)
   function renderRowCells(row: T) {
     return (
       <>
-        {visibleColumns.map((col) => {
-          const isMasked = maskedColumnIds.includes(col.id)
-          const content = col.render
-            ? col.render(row)
-            : col.key !== undefined
-              ? String(row[col.key] ?? '')
-              : null
-          return (
-            <td
-              key={col.id}
-              className={cn(
-                bodyCellVariants({
-                  align: col.align,
-                  numeric: col.numeric ?? false,
-                  density,
-                }),
-                col.defaultPinned === 'left' && 'sticky left-0 z-10 bg-card',
-                col.defaultPinned === 'right' && 'sticky right-0 z-10 bg-card max-md:relative max-md:right-auto'
-              )}
-              {...(isMasked && { 'data-ph-mask': '' })}
-              {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
-            >
-              {content}
-            </td>
-          )
-        })}
+        {visibleColumns.map((col) => (
+          <td
+            key={col.id}
+            className={cn(
+              bodyCellVariants({
+                align: col.align,
+                numeric: col.numeric ?? false,
+                density,
+              }),
+              col.defaultPinned === 'left' && 'sticky left-0 z-10 bg-card',
+              col.defaultPinned === 'right' && 'sticky right-0 z-10 bg-card max-md:relative max-md:right-auto'
+            )}
+            {...(maskedColumnIds.includes(col.id) && { 'data-ph-mask': '' })}
+            {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
+          >
+            {col.render ? col.render(row) : col.key !== undefined ? String(row[col.key] ?? '') : null}
+          </td>
+        ))}
         {rowActions && (
           <td
             className={bodyCellVariants({ align: 'right', density })}
@@ -494,6 +473,7 @@ export function DataTable<T,>({
                       key={rowKey(row)}
                       ref={virtualization.dynamicRowHeight !== false ? virtualizer.measureElement : undefined}
                       data-index={virtualItem.index}
+                      data-row-id={rowKey(row)}
                       className={cn(
                         'transition-colors',
                         onRowClick && 'cursor-pointer hover:bg-muted/50',
@@ -559,6 +539,7 @@ export function DataTable<T,>({
                   return (
                     <tr
                       key={rowKey(row)}
+                      data-row-id={rowKey(row)}
                       className={cn(
                         'transition-colors',
                         onRowClick && 'cursor-pointer hover:bg-muted/50',

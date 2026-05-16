@@ -33,16 +33,15 @@ import type { GetTransactionsSortDir } from "./getTransactionsSortDir";
 
 export type GetTransactionsParams = {
   /**
-   * Number of items to return (1-100)
+   * Opaque cursor from previous page's next_cursor; omit for first page
+   */
+  cursor?: string;
+  /**
+   * Number of transactions to return (1-100)
    * @minimum 1
    * @maximum 100
    */
   limit?: number;
-  /**
-   * Number of items to skip for pagination
-   * @minimum 0
-   */
-  offset?: number;
   /**
    * Filter by specific account ID (deprecated: use account_ids)
    */

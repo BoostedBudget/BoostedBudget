@@ -125,15 +125,9 @@ export function TransactionTable({
 
   const handleFiltersChange = useCallback(
     (newFilters: FilterState) => {
-      if (newFilters.account !== filters.account) {
-        onAccountFilterChange?.(newFilters.account as string[])
-      }
-      if (newFilters.category !== filters.category) {
-        onCategoryFilterChange?.(newFilters.category as string[])
-      }
-      if (newFilters.amount !== filters.amount) {
-        onAmountRangeChange?.(newFilters.amount as RangeValue | null)
-      }
+      if (newFilters.account !== filters.account) onAccountFilterChange?.(newFilters.account as string[])
+      if (newFilters.category !== filters.category) onCategoryFilterChange?.(newFilters.category as string[])
+      if (newFilters.amount !== filters.amount) onAmountRangeChange?.(newFilters.amount as RangeValue | null)
     },
     [filters.account, filters.category, filters.amount, onAccountFilterChange, onCategoryFilterChange, onAmountRangeChange]
   )
@@ -187,15 +181,13 @@ export function TransactionTable({
       hideable: true,
       render: (row) => {
         const account = accountsMap[row.account_id]
-        const accountDisplayName = account ? account.nickname || account.name : 'Unknown'
-        const accountBackgroundColor = account?.custom_color || '#E5E7EB'
         return (
           <span
             className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-gray-800"
-            style={{ backgroundColor: accountBackgroundColor }}
+            style={{ backgroundColor: account?.custom_color || '#E5E7EB' }}
           >
             {account?.custom_emoji && <span>{account.custom_emoji}</span>}
-            {accountDisplayName}
+            {account ? account.nickname || account.name : 'Unknown'}
           </span>
         )
       },
@@ -212,14 +204,12 @@ export function TransactionTable({
       reorderable: true,
       hideable: true,
       render: (row) => {
-        const effective = getEffectiveCategory(row)
-        const categoryLabel = getEffectiveCategoryLabel(effective)
-        const categoryColor = getCategoryColor(categoryLabel)
+        const categoryLabel = getEffectiveCategoryLabel(getEffectiveCategory(row))
         return (
           <span className="inline-flex items-center gap-1.5">
             <span
               className="h-2 w-2 shrink-0 rounded-full"
-              style={{ backgroundColor: categoryColor }}
+              style={{ backgroundColor: getCategoryColor(categoryLabel) }}
             />
             {categoryLabel}
           </span>
@@ -239,31 +229,28 @@ export function TransactionTable({
       defaultPinned: 'right',
       align: 'right',
       numeric: true,
-      render: (row) => {
-        const { text: amountFormatted } = formatTransactionAmount(row.amount)
-        return (
-          <div className="flex flex-col items-end gap-1">
-            <span
-              className={cn(
-                'font-semibold tabular-nums',
-                isOutflow(row.amount)
-                  ? 'transaction-table__amount--debit text-red-600 dark:text-red-400'
-                  : row.amount < 0
-                    ? 'transaction-table__amount--credit text-green-600 dark:text-green-400'
-                    : 'text-foreground'
-              )}
-            >
-              {amountFormatted}
-            </span>
-            {row.pending && (
-              <span className="inline-flex items-center gap-1 rounded bg-yellow-100 px-1.5 py-0.5 text-[0.625rem] font-medium text-yellow-800 dark:bg-yellow-800 dark:text-yellow-200">
-                <Clock className="h-2.5 w-2.5" aria-hidden="true" />
-                Pending
-              </span>
+      render: (row) => (
+        <div className="flex flex-col items-end gap-1">
+          <span
+            className={cn(
+              'font-semibold tabular-nums',
+              isOutflow(row.amount)
+                ? 'transaction-table__amount--debit text-red-600 dark:text-red-400'
+                : row.amount < 0
+                  ? 'transaction-table__amount--credit text-green-600 dark:text-green-400'
+                  : 'text-foreground'
             )}
-          </div>
-        )
-      },
+          >
+            {formatTransactionAmount(row.amount).text}
+          </span>
+          {row.pending && (
+            <span className="inline-flex items-center gap-1 rounded bg-yellow-100 px-1.5 py-0.5 text-[0.625rem] font-medium text-yellow-800 dark:bg-yellow-800 dark:text-yellow-200">
+              <Clock className="h-2.5 w-2.5" aria-hidden="true" />
+              Pending
+            </span>
+          )}
+        </div>
+      ),
       filter: onAmountRangeChange ? { type: 'range', unit: 'currency' } : undefined,
     },
   ]

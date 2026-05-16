@@ -192,14 +192,7 @@ func (s *transactionService) ListTransactions(
 }
 
 // ListTransactionsByCursor retrieves transactions using keyset (cursor) pagination.
-//
-// Validation:
-// - Enforces 1 ≤ limit ≤ 100 (defaults to 50 when limit=0)
-// - Validates cursor sort key/dir matches filters.SortBy/SortDir
-//
-// Cursor encoding:
-// - Fetches limit+1 rows via the repository to detect end-of-list
-// - Encodes the last returned row as the next-page cursor (nil when no more pages)
+// Validates cursor sort key/dir matches filters and encodes next cursor for pagination.
 func (s *transactionService) ListTransactionsByCursor(
 	ctx context.Context,
 	userID string,
@@ -207,7 +200,6 @@ func (s *transactionService) ListTransactionsByCursor(
 	cursor *domain.TransactionCursor,
 	limit int,
 ) (*TransactionListResponse, error) {
-	// Validate and apply default limit
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
@@ -215,26 +207,39 @@ func (s *transactionService) ListTransactionsByCursor(
 		return nil, ErrInvalidLimit
 	}
 
-	// Validate cursor matches current sort parameters
-	if cursor != nil {
-		if cursor.K != filters.SortBy || cursor.D != filters.SortDir {
-			return nil, ErrCursorSortMismatch
+	if filters.StartDate != nil && filters.EndDate != nil {
+		if filters.StartDate.After(*filters.EndDate) {
+			return nil, ErrInvalidDateRange
+		}
+	}
+	if filters.MinAmount != nil && filters.MaxAmount != nil {
+		if *filters.MinAmount > *filters.MaxAmount {
+			return nil, ErrInvalidAmountRange
 		}
 	}
 
-	// Sanitize search input to prevent SQL injection
+	sortBy := filters.SortBy
+	if sortBy == "" {
+		sortBy = "date"
+	}
+	sortDir := filters.SortDir
+	if sortDir == "" {
+		sortDir = "desc"
+	}
+	if cursor != nil && (cursor.K != sortBy || cursor.D != sortDir) {
+		return nil, ErrCursorSortMismatch
+	}
+
 	if filters.Search != nil {
 		sanitized := sanitizeSearchInput(*filters.Search)
 		filters.Search = &sanitized
 	}
 
-	// Fetch from repository (repo returns limit rows + next cursor, nil cursor = end of list)
 	transactions, nextRepoCursor, err := s.repo.GetByUserIDKeyset(ctx, userID, filters, cursor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get transactions by cursor: %w", err)
 	}
 
-	// Enrich each transaction with PFC display names and custom-category display names.
 	ptrs := make([]*domain.Transaction, len(transactions))
 	for i := range transactions {
 		transactions[i].PopulatePFCDisplay()
@@ -244,7 +249,6 @@ func (s *transactionService) ListTransactionsByCursor(
 		return nil, err
 	}
 
-	// Encode next cursor as opaque string (nil when no more pages)
 	var encodedCursor *string
 	if nextRepoCursor != nil {
 		s2, encErr := domain.EncodeTransactionCursor(*nextRepoCursor)
