@@ -45,9 +45,9 @@ import type {
 
 import type {
   ErrorModel,
+  GetTransactionsOutputBody,
   GetTransactionsParams,
   Transaction,
-  TransactionListResponse,
   UpdateTransactionCategoryBody,
   UpdateTransactionTagsBody,
 } from "../../models";
@@ -94,7 +94,7 @@ export const getTransactions = (
   options?: SecondParameter<typeof customInstance>,
   signal?: AbortSignal,
 ) => {
-  return customInstance<TransactionListResponse>(
+  return customInstance<GetTransactionsOutputBody>(
     { url: `/api/v1/transactions`, method: "GET", params, signal },
     options,
   );

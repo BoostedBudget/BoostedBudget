@@ -2,6 +2,7 @@ package operations
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -29,21 +30,21 @@ func NewTransactionHandler(service services.TransactionService) *TransactionHand
 // GetTransactionsInput represents the input for listing transactions.
 type GetTransactionsInput struct {
 	inputs.AuthenticatedInput
-	inputs.PaginationInput
+	inputs.CursorPaginationInput
 
 	// Filter parameters (all optional - empty string means not set)
-	AccountID        string `query:"account_id" doc:"Filter by specific account ID (deprecated: use account_ids)"`
-	AccountIDs       string `query:"account_ids" doc:"Filter by multiple account IDs (comma-separated UUIDs)"`
-	StartDate        string `query:"start_date" doc:"Filter transactions on or after this date (YYYY-MM-DD)"`
-	EndDate          string `query:"end_date" doc:"Filter transactions on or before this date (YYYY-MM-DD)"`
-	PFCPrimaries     string `query:"pfc_primaries" doc:"Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)"`
+	AccountID         string `query:"account_id" doc:"Filter by specific account ID (deprecated: use account_ids)"`
+	AccountIDs        string `query:"account_ids" doc:"Filter by multiple account IDs (comma-separated UUIDs)"`
+	StartDate         string `query:"start_date" doc:"Filter transactions on or after this date (YYYY-MM-DD)"`
+	EndDate           string `query:"end_date" doc:"Filter transactions on or before this date (YYYY-MM-DD)"`
+	PFCPrimaries      string `query:"pfc_primaries" doc:"Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)"`
 	CustomCategoryIDs string `query:"custom_category_ids" doc:"Filter by custom category UUIDs (comma-separated)"`
-	Search           string `query:"search" doc:"Search in merchant name or transaction name"`
-	Pending          string `query:"pending" doc:"Filter by pending status (true/false)"`
-	MinAmount        string `query:"min_amount" doc:"Filter by minimum absolute amount"`
-	MaxAmount        string `query:"max_amount" doc:"Filter by maximum absolute amount"`
-	AmountType       string `query:"amount_type" enum:"income,expense,all" doc:"Filter by transaction type"`
-	UserAccountID    string `query:"user_account_id" doc:"Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members"`
+	Search            string `query:"search" doc:"Search in merchant name or transaction name"`
+	Pending           string `query:"pending" doc:"Filter by pending status (true/false)"`
+	MinAmount         string `query:"min_amount" doc:"Filter by minimum absolute amount"`
+	MaxAmount         string `query:"max_amount" doc:"Filter by maximum absolute amount"`
+	AmountType        string `query:"amount_type" enum:"income,expense,all" doc:"Filter by transaction type"`
+	UserAccountID     string `query:"user_account_id" doc:"Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members"`
 
 	// Sort parameters
 	SortBy  string `query:"sort_by"  enum:"date,merchant,amount,category" default:"date"  doc:"Column to sort by"`
@@ -52,7 +53,11 @@ type GetTransactionsInput struct {
 
 // GetTransactionsOutput represents the response for listing transactions.
 type GetTransactionsOutput struct {
-	Body *services.TransactionListResponse
+	Body struct {
+		Transactions []*domain.Transaction `json:"transactions"`
+		NextCursor   *string               `json:"next_cursor,omitempty"`
+		Limit        int                   `json:"limit"`
+	}
 }
 
 // GetTransactionByIDInput represents the input for getting a transaction by ID.
@@ -120,8 +125,33 @@ type GetPlaidCategoriesOutput struct {
 // --- Handler Methods ---
 
 // GetTransactions handles GET /api/v1/transactions requests.
-// Retrieves transactions for the authenticated user with optional filters and pagination.
+// Retrieves transactions for the authenticated user with optional filters and cursor-based pagination.
 func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTransactionsInput) (*GetTransactionsOutput, error) {
+	// Decode cursor if present
+	var cursor *domain.TransactionCursor
+	if input.Cursor != "" {
+		c, err := domain.DecodeTransactionCursor(input.Cursor)
+		if err != nil {
+			if errors.Is(err, domain.ErrCursorVersionUnsupported) {
+				return nil, huma.Error400BadRequest("cursor version not supported")
+			}
+			return nil, huma.Error400BadRequest("invalid cursor")
+		}
+		// Validate cursor matches current sort params
+		sortBy := input.SortBy
+		if sortBy == "" {
+			sortBy = "date"
+		}
+		sortDir := input.SortDir
+		if sortDir == "" {
+			sortDir = "desc"
+		}
+		if c.K != sortBy || c.D != sortDir {
+			return nil, huma.Error400BadRequest("cursor does not match sort_by/sort_dir")
+		}
+		cursor = c
+	}
+
 	// Build filters from query parameters
 	filters := domain.TransactionFilters{}
 
@@ -215,13 +245,17 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 		filters.SortDir = "desc"
 	}
 
-	// Call service layer
-	result, err := h.service.ListTransactions(ctx, input.UserID, filters, input.Limit, input.Offset)
+	// Call service layer (cursor-based pagination)
+	result, err := h.service.ListTransactionsByCursor(ctx, input.UserID, filters, cursor, input.Limit)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &GetTransactionsOutput{Body: result}, nil
+	out := &GetTransactionsOutput{}
+	out.Body.Transactions = result.Transactions
+	out.Body.NextCursor = result.NextCursor
+	out.Body.Limit = result.Limit
+	return out, nil
 }
 
 // GetTransactionByID handles GET /api/v1/transactions/:id requests.

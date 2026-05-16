@@ -19,16 +19,30 @@ func encodeCursorMap(t *testing.T, m map[string]interface{}) string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+// svForKey returns a valid sort value string for the given sort key, used in round-trip tests.
+// date uses ISO 8601 date, amount uses a numeric string, others use a generic string.
+func svForKey(k string) string {
+	switch k {
+	case "date":
+		return "2026-01-15"
+	case "amount":
+		return "123.45"
+	default:
+		return "some-value"
+	}
+}
+
 // TestTransactionCursor_RoundTrip tests encode->decode round trips for all sort keys and directions.
 func TestTransactionCursor_RoundTrip(t *testing.T) {
 	sortKeys := []string{"date", "merchant", "amount", "category"}
 	directions := []string{"asc", "desc"}
 	id := uuid.New()
-	sv := "some-value"
 
 	for _, k := range sortKeys {
 		for _, d := range directions {
+			k, d := k, d
 			t.Run(k+"_"+d, func(t *testing.T) {
+				sv := svForKey(k)
 				c := TransactionCursor{
 					V:  1,
 					K:  k,
@@ -70,7 +84,7 @@ func TestTransactionCursor_NilSV(t *testing.T) {
 
 	decoded, err := DecodeTransactionCursor(encoded)
 	require.NoError(t, err)
-	assert.Nil(t, decoded.SV, "SV should remain nil through round-trip")
+	assert.Nil(t, decoded.SV)
 	assert.Equal(t, id, decoded.ID)
 }
 
@@ -91,7 +105,7 @@ func TestTransactionCursor_AmountPrecision(t *testing.T) {
 	decoded, err := DecodeTransactionCursor(encoded)
 	require.NoError(t, err)
 	require.NotNil(t, decoded.SV)
-	assert.Equal(t, "123.45", *decoded.SV, "amount string must survive round-trip exactly")
+	assert.Equal(t, "123.45", *decoded.SV)
 }
 
 // TestTransactionCursor_SVTRoundTrip tests round-trip with SVT set for date sort.

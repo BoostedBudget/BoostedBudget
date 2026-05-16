@@ -2118,6 +2118,31 @@ components:
         - limit
         - offset
       type: object
+    GetTransactionsOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/GetTransactionsOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        limit:
+          format: int64
+          type: integer
+        next_cursor:
+          type: string
+        transactions:
+          items:
+            $ref: "#/components/schemas/Transaction"
+          type:
+            - array
+            - "null"
+      required:
+        - transactions
+        - limit
+      type: object
     GetUnreadCountOutputBody:
       additionalProperties: false
       properties:
@@ -3719,40 +3744,6 @@ components:
         - tags_source
         - created_at
         - updated_at
-      type: object
-    TransactionListResponse:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/TransactionListResponse.json
-          format: uri
-          readOnly: true
-          type: string
-        has_more:
-          type: boolean
-        limit:
-          format: int64
-          type: integer
-        offset:
-          format: int64
-          type: integer
-        total_count:
-          format: int64
-          type: integer
-        transactions:
-          items:
-            $ref: "#/components/schemas/Transaction"
-          type:
-            - array
-            - "null"
-      required:
-        - transactions
-        - total_count
-        - limit
-        - offset
-        - has_more
       type: object
     TransferSuggestion:
       additionalProperties: false
@@ -8170,26 +8161,23 @@ paths:
       description: Retrieves transactions for the authenticated user with optional filters and pagination.
       operationId: getTransactions
       parameters:
-        - description: Number of items to return (1-100)
+        - description: Opaque cursor from previous page's next_cursor; omit for first page
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: Opaque cursor from previous page's next_cursor; omit for first page
+            type: string
+        - description: Number of transactions to return (1-100)
           explode: false
           in: query
           name: limit
           schema:
             default: 50
-            description: Number of items to return (1-100)
+            description: Number of transactions to return (1-100)
             format: int64
             maximum: 100
             minimum: 1
-            type: integer
-        - description: Number of items to skip for pagination
-          explode: false
-          in: query
-          name: offset
-          schema:
-            default: 0
-            description: Number of items to skip for pagination
-            format: int64
-            minimum: 0
             type: integer
         - description: "Filter by specific account ID (deprecated: use account_ids)"
           explode: false
@@ -8308,7 +8296,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TransactionListResponse"
+                $ref: "#/components/schemas/GetTransactionsOutputBody"
           description: OK
         default:
           content:

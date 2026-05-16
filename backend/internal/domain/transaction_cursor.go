@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,7 +31,6 @@ var validCursorDirections = map[string]bool{
 
 // TransactionCursor encodes the position for keyset (cursor) pagination.
 // Use EncodeTransactionCursor / DecodeTransactionCursor for serialization.
-//
 // The cursor is opaque to the client — always treat it as a black box.
 // SV stores the sort-key value as a string to avoid floating-point precision loss.
 // SVT is only populated when K="date" and holds the parsed UTC time for efficient DB queries.
@@ -39,7 +39,7 @@ type TransactionCursor struct {
 	K   string     `json:"k"`             // sort key: date|merchant|amount|category
 	D   string     `json:"d"`             // direction: asc|desc
 	SV  *string    `json:"sv"`            // sort-key value as string; nil = NULL sentinel
-	SVT *time.Time `json:"svt,omitempty"` // parsed time when K=date (UTC)
+	SVT *time.Time `json:"svt,omitempty"` // parsed time when K=date
 	ID  uuid.UUID  `json:"id"`            // row id tiebreaker
 }
 
@@ -77,6 +77,18 @@ func DecodeTransactionCursor(s string) (*TransactionCursor, error) {
 	}
 	if c.ID == uuid.Nil {
 		return nil, fmt.Errorf("cursor: missing id")
+	}
+	if c.SV != nil {
+		switch c.K {
+		case "date":
+			if _, err := time.Parse(time.DateOnly, *c.SV); err != nil {
+				return nil, fmt.Errorf("cursor: invalid date format in sv")
+			}
+		case "amount":
+			if _, err := strconv.ParseFloat(*c.SV, 64); err != nil {
+				return nil, fmt.Errorf("cursor: invalid amount format in sv")
+			}
+		}
 	}
 	return &c, nil
 }

@@ -7,5 +7,5 @@ package inputs
 // Omit it (or pass empty string) to request the first page.
 type CursorPaginationInput struct {
 	Cursor string `query:"cursor" doc:"Opaque cursor from previous page's next_cursor; omit for first page"`
-	Limit  int    `query:"limit" minimum:"1" maximum:"100" default:"50"`
+	Limit  int    `query:"limit" minimum:"1" maximum:"100" default:"50" doc:"Number of transactions to return (1-100)"`
 }
