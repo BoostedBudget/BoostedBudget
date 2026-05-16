@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
@@ -154,7 +155,16 @@ func (m *MockTransactionRepository) UpdateEffectiveCategoryNameByCustomCategoryI
 }
 
 func (m *MockTransactionRepository) GetByUserIDKeyset(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]domain.Transaction, *domain.TransactionCursor, error) {
-	return nil, nil, nil
+	args := m.Called(ctx, userID, filters, cursor, limit)
+	var txs []domain.Transaction
+	if v := args.Get(0); v != nil {
+		txs = v.([]domain.Transaction)
+	}
+	var nextCursor *domain.TransactionCursor
+	if v := args.Get(1); v != nil {
+		nextCursor = v.(*domain.TransactionCursor)
+	}
+	return txs, nextCursor, args.Error(2)
 }
 
 // TestTransactionService_ListTransactions_EnforcesMaxLimit tests that the service enforces a maximum limit of 100
@@ -694,6 +704,117 @@ func TestGetTransactionByID_PopulatesCustomCategoryDisplay(t *testing.T) {
 	assert.Equal(t, "My Custom", *result.CustomCategoryOverrideDisplay)
 	mockRepo.AssertExpectations(t)
 	mockCategoryRepo.AssertExpectations(t)
+}
+
+// ---- ListTransactionsByCursor tests ----
+
+// TestTransactionService_ListTransactionsByCursor_FirstPage verifies the first page (cursor=nil)
+// returns transactions with NextCursor set when the repo signals more rows exist.
+func TestTransactionService_ListTransactionsByCursor_FirstPage(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+	ctx := context.Background()
+
+	userID := "user-123"
+	filters := domain.TransactionFilters{SortBy: "date", SortDir: "desc"}
+
+	tx1 := domain.Transaction{ID: "id-1", UserID: userID, Amount: 10.0, Date: time.Now()}
+	tx2 := domain.Transaction{ID: "id-2", UserID: userID, Amount: 20.0, Date: time.Now()}
+
+	// Repo returns the two rows and a cursor pointing past the last row.
+	id2UUID, _ := uuid.Parse("00000000-0000-0000-0000-000000000002")
+	repoNextCursor := &domain.TransactionCursor{V: 1, K: "date", D: "desc", ID: id2UUID}
+
+	mockRepo.On("GetByUserIDKeyset", ctx, userID, filters, (*domain.TransactionCursor)(nil), 2).
+		Return([]domain.Transaction{tx1, tx2}, repoNextCursor, nil)
+
+	result, err := service.ListTransactionsByCursor(ctx, userID, filters, nil, 2)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Len(t, result.Transactions, 2)
+	assert.NotNil(t, result.NextCursor, "expected NextCursor to be set on first page")
+	assert.Equal(t, 2, result.Limit)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestTransactionService_ListTransactionsByCursor_LastPage verifies that when the repo returns
+// nil for the next cursor the service also returns NextCursor=nil.
+func TestTransactionService_ListTransactionsByCursor_LastPage(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+	ctx := context.Background()
+
+	userID := "user-123"
+	id1UUID, _ := uuid.Parse("00000000-0000-0000-0000-000000000001")
+	incomingCursor := &domain.TransactionCursor{V: 1, K: "date", D: "desc", ID: id1UUID}
+	filters := domain.TransactionFilters{SortBy: "date", SortDir: "desc"}
+
+	tx := domain.Transaction{ID: "id-3", UserID: userID, Amount: 5.0, Date: time.Now()}
+
+	// Repo returns one row and nil cursor (end of list).
+	mockRepo.On("GetByUserIDKeyset", ctx, userID, filters, incomingCursor, 2).
+		Return([]domain.Transaction{tx}, (*domain.TransactionCursor)(nil), nil)
+
+	result, err := service.ListTransactionsByCursor(ctx, userID, filters, incomingCursor, 2)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Len(t, result.Transactions, 1)
+	assert.Nil(t, result.NextCursor, "expected NextCursor to be nil on last page")
+	mockRepo.AssertExpectations(t)
+}
+
+// TestTransactionService_ListTransactionsByCursor_ValidatesLimit ensures limit > 100 is rejected.
+func TestTransactionService_ListTransactionsByCursor_ValidatesLimit(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+	ctx := context.Background()
+
+	_, err := service.ListTransactionsByCursor(ctx, "user-1", domain.TransactionFilters{}, nil, 150)
+
+	assert.Error(t, err)
+	assert.Equal(t, ErrInvalidLimit, err)
+}
+
+// TestTransactionService_ListTransactionsByCursor_ValidatesSortMatch ensures a cursor whose
+// sort key/direction mismatches the current filters is rejected.
+func TestTransactionService_ListTransactionsByCursor_ValidatesSortMatch(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+	ctx := context.Background()
+
+	// Cursor was issued for sort-by=date but filters now say sort-by=merchant.
+	id1UUID, _ := uuid.Parse("00000000-0000-0000-0000-000000000001")
+	cursor := &domain.TransactionCursor{V: 1, K: "date", D: "desc", ID: id1UUID}
+	filters := domain.TransactionFilters{SortBy: "merchant", SortDir: "desc"}
+
+	_, err := service.ListTransactionsByCursor(ctx, "user-1", filters, cursor, 10)
+
+	assert.Error(t, err)
+	assert.Equal(t, ErrCursorSortMismatch, err)
+}
+
+// TestTransactionService_ListTransactionsByCursor_PropagatesRepoError ensures repository
+// errors are wrapped and surfaced by the service.
+func TestTransactionService_ListTransactionsByCursor_PropagatesRepoError(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+	ctx := context.Background()
+
+	userID := "user-123"
+	filters := domain.TransactionFilters{SortBy: "date", SortDir: "desc"}
+	repoErr := errors.New("db connection lost")
+
+	mockRepo.On("GetByUserIDKeyset", ctx, userID, filters, (*domain.TransactionCursor)(nil), 10).
+		Return(nil, (*domain.TransactionCursor)(nil), repoErr)
+
+	_, err := service.ListTransactionsByCursor(ctx, userID, filters, nil, 10)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get transactions by cursor")
+	assert.ErrorIs(t, err, repoErr)
+	mockRepo.AssertExpectations(t)
 }
 
 // TestGetTransactionByID_NilDisplayWhenNoCustomCategory asserts display field is nil for non-custom transactions.

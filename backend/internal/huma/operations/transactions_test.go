@@ -80,6 +80,10 @@ func (m *mockTransactionService) ListByBudgetCategory(ctx context.Context, userI
 	return nil, 0, 0, nil
 }
 
+func (m *mockTransactionService) ListTransactionsByCursor(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) (*services.TransactionListResponse, error) {
+	return nil, nil
+}
+
 // Helper to create a test transaction
 func createTestTransaction(userID string) *domain.Transaction {
 	now := time.Now()
@@ -108,7 +112,7 @@ func TestGetTransactions_Success(t *testing.T) {
 
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []domain.Transaction{*tx},
+			Transactions: []*domain.Transaction{tx},
 			TotalCount:   1,
 			Limit:        50,
 			Offset:       0,
@@ -137,7 +141,7 @@ func TestGetTransactions_WithFilters(t *testing.T) {
 	userID := "user-123"
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []domain.Transaction{},
+			Transactions: []*domain.Transaction{},
 			TotalCount:   0,
 			Limit:        50,
 			Offset:       0,
@@ -442,7 +446,7 @@ func TestGetPlaidCategories_EmptyList(t *testing.T) {
 func TestTransactionRouteRegistration(t *testing.T) {
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []domain.Transaction{},
+			Transactions: []*domain.Transaction{},
 			TotalCount:   0,
 			Limit:        50,
 			Offset:       0,
@@ -512,7 +516,7 @@ func TestTransactionListResponseJSON(t *testing.T) {
 
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []domain.Transaction{*tx},
+			Transactions: []*domain.Transaction{tx},
 			TotalCount:   1,
 			Limit:        50,
 			Offset:       0,
@@ -541,7 +545,7 @@ func TestGetTransactions_UserAccountIDFilter(t *testing.T) {
 	userID := "user-123"
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []domain.Transaction{},
+			Transactions: []*domain.Transaction{},
 			TotalCount:   0,
 			Limit:        50,
 			Offset:       0,
