@@ -6,6 +6,7 @@ import type { RangeValue } from '../ColumnFilterDropdown'
 import {
   useReactTable,
   getCoreRowModel,
+  useVirtualizer,
 } from '@/shared/lib/tanstack'
 import {
   DndContext,
@@ -217,6 +218,7 @@ export function DataTable<T,>({
   onColumnVisibilityChange,
   density = 'comfortable',
   tableId,
+  virtualization,
 }: DataTableProps<T>) {
   // totalCols is computed after visibleColumns below
 
@@ -295,11 +297,143 @@ export function DataTable<T,>({
   // Use TanStack's row model for iteration — row.original gives back the typed T.
   const rows = table.getRowModel().rows
 
+  // ── Virtualization ────────────────────────────────────────────────────────
+  // Scroll container ref (used only when virtualization.enabled).
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  const virtualizer = useVirtualizer({
+    count: virtualization?.enabled ? rows.length : 0,
+    getScrollElement: () => (virtualization?.enabled ? scrollRef.current : null),
+    estimateSize: () => virtualization?.estimateRowHeight ?? 40,
+    overscan: virtualization?.overscan ?? 8,
+    measureElement:
+      virtualization?.enabled && virtualization.dynamicRowHeight !== false
+        ? (el: Element) => el.getBoundingClientRect().height
+        : undefined,
+    enabled: virtualization?.enabled ?? false,
+  })
+
+  const virtualItems = virtualizer.getVirtualItems()
+
+  // Fire onScrollEnd once per zone entry (when last virtualItem nears end of list)
+  const scrollEndFiredRef = useRef(false)
+  useEffect(() => {
+    if (!virtualization?.enabled) return
+    if (!virtualization.onScrollEnd || !virtualization.hasMore || virtualization.isFetchingMore) return
+    if (virtualItems.length === 0) return
+    const lastIndex = virtualItems[virtualItems.length - 1].index
+    const prefetch = virtualization.prefetchRows ?? 5
+    if (lastIndex >= rows.length - prefetch) {
+      if (!scrollEndFiredRef.current) {
+        scrollEndFiredRef.current = true
+        virtualization.onScrollEnd()
+      }
+    } else {
+      scrollEndFiredRef.current = false
+    }
+  }, [virtualItems, rows.length, virtualization])
+
   useEffect(() => {
     if (hasHideableColumns && !onColumnVisibilityChange && import.meta.env.DEV) {
       console.warn('[DataTable] Some columns have hideable:true but onColumnVisibilityChange is not provided — column visibility menu will not render.')
     }
   }, [hasHideableColumns, onColumnVisibilityChange])
+
+  // Shared thead renderer (used by both virtualized and non-virtualized paths)
+  const theadEl = (
+    <thead style={virtualization?.enabled ? { position: 'sticky', top: 0, zIndex: 2 } : undefined}>
+      <SortableContext items={reorderableIds} strategy={horizontalListSortingStrategy}>
+        <tr className="bg-muted/50">
+          {visibleColumns.map((col) => (
+            <SortableColHeader
+              key={col.id}
+              col={col}
+              sortAriaVal={getAriaSort(sort, col.id)}
+              draggingId={draggingId}
+              isFinePointerDnd={isFinePointerDnd}
+              onDragHandleKeyDown={handleDragHandleKeyDown}
+              headerContent={renderHeaderContent(col, sort, filters, handleSort, handleFilterChange)}
+              resizeHandle={col.resizable ? (
+                <ResizeHandle
+                  columnId={col.id}
+                  currentWidth={getWidth(col.id, col.defaultSize)}
+                  isCoarsePointer={!isFinePointer}
+                  onKeyDown={(e) => handleKeyDown(e, col.id, col.defaultSize)}
+                  onPointerDown={(e) =>
+                    handlePointerDown(e, col.id, colElRefs.current.get(col.id) ?? null)
+                  }
+                />
+              ) : null}
+            />
+          ))}
+          {rowActions && (
+            <th
+              scope="col"
+              className={headerCellVariants({ align: 'right', action: true })}
+            >
+              Actions
+            </th>
+          )}
+        </tr>
+      </SortableContext>
+    </thead>
+  )
+
+  // Shared <td> row renderer (preserves data-ph-mask invariant in both paths)
+  function renderRowCells(row: T) {
+    return (
+      <>
+        {visibleColumns.map((col) => {
+          const isMasked = maskedColumnIds.includes(col.id)
+          const content = col.render
+            ? col.render(row)
+            : col.key !== undefined
+              ? String(row[col.key] ?? '')
+              : null
+          return (
+            <td
+              key={col.id}
+              className={cn(
+                bodyCellVariants({
+                  align: col.align,
+                  numeric: col.numeric ?? false,
+                  density,
+                }),
+                col.defaultPinned === 'left' && 'sticky left-0 z-10 bg-card',
+                col.defaultPinned === 'right' && 'sticky right-0 z-10 bg-card max-md:relative max-md:right-auto'
+              )}
+              {...(isMasked && { 'data-ph-mask': '' })}
+              {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
+            >
+              {content}
+            </td>
+          )
+        })}
+        {rowActions && (
+          <td
+            className={bodyCellVariants({ align: 'right', density })}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {rowActions(row)}
+          </td>
+        )}
+      </>
+    )
+  }
+
+  // Shared colgroup
+  const colgroupEl = (
+    <colgroup>
+      {visibleColumns.map((col) => (
+        <col
+          key={col.id}
+          ref={setColRef(col.id)}
+          style={sizing[col.id] ? { width: `${sizing[col.id]}px` } : undefined}
+        />
+      ))}
+      {rowActions && <col style={{ width: '96px' }} />}
+    </colgroup>
+  )
 
   return (
     <DndContext
@@ -324,120 +458,122 @@ export function DataTable<T,>({
             />
           </div>
         )}
-        <table
-          className={cn(tableVariants({ loading }), className)}
-          aria-busy={loading ? true : undefined}
-        >
-          {caption && (
-            <caption className="caption-top text-left text-sm font-semibold text-foreground mb-2">
-              {caption}
-            </caption>
-          )}
-          <colgroup>
-            {visibleColumns.map((col) => (
-              <col
-                key={col.id}
-                ref={setColRef(col.id)}
-                style={sizing[col.id] ? { width: `${sizing[col.id]}px` } : undefined}
-              />
-            ))}
-            {rowActions && <col style={{ width: '96px' }} />}
-          </colgroup>
-          <thead>
-            <SortableContext items={reorderableIds} strategy={horizontalListSortingStrategy}>
-              <tr className="bg-muted/50">
-                {visibleColumns.map((col) => (
-                  <SortableColHeader
-                    key={col.id}
-                    col={col}
-                    sortAriaVal={getAriaSort(sort, col.id)}
-                    draggingId={draggingId}
-                    isFinePointerDnd={isFinePointerDnd}
-                    onDragHandleKeyDown={handleDragHandleKeyDown}
-                    headerContent={renderHeaderContent(col, sort, filters, handleSort, handleFilterChange)}
-                    resizeHandle={col.resizable ? (
-                      <ResizeHandle
-                        columnId={col.id}
-                        currentWidth={getWidth(col.id, col.defaultSize)}
-                        isCoarsePointer={!isFinePointer}
-                        onKeyDown={(e) => handleKeyDown(e, col.id, col.defaultSize)}
-                        onPointerDown={(e) =>
-                          handlePointerDown(e, col.id, colElRefs.current.get(col.id) ?? null)
-                        }
-                      />
-                    ) : null}
-                  />
-                ))}
-                {rowActions && (
-                  <th
-                    scope="col"
-                    className={headerCellVariants({ align: 'right', action: true })}
-                  >
-                    Actions
-                  </th>
-                )}
-              </tr>
-            </SortableContext>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={totalCols}>{emptyState}</td>
-              </tr>
-            ) : (
-              rows.map((tanStackRow) => {
-                const row = tanStackRow.original
-                return (
-                  <tr
-                    key={rowKey(row)}
-                    className={cn(
-                      'transition-colors',
-                      onRowClick && 'cursor-pointer hover:bg-muted/50',
-                      rowClassName?.(row)
-                    )}
-                    onClick={onRowClick ? () => onRowClick(row) : undefined}
-                  >
-                    {visibleColumns.map((col) => {
-                      const isMasked = maskedColumnIds.includes(col.id)
-                      const content = col.render
-                        ? col.render(row)
-                        : col.key !== undefined
-                          ? String(row[col.key] ?? '')
-                          : null
 
-                      return (
-                        <td
-                          key={col.id}
-                          className={cn(
-                            bodyCellVariants({
-                              align: col.align,
-                              numeric: col.numeric ?? false,
-                              density,
-                            }),
-                            col.defaultPinned === 'left' && 'sticky left-0 z-10 bg-card',
-                            col.defaultPinned === 'right' && 'sticky right-0 z-10 bg-card max-md:relative max-md:right-auto'
-                          )}
-                          {...(isMasked && { 'data-ph-mask': '' })}
-                          {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
-                        >
-                          {content}
-                        </td>
-                      )
-                    })}
-                    {rowActions && (
-                      <td
-                        className={bodyCellVariants({ align: 'right', density })}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {rowActions(row)}
-                      </td>
-                    )}
+        {virtualization?.enabled ? (
+          // ── VIRTUALIZED PATH ──────────────────────────────────────────
+          <div
+            ref={scrollRef}
+            className="overflow-auto"
+            style={{ height: virtualization.scrollContainerHeight ?? '600px' }}
+            data-testid="virtual-scroll-container"
+          >
+            <table
+              className={cn(tableVariants({ loading }), className)}
+              aria-busy={loading ? true : undefined}
+              style={{ width: '100%', borderCollapse: 'collapse' }}
+            >
+              {caption && (
+                <caption className="caption-top text-left text-sm font-semibold text-foreground mb-2">
+                  {caption}
+                </caption>
+              )}
+              {colgroupEl}
+              {theadEl}
+              <tbody
+                style={{
+                  position: 'relative',
+                  height: `${virtualizer.getTotalSize()}px`,
+                }}
+              >
+                {virtualItems.map((virtualItem) => {
+                  const tanStackRow = rows[virtualItem.index]
+                  if (!tanStackRow) return null
+                  const row = tanStackRow.original
+                  return (
+                    <tr
+                      key={rowKey(row)}
+                      ref={virtualization.dynamicRowHeight !== false ? virtualizer.measureElement : undefined}
+                      data-index={virtualItem.index}
+                      className={cn(
+                        'transition-colors',
+                        onRowClick && 'cursor-pointer hover:bg-muted/50',
+                        rowClassName?.(row)
+                      )}
+                      onClick={onRowClick ? () => onRowClick(row) : undefined}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        transform: `translateY(${virtualItem.start}px)`,
+                      }}
+                    >
+                      {renderRowCells(row)}
+                    </tr>
+                  )
+                })}
+                {/* Sentinel row — always rendered at bottom of virtual space */}
+                {(virtualization.isFetchingMore || virtualization.hasMore) && (
+                  <tr
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${virtualizer.getTotalSize()}px)`,
+                    }}
+                  >
+                    <td
+                      data-testid="virtual-sentinel"
+                      colSpan={totalCols}
+                      style={{ textAlign: 'center', padding: '12px' }}
+                    >
+                      {virtualization.isFetchingMore ? 'Loading more transactions…' : null}
+                    </td>
                   </tr>
-                )
-              })
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          // ── NON-VIRTUALIZED PATH (unchanged) ───────────────────────
+          <table
+            className={cn(tableVariants({ loading }), className)}
+            aria-busy={loading ? true : undefined}
+          >
+            {caption && (
+              <caption className="caption-top text-left text-sm font-semibold text-foreground mb-2">
+                {caption}
+              </caption>
             )}
-          </tbody>
-        </table>
+            {colgroupEl}
+            {theadEl}
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={totalCols}>{emptyState}</td>
+                </tr>
+              ) : (
+                rows.map((tanStackRow) => {
+                  const row = tanStackRow.original
+                  return (
+                    <tr
+                      key={rowKey(row)}
+                      className={cn(
+                        'transition-colors',
+                        onRowClick && 'cursor-pointer hover:bg-muted/50',
+                        rowClassName?.(row)
+                      )}
+                      onClick={onRowClick ? () => onRowClick(row) : undefined}
+                    >
+                      {renderRowCells(row)}
+                    </tr>
+                  )
+                })
+              )}
+            </tbody>
+          </table>
+        )}
       </div>
     </DndContext>
   )
