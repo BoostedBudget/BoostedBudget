@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
 import { format, subDays, subYears, startOfDay } from 'date-fns'
+import { useFilterState, type FilterSpec } from '@/shared/hooks/useFilterState'
 import type { TransactionFilters, DatePreset, StatusFilter } from '../types'
 
 /**
@@ -34,60 +34,51 @@ export interface UseTransactionFiltersResult {
   setStatusFilter: (status: StatusFilter) => void
 }
 
-// URL param names for array filters
-const ARRAY_PARAMS = ['account_ids', 'categories'] as const
+// ---------------------------------------------------------------------------
+// Filter spec for useFilterState
+// ---------------------------------------------------------------------------
 
-// URL param names for numeric filters
-const NUMERIC_PARAMS = ['min_amount', 'max_amount'] as const
+const SPEC = {
+  account_ids:   { kind: 'multi-select' },
+  pfc_primaries: { kind: 'multi-select' },
+  categories:    { kind: 'multi-select' },
+  min_amount:    { kind: 'scalar', codec: 'number' as const },
+  max_amount:    { kind: 'scalar', codec: 'number' as const },
+  start_date:    { kind: 'scalar', codec: 'string' as const },
+  end_date:      { kind: 'scalar', codec: 'string' as const },
+  search:        { kind: 'scalar', codec: 'string' as const },
+  amount_type:   { kind: 'scalar', codec: 'string' as const },
+  pending:       { kind: 'scalar', codec: 'boolean' as const },
+} as const satisfies FilterSpec
 
-/**
- * Calculate date range from preset
- */
-function getDateRangeFromPreset(preset: DatePreset): { startDate: string; endDate: string } | null {
+// ---------------------------------------------------------------------------
+// Date helpers (inline — no external dates module dependency)
+// ---------------------------------------------------------------------------
+
+function getDateRange(preset: DatePreset): { startDate: string; endDate: string } | null {
   const today = startOfDay(new Date())
   const todayStr = format(today, 'yyyy-MM-dd')
 
   switch (preset) {
     case '7d':
-      return {
-        startDate: format(subDays(today, 7), 'yyyy-MM-dd'),
-        endDate: todayStr,
-      }
+      return { startDate: format(subDays(today, 7), 'yyyy-MM-dd'), endDate: todayStr }
     case '30d':
-      return {
-        startDate: format(subDays(today, 30), 'yyyy-MM-dd'),
-        endDate: todayStr,
-      }
+      return { startDate: format(subDays(today, 30), 'yyyy-MM-dd'), endDate: todayStr }
     case '90d':
-      return {
-        startDate: format(subDays(today, 90), 'yyyy-MM-dd'),
-        endDate: todayStr,
-      }
+      return { startDate: format(subDays(today, 90), 'yyyy-MM-dd'), endDate: todayStr }
     case '1y':
-      return {
-        startDate: format(subYears(today, 1), 'yyyy-MM-dd'),
-        endDate: todayStr,
-      }
-    case 'all':
-      return null // No date filter
-    case 'custom':
-      return null // Custom dates handled separately
+      return { startDate: format(subYears(today, 1), 'yyyy-MM-dd'), endDate: todayStr }
     default:
-      return null
+      return null // 'all' and 'custom' have no fixed range
   }
 }
 
-/**
- * Infer date preset from current start_date and end_date
- */
-function inferDatePreset(startDate?: string, endDate?: string): DatePreset {
+function inferPreset(startDate?: string, endDate?: string): DatePreset {
   if (!startDate && !endDate) return 'all'
 
   const today = format(startOfDay(new Date()), 'yyyy-MM-dd')
 
-  // Check if endDate is today (or not set)
   if (endDate && endDate !== today) return 'custom'
-
   if (!startDate) return 'all'
 
   const todayDate = startOfDay(new Date())
@@ -102,252 +93,113 @@ function inferDatePreset(startDate?: string, endDate?: string): DatePreset {
   return 'custom'
 }
 
+// ---------------------------------------------------------------------------
+// Main hook
+// ---------------------------------------------------------------------------
+
 /**
- * Hook for managing transaction filters with URL state synchronization
+ * Hook for managing transaction filters with URL state synchronization.
  *
  * Features:
  * - Parses filters from URL search params on mount
  * - Syncs filter changes to URL for bookmarking/sharing
- * - Calculates active filter count
- * - Provides setFilter, clearFilter, clearAllFilters methods
+ * - Calculates active filter count (date range and amount range each count as 1)
  * - Date preset management (converts presets to actual dates)
  * - Status filter management (converts to pending boolean)
  *
  * @returns Filter state and management functions
  */
 export function useTransactionFilters(): UseTransactionFiltersResult {
-  const [searchParams, setSearchParams] = useSearchParams()
+  const state = useFilterState(SPEC, { clearKeysOnWrite: ['offset'] })
 
-  // Parse filters from URL search params
-  const filters = useMemo<TransactionFilters>(() => {
-    const result: TransactionFilters = {}
-
-    // Parse array params (comma-separated)
-    for (const key of ARRAY_PARAMS) {
-      const value = searchParams.get(key)
-      if (value) {
-        const parsed = value.split(',').filter(Boolean).map((s) => s.trim())
-        if (parsed.length > 0) {
-          result[key] = parsed
-        }
-      }
-    }
-
-    // Parse numeric params
-    for (const key of NUMERIC_PARAMS) {
-      const value = searchParams.get(key)
-      if (value) {
-        const parsed = parseFloat(value)
-        if (!isNaN(parsed)) {
-          result[key] = parsed
-        }
-      }
-    }
-
-    // Parse string params
-    const stringParams = ['start_date', 'end_date', 'search', 'amount_type'] as const
-    for (const key of stringParams) {
-      const value = searchParams.get(key)
-      if (value) {
-        (result as Record<string, string>)[key] = value
-      }
-    }
-
-    // Parse boolean (pending)
-    const pending = searchParams.get('pending')
-    if (pending !== null) {
-      result.pending = pending === 'true'
-    }
-
-    return result
-  }, [searchParams])
-
-  // Set a single filter value
-  const setFilter = useCallback(
-    <K extends keyof TransactionFilters>(key: K, value: TransactionFilters[K]) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-
-          // Handle undefined/null/empty values - remove from URL
-          if (value === undefined || value === null || value === '') {
-            next.delete(key)
-          } else if (Array.isArray(value)) {
-            if (value.length === 0) {
-              next.delete(key)
-            } else {
-              next.set(key, value.join(','))
-            }
-          } else if (typeof value === 'boolean') {
-            next.set(key, String(value))
-          } else if (typeof value === 'number') {
-            next.set(key, String(value))
-          } else {
-            next.set(key, value as string)
-          }
-
-          // Reset offset when filters change (back to first page)
-          next.delete('offset')
-
-          return next
-        },
-        { replace: true }
-      )
-    },
-    [setSearchParams]
+  // Build TransactionFilters from generic state
+  // Note: pfc_primaries is tracked in the URL spec for filtering but is not part of
+  // the public TransactionFilters type (it maps to pfc_primaries via API filter params)
+  const filters = useMemo<TransactionFilters>(
+    () => ({
+      account_ids:   state.filters.account_ids.length > 0 ? state.filters.account_ids : undefined,
+      categories:    state.filters.categories.length > 0 ? state.filters.categories : undefined,
+      start_date:    state.filters.start_date,
+      end_date:      state.filters.end_date,
+      search:        state.filters.search,
+      pending:       state.filters.pending,
+      min_amount:    state.filters.min_amount,
+      max_amount:    state.filters.max_amount,
+      amount_type:   state.filters.amount_type as TransactionFilters['amount_type'],
+    }),
+    [state.filters],
   )
 
-  // Set multiple filters at once
-  const setFilters = useCallback(
-    (updates: Partial<TransactionFilters>) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-
-          for (const [key, value] of Object.entries(updates)) {
-            if (value === undefined || value === null || value === '') {
-              next.delete(key)
-            } else if (Array.isArray(value)) {
-              if (value.length === 0) {
-                next.delete(key)
-              } else {
-                next.set(key, value.join(','))
-              }
-            } else if (typeof value === 'boolean') {
-              next.set(key, String(value))
-            } else if (typeof value === 'number') {
-              next.set(key, String(value))
-            } else {
-              next.set(key, value as string)
-            }
-          }
-
-          // Reset offset when filters change
-          next.delete('offset')
-
-          return next
-        },
-        { replace: true }
-      )
-    },
-    [setSearchParams]
-  )
-
-  // Clear a specific filter
-  const clearFilter = useCallback(
-    (key: keyof TransactionFilters) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-          next.delete(key)
-          next.delete('offset')
-          return next
-        },
-        { replace: true }
-      )
-    },
-    [setSearchParams]
-  )
-
-  // Clear all filters
-  const clearAllFilters = useCallback(() => {
-    setSearchParams(new URLSearchParams(), { replace: true })
-  }, [setSearchParams])
-
-  // Calculate active filter count (exclude default values)
+  // Active filter count — date range and amount range each count as one grouped filter
   const activeFilterCount = useMemo(() => {
     let count = 0
-
     if (filters.account_ids && filters.account_ids.length > 0) count++
+    if (state.filters.pfc_primaries.length > 0) count++
     if (filters.categories && filters.categories.length > 0) count++
     if (filters.start_date || filters.end_date) count++
     if (filters.search) count++
     if (filters.pending !== undefined) count++
     if (filters.min_amount !== undefined || filters.max_amount !== undefined) count++
     if (filters.amount_type && filters.amount_type !== 'all') count++
-
     return count
-  }, [filters])
+  }, [filters, state.filters.pfc_primaries])
 
-  const hasActiveFilters = activeFilterCount > 0
-
-  // Date preset (inferred from current dates)
+  // Feature projections
   const datePreset = useMemo<DatePreset>(
-    () => inferDatePreset(filters.start_date, filters.end_date),
-    [filters.start_date, filters.end_date]
+    () => inferPreset(state.filters.start_date, state.filters.end_date),
+    [state.filters.start_date, state.filters.end_date],
   )
 
-  // Set date preset (updates start_date and end_date)
+  const statusFilter = useMemo<StatusFilter>(() => {
+    if (state.filters.pending === true) return 'pending'
+    if (state.filters.pending === false) return 'posted'
+    return 'all'
+  }, [state.filters.pending])
+
+  const clearAllFilters = useCallback(
+    () => {
+      state.clearAllFilters()
+    },
+    [state.clearAllFilters],
+  )
+
   const setDatePreset = useCallback(
     (preset: DatePreset) => {
-      if (preset === 'custom') {
-        // Don't change dates for custom - user will set manually
-        return
-      }
-
-      const range = getDateRangeFromPreset(preset)
+      if (preset === 'custom') return
+      const range = getDateRange(preset)
       if (range) {
-        setFilters({
-          start_date: range.startDate,
-          end_date: range.endDate,
-        })
+        state.setFilters({ start_date: range.startDate, end_date: range.endDate })
       } else {
-        // 'all' preset - clear date filters
-        setSearchParams(
-          (prev) => {
-            const next = new URLSearchParams(prev)
-            next.delete('start_date')
-            next.delete('end_date')
-            next.delete('offset')
-            return next
-          },
-          { replace: true }
-        )
+        state.setFilters({ start_date: undefined, end_date: undefined })
       }
     },
-    [setFilters, setSearchParams]
+    [state.setFilters],
   )
 
-  // Status filter (derived from pending boolean)
-  const statusFilter = useMemo<StatusFilter>(() => {
-    if (filters.pending === true) return 'pending'
-    if (filters.pending === false) return 'posted'
-    return 'all'
-  }, [filters.pending])
-
-  // Set status filter (updates pending)
-  const setStatusFilter = useCallback(
-    (status: StatusFilter) => {
-      if (status === 'pending') {
-        setFilter('pending', true)
-      } else if (status === 'posted') {
-        setFilter('pending', false)
-      } else {
-        clearFilter('pending')
-      }
-    },
-    [setFilter, clearFilter]
-  )
-
-  // Set custom date range
   const setCustomDateRange = useCallback(
     (startDate: string, endDate: string) => {
-      setFilters({
-        start_date: startDate,
-        end_date: endDate,
-      })
+      state.setFilters({ start_date: startDate, end_date: endDate })
     },
-    [setFilters]
+    [state.setFilters],
+  )
+
+  const setStatusFilter = useCallback(
+    (status: StatusFilter) => {
+      if (status === 'pending')     state.setFilter('pending', true)
+      else if (status === 'posted') state.setFilter('pending', false)
+      else                          state.clearFilter('pending')
+    },
+    [state.setFilter, state.clearFilter],
   )
 
   return {
     filters,
-    setFilter,
-    setFilters,
-    clearFilter,
+    setFilter:         state.setFilter as UseTransactionFiltersResult['setFilter'],
+    setFilters:        state.setFilters as UseTransactionFiltersResult['setFilters'],
+    clearFilter:       state.clearFilter as UseTransactionFiltersResult['clearFilter'],
     clearAllFilters,
     activeFilterCount,
-    hasActiveFilters,
+    hasActiveFilters:  activeFilterCount > 0,
     datePreset,
     setDatePreset,
     setCustomDateRange,
