@@ -4,6 +4,20 @@
  *
  * Manages filter values in URLSearchParams (react-router-dom).
  * Supports multi-select, range, and scalar field types with full codec support.
+ *
+ * @example
+ * const SPEC = {
+ *   institution: { kind: 'multi-select' },
+ *   balance: { kind: 'range' },
+ *   search: { kind: 'scalar', codec: 'string' as const },
+ * } as const satisfies FilterSpec
+ * const { filters } = useFilterState(SPEC)
+ * // filters.institution: string[]
+ * // filters.balance: { min?: number; max?: number } | undefined
+ * // filters.search: string | undefined
+ *
+ * NOTE: Use `as const satisfies FilterSpec` on spec literals (not `: FilterSpec`) to
+ * preserve literal types so InferFilters<S> resolves correctly per field.
  */
 
 import { useCallback, useMemo } from 'react'
@@ -41,14 +55,40 @@ export type FilterFieldSpec =
 
 export type FilterSpec = Record<string, FilterFieldSpec>
 
+// ---------------------------------------------------------------------------
+// InferFilters<S> — maps spec keys to their resolved runtime types
+// ---------------------------------------------------------------------------
+
+type InferScalarType<C extends ScalarCodec> = C extends 'string'
+  ? string
+  : C extends 'number'
+    ? number
+    : C extends 'integer'
+      ? number
+      : C extends 'boolean'
+        ? boolean
+        : unknown
+
+type InferFieldValue<F extends FilterFieldSpec> = F extends { kind: 'multi-select' }
+  ? string[]
+  : F extends { kind: 'range' }
+    ? { min?: number; max?: number } | undefined
+    : F extends { kind: 'scalar'; codec: infer C extends ScalarCodec }
+      ? InferScalarType<C> | undefined
+      : never
+
+export type InferFilters<S extends FilterSpec> = {
+  [K in keyof S]: InferFieldValue<S[K]>
+}
+
 export interface UseFilterStateOptions {
   clearKeysOnWrite?: string[]
 }
 
 export interface UseFilterStateReturn<S extends FilterSpec> {
-  filters: Record<string, unknown>
-  setFilter: (key: keyof S & string, value: unknown) => void
-  setFilters: (updates: Partial<Record<keyof S & string, unknown>>) => void
+  filters: InferFilters<S>
+  setFilter: <K extends keyof S & string>(key: K, value: InferFilters<S>[K]) => void
+  setFilters: (updates: Partial<InferFilters<S>>) => void
   clearFilter: (key: keyof S & string) => void
   clearAllFilters: () => void
   activeFilterCount: number
@@ -270,12 +310,12 @@ export function useFilterState<S extends FilterSpec>(
   )
 
   // Parse all fields from current URL
-  const filters = useMemo<Record<string, unknown>>(() => {
+  const filters = useMemo<InferFilters<S>>(() => {
     const result: Record<string, unknown> = {}
     for (const [key, fieldSpec] of Object.entries(spec)) {
       result[key] = readField(key, fieldSpec, searchParams)
     }
-    return result
+    return result as InferFilters<S>
   }, [spec, searchParams])
 
   const activeFilterCount = useMemo(() => {
@@ -287,7 +327,7 @@ export function useFilterState<S extends FilterSpec>(
   }, [spec, filters])
 
   const setFilter = useCallback(
-    (key: string, value: unknown) => {
+    <K extends keyof S & string>(key: K, value: InferFilters<S>[K]) => {
       const fieldSpec = spec[key]
       if (!fieldSpec) return
       setSearchParams(
@@ -304,7 +344,7 @@ export function useFilterState<S extends FilterSpec>(
   )
 
   const setFilters = useCallback(
-    (updates: Record<string, unknown>) => {
+    (updates: Partial<InferFilters<S>>) => {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev)
