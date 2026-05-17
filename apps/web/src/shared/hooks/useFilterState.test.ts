@@ -5,7 +5,7 @@
  * Tests URL-state management for filter fields (multi-select, range, scalar).
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, expectTypeOf } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import React from 'react'
@@ -749,6 +749,7 @@ describe('useFilterState — scalar custom urlKey', () => {
 // ---------------------------------------------------------------------------
 // 18. unknown key — setFilter is a no-op
 // ---------------------------------------------------------------------------
+// NOTE: type tests (section 19) are appended after this block
 describe('useFilterState — unknown key no-op', () => {
   beforeEach(() => {
     window.history.replaceState({}, '', '/')
@@ -775,5 +776,70 @@ describe('useFilterState — unknown key no-op', () => {
         result.current.setFilter('nonExistentKey' as keyof typeof spec & string, 'value')
       })
     }).not.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 19. InferFilters<S> — type-level assertions (compile-time only)
+// ---------------------------------------------------------------------------
+describe('useFilterState — InferFilters type inference', () => {
+  it('infers string[] for multi-select', () => {
+    const spec = { institution: { kind: 'multi-select' } } as const satisfies FilterSpec
+    const { result } = renderHook(() => useFilterState(spec), { wrapper: createWrapper() })
+    expectTypeOf(result.current.filters.institution).toEqualTypeOf<string[]>()
+  })
+
+  it('infers { min?: number; max?: number } | undefined for range', () => {
+    const spec = { balance: { kind: 'range' } } as const satisfies FilterSpec
+    const { result } = renderHook(() => useFilterState(spec), { wrapper: createWrapper() })
+    expectTypeOf(result.current.filters.balance).toEqualTypeOf<
+      { min?: number; max?: number } | undefined
+    >()
+  })
+
+  it("infers string | undefined for scalar codec 'string'", () => {
+    const spec = { search: { kind: 'scalar', codec: 'string' as const } } as const satisfies FilterSpec
+    const { result } = renderHook(() => useFilterState(spec), { wrapper: createWrapper() })
+    expectTypeOf(result.current.filters.search).toEqualTypeOf<string | undefined>()
+  })
+
+  it("infers number | undefined for scalar codec 'number'", () => {
+    const spec = { amount: { kind: 'scalar', codec: 'number' as const } } as const satisfies FilterSpec
+    const { result } = renderHook(() => useFilterState(spec), { wrapper: createWrapper() })
+    expectTypeOf(result.current.filters.amount).toEqualTypeOf<number | undefined>()
+  })
+
+  it("infers number | undefined for scalar codec 'integer'", () => {
+    const spec = { count: { kind: 'scalar', codec: 'integer' as const } } as const satisfies FilterSpec
+    const { result } = renderHook(() => useFilterState(spec), { wrapper: createWrapper() })
+    expectTypeOf(result.current.filters.count).toEqualTypeOf<number | undefined>()
+  })
+
+  it("infers boolean | undefined for scalar codec 'boolean'", () => {
+    const spec = { pending: { kind: 'scalar', codec: 'boolean' as const } } as const satisfies FilterSpec
+    const { result } = renderHook(() => useFilterState(spec), { wrapper: createWrapper() })
+    expectTypeOf(result.current.filters.pending).toEqualTypeOf<boolean | undefined>()
+  })
+
+  it('infers unknown for scalar with custom codec (parse returns unknown; unknown|undefined simplifies to unknown)', () => {
+    const spec = {
+      ids: {
+        kind: 'scalar',
+        codec: {
+          parse: (raw: string) => raw.split('|').map(Number),
+          serialize: (v: unknown) => String(v),
+        },
+      },
+    } as const satisfies FilterSpec
+    const { result } = renderHook(() => useFilterState(spec), { wrapper: createWrapper() })
+    // Custom codecs resolve to `unknown` — consumers must narrow/cast after reading filters.ids
+    expectTypeOf(result.current.filters.ids).toEqualTypeOf<unknown>()
+  })
+
+  it('setFilter return type is void for multi-select key', () => {
+    const spec = { institution: { kind: 'multi-select' } } as const satisfies FilterSpec
+    const { result } = renderHook(() => useFilterState(spec), { wrapper: createWrapper() })
+    // Type check: calling setFilter with string[] should produce void
+    expectTypeOf(result.current.setFilter('institution', ['Chase'])).toEqualTypeOf<void>()
   })
 })
