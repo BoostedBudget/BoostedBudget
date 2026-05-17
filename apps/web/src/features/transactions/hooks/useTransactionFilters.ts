@@ -38,6 +38,8 @@ export interface UseTransactionFiltersResult {
 // Filter spec for useFilterState
 // ---------------------------------------------------------------------------
 
+// Deprecated TransactionFilters fields `account_id` (singular) and `category` (singular)
+// are intentionally absent — no consumer passes them through this hook.
 const SPEC = {
   account_ids:   { kind: 'multi-select' },
   pfc_primaries: { kind: 'multi-select' },
@@ -156,13 +158,6 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
     return 'all'
   }, [state.filters.pending])
 
-  const clearAllFilters = useCallback(
-    () => {
-      state.clearAllFilters()
-    },
-    [state.clearAllFilters],
-  )
-
   const setDatePreset = useCallback(
     (preset: DatePreset) => {
       if (preset === 'custom') return
@@ -197,7 +192,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
     setFilter:         state.setFilter as UseTransactionFiltersResult['setFilter'],
     setFilters:        state.setFilters as UseTransactionFiltersResult['setFilters'],
     clearFilter:       state.clearFilter as UseTransactionFiltersResult['clearFilter'],
-    clearAllFilters,
+    clearAllFilters:   state.clearAllFilters,
     activeFilterCount,
     hasActiveFilters:  activeFilterCount > 0,
     datePreset,
