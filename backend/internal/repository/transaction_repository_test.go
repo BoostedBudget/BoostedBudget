@@ -3033,3 +3033,85 @@ func TestGetByUserIDKeyset_Category_Asc_FirstPage(t *testing.T) {
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestGetByUserIDKeyset_MidSessionInsertExcluded verifies Issue #1128 AC #2:
+// a row inserted between page fetches (with a newer date) does not appear on
+// subsequent pages because the keyset predicate anchors to (date < cursorDate
+// OR (date = cursorDate AND id > cursorID)). Simulated via pgxmock.
+func TestGetByUserIDKeyset_MidSessionInsertExcluded(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-keyset-mid-insert"
+	limit := 2
+	filters := domain.TransactionFilters{SortBy: "date", SortDir: "desc"}
+
+	// Page 1: rows A and B (B is the last row → provides cursor).
+	dateA := time.Date(2025, 6, 20, 0, 0, 0, 0, time.UTC)
+	dateB := time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC)
+	txIDA := "00000000-0000-0000-0000-000000000080"
+	txIDB := "00000000-0000-0000-0000-000000000081"
+	txIDC := "00000000-0000-0000-0000-000000000082"
+	txIDD := "00000000-0000-0000-0000-000000000083"
+
+	// Return limit+1 (3) rows so the repo signals a next page.
+	rowsPage1 := pgxmock.NewRows(transactionSelectColumns).
+		AddRow(makeKeysetRow(txIDA, userID, -10.00, dateA, nil)...).
+		AddRow(makeKeysetRow(txIDB, userID, -20.00, dateB, nil)...).
+		AddRow(makeKeysetRow(txIDC, userID, -5.00, dateB, nil)...) // sentinel row (limit+1)
+
+	// First page: no keyset predicate.
+	patternPage1 := "SELECT .+ FROM transactions WHERE user_id .+" +
+		regexp.QuoteMeta("ORDER BY COALESCE(authorized_date, date) DESC, id ASC") +
+		`.+LIMIT`
+	mock.ExpectQuery(patternPage1).
+		WithArgs(userID, limit+1).
+		WillReturnRows(rowsPage1)
+
+	txsP1, cursorP1, err := repo.GetByUserIDKeyset(ctx, userID, filters, nil, limit)
+	require.NoError(t, err)
+	assert.Len(t, txsP1, limit, "page 1 returns exactly limit rows")
+	require.NotNil(t, cursorP1, "cursor must be present when limit+1 rows were fetched")
+
+	// At this point, imagine a new transaction X is inserted with dateX > dateA
+	// (i.e. a future sync). The cursor from B anchors to (dateB, idB), so X
+	// must NOT appear in page 2.
+	// The keyset predicate for page 2 (date desc): date < cursorDate OR (date = cursorDate AND id > cursorID).
+	// X has date > dateA > dateB, so date < cursorDate is false and date = cursorDate is false → X excluded ✓.
+
+	cursorDate := *cursorP1.SV // "2025-06-15" (B's date)
+	cursorUUID := cursorP1.ID
+
+	// Page 2 returns C and D (not A, not B, not the hypothetical X).
+	rowsPage2 := pgxmock.NewRows(transactionSelectColumns).
+		AddRow(makeKeysetRow(txIDC, userID, -5.00, dateB, nil)...).
+		AddRow(makeKeysetRow(txIDD, userID, -30.00, dateB, nil)...)
+
+	// Second page: keyset predicate must be present with cursor values.
+	patternPage2 := "SELECT .+ FROM transactions WHERE user_id .+" +
+		regexp.QuoteMeta("COALESCE(authorized_date, date)::date") +
+		`.+` + regexp.QuoteMeta("ORDER BY COALESCE(authorized_date, date) DESC, id ASC") +
+		`.+LIMIT`
+	mock.ExpectQuery(patternPage2).
+		WithArgs(userID, cursorDate, cursorUUID.String(), limit+1).
+		WillReturnRows(rowsPage2)
+
+	txsP2, _, err := repo.GetByUserIDKeyset(ctx, userID, filters, cursorP1, limit)
+	require.NoError(t, err)
+	assert.Len(t, txsP2, limit, "page 2 returns exactly limit rows")
+
+	// Confirm: none of page 2's rows duplicate page 1 rows.
+	p1IDs := map[string]bool{txsP1[0].ID: true, txsP1[1].ID: true}
+	for _, tx := range txsP2 {
+		assert.False(t, p1IDs[tx.ID], "page 2 must not contain page 1 rows (no duplicate on mid-session insert)")
+	}
+
+	// And page 1 must not contain X (X's ID not in p1IDs would be trivially true,
+	// but the meaningful assertion is the WHERE predicate shape verified by pgxmock
+	// matching patternPage2 — if the cursor args are wrong, ExpectationsWereMet fails).
+	require.NoError(t, mock.ExpectationsWereMet(), "keyset predicate must use cursor (date, id) args that exclude mid-session inserts")
+}

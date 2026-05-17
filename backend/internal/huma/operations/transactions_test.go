@@ -2,6 +2,7 @@ package operations
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -836,4 +837,55 @@ func TestGetTransactions_CursorVersionUnsupported(t *testing.T) {
 	assert.Nil(t, output)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cursor version not supported")
+}
+
+// TestGetTransactions_CursorMissingRequiredFields verifies that a cursor with valid base64 and
+// valid JSON but missing required fields (k, d, id) is rejected with a 400. The decoder
+// validates K is one of {date,merchant,amount,category}; an empty K fails that check.
+func TestGetTransactions_CursorMissingRequiredFields(t *testing.T) {
+	userID := "user-cursor-missing"
+	mockService := &mockTransactionService{}
+	handler := NewTransactionHandler(mockService)
+
+	// Encode {"v":1} — valid base64/JSON but K and D default to "" which fail enum validation.
+	partialJSON, err := json.Marshal(map[string]interface{}{"v": 1})
+	require.NoError(t, err)
+	encodedCursor := base64.RawURLEncoding.EncodeToString(partialJSON)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Cursor: encodedCursor, Limit: 10},
+		SortBy:                "date",
+		SortDir:               "desc",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid cursor")
+}
+
+// TestGetTransactions_OldOffsetParamSilentlyIgnored verifies that a request including the
+// legacy ?offset=10 query param is not rejected (Huma ignores unregistered query params).
+// Expected: 401 (auth failure) — not 422 with "unexpected query parameter" about offset.
+func TestGetTransactions_OldOffsetParamSilentlyIgnored(t *testing.T) {
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.Transaction{},
+			Limit:        50,
+		},
+	}
+	_, api := humatest.New(t)
+	handler := NewTransactionHandler(mockService)
+	RegisterTransactionRoutes(api, handler)
+
+	resp := api.Get("/api/v1/transactions?offset=10&limit=20")
+
+	// Auth fails in test, so we get 401 — but NOT 422 from an "unknown param" rejection.
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+	body := resp.Body.String()
+	assert.NotContains(t, body, "unknown query parameter")
+	assert.NotContains(t, body, "unexpected query parameter")
+	assert.NotContains(t, body, "\"offset\"")
 }
