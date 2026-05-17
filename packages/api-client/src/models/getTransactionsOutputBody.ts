@@ -29,13 +29,11 @@ Multi-region support planned for Phase 7+.
  */
 import type { Transaction } from "./transaction";
 
-export interface TransactionListResponse {
+export interface GetTransactionsOutputBody {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
-  has_more: boolean;
   limit: number;
-  offset: number;
-  total_count: number;
+  next_cursor?: string;
   /** @nullable */
   transactions: Transaction[] | null;
 }

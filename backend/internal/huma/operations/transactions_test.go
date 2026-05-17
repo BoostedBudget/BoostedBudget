@@ -2,12 +2,14 @@ package operations
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -18,15 +20,17 @@ import (
 
 // mockTransactionService is a mock implementation of services.TransactionService
 type mockTransactionService struct {
-	listResponse     *services.TransactionListResponse
-	listErr          error
-	transaction      *domain.Transaction
-	getErr           error
-	updateTagsErr    error
+	listResponse      *services.TransactionListResponse
+	listErr           error
+	transaction       *domain.Transaction
+	getErr            error
+	updateTagsErr     error
 	updateCategoryErr error
-	categories       []string
-	categoriesErr    error
-	capturedFilters  domain.TransactionFilters
+	categories        []string
+	categoriesErr     error
+	capturedFilters   domain.TransactionFilters
+	capturedCursor    *domain.TransactionCursor
+	capturedLimit     int
 }
 
 func (m *mockTransactionService) ListTransactions(
@@ -80,6 +84,16 @@ func (m *mockTransactionService) ListByBudgetCategory(ctx context.Context, userI
 	return nil, 0, 0, nil
 }
 
+func (m *mockTransactionService) ListTransactionsByCursor(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) (*services.TransactionListResponse, error) {
+	m.capturedFilters = filters
+	m.capturedCursor = cursor
+	m.capturedLimit = limit
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	return m.listResponse, nil
+}
+
 // Helper to create a test transaction
 func createTestTransaction(userID string) *domain.Transaction {
 	now := time.Now()
@@ -108,19 +122,16 @@ func TestGetTransactions_Success(t *testing.T) {
 
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []domain.Transaction{*tx},
-			TotalCount:   1,
+			Transactions: []*domain.Transaction{tx},
 			Limit:        50,
-			Offset:       0,
-			HasMore:      false,
 		},
 	}
 
 	handler := NewTransactionHandler(mockService)
 
 	input := &GetTransactionsInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
-		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
 	}
 
 	output, err := handler.GetTransactions(context.Background(), input)
@@ -128,8 +139,8 @@ func TestGetTransactions_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	assert.Len(t, output.Body.Transactions, 1)
-	assert.Equal(t, 1, output.Body.TotalCount)
-	assert.False(t, output.Body.HasMore)
+	assert.Equal(t, 50, output.Body.Limit)
+	assert.Nil(t, output.Body.NextCursor)
 }
 
 // TestGetTransactions_WithFilters tests transaction listing with filters.
@@ -137,28 +148,25 @@ func TestGetTransactions_WithFilters(t *testing.T) {
 	userID := "user-123"
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []domain.Transaction{},
-			TotalCount:   0,
+			Transactions: []*domain.Transaction{},
 			Limit:        50,
-			Offset:       0,
-			HasMore:      false,
 		},
 	}
 
 	handler := NewTransactionHandler(mockService)
 
 	input := &GetTransactionsInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
-		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
-		AccountIDs:         "acc-1,acc-2,acc-3",
-		PFCPrimaries:       "FOOD_AND_DRINK,SHOPPING",
-		Search:             "coffee",
-		Pending:            "true",
-		MinAmount:          "10.00",
-		MaxAmount:          "100.00",
-		AmountType:         "expense",
-		StartDate:          "2024-01-01",
-		EndDate:            "2024-12-31",
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		AccountIDs:           "acc-1,acc-2,acc-3",
+		PFCPrimaries:         "FOOD_AND_DRINK,SHOPPING",
+		Search:               "coffee",
+		Pending:              "true",
+		MinAmount:            "10.00",
+		MaxAmount:            "100.00",
+		AmountType:           "expense",
+		StartDate:            "2024-01-01",
+		EndDate:              "2024-12-31",
 	}
 
 	output, err := handler.GetTransactions(context.Background(), input)
@@ -174,9 +182,9 @@ func TestGetTransactions_InvalidDateFormat(t *testing.T) {
 	handler := NewTransactionHandler(mockService)
 
 	input := &GetTransactionsInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
-		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
-		StartDate:          "invalid-date",
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		StartDate:            "invalid-date",
 	}
 
 	output, err := handler.GetTransactions(context.Background(), input)
@@ -193,9 +201,9 @@ func TestGetTransactions_InvalidAmount(t *testing.T) {
 	handler := NewTransactionHandler(mockService)
 
 	input := &GetTransactionsInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
-		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
-		MinAmount:          "not-a-number",
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		MinAmount:            "not-a-number",
 	}
 
 	output, err := handler.GetTransactions(context.Background(), input)
@@ -215,8 +223,8 @@ func TestGetTransactions_ServiceError(t *testing.T) {
 	handler := NewTransactionHandler(mockService)
 
 	input := &GetTransactionsInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
-		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
 	}
 
 	output, err := handler.GetTransactions(context.Background(), input)
@@ -442,11 +450,8 @@ func TestGetPlaidCategories_EmptyList(t *testing.T) {
 func TestTransactionRouteRegistration(t *testing.T) {
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []domain.Transaction{},
-			TotalCount:   0,
+			Transactions: []*domain.Transaction{},
 			Limit:        50,
-			Offset:       0,
-			HasMore:      false,
 		},
 	}
 
@@ -512,7 +517,7 @@ func TestTransactionListResponseJSON(t *testing.T) {
 
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []domain.Transaction{*tx},
+			Transactions: []*domain.Transaction{tx},
 			TotalCount:   1,
 			Limit:        50,
 			Offset:       0,
@@ -541,11 +546,8 @@ func TestGetTransactions_UserAccountIDFilter(t *testing.T) {
 	userID := "user-123"
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []domain.Transaction{},
-			TotalCount:   0,
+			Transactions: []*domain.Transaction{},
 			Limit:        50,
-			Offset:       0,
-			HasMore:      false,
 		},
 	}
 
@@ -553,9 +555,9 @@ func TestGetTransactions_UserAccountIDFilter(t *testing.T) {
 
 	userAccountID := "some-uuid-stable-acct"
 	input := &GetTransactionsInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
-		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
-		UserAccountID:      userAccountID,
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		UserAccountID:        userAccountID,
 	}
 
 	_, err := handler.GetTransactions(context.Background(), input)
@@ -578,8 +580,8 @@ func TestGetTransactions_SortDefaults(t *testing.T) {
 	handler := NewTransactionHandler(mockService)
 
 	input := &GetTransactionsInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
-		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
 		// SortBy and SortDir intentionally left empty — Huma default fills them
 	}
 
@@ -601,10 +603,10 @@ func TestGetTransactions_SortByAmount(t *testing.T) {
 	handler := NewTransactionHandler(mockService)
 
 	input := &GetTransactionsInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
-		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
-		SortBy:             "amount",
-		SortDir:            "asc",
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		SortBy:               "amount",
+		SortDir:              "asc",
 	}
 
 	_, err := handler.GetTransactions(context.Background(), input)
@@ -623,10 +625,10 @@ func TestGetTransactions_SortByMerchant(t *testing.T) {
 	handler := NewTransactionHandler(mockService)
 
 	input := &GetTransactionsInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
-		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
-		SortBy:             "merchant",
-		SortDir:            "desc",
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		SortBy:               "merchant",
+		SortDir:              "desc",
 	}
 
 	_, err := handler.GetTransactions(context.Background(), input)
@@ -662,14 +664,228 @@ func TestGetTransactions_SortByCategory(t *testing.T) {
 	handler := NewTransactionHandler(mockService)
 
 	input := &GetTransactionsInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
-		PaginationInput:    inputs.PaginationInput{Limit: 50, Offset: 0},
-		SortBy:             "category",
-		SortDir:            "asc",
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		SortBy:               "category",
+		SortDir:              "asc",
 	}
 
 	_, err := handler.GetTransactions(context.Background(), input)
 	require.NoError(t, err)
 	assert.Equal(t, "category", mockService.capturedFilters.SortBy)
 	assert.Equal(t, "asc", mockService.capturedFilters.SortDir)
+}
+
+// --- Cursor pagination handler tests (RED phase) ---
+
+// TestGetTransactions_CursorFirstPage verifies that a request with no cursor calls the
+// service with cursor=nil and returns transactions + no next_cursor.
+func TestGetTransactions_CursorFirstPage(t *testing.T) {
+	userID := "user-cursor-1"
+	tx := createTestTransaction(userID)
+	nextCursor := "opaque-cursor-token"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.Transaction{tx},
+			Limit:        10,
+			NextCursor:   &nextCursor,
+		},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 10},
+		SortBy:               "date",
+		SortDir:              "desc",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Nil(t, mockService.capturedCursor, "first page should pass nil cursor to service")
+	assert.Equal(t, 10, mockService.capturedLimit)
+	assert.Len(t, output.Body.Transactions, 1)
+	require.NotNil(t, output.Body.NextCursor)
+	assert.Equal(t, nextCursor, *output.Body.NextCursor)
+}
+
+// TestGetTransactions_CursorSecondPage verifies that a valid cursor string is decoded and
+// passed to the service, and that the returned next_cursor is forwarded.
+func TestGetTransactions_CursorSecondPage(t *testing.T) {
+	userID := "user-cursor-2"
+
+	// Build a valid v1 cursor for sort_by=date, sort_dir=desc
+	sv := "2024-01-15"
+	cursor := domain.TransactionCursor{
+		V:  1,
+		K:  "date",
+		D:  "desc",
+		SV: &sv,
+		ID: uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+	}
+	encodedCursor, err := domain.EncodeTransactionCursor(cursor)
+	require.NoError(t, err)
+
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.Transaction{},
+			Limit:        10,
+		},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Cursor: encodedCursor, Limit: 10},
+		SortBy:               "date",
+		SortDir:              "desc",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.capturedCursor, "second page should pass decoded cursor to service")
+	assert.Equal(t, "date", mockService.capturedCursor.K)
+	assert.Equal(t, "desc", mockService.capturedCursor.D)
+	assert.Nil(t, output.Body.NextCursor, "no more pages")
+}
+
+// TestGetTransactions_InvalidCursor verifies that a corrupt cursor string yields a 400.
+func TestGetTransactions_InvalidCursor(t *testing.T) {
+	userID := "user-cursor-bad"
+	mockService := &mockTransactionService{}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Cursor: "!!!not-base64!!!", Limit: 10},
+		SortBy:               "date",
+		SortDir:              "desc",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid cursor")
+}
+
+// TestGetTransactions_CursorSortMismatch verifies that a cursor with K="date" but
+// sort_by="merchant" in the request yields a 400.
+func TestGetTransactions_CursorSortMismatch(t *testing.T) {
+	userID := "user-cursor-mismatch"
+
+	// Cursor encodes sort_by=date
+	sv := "2024-01-15"
+	cursor := domain.TransactionCursor{
+		V:  1,
+		K:  "date",
+		D:  "desc",
+		SV: &sv,
+		ID: uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+	}
+	encodedCursor, err := domain.EncodeTransactionCursor(cursor)
+	require.NoError(t, err)
+
+	mockService := &mockTransactionService{}
+	handler := NewTransactionHandler(mockService)
+
+	// But request says sort_by=merchant — mismatch
+	input := &GetTransactionsInput{
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Cursor: encodedCursor, Limit: 10},
+		SortBy:               "merchant",
+		SortDir:              "desc",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cursor does not match sort_by/sort_dir")
+}
+
+// TestGetTransactions_CursorVersionUnsupported verifies that a cursor with V=2 yields a 400.
+func TestGetTransactions_CursorVersionUnsupported(t *testing.T) {
+	userID := "user-cursor-ver"
+
+	// Manually encode a cursor with V=2 (unsupported version) bypassing DecodeTransactionCursor
+	v2Cursor := domain.TransactionCursor{
+		V:  2,
+		K:  "date",
+		D:  "desc",
+		ID: uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+	}
+	encodedCursor, err := domain.EncodeTransactionCursor(v2Cursor)
+	require.NoError(t, err)
+
+	mockService := &mockTransactionService{}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Cursor: encodedCursor, Limit: 10},
+		SortBy:               "date",
+		SortDir:              "desc",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cursor version not supported")
+}
+
+// TestGetTransactions_CursorMissingRequiredFields verifies that a cursor with valid base64 and
+// valid JSON but missing required fields (k, d, id) is rejected with a 400. The decoder
+// validates K is one of {date,merchant,amount,category}; an empty K fails that check.
+func TestGetTransactions_CursorMissingRequiredFields(t *testing.T) {
+	userID := "user-cursor-missing"
+	mockService := &mockTransactionService{}
+	handler := NewTransactionHandler(mockService)
+
+	// Encode {"v":1} — valid base64/JSON but K and D default to "" which fail enum validation.
+	partialJSON, err := json.Marshal(map[string]interface{}{"v": 1})
+	require.NoError(t, err)
+	encodedCursor := base64.RawURLEncoding.EncodeToString(partialJSON)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Cursor: encodedCursor, Limit: 10},
+		SortBy:                "date",
+		SortDir:               "desc",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid cursor")
+}
+
+// TestGetTransactions_OldOffsetParamSilentlyIgnored verifies that a request including the
+// legacy ?offset=10 query param is not rejected (Huma ignores unregistered query params).
+// Expected: 401 (auth failure) — not 422 with "unexpected query parameter" about offset.
+func TestGetTransactions_OldOffsetParamSilentlyIgnored(t *testing.T) {
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.Transaction{},
+			Limit:        50,
+		},
+	}
+	_, api := humatest.New(t)
+	handler := NewTransactionHandler(mockService)
+	RegisterTransactionRoutes(api, handler)
+
+	resp := api.Get("/api/v1/transactions?offset=10&limit=20")
+
+	// Auth fails in test, so we get 401 — but NOT 422 from an "unknown param" rejection.
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+	body := resp.Body.String()
+	assert.NotContains(t, body, "unknown query parameter")
+	assert.NotContains(t, body, "unexpected query parameter")
+	assert.NotContains(t, body, "\"offset\"")
 }

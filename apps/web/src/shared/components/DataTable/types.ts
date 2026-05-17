@@ -38,6 +38,26 @@ export type ColumnDef<T> = {
   hideable?: boolean
 }
 
+export type DataTableVirtualizationOpts = {
+  enabled: boolean
+  /** px; used as initial estimate for measureElement */
+  estimateRowHeight: number
+  /** default 8 */
+  overscan?: number
+  /** CSS value, e.g. 'calc(100dvh - 240px)' */
+  scrollContainerHeight?: string
+  /** fires when last virtual item index >= count - prefetchRows */
+  onScrollEnd?: () => void
+  /** default 5; rows from end before firing onScrollEnd */
+  prefetchRows?: number
+  /** shows loading sentinel row */
+  isFetchingMore?: boolean
+  /** shows sentinel row (but not loading spinner) */
+  hasMore?: boolean
+  /** default true; uses virtualizer.measureElement for dynamic row heights */
+  dynamicRowHeight?: boolean
+}
+
 export interface DataTableProps<T> {
   data: T[]
   columns: ColumnDef<T>[]
@@ -83,4 +103,9 @@ export interface DataTableProps<T> {
    * 'compact' | 'comfortable' (default) | 'spacious'
    */
   density?: 'compact' | 'comfortable' | 'spacious'
+  /**
+   * Opt-in row virtualization. When absent or enabled:false, DataTable renders
+   * exactly as today — no behavior change for other consumers.
+   */
+  virtualization?: DataTableVirtualizationOpts
 }

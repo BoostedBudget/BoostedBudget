@@ -137,6 +137,18 @@ export default defineConfig({
       },
       dependencies: ['setup'],
     },
+    // Safari/webkit — scoped to the virtualized infinite-scroll spec only.
+    // Catches sticky-thead-inside-table bugs specific to Safari rendering.
+    // If regressions appear, see the display:grid follow-up issue documented in the plan.
+    {
+      name: 'webkit-virtualized',
+      testMatch: /transactions-infinite-scroll\.auth\.spec\.ts$/,
+      use: {
+        ...devices['Desktop Safari'],
+        ...(existsSync(authFile) ? { storageState: authFile } : {}),
+      },
+      dependencies: ['auth'],
+    },
   ],
 
   // Run your local dev server before starting the tests

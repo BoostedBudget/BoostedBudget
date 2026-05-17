@@ -30,3 +30,6 @@ export type {
   VisibilityState,
   RowSelectionState,
 } from '@tanstack/react-table'
+
+export { useVirtualizer } from '@tanstack/react-virtual'
+export type { Virtualizer, VirtualItem } from '@tanstack/react-virtual'

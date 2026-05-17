@@ -32,16 +32,17 @@ import { faker } from "@faker-js/faker";
 import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
-import type { Transaction, TransactionListResponse } from "../../models";
+import type { GetTransactionsOutputBody, Transaction } from "../../models";
 
 export const getGetTransactionsResponseMock = (
-  overrideResponse: Partial<Extract<TransactionListResponse, object>> = {},
-): TransactionListResponse => ({
+  overrideResponse: Partial<Extract<GetTransactionsOutputBody, object>> = {},
+): GetTransactionsOutputBody => ({
   $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
-  has_more: faker.datatype.boolean(),
   limit: faker.number.int(),
-  offset: faker.number.int(),
-  total_count: faker.number.int(),
+  next_cursor: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   transactions: faker.helpers.arrayElement([
     Array.from(
       { length: faker.number.int({ min: 1, max: 10 }) },
@@ -899,10 +900,10 @@ export const getUpdateTransactionTagsResponseMock = (
 
 export const getGetTransactionsMockHandler = (
   overrideResponse?:
-    | TransactionListResponse
+    | GetTransactionsOutputBody
     | ((
         info: Parameters<Parameters<typeof http.get>[1]>[0],
-      ) => Promise<TransactionListResponse> | TransactionListResponse),
+      ) => Promise<GetTransactionsOutputBody> | GetTransactionsOutputBody),
   options?: RequestHandlerOptions,
 ) => {
   return http.get(

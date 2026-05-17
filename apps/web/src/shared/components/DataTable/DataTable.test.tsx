@@ -1,4 +1,4 @@
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DataTable } from './DataTable'
@@ -1493,5 +1493,214 @@ describe('DragHandle column-specific accessible names (D2b — Codex finding)', 
     const sortBtn = screen.getByRole('columnheader', { name: /^Account$/i })
       .querySelector('button:not([data-testid="drag-handle"])')
     expect(sortBtn).not.toBeNull()
+  })
+})
+
+// ── Task I: Row Virtualization ────────────────────────────────────────────────
+describe('DataTable virtualization', () => {
+  // JSDOM doesn't implement real layout.
+  // @tanstack/react-virtual reads offsetHeight (via getRect) synchronously on mount
+  // to determine the visible viewport size. Without mocking it, outerSize = 0 and
+  // the virtualizer renders nothing. We also mock getBoundingClientRect for
+  // measureElement (dynamic row heights).
+  const originalGetBCR = Element.prototype.getBoundingClientRect
+  let offsetHeightDesc: PropertyDescriptor | undefined
+  let offsetWidthDesc: PropertyDescriptor | undefined
+
+  beforeEach(() => {
+    Element.prototype.getBoundingClientRect = mock(() => ({
+      height: 56,
+      width: 800,
+      top: 0,
+      bottom: 56,
+      left: 0,
+      right: 800,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }))
+    offsetHeightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+    offsetWidthDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get: () => 400,
+    })
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+      configurable: true,
+      get: () => 800,
+    })
+  })
+
+  afterEach(() => {
+    Element.prototype.getBoundingClientRect = originalGetBCR
+    if (offsetHeightDesc) {
+      Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offsetHeightDesc)
+    } else {
+      // Restore to undefined if it wasn't originally defined
+      delete (HTMLElement.prototype as unknown as Record<string, unknown>)['offsetHeight']
+    }
+    if (offsetWidthDesc) {
+      Object.defineProperty(HTMLElement.prototype, 'offsetWidth', offsetWidthDesc)
+    } else {
+      delete (HTMLElement.prototype as unknown as Record<string, unknown>)['offsetWidth']
+    }
+  })
+
+  const manyRows: Row[] = Array.from({ length: 1000 }, (_, i) => ({
+    id: String(i + 1),
+    name: `User ${i + 1}`,
+    amount: (i + 1) * 10,
+  }))
+
+  it('renders a scroll container div with overflow-auto when virtualization.enabled=true', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={manyRows}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        virtualization={{
+          enabled: true,
+          estimateRowHeight: 56,
+          overscan: 8,
+          scrollContainerHeight: '400px',
+        }}
+      />
+    )
+    const scrollContainer = container.querySelector('[data-testid="virtual-scroll-container"]')
+    expect(scrollContainer).not.toBeNull()
+    expect(scrollContainer?.className).toContain('overflow-auto')
+  })
+
+  it('tbody has position:relative style in virtualized path', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={manyRows}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        virtualization={{
+          enabled: true,
+          estimateRowHeight: 56,
+          scrollContainerHeight: '400px',
+        }}
+      />
+    )
+    const tbody = container.querySelector('tbody')
+    expect(tbody?.style.position).toBe('relative')
+  })
+
+  it('shows sentinel row when isFetchingMore=true', () => {
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        virtualization={{
+          enabled: true,
+          estimateRowHeight: 56,
+          isFetchingMore: true,
+        }}
+      />
+    )
+    expect(screen.getByText(/loading more/i)).toBeInTheDocument()
+  })
+
+  it('shows sentinel row when hasMore=true', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        virtualization={{
+          enabled: true,
+          estimateRowHeight: 56,
+          hasMore: true,
+        }}
+      />
+    )
+    // Sentinel tr exists (even though it has no text when only hasMore and not isFetchingMore)
+    const sentinelTd = container.querySelector('[data-testid="virtual-sentinel"]')
+    expect(sentinelTd).not.toBeNull()
+  })
+
+  it('preserves data-ph-mask on virtualized rows', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        maskedColumnIds={['amount']}
+        virtualization={{
+          enabled: true,
+          estimateRowHeight: 56,
+        }}
+      />
+    )
+    const maskedCells = container.querySelectorAll('td[data-ph-mask]')
+    // At least some rows rendered (JSDOM may virtualise to a small set)
+    expect(maskedCells.length).toBeGreaterThan(0)
+    // All masked cells belong to the amount column (not name)
+    for (const cell of maskedCells) {
+      expect(cell.textContent).not.toBe('Alice')
+      expect(cell.textContent).not.toBe('Bob')
+    }
+  })
+
+  it('non-virtualized path unchanged — no scroll container', () => {
+    const { container } = renderTable()
+    const scrollContainer = container.querySelector('[data-testid="virtual-scroll-container"]')
+    expect(scrollContainer).toBeNull()
+  })
+
+  it('calls onScrollEnd when last virtual item is within prefetchRows of the end', () => {
+    const onScrollEnd = mock(() => {})
+    // Use a tiny dataset (5 rows) so the virtualizer renders ALL rows in the
+    // initial viewport (offsetHeight=400, estimateRowHeight=56 → ~7 visible).
+    // With prefetchRows=3 the threshold is count-3 = 2. lastIndex(4) >= 2 → fires.
+    const tinyRows: Row[] = Array.from({ length: 5 }, (_, i) => ({
+      id: String(i + 1),
+      name: `User ${i + 1}`,
+      amount: (i + 1) * 10,
+    }))
+    render(
+      <DataTable<Row>
+        data={tinyRows}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        virtualization={{
+          enabled: true,
+          estimateRowHeight: 56,
+          prefetchRows: 3,
+          hasMore: true,
+          onScrollEnd,
+        }}
+      />
+    )
+    // The virtualizer renders all 5 rows on mount (viewport=400px > total=5×56=280px).
+    // The useEffect fires: lastIndex(4) >= count(5)-prefetchRows(3)=2 → onScrollEnd called.
+    expect(onScrollEnd).toHaveBeenCalled()
   })
 })

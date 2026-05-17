@@ -89,6 +89,10 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bunx playwright install --with-deps chromium
 
+      - name: Install webkit browser
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: bunx playwright install webkit
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:

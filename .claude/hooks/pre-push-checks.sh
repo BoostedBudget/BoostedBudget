@@ -6,7 +6,7 @@
 # Checks run (matches CI test.yml):
 #   1. Dependency audit:          bun audit --audit-level=high  (HIGH/CRITICAL block)
 #   2. Backend + frontend tests:  make test-fast
-#   3. Bundle size check:         npx size-limit
+#   3. Bundle size check:         make check-bundle-size
 #   4. Lighthouse CI audit:       npx lhci autorun
 
 set -euo pipefail
@@ -109,12 +109,13 @@ ensure_frontend_build() {
 printf 'Bundle size:\n'
 
 if command -v bun &>/dev/null; then
-  ensure_frontend_build
-  run_check "npx size-limit       (bundle budgets)" \
+  # make check-bundle-size = bun run build + orphan-chunk guard + size-limit.
+  # Handles its own build, so ensure_frontend_build is not needed here.
+  run_check "make check-bundle-size (build + orphan guard + budgets)" \
     "$PROJECT_ROOT" \
-    "npx size-limit"
+    "make check-bundle-size"
 else
-  printf '  %-50s⚠️  (bun not installed)\n' "npx size-limit"
+  printf '  %-50s⚠️  (bun not installed)\n' "make check-bundle-size"
   WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"
 fi
 
