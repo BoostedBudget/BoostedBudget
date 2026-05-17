@@ -113,6 +113,7 @@ function inferPreset(startDate?: string, endDate?: string): DatePreset {
  */
 export function useTransactionFilters(): UseTransactionFiltersResult {
   const state = useFilterState(SPEC, { clearKeysOnWrite: ['offset'] })
+  const { setFilter, setFilters, clearFilter, clearAllFilters } = state
 
   // Build TransactionFilters from generic state
   // Note: pfc_primaries is tracked in the URL spec for filtering but is not part of
@@ -163,36 +164,36 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
       if (preset === 'custom') return
       const range = getDateRange(preset)
       if (range) {
-        state.setFilters({ start_date: range.startDate, end_date: range.endDate })
+        setFilters({ start_date: range.startDate, end_date: range.endDate })
       } else {
-        state.setFilters({ start_date: undefined, end_date: undefined })
+        setFilters({ start_date: undefined, end_date: undefined })
       }
     },
-    [state.setFilters],
+    [setFilters],
   )
 
   const setCustomDateRange = useCallback(
     (startDate: string, endDate: string) => {
-      state.setFilters({ start_date: startDate, end_date: endDate })
+      setFilters({ start_date: startDate, end_date: endDate })
     },
-    [state.setFilters],
+    [setFilters],
   )
 
   const setStatusFilter = useCallback(
     (status: StatusFilter) => {
-      if (status === 'pending')     state.setFilter('pending', true)
-      else if (status === 'posted') state.setFilter('pending', false)
-      else                          state.clearFilter('pending')
+      if (status === 'pending')     setFilter('pending', true)
+      else if (status === 'posted') setFilter('pending', false)
+      else                          clearFilter('pending')
     },
-    [state.setFilter, state.clearFilter],
+    [setFilter, clearFilter],
   )
 
   return {
     filters,
-    setFilter:         state.setFilter as UseTransactionFiltersResult['setFilter'],
-    setFilters:        state.setFilters as UseTransactionFiltersResult['setFilters'],
-    clearFilter:       state.clearFilter as UseTransactionFiltersResult['clearFilter'],
-    clearAllFilters:   state.clearAllFilters,
+    setFilter:         setFilter as UseTransactionFiltersResult['setFilter'],
+    setFilters:        setFilters as UseTransactionFiltersResult['setFilters'],
+    clearFilter:       clearFilter as UseTransactionFiltersResult['clearFilter'],
+    clearAllFilters,
     activeFilterCount,
     hasActiveFilters:  activeFilterCount > 0,
     datePreset,

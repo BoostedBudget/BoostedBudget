@@ -128,32 +128,9 @@ function serializeScalar(value: unknown, codec: ScalarCodec): string | null {
   return codec.serialize(value)
 }
 
-function parseFloat_(raw: string | null): number | undefined {
-  if (raw === null) return undefined
-  const v = parseFloat(raw)
-  return isNaN(v) ? undefined : v
-}
-
-function parseInt_(raw: string | null): number | undefined {
-  if (raw === null) return undefined
-  const v = parseInt(raw, 10)
-  return isNaN(v) ? undefined : v
-}
-
 // ---------------------------------------------------------------------------
 // URL-key derivation helpers
 // ---------------------------------------------------------------------------
-
-function getScalarUrlKey(specKey: string, fieldSpec: { kind: 'scalar'; urlKey?: string }): string {
-  return fieldSpec.urlKey ?? specKey
-}
-
-function getMultiSelectUrlKey(
-  specKey: string,
-  fieldSpec: { kind: 'multi-select'; urlKey?: string },
-): string {
-  return fieldSpec.urlKey ?? specKey
-}
 
 function getRangeUrlKeys(
   specKey: string,
@@ -166,13 +143,25 @@ function getRangeUrlKeys(
 // Field-level read/write helpers
 // ---------------------------------------------------------------------------
 
+function parseFloat_(raw: string | null): number | undefined {
+  if (raw === null) return undefined
+  const v = parseFloat(raw)
+  return isNaN(v) ? undefined : v
+}
+
+function parseInt_(raw: string | null): number | undefined {
+  if (raw === null) return undefined
+  const v = parseInt(raw, 10)
+  return isNaN(v) ? undefined : v
+}
+
 function readField(
   specKey: string,
   fieldSpec: FilterFieldSpec,
   searchParams: URLSearchParams,
 ): unknown {
   if (fieldSpec.kind === 'multi-select') {
-    const urlKey = getMultiSelectUrlKey(specKey, fieldSpec)
+    const urlKey = fieldSpec.urlKey ?? specKey
     if (fieldSpec.serialize === 'repeat') {
       return searchParams.getAll(urlKey)
     }
@@ -197,7 +186,7 @@ function readField(
   }
 
   // scalar
-  const urlKey = getScalarUrlKey(specKey, fieldSpec)
+  const urlKey = fieldSpec.urlKey ?? specKey
   const raw = searchParams.get(urlKey)
   return parseScalar(raw, fieldSpec.codec)
 }
@@ -229,7 +218,7 @@ function writeField(
   params: URLSearchParams,
 ): void {
   if (fieldSpec.kind === 'multi-select') {
-    const urlKey = getMultiSelectUrlKey(specKey, fieldSpec)
+    const urlKey = fieldSpec.urlKey ?? specKey
     const arr = (value as string[] | undefined) ?? []
     if (arr.length === 0) {
       params.delete(urlKey)
@@ -260,7 +249,7 @@ function writeField(
   }
 
   // scalar
-  const urlKey = getScalarUrlKey(specKey, fieldSpec)
+  const urlKey = fieldSpec.urlKey ?? specKey
   const serialized = serializeScalar(value, fieldSpec.codec)
   if (serialized === null) {
     params.delete(urlKey)
@@ -275,7 +264,7 @@ function deleteField(
   params: URLSearchParams,
 ): void {
   if (fieldSpec.kind === 'multi-select') {
-    params.delete(getMultiSelectUrlKey(specKey, fieldSpec))
+    params.delete(fieldSpec.urlKey ?? specKey)
     return
   }
   if (fieldSpec.kind === 'range') {
@@ -284,7 +273,7 @@ function deleteField(
     params.delete(maxKey)
     return
   }
-  params.delete(getScalarUrlKey(specKey, fieldSpec))
+  params.delete(fieldSpec.urlKey ?? specKey)
 }
 
 // ---------------------------------------------------------------------------
@@ -297,13 +286,14 @@ export function useFilterState<S extends FilterSpec>(
 ): UseFilterStateReturn<S> {
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const clearKeysOnWrite = options?.clearKeysOnWrite
-  const clearKeysKey = clearKeysOnWrite?.join(',') ?? ''
+  const clearKeysKey = options?.clearKeysOnWrite?.join(',') ?? ''
 
   const applyClearKeys = useCallback(
     (params: URLSearchParams) => {
-      for (const k of clearKeysOnWrite ?? []) {
-        params.delete(k)
+      if (clearKeysKey) {
+        for (const k of clearKeysKey.split(',')) {
+          params.delete(k)
+        }
       }
     },
     [clearKeysKey],

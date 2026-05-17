@@ -10,6 +10,7 @@ import { useCallback, useMemo } from 'react'
 import type { RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import { useFilterState, type FilterSpec } from '@/shared/hooks/useFilterState'
 
+
 /**
  * Rule filter state
  */
@@ -63,6 +64,7 @@ const SPEC = {
  */
 export function useRuleFilters(): UseRuleFiltersResult {
   const state = useFilterState(SPEC)
+  const { setFilter, clearAllFilters, activeFilterCount, hasActiveFilters } = state
 
   const filters = useMemo<RuleFilters>(
     () => ({
@@ -80,20 +82,20 @@ export function useRuleFilters(): UseRuleFiltersResult {
   )
 
   const setStatusFilter = useCallback(
-    (v: string[]) => state.setFilter('status', v),
-    [state.setFilter],
+    (v: string[]) => setFilter('status', v),
+    [setFilter],
   )
 
   const setCategoryFilter = useCallback(
-    (v: string[]) => state.setFilter('category', v),
-    [state.setFilter],
+    (v: string[]) => setFilter('category', v),
+    [setFilter],
   )
 
   const setPriorityRange = useCallback(
     (value: RangeValue | null) => {
-      state.setFilter('priority', value ?? undefined)
+      setFilter('priority', value ?? undefined)
     },
-    [state.setFilter],
+    [setFilter],
   )
 
   return {
@@ -104,8 +106,8 @@ export function useRuleFilters(): UseRuleFiltersResult {
     setStatusFilter,
     setCategoryFilter,
     setPriorityRange,
-    clearAllFilters: state.clearAllFilters,
-    activeFilterCount: state.activeFilterCount,
-    hasActiveFilters: state.hasActiveFilters,
+    clearAllFilters,
+    activeFilterCount,
+    hasActiveFilters,
   }
 }
