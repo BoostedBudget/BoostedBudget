@@ -10,6 +10,7 @@ import { useCallback, useMemo } from 'react'
 import type { RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import { useFilterState, type FilterSpec } from '@/shared/hooks/useFilterState'
 
+
 /**
  * Account filter state
  */
@@ -63,6 +64,7 @@ const SPEC = {
  */
 export function useAccountFilters(): UseAccountFiltersResult {
   const state = useFilterState(SPEC)
+  const { setFilter, clearAllFilters, activeFilterCount, hasActiveFilters } = state
 
   const filters = useMemo<AccountFilters>(
     () => ({
@@ -80,20 +82,20 @@ export function useAccountFilters(): UseAccountFiltersResult {
   )
 
   const setInstitutionFilter = useCallback(
-    (v: string[]) => state.setFilter('institution', v),
-    [state.setFilter],
+    (v: string[]) => setFilter('institution', v),
+    [setFilter],
   )
 
   const setTypeFilter = useCallback(
-    (v: string[]) => state.setFilter('type', v),
-    [state.setFilter],
+    (v: string[]) => setFilter('type', v),
+    [setFilter],
   )
 
   const setBalanceRange = useCallback(
     (value: RangeValue | null) => {
-      state.setFilter('balance', value ?? undefined)
+      setFilter('balance', value ?? undefined)
     },
-    [state.setFilter],
+    [setFilter],
   )
 
   return {
@@ -104,8 +106,8 @@ export function useAccountFilters(): UseAccountFiltersResult {
     setInstitutionFilter,
     setTypeFilter,
     setBalanceRange,
-    clearAllFilters: state.clearAllFilters,
-    activeFilterCount: state.activeFilterCount,
-    hasActiveFilters: state.hasActiveFilters,
+    clearAllFilters,
+    activeFilterCount,
+    hasActiveFilters,
   }
 }

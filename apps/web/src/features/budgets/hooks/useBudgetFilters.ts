@@ -56,6 +56,7 @@ const SPEC = {
  */
 export function useBudgetFilters(): UseBudgetFiltersResult {
   const state = useFilterState(SPEC)
+  const { setFilter, clearAllFilters, activeFilterCount, hasActiveFilters } = state
 
   const filters = useMemo<BudgetFilters>(
     () => ({
@@ -72,15 +73,15 @@ export function useBudgetFilters(): UseBudgetFiltersResult {
   )
 
   const setPeriodFilter = useCallback(
-    (v: string[]) => state.setFilter('period', v),
-    [state.setFilter],
+    (v: string[]) => setFilter('period', v),
+    [setFilter],
   )
 
   const setProgressRange = useCallback(
     (value: RangeValue | null) => {
-      state.setFilter('progress', value ?? undefined)
+      setFilter('progress', value ?? undefined)
     },
-    [state.setFilter],
+    [setFilter],
   )
 
   return {
@@ -89,8 +90,8 @@ export function useBudgetFilters(): UseBudgetFiltersResult {
     progressRange,
     setPeriodFilter,
     setProgressRange,
-    clearAllFilters: state.clearAllFilters,
-    activeFilterCount: state.activeFilterCount,
-    hasActiveFilters: state.hasActiveFilters,
+    clearAllFilters,
+    activeFilterCount,
+    hasActiveFilters,
   }
 }
