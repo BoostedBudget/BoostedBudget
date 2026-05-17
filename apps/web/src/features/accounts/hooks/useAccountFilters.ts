@@ -8,8 +8,10 @@
 
 import { useCallback, useMemo } from 'react'
 import type { RangeValue } from '@/shared/components/ColumnFilterDropdown'
+import type { SortState } from '@/shared/components/DataTable'
+import { useSortUrlState } from '@/shared/hooks/useSortUrlState'
 import { useFilterState, type FilterSpec } from '@/shared/hooks/useFilterState'
-
+import { ACCOUNT_SORTABLE_COLUMNS } from '../components/AccountTable'
 
 /**
  * Account filter state
@@ -37,14 +39,24 @@ export interface UseAccountFiltersResult {
   typeFilter: string[]
   /** Balance range filter */
   balanceRange: RangeValue | null
+  /** Current sort state */
+  sort: SortState | null
+  /** Whether sort is at its default value */
+  isDefaultSort: boolean
   /** Set institution filter */
   setInstitutionFilter: (value: string[]) => void
   /** Set type filter */
   setTypeFilter: (value: string[]) => void
   /** Set balance range filter */
   setBalanceRange: (value: RangeValue | null) => void
-  /** Clear all filters */
-  clearAllFilters: () => void
+  /** Set sort state */
+  setSort: (next: SortState | null) => void
+  /** Reset sort to default */
+  resetSort: () => void
+  /** Toggle sort column */
+  toggleSortColumn: (columnId: string) => void
+  /** Clear all filters (and optionally sort) */
+  clearAllFilters: (options?: { includeSort?: boolean }) => void
   /** Number of active filters */
   activeFilterCount: number
   /** Whether any filters are active */
@@ -53,8 +65,8 @@ export interface UseAccountFiltersResult {
 
 const SPEC = {
   institution: { kind: 'multi-select' },
-  type: { kind: 'multi-select' },
-  balance: { kind: 'range' },
+  type:        { kind: 'multi-select' },
+  balance:     { kind: 'range' },
 } as const satisfies FilterSpec
 
 /**
@@ -64,7 +76,12 @@ const SPEC = {
  */
 export function useAccountFilters(): UseAccountFiltersResult {
   const state = useFilterState(SPEC)
-  const { setFilter, clearAllFilters, activeFilterCount, hasActiveFilters } = state
+  const { setFilter, clearAllFilters: genericClearAll } = state
+
+  const { sort, setSort, resetSort, toggleSortColumn, isDefaultSort } = useSortUrlState({
+    defaultSort: null,
+    validColumns: ACCOUNT_SORTABLE_COLUMNS,
+  })
 
   const filters = useMemo<AccountFilters>(
     () => ({
@@ -98,16 +115,29 @@ export function useAccountFilters(): UseAccountFiltersResult {
     [setFilter],
   )
 
+  const clearAllFilters = useCallback(
+    (options?: { includeSort?: boolean }) => {
+      genericClearAll()
+      if (options?.includeSort) resetSort()
+    },
+    [genericClearAll, resetSort],
+  )
+
   return {
     filters,
     institutionFilter: state.filters.institution,
     typeFilter: state.filters.type,
     balanceRange,
+    sort,
+    isDefaultSort,
     setInstitutionFilter,
     setTypeFilter,
     setBalanceRange,
+    setSort,
+    resetSort,
+    toggleSortColumn,
     clearAllFilters,
-    activeFilterCount,
-    hasActiveFilters,
+    activeFilterCount: state.activeFilterCount,
+    hasActiveFilters: state.hasActiveFilters,
   }
 }

@@ -22,7 +22,8 @@ Authorization: Bearer <your-jwt-token>
 
 ## Regions
 
-All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+Use the GET /api/v1/regions endpoint to discover available data residency regions.
+Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
@@ -35,7 +36,13 @@ import type {
   AdminUserDetail,
   AdminUserListResponse,
   CheckRoleResponseBody,
+  DeadLetterBulkDeleteResponse,
+  DeadLetterJob,
+  DeadLetterJobListResponse,
+  DeadLetterRetryResponse,
+  DeadLetterStatsResponse,
   FireWebhookResponseBody,
+  GetAdminDeadLetterJobArgs200,
   GetPaymentFailuresOutputBody,
   GrantTrialResponseBody,
   PaddleWebhookEvent,
@@ -50,6 +57,118 @@ export const getCheckRoleResponseMock = (
 ): CheckRoleResponseBody => ({
   $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
   is_admin: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getListAdminDeadLetterJobsResponseMock = (
+  overrideResponse: Partial<Extract<DeadLetterJobListResponse, object>> = {},
+): DeadLetterJobListResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  has_more: faker.datatype.boolean(),
+  jobs: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+      args: {},
+      created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      errors: {},
+      failed_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      id: faker.number.int(),
+      kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      max_attempts: faker.number.int(),
+      notes: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      notified: faker.datatype.boolean(),
+      original_job_id: faker.number.int(),
+      queue: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      retried_at: faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        undefined,
+      ]),
+      retry_job_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      user_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+    })),
+    null,
+  ]),
+  page: faker.number.int(),
+  page_size: faker.number.int(),
+  total: faker.number.int(),
+  total_pages: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getBulkDeleteAdminDeadLetterJobsResponseMock = (
+  overrideResponse: Partial<Extract<DeadLetterBulkDeleteResponse, object>> = {},
+): DeadLetterBulkDeleteResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  deleted: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetAdminDeadLetterJobStatsResponseMock = (
+  overrideResponse: Partial<Extract<DeadLetterStatsResponse, object>> = {},
+): DeadLetterStatsResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  by_kind: {
+    [faker.string.alphanumeric(5)]: faker.number.int(),
+  },
+  last_24_hours: faker.number.int(),
+  retried: faker.number.int(),
+  total: faker.number.int(),
+  unnotified: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetAdminDeadLetterJobDetailResponseMock = (
+  overrideResponse: Partial<Extract<DeadLetterJob, object>> = {},
+): DeadLetterJob => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  args: {},
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  errors: {},
+  failed_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  id: faker.number.int(),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  max_attempts: faker.number.int(),
+  notes: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  notified: faker.datatype.boolean(),
+  original_job_id: faker.number.int(),
+  queue: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  retried_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  retry_job_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  user_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetAdminDeadLetterJobArgsResponseMock =
+  (): GetAdminDeadLetterJobArgs200 => ({
+    [faker.string.alphanumeric(5)]: {},
+  });
+
+export const getRetryAdminDeadLetterJobResponseMock = (
+  overrideResponse: Partial<Extract<DeadLetterRetryResponse, object>> = {},
+): DeadLetterRetryResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  dead_letter_id: faker.number.int(),
+  message: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  new_job_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  success: faker.datatype.boolean(),
   ...overrideResponse,
 });
 
@@ -390,6 +509,210 @@ export const getCheckRoleMockHandler = (
   );
 };
 
+export const getListAdminDeadLetterJobsMockHandler = (
+  overrideResponse?:
+    | DeadLetterJobListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<DeadLetterJobListResponse> | DeadLetterJobListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/admin/dead-letter-jobs",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAdminDeadLetterJobsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getBulkDeleteAdminDeadLetterJobsMockHandler = (
+  overrideResponse?:
+    | DeadLetterBulkDeleteResponse
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) =>
+        | Promise<DeadLetterBulkDeleteResponse>
+        | DeadLetterBulkDeleteResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/api/v1/admin/dead-letter-jobs/bulk-delete",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getBulkDeleteAdminDeadLetterJobsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAdminDeadLetterJobStatsMockHandler = (
+  overrideResponse?:
+    | DeadLetterStatsResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<DeadLetterStatsResponse> | DeadLetterStatsResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/admin/dead-letter-jobs/stats",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAdminDeadLetterJobStatsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteAdminDeadLetterJobMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/api/v1/admin/dead-letter-jobs/:id",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(500);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
+export const getGetAdminDeadLetterJobDetailMockHandler = (
+  overrideResponse?:
+    | DeadLetterJob
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<DeadLetterJob> | DeadLetterJob),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/admin/dead-letter-jobs/:id",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAdminDeadLetterJobDetailResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAdminDeadLetterJobArgsMockHandler = (
+  overrideResponse?:
+    | GetAdminDeadLetterJobArgs200
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<GetAdminDeadLetterJobArgs200>
+        | GetAdminDeadLetterJobArgs200),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/admin/dead-letter-jobs/:id/args",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAdminDeadLetterJobArgsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getAddAdminDeadLetterJobNotesMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/api/v1/admin/dead-letter-jobs/:id/notes",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(500);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
+export const getRetryAdminDeadLetterJobMockHandler = (
+  overrideResponse?:
+    | DeadLetterRetryResponse
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<DeadLetterRetryResponse> | DeadLetterRetryResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/api/v1/admin/dead-letter-jobs/:id/retry",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRetryAdminDeadLetterJobResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetAdminPaymentFailuresMockHandler = (
   overrideResponse?:
     | GetPaymentFailuresOutputBody
@@ -653,6 +976,14 @@ export const getReplayAdminPaddleWebhookMockHandler = (
 };
 export const getAdminMock = () => [
   getCheckRoleMockHandler(),
+  getListAdminDeadLetterJobsMockHandler(),
+  getBulkDeleteAdminDeadLetterJobsMockHandler(),
+  getGetAdminDeadLetterJobStatsMockHandler(),
+  getDeleteAdminDeadLetterJobMockHandler(),
+  getGetAdminDeadLetterJobDetailMockHandler(),
+  getGetAdminDeadLetterJobArgsMockHandler(),
+  getAddAdminDeadLetterJobNotesMockHandler(),
+  getRetryAdminDeadLetterJobMockHandler(),
   getGetAdminPaymentFailuresMockHandler(),
   getFireWebhookMockHandler(),
   getGrantTrialMockHandler(),

@@ -3,10 +3,12 @@ package services
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -27,25 +29,37 @@ type DeletionService interface {
 	// Issue #668: Plaid Item Management for Cost Optimization
 	SetPlaidCleanupService(svc PlaidItemCleanupService)
 
+	// SetPaddleCleanupService sets the Paddle cleanup service for billing reconciliation
+	// during deletion. Mirrors SetPlaidCleanupService pattern. Issue #1006.
+	SetPaddleCleanupService(svc PaddleDeletionCleaner)
+
 	// SetAnalytics sets the analytics client for capturing deletion lifecycle events
 	SetAnalytics(a phclient.Analytics)
 }
 
 // deletionService implements DeletionService
 type deletionService struct {
-	profileRepo     repository.ProfileRepository
-	emailService    EmailService
-	clerkService    ClerkService
-	auditLogger     AuditLogger
-	plaidCleanupSvc PlaidItemCleanupService // Issue #668: Remove Plaid items before DB deletion
-	analytics       phclient.Analytics      // Optional PostHog analytics client
-	gracePeriodDays int
-	tokenSecret     string
+	profileRepo      repository.ProfileRepository
+	emailService     EmailService
+	clerkService     ClerkService
+	auditLogger      AuditLogger
+	plaidCleanupSvc  PlaidItemCleanupService // Issue #668: Remove Plaid items before DB deletion
+	paddleCleanupSvc PaddleDeletionCleaner   // Issue #1006: nil if Paddle not configured
+	analytics        phclient.Analytics      // Optional PostHog analytics client
+	gracePeriodDays  int
+	tokenSecret      string
 }
 
 // AuditLogger defines the interface for audit logging
 type AuditLogger interface {
 	Log(ctx context.Context, action, resourceType, resourceID string) error
+}
+
+// PaddleDeletionCleaner is the narrowed Paddle interface used by DeletionService.
+// paddleService satisfies this automatically via duck typing. Issue #1006.
+type PaddleDeletionCleaner interface {
+	CancelSubscriptionImmediately(ctx context.Context, subscriptionID string) error
+	ArchiveAndAnonymizeCustomer(ctx context.Context, customerID, anonymizedEmail string) error
 }
 
 // NewDeletionService creates a new DeletionService instance
@@ -165,6 +179,11 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 		return nil
 	}
 
+	// Issue #1006: Paddle cleanup before Plaid and DB deletion (Paddle IDs must be readable)
+	if s.paddleCleanupSvc != nil {
+		s.cleanupPaddleResources(ctx, userID, user)
+	}
+
 	// Issue #668: Remove Plaid items BEFORE database deletion to stop billing
 	// This is critical for cost control - Plaid charges monthly per Item
 	// Errors are logged but don't stop deletion (graceful degradation)
@@ -224,7 +243,49 @@ func (s *deletionService) SetPlaidCleanupService(svc PlaidItemCleanupService) {
 	s.plaidCleanupSvc = svc
 }
 
+// SetPaddleCleanupService sets the Paddle cleanup service. Issue #1006.
+func (s *deletionService) SetPaddleCleanupService(svc PaddleDeletionCleaner) {
+	s.paddleCleanupSvc = svc
+}
+
 // SetAnalytics sets the analytics client for capturing deletion lifecycle events
 func (s *deletionService) SetAnalytics(a phclient.Analytics) {
 	s.analytics = a
+}
+
+// cleanupPaddleResources cancels subscriptions and archives customer for GDPR compliance.
+// Errors are logged but don't stop deletion (graceful degradation).
+func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID string, user *domain.User) {
+	anonymizedEmail := fmt.Sprintf("deleted_%s@deleted.local", userID)
+
+	// Cancel active subscriptions
+	if user.PaddleSubscriptionID != nil {
+		status := domain.SubscriptionStatus(user.SubscriptionStatus)
+		if status.IsActiveSubscription() || status == domain.SubscriptionStatusPastDue {
+			if err := s.paddleCleanupSvc.CancelSubscriptionImmediately(ctx, *user.PaddleSubscriptionID); err != nil {
+				slog.Default().Warn("failed to cancel Paddle subscription during deletion",
+					"user_id", userID,
+					"subscription_id", *user.PaddleSubscriptionID,
+					"error", err,
+				)
+				if s.analytics != nil {
+					s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "cancel_subscription"})
+				}
+			}
+		}
+	}
+
+	// Archive customer and anonymize email (GDPR PII erasure)
+	if user.PaddleCustomerID != nil {
+		if err := s.paddleCleanupSvc.ArchiveAndAnonymizeCustomer(ctx, *user.PaddleCustomerID, anonymizedEmail); err != nil {
+			slog.Default().Warn("failed to archive Paddle customer during deletion",
+				"user_id", userID,
+				"customer_id", *user.PaddleCustomerID,
+				"error", err,
+			)
+			if s.analytics != nil {
+				s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "archive_customer"})
+			}
+		}
+	}
 }

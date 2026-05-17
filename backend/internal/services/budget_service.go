@@ -3,11 +3,13 @@ package services
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/pfc"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -68,20 +70,28 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		slog.String("period", string(req.Period)),
 	)
 
+	// Reconcile expected_income and amount: prefer expected_income if explicitly set (Issue #1048).
+	reconcileAmount, reconcileExpectedIncome := req.Amount, req.Amount
+	if req.ExpectedIncome != nil && *req.ExpectedIncome > 0 {
+		reconcileAmount = *req.ExpectedIncome
+		reconcileExpectedIncome = *req.ExpectedIncome
+	}
+
 	// Create budget from request
 	budget := &domain.Budget{
-		ID:           uuid.New().String(),
-		UserID:       userID,
-		Name:         req.Name,
-		Description:  req.Description,
-		Period:       req.Period,
-		StartDate:    req.StartDate,
-		EndDate:      req.EndDate,
-		Amount:       req.Amount,
-		CurrencyCode: req.CurrencyCode,
-		IsActive:     true,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:             uuid.New().String(),
+		UserID:         userID,
+		Name:           req.Name,
+		Description:    req.Description,
+		Period:         req.Period,
+		StartDate:      req.StartDate,
+		EndDate:        req.EndDate,
+		Amount:         reconcileAmount,
+		ExpectedIncome: reconcileExpectedIncome,
+		CurrencyCode:   req.CurrencyCode,
+		IsActive:       true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 		// Envelope budgeting fields (Issue #491)
 		IncomeAmount:  req.IncomeAmount,
 		IncomeSources: req.IncomeSources,
@@ -113,16 +123,18 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 	// Create categories if provided
 	for _, catReq := range req.Categories {
 		category := &domain.BudgetCategory{
-			ID:              uuid.New().String(),
-			BudgetID:        budget.ID,
-			Category:        catReq.Category,
-			AllocatedAmount: catReq.AllocatedAmount,
-			SpentAmount:     0,
-			CreatedAt:       time.Now(),
-			UpdatedAt:       time.Now(),
-			// Flexible matching fields (Issue #491)
-			Tags:       catReq.Tags,
-			MatchLogic: catReq.MatchLogic,
+			ID:               uuid.New().String(),
+			BudgetID:         budget.ID,
+			CategoryKind:     catReq.CategoryKind,
+			PFCPrimary:       catReq.PFCPrimary,
+			PFCDetailed:      catReq.PFCDetailed,
+			CustomCategoryID: catReq.CustomCategoryID,
+			AllocatedAmount:  catReq.AllocatedAmount,
+			SpentAmount:      0,
+			CreatedAt:        time.Now(),
+			UpdatedAt:        time.Now(),
+			Tags:             catReq.Tags,
+			MatchLogic:       catReq.MatchLogic,
 		}
 
 		if err := s.budgetRepo.CreateCategory(ctx, category); err != nil {
@@ -141,6 +153,7 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		slog.String("budget_id", budget.ID),
 	)
 
+	enrichBudgetPFCDisplay(budget)
 	return budget, nil
 }
 
@@ -156,17 +169,32 @@ func (s *budgetService) GetBudget(ctx context.Context, userID, budgetID string) 
 		return nil, domain.ErrBudgetNotFound
 	}
 
+	enrichBudgetPFCDisplay(budget)
 	return budget, nil
 }
 
 // GetBudgets retrieves all budgets for a user.
 func (s *budgetService) GetBudgets(ctx context.Context, userID string) ([]*domain.Budget, error) {
-	return s.budgetRepo.GetByUserID(ctx, userID)
+	budgets, err := s.budgetRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range budgets {
+		enrichBudgetPFCDisplay(b)
+	}
+	return budgets, nil
 }
 
 // GetActiveBudgets retrieves all active budgets for a user.
 func (s *budgetService) GetActiveBudgets(ctx context.Context, userID string) ([]*domain.Budget, error) {
-	return s.budgetRepo.GetActiveByUserID(ctx, userID)
+	budgets, err := s.budgetRepo.GetActiveByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range budgets {
+		enrichBudgetPFCDisplay(b)
+	}
+	return budgets, nil
 }
 
 // GetCurrentBudget retrieves the current active budget (where today is within the period).
@@ -202,17 +230,22 @@ func (s *budgetService) GetCurrentBudget(ctx context.Context, userID string) (*d
 				endDate = endDate.AddDate(0, 0, 7)
 			}
 			if now.After(budget.StartDate) {
+				enrichBudgetPFCDisplay(budget)
 				return budget, nil
 			}
 		case domain.BudgetPeriodMonthly:
 			// For monthly, the budget is current if we're in a valid month period
+			enrichBudgetPFCDisplay(budget)
 			return budget, nil
 		case domain.BudgetPeriodQuarterly:
+			enrichBudgetPFCDisplay(budget)
 			return budget, nil
 		case domain.BudgetPeriodYearly:
+			enrichBudgetPFCDisplay(budget)
 			return budget, nil
 		case domain.BudgetPeriodCustom:
 			// Already checked end date above
+			enrichBudgetPFCDisplay(budget)
 			return budget, nil
 		}
 	}
@@ -254,8 +287,13 @@ func (s *budgetService) UpdateBudget(ctx context.Context, userID, budgetID strin
 	if req.EndDate != nil {
 		budget.EndDate = req.EndDate
 	}
-	if req.Amount != nil {
+	// Reconcile expected_income and amount (Issue #1048): expected_income wins when set.
+	if req.ExpectedIncome != nil && *req.ExpectedIncome > 0 {
+		budget.ExpectedIncome = *req.ExpectedIncome
+		budget.Amount = *req.ExpectedIncome // mirror for back-compat
+	} else if req.Amount != nil {
 		budget.Amount = *req.Amount
+		budget.ExpectedIncome = *req.Amount // mirror
 	}
 	if req.IsActive != nil {
 		budget.IsActive = *req.IsActive
@@ -287,6 +325,7 @@ func (s *budgetService) UpdateBudget(ctx context.Context, userID, budgetID strin
 		slog.String("budget_id", budgetID),
 	)
 
+	enrichBudgetPFCDisplay(budget)
 	return budget, nil
 }
 
@@ -342,48 +381,24 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 		return nil, domain.ErrBudgetNotFound
 	}
 
-	// Validate that the category exists in available categories
-	availableCategories, err := s.GetAvailableCategories(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	categoryStr := strings.Join(req.Category, " > ")
-	found := false
-	for _, avail := range availableCategories {
-		if avail == categoryStr || avail == req.Category[0] {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		// Check if it's a simple category match
-		for _, avail := range availableCategories {
-			for _, cat := range req.Category {
-				if avail == cat {
-					found = true
-					break
-				}
-			}
-			if found {
-				break
-			}
-		}
-	}
+	// Note: Category validation is deferred to the domain model.
+	// Categories may not exist yet (e.g., user-created) or may be added
+	// dynamically, so we allow flexible category definitions.
 
 	// Create the category
 	category := &domain.BudgetCategory{
-		ID:              uuid.New().String(),
-		BudgetID:        budgetID,
-		Category:        req.Category,
-		AllocatedAmount: req.AllocatedAmount,
-		SpentAmount:     0,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
-		// Flexible matching fields (Issue #491)
-		Tags:       req.Tags,
-		MatchLogic: req.MatchLogic,
+		ID:               uuid.New().String(),
+		BudgetID:         budgetID,
+		CategoryKind:     req.CategoryKind,
+		PFCPrimary:       req.PFCPrimary,
+		PFCDetailed:      req.PFCDetailed,
+		CustomCategoryID: req.CustomCategoryID,
+		AllocatedAmount:  req.AllocatedAmount,
+		SpentAmount:      0,
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+		Tags:             req.Tags,
+		MatchLogic:       req.MatchLogic,
 	}
 
 	// Validate
@@ -405,6 +420,7 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 		slog.String("category_id", category.ID),
 	)
 
+	category.PopulatePFCDisplay()
 	return category, nil
 }
 
@@ -470,6 +486,7 @@ func (s *budgetService) UpdateCategory(ctx context.Context, userID, budgetID, ca
 		slog.String("category_id", categoryID),
 	)
 
+	category.PopulatePFCDisplay()
 	return category, nil
 }
 
@@ -521,54 +538,55 @@ func (s *budgetService) DeleteCategory(ctx context.Context, userID, budgetID, ca
 	return nil
 }
 
-// GetAvailableCategories returns a merged list of custom categories and Plaid categories.
-// This follows the same pattern as the auto-categorization rule editor.
+// GetAvailableCategories returns a merged list of custom categories and curated PFCv2 primaries.
+// Custom categories win on case-insensitive name collision with a curated primary.
+// Result is sorted alphabetically.
 func (s *budgetService) GetAvailableCategories(ctx context.Context, userID string) ([]string, error) {
-	var categories []string
-
-	// Get custom categories
 	customCats, err := s.customCategoryRepo.GetByUserID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Add custom categories (with parent > child format if parent exists)
+	// Track which normalised display names the custom set already covers.
+	customNorms := make(map[string]struct{}, len(customCats))
+	var result []string
+
 	for _, cat := range customCats {
-		if cat.ParentCategory != nil && *cat.ParentCategory != "" {
-			categories = append(categories, *cat.ParentCategory+" > "+cat.Name)
-		} else {
-			categories = append(categories, cat.Name)
+		result = append(result, cat.Name)
+		customNorms[strings.ToLower(strings.TrimSpace(cat.Name))] = struct{}{}
+	}
+
+	// Merge curated PFCv2 primaries; skip entries already covered by a custom category.
+	// Return enum values (e.g. "FOOD_AND_DRINK") so BudgetCategoryForm can pass them
+	// directly as pfc_primary to the API without a display→enum conversion step.
+	// Check both the display form ("food and drink") and the enum form ("food_and_drink")
+	// so a custom category named either way suppresses the curated duplicate.
+	const uncategorizedNorm = "uncategorized"
+	for _, primary := range pfc.AllPrimaries() {
+		displayNorm := strings.ToLower(strings.TrimSpace(primary.Display))
+		enumNorm := strings.ToLower(strings.TrimSpace(primary.Enum))
+		if displayNorm == uncategorizedNorm || enumNorm == uncategorizedNorm {
+			continue
+		}
+		_, displayExists := customNorms[displayNorm]
+		_, enumExists := customNorms[enumNorm]
+		if !displayExists && !enumExists {
+			result = append(result, primary.Enum)
 		}
 	}
 
-	// Get Plaid categories
-	plaidCats, err := s.plaidCategoryRepo.GetDistinctPlaidCategories(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Add Plaid categories (formatted: FOOD_AND_DRINK -> Food And Drink)
-	for _, cat := range plaidCats {
-		formatted := formatPlaidCategory(cat)
-		categories = append(categories, formatted)
-	}
-
-	return categories, nil
+	sort.Strings(result)
+	return result, nil
 }
 
-// formatPlaidCategory converts Plaid category format to display format.
-// e.g., "FOOD_AND_DRINK" -> "Food And Drink"
-func formatPlaidCategory(category string) string {
-	// Replace underscores with spaces
-	result := strings.ReplaceAll(category, "_", " ")
-
-	// Title case each word
-	words := strings.Fields(result)
-	for i, word := range words {
-		if len(word) > 0 {
-			words[i] = strings.ToUpper(string(word[0])) + strings.ToLower(word[1:])
-		}
+// enrichBudgetPFCDisplay populates PFC display names on all BudgetCategories and
+// IncomeSources within a Budget. Called after any Get/mutation that returns a Budget.
+func enrichBudgetPFCDisplay(b *domain.Budget) {
+	for i := range b.Categories {
+		b.Categories[i].PopulatePFCDisplay()
 	}
-
-	return strings.Join(words, " ")
+	for i := range b.IncomeSources {
+		b.IncomeSources[i].PopulatePFCDisplay()
+	}
 }
+

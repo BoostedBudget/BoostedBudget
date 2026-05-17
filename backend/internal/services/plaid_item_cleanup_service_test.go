@@ -59,18 +59,9 @@ func (m *MockPlaidServiceForCleanup) RemoveItem(ctx context.Context, accessToken
 	return args.Error(0)
 }
 
-// MockEncryptionServiceForCleanup is a mock for EncryptionService
-type MockEncryptionServiceForCleanup struct {
-	mock.Mock
-}
-
-func (m *MockEncryptionServiceForCleanup) Decrypt(ciphertext string) (string, error) {
-	args := m.Called(ciphertext)
-	return args.String(0), args.Error(1)
-}
-
 // Test_RemoveAllUserItems_CallsPlaidRemoveForEachItem verifies that
-// RemoveAllUserItems calls Plaid /item/remove for each linked item
+// RemoveAllUserItems calls Plaid /item/remove for each linked item.
+// AccessToken is populated by the repository layer (repo-layer encryption).
 func Test_RemoveAllUserItems_CallsPlaidRemoveForEachItem(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-123"
@@ -78,25 +69,20 @@ func Test_RemoveAllUserItems_CallsPlaidRemoveForEachItem(t *testing.T) {
 	// Setup mocks
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 	mockPlaid := new(MockPlaidServiceForCleanup)
-	mockEncryption := new(MockEncryptionServiceForCleanup)
 
-	// Mock: user has 2 linked items
+	// Mock: user has 2 linked items with AccessToken already decrypted by repo
 	items := []domain.LinkedItem{
-		{ID: "item-1", UserID: userID, AccessTokenEncrypted: "encrypted-token-1"},
-		{ID: "item-2", UserID: userID, AccessTokenEncrypted: "encrypted-token-2"},
+		{ID: "item-1", UserID: userID, AccessToken: "decrypted-token-1"},
+		{ID: "item-2", UserID: userID, AccessToken: "decrypted-token-2"},
 	}
 	mockRepo.On("GetByUserID", ctx, userID).Return(items, nil)
-
-	// Mock: decrypt returns decrypted tokens
-	mockEncryption.On("Decrypt", "encrypted-token-1").Return("decrypted-token-1", nil)
-	mockEncryption.On("Decrypt", "encrypted-token-2").Return("decrypted-token-2", nil)
 
 	// Mock: Plaid RemoveItem succeeds for both
 	mockPlaid.On("RemoveItem", ctx, "decrypted-token-1").Return(nil)
 	mockPlaid.On("RemoveItem", ctx, "decrypted-token-2").Return(nil)
 
 	// Create service
-	service := NewPlaidItemCleanupService(mockRepo, mockPlaid, mockEncryption)
+	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
 
 	// Execute
 	err := service.RemoveAllUserItems(ctx, userID)
@@ -104,7 +90,6 @@ func Test_RemoveAllUserItems_CallsPlaidRemoveForEachItem(t *testing.T) {
 	// Verify
 	assert.NoError(t, err)
 	mockRepo.AssertExpectations(t)
-	mockEncryption.AssertExpectations(t)
 	mockPlaid.AssertExpectations(t)
 
 	// Verify Plaid was called for each item
@@ -119,24 +104,19 @@ func Test_RemoveAllUserItems_ContinuesOnPlaidError(t *testing.T) {
 
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 	mockPlaid := new(MockPlaidServiceForCleanup)
-	mockEncryption := new(MockEncryptionServiceForCleanup)
 
-	// Mock: user has 2 linked items
+	// Mock: user has 2 linked items with AccessToken already decrypted by repo
 	items := []domain.LinkedItem{
-		{ID: "item-1", UserID: userID, AccessTokenEncrypted: "encrypted-token-1"},
-		{ID: "item-2", UserID: userID, AccessTokenEncrypted: "encrypted-token-2"},
+		{ID: "item-1", UserID: userID, AccessToken: "decrypted-token-1"},
+		{ID: "item-2", UserID: userID, AccessToken: "decrypted-token-2"},
 	}
 	mockRepo.On("GetByUserID", ctx, userID).Return(items, nil)
-
-	// Mock: decrypt succeeds for both
-	mockEncryption.On("Decrypt", "encrypted-token-1").Return("decrypted-token-1", nil)
-	mockEncryption.On("Decrypt", "encrypted-token-2").Return("decrypted-token-2", nil)
 
 	// Mock: First Plaid call fails, second succeeds
 	mockPlaid.On("RemoveItem", ctx, "decrypted-token-1").Return(errors.New("plaid API error"))
 	mockPlaid.On("RemoveItem", ctx, "decrypted-token-2").Return(nil)
 
-	service := NewPlaidItemCleanupService(mockRepo, mockPlaid, mockEncryption)
+	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
 
 	// Execute - should not return error (graceful degradation)
 	err := service.RemoveAllUserItems(ctx, userID)
@@ -156,12 +136,11 @@ func Test_RemoveAllUserItems_HandlesNoLinkedItems(t *testing.T) {
 
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 	mockPlaid := new(MockPlaidServiceForCleanup)
-	mockEncryption := new(MockEncryptionServiceForCleanup)
 
 	// Mock: user has no linked items
 	mockRepo.On("GetByUserID", ctx, userID).Return([]domain.LinkedItem{}, nil)
 
-	service := NewPlaidItemCleanupService(mockRepo, mockPlaid, mockEncryption)
+	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
 
 	// Execute
 	err := service.RemoveAllUserItems(ctx, userID)
@@ -174,42 +153,6 @@ func Test_RemoveAllUserItems_HandlesNoLinkedItems(t *testing.T) {
 	mockPlaid.AssertNotCalled(t, "RemoveItem")
 }
 
-// Test_RemoveAllUserItems_HandlesDecryptionError verifies that
-// RemoveAllUserItems continues processing other items even if decryption fails for one
-func Test_RemoveAllUserItems_HandlesDecryptionError(t *testing.T) {
-	ctx := context.Background()
-	userID := "user-123"
-
-	mockRepo := new(MockLinkedItemRepoForCleanup)
-	mockPlaid := new(MockPlaidServiceForCleanup)
-	mockEncryption := new(MockEncryptionServiceForCleanup)
-
-	// Mock: user has 2 linked items
-	items := []domain.LinkedItem{
-		{ID: "item-1", UserID: userID, AccessTokenEncrypted: "encrypted-token-1"},
-		{ID: "item-2", UserID: userID, AccessTokenEncrypted: "encrypted-token-2"},
-	}
-	mockRepo.On("GetByUserID", ctx, userID).Return(items, nil)
-
-	// Mock: first decryption fails, second succeeds
-	mockEncryption.On("Decrypt", "encrypted-token-1").Return("", errors.New("decryption failed"))
-	mockEncryption.On("Decrypt", "encrypted-token-2").Return("decrypted-token-2", nil)
-
-	// Mock: Plaid RemoveItem only called for second item
-	mockPlaid.On("RemoveItem", ctx, "decrypted-token-2").Return(nil)
-
-	service := NewPlaidItemCleanupService(mockRepo, mockPlaid, mockEncryption)
-
-	// Execute - should not return error (graceful degradation)
-	err := service.RemoveAllUserItems(ctx, userID)
-
-	// Verify
-	assert.NoError(t, err)
-
-	// Verify Plaid was only called for the item with successful decryption
-	mockPlaid.AssertNumberOfCalls(t, "RemoveItem", 1)
-}
-
 // Test_RemoveAllUserItems_HandlesRepoError verifies that
 // RemoveAllUserItems returns error when repository fails
 func Test_RemoveAllUserItems_HandlesRepoError(t *testing.T) {
@@ -218,12 +161,11 @@ func Test_RemoveAllUserItems_HandlesRepoError(t *testing.T) {
 
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 	mockPlaid := new(MockPlaidServiceForCleanup)
-	mockEncryption := new(MockEncryptionServiceForCleanup)
 
 	// Mock: repository returns error
 	mockRepo.On("GetByUserID", ctx, userID).Return(nil, errors.New("database error"))
 
-	service := NewPlaidItemCleanupService(mockRepo, mockPlaid, mockEncryption)
+	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
 
 	// Execute
 	err := service.RemoveAllUserItems(ctx, userID)
@@ -233,7 +175,8 @@ func Test_RemoveAllUserItems_HandlesRepoError(t *testing.T) {
 	assert.Contains(t, err.Error(), "database error")
 }
 
-// Test_RemoveItem_Success verifies that RemoveItem removes a single Plaid item
+// Test_RemoveItem_Success verifies that RemoveItem removes a single Plaid item.
+// AccessToken is populated by the repository layer (repo-layer encryption).
 func Test_RemoveItem_Success(t *testing.T) {
 	ctx := context.Background()
 	itemID := "item-123"
@@ -241,23 +184,19 @@ func Test_RemoveItem_Success(t *testing.T) {
 
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 	mockPlaid := new(MockPlaidServiceForCleanup)
-	mockEncryption := new(MockEncryptionServiceForCleanup)
 
-	// Mock: repository returns the item
+	// Mock: repository returns the item with AccessToken already decrypted
 	item := &domain.LinkedItem{
-		ID:                   itemID,
-		UserID:               userID,
-		AccessTokenEncrypted: "encrypted-token",
+		ID:          itemID,
+		UserID:      userID,
+		AccessToken: "decrypted-token",
 	}
 	mockRepo.On("GetByID", ctx, itemID).Return(item, nil)
-
-	// Mock: decrypt succeeds
-	mockEncryption.On("Decrypt", "encrypted-token").Return("decrypted-token", nil)
 
 	// Mock: Plaid RemoveItem succeeds
 	mockPlaid.On("RemoveItem", ctx, "decrypted-token").Return(nil)
 
-	service := NewPlaidItemCleanupService(mockRepo, mockPlaid, mockEncryption)
+	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
 
 	// Execute
 	err := service.RemoveItem(ctx, itemID)
@@ -265,7 +204,6 @@ func Test_RemoveItem_Success(t *testing.T) {
 	// Verify
 	assert.NoError(t, err)
 	mockRepo.AssertExpectations(t)
-	mockEncryption.AssertExpectations(t)
 	mockPlaid.AssertExpectations(t)
 }
 
@@ -276,19 +214,17 @@ func Test_RemoveItem_PlaidError(t *testing.T) {
 
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 	mockPlaid := new(MockPlaidServiceForCleanup)
-	mockEncryption := new(MockEncryptionServiceForCleanup)
 
 	item := &domain.LinkedItem{
-		ID:                   itemID,
-		AccessTokenEncrypted: "encrypted-token",
+		ID:          itemID,
+		AccessToken: "decrypted-token",
 	}
 	mockRepo.On("GetByID", ctx, itemID).Return(item, nil)
-	mockEncryption.On("Decrypt", "encrypted-token").Return("decrypted-token", nil)
 
 	// Mock: Plaid RemoveItem fails
 	mockPlaid.On("RemoveItem", ctx, "decrypted-token").Return(errors.New("plaid error"))
 
-	service := NewPlaidItemCleanupService(mockRepo, mockPlaid, mockEncryption)
+	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
 
 	// Execute - should NOT return error (graceful degradation)
 	err := service.RemoveItem(ctx, itemID)
@@ -304,12 +240,11 @@ func Test_RemoveItem_ItemNotFound(t *testing.T) {
 
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 	mockPlaid := new(MockPlaidServiceForCleanup)
-	mockEncryption := new(MockEncryptionServiceForCleanup)
 
 	// Mock: repository returns not found
 	mockRepo.On("GetByID", ctx, itemID).Return(nil, errors.New("not found"))
 
-	service := NewPlaidItemCleanupService(mockRepo, mockPlaid, mockEncryption)
+	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
 
 	// Execute
 	err := service.RemoveItem(ctx, itemID)

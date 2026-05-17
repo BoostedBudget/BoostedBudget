@@ -16,6 +16,7 @@ import (
 	echomiddleware "github.com/labstack/echo/v4/middleware"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/database"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
@@ -182,6 +183,19 @@ func main() {
 	subscriptionTiersHandler := operations.NewSubscriptionTiersHandler(tierConfig)
 	operations.RegisterSubscriptionTiersRoutes(humaAPI, subscriptionTiersHandler)
 
+	// Load region configuration and initialize domain registry (#974)
+	regionConfig, err := config.LoadRegionConfig()
+	if err != nil {
+		appLogger.Error("Failed to load region config", "error", err)
+		os.Exit(1)
+	}
+	domain.InitRegionRegistry(convertRegionConfig(regionConfig), regionConfig.GetDefaultRegion(), regionConfig.GetServerRegion())
+	appLogger.Info("Region configuration loaded", "regions", len(regionConfig.Regions))
+
+	// Regions endpoint (public - needed for profile region selector)
+	regionsHandler := operations.NewRegionsHandler(regionConfig)
+	operations.RegisterRegionRoutes(humaAPI, regionsHandler)
+
 	// Default dashboard layout endpoint migrated to Huma (see humaDashboardHandler) - Issue #559
 
 	// Declare plaidService at package scope for use in both authenticated routes and webhook endpoint
@@ -212,6 +226,29 @@ func main() {
 	// Issue #762: Declare Paddle reconciliation worker
 	var paddleReconciliationWorker *jobs.PaddleReconciliationWorker
 
+	// Issue #930: Declare retention cleanup check worker
+	var retentionCleanupCheckWorker *jobs.RetentionCleanupCheckWorker
+
+	// Issue #633: Declare DLQ cleanup check worker
+	var dlqCleanupCheckWorker *jobs.DLQCleanupCheckWorker
+
+	// Issue #1007: Declare email change propagation worker.
+	// Issue #1015: Created unconditionally (before Plaid block); registered with River after.
+	var emailChangePropagationWorker *jobs.EmailChangePropagationWorker
+
+	// Issue #1015: Declare rule evaluation worker (non-Plaid)
+	var ruleEvaluationWorker *jobs.RuleEvaluationWorker
+
+	// Issue #1123: Declare effective category refresh worker
+	var effectiveCategoryRefreshWorker *jobs.EffectiveCategoryRefreshWorker
+
+	// Issue #1015: Declare Plaid-dependent workers at outer scope so they can be nil-checked
+	// during River registration (which now occurs after the Plaid block).
+	var webhookProcessingWorker *jobs.WebhookProcessingWorker
+	var plaidSyncWorker *jobs.PlaidSyncWorker
+	var investmentHoldingsSyncWorker *jobs.InvestmentHoldingsSyncWorker
+	var investmentTransactionsSyncWorker *jobs.InvestmentTransactionsSyncWorker
+
 	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
 	var ruleSchedulerManager *workers.RuleSchedulerManager
 
@@ -223,18 +260,52 @@ func main() {
 	var paddleWebhookRepo repository.PaddleWebhookRepository
 	var paddleTransactionRepo repository.PaddleTransactionRepository // Issues #747 #748
 
+	// Declare encryption service and field encryptor at outer scope so they are accessible
+	// in both the authenticated block and later public webhook handlers.
+	var encryptionService services.EncryptionService
+	var fieldEncryptor *appcrypto.FieldEncryptor
+
 	if db != nil && cfg.ClerkSecretKey != "" {
+		// Create encryption service (required for repository-layer PII encryption)
+		if cfg.EncryptionKey != "" {
+			encryptionService, err = services.NewEncryptionService(cfg)
+			if err != nil {
+				appLogger.Error("Failed to initialize encryption service", "error", err)
+				appLogger.Error("Encryption service is required for account linking")
+				os.Exit(1)
+			}
+			appLogger.Info("Encryption service initialized")
+		} else {
+			appLogger.Error("ENCRYPTION_KEY environment variable is required")
+			os.Exit(1)
+		}
+
+		// Create field encryptor for repository-layer PII encryption
+		fieldEncryptor, err = appcrypto.NewFieldEncryptor(encryptionService, []byte(cfg.EncryptionKey))
+		if err != nil {
+			appLogger.Error("Failed to initialize field encryptor", "error", err)
+			os.Exit(1)
+		}
+
+		// #1001: Safety-net backfill — encrypt any rows that were created before encryption
+		// was deployed (they have NULL blind indexes and are invisible to blind-index lookups).
+		// Runs synchronously before serving traffic. Idempotent — skips already-encrypted rows.
+		if err := database.BackfillEncryption(context.Background(), db, fieldEncryptor); err != nil {
+			appLogger.Error("Encryption backfill failed — exiting to prevent duplicate accounts", "error", err)
+			os.Exit(1)
+		}
+
 		// Create repositories
-		profileRepo := repository.NewProfileRepository(db)
+		profileRepo := repository.NewProfileRepository(db, fieldEncryptor)
 		privacyRepo := repository.NewPrivacyRepository(db)
-		linkedItemRepo := repository.NewLinkedItemRepository(db)
-		accountRepo := repository.NewAccountRepository(db)
-		transactionRepo := repository.NewTransactionRepository(db)
-		webhookRepo := repository.NewWebhookRepository(db)
-		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db)            // Issue #45, #46: Paddle webhooks
-		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db)   // Issues #747 #748: Paddle transaction audit log
-		identityRepo := repository.NewUserIdentityRepository(db)                 // Maps Clerk IDs to user UUIDs
-		notificationRepo := repository.NewNotificationRepository(db)             // Issue #257: Notification storage
+		linkedItemRepo := repository.NewLinkedItemRepository(db, fieldEncryptor)
+		accountRepo := repository.NewAccountRepository(db, fieldEncryptor)
+		transactionRepo := repository.NewTransactionRepository(db, fieldEncryptor)
+		webhookRepo := repository.NewWebhookRepository(db, fieldEncryptor)
+		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db, fieldEncryptor)            // Issue #45, #46: Paddle webhooks
+		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db, fieldEncryptor)   // Issues #747 #748: Paddle transaction audit log
+		identityRepo := repository.NewUserIdentityRepository(db, fieldEncryptor) // Maps Clerk IDs to user UUIDs
+		notificationRepo := repository.NewNotificationRepository(db, fieldEncryptor)             // Issue #257: Notification storage
 		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db)       // Issue #353: Balance tracking
 		userTagRepo := repository.NewUserTagRepository(db)                       // Issue #345: User tags
 		customCategoryRepo := repository.NewCustomCategoryRepository(db)         // Issue #345: Custom categories
@@ -245,17 +316,32 @@ func main() {
 		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db)   // Issue #354: Dashboard preferences
 		transferSuggestionRepo := repository.NewTransferSuggestionRepository(db) // Issue #36: Transfer suggestions
 		automationRuleRepo := repository.NewAutomationRulesRepository(db)        // Issue #37: Automation rules
-		adminUserRepo := repository.NewAdminUserRepository(db)                   // Issue #639: Admin user management
+		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)    // Issue #639: Admin user management
 		systemHealthRepo := repository.NewSystemHealthRepository(db)             // Issue #640: System health monitoring
 		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)           // Issue #640: Dead letter queue metrics
+		securityRepo := repository.NewSecurityRepository(db)                           // Issue #659: Plaid Investments
+		holdingRepo := repository.NewHoldingRepository(db)                             // Issue #659: Plaid Investments
+		investmentTxnRepo := repository.NewInvestmentTransactionRepository(db)        // Issue #659: Plaid Investments
+		creditLiabilityRepo := repository.NewCreditLiabilityRepository(db)            // Issue #910: Plaid Liabilities
+		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db, fieldEncryptor)       // Issue #910: Plaid Liabilities
+		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor) // Issue #910: Plaid Liabilities
 
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
 
+		// Clerk Backend API service — used by deletion service and email propagation worker
+		clerkService := services.NewClerkService(cfg.ClerkSecretKey)
+		appLogger.Info("Clerk Backend API service initialized")
+
 		// Create services
-		profileService := services.NewProfileService(profileRepo)
+		profileService := services.NewProfileService(services.NewProfileServiceDeps{
+			Repo:         profileRepo,
+			IdentityRepo: identityRepo,
+			DB:           db,
+			JobQueue:     nil, // Set after jobQueue is created via SetJobQueue
+		})
 		privacyService := services.NewPrivacyService(privacyRepo)
-		transactionService := services.NewTransactionService(transactionRepo)
+		transactionService := services.NewTransactionService(transactionRepo, customCategoryRepo)
 		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
 		registrationService.SetAnalytics(phClient)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
@@ -266,7 +352,7 @@ func main() {
 		userTagService := services.NewUserTagService(userTagRepo)
 		customCategoryService := services.NewCustomCategoryService(customCategoryRepo)
 		// Issue #346: Categorization rules services
-		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo)
+		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo, customCategoryRepo)
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
 		ruleApplicationService.SetAnalytics(phClient)
 		// Issue #354: Cash flow analytics and dashboard preferences services
@@ -308,13 +394,11 @@ func main() {
 
 		// Issue #37: Rule Scheduler Manager with providers
 		ruleSchedulerManager = workers.NewRuleSchedulerManager(appLogger)
-		subscriptionLimitAdapter := workers.NewSubscriptionLimitAdapter()
 
 		// Create and register CronTriggerProvider
 		cronProvider := workers.NewCronTriggerProvider(
 			automationRuleRepo,
 			ruleExecutionService,
-			subscriptionLimitAdapter,
 			15*time.Minute, // Refresh interval for picking up new/updated rules
 			appLogger,
 		)
@@ -324,7 +408,6 @@ func main() {
 		manualProvider := workers.NewManualTriggerProvider(
 			automationRuleRepo,
 			ruleExecutionService,
-			subscriptionLimitAdapter,
 			appLogger,
 		)
 		ruleSchedulerManager.RegisterProvider(manualProvider)
@@ -343,10 +426,6 @@ func main() {
 
 		// Create deletion services (if token secret configured)
 		if cfg.DeletionTokenSecret != "" {
-			// Initialize Clerk Backend API service
-			clerkService := services.NewClerkService(cfg.ClerkSecretKey)
-			appLogger.Info("Clerk Backend API service initialized")
-
 			// Initialize Deletion service (reuses auditLogger and emailService created earlier)
 			// Issue #668: plaidCleanupSvc is nil here - will be wired later after plaidService is created
 			// Uses assignment (=) not declaration (:=) to assign to outer-scoped deletionService variable
@@ -383,23 +462,26 @@ func main() {
 				Logger:      appLogger,
 			})
 			appLogger.Info("Scheduled deletion check worker created (River)")
+
+			// Issue #930: Create retention cleanup check worker
+			// Note: EmailService is nil in MVP — notice emails are skipped until Phase 3 email templates
+			retentionCleanupCheckWorker = jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{
+				ProfileRepo:     profileRepo,
+				DeletionService: deletionService,
+				RetentionMonths: cfg.RetentionPeriodMonths,
+				Logger:          appLogger,
+			})
+			appLogger.Info("Retention cleanup check worker created (River)")
+
+			// Issue #633: Create DLQ cleanup worker
+			dlqCleanupCheckWorker = jobs.NewDLQCleanupCheckWorker(jobs.DLQCleanupCheckWorkerDeps{
+				Repo:          deadLetterJobRepo,
+				RetentionDays: cfg.DLQRetentionDays,
+				Logger:        appLogger,
+			})
+			appLogger.Info("DLQ cleanup check worker created (River)")
 		} else {
 			appLogger.Warn("Deletion services disabled (requires DELETION_TOKEN_SECRET)")
-		}
-
-		// Create encryption service (if configured)
-		var encryptionService services.EncryptionService
-		if cfg.EncryptionKey != "" {
-			encryptionService, err = services.NewEncryptionService(cfg)
-			if err != nil {
-				appLogger.Error("Failed to initialize encryption service", "error", err)
-				appLogger.Error("Encryption service is required for account linking")
-				os.Exit(1)
-			}
-			appLogger.Info("Encryption service initialized")
-		} else {
-			appLogger.Error("ENCRYPTION_KEY environment variable is required")
-			os.Exit(1)
 		}
 
 		// Create Paddle services (if configured) - Issue #45, #46: Paddle Payment Integration
@@ -457,6 +539,74 @@ func main() {
 			appLogger.Warn("Paddle services disabled (PADDLE_API_KEY not configured)")
 		}
 
+		// Issue #1006: Wire PaddleService into DeletionService for billing cleanup on deletion.
+		// Must run after Paddle init so paddleService is available.
+		if paddleService != nil && deletionService != nil {
+			deletionService.SetPaddleCleanupService(paddleService)
+			appLogger.Info("Paddle cleanup service wired to deletion service")
+		}
+
+		// Issue #1015: Create non-Plaid workers unconditionally (decoupled from Plaid config).
+		// These workers previously lived inside the Plaid block but have no Plaid dependency.
+		// Placement: after Paddle init (paddleService available), before Plaid init.
+
+		// Issue #679, #680: Create TrialService unconditionally.
+		// PlaidCleanup is nil initially — wired via SetPlaidCleanup() if Plaid is configured.
+		// ExpireTrial already nil-guards plaidCleanup before calling it.
+		trialService = services.NewTrialService(tierConfig, profileRepo, nil)
+		trialService.SetRetentionMonths(cfg.RetentionPeriodMonths)
+		appLogger.Info("Trial service initialized")
+
+		// Issue #679: Wire trial service to registration service for auto-grant on signup.
+		// Auto-grant now runs regardless of Plaid config (confirmed intended behavior #1015).
+		registrationService.SetTrialGranter(trialService)
+		appLogger.Info("Trial service wired to registration service")
+
+		// Issue #679, #680: Create trial expiration check worker (depends only on trialService)
+		trialExpirationCheckWorker = jobs.NewTrialExpirationCheckWorker(jobs.TrialExpirationCheckWorkerDeps{
+			ProfileRepo:  profileRepo,
+			TrialService: trialService,
+			Logger:       appLogger,
+		})
+		appLogger.Info("Trial expiration check worker created (River)")
+
+		// Issue #762: Create Paddle reconciliation worker (depends only on paddleService, not Plaid)
+		if cfg.PaddleReconciliationEnabled && paddleService != nil {
+			paddleReconciliationWorker = jobs.NewPaddleReconciliationWorker(jobs.PaddleReconciliationWorkerDeps{
+				ProfileRepo: profileRepo,
+				PaddleSvc:   paddleService,
+				TierConfig:  tierConfig,
+				Logger:      appLogger,
+				AutoFix:     cfg.PaddleReconciliationAutoFix,
+			})
+			appLogger.Info("Paddle reconciliation worker created (River)")
+		}
+
+		// Issue #1007: Create EmailChangePropagationWorker (no Plaid dependency).
+		// Issue #1015: Moved before Plaid block so it runs unconditionally.
+		emailChangePropagationWorker = jobs.NewEmailChangePropagationWorker(jobs.EmailChangePropagationWorkerDeps{
+			ProfileRepo:   profileRepo,
+			ClerkService:  clerkService,
+			PaddleService: paddleService, // nil if Paddle not configured — worker nil-checks before calling
+			Logger:        appLogger,
+		})
+		appLogger.Info("Email change propagation worker created (River)")
+		emailChangePropagationWorker.SetAnalytics(phClient)
+
+		// Issue #1015: Create rule evaluation worker (depends only on ruleExecutionService, no Plaid dependency)
+		ruleEvaluationWorker = jobs.NewRuleEvaluationWorker(jobs.RuleEvaluationWorkerDeps{
+			RuleExecutionService: ruleExecutionService,
+			Logger:               appLogger,
+		})
+		appLogger.Info("Rule evaluation worker created (River)")
+
+		// Issue #1123: Create effective category refresh worker (no external dependencies)
+		effectiveCategoryRefreshWorker = jobs.NewEffectiveCategoryRefreshWorker(jobs.EffectiveCategoryRefreshWorkerDeps{
+			TransactionRepo: transactionRepo,
+			Logger:          appLogger,
+		})
+		appLogger.Info("Effective category refresh worker created (River)")
+
 		// Create Plaid service and account linking (if configured)
 		// plaidHandler migrated to Huma (see humaPlaidHandler) - Issue #559
 		// var plaidHandler *handlers.PlaidHandler
@@ -470,16 +620,13 @@ func main() {
 				accountService = services.NewAccountService(
 					plaidService,
 					subscriptionService,
-					encryptionService,
 					linkedItemRepo,
 					accountRepo,
 					profileRepo,
 					db,
+					services.WithEncryptor(fieldEncryptor), // Issue #1010: Cross-user fingerprint checks
 				)
 
-				// plaidHandler migrated to Huma - Issue #559
-				_ = plaidService   // Silence unused variable (used by Huma handler)
-				_ = accountService // Silence unused variable (used by Huma handler)
 				appLogger.Info("Plaid service initialized")
 				appLogger.Info("Account linking service initialized")
 
@@ -488,7 +635,6 @@ func main() {
 				plaidCleanupService = services.NewPlaidItemCleanupService(
 					linkedItemRepo,
 					plaidService,
-					encryptionService,
 				)
 				appLogger.Info("Plaid item cleanup service initialized")
 
@@ -505,33 +651,9 @@ func main() {
 					appLogger.Info("Plaid cleanup service wired to subscription webhook worker")
 				}
 
-				// Issue #679, #680: Create TrialService for trial management
-				trialService = services.NewTrialService(tierConfig, profileRepo, plaidCleanupService)
-				appLogger.Info("Trial service initialized")
-
-				// Issue #679: Wire trial service to registration service for auto-grant on signup
-				registrationService.SetTrialGranter(trialService)
-				appLogger.Info("Trial service wired to registration service")
-
-				// Issue #679, #680: Create trial expiration check worker
-				trialExpirationCheckWorker = jobs.NewTrialExpirationCheckWorker(jobs.TrialExpirationCheckWorkerDeps{
-					ProfileRepo:  profileRepo,
-					TrialService: trialService,
-					Logger:       appLogger,
-				})
-				appLogger.Info("Trial expiration check worker created (River)")
-
-				// Issue #762: Create Paddle reconciliation worker
-				if cfg.PaddleReconciliationEnabled && paddleService != nil {
-					paddleReconciliationWorker = jobs.NewPaddleReconciliationWorker(jobs.PaddleReconciliationWorkerDeps{
-						ProfileRepo: profileRepo,
-						PaddleSvc:   paddleService,
-						TierConfig:  tierConfig,
-						Logger:      appLogger,
-						AutoFix:     cfg.PaddleReconciliationAutoFix,
-					})
-					appLogger.Info("Paddle reconciliation worker created (River)")
-				}
+				// Issue #1015: Wire Plaid cleanup to trial service (created before Plaid block with nil cleanup)
+				trialService.SetPlaidCleanup(plaidCleanupService)
+				appLogger.Info("Plaid cleanup service wired to trial service")
 
 				// Issue #36: Transaction Monitor Service for auto-detecting completed transfers
 				transactionMonitorService := services.NewTransactionMonitorService(transferSuggestionRepo)
@@ -550,7 +672,6 @@ func main() {
 					profileRepo,
 					balanceSnapshotRepo,
 					plaidService,
-					encryptionService,
 					subscriptionService,
 					ruleApplicationService,
 					budgetSyncService,
@@ -565,113 +686,83 @@ func main() {
 					notificationRepo,
 					profileRepo,
 					plaidService,
-					encryptionService,
 					emailService,
 					appLogger,
 				)
 
-				// Issue #573/629: Initialize River queue for async job processing
-				logger := slog.Default()
-				riverConfig := riverqueue.DefaultConfig()
-
-				// Issue #629: Configure dead letter handler for failed jobs
-				deadLetterHandler := riverqueue.NewDeadLetterHandler(riverqueue.DeadLetterHandlerDeps{
-					DB:     db,
-					Logger: logger,
-				})
-				deadLetterHandler.SetAnalytics(phClient)
-				riverConfig.ErrorHandler = deadLetterHandler.ErrorHandlerFunc()
-				appLogger.Info("Dead letter handler configured for failed jobs")
-
-				// Issue #629: Configure periodic jobs
-				var periodicJobs []*river.PeriodicJob
-
-				// Scheduled deletion check (hourly) - checks for users scheduled for deletion
-				if scheduledDeletionCheckWorker != nil {
-					periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-						river.PeriodicInterval(1*time.Hour),
-						func() (river.JobArgs, *river.InsertOpts) {
-							return jobs.ScheduledDeletionCheckArgs{
-									TriggerSource: "periodic",
-								}, &river.InsertOpts{
-									Queue: "low", // Deletions run on low priority queue
-								}
-						},
-						&river.PeriodicJobOpts{RunOnStart: true}, // Run immediately on startup to catch any pending deletions
-					))
-					appLogger.Info("Scheduled deletion check periodic job configured (hourly)")
+				// Issue #659: Initialize InvestmentSyncService for holdings and investment transactions
+				investmentSyncService := services.NewInvestmentSyncService(
+					webhookRepo,
+					linkedItemRepo,
+					accountRepo,
+					securityRepo,
+					holdingRepo,
+					investmentTxnRepo,
+					plaidService,
+					appLogger,
+				)
+				appLogger.Info("Investment sync service initialized")
+				if phClient != nil {
+					investmentSyncService.SetAnalytics(phClient)
 				}
 
-				// Issue #668: Item cleanup check (daily at 3 AM) - checks for orphaned Plaid items
-				// Detects: items in error state > 30 days, revoked items, stale items > 60 days, zero-account items
-				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-					river.PeriodicInterval(24*time.Hour), // Run once per day
-					func() (river.JobArgs, *river.InsertOpts) {
-						return jobs.ItemCleanupCheckArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low", // Cleanup runs on low priority queue
-							}
-					},
-					&river.PeriodicJobOpts{RunOnStart: false}, // Don't run on startup - wait for daily schedule
-				))
-				appLogger.Info("Item cleanup check periodic job configured (daily)")
-
-				// Issue #679, #680: Trial expiration check (daily) - finds expired trials and freezes accounts
-				// Expires trial: sets subscription_status='inactive', disconnects all Plaid items
-				if trialExpirationCheckWorker != nil {
-					periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-						river.PeriodicInterval(24*time.Hour), // Run once per day
-						func() (river.JobArgs, *river.InsertOpts) {
-							return jobs.TrialExpirationCheckArgs{
-									TriggerSource: "periodic",
-								}, &river.InsertOpts{
-									Queue: "low", // Trial checks run on low priority queue
-								}
-						},
-						&river.PeriodicJobOpts{RunOnStart: true}, // Run on startup to catch any expired trials
-					))
-					appLogger.Info("Trial expiration check periodic job configured (daily)")
-				}
-
-				// Issue #762: Paddle reconciliation check (daily) - detects status/tier discrepancies
-				if paddleReconciliationWorker != nil {
-					periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-						river.PeriodicInterval(24*time.Hour),
-						func() (river.JobArgs, *river.InsertOpts) {
-							return jobs.PaddleReconciliationArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low",
-							}
-						},
-						&river.PeriodicJobOpts{RunOnStart: false},
-					))
-					appLogger.Info("Paddle reconciliation periodic job configured (daily)")
-				}
-
-				if len(periodicJobs) > 0 {
-					riverConfig.PeriodicJobs = periodicJobs
+				// Issue #910: Initialize LiabilitySyncService for credit, mortgage, student loan liabilities
+				liabilitySyncService := services.NewLiabilitySyncService(
+					webhookRepo,
+					linkedItemRepo,
+					accountRepo,
+					creditLiabilityRepo,
+					mortgageLiabilityRepo,
+					studentLoanLiabilityRepo,
+					plaidService,
+					appLogger,
+				)
+				appLogger.Info("Liability sync service initialized")
+				if phClient != nil {
+					liabilitySyncService.SetAnalytics(phClient)
 				}
 
 				// Create WebhookProcessingWorker with all dependencies
-				webhookProcessingWorker := jobs.NewWebhookProcessingWorker(jobs.WebhookProcessingWorkerDeps{
+				// Issue #659: InvestmentSyncSvc added for HOLDINGS and INVESTMENTS_TRANSACTIONS routing
+				// Issue #910: LiabilitySyncSvc added for LIABILITIES routing
+				// Issue #1015: Use = (not :=) — these vars are declared at outer scope for post-Plaid River registration
+				webhookProcessingWorker = jobs.NewWebhookProcessingWorker(jobs.WebhookProcessingWorkerDeps{
 					WebhookRepo:        webhookRepo,
 					TransactionSyncSvc: transactionSyncService,
+					InvestmentSyncSvc:  investmentSyncService,
+					LiabilitySyncSvc:   liabilitySyncService,
 					ItemErrorSvc:       itemErrorService,
-					Logger:             logger,
+					Logger:             appLogger,
 				})
 
 				// Issue #666: Create PlaidSyncWorker for auto-sync after account linking
 				// Issue #171: Add DB for row-level locking to prevent concurrent syncs
-				plaidSyncWorker := jobs.NewPlaidSyncWorker(jobs.PlaidSyncWorkerDeps{
+				plaidSyncWorker = jobs.NewPlaidSyncWorker(jobs.PlaidSyncWorkerDeps{
 					SyncService:    transactionSyncService,
 					LinkedItemRepo: linkedItemRepo,
 					JobQueue:       nil, // Set after River client created (circular dependency)
-					Logger:         logger,
+					Logger:         appLogger,
 					DB:             db, // For row-level locking via FOR UPDATE
 				})
 				appLogger.Info("Plaid sync worker created")
+
+				// Issue #659: Create InvestmentHoldingsSyncWorker
+				investmentHoldingsSyncWorker = jobs.NewInvestmentHoldingsSyncWorker(jobs.InvestmentHoldingsSyncWorkerDeps{
+					InvestmentSyncSvc: investmentSyncService,
+					LinkedItemRepo:    linkedItemRepo,
+					Logger:            appLogger,
+					DB:                db,
+				})
+				appLogger.Info("Investment holdings sync worker created")
+
+				// Issue #659: Create InvestmentTransactionsSyncWorker
+				investmentTransactionsSyncWorker = jobs.NewInvestmentTransactionsSyncWorker(jobs.InvestmentTransactionsSyncWorkerDeps{
+					InvestmentSyncSvc: investmentSyncService,
+					LinkedItemRepo:    linkedItemRepo,
+					Logger:            appLogger,
+					DB:                db,
+				})
+				appLogger.Info("Investment transactions sync worker created")
 
 				// Issue #668: Create ItemCleanupCheckWorker for periodic orphaned item detection
 				// Checks for items in error state, revoked, stale, or with zero accounts
@@ -679,7 +770,7 @@ func main() {
 					LinkedItemRepo:     linkedItemRepo,
 					AccountRepo:        accountRepo, // For zero-account detection
 					JobQueue:           nil,         // Set after River client created (circular dependency)
-					Logger:             logger,
+					Logger:             appLogger,
 					GracePeriodDays:    7,  // Days to wait before cleanup (error/stale/revoked items)
 					ErrorDaysThreshold: 30, // Days in error state before cleanup candidate
 					StaleDaysThreshold: 60, // Days since last sync before cleanup candidate
@@ -691,86 +782,242 @@ func main() {
 				itemCleanupWorker = jobs.NewItemCleanupWorker(jobs.ItemCleanupWorkerDeps{
 					PlaidCleanupSvc: plaidCleanupService,
 					LinkedItemRepo:  linkedItemRepo,
-					Logger:          logger,
+					Logger:          appLogger,
 				})
 				appLogger.Info("Item cleanup worker created")
 
-				// Create River workers and register all workers
-				riverWorkers := river.NewWorkers()
-				river.AddWorker(riverWorkers, webhookProcessingWorker)
-
-				// Issue #666: Register PlaidSyncWorker with River
-				river.AddWorker(riverWorkers, plaidSyncWorker)
-				appLogger.Info("Plaid sync worker registered with River")
-
-				// Issue #629: Register deletion workers if available
-				if accountDeletionWorker != nil {
-					river.AddWorker(riverWorkers, accountDeletionWorker)
-					appLogger.Info("Account deletion worker registered with River")
-				}
-				if scheduledDeletionCheckWorker != nil {
-					river.AddWorker(riverWorkers, scheduledDeletionCheckWorker)
-					appLogger.Info("Scheduled deletion check worker registered with River")
-				}
-
-				// Issue #668: Register cleanup workers
-				if itemCleanupCheckWorker != nil {
-					river.AddWorker(riverWorkers, itemCleanupCheckWorker)
-					appLogger.Info("Item cleanup check worker registered with River")
-				}
-				if itemCleanupWorker != nil {
-					river.AddWorker(riverWorkers, itemCleanupWorker)
-					appLogger.Info("Item cleanup worker registered with River")
-				}
-
-				// Issue #679, #680: Register trial expiration check worker
-				if trialExpirationCheckWorker != nil {
-					river.AddWorker(riverWorkers, trialExpirationCheckWorker)
-					appLogger.Info("Trial expiration check worker registered with River")
-				}
-
-				// Issue #762: Register Paddle reconciliation worker
-				if paddleReconciliationWorker != nil {
-					river.AddWorker(riverWorkers, paddleReconciliationWorker)
-					appLogger.Info("Paddle reconciliation worker registered with River")
-				}
-
-				// Issue #45, #46: Register Paddle subscription webhook worker
-				if subscriptionWebhookWorker != nil {
-					river.AddWorker(riverWorkers, subscriptionWebhookWorker)
-					appLogger.Info("Paddle subscription webhook worker registered with River")
-				}
-
-				// Create River client
-				riverClient, err := riverqueue.NewClient(db, riverWorkers, riverConfig)
-				if err != nil {
-					appLogger.Warn("Failed to initialize River queue", "error", err)
-				} else {
-					jobQueue = riverClient
-					riverRunner = riverClient
-					appLogger.Info("River queue initialized")
-
-					// Wire up job queue to workers (resolves circular dependency)
-					if scheduledDeletionCheckWorker != nil {
-						scheduledDeletionCheckWorker.SetJobQueue(jobQueue)
-						appLogger.Info("Scheduled deletion check worker connected to job queue")
-					}
-					if accountService != nil {
-						accountService.SetJobQueue(jobQueue)
-						appLogger.Info("Account service connected to job queue for auto-sync")
-					}
-					plaidSyncWorker.SetJobQueue(jobQueue)
-					appLogger.Info("Plaid sync worker connected to job queue for follow-up jobs")
-
-					// Issue #668: Wire up job queue to cleanup check worker
-					if itemCleanupCheckWorker != nil {
-						itemCleanupCheckWorker.SetJobQueue(jobQueue)
-						appLogger.Info("Item cleanup check worker connected to job queue")
-					}
-				}
-
 				appLogger.Info("Transaction sync service initialized")
 				appLogger.Info("Item error service initialized")
+			}
+		}
+
+		// ═══════════════════════════════════════════════════════════════════════
+		// Issue #1015: River queue initialization — decoupled from Plaid config.
+		// River runs whenever DB + Clerk are available. Plaid-specific workers are
+		// nil when Plaid is not configured and are silently skipped via nil-checks.
+		// ═══════════════════════════════════════════════════════════════════════
+		{
+			riverConfig := riverqueue.DefaultConfig()
+
+			// Configure dead letter handler for failed jobs
+			deadLetterHandler := riverqueue.NewDeadLetterHandler(riverqueue.DeadLetterHandlerDeps{
+				DB:     db,
+				Logger: appLogger,
+			})
+			deadLetterHandler.SetAnalytics(phClient)
+			riverConfig.ErrorHandler = deadLetterHandler.ErrorHandlerFunc()
+			appLogger.Info("Dead letter handler configured for failed jobs")
+
+			// Configure periodic jobs (all nil-guarded)
+			var periodicJobs []*river.PeriodicJob
+
+			// Scheduled deletion check (hourly)
+			if scheduledDeletionCheckWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(1*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.ScheduledDeletionCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+							}
+					},
+					&river.PeriodicJobOpts{RunOnStart: true},
+				))
+				appLogger.Info("Scheduled deletion check periodic job configured (hourly)")
+			}
+
+			// Issue #668: Item cleanup check (daily) — Plaid-specific, nil-guarded
+			if itemCleanupCheckWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.ItemCleanupCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+							}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false},
+				))
+				appLogger.Info("Item cleanup check periodic job configured (daily)")
+			}
+
+			// Issue #679, #680: Trial expiration check (daily)
+			if trialExpirationCheckWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.TrialExpirationCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+							}
+					},
+					&river.PeriodicJobOpts{RunOnStart: true},
+				))
+				appLogger.Info("Trial expiration check periodic job configured (daily)")
+			}
+
+			// Issue #762: Paddle reconciliation check (daily)
+			if paddleReconciliationWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.PaddleReconciliationArgs{
+							TriggerSource: "periodic",
+						}, &river.InsertOpts{
+							Queue: "low",
+						}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false},
+				))
+				appLogger.Info("Paddle reconciliation periodic job configured (daily)")
+			}
+
+			// Issue #930: Retention cleanup check (daily)
+			if retentionCleanupCheckWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.RetentionCleanupCheckArgs{
+							TriggerSource: "periodic",
+						}, &river.InsertOpts{
+							Queue: "low",
+						}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false},
+				))
+				appLogger.Info("Retention cleanup check periodic job configured (daily)")
+			}
+
+			// Issue #633: DLQ cleanup check (daily)
+			if dlqCleanupCheckWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.DLQCleanupCheckArgs{
+							TriggerSource: "periodic",
+						}, &river.InsertOpts{
+							Queue: "low",
+						}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false},
+				))
+				appLogger.Info("DLQ cleanup check periodic job configured (daily)")
+			}
+
+			if len(periodicJobs) > 0 {
+				riverConfig.PeriodicJobs = periodicJobs
+			}
+
+			// Register ALL workers with nil-guards.
+			// Non-Plaid workers are always non-nil when their config gates are met.
+			// Plaid-specific workers are nil when Plaid is not configured.
+			riverWorkers := river.NewWorkers()
+
+			// Non-Plaid workers (run unconditionally when configured)
+			if emailChangePropagationWorker != nil {
+				river.AddWorker(riverWorkers, emailChangePropagationWorker)
+				appLogger.Info("Email change propagation worker registered with River")
+			}
+			if accountDeletionWorker != nil {
+				river.AddWorker(riverWorkers, accountDeletionWorker)
+				appLogger.Info("Account deletion worker registered with River")
+			}
+			if scheduledDeletionCheckWorker != nil {
+				river.AddWorker(riverWorkers, scheduledDeletionCheckWorker)
+				appLogger.Info("Scheduled deletion check worker registered with River")
+			}
+			if trialExpirationCheckWorker != nil {
+				river.AddWorker(riverWorkers, trialExpirationCheckWorker)
+				appLogger.Info("Trial expiration check worker registered with River")
+			}
+			if paddleReconciliationWorker != nil {
+				river.AddWorker(riverWorkers, paddleReconciliationWorker)
+				appLogger.Info("Paddle reconciliation worker registered with River")
+			}
+			if retentionCleanupCheckWorker != nil {
+				river.AddWorker(riverWorkers, retentionCleanupCheckWorker)
+				appLogger.Info("Retention cleanup check worker registered with River")
+			}
+			if dlqCleanupCheckWorker != nil {
+				river.AddWorker(riverWorkers, dlqCleanupCheckWorker)
+				appLogger.Info("DLQ cleanup check worker registered with River")
+			}
+			if subscriptionWebhookWorker != nil {
+				river.AddWorker(riverWorkers, subscriptionWebhookWorker)
+				appLogger.Info("Paddle subscription webhook worker registered with River")
+			}
+			if ruleEvaluationWorker != nil {
+				river.AddWorker(riverWorkers, ruleEvaluationWorker)
+				appLogger.Info("Rule evaluation worker registered with River")
+			}
+			if effectiveCategoryRefreshWorker != nil {
+				river.AddWorker(riverWorkers, effectiveCategoryRefreshWorker)
+				appLogger.Info("Effective category refresh worker registered with River")
+			}
+
+			// Plaid-specific workers (nil when Plaid not configured)
+			if webhookProcessingWorker != nil {
+				river.AddWorker(riverWorkers, webhookProcessingWorker)
+				appLogger.Info("Webhook processing worker registered with River")
+			}
+			if plaidSyncWorker != nil {
+				river.AddWorker(riverWorkers, plaidSyncWorker)
+				appLogger.Info("Plaid sync worker registered with River")
+			}
+			if investmentHoldingsSyncWorker != nil {
+				river.AddWorker(riverWorkers, investmentHoldingsSyncWorker)
+				appLogger.Info("Investment holdings sync worker registered with River")
+			}
+			if investmentTransactionsSyncWorker != nil {
+				river.AddWorker(riverWorkers, investmentTransactionsSyncWorker)
+				appLogger.Info("Investment transactions sync worker registered with River")
+			}
+			if itemCleanupCheckWorker != nil {
+				river.AddWorker(riverWorkers, itemCleanupCheckWorker)
+				appLogger.Info("Item cleanup check worker registered with River")
+			}
+			if itemCleanupWorker != nil {
+				river.AddWorker(riverWorkers, itemCleanupWorker)
+				appLogger.Info("Item cleanup worker registered with River")
+			}
+
+			// Create River client and wire all SetJobQueue dependencies
+			riverClient, err := riverqueue.NewClient(db, riverWorkers, riverConfig)
+			if err != nil {
+				appLogger.Warn("Failed to initialize River queue", "error", err)
+			} else {
+				jobQueue = riverClient
+				riverRunner = riverClient
+				appLogger.Info("River queue initialized")
+
+				// Unconditional — the core fix of Issue #1015
+				profileService.SetJobQueue(jobQueue)
+				appLogger.Info("Profile service connected to job queue for email propagation")
+
+				// Nil-guarded wiring for workers with circular dependencies
+				if scheduledDeletionCheckWorker != nil {
+					scheduledDeletionCheckWorker.SetJobQueue(jobQueue)
+					appLogger.Info("Scheduled deletion check worker connected to job queue")
+				}
+				if accountService != nil {
+					accountService.SetJobQueue(jobQueue)
+					appLogger.Info("Account service connected to job queue for auto-sync")
+				}
+				if plaidSyncWorker != nil {
+					plaidSyncWorker.SetJobQueue(jobQueue)
+					appLogger.Info("Plaid sync worker connected to job queue for follow-up jobs")
+				}
+				if itemCleanupCheckWorker != nil {
+					itemCleanupCheckWorker.SetJobQueue(jobQueue)
+					appLogger.Info("Item cleanup check worker connected to job queue")
+				}
+
+				// Issue #1123: Wire job queue for async effective_category_name refresh
+				customCategoryService.SetJobQueue(jobQueue)
+				appLogger.Info("Custom category service connected to job queue for rename cascade")
 			}
 		}
 
@@ -799,22 +1046,21 @@ func main() {
 		// Admin handler dependencies used by Huma admin routes - Issue #559
 		// plaidService, linkedItemRepo, and encryptionService are used in the Huma admin handler registration below
 
-		// Create Clerk middleware with identity resolution and auto-registration
-		clerkMiddleware := middleware.ClerkMiddleware(
-			cfg.ClerkSecretKey,
-			identityRepo,        // Resolves Clerk IDs to internal user UUIDs
-			registrationService, // Auto-registers new users on first login
-		)
-
 		// Apply Huma Clerk middleware for authenticated Huma routes
+		// #930: Pass profileRepo so the middleware stores subscription_status in context
 		humaClerkMiddleware := humamiddleware.NewClerkMiddleware(
 			cfg.ClerkSecretKey,
 			identityRepo,
 			registrationService,
 			appLogger,
+			profileRepo,
 		)
 		humaAPI.UseMiddleware(humaClerkMiddleware)
 		appLogger.Info("Huma Clerk middleware applied")
+
+		// #930: Apply read-only enforcement middleware — blocks mutations for inactive/cancelled subscriptions
+		humaAPI.UseMiddleware(humamiddleware.NewReadOnlyMiddleware())
+		appLogger.Info("Huma read-only enforcement middleware applied")
 
 		// Load admin email config and create AdminService (Issue #309)
 		adminEmailConfig, err := config.LoadAdminEmailConfig()
@@ -835,6 +1081,9 @@ func main() {
 			&dbPoolAdapter{db},
 			cfg.PlaidEnv,
 		)
+
+		// Issue #633: Dead letter queue admin service
+		deadLetterService := services.NewDeadLetterService(deadLetterJobRepo, jobQueue)
 
 		// Apply Huma Admin middleware for admin routes (Issue #309)
 		humaAdminMiddleware := humamiddleware.NewAdminMiddleware(cfg, adminService)
@@ -866,6 +1115,16 @@ func main() {
 		operations.RegisterNotificationRoutes(humaAPI, humaNotificationHandler)
 		appLogger.Info("Huma notification routes registered")
 
+		// Register Huma transfer suggestion routes (Issue #952: Notification Center)
+		transferSuggestionSvc := services.NewTransferSuggestionService(transferSuggestionRepo)
+		transferSuggestionSvc.SetAnalytics(phClient)
+		humaTransferSuggestionHandler := operations.NewTransferSuggestionHandler(transferSuggestionSvc)
+		operations.RegisterTransferSuggestionRoutes(humaAPI, humaTransferSuggestionHandler)
+		appLogger.Info("Huma transfer suggestion routes registered")
+
+		// Wire notification repo to rule execution service for suggestion notifications (Issue #952)
+		ruleExecutionService.SetNotificationRepo(notificationRepo)
+
 		// Register Huma dashboard routes (Issue #559: Huma migration)
 		humaDashboardHandler := operations.NewDashboardHandler(dashboardService)
 		operations.RegisterDashboardRoutes(humaAPI, humaDashboardHandler)
@@ -882,7 +1141,7 @@ func main() {
 		appLogger.Info("Huma dashboard preferences routes registered")
 
 		// Register Huma budget routes (Issue #559: Huma migration)
-		humaBudgetHandler := operations.NewBudgetHandler(budgetService, budgetSyncService, transactionRepo)
+		humaBudgetHandler := operations.NewBudgetHandler(budgetService, budgetSyncService, transactionService)
 		operations.RegisterBudgetRoutes(humaAPI, humaBudgetHandler)
 		appLogger.Info("Huma budget routes registered")
 
@@ -925,11 +1184,12 @@ func main() {
 		// Issue #638: Pass adminService for check-role endpoint
 		// Issue #639: Pass adminUserService for user management endpoints
 		// Issue #640: Pass systemHealthService for system health monitoring
-		if plaidService != nil && encryptionService != nil {
-			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, encryptionService, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
+		if plaidService != nil {
+			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
 				WithPaddleTransactionRepo(paddleTransactionRepo).
 				WithPaddleWebhookRepo(paddleWebhookRepo).
-				WithJobQueue(jobQueue)
+				WithJobQueue(jobQueue).
+				WithDeadLetterService(deadLetterService)
 			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
 			appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)")
 		}
@@ -944,61 +1204,11 @@ func main() {
 			appLogger.Info("QA auth bypass route registered")
 		}
 
-		// API v1 routes (Echo - to be migrated to Huma incrementally)
-		api := e.Group("/api/v1")
-		api.Use(clerkMiddleware)
-		// Profile and privacy routes migrated to Huma (see humaProfileHandler and humaPrivacyHandler above)
-		// api.GET("/user/profile", profileHandler.GetProfile)
-		// api.PUT("/user/profile", profileHandler.UpdateProfile)
-		// api.GET("/user/privacy", privacyHandler.GetPrivacySettings)
-		// api.PUT("/user/privacy", privacyHandler.UpdatePrivacySettings)
-
-		// Transaction routes migrated to Huma (see humaTransactionHandler above)
-		// Tag routes migrated to Huma (see humaTagHandler above)
-		// Category routes migrated to Huma (see humaCategoryHandler above)
-		// Auto-categorization routes migrated to Huma (see humaRuleHandler above)
-
-		// Notification routes migrated to Huma (see humaNotificationHandler above)
-
-
-		// Dashboard routes migrated to Huma (see humaDashboardHandler above)
-
-		// Analytics routes migrated to Huma (see humaAnalyticsHandler above)
-
-		// Dashboard preferences routes migrated to Huma (see humaDashboardPrefsHandler above)
-
-		// Budget routes migrated to Huma (see humaBudgetHandler above) - Issue #559
-		// Category preview route migrated to Huma (see humaCategoryPreviewHandler above) - Issue #559
-		// api.POST("/budgets/categories/preview", categoryPreviewHandler.PreviewCategoryMatches) // Issue #497: Category preview
-
-		// Savings Goal routes migrated to Huma (see humaSavingsGoalHandler above) - Issue #559
-
-		// Plaid routes migrated to Huma (see humaPlaidHandler above) - Issue #559
-		// Old Echo routes commented out:
-		// if plaidHandler != nil {
-		// 	api.POST("/plaid/link-token", plaidHandler.CreateLinkToken)
-		// 	api.POST("/plaid/exchange-token", plaidHandler.ExchangePublicToken)
-		// 	api.GET("/accounts", plaidHandler.GetAccounts)
-		// 	api.PATCH("/accounts/reorder", plaidHandler.ReorderAccounts)  // Issue #307: Must be before :id route
-		// 	api.PATCH("/accounts/:id", plaidHandler.UpdateAccount)        // Issue #307: Account customization
-		// 	api.DELETE("/accounts/:id", plaidHandler.DeleteAccount)
-		// 	api.DELETE("/linked-items/:id", plaidHandler.DisconnectInstitution)
-		// }
-
-		// Admin routes migrated to Huma (see humaAdminHandler above) - Issue #559
-		// Note: Security maintained - routes only registered in qa environment
-		// if adminHandler != nil && cfg.Environment == "qa" {
-		// 	admin := api.Group("/admin", middleware.AdminMiddleware(cfg))
-		// 	admin.POST("/plaid/fire-webhook", adminHandler.FireWebhook)
-		// 	appLogger.Info("Admin endpoints enabled (qa only)")
-		// }
-
-		// Deletion routes migrated to Huma (see humaDeletionHandler below) - Issue #559
-		// Old Echo routes commented out:
-		// if deletionHandler != nil {
-		// 	api.POST("/user/delete", deletionHandler.RequestDeletion)
-		// 	api.GET("/user/delete/cancel/:token", deletionHandler.CancelDeletion)
-		// }
+		// All API v1 routes fully migrated to Huma (Issue #559)
+		// The legacy Echo group and its Clerk middleware have been removed —
+		// the Echo group's prefix-matching was shadowing Huma routes and
+		// blocking requests with 401 (the Echo middleware lacks the Clerk API
+		// email fallback that the Huma middleware provides).
 
 		appLogger.Info("Authenticated routes enabled (Clerk + Database)")
 	}
@@ -1010,7 +1220,7 @@ func main() {
 	// Issue #573: Now enqueues River jobs for async processing
 	if db != nil && plaidService != nil {
 		// Webhook repository for audit trail
-		webhookRepoForHandler := repository.NewWebhookRepository(db)
+		webhookRepoForHandler := repository.NewWebhookRepository(db, fieldEncryptor)
 
 		// Initialize webhook service for JWT signature verification
 		webhookService := services.NewWebhookService(plaidService.GetClient())
@@ -1021,7 +1231,7 @@ func main() {
 			WebhookService: webhookService,
 			WebhookRepo:    webhookRepoForHandler,
 			JobQueue:       jobQueue,
-			Logger:         slog.Default(),
+			Logger:         appLogger,
 		})
 		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
 
@@ -1035,9 +1245,9 @@ func main() {
 		// Fallback: Basic webhook handler without signature verification
 		// Used when Plaid credentials are not configured (e.g., local development)
 		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(operations.PlaidWebhookHandlerDeps{
-			WebhookRepo: repository.NewWebhookRepository(db),
+			WebhookRepo: repository.NewWebhookRepository(db, fieldEncryptor),
 			JobQueue:    jobQueue,
-			Logger:      slog.Default(),
+			Logger:      appLogger,
 		})
 		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
 		appLogger.Info("Huma Plaid webhook route registered at POST /webhooks/plaid (verification disabled)")
@@ -1055,7 +1265,7 @@ func main() {
 			WebhookService: paddleWebhookService,
 			WebhookRepo:    paddleWebhookRepo,
 			JobQueue:       jobQueue,
-			Logger:         slog.Default(),
+			Logger:         appLogger,
 		})
 		operations.RegisterPaddleWebhookRoutes(humaAPI, humaPaddleWebhookHandler)
 
@@ -1071,7 +1281,7 @@ func main() {
 		humaPaddleWebhookHandler := operations.NewPaddleWebhookHandler(operations.PaddleWebhookHandlerDeps{
 			WebhookRepo: paddleWebhookRepo,
 			JobQueue:    jobQueue,
-			Logger:      slog.Default(),
+			Logger:      appLogger,
 		})
 		operations.RegisterPaddleWebhookRoutes(humaAPI, humaPaddleWebhookHandler)
 		appLogger.Info("Huma Paddle webhook route registered at POST /webhooks/paddle (verification disabled)")
@@ -1093,11 +1303,13 @@ func main() {
 	var workerCtx context.Context
 	var workerCancel context.CancelFunc
 
+	// Initialize worker context once for all background workers
+	if riverRunner != nil || ruleSchedulerManager != nil {
+		workerCtx, workerCancel = context.WithCancel(context.Background())
+	}
+
 	// Issue #573/629: Start River queue runner (handles webhook processing + account deletion)
 	if riverRunner != nil {
-		if workerCtx == nil {
-			workerCtx, workerCancel = context.WithCancel(context.Background())
-		}
 		go func() {
 			if err := riverRunner.Start(workerCtx); err != nil {
 				appLogger.Warn("River queue runner error", "error", err)
@@ -1108,9 +1320,6 @@ func main() {
 
 	// Issue #37: Start rule scheduler manager
 	if ruleSchedulerManager != nil {
-		if workerCtx == nil {
-			workerCtx, workerCancel = context.WithCancel(context.Background())
-		}
 		go func() {
 			if err := ruleSchedulerManager.Start(workerCtx); err != nil {
 				appLogger.Warn("Failed to start rule scheduler", "error", err)
@@ -1122,7 +1331,7 @@ func main() {
 	// Start server
 	// Bind to 0.0.0.0 to be accessible from outside the container (required for Fly.io)
 	address := fmt.Sprintf("0.0.0.0:%s", cfg.Port)
-	appLogger.Info("Starting BoostedBudget API", "address", address, "region", cfg.PrimaryRegion)
+	appLogger.Info("Starting BoostedBudget API", "address", address, "region", regionConfig.GetServerRegion())
 
 	// Graceful shutdown
 	go func() {
@@ -1243,4 +1452,20 @@ func boolStatus(configured bool) string {
 		return "configured"
 	}
 	return "not configured"
+}
+
+// convertRegionConfig maps config.RegionConfig to domain.RegionInfo map for InitRegionRegistry.
+func convertRegionConfig(rc *config.RegionConfig) map[string]domain.RegionInfo {
+	result := make(map[string]domain.RegionInfo, len(rc.Regions))
+	for code, def := range rc.Regions {
+		result[code] = domain.RegionInfo{
+			Code:        code,
+			DisplayName: def.DisplayName,
+			Country:     def.Country,
+			City:        def.City,
+			Flag:        def.Flag,
+			FlyRegion:   def.Infrastructure.FlyRegion,
+		}
+	}
+	return result
 }

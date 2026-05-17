@@ -3,14 +3,17 @@ package services
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/pfc"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
 // AnalyticsService provides cash flow analytics functionality
 // Issue #354: Cash Flow Analysis & Income/Expense Visualization
+// Issue #953: Spending Reports
 type AnalyticsService interface {
 	// GetCashFlowSummary returns aggregated cash flow data for a date range
 	// Includes income, expenses, net cash flow, and period comparison
@@ -19,6 +22,15 @@ type AnalyticsService interface {
 	// GetCashFlowHistory returns time series cash flow data grouped by period
 	// Used for rendering cash flow bar charts
 	GetCashFlowHistory(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowHistoryResponse, error)
+
+	// GetSpendingByCategory returns spending totals grouped by category with percentages
+	GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.SpendingByCategoryResponse, error)
+
+	// GetSpendingByMerchant returns top merchants by spending with percentages
+	GetSpendingByMerchant(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) (*domain.SpendingByMerchantResponse, error)
+
+	// GetSpendingTrends returns monthly category spending trends for stacked charts
+	GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.SpendingTrendsResponse, error)
 }
 
 type analyticsService struct {
@@ -180,6 +192,218 @@ func calculatePeriodEnd(periodStart time.Time, grouping string) time.Time {
 	default: // daily
 		return periodStart
 	}
+}
+
+// isPFCPrimary reports whether s is a known PFCv2 primary enum.
+func isPFCPrimary(s string) bool {
+	for _, p := range pfc.AllPrimaries() {
+		if p.Enum == s {
+			return true
+		}
+	}
+	return false
+}
+
+// pfcDisplayName returns the appropriate display name for a category enum.
+// Primary enums use PrimaryDisplayName; detailed enums use DetailedDisplayName.
+func pfcDisplayName(category string) string {
+	if isPFCPrimary(category) {
+		return pfc.PrimaryDisplayName(category)
+	}
+	// Detailed enum — look up the primary from the registry.
+	for _, d := range pfc.AllDetailed() {
+		if d.Enum == category {
+			return pfc.DetailedDisplayName(d.PrimaryEnum, category)
+		}
+	}
+	// Unknown detailed: fall back to primary display (title-case fallback inside).
+	return pfc.PrimaryDisplayName(category)
+}
+
+// GetSpendingByCategory returns spending totals grouped by category with percentages and display names
+func (s *analyticsService) GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.SpendingByCategoryResponse, error) {
+	categories, err := s.analyticsRepo.GetSpendingByCategory(ctx, userID, filters)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get spending by category: %w", err)
+	}
+
+	// Merge by raw category token (UUID for custom, enum for PFC) to keep distinct rows.
+	// Use server-resolved display from repo when available; fall back to pfcDisplayName for PFC.
+	merged := make(map[string]*domain.SpendingByCategory)
+	var order []string
+	for _, c := range categories {
+		displayName := c.PFCPrimaryDisplay
+		if displayName == "" {
+			displayName = pfcDisplayName(c.Category)
+		}
+		if existing, ok := merged[c.Category]; ok {
+			existing.Total += c.Total
+			existing.TransactionCount += c.TransactionCount
+		} else {
+			merged[c.Category] = &domain.SpendingByCategory{
+				Category:          c.Category,
+				PFCPrimaryDisplay: displayName,
+				Total:             c.Total,
+				TransactionCount:  c.TransactionCount,
+			}
+			order = append(order, c.Category)
+		}
+	}
+
+	categories = make([]domain.SpendingByCategory, 0, len(order))
+	var totalSpent float64
+	for _, key := range order {
+		categories = append(categories, *merged[key])
+		totalSpent += merged[key].Total
+	}
+
+	for i := range categories {
+		if totalSpent > 0 {
+			categories[i].Percentage = (categories[i].Total / totalSpent) * 100
+		}
+	}
+
+	return &domain.SpendingByCategoryResponse{
+		StartDate:  filters.StartDate.Format("2006-01-02"),
+		EndDate:    filters.EndDate.Format("2006-01-02"),
+		TotalSpent: totalSpent,
+		Categories: categories,
+	}, nil
+}
+
+// GetSpendingByMerchant returns top merchants by spending with percentages
+func (s *analyticsService) GetSpendingByMerchant(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) (*domain.SpendingByMerchantResponse, error) {
+	merchants, err := s.analyticsRepo.GetSpendingByMerchant(ctx, userID, filters, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get spending by merchant: %w", err)
+	}
+
+	var totalSpent float64
+	for _, m := range merchants {
+		totalSpent += m.Total
+	}
+
+	for i := range merchants {
+		if totalSpent > 0 {
+			merchants[i].Percentage = (merchants[i].Total / totalSpent) * 100
+		}
+	}
+
+	return &domain.SpendingByMerchantResponse{
+		StartDate: filters.StartDate.Format("2006-01-02"),
+		EndDate:   filters.EndDate.Format("2006-01-02"),
+		TopN:      limit,
+		Merchants: merchants,
+	}, nil
+}
+
+// GetSpendingTrends returns monthly category spending with top 5 categories and "Other" bucketing
+func (s *analyticsService) GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.SpendingTrendsResponse, error) {
+	rows, err := s.analyticsRepo.GetSpendingTrends(ctx, userID, filters)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get spending trends: %w", err)
+	}
+
+	// Calculate total per category across all periods and collect display names.
+	categoryTotals := make(map[string]float64)
+	categoryDisplays := make(map[string]string)
+	for _, row := range rows {
+		categoryTotals[row.Category] += row.Total
+		if row.CategoryDisplay != "" {
+			categoryDisplays[row.Category] = row.CategoryDisplay
+		}
+	}
+
+	// Sort categories by total descending, take top 5
+	type catTotal struct {
+		category string
+		total    float64
+	}
+	sorted := make([]catTotal, 0, len(categoryTotals))
+	for cat, total := range categoryTotals {
+		sorted = append(sorted, catTotal{cat, total})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].total > sorted[j].total
+	})
+
+	const maxTopCategories = 5
+	topSet := make(map[string]bool)
+	topCategories := make([]string, 0, maxTopCategories)
+	for i, ct := range sorted {
+		if i >= maxTopCategories {
+			break
+		}
+		topSet[ct.category] = true
+		topCategories = append(topCategories, ct.category)
+	}
+
+	// Group rows by period, preserving order
+	periodOrder := make([]time.Time, 0)
+	periodRows := make(map[time.Time][]domain.SpendingTrendRow)
+	for _, row := range rows {
+		if _, exists := periodRows[row.PeriodStart]; !exists {
+			periodOrder = append(periodOrder, row.PeriodStart)
+		}
+		periodRows[row.PeriodStart] = append(periodRows[row.PeriodStart], row)
+	}
+
+	periods := make([]domain.SpendingTrendPeriod, 0, len(periodOrder))
+	for _, periodStart := range periodOrder {
+		// Aggregate into top categories + Other
+		catSpend := make(map[string]float64)
+		for _, row := range periodRows[periodStart] {
+			if topSet[row.Category] {
+				catSpend[row.Category] += row.Total
+			} else {
+				catSpend["OTHER"] += row.Total
+			}
+		}
+
+		// Build category list (top categories first, then Other if present).
+		// Use server-resolved display when available; fall back to pfcDisplayName for PFC rows.
+		var periodTotal float64
+		cats := make([]domain.CategorySpending, 0)
+		for _, tc := range topCategories {
+			if spend, ok := catSpend[tc]; ok {
+				display := categoryDisplays[tc]
+				if display == "" {
+					display = pfcDisplayName(tc)
+				}
+				cats = append(cats, domain.CategorySpending{
+					Category:          tc,
+					PFCPrimaryDisplay: display,
+					Total:             spend,
+				})
+				periodTotal += spend
+			}
+		}
+		if otherSpend, ok := catSpend["OTHER"]; ok {
+			cats = append(cats, domain.CategorySpending{
+				Category:          "OTHER",
+				PFCPrimaryDisplay: "Other",
+				Total:             otherSpend,
+			})
+			periodTotal += otherSpend
+		}
+
+		// Calculate period end (last day of month)
+		periodEnd := periodStart.AddDate(0, 1, 0).AddDate(0, 0, -1)
+
+		periods = append(periods, domain.SpendingTrendPeriod{
+			PeriodStart: periodStart.Format("2006-01-02"),
+			PeriodEnd:   periodEnd.Format("2006-01-02"),
+			Categories:  cats,
+			Total:       periodTotal,
+		})
+	}
+
+	return &domain.SpendingTrendsResponse{
+		StartDate:     filters.StartDate.Format("2006-01-02"),
+		EndDate:       filters.EndDate.Format("2006-01-02"),
+		Periods:       periods,
+		TopCategories: topCategories,
+	}, nil
 }
 
 // absFloat returns the absolute value of a float64

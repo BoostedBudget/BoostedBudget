@@ -22,7 +22,8 @@ Authorization: Bearer <your-jwt-token>
 
 ## Regions
 
-All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+Use the GET /api/v1/regions endpoint to discover available data residency regions.
+Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
@@ -43,16 +44,25 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  AddDLQNotesRequest,
   AdminUserDetail,
   AdminUserListResponse,
   CheckRoleResponseBody,
+  DeadLetterBulkDeleteRequest,
+  DeadLetterBulkDeleteResponse,
+  DeadLetterJob,
+  DeadLetterJobListResponse,
+  DeadLetterRetryResponse,
+  DeadLetterStatsResponse,
   ErrorModel,
   FireWebhookRequestBody,
   FireWebhookResponseBody,
+  GetAdminDeadLetterJobArgs200,
   GetAdminPaddleWebhookStatsParams,
   GetAdminPaymentFailuresParams,
   GetPaymentFailuresOutputBody,
   GrantTrialResponseBody,
+  ListAdminDeadLetterJobsParams,
   ListAdminPaddleWebhooksParams,
   ListAdminUsersParams,
   PaddleWebhookEvent,
@@ -228,6 +238,1024 @@ export function useCheckRole<
   return { ...query, queryKey: queryOptions.queryKey };
 }
 
+/**
+ * @summary List dead letter jobs (admin)
+ */
+export const listAdminDeadLetterJobs = (
+  params?: ListAdminDeadLetterJobsParams,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<DeadLetterJobListResponse>(
+    { url: `/api/v1/admin/dead-letter-jobs`, method: "GET", params, signal },
+    options,
+  );
+};
+
+export const getListAdminDeadLetterJobsQueryKey = (
+  params?: ListAdminDeadLetterJobsParams,
+) => {
+  return [
+    `/api/v1/admin/dead-letter-jobs`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListAdminDeadLetterJobsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAdminDeadLetterJobs>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: ListAdminDeadLetterJobsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminDeadLetterJobs>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListAdminDeadLetterJobsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAdminDeadLetterJobs>>
+  > = ({ signal }) => listAdminDeadLetterJobs(params, requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAdminDeadLetterJobs>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAdminDeadLetterJobsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAdminDeadLetterJobs>>
+>;
+export type ListAdminDeadLetterJobsQueryError = ErrorType<ErrorModel>;
+
+export function useListAdminDeadLetterJobs<
+  TData = Awaited<ReturnType<typeof listAdminDeadLetterJobs>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: undefined | ListAdminDeadLetterJobsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminDeadLetterJobs>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminDeadLetterJobs>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminDeadLetterJobs>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAdminDeadLetterJobs<
+  TData = Awaited<ReturnType<typeof listAdminDeadLetterJobs>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: ListAdminDeadLetterJobsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminDeadLetterJobs>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminDeadLetterJobs>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminDeadLetterJobs>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAdminDeadLetterJobs<
+  TData = Awaited<ReturnType<typeof listAdminDeadLetterJobs>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: ListAdminDeadLetterJobsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminDeadLetterJobs>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List dead letter jobs (admin)
+ */
+
+export function useListAdminDeadLetterJobs<
+  TData = Awaited<ReturnType<typeof listAdminDeadLetterJobs>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: ListAdminDeadLetterJobsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminDeadLetterJobs>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAdminDeadLetterJobsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Bulk delete dead letter jobs (admin)
+ */
+export const bulkDeleteAdminDeadLetterJobs = (
+  deadLetterBulkDeleteRequest: BodyType<
+    NonReadonly<DeadLetterBulkDeleteRequest>
+  >,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<DeadLetterBulkDeleteResponse>(
+    {
+      url: `/api/v1/admin/dead-letter-jobs/bulk-delete`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      data: deadLetterBulkDeleteRequest,
+      signal,
+    },
+    options,
+  );
+};
+
+export const getBulkDeleteAdminDeadLetterJobsMutationOptions = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof bulkDeleteAdminDeadLetterJobs>>,
+    TError,
+    { data: BodyType<NonReadonly<DeadLetterBulkDeleteRequest>> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customInstance>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof bulkDeleteAdminDeadLetterJobs>>,
+  TError,
+  { data: BodyType<NonReadonly<DeadLetterBulkDeleteRequest>> },
+  TContext
+> => {
+  const mutationKey = ["bulkDeleteAdminDeadLetterJobs"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof bulkDeleteAdminDeadLetterJobs>>,
+    { data: BodyType<NonReadonly<DeadLetterBulkDeleteRequest>> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return bulkDeleteAdminDeadLetterJobs(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type BulkDeleteAdminDeadLetterJobsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof bulkDeleteAdminDeadLetterJobs>>
+>;
+export type BulkDeleteAdminDeadLetterJobsMutationBody = BodyType<
+  NonReadonly<DeadLetterBulkDeleteRequest>
+>;
+export type BulkDeleteAdminDeadLetterJobsMutationError = ErrorType<ErrorModel>;
+
+/**
+ * @summary Bulk delete dead letter jobs (admin)
+ */
+export const useBulkDeleteAdminDeadLetterJobs = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof bulkDeleteAdminDeadLetterJobs>>,
+      TError,
+      { data: BodyType<NonReadonly<DeadLetterBulkDeleteRequest>> },
+      TContext
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof bulkDeleteAdminDeadLetterJobs>>,
+  TError,
+  { data: BodyType<NonReadonly<DeadLetterBulkDeleteRequest>> },
+  TContext
+> => {
+  return useMutation(
+    getBulkDeleteAdminDeadLetterJobsMutationOptions(options),
+    queryClient,
+  );
+};
+/**
+ * @summary Get dead letter job statistics (admin)
+ */
+export const getAdminDeadLetterJobStats = (
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<DeadLetterStatsResponse>(
+    { url: `/api/v1/admin/dead-letter-jobs/stats`, method: "GET", signal },
+    options,
+  );
+};
+
+export const getGetAdminDeadLetterJobStatsQueryKey = () => {
+  return [`/api/v1/admin/dead-letter-jobs/stats`] as const;
+};
+
+export const getGetAdminDeadLetterJobStatsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>,
+  TError = ErrorType<ErrorModel>,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof customInstance>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAdminDeadLetterJobStatsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>
+  > = ({ signal }) => getAdminDeadLetterJobStats(requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAdminDeadLetterJobStatsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>
+>;
+export type GetAdminDeadLetterJobStatsQueryError = ErrorType<ErrorModel>;
+
+export function useGetAdminDeadLetterJobStats<
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminDeadLetterJobStats<
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminDeadLetterJobStats<
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get dead letter job statistics (admin)
+ */
+
+export function useGetAdminDeadLetterJobStats<
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminDeadLetterJobStats>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAdminDeadLetterJobStatsQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Delete a dead letter job (admin)
+ */
+export const deleteAdminDeadLetterJob = (
+  id: number,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<void>(
+    { url: `/api/v1/admin/dead-letter-jobs/${id}`, method: "DELETE", signal },
+    options,
+  );
+};
+
+export const getDeleteAdminDeadLetterJobMutationOptions = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteAdminDeadLetterJob>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customInstance>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteAdminDeadLetterJob>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["deleteAdminDeadLetterJob"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteAdminDeadLetterJob>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deleteAdminDeadLetterJob(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteAdminDeadLetterJobMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteAdminDeadLetterJob>>
+>;
+
+export type DeleteAdminDeadLetterJobMutationError = ErrorType<ErrorModel>;
+
+/**
+ * @summary Delete a dead letter job (admin)
+ */
+export const useDeleteAdminDeadLetterJob = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof deleteAdminDeadLetterJob>>,
+      TError,
+      { id: number },
+      TContext
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof deleteAdminDeadLetterJob>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(
+    getDeleteAdminDeadLetterJobMutationOptions(options),
+    queryClient,
+  );
+};
+/**
+ * @summary Get dead letter job detail (admin)
+ */
+export const getAdminDeadLetterJobDetail = (
+  id: number,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<DeadLetterJob>(
+    { url: `/api/v1/admin/dead-letter-jobs/${id}`, method: "GET", signal },
+    options,
+  );
+};
+
+export const getGetAdminDeadLetterJobDetailQueryKey = (id: number) => {
+  return [`/api/v1/admin/dead-letter-jobs/${id}`] as const;
+};
+
+export const getGetAdminDeadLetterJobDetailQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAdminDeadLetterJobDetailQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>
+  > = ({ signal }) => getAdminDeadLetterJobDetail(id, requestOptions, signal);
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAdminDeadLetterJobDetailQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>
+>;
+export type GetAdminDeadLetterJobDetailQueryError = ErrorType<ErrorModel>;
+
+export function useGetAdminDeadLetterJobDetail<
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminDeadLetterJobDetail<
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminDeadLetterJobDetail<
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get dead letter job detail (admin)
+ */
+
+export function useGetAdminDeadLetterJobDetail<
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminDeadLetterJobDetail>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAdminDeadLetterJobDetailQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get raw (unredacted) job args (admin)
+ */
+export const getAdminDeadLetterJobArgs = (
+  id: number,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<GetAdminDeadLetterJobArgs200>(
+    { url: `/api/v1/admin/dead-letter-jobs/${id}/args`, method: "GET", signal },
+    options,
+  );
+};
+
+export const getGetAdminDeadLetterJobArgsQueryKey = (id: number) => {
+  return [`/api/v1/admin/dead-letter-jobs/${id}/args`] as const;
+};
+
+export const getGetAdminDeadLetterJobArgsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAdminDeadLetterJobArgsQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>
+  > = ({ signal }) => getAdminDeadLetterJobArgs(id, requestOptions, signal);
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAdminDeadLetterJobArgsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>
+>;
+export type GetAdminDeadLetterJobArgsQueryError = ErrorType<ErrorModel>;
+
+export function useGetAdminDeadLetterJobArgs<
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminDeadLetterJobArgs<
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminDeadLetterJobArgs<
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get raw (unredacted) job args (admin)
+ */
+
+export function useGetAdminDeadLetterJobArgs<
+  TData = Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminDeadLetterJobArgs>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAdminDeadLetterJobArgsQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Add admin notes to a dead letter job (admin)
+ */
+export const addAdminDeadLetterJobNotes = (
+  id: number,
+  addDLQNotesRequest: BodyType<NonReadonly<AddDLQNotesRequest>>,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<void>(
+    {
+      url: `/api/v1/admin/dead-letter-jobs/${id}/notes`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      data: addDLQNotesRequest,
+      signal,
+    },
+    options,
+  );
+};
+
+export const getAddAdminDeadLetterJobNotesMutationOptions = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof addAdminDeadLetterJobNotes>>,
+    TError,
+    { id: number; data: BodyType<NonReadonly<AddDLQNotesRequest>> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customInstance>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof addAdminDeadLetterJobNotes>>,
+  TError,
+  { id: number; data: BodyType<NonReadonly<AddDLQNotesRequest>> },
+  TContext
+> => {
+  const mutationKey = ["addAdminDeadLetterJobNotes"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof addAdminDeadLetterJobNotes>>,
+    { id: number; data: BodyType<NonReadonly<AddDLQNotesRequest>> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return addAdminDeadLetterJobNotes(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AddAdminDeadLetterJobNotesMutationResult = NonNullable<
+  Awaited<ReturnType<typeof addAdminDeadLetterJobNotes>>
+>;
+export type AddAdminDeadLetterJobNotesMutationBody = BodyType<
+  NonReadonly<AddDLQNotesRequest>
+>;
+export type AddAdminDeadLetterJobNotesMutationError = ErrorType<ErrorModel>;
+
+/**
+ * @summary Add admin notes to a dead letter job (admin)
+ */
+export const useAddAdminDeadLetterJobNotes = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof addAdminDeadLetterJobNotes>>,
+      TError,
+      { id: number; data: BodyType<NonReadonly<AddDLQNotesRequest>> },
+      TContext
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof addAdminDeadLetterJobNotes>>,
+  TError,
+  { id: number; data: BodyType<NonReadonly<AddDLQNotesRequest>> },
+  TContext
+> => {
+  return useMutation(
+    getAddAdminDeadLetterJobNotesMutationOptions(options),
+    queryClient,
+  );
+};
+/**
+ * @summary Retry a dead letter job (admin)
+ */
+export const retryAdminDeadLetterJob = (
+  id: number,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<DeadLetterRetryResponse>(
+    {
+      url: `/api/v1/admin/dead-letter-jobs/${id}/retry`,
+      method: "POST",
+      signal,
+    },
+    options,
+  );
+};
+
+export const getRetryAdminDeadLetterJobMutationOptions = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof retryAdminDeadLetterJob>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customInstance>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof retryAdminDeadLetterJob>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["retryAdminDeadLetterJob"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof retryAdminDeadLetterJob>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return retryAdminDeadLetterJob(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RetryAdminDeadLetterJobMutationResult = NonNullable<
+  Awaited<ReturnType<typeof retryAdminDeadLetterJob>>
+>;
+
+export type RetryAdminDeadLetterJobMutationError = ErrorType<ErrorModel>;
+
+/**
+ * @summary Retry a dead letter job (admin)
+ */
+export const useRetryAdminDeadLetterJob = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof retryAdminDeadLetterJob>>,
+      TError,
+      { id: number },
+      TContext
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof retryAdminDeadLetterJob>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(
+    getRetryAdminDeadLetterJobMutationOptions(options),
+    queryClient,
+  );
+};
 /**
  * Returns failed, past_due, and canceled Paddle transactions for admin review. Requires admin role.
  * @summary List failed payment transactions (admin)

@@ -16,12 +16,14 @@ import type {
   TagBehavior,
   AmountRangeValue,
   DateRangeValue,
+  RuleTargetKind,
 } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
 import { SearchableSelect } from '../../../shared/components/SearchableSelect'
 import type { Account } from '../../accounts/types'
-import { formatPlaidCategory } from '../utils/categoryUtils'
-import './AutoCategorizationRuleEditor.css'
+import type { Primary } from '@boostedbudget/api-client/models/primary'
+import type { Detailed } from '@boostedbudget/api-client/models/detailed'
+import { useGetPlaidDetailedCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
 
 // Account types available for selection
 const ACCOUNT_TYPES = [
@@ -52,8 +54,10 @@ function getInputTypeForCondition(conditionType: ConditionType): string {
       return 'amount_range'
     case 'date_range':
       return 'date_range'
-    case 'existing_category':
-      return 'category_select'
+    case 'existing_pfc_primary':
+      return 'pfc_primary_select'
+    case 'existing_pfc_detailed':
+      return 'pfc_detailed_select'
     case 'account_id':
       return 'account_select'
     case 'account_type':
@@ -132,8 +136,9 @@ export interface AutoCategorizationRuleEditorProps {
   rule?: CategorizationRule
   onSave: (data: CreateRuleRequest | UpdateRuleRequest) => Promise<void>
   onCancel: () => void
-  categories: string[][]
-  plaidCategories?: string[] // Plaid categories from user's transactions for "existing_category" condition
+  /** Legacy prop kept for parent compatibility; PFC v2 picker uses `plaidPrimaries` instead. */
+  categories?: string[][]
+  plaidPrimaries?: Primary[]
   accounts?: Account[] // Optional accounts list for account_id dropdown
   tags?: { id: string; name: string }[] // User tags for target tags autocomplete
 }
@@ -153,20 +158,24 @@ const DEFAULT_CONDITION: RuleCondition = {
   value: '',
 }
 
-export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, categories, plaidCategories = [], accounts = [], tags = [] }: AutoCategorizationRuleEditorProps) {
-  // Form state
+export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, plaidPrimaries = [], accounts = [], tags = [] }: AutoCategorizationRuleEditorProps) {
+  // Form state - basic info
   const [name, setName] = useState(rule?.name || '')
   const [description, setDescription] = useState(rule?.description || '')
   const [priority, setPriority] = useState(rule?.priority || 10)
-  const [conditions, setConditions] = useState<RuleCondition[]>(
-    rule?.conditions || []
-  )
-  const [conditionLogic, setConditionLogic] = useState<ConditionLogic>(
-    rule?.condition_logic || 'AND'
-  )
-  const [targetCategory, setTargetCategory] = useState<string[] | null>(
-    rule?.target_category || null
-  )
+
+  // Form state - conditions
+  const [conditions, setConditions] = useState<RuleCondition[]>(rule?.conditions || [])
+  const [conditionLogic, setConditionLogic] = useState<ConditionLogic>(rule?.condition_logic || 'AND')
+
+  // Form state - target (PFC v2 discriminated)
+  // Note: targetCustomCategoryId is hydrated but read-only pending deferred custom-target picker
+  const [targetKind, setTargetKind] = useState<RuleTargetKind | null>(rule?.target_kind ?? null)
+  const [targetPfcPrimary, setTargetPfcPrimary] = useState<string | null>(rule?.target_pfc_primary ?? null)
+  const [targetPfcDetailed, setTargetPfcDetailed] = useState<string | null>(rule?.target_pfc_detailed ?? null)
+  const [targetCustomCategoryId] = useState<string | null>(rule?.target_custom_category_id ?? null)
+
+  // Form state - tags
   const [targetTags, setTargetTags] = useState<string[]>(rule?.target_tags || [])
   const [tagBehavior, setTagBehavior] = useState<TagBehavior>(rule?.tag_behavior || 'add')
   const [newTag, setNewTag] = useState('')
@@ -175,48 +184,48 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
   const [saving, setSaving] = useState(false)
   const [errors, setErrors] = useState<FormErrors>({})
   const [conditionErrors, setConditionErrors] = useState<ConditionErrors>({})
+  const [pfcDetailedPrimarySelections, setPfcDetailedPrimarySelections] = useState<Record<number, string>>({})
 
-  // Flatten categories for the searchable dropdown
-  const flatCategories = useMemo(() => {
-    return categories.map(cat => cat.join(' > '))
-  }, [categories])
+  // Lazy-load detailed categories for pfc_detailed conditions or pfc-kind targets
+  const needsPlaidDetailed = useMemo(
+    () => conditions.some(c => c.type === 'existing_pfc_detailed') || targetKind === 'pfc',
+    [conditions, targetKind]
+  )
+  const { data: plaidDetailedData } = useGetPlaidDetailedCategories({ query: { enabled: needsPlaidDetailed } })
+  const plaidDetailed = useMemo(
+    () => (plaidDetailedData as unknown as Detailed[]) ?? [],
+    [plaidDetailedData]
+  )
 
-  // Issue #404: Special value for "Uncategorized" (clear category) option
-  const UNCATEGORIZED_VALUE = '__UNCATEGORIZED__'
-  const UNCATEGORIZED_LABEL = 'Uncategorized'
+  // PFC v2 (#1073): target picker option set.
+  // - PFC primaries (display label, value = enum)
+  // - Synthetic "Uncategorized" entry → targetKind='clear'
+  // Custom-category target picker is deferred (requires fetching CustomCategory[] with ids).
+  const CLEAR_VALUE = '__CLEAR__'
+  const CLEAR_LABEL = 'Uncategorized (clear override)'
 
-  // Combined category options for target category dropdown (custom + Plaid)
-  // Issue #402: Merge custom categories with Plaid categories in a flat, sorted list
-  // Issue #404: Add "Uncategorized" option at the top to allow clearing category
-  const allTargetCategoryOptions = useMemo(() => {
-    // Issue #404: "Uncategorized" option first - clears category to empty array
-    const uncategorizedOption = {
-      value: UNCATEGORIZED_VALUE,
-      label: UNCATEGORIZED_LABEL,
-    }
+  const targetPrimaryOptions = useMemo(() => {
+    const pfcOptions = plaidPrimaries
+      .map(p => ({ value: p.enum, label: p.display }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+    return [{ value: CLEAR_VALUE, label: CLEAR_LABEL }, ...pfcOptions]
+  }, [plaidPrimaries])
 
-    // Custom categories (keep as-is)
-    const customOptions = flatCategories.map(cat => ({ value: cat, label: cat }))
+  // Detailed children of the currently selected primary (cascading sub-picker)
+  const detailedChildrenOptions = useMemo(() => {
+    if (targetKind !== 'pfc' || !targetPfcPrimary) return []
+    return plaidDetailed
+      .filter(d => d.primary_enum === targetPfcPrimary)
+      .map(d => ({ value: d.enum, label: d.display }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [targetKind, targetPfcPrimary, plaidDetailed])
 
-    // Track existing values for deduplication
-    const existingValues = new Set(customOptions.map(opt => opt.value.toLowerCase()))
-
-    // Plaid categories (format for display, keep human-readable value for storage)
-    // Filter out duplicates that already exist in custom categories
-    const plaidOptions = plaidCategories
-      .map(cat => ({
-        value: formatPlaidCategory(cat),
-        label: formatPlaidCategory(cat),
-      }))
-      .filter(opt => !existingValues.has(opt.value.toLowerCase()))
-
-    // Merge and sort alphabetically, then add Uncategorized at the top
-    const sortedCategories = [...customOptions, ...plaidOptions].sort((a, b) =>
-      a.label.localeCompare(b.label)
-    )
-
-    return [uncategorizedOption, ...sortedCategories]
-  }, [flatCategories, plaidCategories])
+  // Display value for the primary combobox: maps targetKind/targetPfcPrimary back to option.value.
+  const targetPrimaryComboboxValue = useMemo(() => {
+    if (targetKind === 'clear') return CLEAR_VALUE
+    if (targetKind === 'pfc' && targetPfcPrimary) return targetPfcPrimary
+    return null
+  }, [targetKind, targetPfcPrimary])
 
   // Validate a single condition and update error state
   const validateSingleCondition = useCallback((index: number, condition: RuleCondition): string | null => {
@@ -251,16 +260,23 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       }
     }
 
-    // Issue #404: Empty array [] is a valid action (clear category), only null means no action
-    // null = no category action, [] = clear category action, ['Food'] = assign category action
-    if (targetCategory === null && targetTags.length === 0) {
+    // PFC v2: targetKind discriminator — null means no category action.
+    // 'pfc' requires a primary; 'custom' requires a custom_category_id (currently
+    // only hydrated on edit; picker support is deferred); 'clear' requires no further fields.
+    if (targetKind === null && targetTags.length === 0) {
       newErrors.target = 'Target category or tags required'
+    }
+    if (targetKind === 'pfc' && !targetPfcPrimary) {
+      newErrors.target = 'PFC primary is required for a PFC target'
+    }
+    if (targetKind === 'custom' && !targetCustomCategoryId) {
+      newErrors.target = 'Custom category id is required for a custom target'
     }
 
     setErrors(newErrors)
     setConditionErrors(newConditionErrors)
     return Object.keys(newErrors).length === 0
-  }, [name, conditions, targetCategory, targetTags])
+  }, [name, conditions, targetKind, targetPfcPrimary, targetCustomCategoryId, targetTags])
 
   // Handlers
   const handleSubmit = async (e: React.FormEvent) => {
@@ -278,9 +294,13 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         priority,
         conditions,
         condition_logic: conditionLogic,
-        // Issue #404: Preserve null (no action) vs [] (clear category) distinction
-        // null/undefined = no category action, [] = clear category, ['Food'] = assign category
-        target_category: targetCategory === null ? undefined : (targetCategory || undefined),
+        // PFC v2: discriminated target. undefined = no category action.
+        // Custom-target rules round-trip the hydrated custom_category_id even though the
+        // picker UI for it is not yet exposed (#1073 Phase 2 scope deferral).
+        target_kind: targetKind ?? undefined,
+        target_pfc_primary: targetKind === 'pfc' ? (targetPfcPrimary ?? undefined) : undefined,
+        target_pfc_detailed: targetKind === 'pfc' ? (targetPfcDetailed ?? undefined) : undefined,
+        target_custom_category_id: targetKind === 'custom' ? (targetCustomCategoryId ?? undefined) : undefined,
         target_tags: targetTags.length > 0 ? targetTags : undefined,
         tag_behavior: tagBehavior,
       }
@@ -377,16 +397,23 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
     updateCondition(index, { value: newTypes })
   }
 
-  // Issue #404: Handle category change including Uncategorized option
-  const handleCategoryChange = (value: string) => {
+  // PFC v2 (#1073): map combobox selection back to discriminated state.
+  const handleTargetPrimaryChange = (value: string) => {
     if (value === '' || value === null) {
-      // "No category change" selected (via allowClear) - null means no action
-      setTargetCategory(null)
-    } else if (value === UNCATEGORIZED_VALUE) {
-      // "Uncategorized" selected - empty array means clear category
-      setTargetCategory([])
+      // No selection — clear all target fields (rule has no category action).
+      setTargetKind(null)
+      setTargetPfcPrimary(null)
+      setTargetPfcDetailed(null)
+    } else if (value === CLEAR_VALUE) {
+      // User explicitly wants the rule to clear any existing override.
+      setTargetKind('clear')
+      setTargetPfcPrimary(null)
+      setTargetPfcDetailed(null)
     } else {
-      setTargetCategory(value.split(' > '))
+      // PFC primary enum selected — switch detailed back to null (forces user to re-pick).
+      setTargetKind('pfc')
+      setTargetPfcPrimary(value)
+      setTargetPfcDetailed(null)
     }
   }
 
@@ -402,22 +429,13 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
     setTargetTags(targetTags.filter((t) => t !== tag))
   }
 
-  // Issue #404: Display "Uncategorized" when targetCategory is empty array
-  // null = no selection (placeholder), [] = Uncategorized selected, ['Food'] = category selected
-  // Note: SearchableSelect matches on value, then displays label, so we return UNCATEGORIZED_VALUE
-  const categoryValue = useMemo(() => {
-    if (targetCategory === null) {
-      return null // Shows placeholder "Search categories..."
-    }
-    if (targetCategory.length === 0) {
-      return UNCATEGORIZED_VALUE // SearchableSelect will display "Uncategorized" label
-    }
-    return targetCategory.join(' > ')
-  }, [targetCategory])
-
   // Render the appropriate input for a condition based on its type
   const renderConditionValueInput = (condition: RuleCondition, index: number) => {
     const inputType = getInputTypeForCondition(condition.type)
+    const inputCls = 'flex-1 min-w-[100px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
+    const numberInputCls = 'max-w-[120px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
+    const dateInputCls = 'max-w-[150px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
+    const selectCls = 'flex-shrink-0 px-3 py-2 text-sm border border-input rounded bg-background text-foreground cursor-pointer min-w-[150px] focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70 disabled:cursor-not-allowed'
 
     switch (inputType) {
       case 'number':
@@ -425,7 +443,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
           <input
             type="number"
             step="0.01"
-            className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--number"
+            className={numberInputCls}
             value={condition.value === '' ? '' : String(condition.value)}
             onChange={(e) => {
               const val = e.target.value === '' ? '' : parseFloat(e.target.value)
@@ -441,11 +459,11 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       case 'amount_range': {
         const rangeValue = (condition.value as AmountRangeValue) || { min: undefined, max: undefined }
         return (
-          <div className="auto-categorization-rule-editor__range-inputs">
+          <div className="flex items-center gap-2 flex-1">
             <input
               type="number"
               step="0.01"
-              className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--number"
+              className={numberInputCls}
               value={rangeValue.min ?? ''}
               onChange={(e) => updateAmountRangeValue(index, 'min', e.target.value)}
               onBlur={() => validateSingleCondition(index, conditions[index])}
@@ -453,11 +471,11 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
               placeholder="$0.00"
               aria-label="Minimum amount"
             />
-            <span className="auto-categorization-rule-editor__range-separator">to</span>
+            <span className="text-sm text-muted-foreground">to</span>
             <input
               type="number"
               step="0.01"
-              className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--number"
+              className={numberInputCls}
               value={rangeValue.max ?? ''}
               onChange={(e) => updateAmountRangeValue(index, 'max', e.target.value)}
               onBlur={() => validateSingleCondition(index, conditions[index])}
@@ -472,20 +490,20 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       case 'date_range': {
         const dateValue = (condition.value as DateRangeValue) || { start: '', end: '' }
         return (
-          <div className="auto-categorization-rule-editor__range-inputs">
+          <div className="flex items-center gap-2 flex-1">
             <input
               type="date"
-              className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--date"
+              className={dateInputCls}
               value={dateValue.start || ''}
               onChange={(e) => updateDateRangeValue(index, 'start', e.target.value)}
               onBlur={() => validateSingleCondition(index, conditions[index])}
               disabled={saving}
               aria-label="Start date"
             />
-            <span className="auto-categorization-rule-editor__range-separator">to</span>
+            <span className="text-sm text-muted-foreground">to</span>
             <input
               type="date"
-              className="auto-categorization-rule-editor__input auto-categorization-rule-editor__input--date"
+              className={dateInputCls}
               value={dateValue.end || ''}
               onChange={(e) => updateDateRangeValue(index, 'end', e.target.value)}
               onBlur={() => validateSingleCondition(index, conditions[index])}
@@ -496,34 +514,88 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         )
       }
 
-      case 'category_select':
-        // Use Plaid categories from user's transactions for "existing_category" condition
-        // Issue #402: Display human-readable format, store Plaid enum value
+      case 'pfc_primary_select':
+        // existing_pfc_primary: display shown, raw PFC enum stored
         return (
           <SearchableSelect
-            options={plaidCategories.map(cat => ({
-              value: cat,
-              label: formatPlaidCategory(cat),
-            }))}
+            options={plaidPrimaries.map(p => ({ value: p.enum, label: p.display }))}
             value={String(condition.value || '') || null}
             onChange={(value) => updateCondition(index, { value: value || '' })}
-            placeholder="Search Plaid categories..."
+            placeholder="Search PFC primaries..."
             disabled={saving}
-            aria-label="Select Plaid category"
+            aria-label="Select PFC primary"
             allowClear
-            clearLabel="Select a category"
+            clearLabel="Select a primary"
           />
         )
 
-      case 'account_select':
+      case 'pfc_detailed_select': {
+        // existing_pfc_detailed: two-stage cascading dropdown (primary → detailed children)
+        const detailedValue = String(condition.value || '')
+        // Derive selected primary: from explicit per-condition selection, OR from cached row on edit
+        const selectedPrimary = pfcDetailedPrimarySelections[index] ??
+          plaidDetailed.find(d => d.enum === detailedValue)?.primary_enum ?? ''
+
+        // Build stage-1: distinct primaries that have at least one detailed child
+        const primarysWithChildren = Array.from(new Map(
+          plaidDetailed.map(d => [d.primary_enum, { value: d.primary_enum, label: d.primary_display }])
+        ).values()).sort((a, b) => a.label.localeCompare(b.label))
+
+        // Build stage-2: detailed children of the selected primary
+        const detailedChildren = plaidDetailed
+          .filter(d => d.primary_enum === selectedPrimary)
+          .map(d => ({ value: d.enum, label: d.display }))
+          .sort((a, b) => a.label.localeCompare(b.label))
+
+        return (
+          <div className="flex flex-col gap-2 flex-1">
+            <SearchableSelect
+              options={primarysWithChildren}
+              value={selectedPrimary || null}
+              onChange={(value) => {
+                setPfcDetailedPrimarySelections(prev => ({ ...prev, [index]: value || '' }))
+                // Clear the detailed value when primary changes
+                updateCondition(index, { value: '' })
+              }}
+              placeholder="Select primary category..."
+              disabled={saving || plaidDetailed.length === 0}
+              aria-label="Select PFC primary for detailed"
+              allowClear
+              clearLabel="Select a primary"
+            />
+            {selectedPrimary && (
+              <SearchableSelect
+                options={detailedChildren}
+                value={detailedValue || null}
+                onChange={(value) => updateCondition(index, { value: value || '' })}
+                placeholder="Select detailed category..."
+                disabled={saving}
+                aria-label="Select PFC detailed"
+                allowClear
+                clearLabel="Select a detailed category"
+              />
+            )}
+          </div>
+        )
+      }
+
+      case 'account_select': {
+        const accountOptions = accounts.map(acc => ({
+          value: acc.user_account_id ?? acc.id,
+          label: acc.name,
+          sublabel: `${acc.type}${acc.mask ? ` ••••${acc.mask}` : ''}`
+        }))
+        const rawValue = String(condition.value || '') || null
+        // Edit-mode hydration: if a legacy rule stored a raw account.id (not user_account_id),
+        // resolve it to the stable user_account_id so the dropdown renders correctly.
+        // Migration 000072 backfills existing rules, but this is a belt-and-suspenders guard.
+        const resolvedValue = rawValue !== null && !accountOptions.some(o => o.value === rawValue)
+          ? (accounts.find(acc => acc.id === rawValue)?.user_account_id ?? rawValue)
+          : rawValue
         return (
           <SearchableSelect
-            options={accounts.map(acc => ({
-              value: acc.id,
-              label: acc.name,
-              sublabel: `${acc.type}${acc.mask ? ` ••••${acc.mask}` : ''}`
-            }))}
-            value={String(condition.value || '') || null}
+            options={accountOptions}
+            value={resolvedValue}
             onChange={(value) => updateCondition(index, { value: value || '' })}
             placeholder="Search accounts..."
             disabled={saving}
@@ -532,19 +604,21 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
             clearLabel="Select an account"
           />
         )
+      }
 
       case 'account_type_select': {
         const selectedTypes = (Array.isArray(condition.value) ? condition.value : []) as string[]
         return (
-          <div className="auto-categorization-rule-editor__checkbox-group">
-            <span className="auto-categorization-rule-editor__match-label">Match ANY of:</span>
+          <div className="flex flex-wrap gap-3 p-2 bg-muted rounded flex-1 min-w-[200px]">
+            <span className="w-full text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Match ANY of:</span>
             {ACCOUNT_TYPES.map((type) => (
-              <label key={type.value} className="auto-categorization-rule-editor__checkbox-label">
+              <label key={type.value} className="flex items-center gap-1.5 text-[0.8125rem] text-foreground cursor-pointer whitespace-nowrap">
                 <input
                   type="checkbox"
                   checked={selectedTypes.includes(type.value)}
                   onChange={() => toggleAccountType(index, type.value)}
                   disabled={saving}
+                  className="cursor-pointer"
                 />
                 {type.label}
               </label>
@@ -556,7 +630,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       case 'payment_channel_select':
         return (
           <select
-            className="auto-categorization-rule-editor__select"
+            className={selectCls}
             value={String(condition.value || '')}
             onChange={(e) => updateCondition(index, { value: e.target.value })}
             disabled={saving}
@@ -575,7 +649,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         return (
           <input
             type="text"
-            className="auto-categorization-rule-editor__input"
+            className={inputCls}
             value={String(condition.value)}
             onChange={(e) => updateCondition(index, { value: e.target.value })}
             onBlur={() => validateSingleCondition(index, conditions[index])}
@@ -587,38 +661,44 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
     }
   }
 
+  const inputClass = 'w-full px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
+  const selectClass = 'px-3 py-2 text-sm border border-input rounded bg-background text-foreground cursor-pointer min-w-[150px] focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70 disabled:cursor-not-allowed'
+  const labelClass = 'block mb-1.5 text-[0.8125rem] font-medium text-muted-foreground'
+  const errorClass = 'block mt-1 text-xs text-destructive'
+  const btnBaseClass = 'px-5 py-2 text-sm font-medium border border-transparent rounded cursor-pointer transition-colors disabled:opacity-60 disabled:cursor-not-allowed'
+
   return (
-    <form className="auto-categorization-rule-editor" onSubmit={handleSubmit}>
-      <h2 className="auto-categorization-rule-editor__title">
+    <form className="bg-card border border-border rounded-lg p-6 max-w-[600px]" onSubmit={handleSubmit}>
+      <h2 className="m-0 mb-6 text-xl font-semibold text-foreground">
         {mode === 'create' ? 'Create Rule' : 'Edit Rule'}
       </h2>
 
       {/* Basic Info */}
-      <div className="auto-categorization-rule-editor__section">
-        <div className="auto-categorization-rule-editor__field">
-          <label htmlFor="rule-name" className="auto-categorization-rule-editor__label">
+      <div className="mb-6 pb-6 border-b border-border">
+        <div className="mb-4">
+          <label htmlFor="rule-name" className={labelClass}>
             Rule Name
           </label>
           <input
             id="rule-name"
             type="text"
-            className="auto-categorization-rule-editor__input"
+            className={inputClass}
             value={name}
             onChange={(e) => setName(e.target.value)}
             disabled={saving}
             placeholder="e.g., Coffee Shops"
           />
-          {errors.name && <span className="auto-categorization-rule-editor__error">{errors.name}</span>}
+          {errors.name && <span className={errorClass}>{errors.name}</span>}
         </div>
 
-        <div className="auto-categorization-rule-editor__field">
-          <label htmlFor="rule-description" className="auto-categorization-rule-editor__label">
+        <div className="mb-4">
+          <label htmlFor="rule-description" className={labelClass}>
             Description
           </label>
           <input
             id="rule-description"
             type="text"
-            className="auto-categorization-rule-editor__input"
+            className={inputClass}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             disabled={saving}
@@ -626,14 +706,14 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
           />
         </div>
 
-        <div className="auto-categorization-rule-editor__field auto-categorization-rule-editor__field--small">
-          <label htmlFor="rule-priority" className="auto-categorization-rule-editor__label">
+        <div className="mb-4 max-w-[120px]">
+          <label htmlFor="rule-priority" className={labelClass}>
             Priority
           </label>
           <input
             id="rule-priority"
             type="number"
-            className="auto-categorization-rule-editor__input"
+            className={inputClass}
             value={priority}
             onChange={(e) => setPriority(parseInt(e.target.value, 10) || 0)}
             disabled={saving}
@@ -644,14 +724,14 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       </div>
 
       {/* Conditions */}
-      <div className="auto-categorization-rule-editor__section">
-        <div className="auto-categorization-rule-editor__section-header">
-          <h3 className="auto-categorization-rule-editor__section-title">Conditions</h3>
+      <div className="mb-6 pb-6 border-b border-border">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="m-0 text-[0.9375rem] font-semibold text-foreground">Conditions</h3>
           {conditions.length > 1 && (
-            <div className="auto-categorization-rule-editor__logic-toggle">
+            <div className="flex border border-border rounded overflow-hidden">
               <button
                 type="button"
-                className={`auto-categorization-rule-editor__logic-btn ${conditionLogic === 'AND' ? 'active' : ''}`}
+                className={`px-3 py-1 text-xs font-semibold border-none cursor-pointer transition-colors disabled:opacity-70 disabled:cursor-not-allowed ${conditionLogic === 'AND' ? 'active bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted'}`}
                 onClick={() => setConditionLogic('AND')}
                 disabled={saving}
               >
@@ -659,7 +739,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
               </button>
               <button
                 type="button"
-                className={`auto-categorization-rule-editor__logic-btn ${conditionLogic === 'OR' ? 'active' : ''}`}
+                className={`px-3 py-1 text-xs font-semibold border-none cursor-pointer transition-colors disabled:opacity-70 disabled:cursor-not-allowed ${conditionLogic === 'OR' ? 'active bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted'}`}
                 onClick={() => setConditionLogic('OR')}
                 disabled={saving}
               >
@@ -670,20 +750,20 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         </div>
 
         {errors.conditions && (
-          <span className="auto-categorization-rule-editor__error">{errors.conditions}</span>
+          <span className={errorClass}>{errors.conditions}</span>
         )}
 
-        <div className="auto-categorization-rule-editor__conditions">
+        <div className="flex flex-col gap-3 mb-3">
           {conditions.map((condition, index) => (
-            <div key={index} className="auto-categorization-rule-editor__condition-wrapper">
-              <div className={`auto-categorization-rule-editor__condition ${conditionErrors[index] ? 'auto-categorization-rule-editor__condition--error' : ''}`}>
-                <label htmlFor={`condition-type-${index}`} className="visually-hidden">
+            <div key={index} className="flex flex-col gap-1">
+              <div className={`flex items-start gap-2 flex-wrap ${conditionErrors[index] ? 'border-l-2 border-destructive pl-2 -ml-2' : ''}`}>
+                <label htmlFor={`condition-type-${index}`} className="sr-only">
                   Condition type
                 </label>
                 <select
                   id={`condition-type-${index}`}
                   aria-label="Condition type"
-                  className="auto-categorization-rule-editor__select"
+                  className={selectClass}
                   value={condition.type}
                   onChange={(e) => updateCondition(index, { type: e.target.value as ConditionType })}
                   disabled={saving}
@@ -697,7 +777,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
                 {renderConditionValueInput(condition, index)}
                 <button
                   type="button"
-                  className="auto-categorization-rule-editor__remove-btn"
+                  className="px-2 py-1 text-xl leading-none border-none bg-transparent text-destructive cursor-pointer opacity-70 hover:opacity-100 transition-opacity disabled:cursor-not-allowed"
                   onClick={() => removeCondition(index)}
                   disabled={saving}
                   aria-label="Remove condition"
@@ -706,7 +786,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
                 </button>
               </div>
               {conditionErrors[index] && (
-                <span className="auto-categorization-rule-editor__condition-error">
+                <span className="text-xs text-destructive pl-2">
                   {conditionErrors[index]}
                 </span>
               )}
@@ -716,7 +796,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
 
         <button
           type="button"
-          className="auto-categorization-rule-editor__add-btn"
+          className="px-3 py-1.5 text-[0.8125rem] font-medium border border-dashed border-border rounded bg-transparent text-muted-foreground cursor-pointer hover:border-primary hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           onClick={addCondition}
           disabled={saving}
         >
@@ -725,37 +805,73 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
       </div>
 
       {/* Target Category */}
-      <div className="auto-categorization-rule-editor__section">
-        <h3 className="auto-categorization-rule-editor__section-title">Actions</h3>
-        {errors.target && <span className="auto-categorization-rule-editor__error">{errors.target}</span>}
+      <div className="mb-6 pb-6 border-b border-border last:border-b-0 last:pb-0">
+        <h3 className="m-0 mb-4 text-[0.9375rem] font-semibold text-foreground">Actions</h3>
+        {errors.target && <span className={errorClass}>{errors.target}</span>}
 
-        <div className="auto-categorization-rule-editor__field">
-          <label htmlFor="target-category" className="auto-categorization-rule-editor__label">
+        <div className="mb-4">
+          <label htmlFor="target-category" className={labelClass}>
             Target Category
           </label>
-          {/* Issue #402: Combined custom + Plaid categories in a flat, sorted list */}
-          <SearchableSelect
-            options={allTargetCategoryOptions}
-            value={categoryValue || null}
-            onChange={(value) => handleCategoryChange(value || '')}
-            placeholder="Search categories..."
-            disabled={saving}
-            aria-label="Target category"
-            allowClear
-            clearLabel="No category change"
-          />
+          {targetKind === 'custom' ? (
+            // PFC v2 (#1073): the custom-target picker UI is deferred. Existing rules with a
+            // custom target are shown read-only so users can edit other fields without
+            // accidentally clearing the target. Editing the custom target itself is unsupported
+            // in this version — track in a follow-up.
+            <div
+              className="px-3 py-2 text-sm border border-input rounded bg-muted text-muted-foreground"
+              data-testid="target-custom-readonly"
+              aria-label="Custom category target (read-only)"
+            >
+              Custom category: <code className="font-mono text-xs">{rule?.target_custom_category_display ?? targetCustomCategoryId}</code>
+              <span className="block text-xs mt-1 text-muted-foreground/80">
+                Editing the custom-category target is not yet supported in this UI.
+              </span>
+            </div>
+          ) : (
+            <>
+              {/* PFC v2 (#1073): primary picker + optional detailed cascade. */}
+              <SearchableSelect
+                options={targetPrimaryOptions}
+                value={targetPrimaryComboboxValue}
+                onChange={(value) => handleTargetPrimaryChange(value || '')}
+                placeholder="Search PFC primaries..."
+                disabled={saving}
+                aria-label="Target category"
+                allowClear
+                clearLabel="No category change"
+              />
+            </>
+          )}
+          {targetKind === 'pfc' && targetPfcPrimary && (
+            <div className="mt-2">
+              <label htmlFor="target-detailed" className={labelClass}>
+                Detailed (optional)
+              </label>
+              <SearchableSelect
+                options={detailedChildrenOptions}
+                value={targetPfcDetailed}
+                onChange={(value) => setTargetPfcDetailed(value || null)}
+                placeholder="Search detailed categories..."
+                disabled={saving || detailedChildrenOptions.length === 0}
+                aria-label="Target detailed category"
+                allowClear
+                clearLabel="No detailed refinement"
+              />
+            </div>
+          )}
         </div>
 
         {/* Tags */}
-        <div className="auto-categorization-rule-editor__field">
-          <label className="auto-categorization-rule-editor__label">Target Tags</label>
-          <div className="auto-categorization-rule-editor__tags">
+        <div className="mb-4">
+          <label className={labelClass}>Target Tags</label>
+          <div className="flex flex-wrap gap-1.5 mb-2">
             {targetTags.map((tag) => (
-              <span key={tag} className="auto-categorization-rule-editor__tag">
+              <span key={tag} className="inline-flex items-center gap-1 px-2 py-1 text-[0.8125rem] bg-info/10 text-info rounded">
                 {tag}
                 <button
                   type="button"
-                  className="auto-categorization-rule-editor__tag-remove"
+                  className="p-0 text-base leading-none border-none bg-transparent text-current cursor-pointer opacity-70 hover:opacity-100"
                   onClick={() => removeTag(tag)}
                   disabled={saving}
                   aria-label={`Remove tag ${tag}`}
@@ -765,7 +881,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
               </span>
             ))}
           </div>
-          <div className="auto-categorization-rule-editor__tag-input-row">
+          <div className="flex gap-2">
             {tags.length > 0 ? (
               <SearchableSelect
                 options={tags
@@ -785,7 +901,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
               <>
                 <input
                   type="text"
-                  className="auto-categorization-rule-editor__input"
+                  className={`${inputClass} flex-1`}
                   value={newTag}
                   onChange={(e) => setNewTag(e.target.value)}
                   onKeyDown={(e) => {
@@ -799,7 +915,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
                 />
                 <button
                   type="button"
-                  className="auto-categorization-rule-editor__add-btn"
+                  className="px-3 py-1.5 text-[0.8125rem] font-medium border border-dashed border-border rounded bg-transparent text-muted-foreground cursor-pointer hover:border-primary hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   onClick={addTag}
                   disabled={saving || !newTag.trim()}
                 >
@@ -812,10 +928,10 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
 
         {/* Tag behavior */}
         {targetTags.length > 0 && (
-          <div className="auto-categorization-rule-editor__field">
-            <label className="auto-categorization-rule-editor__label">Tag Behavior</label>
-            <div className="auto-categorization-rule-editor__radio-group">
-              <label className="auto-categorization-rule-editor__radio">
+          <div className="mb-4">
+            <label className={labelClass}>Tag Behavior</label>
+            <div className="flex flex-col gap-2">
+              <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
                 <input
                   type="radio"
                   name="tag-behavior"
@@ -823,10 +939,11 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
                   checked={tagBehavior === 'add'}
                   onChange={() => setTagBehavior('add')}
                   disabled={saving}
+                  className="cursor-pointer"
                 />
                 Add to existing tags
               </label>
-              <label className="auto-categorization-rule-editor__radio">
+              <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
                 <input
                   type="radio"
                   name="tag-behavior"
@@ -834,6 +951,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
                   checked={tagBehavior === 'replace'}
                   onChange={() => setTagBehavior('replace')}
                   disabled={saving}
+                  className="cursor-pointer"
                 />
                 Replace existing tags
               </label>
@@ -842,11 +960,11 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         )}
       </div>
 
-      {/* Actions */}
-      <div className="auto-categorization-rule-editor__footer">
+      {/* Footer Actions */}
+      <div className="flex justify-end gap-3 mt-6 pt-6 border-t border-border">
         <button
           type="button"
-          className="auto-categorization-rule-editor__btn auto-categorization-rule-editor__btn--cancel"
+          className={`${btnBaseClass} bg-background border-border text-foreground hover:bg-muted`}
           onClick={onCancel}
           disabled={saving}
         >
@@ -854,7 +972,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, cat
         </button>
         <button
           type="submit"
-          className="auto-categorization-rule-editor__btn auto-categorization-rule-editor__btn--save"
+          className={`${btnBaseClass} bg-primary text-primary-foreground hover:bg-primary/90`}
           disabled={saving}
         >
           {saving ? 'Saving...' : 'Save'}

@@ -6,7 +6,7 @@
 #   1. Finds available ports for frontend, backend, and PostgreSQL
 #   2. Starts a temporary PostgreSQL container (if Docker available)
 #   3. Runs database migrations
-#   4. Builds backend if binary doesn't exist
+#   4. Always rebuilds backend binary (prevents stale-binary/schema mismatches)
 #   5. Runs Playwright tests
 #   6. Cleans up PostgreSQL container on exit
 #
@@ -22,8 +22,28 @@ BACKEND_DIR="${SCRIPT_DIR}/../../../backend"
 # Source postgres helper functions
 source "${SCRIPT_DIR}/e2e-postgres.sh"
 
+# Background health monitor — logs if PostgreSQL dies mid-run so failures have clear evidence
+monitor_postgres() {
+  local container_name
+  container_name=$(docker ps --filter "name=e2e-postgres-" --format "{{.Names}}" 2>/dev/null | head -1)
+  [ -z "$container_name" ] && return
+
+  while true; do
+    sleep 30
+    local status
+    status=$(docker inspect --format='{{.State.Status}}' "$container_name" 2>/dev/null || echo "missing")
+    if [ "$status" != "running" ]; then
+      echo ""
+      echo "🚨 PostgreSQL container '$container_name' is $status! Remaining tests will likely fail."
+      docker logs --tail 20 "$container_name" 2>/dev/null || true
+      break
+    fi
+  done
+}
+
 # Cleanup function - called on exit (success or failure)
 cleanup() {
+  kill "${MONITOR_PID:-}" 2>/dev/null || true
   echo ""
   echo "🧹 Cleaning up..."
   stop_postgres
@@ -49,15 +69,13 @@ echo "   Backend:  $E2E_BACKEND_PORT"
 echo "   Postgres: $E2E_POSTGRES_PORT"
 
 # =============================================================================
-# Build Backend (if needed)
+# Build Backend (always rebuild to prevent stale-binary/schema mismatches)
 # =============================================================================
 
-if [ ! -f "${BACKEND_DIR}/bin/server" ]; then
-  echo ""
-  echo "🔨 Backend binary not found, building..."
-  (cd "$BACKEND_DIR" && go build -o bin/server ./cmd/server)
-  echo "   ✅ Backend built successfully"
-fi
+echo ""
+echo "Building backend binary..."
+(cd "$BACKEND_DIR" && go build -o bin/server ./cmd/server)
+echo "   Backend built successfully"
 
 # =============================================================================
 # Setup PostgreSQL Database
@@ -93,6 +111,10 @@ else
 
         echo ""
         echo "✅ Database ready for E2E tests!"
+
+        # Start background monitor to log if postgres dies mid-run
+        monitor_postgres &
+        MONITOR_PID=$!
       else
         echo ""
         echo "❌ PostgreSQL failed to become ready"

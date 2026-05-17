@@ -615,49 +615,34 @@ test.describe.skip('Account Customization - Hide/Show Toggle (Requires Auth)', (
   });
 
   test('should show hidden accounts toggle in header when accounts are hidden', async ({ page }) => {
-    // This test assumes there are hidden accounts
     await navigateToAccountsPage(page);
 
-    // The toggle should appear if there are hidden accounts
     const toggle = page.locator('.accounts-header__toggle');
-
-    if (await toggle.isVisible({ timeout: 1000 })) {
-      // Should show count of hidden accounts
-      await expect(toggle).toContainText(/hidden/i);
-      await expect(toggle).toContainText(/\d+/); // Should have a number
-    }
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toContainText(/hidden/i);
+    await expect(toggle).toContainText(/\d+/);
   });
 
   test('should reveal hidden accounts when toggle is clicked', async ({ page }) => {
     await navigateToAccountsPage(page);
 
     const toggle = page.locator('.accounts-header__toggle');
-
-    if (await toggle.isVisible({ timeout: 1000 })) {
-      // Click to show hidden accounts
-      await toggle.click();
-
-      // Toggle should now say "Hide Hidden"
-      await expect(toggle).toContainText(/hide hidden/i);
-
-      // Hidden accounts should now be visible (with --hidden modifier)
-      await expect(page.locator('.account-card--hidden')).toBeVisible();
-    }
+    await expect(toggle).toBeVisible();
+    await toggle.click();
+    await expect(toggle).toContainText(/hide hidden/i);
+    await expect(page.locator('.account-card--hidden')).toBeVisible();
   });
 
   test('should show Hidden badge on hidden accounts', async ({ page }) => {
     await navigateToAccountsPage(page);
 
-    // Show hidden accounts first
     const toggle = page.locator('.accounts-header__toggle');
-    if (await toggle.isVisible({ timeout: 1000 })) {
-      await toggle.click();
+    await expect(toggle).toBeVisible();
+    await toggle.click();
 
-      // Hidden accounts should have a badge
-      const hiddenCard = page.locator('.account-card--hidden').first();
-      await expect(hiddenCard.locator('.account-card__badge--hidden')).toBeVisible();
-      await expect(hiddenCard.locator('.account-card__badge--hidden')).toContainText('Hidden');
-    }
+    const hiddenCard = page.locator('.account-card--hidden').first();
+    await expect(hiddenCard.locator('.account-card__badge--hidden')).toBeVisible();
+    await expect(hiddenCard.locator('.account-card__badge--hidden')).toContainText('Hidden');
   });
 });
 

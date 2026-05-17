@@ -354,4 +354,32 @@ describe('WebhooksPage', () => {
 
     expect(screen.getByRole('button', { name: /reset filters/i })).toBeInTheDocument()
   })
+
+  describe('Phase 6 – DataTable migration', () => {
+    it('shows column visibility menu with hideable columns', () => {
+      mockUseListAdminPaddleWebhooks.mockReturnValue({
+        data: mockListResponse,
+        isLoading: false,
+        error: null,
+      })
+      mockUseGetAdminPaddleWebhookStats.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: null,
+      })
+      mockUseReplayAdminPaddleWebhook.mockReturnValue({
+        mutate: () => {},
+        isPending: false,
+      })
+
+      render(<WebhooksPage />, { wrapper: createWrapper() })
+
+      const columnsBtn = screen.getByRole('button', { name: /columns/i })
+      fireEvent.click(columnsBtn)
+
+      expect(screen.getByRole('menuitemcheckbox', { name: /event id/i })).toBeInTheDocument()
+      expect(screen.getByRole('menuitemcheckbox', { name: /attempts/i })).toBeInTheDocument()
+      expect(screen.getByRole('menuitemcheckbox', { name: /error/i })).toBeInTheDocument()
+    })
+  })
 })

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -42,6 +43,24 @@ func plaidSyncUniqueOpts() *queue.UniqueOpts {
 		},
 	}
 }
+
+// investmentHoldingsSyncJobArgs is a local struct for enqueueing investment holdings sync jobs.
+// This mirrors jobs.InvestmentHoldingsSyncArgs to avoid import cycle (Issue #659).
+type investmentHoldingsSyncJobArgs struct {
+	UserID string `json:"user_id"`
+	ItemID string `json:"item_id"`
+}
+
+func (investmentHoldingsSyncJobArgs) Kind() string { return "investment_holdings_sync" }
+
+// investmentTransactionsSyncJobArgs is a local struct for enqueueing investment transactions sync jobs.
+// This mirrors jobs.InvestmentTransactionsSyncArgs to avoid import cycle (Issue #659).
+type investmentTransactionsSyncJobArgs struct {
+	UserID string `json:"user_id"`
+	ItemID string `json:"item_id"`
+}
+
+func (investmentTransactionsSyncJobArgs) Kind() string { return "investment_transactions_sync" }
 
 // itemCleanupJobArgs is a local struct for enqueueing item cleanup jobs.
 // This mirrors jobs.ItemCleanupArgs to avoid import cycle (services → jobs → services).
@@ -94,10 +113,11 @@ type AccountService interface {
 	// NOTE: After PR #197, this accepts internal user UUID, not Clerk ID
 	GetAccounts(ctx context.Context, userID string) ([]domain.Account, error)
 
-	// GetAccountsFiltered retrieves accounts with optional hidden filter (Issue #307)
-	// includeHidden=false: Returns only visible accounts (default view)
-	// includeHidden=true: Returns all accounts including hidden ones
-	GetAccountsFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error)
+	// GetAccountsFiltered retrieves accounts with optional filters (Issue #307, #1109)
+	// opts.IncludeHidden=false: Returns only visible accounts (default)
+	// opts.IncludeReplaced=true: Also includes replaced accounts (chain transparency)
+	// opts.UserAccountID: Filters to accounts sharing a user_account_id chain
+	GetAccountsFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error)
 
 	// UpdateAccount updates account customization fields (Issue #307)
 	// Supports: nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden
@@ -108,6 +128,10 @@ type AccountService interface {
 	// ReorderAccounts bulk updates display_order for multiple accounts (Issue #307)
 	// Used for drag-and-drop reordering
 	ReorderAccounts(ctx context.Context, userID string, req *domain.ReorderAccountsRequest) error
+
+	// ListActiveByUser returns only active accounts for a user, excluding replaced and expired.
+	// Issue #1109: re-link chain transparency — callers should prefer this over GetByUserID.
+	ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error)
 
 	// DeleteAccount deletes a single account with ownership validation.
 	// Only the account owner can delete their account.
@@ -136,13 +160,14 @@ type LinkAccountsResult struct {
 type accountService struct {
 	plaidService    PlaidService
 	subscriptionSvc *SubscriptionService
-	encryptionSvc   EncryptionService
 	linkedItemRepo  repository.LinkedItemRepository
 	accountRepo     repository.AccountRepository
 	userRepo        repository.ProfileRepository
-	userAccountSvc  UserAccountService // Issue #171: For re-link user_account matching
+	userAccountSvc  UserAccountService  // Issue #171: For re-link user_account matching
+	chainResolver   AccountChainResolver // Issue #1109: Active-only account resolution
 	db              *pgxpool.Pool
-	jobQueue        queue.JobQueue // Issue #658: For auto-sync after linking (can be nil)
+	jobQueue        queue.JobQueue           // Issue #658: For auto-sync after linking (can be nil)
+	enc             *appcrypto.FieldEncryptor // Issue #1010: For fingerprint computation (can be nil)
 	logger          *slog.Logger
 }
 
@@ -170,11 +195,72 @@ func WithUserAccountService(uaSvc UserAccountService) AccountServiceOption {
 	}
 }
 
+// WithEncryptor sets the FieldEncryptor for fingerprint computation (Issue #1010).
+// When set, LinkAccounts will compute and check cross-user fingerprints.
+func WithEncryptor(enc *appcrypto.FieldEncryptor) AccountServiceOption {
+	return func(s *accountService) {
+		s.enc = enc
+	}
+}
+
+// computePersistentBlind computes the blind index for a persistent_account_id fingerprint.
+// Uses namespaced prefix "pid:" to prevent cross-namespace collisions.
+func computePersistentBlind(persistentAccountID string, enc *appcrypto.FieldEncryptor) string {
+	return enc.BlindIndex("pid:" + persistentAccountID)
+}
+
+// computeFallbackBlind computes the blind index for an institution|mask|type|subtype fingerprint.
+// Uses namespaced prefix "fb:" and null-byte delimiters to prevent hash collisions.
+func computeFallbackBlind(institutionID, mask, accountType, subtype string, enc *appcrypto.FieldEncryptor) string {
+	return enc.BlindIndex("fb:" + institutionID + "\x00" + mask + "\x00" + accountType + "\x00" + subtype)
+}
+
+// shouldReleaseFingerprint returns true when a disconnected/revoked item's 90-day TTL has elapsed.
+// Active items are never released.
+func shouldReleaseFingerprint(ownership *repository.FingerprintOwnership) bool {
+	if ownership.ItemStatus == domain.LinkedItemStatusActive {
+		return false
+	}
+	if ownership.ItemStatus != domain.LinkedItemStatusDisconnected &&
+		ownership.ItemStatus != domain.LinkedItemStatusRevoked {
+		return false
+	}
+	if ownership.StatusChangedAt == nil {
+		return false
+	}
+	return time.Since(*ownership.StatusChangedAt) >= 90*24*time.Hour
+}
+
+// checkFingerprintOwnership checks whether a blind index is owned by another user.
+// Returns ErrAccountOwnedByAnotherUser if blocked, nil if allowed.
+// If TTL has expired, it releases the fingerprint by expiring the old accounts first.
+func (s *accountService) checkFingerprintOwnership(ctx context.Context, blindIdx, userID string) error {
+	ownership, err := s.accountRepo.CheckFingerprintOwnership(ctx, blindIdx, userID)
+	if err != nil {
+		return fmt.Errorf("fingerprint ownership check failed: %w", err)
+	}
+	if ownership == nil {
+		return nil // no other user owns it
+	}
+	if shouldReleaseFingerprint(ownership) {
+		s.logger.Info("releasing expired fingerprint",
+			"blind_idx_prefix", blindIdx[:8],
+			"other_item_id", ownership.LinkedItemID,
+			"status_changed_at", ownership.StatusChangedAt,
+		)
+		if err := s.accountRepo.ExpireAccountsByFingerprint(ctx, blindIdx); err != nil {
+			return fmt.Errorf("failed to expire accounts by fingerprint: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("%w: account fingerprint already claimed by another user (item_id=%s, status=%s)",
+		repository.ErrAccountOwnedByAnotherUser, ownership.LinkedItemID, ownership.ItemStatus)
+}
+
 // NewAccountService creates a new AccountService instance
 func NewAccountService(
 	plaidService PlaidService,
 	subscriptionSvc *SubscriptionService,
-	encryptionSvc EncryptionService,
 	linkedItemRepo repository.LinkedItemRepository,
 	accountRepo repository.AccountRepository,
 	userRepo repository.ProfileRepository,
@@ -184,10 +270,10 @@ func NewAccountService(
 	svc := &accountService{
 		plaidService:    plaidService,
 		subscriptionSvc: subscriptionSvc,
-		encryptionSvc:   encryptionSvc,
 		linkedItemRepo:  linkedItemRepo,
 		accountRepo:     accountRepo,
 		userRepo:        userRepo,
+		chainResolver:   NewAccountChainResolver(accountRepo), // Issue #1109
 		db:              db,
 		logger:          slog.Default(),
 	}
@@ -283,6 +369,43 @@ func (s *accountService) LinkAccounts(
 		return nil, fmt.Errorf("%w: the institution returned no accounts to link - please ensure you select accounts during the connection process", ErrNoAccountsAvailable)
 	}
 
+	// Step 4c: Issue #1010 — Cross-user fingerprint ownership check.
+	// Uses server-provided institution_id (trusted) for fallback fingerprint.
+	plaidItem := accountsResp.GetItem()
+	if serverInstID := plaidItem.GetInstitutionId(); serverInstID != "" && serverInstID != institutionID {
+		s.logger.Warn("institution_id mismatch: client vs server",
+			"client_institution_id", institutionID,
+			"server_institution_id", serverInstID,
+		)
+	}
+	if s.enc != nil {
+		institutionIDFromPlaid := plaidItem.GetInstitutionId()
+		for _, plaidAccount := range plaidAccounts {
+			// Check persistent fingerprint (when available)
+			if persistentID, ok := plaidAccount.GetPersistentAccountIdOk(); ok && persistentID != nil && *persistentID != "" {
+				persistentBlind := computePersistentBlind(*persistentID, s.enc)
+				if err := s.checkFingerprintOwnership(ctx, persistentBlind, user.ID); err != nil {
+					return nil, err
+				}
+			}
+
+			// Check fallback fingerprint (always)
+			mask := "__NO_MASK__"
+			if m, ok := plaidAccount.GetMaskOk(); ok && m != nil {
+				mask = *m
+			}
+			accountType := string(plaidAccount.GetType())
+			subtype := "__NO_SUBTYPE__"
+			if st, ok := plaidAccount.GetSubtypeOk(); ok && st != nil {
+				subtype = string(*st)
+			}
+			fallbackBlind := computeFallbackBlind(institutionIDFromPlaid, mask, accountType, subtype, s.enc)
+			if err := s.checkFingerprintOwnership(ctx, fallbackBlind, user.ID); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// Step 5: Verify combined count doesn't exceed limit
 	// Skip this check for unlimited tiers (limit=-1)
 	newTotalCount := currentAccountCount + len(plaidAccounts)
@@ -292,12 +415,6 @@ func (s *accountService) LinkAccounts(
 			len(plaidAccounts),
 			currentAccountCount,
 			limitCheck.Limit)
-	}
-
-	// Step 6: Encrypt access token
-	encryptedToken, err := s.encryptionSvc.Encrypt(accessToken)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encrypt access token: %w", err)
 	}
 
 	// Step 7: Issue #171 - Check for re-link (existing active item at same institution)
@@ -328,13 +445,13 @@ func (s *accountService) LinkAccounts(
 
 	// Step 8: Create new linked item (stores access token and links accounts)
 	linkedItem := &domain.LinkedItem{
-		UserID:               user.ID,
-		ItemID:               itemID,
-		AccessTokenEncrypted: encryptedToken,
-		InstitutionID:        institutionID,
-		InstitutionName:      institutionName,
-		Provider:             "plaid",                       // Set provider to avoid database constraint violation (Issue #305)
-		Status:               domain.LinkedItemStatusActive, // Issue #171: Explicitly set active status
+		UserID:          user.ID,
+		ItemID:          itemID,
+		AccessToken:     accessToken,
+		InstitutionID:   institutionID,
+		InstitutionName: institutionName,
+		Provider:        "plaid",                       // Set provider to avoid database constraint violation (Issue #305)
+		Status:          domain.LinkedItemStatusActive, // Issue #171: Explicitly set active status
 	}
 
 	// Create linked item
@@ -353,6 +470,7 @@ func (s *accountService) LinkAccounts(
 		// Mark old linked_item as 'replaced' with replaced_by_id pointing to new item
 		now := time.Now()
 		existingLinkedItem.Status = domain.LinkedItemStatusReplaced
+		existingLinkedItem.StatusChangedAt = &now // Issue #1010: TTL clock for fingerprint release
 		existingLinkedItem.ReplacedAt = &now
 		existingLinkedItem.ReplacedByID = &linkedItem.ID
 		if err := s.linkedItemRepo.Update(ctx, existingLinkedItem); err != nil {
@@ -383,6 +501,7 @@ func (s *accountService) LinkAccounts(
 	}
 
 	// Step 9b: Convert Plaid accounts to domain accounts with user_account_id
+	institutionIDFromPlaid := plaidItem.GetInstitutionId()
 	accounts := make([]domain.Account, len(plaidAccounts))
 	for i, plaidAccount := range plaidAccounts {
 		account := convertPlaidAccount(plaidAccount, linkedItem.ID, user.ID)
@@ -413,6 +532,24 @@ func (s *accountService) LinkAccounts(
 			} else {
 				account.UserAccountID = &userAccount.ID
 			}
+		}
+
+		// Issue #1010: Compute fingerprint blind indices for storage
+		if s.enc != nil {
+			mask := "__NO_MASK__"
+			if account.Mask != nil {
+				mask = *account.Mask
+			}
+			subtype := "__NO_SUBTYPE__"
+			if account.Subtype != nil {
+				subtype = *account.Subtype
+			}
+			if account.PersistentAccountID != nil {
+				blind := computePersistentBlind(*account.PersistentAccountID, s.enc)
+				account.PersistentAccountIDBlindIdx = &blind
+			}
+			fallbackBlind := computeFallbackBlind(institutionIDFromPlaid, mask, account.Type, subtype, s.enc)
+			account.FallbackFingerprintBlindIdx = &fallbackBlind
 		}
 
 		accounts[i] = account
@@ -458,6 +595,11 @@ func convertPlaidAccount(plaidAccount plaid.AccountBase, linkedItemID, userID st
 
 	if mask, ok := plaidAccount.GetMaskOk(); ok && mask != nil {
 		account.Mask = mask
+	}
+
+	// Issue #1010: Extract persistent_account_id for cross-user uniqueness fingerprinting
+	if persistentID, ok := plaidAccount.GetPersistentAccountIdOk(); ok && persistentID != nil && *persistentID != "" {
+		account.PersistentAccountID = persistentID
 	}
 
 	// Balance information
@@ -531,50 +673,70 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 		return err
 	}
 
-	// Step 3: Check if zero-account cleanup should be triggered
-	// Only proceed if jobQueue is available (optional dependency)
-	if s.jobQueue == nil {
-		return nil
-	}
-
-	// Step 4: Count remaining active accounts for this linked item
-	remainingCount, err := s.accountRepo.CountActiveByLinkedItemID(ctx, linkedItemID)
-	if err != nil {
-		// Log error but don't fail the deletion
-		if s.logger != nil {
-			s.logger.Warn("failed to count remaining accounts after deletion",
-				"account_id", accountID,
-				"linked_item_id", linkedItemID,
-				"error", err,
-			)
-		}
-		return nil
-	}
-
-	// Step 5: If no accounts remain, enqueue cleanup job
-	if remainingCount == 0 {
-		cleanupJob := itemCleanupJobArgs{
-			LinkedItemID: linkedItemID,
-			UserID:       userID,
-			Reason:       "zero_accounts",
-		}
-		uniqueOpts := itemCleanupUniqueOpts()
-		_, err := s.jobQueue.Enqueue(ctx, cleanupJob, queue.WithUnique(*uniqueOpts))
+	// Steps 4-5: Zero-account item cleanup (requires job queue)
+	if s.jobQueue != nil {
+		// Step 4: Count remaining active accounts for this linked item
+		remainingCount, err := s.accountRepo.CountActiveByLinkedItemID(ctx, linkedItemID)
 		if err != nil {
 			// Log error but don't fail the deletion
 			if s.logger != nil {
-				s.logger.Warn("failed to enqueue item cleanup job",
+				s.logger.Warn("failed to count remaining accounts after deletion",
+					"account_id", accountID,
 					"linked_item_id", linkedItemID,
-					"user_id", userID,
 					"error", err,
 				)
 			}
-		} else if s.logger != nil {
-			s.logger.Info("enqueued item cleanup job for zero-account item",
-				"linked_item_id", linkedItemID,
-				"user_id", userID,
-				"reason", "zero_accounts",
-			)
+		} else if remainingCount == 0 {
+			// Step 5: If no accounts remain, enqueue cleanup job
+			cleanupJob := itemCleanupJobArgs{
+				LinkedItemID: linkedItemID,
+				UserID:       userID,
+				Reason:       "zero_accounts",
+			}
+			_, err := s.jobQueue.Enqueue(ctx, cleanupJob, queue.WithUnique(*itemCleanupUniqueOpts()))
+			if err != nil {
+				if s.logger != nil {
+					s.logger.Warn("failed to enqueue item cleanup job",
+						"linked_item_id", linkedItemID,
+						"user_id", userID,
+						"error", err,
+					)
+				}
+			} else if s.logger != nil {
+				s.logger.Info("enqueued item cleanup job for zero-account item",
+					"linked_item_id", linkedItemID,
+					"user_id", userID,
+					"reason", "zero_accounts",
+				)
+			}
+		}
+	}
+
+	// Step 6: Hide UserAccount if no other active accounts reference it.
+	// account.UserAccountID is populated by GetByIDAndUser (Task 1 fix).
+	// This is best-effort: log on failure, never return an error.
+	if s.userAccountSvc != nil && account.UserAccountID != nil {
+		remaining, err := s.accountRepo.GetByUserAccountAndStatus(ctx, *account.UserAccountID, string(domain.AccountStatusActive))
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Warn("failed to check remaining accounts for user_account",
+					"user_account_id", *account.UserAccountID,
+					"error", err,
+				)
+			}
+		} else if len(remaining) == 0 {
+			if hideErr := s.userAccountSvc.SetHidden(ctx, *account.UserAccountID, true); hideErr != nil {
+				if s.logger != nil {
+					s.logger.Warn("failed to hide user_account after last account deletion",
+						"user_account_id", *account.UserAccountID,
+						"error", hideErr,
+					)
+				}
+			} else if s.logger != nil {
+				s.logger.Info("hid user_account after last account deletion",
+					"user_account_id", *account.UserAccountID,
+				)
+			}
 		}
 	}
 
@@ -600,17 +762,11 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 		return err // Returns ErrLinkedItemNotFound if not found or not owned
 	}
 
-	// Step 2: Decrypt the Plaid access token
-	accessToken, err := s.encryptionSvc.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt access token: %w", err)
-	}
-
 	// Step 3: Call Plaid to remove the item (stops monthly billing)
 	// This is critical for cost control per Issue #226
 	// Log the error but continue - access token may already be invalid
 	// We still want to clean up our database even if Plaid call fails
-	if err := s.plaidService.RemoveItem(ctx, accessToken); err != nil {
+	if err := s.plaidService.RemoveItem(ctx, linkedItem.AccessToken); err != nil {
 		if s.logger != nil {
 			s.logger.Warn("plaid RemoveItem failed for item",
 				"item_id", linkedItemID,
@@ -623,9 +779,17 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 	return s.linkedItemRepo.DeleteByUser(ctx, linkedItemID, userID)
 }
 
-// GetAccountsFiltered retrieves accounts with optional hidden filter (Issue #307)
-// Similar to GetAccounts but supports filtering hidden accounts.
-func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
+// AccountFilterOptions holds filter options for GetAccountsFiltered (Issue #1109).
+type AccountFilterOptions struct {
+	IncludeHidden   bool   // if true, include hidden accounts
+	IncludeReplaced bool   // if true, equivalent to StatusFilter="all" (backward-compat alias)
+	StatusFilter    string // "active" (default), "replaced" (replaced only), "all" (no filter)
+	UserAccountID   string // if set, filter to accounts with this user_account_id
+}
+
+// GetAccountsFiltered retrieves accounts with optional filters (Issue #307, #1109).
+// Supports hidden, replaced-status, and user_account_id chain filtering.
+func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error) {
 	// Fetch user by internal UUID to verify user exists
 	_, err := s.userRepo.GetUserByID(ctx, userID)
 	if err != nil {
@@ -638,8 +802,16 @@ func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string,
 		return []domain.Account{}, nil
 	}
 
-	// Query accounts with hidden filter using internal UUID
-	accounts, err := s.accountRepo.GetAccountsWithInstitutionFiltered(ctx, userID, includeHidden)
+	// Map service options to repository filter options
+	repoOpts := repository.AccountFilterOptions{
+		IncludeHidden:   opts.IncludeHidden,
+		IncludeReplaced: opts.IncludeReplaced || opts.StatusFilter == "all",
+		ReplacedOnly:    opts.StatusFilter == "replaced",
+		UserAccountID:   opts.UserAccountID,
+	}
+
+	// Query accounts with filters using internal UUID
+	accounts, err := s.accountRepo.GetAccountsWithInstitutionFiltered(ctx, userID, repoOpts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts: %w", err)
 	}
@@ -749,49 +921,54 @@ func (s *accountService) ReorderAccounts(
 // SetJobQueue sets the job queue for auto-sync after linking (Issue #658).
 // This is needed because of circular dependency: service must be created before
 // River client, but needs client to enqueue jobs.
+// ListActiveByUser returns only active (non-replaced, non-expired) accounts for a user.
+// Issue #1109: re-link chain transparency.
+func (s *accountService) ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error) {
+	return s.chainResolver.ListActiveByUser(ctx, userID)
+}
+
 func (s *accountService) SetJobQueue(jq queue.JobQueue) {
 	s.jobQueue = jq
 }
 
-// enqueueInitialSync enqueues a PlaidSyncJob to sync transactions after account linking.
+// enqueueInitialSync enqueues sync jobs for transactions and investments after account linking.
 // Issue #658: Auto-sync transactions after Plaid account linking
+// Issue #659: Auto-sync investments after Plaid account linking
 //
 // This method is non-blocking: if the job queue fails, we log a warning but don't
 // fail the account linking operation. The user will still have their accounts linked,
 // and transactions will be synced when webhooks arrive.
-//
-// Parameters:
-//   - linkedItemID: The internal UUID of the LinkedItem to sync
-//   - userID: The internal UUID of the user who owns the linked item
 func (s *accountService) enqueueInitialSync(ctx context.Context, linkedItemID, userID string) {
-	// Guard against nil jobQueue (backward compatibility)
 	if s.jobQueue == nil {
 		return
 	}
 
-	syncJob := plaidSyncJobArgs{
-		UserID: userID,
-		ItemID: linkedItemID,
-	}
-
-	// Enqueue with 5-second delay to give Plaid time to prepare data
-	// Use uniqueness options to prevent duplicate syncs
-	_, err := s.jobQueue.Enqueue(ctx, syncJob,
-		queue.WithDelay(5*time.Second),
+	opts := []queue.EnqueueOption{
+		queue.WithDelay(5 * time.Second),
 		queue.WithUnique(*plaidSyncUniqueOpts()),
 		queue.WithTags("initial_sync"),
-	)
+	}
+
+	s.enqueueJob(ctx, plaidSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
+	s.enqueueJob(ctx, investmentHoldingsSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
+	s.enqueueJob(ctx, investmentTransactionsSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
+}
+
+// enqueueJob enqueues a single job and logs success or failure.
+func (s *accountService) enqueueJob(ctx context.Context, job queue.Job, linkedItemID, userID string, opts []queue.EnqueueOption) {
+	_, err := s.jobQueue.Enqueue(ctx, job, opts...)
 	if err != nil {
-		// Log but don't fail - account linking should succeed even if queue fails
 		s.logger.Warn("failed to enqueue initial sync job",
 			"linked_item_id", linkedItemID,
 			"user_id", userID,
+			"job_kind", job.Kind(),
 			"error", err,
 		)
 	} else {
 		s.logger.Info("enqueued initial sync job",
 			"linked_item_id", linkedItemID,
 			"user_id", userID,
+			"job_kind", job.Kind(),
 		)
 	}
 }

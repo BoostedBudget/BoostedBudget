@@ -22,7 +22,8 @@ Authorization: Bearer <your-jwt-token>
 
 ## Regions
 
-All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+Use the GET /api/v1/regions endpoint to discover available data residency regions.
+Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
@@ -136,6 +137,10 @@ export const getGetSavingsGoalsResponseMock = (): SavingsGoal[] | null =>
     name: faker.string.alpha({ length: { min: 10, max: 20 } }),
     target_amount: faker.number.float({ fractionDigits: 2 }),
     updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    user_account_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
     user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   }));
 
@@ -240,6 +245,10 @@ export const getCreateSavingsGoalResponseMock = (
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
   target_amount: faker.number.float({ fractionDigits: 2 }),
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  user_account_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   ...overrideResponse,
 });
@@ -347,6 +356,10 @@ export const getGetActiveSavingsGoalsResponseMock = (): SavingsGoal[] | null =>
     name: faker.string.alpha({ length: { min: 10, max: 20 } }),
     target_amount: faker.number.float({ fractionDigits: 2 }),
     updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    user_account_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
     user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   }));
 
@@ -451,6 +464,10 @@ export const getGetSavingsGoalResponseMock = (
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
   target_amount: faker.number.float({ fractionDigits: 2 }),
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  user_account_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   ...overrideResponse,
 });
@@ -556,6 +573,10 @@ export const getUpdateSavingsGoalResponseMock = (
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
   target_amount: faker.number.float({ fractionDigits: 2 }),
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  user_account_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   ...overrideResponse,
 });

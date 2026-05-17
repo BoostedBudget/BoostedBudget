@@ -40,6 +40,20 @@ export const mockUseGetPlaidCategories = mock(() => ({
   refetch: mockRefetchPlaidCategories,
 }))
 
+// === useGetPlaidPrimaryCategories ===
+export const mockUseGetPlaidPrimaryCategories = mock(() => ({
+  data: [],
+  isLoading: false,
+  error: null,
+}))
+
+// === useGetPlaidDetailedCategories ===
+export const mockUseGetPlaidDetailedCategories = mock(() => ({
+  data: [],
+  isLoading: false,
+  error: null,
+}))
+
 // Query key mock
 export const mockGetUserCategoriesQueryKey = mock(() => ['user-categories'])
 
@@ -50,5 +64,7 @@ mock.module('@boostedbudget/api-client/endpoints/categories/categories', () => (
   useGetCategories: mockUseGetCategories,
   useGetUserCategories: mockUseGetUserCategories,
   useGetPlaidCategories: mockUseGetPlaidCategories,
+  useGetPlaidPrimaryCategories: mockUseGetPlaidPrimaryCategories,
+  useGetPlaidDetailedCategories: mockUseGetPlaidDetailedCategories,
   getGetUserCategoriesQueryKey: mockGetUserCategoriesQueryKey,
 }))

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { CategorizationRule } from '../types'
@@ -50,7 +50,9 @@ describe('AutoCategorizationPage', () => {
     priority: 10,
     conditions: [{ type: 'merchant_contains', value: 'starbucks' }],
     condition_logic: 'AND',
-    target_category: ['Food & Drink', 'Coffee'],
+    target_kind: 'pfc',
+    target_pfc_primary: 'FOOD_AND_DRINK',
+    target_pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
     target_tags: ['morning'],
     tag_behavior: 'add',
     source: 'manual',
@@ -137,6 +139,7 @@ describe('AutoCategorizationPage', () => {
 
   afterEach(() => {
     window.history.replaceState({}, '', '/')
+    localStorage.clear()
   })
 
   describe('Loading state', () => {
@@ -228,16 +231,70 @@ describe('AutoCategorizationPage', () => {
   })
 
   describe('Delete rule', () => {
-    it('should call deleteRule when delete is confirmed', async () => {
+    it('should call deleteRule when delete is confirmed (cards view)', async () => {
       configureQuery({ data: [mockRule1] })
       renderWithProviders(<AutoCategorizationPage categories={mockCategories} />)
       const deleteButton = screen.getByRole('button', { name: 'Delete' })
       fireEvent.click(deleteButton)
-      const confirmButtons = screen.getAllByRole('button', { name: 'Delete' })
-      fireEvent.click(confirmButtons[confirmButtons.length - 1])
+      const dialog = await screen.findByRole('alertdialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
       await waitFor(() => {
         expect(mockDeleteRuleMutateAsync).toHaveBeenCalled()
       })
+    })
+
+    it('should show confirmation dialog before deleting in table view', async () => {
+      configureQuery({ data: [mockRule1] })
+      renderWithProviders(<AutoCategorizationPage categories={mockCategories} />)
+
+      // Switch to table view
+      fireEvent.click(screen.getByRole('button', { name: /table/i }))
+
+      // Click the delete button in the table row
+      const deleteButton = await screen.findByRole('button', { name: /delete rule/i })
+      fireEvent.click(deleteButton)
+
+      // Confirmation dialog should open without calling deleteRule
+      await waitFor(() => {
+        expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+      })
+      expect(mockDeleteRuleMutateAsync).not.toHaveBeenCalled()
+    })
+
+    it('should call deleteRule when table view delete is confirmed', async () => {
+      configureQuery({ data: [mockRule1] })
+      renderWithProviders(<AutoCategorizationPage categories={mockCategories} />)
+
+      // Switch to table view
+      fireEvent.click(screen.getByRole('button', { name: /table/i }))
+
+      const deleteButton = await screen.findByRole('button', { name: /delete rule/i })
+      fireEvent.click(deleteButton)
+
+      const dialog = await screen.findByRole('alertdialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+      await waitFor(() => {
+        expect(mockDeleteRuleMutateAsync).toHaveBeenCalled()
+      })
+    })
+
+    it('should not call deleteRule when table view delete is cancelled', async () => {
+      configureQuery({ data: [mockRule1] })
+      renderWithProviders(<AutoCategorizationPage categories={mockCategories} />)
+
+      fireEvent.click(screen.getByRole('button', { name: /table/i }))
+
+      const deleteButton = await screen.findByRole('button', { name: /delete rule/i })
+      fireEvent.click(deleteButton)
+
+      const dialog = await screen.findByRole('alertdialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: /cancel/i }))
+
+      await waitFor(() => {
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+      })
+      expect(mockDeleteRuleMutateAsync).not.toHaveBeenCalled()
     })
   })
 

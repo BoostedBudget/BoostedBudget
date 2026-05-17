@@ -71,6 +71,11 @@ func (m *MockLinkedItemRepoForCleanup) MarkForCleanup(ctx context.Context, itemI
 	return args.Error(0)
 }
 
+func (m *MockLinkedItemRepoForCleanup) Delete(ctx context.Context, id string) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
 func newTestItemCleanupJob(args ItemCleanupArgs) *river.Job[ItemCleanupArgs] {
 	return &river.Job[ItemCleanupArgs]{
 		JobRow: &rivertype.JobRow{
@@ -96,6 +101,7 @@ func TestItemCleanupWorker_Work_Success(t *testing.T) {
 
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
 
 	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
 		PlaidCleanupSvc: mockCleanupSvc,
@@ -126,6 +132,8 @@ func TestItemCleanupWorker_Work_ItemNotFoundSkipsCleanup(t *testing.T) {
 	// Return item not found error - this should result in success
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).
 		Return(repository.ErrLinkedItemNotFound)
+	// Delete IS called even when item-not-found — orphan DB row must be cleaned up
+	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
 
 	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
 		PlaidCleanupSvc: mockCleanupSvc,
@@ -144,6 +152,7 @@ func TestItemCleanupWorker_Work_ItemNotFoundSkipsCleanup(t *testing.T) {
 	// Should succeed - item was already removed
 	require.NoError(t, err)
 	mockCleanupSvc.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
 	// ClearCleanupSchedule should NOT be called when item not found
 	mockRepo.AssertNotCalled(t, "ClearCleanupSchedule")
 }
@@ -190,6 +199,7 @@ func TestItemCleanupWorker_Work_ClearScheduleErrorDoesNotFail(t *testing.T) {
 	// ClearCleanupSchedule fails - but job should still succeed
 	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).
 		Return(errors.New("database error"))
+	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
 
 	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
 		PlaidCleanupSvc: mockCleanupSvc,
@@ -221,6 +231,7 @@ func TestItemCleanupWorker_Work_ZeroAccountsReason(t *testing.T) {
 
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
 
 	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
 		PlaidCleanupSvc: mockCleanupSvc,
@@ -252,6 +263,7 @@ func TestItemCleanupWorker_Work_UserDeletionReason(t *testing.T) {
 
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
 
 	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
 		PlaidCleanupSvc: mockCleanupSvc,
@@ -317,6 +329,7 @@ func TestItemCleanupWorker_Work_AllReasons(t *testing.T) {
 
 			mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 			mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+			mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
 
 			worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
 				PlaidCleanupSvc: mockCleanupSvc,
@@ -337,4 +350,37 @@ func TestItemCleanupWorker_Work_AllReasons(t *testing.T) {
 			mockRepo.AssertExpectations(t)
 		})
 	}
+}
+
+func TestItemCleanupWorker_Work_DeleteErrorDoesNotFail(t *testing.T) {
+	ctx := context.Background()
+	linkedItemID := "item-delete-fails"
+	userID := "user-456"
+
+	mockCleanupSvc := new(MockPlaidCleanupService)
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+
+	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
+	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+	// Delete fails - job should still succeed (best-effort)
+	mockRepo.On("Delete", ctx, linkedItemID).Return(errors.New("database error"))
+
+	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
+		PlaidCleanupSvc: mockCleanupSvc,
+		LinkedItemRepo:  mockRepo,
+		Logger:          slog.Default(),
+	})
+
+	job := newTestItemCleanupJob(ItemCleanupArgs{
+		LinkedItemID: linkedItemID,
+		UserID:       userID,
+		Reason:       "user_deletion",
+	})
+
+	err := worker.Work(ctx, job)
+
+	// Job should succeed even though Delete failed
+	require.NoError(t, err)
+	mockCleanupSvc.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
 }

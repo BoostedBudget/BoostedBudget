@@ -22,7 +22,8 @@ Authorization: Bearer <your-jwt-token>
 
 ## Regions
 
-All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+Use the GET /api/v1/regions endpoint to discover available data residency regions.
+Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
@@ -32,4 +33,16 @@ export type GetAccountsParams = {
    * If 'true', includes hidden accounts
    */
   include_hidden?: string;
+  /**
+   * Filter by account status: 'active' (default), 'replaced', or 'all'
+   */
+  status?: string;
+  /**
+   * If 'true', equivalent to status=all (backward-compat alias)
+   */
+  include_replaced?: string;
+  /**
+   * When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set.
+   */
+  user_account_id?: string;
 };

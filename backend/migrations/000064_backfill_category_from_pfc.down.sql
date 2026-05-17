@@ -1,0 +1,18 @@
+-- Down migration: intentional no-op (data preservation).
+--
+-- We do NOT clear the backfilled category values because:
+-- 1. The data is derived faithfully from personal_finance_category already present in the row.
+-- 2. Clearing category would break the application for all affected transactions until a
+--    re-sync runs (which may never happen for historical rows).
+-- 3. original_category was deliberately left NULL in the up migration (Plaid never sent a
+--    legacy category for these rows), so there is no prior state to restore.
+--
+-- If you need to undo this backfill in a specific environment, run manually:
+--   UPDATE transactions
+--   SET    category = NULL
+--   WHERE  original_category IS NULL
+--     AND  category IS NOT NULL
+--     AND  personal_finance_category IS NOT NULL;
+--
+-- Drop the helper function installed by the up migration.
+DROP FUNCTION IF EXISTS pfc_enum_to_title_case(TEXT);

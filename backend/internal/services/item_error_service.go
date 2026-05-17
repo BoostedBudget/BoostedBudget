@@ -102,13 +102,12 @@ type ItemErrorService interface {
 
 // itemErrorService implements ItemErrorService
 type itemErrorService struct {
-	logger            *slog.Logger
-	linkedItemRepo    repository.LinkedItemRepository
-	notificationRepo  repository.NotificationRepository
-	userRepo          UserRepository
-	plaidService      PlaidService
-	encryptionService EncryptionService
-	emailService      EmailService
+	logger           *slog.Logger
+	linkedItemRepo   repository.LinkedItemRepository
+	notificationRepo repository.NotificationRepository
+	userRepo         UserRepository
+	plaidService     PlaidService
+	emailService     EmailService
 }
 
 // NewItemErrorService creates a new ItemErrorService instance
@@ -117,7 +116,6 @@ func NewItemErrorService(
 	notificationRepo repository.NotificationRepository,
 	userRepo UserRepository,
 	plaidService PlaidService,
-	encryptionService EncryptionService,
 	emailService EmailService,
 	logger *slog.Logger,
 ) ItemErrorService {
@@ -125,13 +123,12 @@ func NewItemErrorService(
 		logger = slog.Default()
 	}
 	return &itemErrorService{
-		logger:            logger,
-		linkedItemRepo:    linkedItemRepo,
-		notificationRepo:  notificationRepo,
-		userRepo:          userRepo,
-		plaidService:      plaidService,
-		encryptionService: encryptionService,
-		emailService:      emailService,
+		logger:           logger,
+		linkedItemRepo:   linkedItemRepo,
+		notificationRepo: notificationRepo,
+		userRepo:         userRepo,
+		plaidService:     plaidService,
+		emailService:     emailService,
 	}
 }
 
@@ -159,14 +156,8 @@ func (s *itemErrorService) HandleLoginRequired(
 	errorCode string,
 	errorMessage string,
 ) error {
-	// 1. Decrypt access token (critical - return error if fails)
-	decryptedAccessToken, err := s.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt access token for item %s: %w", linkedItem.ItemID, err)
-	}
-
 	// 2. Create update mode link token for re-authentication (critical - return error if fails)
-	linkTokenResponse, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, decryptedAccessToken)
+	linkTokenResponse, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, linkedItem.AccessToken)
 	if err != nil {
 		return fmt.Errorf("failed to create update mode link token for item %s: %w", linkedItem.ItemID, err)
 	}
@@ -174,6 +165,7 @@ func (s *itemErrorService) HandleLoginRequired(
 	// 3. Update LinkedItem status to "login_required" (critical - return error if fails)
 	now := time.Now()
 	linkedItem.Status = "login_required"
+	linkedItem.StatusChangedAt = &now // Issue #1010: track status change time
 	linkedItem.ErrorCode = &errorCode
 	linkedItem.ErrorMessage = &errorMessage
 	linkedItem.LastErrorAt = &now
@@ -188,14 +180,15 @@ func (s *itemErrorService) HandleLoginRequired(
 	actionLabel := "Reconnect Bank"
 
 	notification := &domain.Notification{
-		UserID:      linkedItem.UserID,
-		Type:        "login_required",
-		Title:       "Reconnect Your Bank",
-		Message:     fmt.Sprintf("We need you to reconnect %s to continue syncing transactions. This usually happens when your credentials change or when your bank requires additional verification.", linkedItem.InstitutionName),
-		ActionURL:   &actionURL,
-		ActionLabel: &actionLabel,
-		Read:        false,
-		SentEmail:   false,
+		UserID:             linkedItem.UserID,
+		Type:               "login_required",
+		Title:              "Reconnect Your Bank",
+		Message:            fmt.Sprintf("We need you to reconnect %s to continue syncing transactions. This usually happens when your credentials change or when your bank requires additional verification.", linkedItem.InstitutionName),
+		ActionURL:          &actionURL,
+		ActionLabel:        &actionLabel,
+		InteractionPattern: "action_required",
+		Read:               false,
+		SentEmail:          false,
 	}
 
 	err = s.notificationRepo.Create(ctx, notification)
@@ -221,6 +214,7 @@ func (s *itemErrorService) HandleError(
 	// 1. Update LinkedItem status to "error" (critical - return error if fails)
 	now := time.Now()
 	linkedItem.Status = "error"
+	linkedItem.StatusChangedAt = &now // Issue #1010: track status change time
 	linkedItem.ErrorCode = &errorCode
 	linkedItem.ErrorMessage = &errorMessage
 	linkedItem.LastErrorAt = &now
@@ -233,12 +227,13 @@ func (s *itemErrorService) HandleError(
 	// 2. Create notification (non-blocking - log error but continue)
 	// Note: No action URL for general errors (unlike LOGIN_REQUIRED)
 	notification := &domain.Notification{
-		UserID:    linkedItem.UserID,
-		Type:      "error",
-		Title:     "Connection Error",
-		Message:   fmt.Sprintf("We're experiencing a connection issue with %s: %s. We'll automatically retry, but you can also try reconnecting your account if the issue persists.", linkedItem.InstitutionName, errorMessage),
-		Read:      false,
-		SentEmail: false,
+		UserID:             linkedItem.UserID,
+		Type:               "item_error",
+		Title:              "Connection Error",
+		Message:            fmt.Sprintf("We're experiencing a connection issue with %s: %s. We'll automatically retry, but you can also try reconnecting your account if the issue persists.", linkedItem.InstitutionName, errorMessage),
+		InteractionPattern: "informational",
+		Read:               false,
+		SentEmail:          false,
 	}
 
 	err = s.notificationRepo.Create(ctx, notification)
@@ -261,14 +256,8 @@ func (s *itemErrorService) HandlePendingExpiration(
 	errorCode string,
 	errorMessage string,
 ) error {
-	// 1. Decrypt access token (critical - return error if fails)
-	decryptedAccessToken, err := s.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt access token for item %s: %w", linkedItem.ItemID, err)
-	}
-
 	// 2. Create update mode link token for re-authentication (critical)
-	linkTokenResponse, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, decryptedAccessToken)
+	linkTokenResponse, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, linkedItem.AccessToken)
 	if err != nil {
 		return fmt.Errorf("failed to create update mode link token for item %s: %w", linkedItem.ItemID, err)
 	}
@@ -276,6 +265,7 @@ func (s *itemErrorService) HandlePendingExpiration(
 	// 3. Update LinkedItem status to "pending_expiration" (critical)
 	now := time.Now()
 	linkedItem.Status = "pending_expiration"
+	linkedItem.StatusChangedAt = &now // Issue #1010: track status change time
 	linkedItem.ErrorCode = &errorCode
 	linkedItem.ErrorMessage = &errorMessage
 	linkedItem.LastErrorAt = &now
@@ -290,14 +280,15 @@ func (s *itemErrorService) HandlePendingExpiration(
 	actionLabel := "Reconnect Bank"
 
 	notification := &domain.Notification{
-		UserID:      linkedItem.UserID,
-		Type:        "pending_expiration",
-		Title:       "Bank Connection Expiring Soon",
-		Message:     fmt.Sprintf("Your connection to %s is expiring soon. Please reconnect your account to ensure uninterrupted access to your financial data.", linkedItem.InstitutionName),
-		ActionURL:   &actionURL,
-		ActionLabel: &actionLabel,
-		Read:        false,
-		SentEmail:   false,
+		UserID:             linkedItem.UserID,
+		Type:               "pending_expiration",
+		Title:              "Bank Connection Expiring Soon",
+		Message:            fmt.Sprintf("Your connection to %s is expiring soon. Please reconnect your account to ensure uninterrupted access to your financial data.", linkedItem.InstitutionName),
+		ActionURL:          &actionURL,
+		ActionLabel:        &actionLabel,
+		InteractionPattern: "action_required",
+		Read:               false,
+		SentEmail:          false,
 	}
 
 	err = s.notificationRepo.Create(ctx, notification)
@@ -320,14 +311,8 @@ func (s *itemErrorService) HandlePermissionRevoked(
 	errorCode string,
 	errorMessage string,
 ) error {
-	// 1. Decrypt access token (critical - return error if fails)
-	decryptedAccessToken, err := s.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt access token for item %s: %w", linkedItem.ItemID, err)
-	}
-
 	// 2. Create update mode link token for re-linking (critical)
-	linkTokenResponse, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, decryptedAccessToken)
+	linkTokenResponse, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, linkedItem.AccessToken)
 	if err != nil {
 		return fmt.Errorf("failed to create update mode link token for item %s: %w", linkedItem.ItemID, err)
 	}
@@ -335,6 +320,7 @@ func (s *itemErrorService) HandlePermissionRevoked(
 	// 3. Update LinkedItem status to "revoked" (critical)
 	now := time.Now()
 	linkedItem.Status = "revoked"
+	linkedItem.StatusChangedAt = &now // Issue #1010: TTL clock for fingerprint release
 	linkedItem.ErrorCode = &errorCode
 	linkedItem.ErrorMessage = &errorMessage
 	linkedItem.LastErrorAt = &now
@@ -349,14 +335,15 @@ func (s *itemErrorService) HandlePermissionRevoked(
 	actionLabel := "Reconnect Bank"
 
 	notification := &domain.Notification{
-		UserID:      linkedItem.UserID,
-		Type:        "permission_revoked",
-		Title:       "Bank Access Revoked",
-		Message:     fmt.Sprintf("You have revoked BoostedBudget's access to %s at your bank. To restore access and continue syncing your transactions, please reconnect your account.", linkedItem.InstitutionName),
-		ActionURL:   &actionURL,
-		ActionLabel: &actionLabel,
-		Read:        false,
-		SentEmail:   false,
+		UserID:             linkedItem.UserID,
+		Type:               "permission_revoked",
+		Title:              "Bank Access Revoked",
+		Message:            fmt.Sprintf("You have revoked BoostedBudget's access to %s at your bank. To restore access and continue syncing your transactions, please reconnect your account.", linkedItem.InstitutionName),
+		ActionURL:          &actionURL,
+		ActionLabel:        &actionLabel,
+		InteractionPattern: "action_required",
+		Read:               false,
+		SentEmail:          false,
 	}
 
 	err = s.notificationRepo.Create(ctx, notification)

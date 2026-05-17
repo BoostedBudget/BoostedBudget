@@ -1,46 +1,29 @@
-/**
- * useBudgetFilters Hook
- * Issue #590: Inline Column Filtering
- *
- * Manages budget filter state with URL synchronization.
- * Filters are persisted in URL params for bookmarking/sharing.
- */
-
 import { useCallback, useMemo } from 'react'
 import type { RangeValue } from '@/shared/components/ColumnFilterDropdown'
+import type { SortState } from '@/shared/components/DataTable'
+import { useSortUrlState } from '@/shared/hooks/useSortUrlState'
 import { useFilterState, type FilterSpec } from '@/shared/hooks/useFilterState'
+import { BUDGET_SORTABLE_COLUMNS } from '../components/BudgetTable'
 
-/**
- * Budget filter state
- */
 export interface BudgetFilters {
-  /** Budget periods to filter by */
   period: string[]
-  /** Minimum progress percentage */
   progressMin?: number
-  /** Maximum progress percentage */
   progressMax?: number
 }
 
-/**
- * Result of useBudgetFilters hook
- */
 export interface UseBudgetFiltersResult {
-  /** Current filter state derived from URL */
   filters: BudgetFilters
-  /** Period filter array */
   periodFilter: string[]
-  /** Progress range filter */
   progressRange: RangeValue | null
-  /** Set period filter */
+  sort: SortState | null
+  isDefaultSort: boolean
   setPeriodFilter: (value: string[]) => void
-  /** Set progress range filter */
   setProgressRange: (value: RangeValue | null) => void
-  /** Clear all filters */
-  clearAllFilters: () => void
-  /** Number of active filters */
+  setSort: (next: SortState | null) => void
+  resetSort: () => void
+  toggleSortColumn: (columnId: string) => void
+  clearAllFilters: (options?: { includeSort?: boolean }) => void
   activeFilterCount: number
-  /** Whether any filters are active */
   hasActiveFilters: boolean
 }
 
@@ -49,18 +32,18 @@ const SPEC = {
   progress: { kind: 'range' },
 } as const satisfies FilterSpec
 
-/**
- * Hook for managing budget filters with URL state synchronization
- *
- * @returns Filter state and management functions
- */
 export function useBudgetFilters(): UseBudgetFiltersResult {
   const state = useFilterState(SPEC)
-  const { setFilter, clearAllFilters, activeFilterCount, hasActiveFilters } = state
+  const { setFilter, clearAllFilters: genericClearAll, activeFilterCount, hasActiveFilters } = state
+
+  const { sort, setSort, resetSort, toggleSortColumn, isDefaultSort } = useSortUrlState({
+    defaultSort: null,
+    validColumns: BUDGET_SORTABLE_COLUMNS,
+  })
 
   const filters = useMemo<BudgetFilters>(
     () => ({
-      period: state.filters.period,
+      period:      state.filters.period,
       progressMin: state.filters.progress?.min,
       progressMax: state.filters.progress?.max,
     }),
@@ -84,12 +67,25 @@ export function useBudgetFilters(): UseBudgetFiltersResult {
     [setFilter],
   )
 
+  const clearAllFilters = useCallback(
+    (options?: { includeSort?: boolean }) => {
+      genericClearAll()
+      if (options?.includeSort) resetSort()
+    },
+    [genericClearAll, resetSort],
+  )
+
   return {
     filters,
-    periodFilter: state.filters.period,
+    periodFilter:  state.filters.period,
     progressRange,
+    sort,
+    isDefaultSort,
     setPeriodFilter,
     setProgressRange,
+    setSort,
+    resetSort,
+    toggleSortColumn,
     clearAllFilters,
     activeFilterCount,
     hasActiveFilters,

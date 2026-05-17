@@ -274,8 +274,9 @@ describe('RuleTable', () => {
         />
       )
 
-      const nameHeader = screen.getByText('Name').closest('button')!
-      expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
+      // aria-sort lives on the <th> (correct HTML semantics), not the sort button
+      const nameTh = screen.getByRole('columnheader', { name: /name/i })
+      expect(nameTh).toHaveAttribute('aria-sort', 'ascending')
     })
   })
 

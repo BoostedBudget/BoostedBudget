@@ -119,11 +119,11 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 	if h.webhookRepo != nil {
 		webhookEvent := &domain.WebhookEvent{
 			WebhookType:     payload.WebhookType,
-			WebhookCode:     stringPtr(payload.WebhookCode),
-			ItemID:          stringPtr(payload.ItemID),
-			NewTransactions: intPtr(payload.NewTransactions),
+			WebhookCode:     ptrIfNotEmpty(payload.WebhookCode),
+			ItemID:          ptrIfNotEmpty(payload.ItemID),
+			NewTransactions: ptrIfNotZero(payload.NewTransactions),
 			Payload:         json.RawMessage(input.RawBody),
-			Signature:       stringPtr(input.PlaidVerification),
+			Signature:       ptrIfNotEmpty(input.PlaidVerification),
 			SignatureValid:  signatureValid,
 			Processed:       false,
 		}
@@ -184,8 +184,11 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 		// Phase 2 (#241): LIABILITIES product added. Full sync deferred to follow-up issue.
 		message = "Liabilities webhook received"
 	case "HOLDINGS":
-		// Phase 2 (#241): INVESTMENTS product added. Full sync tracked in issue #659.
-		message = "Holdings webhook received"
+		// Issue #659: Plaid Investments — processed via InvestmentSyncService.
+		message = h.handleHoldingsWebhook(&payload)
+	case "INVESTMENTS_TRANSACTIONS":
+		// Issue #659: Plaid Investments — processed via InvestmentSyncService.
+		message = h.handleInvestmentsTransactionsWebhook(&payload)
 	default:
 		message = "Webhook received"
 	}
@@ -215,6 +218,30 @@ func (h *PlaidWebhookHandler) handleTransactionsWebhook(payload *PlaidWebhookPay
 	}
 }
 
+// handleHoldingsWebhook processes HOLDINGS webhook events.
+func (h *PlaidWebhookHandler) handleHoldingsWebhook(payload *PlaidWebhookPayload) string {
+	switch payload.WebhookCode {
+	case "DEFAULT_UPDATE":
+		return "Holdings update queued for sync"
+	default:
+		return "Holdings webhook queued for sync"
+	}
+}
+
+// handleInvestmentsTransactionsWebhook processes INVESTMENTS_TRANSACTIONS webhook events.
+func (h *PlaidWebhookHandler) handleInvestmentsTransactionsWebhook(payload *PlaidWebhookPayload) string {
+	switch payload.WebhookCode {
+	case "DEFAULT_UPDATE":
+		return "Investment transactions update queued for sync"
+	case "INITIAL_UPDATE":
+		return "Initial investment transactions queued for sync"
+	case "HISTORICAL_UPDATE":
+		return "Historical investment transactions queued for sync"
+	default:
+		return "Investment transactions webhook queued for sync"
+	}
+}
+
 // handleItemWebhook processes ITEM webhook events.
 func (h *PlaidWebhookHandler) handleItemWebhook(payload *PlaidWebhookPayload) string {
 	switch payload.WebhookCode {
@@ -233,15 +260,16 @@ func (h *PlaidWebhookHandler) handleItemWebhook(payload *PlaidWebhookPayload) st
 	}
 }
 
-// Helper functions for pointer conversion (return nil for zero values)
-func stringPtr(s string) *string {
+// ptrIfNotEmpty returns a pointer to the string if it's not empty, otherwise nil.
+func ptrIfNotEmpty(s string) *string {
 	if s != "" {
 		return &s
 	}
 	return nil
 }
 
-func intPtr(i int) *int {
+// ptrIfNotZero returns a pointer to the int if it's not zero, otherwise nil.
+func ptrIfNotZero(i int) *int {
 	if i != 0 {
 		return &i
 	}

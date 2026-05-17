@@ -16,7 +16,7 @@ test.describe('Cookie Consent Banner', () => {
     await page.goto('/');
 
     // Wait for the page to load
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Verify cookie consent banner is visible
     const banner = page.locator('.cookie-consent-banner');
@@ -31,7 +31,7 @@ test.describe('Cookie Consent Banner', () => {
 
   test('should have Accept All, Necessary Only, and Customize buttons', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Verify all three primary buttons are visible
     await expect(page.locator('button:has-text("Accept All")')).toBeVisible();
@@ -41,7 +41,7 @@ test.describe('Cookie Consent Banner', () => {
 
   test('should hide banner after clicking Accept All', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Click Accept All button
     await page.click('button:has-text("Accept All")');
@@ -56,7 +56,7 @@ test.describe('Cookie Consent Banner', () => {
 
   test('should hide banner after clicking Necessary Only', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Click Necessary Only button
     await page.click('button:has-text("Necessary Only")');
@@ -71,7 +71,7 @@ test.describe('Cookie Consent Banner', () => {
 
   test('should show detailed preferences when clicking Customize', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Click Customize button
     await page.click('button:has-text("Customize")');
@@ -79,10 +79,9 @@ test.describe('Cookie Consent Banner', () => {
     // Wait for details to appear
     await page.waitForTimeout(300);
 
-    // Verify detailed options are visible
+    // Verify detailed options are visible (no Advertising Cookies — not rendered by the component)
     await expect(page.locator('label:has-text("Necessary Cookies")')).toBeVisible();
     await expect(page.locator('label:has-text("Analytics Cookies")')).toBeVisible();
-    await expect(page.locator('label:has-text("Advertising Cookies")')).toBeVisible();
 
     // Verify Save Preferences button is visible
     await expect(page.locator('button:has-text("Save Preferences")')).toBeVisible();
@@ -90,7 +89,7 @@ test.describe('Cookie Consent Banner', () => {
 
   test('should have necessary cookies checkbox checked and disabled', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Open customize view
     await page.click('button:has-text("Customize")');
@@ -104,7 +103,7 @@ test.describe('Cookie Consent Banner', () => {
 
   test('should allow toggling analytics cookies', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Open customize view
     await page.click('button:has-text("Customize")');
@@ -128,7 +127,7 @@ test.describe('Cookie Consent Banner', () => {
 
   test('should save custom preferences and hide banner', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Open customize view
     await page.click('button:has-text("Customize")');
@@ -151,14 +150,14 @@ test.describe('Cookie Consent Banner', () => {
   test('should not show banner on subsequent visit after accepting', async ({ page, context: _context }) => {
     // First visit - accept cookies
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await page.click('button:has-text("Accept All")');
     await page.waitForTimeout(500);
 
     // Navigate away and back
     await page.goto('/about'); // Assuming an about page exists, or use '/'
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Verify banner does not appear
     const banner = page.locator('.cookie-consent-banner');
@@ -167,7 +166,7 @@ test.describe('Cookie Consent Banner', () => {
 
   test('should have links to Privacy and Cookie policies', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Target the cookie consent banner specifically
     const banner = page.locator('.cookie-consent-banner');
@@ -185,7 +184,7 @@ test.describe('Cookie Consent Banner', () => {
 
   test('should have proper ARIA labels for accessibility', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Verify banner has role dialog
     const banner = page.locator('[role="dialog"]');

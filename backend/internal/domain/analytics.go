@@ -104,3 +104,76 @@ type CashFlowGroupedData struct {
 	Expenses         float64
 	TransactionCount int
 }
+
+// SpendingFilters represents query parameters for spending report endpoints
+type SpendingFilters struct {
+	StartDate        time.Time
+	EndDate          time.Time
+	AccountTypes     []string
+	IncludeTransfers bool
+	Category         string // Optional: filter by primary category for subcategory drill-down
+}
+
+// SpendingByCategory represents spending totals for a single category
+type SpendingByCategory struct {
+	Category         string  `json:"category"`
+	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
+	Total            float64 `json:"total"`
+	Percentage       float64 `json:"percentage"`
+	TransactionCount int     `json:"transaction_count"`
+}
+
+// SpendingByCategoryResponse is the response for GET /analytics/spending-by-category
+type SpendingByCategoryResponse struct {
+	StartDate  string               `json:"start_date"`
+	EndDate    string               `json:"end_date"`
+	TotalSpent float64              `json:"total_spent"`
+	Categories []SpendingByCategory `json:"categories"`
+}
+
+// SpendingByMerchant represents spending totals for a single merchant
+type SpendingByMerchant struct {
+	MerchantName     string  `json:"merchant_name"`
+	Total            float64 `json:"total"`
+	TransactionCount int     `json:"transaction_count"`
+	Percentage       float64 `json:"percentage"`
+}
+
+// SpendingByMerchantResponse is the response for GET /analytics/spending-by-merchant
+type SpendingByMerchantResponse struct {
+	StartDate string               `json:"start_date"`
+	EndDate   string               `json:"end_date"`
+	TopN      int                  `json:"top_n"`
+	Merchants []SpendingByMerchant `json:"merchants"`
+}
+
+// CategorySpending represents spending for a single category within a trend period
+type CategorySpending struct {
+	Category         string  `json:"category"`
+	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
+	Total            float64 `json:"total"`
+}
+
+// SpendingTrendPeriod represents one month's spending breakdown in a trends response
+type SpendingTrendPeriod struct {
+	PeriodStart string             `json:"period_start"`
+	PeriodEnd   string             `json:"period_end"`
+	Categories  []CategorySpending `json:"categories"`
+	Total       float64            `json:"total"`
+}
+
+// SpendingTrendsResponse is the response for GET /analytics/spending-trends
+type SpendingTrendsResponse struct {
+	StartDate     string                `json:"start_date"`
+	EndDate       string                `json:"end_date"`
+	Periods       []SpendingTrendPeriod `json:"periods"`
+	TopCategories []string              `json:"top_categories"` // Top 5 categories by total spend
+}
+
+// SpendingTrendRow is a raw database row from the spending trends query (month + category)
+type SpendingTrendRow struct {
+	PeriodStart     time.Time
+	Category        string
+	CategoryDisplay string // resolved display name for custom categories; empty for PFC rows (service computes display)
+	Total           float64
+}

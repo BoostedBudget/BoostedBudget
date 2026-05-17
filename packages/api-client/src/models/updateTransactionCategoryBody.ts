@@ -22,17 +22,22 @@ Authorization: Bearer <your-jwt-token>
 
 ## Regions
 
-All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+Use the GET /api/v1/regions endpoint to discover available data residency regions.
+Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
+import type { UpdateTransactionCategoryBodyKind } from "./updateTransactionCategoryBodyKind";
 
 export interface UpdateTransactionCategoryBody {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
-  /**
-   * Category hierarchy as string array
-   * @nullable
-   */
-  category: string[] | null;
+  /** Custom category UUID (required when kind=custom) */
+  custom_category_id?: string;
+  /** Category override kind */
+  kind: UpdateTransactionCategoryBodyKind;
+  /** PFC detailed enum (optional when kind=pfc) */
+  pfc_detailed?: string;
+  /** PFC primary enum (required when kind=pfc) */
+  pfc_primary?: string;
 }

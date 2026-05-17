@@ -21,7 +21,7 @@ func setupMockDB(t *testing.T) (pgxmock.PgxPoolIface, ProfileRepository) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewProfileRepository(mock)
+	repo := NewProfileRepository(mock, newTestFieldEncryptor(t))
 	return mock, repo
 }
 
@@ -43,6 +43,7 @@ func TestGetUserByClerkID_Success(t *testing.T) {
 		"deletion_requested_at", "deletion_scheduled_at",
 		"created_at", "updated_at", "last_login_at",
 		"manual_tier_override", "manual_tier_ends_at",
+		"retention_started_at", "retention_expires_at", "retention_notice_30d_sent_at", "retention_notice_7d_sent_at",
 	}).AddRow(
 		userID, clerkUserID, "test@example.com", true,
 		"free", "active", nil, nil,
@@ -51,10 +52,11 @@ func TestGetUserByClerkID_Success(t *testing.T) {
 		nil, nil,
 		now, now, &now,
 		nil, nil,
+		nil, nil, nil, nil,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
-		WithArgs(clerkUserID).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at, retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at FROM users WHERE clerk_user_id_blind_idx = $1 AND is_deleted = FALSE`)).
+		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
 	// Execute
@@ -80,8 +82,8 @@ func TestGetUserByClerkID_NotFound(t *testing.T) {
 	clerkUserID := "user_nonexistent"
 
 	// Issue #679, #680: Updated query to include trial columns
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
-		WithArgs(clerkUserID).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at, retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at FROM users WHERE clerk_user_id_blind_idx = $1 AND is_deleted = FALSE`)).
+		WithArgs(pgxmock.AnyArg()).
 		WillReturnError(pgx.ErrNoRows)
 
 	// Execute
@@ -112,6 +114,7 @@ func TestGetUserByID_Success(t *testing.T) {
 		"deletion_requested_at", "deletion_scheduled_at",
 		"created_at", "updated_at", "last_login_at",
 		"manual_tier_override", "manual_tier_ends_at",
+		"retention_started_at", "retention_expires_at", "retention_notice_30d_sent_at", "retention_notice_7d_sent_at",
 	}).AddRow(
 		userID, clerkUserID, "test@example.com", true,
 		"premium", "active", &now, nil,
@@ -120,9 +123,10 @@ func TestGetUserByID_Success(t *testing.T) {
 		nil, nil,
 		now, now, &now,
 		nil, nil,
+		nil, nil, nil, nil,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at, retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
 		WithArgs(userID).
 		WillReturnRows(rows)
 
@@ -148,7 +152,7 @@ func TestGetUserByID_NotFound(t *testing.T) {
 	userID := uuid.New().String()
 
 	// Issue #679, #680: Updated query to include trial columns
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at, retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
 		WithArgs(userID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -171,11 +175,12 @@ func TestCreateUser_Success(t *testing.T) {
 	user := domain.NewUser("user_newuser", "newuser@example.com", true)
 
 	// Expect INSERT query (match full query for consistency)
-	mock.ExpectExec(`INSERT INTO users \( id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at \) VALUES`).
+	// email and clerk_user_id are encrypted; paddle fields are encrypted; blind indexes added as $22, $23, $24
+	mock.ExpectExec(`INSERT INTO users \( id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, email_blind_idx, clerk_user_id_blind_idx, paddle_subscription_id_blind_idx \) VALUES`).
 		WithArgs(
 			pgxmock.AnyArg(), // id (generated UUID)
-			user.ClerkUserID,
-			user.Email,
+			pgxmock.AnyArg(), // clerk_user_id (encrypted)
+			pgxmock.AnyArg(), // email (encrypted)
 			user.EmailVerified,
 			user.SubscriptionTier,
 			user.SubscriptionStatus,
@@ -184,8 +189,8 @@ func TestCreateUser_Success(t *testing.T) {
 			user.TrialStartedAt,
 			user.TrialEndsAt,
 			user.HadTrial,
-			user.PaddleCustomerID,
-			user.PaddleSubscriptionID,
+			(*string)(nil),   // paddle_customer_id (encrypted, nil → nil)
+			(*string)(nil),   // paddle_subscription_id (encrypted, nil → nil)
 			user.PrimaryRegion,
 			user.IsActive,
 			user.IsDeleted,
@@ -194,6 +199,9 @@ func TestCreateUser_Success(t *testing.T) {
 			pgxmock.AnyArg(), // created_at
 			pgxmock.AnyArg(), // updated_at
 			user.LastLoginAt,
+			pgxmock.AnyArg(), // email_blind_idx
+			pgxmock.AnyArg(), // clerk_user_id_blind_idx
+			(*string)(nil),   // paddle_subscription_id_blind_idx (nil since subscription ID is nil)
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
@@ -217,9 +225,9 @@ func TestCreateUser_DuplicateEmail(t *testing.T) {
 	// Simulate unique constraint violation on email
 	mock.ExpectExec(`INSERT INTO users`).
 		WithArgs(
-			pgxmock.AnyArg(),
-			user.ClerkUserID,
-			user.Email,
+			pgxmock.AnyArg(), // id
+			pgxmock.AnyArg(), // clerk_user_id (encrypted)
+			pgxmock.AnyArg(), // email (encrypted)
 			user.EmailVerified,
 			user.SubscriptionTier,
 			user.SubscriptionStatus,
@@ -228,16 +236,19 @@ func TestCreateUser_DuplicateEmail(t *testing.T) {
 			user.TrialStartedAt,
 			user.TrialEndsAt,
 			user.HadTrial,
-			user.PaddleCustomerID,
-			user.PaddleSubscriptionID,
+			(*string)(nil),   // paddle_customer_id (encrypted, nil → nil)
+			(*string)(nil),   // paddle_subscription_id (encrypted, nil → nil)
 			user.PrimaryRegion,
 			user.IsActive,
 			user.IsDeleted,
 			user.DeletionRequestedAt,
 			user.DeletionScheduledAt,
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // created_at
+			pgxmock.AnyArg(), // updated_at
 			user.LastLoginAt,
+			pgxmock.AnyArg(), // email_blind_idx
+			pgxmock.AnyArg(), // clerk_user_id_blind_idx
+			(*string)(nil),   // paddle_subscription_id_blind_idx (nil since subscription ID is nil)
 		).
 		WillReturnError(errors.New("pq: duplicate key value violates unique constraint \"users_email_key\""))
 
@@ -269,13 +280,14 @@ func TestUpdateUser_Success(t *testing.T) {
 		IsDeleted:          false,
 	}
 
-	// Expect UPDATE query
-	mock.ExpectExec(`UPDATE users SET email = \$1, email_verified = \$2, primary_region = \$3, updated_at = \$4 WHERE id = \$5`).
+	// Expect UPDATE query — email is encrypted ($1), email_blind_idx added ($5), id moves to $6
+	mock.ExpectExec(`UPDATE users SET email = \$1, email_verified = \$2, primary_region = \$3, updated_at = \$4, email_blind_idx = \$5 WHERE id = \$6`).
 		WithArgs(
-			user.Email,
+			pgxmock.AnyArg(), // email (encrypted)
 			user.EmailVerified,
 			user.PrimaryRegion,
 			pgxmock.AnyArg(), // updated_at
+			pgxmock.AnyArg(), // email_blind_idx
 			user.ID,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -301,13 +313,14 @@ func TestUpdateUser_NotFound(t *testing.T) {
 		PrimaryRegion: "iad",
 	}
 
-	// Expect UPDATE query that affects 0 rows
-	mock.ExpectExec(`UPDATE users SET email = \$1, email_verified = \$2, primary_region = \$3, updated_at = \$4 WHERE id = \$5`).
+	// Expect UPDATE query that affects 0 rows — email is encrypted, email_blind_idx added
+	mock.ExpectExec(`UPDATE users SET email = \$1, email_verified = \$2, primary_region = \$3, updated_at = \$4, email_blind_idx = \$5 WHERE id = \$6`).
 		WithArgs(
-			user.Email,
+			pgxmock.AnyArg(), // email (encrypted)
 			user.EmailVerified,
 			user.PrimaryRegion,
-			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // updated_at
+			pgxmock.AnyArg(), // email_blind_idx
 			user.ID,
 		).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
@@ -329,12 +342,12 @@ func TestUpdateLastLogin_Success(t *testing.T) {
 	ctx := context.Background()
 	clerkUserID := "user_507f1f77bcf86cd799439011"
 
-	// Expect UPDATE query
-	mock.ExpectExec(`UPDATE users SET last_login_at = \$1, updated_at = \$2 WHERE clerk_user_id = \$3`).
+	// Expect UPDATE query — WHERE uses blind index instead of plaintext clerk_user_id
+	mock.ExpectExec(`UPDATE users SET last_login_at = \$1, updated_at = \$2 WHERE clerk_user_id_blind_idx = \$3`).
 		WithArgs(
 			pgxmock.AnyArg(), // last_login_at (current time)
 			pgxmock.AnyArg(), // updated_at (current time)
-			clerkUserID,
+			pgxmock.AnyArg(), // clerk_user_id_blind_idx
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
@@ -354,12 +367,12 @@ func TestUpdateLastLogin_NotFound(t *testing.T) {
 	ctx := context.Background()
 	clerkUserID := "user_nonexistent"
 
-	// Expect UPDATE query that affects 0 rows
-	mock.ExpectExec(`UPDATE users SET last_login_at = \$1, updated_at = \$2 WHERE clerk_user_id = \$3`).
+	// Expect UPDATE query that affects 0 rows — WHERE uses blind index
+	mock.ExpectExec(`UPDATE users SET last_login_at = \$1, updated_at = \$2 WHERE clerk_user_id_blind_idx = \$3`).
 		WithArgs(
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
-			clerkUserID,
+			pgxmock.AnyArg(), // clerk_user_id_blind_idx
 		).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
@@ -396,6 +409,7 @@ func TestGetUserByClerkID_WithManualOverride(t *testing.T) {
 		"deletion_requested_at", "deletion_scheduled_at",
 		"created_at", "updated_at", "last_login_at",
 		"manual_tier_override", "manual_tier_ends_at",
+		"retention_started_at", "retention_expires_at", "retention_notice_30d_sent_at", "retention_notice_7d_sent_at",
 	}).AddRow(
 		userID, clerkUserID, "test@example.com", true,
 		"premium", "trial", nil, nil,
@@ -404,10 +418,11 @@ func TestGetUserByClerkID_WithManualOverride(t *testing.T) {
 		nil, nil,
 		now, now, &now,
 		&override, nil,
+		nil, nil, nil, nil,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE clerk_user_id = $1 AND is_deleted = FALSE`)).
-		WithArgs(clerkUserID).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at, retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at FROM users WHERE clerk_user_id_blind_idx = $1 AND is_deleted = FALSE`)).
+		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
 	user, err := repo.GetUserByClerkID(ctx, clerkUserID)
@@ -440,6 +455,7 @@ func TestGetUserByID_WithManualOverride(t *testing.T) {
 		"deletion_requested_at", "deletion_scheduled_at",
 		"created_at", "updated_at", "last_login_at",
 		"manual_tier_override", "manual_tier_ends_at",
+		"retention_started_at", "retention_expires_at", "retention_notice_30d_sent_at", "retention_notice_7d_sent_at",
 	}).AddRow(
 		userID, clerkUserID, "test@example.com", true,
 		"premium", "active", &now, nil,
@@ -448,9 +464,10 @@ func TestGetUserByID_WithManualOverride(t *testing.T) {
 		nil, nil,
 		now, now, &now,
 		&override, &overrideEndsAt,
+		nil, nil, nil, nil,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at, retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
 		WithArgs(userID).
 		WillReturnRows(rows)
 
@@ -483,6 +500,7 @@ func TestGetUserByPaddleSubscriptionID_Success(t *testing.T) {
 		"deletion_requested_at", "deletion_scheduled_at",
 		"created_at", "updated_at", "last_login_at",
 		"manual_tier_override", "manual_tier_ends_at",
+		"retention_started_at", "retention_expires_at", "retention_notice_30d_sent_at", "retention_notice_7d_sent_at",
 	}).AddRow(
 		userID, "clerk_123", "test@example.com", true,
 		"premium", "active", &now, nil,
@@ -492,10 +510,11 @@ func TestGetUserByPaddleSubscriptionID_Success(t *testing.T) {
 		nil, nil,
 		now, now, &now,
 		nil, nil,
+		nil, nil, nil, nil,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE paddle_subscription_id = $1 AND is_deleted = FALSE`)).
-		WithArgs(subscriptionID).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at, retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at FROM users WHERE paddle_subscription_id_blind_idx = $1 AND is_deleted = FALSE`)).
+		WithArgs(pgxmock.AnyArg()). // blind index (HMAC of subscriptionID)
 		WillReturnRows(rows)
 
 	// Execute
@@ -518,8 +537,8 @@ func TestGetUserByPaddleSubscriptionID_NotFound(t *testing.T) {
 	ctx := context.Background()
 	subscriptionID := "sub_nonexistent"
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users WHERE paddle_subscription_id = $1 AND is_deleted = FALSE`)).
-		WithArgs(subscriptionID).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at, retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at FROM users WHERE paddle_subscription_id_blind_idx = $1 AND is_deleted = FALSE`)).
+		WithArgs(pgxmock.AnyArg()). // blind index (HMAC of subscriptionID)
 		WillReturnError(pgx.ErrNoRows)
 
 	// Execute
@@ -544,8 +563,8 @@ func TestUpdateSubscriptionFromPaddle_WithSubscriptionID(t *testing.T) {
 	subscriptionID := "sub_01h12345"
 	now := time.Now()
 
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, updated_at = $6 WHERE id = $7 AND is_deleted = FALSE`)).
-		WithArgs(tier, status, pgxmock.AnyArg(), (*time.Time)(nil), &subscriptionID, pgxmock.AnyArg(), userID).
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7 WHERE id = $8 AND is_deleted = FALSE`)).
+		WithArgs(tier, status, pgxmock.AnyArg(), (*time.Time)(nil), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), userID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
@@ -567,8 +586,8 @@ func TestUpdateSubscriptionFromPaddle_WithNullSubscriptionID(t *testing.T) {
 	status := "active"
 	now := time.Now()
 
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, updated_at = $6 WHERE id = $7 AND is_deleted = FALSE`)).
-		WithArgs(tier, status, pgxmock.AnyArg(), (*time.Time)(nil), (*string)(nil), pgxmock.AnyArg(), userID).
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7 WHERE id = $8 AND is_deleted = FALSE`)).
+		WithArgs(tier, status, pgxmock.AnyArg(), (*time.Time)(nil), (*string)(nil), (*string)(nil), pgxmock.AnyArg(), userID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
@@ -580,7 +599,11 @@ func TestUpdateSubscriptionFromPaddle_WithNullSubscriptionID(t *testing.T) {
 }
 
 // userSelectQueryForTest is the expected SELECT query used in tests for profile lookups
-const userSelectQueryForTest = `SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at FROM users`
+const userSelectQueryForTest = `SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at, retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at FROM users`
+
+// activePaddleSubsWhereClause is the WHERE clause used by GetUsersWithActivePaddleSubscriptions
+// (uses blind index column since paddle_subscription_id is now encrypted)
+const activePaddleSubsWhereClause = ` WHERE paddle_subscription_id_blind_idx IS NOT NULL AND subscription_status NOT IN ('inactive', 'cancelled') AND is_deleted = FALSE`
 
 // makeUserRow creates a pgxmock row for a user with the given parameters
 func makeUserRow(t *testing.T, userID, clerkID, email string, paddleSubID *string) *pgxmock.Rows {
@@ -594,6 +617,7 @@ func makeUserRow(t *testing.T, userID, clerkID, email string, paddleSubID *strin
 		"deletion_requested_at", "deletion_scheduled_at",
 		"created_at", "updated_at", "last_login_at",
 		"manual_tier_override", "manual_tier_ends_at",
+		"retention_started_at", "retention_expires_at", "retention_notice_30d_sent_at", "retention_notice_7d_sent_at",
 	}).AddRow(
 		userID, clerkID, email, true,
 		"premium", "active", &now, nil,
@@ -602,6 +626,7 @@ func makeUserRow(t *testing.T, userID, clerkID, email string, paddleSubID *strin
 		nil, nil,
 		now, now, &now,
 		nil, nil,
+		nil, nil, nil, nil,
 	)
 	return rows
 }
@@ -626,21 +651,22 @@ func TestGetUsersWithActivePaddleSubscriptions_WithResults(t *testing.T) {
 		"deletion_requested_at", "deletion_scheduled_at",
 		"created_at", "updated_at", "last_login_at",
 		"manual_tier_override", "manual_tier_ends_at",
+		"retention_started_at", "retention_expires_at", "retention_notice_30d_sent_at", "retention_notice_7d_sent_at",
 	}).AddRow(
 		userID1, "clerk_1", "user1@example.com", true,
 		"premium", "active", &now, nil,
 		nil, nil, false,
 		stringPtr("cus_1"), &subID1, "iad", true, false,
-		nil, nil, now, now, &now, nil, nil,
+		nil, nil, now, now, &now, nil, nil, nil, nil, nil, nil,
 	).AddRow(
 		userID2, "clerk_2", "user2@example.com", true,
 		"premium", "active", &now, nil,
 		nil, nil, false,
 		stringPtr("cus_2"), &subID2, "iad", true, false,
-		nil, nil, now, now, &now, nil, nil,
+		nil, nil, now, now, &now, nil, nil, nil, nil, nil, nil,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(userSelectQueryForTest+` WHERE paddle_subscription_id IS NOT NULL AND subscription_status NOT IN ('inactive', 'cancelled') AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(userSelectQueryForTest+activePaddleSubsWhereClause)).
 		WillReturnRows(rows)
 
 	users, err := repo.GetUsersWithActivePaddleSubscriptions(ctx)
@@ -669,7 +695,7 @@ func TestGetUsersWithActivePaddleSubscriptions_Empty(t *testing.T) {
 		"manual_tier_override", "manual_tier_ends_at",
 	})
 
-	mock.ExpectQuery(regexp.QuoteMeta(userSelectQueryForTest+` WHERE paddle_subscription_id IS NOT NULL AND subscription_status NOT IN ('inactive', 'cancelled') AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(userSelectQueryForTest+activePaddleSubsWhereClause)).
 		WillReturnRows(rows)
 
 	users, err := repo.GetUsersWithActivePaddleSubscriptions(ctx)
@@ -698,7 +724,7 @@ func TestGetUsersWithActivePaddleSubscriptions_ExcludesDeleted(t *testing.T) {
 		"manual_tier_override", "manual_tier_ends_at",
 	})
 
-	mock.ExpectQuery(regexp.QuoteMeta(userSelectQueryForTest+` WHERE paddle_subscription_id IS NOT NULL AND subscription_status NOT IN ('inactive', 'cancelled') AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(userSelectQueryForTest+activePaddleSubsWhereClause)).
 		WillReturnRows(rows)
 
 	users, err := repo.GetUsersWithActivePaddleSubscriptions(ctx)
@@ -726,12 +752,185 @@ func TestGetUsersWithActivePaddleSubscriptions_ExcludesInactive(t *testing.T) {
 		"manual_tier_override", "manual_tier_ends_at",
 	})
 
-	mock.ExpectQuery(regexp.QuoteMeta(userSelectQueryForTest+` WHERE paddle_subscription_id IS NOT NULL AND subscription_status NOT IN ('inactive', 'cancelled') AND is_deleted = FALSE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(userSelectQueryForTest+activePaddleSubsWhereClause)).
 		WillReturnRows(rows)
 
 	users, err := repo.GetUsersWithActivePaddleSubscriptions(ctx)
 
 	require.NoError(t, err)
 	assert.Empty(t, users)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// #1001: GetUserByEmail — dual lookup (blind index OR plaintext) for encryption migration safety
+
+const getUserByEmailQuery = `SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at, retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at FROM users WHERE (email_blind_idx = $1 OR LOWER(email) = $2) AND is_deleted = FALSE`
+
+// TestGetUserByEmail_FoundByBlindIndex verifies lookup finds an encrypted row via blind index
+func TestGetUserByEmail_FoundByBlindIndex(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	email := "user@example.com"
+	userID := uuid.New().String()
+	now := time.Now()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "clerk_user_id", "email", "email_verified",
+		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
+		"trial_started_at", "trial_ends_at", "had_trial",
+		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
+		"deletion_requested_at", "deletion_scheduled_at",
+		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
+		"retention_started_at", "retention_expires_at", "retention_notice_30d_sent_at", "retention_notice_7d_sent_at",
+	}).AddRow(
+		userID, "clerk_abc", "ENC$TENC[user@example.com]", true, // full encrypted form: ENC$ prefix + test-encrypted value
+		"premium", "trial", nil, nil,
+		nil, nil, true,
+		nil, nil, "iad", true, false,
+		nil, nil,
+		now, now, nil,
+		nil, nil,
+		nil, nil, nil, nil,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(getUserByEmailQuery)).
+		WithArgs(pgxmock.AnyArg(), "user@example.com").
+		WillReturnRows(rows)
+
+	user, err := repo.GetUserByEmail(ctx, email)
+
+	require.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.Equal(t, userID, user.ID)
+	assert.Equal(t, "user@example.com", user.Email) // DecryptString passthrough
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetUserByEmail_FoundPlaintext verifies lookup finds a pre-encryption plaintext row via LOWER(email)
+func TestGetUserByEmail_FoundPlaintext(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	email := "User@Example.com" // mixed case — should be lowercased
+	userID := uuid.New().String()
+	now := time.Now()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "clerk_user_id", "email", "email_verified",
+		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
+		"trial_started_at", "trial_ends_at", "had_trial",
+		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
+		"deletion_requested_at", "deletion_scheduled_at",
+		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
+		"retention_started_at", "retention_expires_at", "retention_notice_30d_sent_at", "retention_notice_7d_sent_at",
+	}).AddRow(
+		userID, "clerk_old", "user@example.com", true, // plaintext email in DB (pre-encryption)
+		"premium", "active", nil, nil,
+		nil, nil, false,
+		nil, nil, "iad", true, false,
+		nil, nil,
+		now, now, nil,
+		nil, nil,
+		nil, nil, nil, nil,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(getUserByEmailQuery)).
+		WithArgs(pgxmock.AnyArg(), "user@example.com"). // normalized to lowercase
+		WillReturnRows(rows)
+
+	user, err := repo.GetUserByEmail(ctx, email)
+
+	require.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.Equal(t, userID, user.ID)
+	assert.Equal(t, "user@example.com", user.Email)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetUserByEmail_NotFound verifies ErrUserNotFound is returned when no match
+func TestGetUserByEmail_NotFound(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	email := "nobody@example.com"
+
+	mock.ExpectQuery(regexp.QuoteMeta(getUserByEmailQuery)).
+		WithArgs(pgxmock.AnyArg(), "nobody@example.com").
+		WillReturnError(pgx.ErrNoRows)
+
+	user, err := repo.GetUserByEmail(ctx, email)
+
+	assert.Nil(t, user)
+	assert.ErrorIs(t, err, ErrUserNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestProfileRepository_UpdateUserEmailTx_Success verifies that UpdateUserEmailTx updates
+// the email, email_blind_idx, and resets email_verified to false within a transaction.
+func TestProfileRepository_UpdateUserEmailTx_Success(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	newEmail := "newemail@example.com"
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET email = $1, email_blind_idx = $2, email_verified = false, updated_at = $3 WHERE id = $4`)).
+		WithArgs(
+			pgxmock.AnyArg(), // email (encrypted)
+			pgxmock.AnyArg(), // email_blind_idx
+			pgxmock.AnyArg(), // updated_at
+			userID,
+		).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	tx, err := mock.Begin(ctx)
+	require.NoError(t, err)
+
+	err = repo.UpdateUserEmailTx(ctx, tx, userID, newEmail)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestProfileRepository_UpdateUserEmailTx_DuplicateEmail verifies that UpdateUserEmailTx
+// returns ErrDuplicateEmail when the new email collides with an existing user's email.
+func TestProfileRepository_UpdateUserEmailTx_DuplicateEmail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	existingEmail := "existing@example.com"
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET email = $1, email_blind_idx = $2, email_verified = false, updated_at = $3 WHERE id = $4`)).
+		WithArgs(
+			pgxmock.AnyArg(), // email (encrypted)
+			pgxmock.AnyArg(), // email_blind_idx
+			pgxmock.AnyArg(), // updated_at
+			userID,
+		).
+		WillReturnError(errors.New("pq: duplicate key value violates unique constraint \"unique_users_email_blind\""))
+
+	tx, err := mock.Begin(ctx)
+	require.NoError(t, err)
+
+	err = repo.UpdateUserEmailTx(ctx, tx, userID, existingEmail)
+
+	assert.ErrorIs(t, err, ErrDuplicateEmail)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

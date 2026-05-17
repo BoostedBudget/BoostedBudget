@@ -4,11 +4,16 @@ import userEvent from '@testing-library/user-event'
 import { IncomeSourcePicker } from './IncomeSourcePicker'
 import type { IncomeSource } from '../../types'
 import type { UserTag } from '@/features/tags/types'
+import type { Primary } from '@boostedbudget/api-client/models/primary'
 
 describe('IncomeSourcePicker', () => {
   const mockOnAdd = mock(() => {})
 
-  const mockCategories = ['INCOME', 'TRANSFER_IN', 'LOAN_PAYMENTS']
+  const mockCategories: Primary[] = [
+    { enum: 'INCOME', display: 'Income' },
+    { enum: 'TRANSFER_IN', display: 'Transfer In' },
+    { enum: 'LOAN_PAYMENTS', display: 'Loan Payments' },
+  ]
   const mockTags: UserTag[] = [
     { id: '1', user_id: 'user-1', name: 'Salary', color: '#22c55e', usage_count: 5, created_at: '', updated_at: '' },
     { id: '2', user_id: 'user-1', name: 'Freelance', color: '#3b82f6', usage_count: 3, created_at: '', updated_at: '' },
@@ -20,7 +25,7 @@ describe('IncomeSourcePicker', () => {
   })
 
   describe('Type Selection', () => {
-    it('renders type selector with three options', () => {
+    it('renders type selector with category and tag options only (no manual)', () => {
       render(
         <IncomeSourcePicker
           availableCategories={mockCategories}
@@ -33,14 +38,15 @@ describe('IncomeSourcePicker', () => {
       const typeSelector = screen.getByRole('combobox', { name: /source type/i }) as HTMLSelectElement;
       expect(typeSelector).toBeInTheDocument();
 
-      // Check all options exist in the type selector
+      // Check category and tag exist
       const options = Array.from(typeSelector.options).map(opt => opt.text.toLowerCase());
       expect(options).toContain('category');
       expect(options).toContain('tag');
-      expect(options).toContain('manual');
+      // Manual option must NOT be present in the picker for new budgets
+      expect(options).not.toContain('manual');
     });
 
-    it('defaults to plaid_category type', () => {
+    it('defaults to pfc_primary type', () => {
       render(
         <IncomeSourcePicker
           availableCategories={mockCategories}
@@ -51,10 +57,10 @@ describe('IncomeSourcePicker', () => {
       );
 
       const typeSelector = screen.getByRole('combobox', { name: /source type/i }) as HTMLSelectElement;
-      expect(typeSelector.value).toBe('plaid_category');
+      expect(typeSelector.value).toBe('pfc_primary');
     });
 
-    it('shows category dropdown when plaid_category selected', () => {
+    it('shows category dropdown when pfc_primary selected', () => {
       render(
         <IncomeSourcePicker
           availableCategories={mockCategories}
@@ -88,27 +94,6 @@ describe('IncomeSourcePicker', () => {
         expect(screen.getByRole('combobox', { name: /select tag/i })).toBeInTheDocument();
       });
     });
-
-    it('shows amount input when manual selected', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
-        <IncomeSourcePicker
-          availableCategories={mockCategories}
-          availableTags={mockTags}
-          existingSources={[]}
-          onAdd={mockOnAdd}
-        />
-      );
-
-      // Select manual type
-      const typeSelector = screen.getByRole('combobox', { name: /source type/i });
-      await user.selectOptions(typeSelector, 'manual');
-
-      // Amount input should be visible
-      await waitFor(() => {
-        expect(screen.getByLabelText(/amount/i)).toBeInTheDocument();
-      });
-    });
   });
 
   // ==========================================================================
@@ -134,9 +119,9 @@ describe('IncomeSourcePicker', () => {
       expect(screen.getByRole('option', { name: /transfer in/i })).toBeInTheDocument();
     });
 
-    it('filters out already selected categories', () => {
+    it('filters out already selected categories (pfc_primary type)', () => {
       const existingSources: IncomeSource[] = [
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
       ];
 
       render(
@@ -241,93 +226,6 @@ describe('IncomeSourcePicker', () => {
   });
 
   // ==========================================================================
-  // Manual Entry Tests
-  // ==========================================================================
-
-  describe('Manual Entry', () => {
-    it('validates amount is a positive number', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
-        <IncomeSourcePicker
-          availableCategories={mockCategories}
-          availableTags={mockTags}
-          existingSources={[]}
-          onAdd={mockOnAdd}
-        />
-      );
-
-      // Switch to manual type
-      const typeSelector = screen.getByRole('combobox', { name: /source type/i });
-      await user.selectOptions(typeSelector, 'manual');
-
-      await waitFor(() => {
-        expect(screen.getByLabelText(/amount/i)).toBeInTheDocument();
-      });
-
-      const amountInput = screen.getByLabelText(/amount/i);
-      const addButton = screen.getByRole('button', { name: /add/i });
-
-      // Enter 0 - should keep button disabled
-      await user.type(amountInput, '0');
-      expect(addButton).toBeDisabled();
-
-      // Clear and enter valid amount
-      await user.clear(amountInput);
-      await user.type(amountInput, '1000');
-      expect(addButton).not.toBeDisabled();
-    });
-
-    it('allows optional description input', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
-        <IncomeSourcePicker
-          availableCategories={mockCategories}
-          availableTags={mockTags}
-          existingSources={[]}
-          onAdd={mockOnAdd}
-        />
-      );
-
-      // Switch to manual type
-      const typeSelector = screen.getByRole('combobox', { name: /source type/i });
-      await user.selectOptions(typeSelector, 'manual');
-
-      await waitFor(() => {
-        expect(screen.getByLabelText(/description/i)).toBeInTheDocument();
-      });
-
-      const descriptionInput = screen.getByLabelText(/description/i);
-      expect(descriptionInput).toBeInTheDocument();
-    });
-
-    it('enables add button when valid amount entered', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
-        <IncomeSourcePicker
-          availableCategories={mockCategories}
-          availableTags={mockTags}
-          existingSources={[]}
-          onAdd={mockOnAdd}
-        />
-      );
-
-      // Switch to manual type
-      const typeSelector = screen.getByRole('combobox', { name: /source type/i });
-      await user.selectOptions(typeSelector, 'manual');
-
-      await waitFor(() => {
-        expect(screen.getByLabelText(/amount/i)).toBeInTheDocument();
-      });
-
-      const amountInput = screen.getByLabelText(/amount/i);
-      await user.type(amountInput, '500.50');
-
-      const addButton = screen.getByRole('button', { name: /add/i });
-      expect(addButton).not.toBeDisabled();
-    });
-  });
-
-  // ==========================================================================
   // Add Action Tests
   // ==========================================================================
 
@@ -352,7 +250,7 @@ describe('IncomeSourcePicker', () => {
       await user.click(addButton);
 
       expect(mockOnAdd).toHaveBeenCalledWith({
-        type: 'plaid_category',
+        type: 'pfc_primary',
         value: 'INCOME',
       });
     });
@@ -387,43 +285,6 @@ describe('IncomeSourcePicker', () => {
       expect(mockOnAdd).toHaveBeenCalledWith({
         type: 'tag',
         value: 'Freelance',
-      });
-    });
-
-    it('calls onAdd with correct IncomeSource for manual', async () => {
-      const user = userEvent.setup({ delay: null });
-      render(
-        <IncomeSourcePicker
-          availableCategories={mockCategories}
-          availableTags={mockTags}
-          existingSources={[]}
-          onAdd={mockOnAdd}
-        />
-      );
-
-      // Switch to manual type
-      const typeSelector = screen.getByRole('combobox', { name: /source type/i });
-      await user.selectOptions(typeSelector, 'manual');
-
-      await waitFor(() => {
-        expect(screen.getByLabelText(/amount/i)).toBeInTheDocument();
-      });
-
-      // Fill in amount and description
-      const amountInput = screen.getByLabelText(/amount/i);
-      await user.type(amountInput, '2500');
-
-      const descriptionInput = screen.getByLabelText(/description/i);
-      await user.type(descriptionInput, 'Monthly salary');
-
-      // Click add
-      const addButton = screen.getByRole('button', { name: /add/i });
-      await user.click(addButton);
-
-      expect(mockOnAdd).toHaveBeenCalledWith({
-        type: 'manual',
-        value: '2500',
-        description: 'Monthly salary',
       });
     });
 
@@ -505,14 +366,39 @@ describe('IncomeSourcePicker', () => {
       // Category selector (default)
       expect(screen.getByRole('combobox', { name: /select category/i })).toBeInTheDocument();
 
-      // Switch to manual and check labels
+      // Switch to tag and check label
       const typeSelector = screen.getByRole('combobox', { name: /source type/i });
-      await user.selectOptions(typeSelector, 'manual');
+      await user.selectOptions(typeSelector, 'tag');
 
       await waitFor(() => {
-        expect(screen.getByLabelText(/amount/i)).toBeInTheDocument();
-        expect(screen.getByLabelText(/description/i)).toBeInTheDocument();
+        expect(screen.getByRole('combobox', { name: /select tag/i })).toBeInTheDocument();
       });
     });
   });
+
+  // ==========================================================================
+  // Curated Categories Test (brand-new user)
+  // ==========================================================================
+
+  describe('Curated categories', () => {
+    it('lists_curated_income_categories_for_new_user', () => {
+      const curatedIncomeCategories: Primary[] = [
+        { enum: 'INCOME', display: 'Income' },
+        { enum: 'TRANSFER_IN', display: 'Transfer In' },
+      ]
+
+      render(
+        <IncomeSourcePicker
+          availableCategories={curatedIncomeCategories}
+          availableTags={[]}
+          existingSources={[]}
+          onAdd={mockOnAdd}
+        />
+      )
+
+      // Brand-new user with no transactions sees curated categories
+      expect(screen.getByRole('option', { name: /^income$/i })).toBeInTheDocument()
+      expect(screen.getByRole('option', { name: /^transfer in$/i })).toBeInTheDocument()
+    })
+  })
 });

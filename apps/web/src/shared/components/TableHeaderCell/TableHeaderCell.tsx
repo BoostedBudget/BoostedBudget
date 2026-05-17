@@ -13,7 +13,6 @@ import {
   type FilterOption,
   type RangeValue,
 } from '../ColumnFilterDropdown'
-import './TableHeaderCell.css'
 
 export type SortDirection = 'asc' | 'desc'
 
@@ -90,27 +89,25 @@ export function TableHeaderCell({
     [onFilterChange]
   )
 
-  const ariaSort = isActiveSortColumn
-    ? currentSortDirection === 'asc'
-      ? 'ascending'
-      : 'descending'
-    : undefined
-
   // Determine filter value based on type
   const selectFilterValue = filterType === 'select' ? (filterValue as string[] | undefined) : undefined
   const rangeFilterValue = filterType === 'range' ? (filterValue as RangeValue | null | undefined) : undefined
 
   return (
-    <div className={`table-header-cell ${className}`.trim()}>
+    <div className={`flex items-center gap-1 ${className}`.trim()}>
       {sortable && sortColumn ? (
         <button
           type="button"
           onClick={handleSort}
-          aria-sort={ariaSort}
-          className="table-header-cell__sort-btn"
+          className={[
+            'inline-flex items-center gap-1 p-0 border-none bg-transparent font-[inherit] font-semibold cursor-pointer transition-colors duration-150',
+            isActiveSortColumn
+              ? 'text-primary'
+              : 'text-muted-foreground hover:text-foreground',
+          ].join(' ')}
         >
           {label}
-          <span className="table-header-cell__sort-icon">
+          <span className="inline-flex items-center w-4 h-4 [&>svg]:w-4 [&>svg]:h-4">
             {isActiveSortColumn && currentSortDirection === 'asc' && (
               <ChevronUp aria-hidden="true" />
             )}
@@ -120,7 +117,7 @@ export function TableHeaderCell({
           </span>
         </button>
       ) : (
-        <span className="table-header-cell__label">{label}</span>
+        <span className="font-semibold text-muted-foreground">{label}</span>
       )}
 
       {filterable && onFilterChange && (
@@ -133,7 +130,7 @@ export function TableHeaderCell({
           multiSelect={multiSelect}
           searchable={searchable}
           ariaLabel={filterAriaLabel || `Filter by ${label.toLowerCase()}`}
-          className="table-header-cell__filter"
+          className="shrink-0 ml-1"
         />
       )}
     </div>

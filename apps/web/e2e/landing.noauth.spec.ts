@@ -116,9 +116,10 @@ test.describe('Landing Page - Unauthenticated', () => {
           }),
         });
       });
-      // Re-navigate to apply the mock
-      await page.goto('/');
-      await acceptCookieConsent(page);
+      // Reload to re-trigger the tiers API fetch with the mock active.
+      // The parent beforeEach already navigated to '/' — no need to navigate again.
+      await page.reload();
+      await page.waitForLoadState('domcontentloaded');
     });
 
     test('should display pricing section', async ({ page }) => {
@@ -188,12 +189,13 @@ test.describe('Landing Page - Unauthenticated', () => {
     test('should display final CTA button', async ({ page }) => {
       // Should have at least 2 "Start Free Today" buttons
       const ctaButtons = page.getByRole('button', { name: /start free today/i });
-      await expect(ctaButtons).toHaveCount(2);
+      // Below-fold content needs extra time in CI under resource contention
+      await expect(ctaButtons).toHaveCount(2, { timeout: 10000 });
     });
 
     test('should display risk reversal messaging', async ({ page }) => {
-      await expect(page.getByText(/2-month free trial/i).first()).toBeVisible();
-      await expect(page.getByText(/cancel anytime/i).first()).toBeVisible();
+      await expect(page.getByText(/2-month free trial/i).first()).toBeVisible({ timeout: 10000 });
+      await expect(page.getByText(/cancel anytime/i).first()).toBeVisible({ timeout: 10000 });
     });
   });
 
@@ -208,6 +210,9 @@ test.describe('Landing Page - Unauthenticated', () => {
     });
 
     test('should have accessible buttons', async ({ page }) => {
+      // Wait for page to be fully settled before counting buttons (avoids flakiness
+      // from dynamic elements like cookie banner appearing/disappearing mid-iteration)
+      await page.waitForLoadState('domcontentloaded');
       const buttons = page.getByRole('button');
       const count = await buttons.count();
 

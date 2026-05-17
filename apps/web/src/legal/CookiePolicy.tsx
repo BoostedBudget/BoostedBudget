@@ -8,7 +8,6 @@
  * Route: /legal/cookie-policy (see App.tsx)
  */
 
-import './PrivacyPolicy.css'
 import { Link } from 'react-router-dom'
 
 export function CookiePolicy() {

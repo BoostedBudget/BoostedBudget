@@ -10,7 +10,6 @@ import { getGetAccountsQueryKey } from '@boostedbudget/api-client/endpoints/acco
 import type { ExchangePublicTokenResponse } from './types'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
-import './PlaidLinkButton.css'
 
 interface PlaidLinkButtonProps {
   onSuccess?: (response: ExchangePublicTokenResponse) => void
@@ -148,11 +147,13 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
     onExit: handleOnExit,
   })
 
+  const wrapperClass = `flex flex-col gap-4 p-4 ${className || ''}`
+
   // Loading state - fetching link token
   if (loading) {
     return (
-      <div className={`plaid-link-button ${className || ''}`}>
-        <p className="plaid-link-button__loading">Preparing bank connection...</p>
+      <div className={wrapperClass}>
+        <p className="flex items-center justify-center py-8 text-muted-foreground">Preparing bank connection...</p>
       </div>
     )
   }
@@ -160,9 +161,14 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
   // Error state - failed to fetch link token
   if (error && !linkToken) {
     return (
-      <div className={`plaid-link-button ${className || ''}`}>
-        <p className="plaid-link-button__error">{error}</p>
-        <button className="plaid-link-button__retry" onClick={() => window.location.reload()}>Retry</button>
+      <div className={wrapperClass}>
+        <p className="px-3 py-2 mb-4 bg-destructive/10 border border-destructive/30 rounded text-destructive text-sm">{error}</p>
+        <button
+          className="mt-2 px-4 py-2 bg-primary text-primary-foreground border-none rounded cursor-pointer text-base hover:bg-primary/90 transition-colors"
+          onClick={() => window.location.reload()}
+        >
+          Retry
+        </button>
       </div>
     )
   }
@@ -170,20 +176,20 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
   // Exchanging state - connecting accounts
   if (exchanging) {
     return (
-      <div className={`plaid-link-button ${className || ''}`}>
-        <p className="plaid-link-button__connecting">Connecting your accounts...</p>
+      <div className={wrapperClass}>
+        <p className="flex items-center justify-center py-8 text-muted-foreground">Connecting your accounts...</p>
       </div>
     )
   }
 
   // Main state - ready to open Plaid Link
   return (
-    <div className={`plaid-link-button ${className || ''}`}>
-      {error && <p className="plaid-link-button__error">{error}</p>}
+    <div className={wrapperClass}>
+      {error && <p className="px-3 py-2 mb-4 bg-destructive/10 border border-destructive/30 rounded text-destructive text-sm">{error}</p>}
       <button
         onClick={() => { trackEvent(ANALYTICS_EVENTS.PLAID_LINK_STARTED); open() }}
         disabled={disabled || !ready || exchanging}
-        className="plaid-link-button__submit"
+        className="px-6 py-3 bg-primary text-primary-foreground border-none rounded font-medium cursor-pointer hover:bg-primary/90 transition-colors min-h-[44px] w-full sm:w-auto disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
       >
         Connect Bank Account
       </button>

@@ -8,24 +8,17 @@
 
 import { useState, useCallback, useMemo, useRef } from 'react';
 import { PlusIcon } from 'lucide-react';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import type {
   BudgetCategory,
   CreateBudgetCategoryRequest,
   UpdateBudgetCategoryRequest,
 } from '../../types';
-import { formatCategoryPath } from '../../types';
+import { formatBudgetCategoryLabel } from '../../types';
 import type { UserTag } from '@/features/tags/types';
 import { BudgetCategoryCard } from './BudgetCategoryCard';
 import { BudgetCategoryForm } from './BudgetCategoryForm';
 import { AllocationBreakdown } from './AllocationBreakdown';
-import './BudgetCategoryManager.css';
 
 export interface BudgetCategoryManagerProps {
   /** Budget ID for API calls */
@@ -93,11 +86,9 @@ export function BudgetCategoryManager({
 
   // Filter out already-used categories for the form dropdown
   const filteredAvailableCategories = useMemo(() => {
-    const usedCategoryPaths = new Set(
-      categories.map((cat) => formatCategoryPath(cat.category))
-    );
+    const usedLabels = new Set(categories.map(formatBudgetCategoryLabel));
     return availableCategories.filter(
-      (cat) => !usedCategoryPaths.has(formatCategoryPath(cat))
+      (cat) => !usedLabels.has(cat.join(' > '))
     );
   }, [availableCategories, categories]);
 
@@ -197,18 +188,28 @@ export function BudgetCategoryManager({
 
   const hasCategories = categories.length > 0;
 
+  // Calculate total allocated excluding current category for edit mode
+  const totalAllocatedExcludingCurrent = useMemo(() => {
+    if (formDialog.mode === 'create' || !formDialog.category) {
+      return categories.reduce((sum, c) => sum + c.allocated_amount, 0)
+    }
+    return categories
+      .filter((c) => c.id !== formDialog.category!.id)
+      .reduce((sum, c) => sum + c.allocated_amount, 0)
+  }, [formDialog.mode, formDialog.category, categories])
+
   return (
-    <div className="budget-category-manager">
+    <div className="flex flex-col gap-6">
       {/* Header with add button */}
-      <div className="budget-category-manager__header">
-        <h2 className="budget-category-manager__title">Budget Categories</h2>
+      <div className="flex justify-between items-center gap-4">
+        <h2 className="text-lg font-semibold text-foreground m-0">Budget Categories</h2>
         <button
           type="button"
           onClick={handleOpenAddForm}
           disabled={disabled}
-          className="budget-category-manager__add-btn"
+          className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-primary border-none rounded-lg cursor-pointer transition-colors duration-150 hover:enabled:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <PlusIcon className="budget-category-manager__add-icon" />
+          <PlusIcon className="w-4 h-4" />
           Add Category
         </button>
       </div>
@@ -224,7 +225,7 @@ export function BudgetCategoryManager({
 
       {/* Categories list or empty state */}
       {hasCategories ? (
-        <div className="budget-category-manager__list" role="list">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3" role="list">
           {categories.map((category, index) => (
             <div
               key={category.id}
@@ -234,7 +235,6 @@ export function BudgetCategoryManager({
               ref={(el) => {
                 categoryRefs.current[index] = el;
               }}
-              className="budget-category-manager__list-item"
             >
               <BudgetCategoryCard
                 category={category}
@@ -246,8 +246,8 @@ export function BudgetCategoryManager({
           ))}
         </div>
       ) : (
-        <div className="budget-category-manager__empty">
-          <p className="budget-category-manager__empty-text">
+        <div className="p-8 text-center bg-muted border border-dashed border-border rounded-lg">
+          <p className="text-sm text-muted-foreground m-0">
             No categories yet. Add a category to start tracking your budget allocations.
           </p>
         </div>
@@ -264,39 +264,20 @@ export function BudgetCategoryManager({
           formDialog.mode === 'edit' ? availableCategories : filteredAvailableCategories
         }
         availableTags={availableTags}
+        expectedIncome={totalIncome}
+        totalAllocatedExcludingCurrent={totalAllocatedExcludingCurrent}
       />
 
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialog.isOpen} onOpenChange={(open) => !open && handleCloseDeleteDialog()}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Confirm Delete</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to delete the category "
-              {deleteDialog.category ? formatCategoryPath(deleteDialog.category.category) : ''}"?
-              This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-3 mt-4">
-            <button
-              type="button"
-              onClick={handleCloseDeleteDialog}
-              disabled={isDeleting}
-              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleConfirmDelete}
-              disabled={isDeleting}
-              className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {isDeleting ? 'Deleting...' : 'Delete'}
-            </button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Delete Confirmation Dialog — Issue #960 */}
+      <ConfirmationDialog
+        open={deleteDialog.isOpen}
+        onOpenChange={(open) => !open && handleCloseDeleteDialog()}
+        onConfirm={handleConfirmDelete}
+        title="Delete Category"
+        description={deleteDialog.category ? `Are you sure you want to delete the category "${formatBudgetCategoryLabel(deleteDialog.category)}"? This action cannot be undone.` : ''}
+        variant="destructive"
+        loading={isDeleting}
+      />
     </div>
   );
 }

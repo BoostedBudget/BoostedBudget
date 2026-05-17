@@ -6,13 +6,13 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
-// Test helper to create a transaction for testing
-func newTestTransaction(merchantName string, amount float64, paymentChannel string, category []string) *domain.Transaction {
+// Test helper to create a transaction for testing.
+// The category parameter is ignored (PFCv2 uses PFCPrimary/PFCDetailed instead).
+func newTestTransaction(merchantName string, amount float64, paymentChannel string, _ []string) *domain.Transaction {
 	return &domain.Transaction{
 		MerchantName:   &merchantName,
 		Amount:         amount,
 		PaymentChannel: &paymentChannel,
-		Category:       strPtr(mustMarshalJSON(category)),
 	}
 }
 
@@ -494,63 +494,9 @@ func TestAccountIDEvaluator_Evaluate(t *testing.T) {
 	}
 }
 
-func TestExistingCategoryEvaluator_Evaluate(t *testing.T) {
-	evaluator := &ExistingCategoryEvaluator{}
-
-	tests := []struct {
-		name      string
-		category  []string
-		condition domain.RuleCondition
-		want      bool
-	}{
-		{
-			name:      "matches primary category",
-			category:  []string{"Food and Drink", "Restaurants"},
-			condition: domain.RuleCondition{Type: domain.ConditionExistingCategory, Value: "Food and Drink"},
-			want:      true,
-		},
-		{
-			name:      "does not match secondary category (primary only)",
-			category:  []string{"Food and Drink", "Restaurants"},
-			condition: domain.RuleCondition{Type: domain.ConditionExistingCategory, Value: "restaurants"},
-			want:      false, // Changed: no longer matches secondary
-		},
-		{
-			name:      "matches one of multiple values",
-			category:  []string{"Travel", "Airlines"},
-			condition: domain.RuleCondition{Type: domain.ConditionExistingCategory, Value: []interface{}{"Travel", "Transportation"}},
-			want:      true,
-		},
-		{
-			name:      "no match",
-			category:  []string{"Food and Drink", "Restaurants"},
-			condition: domain.RuleCondition{Type: domain.ConditionExistingCategory, Value: "Travel"},
-			want:      false,
-		},
-		{
-			name:      "nil category",
-			category:  nil,
-			condition: domain.RuleCondition{Type: domain.ConditionExistingCategory, Value: "Food"},
-			want:      false,
-		},
-		{
-			name:      "case insensitive match on primary",
-			category:  []string{"Food and Drink", "Restaurants"},
-			condition: domain.RuleCondition{Type: domain.ConditionExistingCategory, Value: "food and drink"},
-			want:      true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tx := newTestTransaction("MERCHANT", 10.0, "in store", tt.category)
-			got, _ := evaluator.Evaluate(tx, tt.condition)
-			if got != tt.want {
-				t.Errorf("Evaluate() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
+// TestExistingCategoryEvaluator_Evaluate was removed — ExistingCategoryEvaluator was replaced
+// by ExistingPFCPrimaryEvaluator and ExistingPFCDetailedEvaluator in the PFCv2 migration.
+// See TestExistingPFCPrimaryEvaluator_* tests below.
 
 func TestDateRangeEvaluator_Evaluate(t *testing.T) {
 	evaluator := &DateRangeEvaluator{}
@@ -751,5 +697,106 @@ func TestAmountEqualsEvaluator_Evaluate(t *testing.T) {
 				t.Errorf("Evaluate() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// ============================================================================
+// Issue #1058: PFC Evaluator Tests
+// ============================================================================
+
+func TestExistingPFCPrimaryEvaluator_Match(t *testing.T) {
+	evaluator := &ExistingPFCPrimaryEvaluator{}
+
+	tx := &domain.Transaction{
+		PFCPrimary:  strPtr("FOOD_AND_DRINK"),
+		PFCDetailed: strPtr("FOOD_AND_DRINK_FAST_FOOD"),
+	}
+
+	got, err := evaluator.Evaluate(tx, domain.RuleCondition{
+		Type:  domain.ConditionExistingPFCPrimary,
+		Value: "FOOD_AND_DRINK",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got {
+		t.Error("Evaluate() = false, want true for matching PFC primary")
+	}
+}
+
+func TestExistingPFCPrimaryEvaluator_CaseInsensitive(t *testing.T) {
+	evaluator := &ExistingPFCPrimaryEvaluator{}
+	tx := &domain.Transaction{PFCPrimary: strPtr("FOOD_AND_DRINK")}
+
+	got, _ := evaluator.Evaluate(tx, domain.RuleCondition{
+		Type:  domain.ConditionExistingPFCPrimary,
+		Value: "food_and_drink",
+	})
+	if !got {
+		t.Error("Evaluate() should be case-insensitive")
+	}
+}
+
+func TestExistingPFCPrimaryEvaluator_NoMatch(t *testing.T) {
+	evaluator := &ExistingPFCPrimaryEvaluator{}
+	tx := &domain.Transaction{PFCPrimary: strPtr("TRANSPORTATION")}
+
+	got, _ := evaluator.Evaluate(tx, domain.RuleCondition{
+		Type:  domain.ConditionExistingPFCPrimary,
+		Value: "FOOD_AND_DRINK",
+	})
+	if got {
+		t.Error("Evaluate() = true, want false for non-matching PFC primary")
+	}
+}
+
+func TestExistingPFCPrimaryEvaluator_NilPFC(t *testing.T) {
+	evaluator := &ExistingPFCPrimaryEvaluator{}
+	tx := &domain.Transaction{}
+
+	got, err := evaluator.Evaluate(tx, domain.RuleCondition{
+		Type:  domain.ConditionExistingPFCPrimary,
+		Value: "FOOD_AND_DRINK",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got {
+		t.Error("Evaluate() = true, want false for nil PFC")
+	}
+}
+
+func TestExistingPFCDetailedEvaluator_Match(t *testing.T) {
+	evaluator := &ExistingPFCDetailedEvaluator{}
+	tx := &domain.Transaction{
+		PFCPrimary:  strPtr("FOOD_AND_DRINK"),
+		PFCDetailed: strPtr("FOOD_AND_DRINK_FAST_FOOD"),
+	}
+
+	got, err := evaluator.Evaluate(tx, domain.RuleCondition{
+		Type:  domain.ConditionExistingPFCDetailed,
+		Value: "FOOD_AND_DRINK_FAST_FOOD",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got {
+		t.Error("Evaluate() = false, want true for matching PFC detailed")
+	}
+}
+
+func TestExistingPFCDetailedEvaluator_NoMatch(t *testing.T) {
+	evaluator := &ExistingPFCDetailedEvaluator{}
+	tx := &domain.Transaction{
+		PFCPrimary:  strPtr("FOOD_AND_DRINK"),
+		PFCDetailed: strPtr("FOOD_AND_DRINK_FAST_FOOD"),
+	}
+
+	got, _ := evaluator.Evaluate(tx, domain.RuleCondition{
+		Type:  domain.ConditionExistingPFCDetailed,
+		Value: "FOOD_AND_DRINK_COFFEE_SHOPS",
+	})
+	if got {
+		t.Error("Evaluate() = true, want false for non-matching PFC detailed")
 	}
 }
