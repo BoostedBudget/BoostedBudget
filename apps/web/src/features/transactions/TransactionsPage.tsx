@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { useQueryClient } from '@tanstack/react-query'
 import { Search } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
-import { useTransactions } from './hooks/useTransactions'
+import { useInfiniteTransactions } from './hooks/useInfiniteTransactions'
 import { useTransactionFilters } from './hooks/useTransactionFilters'
 import { TransactionTable } from './components/TransactionTable'
-import type { TransactionSortColumn, SortDirection } from './hooks/useTransactions'
+import type { TransactionSortColumn, SortDirection } from './components/TransactionTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 
 import { TransactionEditor } from './components/TransactionEditor'
@@ -126,17 +127,35 @@ export function TransactionsPage() {
   }, [filters.min_amount, filters.max_amount])
 
   const {
-    data,
-    loading,
-    error,
-    nextPage,
-    previousPage,
-    refetch,
+    transactions: infiniteTransactions,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+    isError,
     updateTransaction,
-    hasMore,
-    totalCount,
-    currentPage,
-  } = useTransactions({ filters, limit: 50, sortBy: sortColumn, sortDir: sortDirection })
+  } = useInfiniteTransactions({ filters, limit: 50, sortBy: sortColumn, sortDir: sortDirection })
+
+  // Track successful infinite scroll load-more
+  const prevFetchingRef = useRef(false)
+  useEffect(() => {
+    if (prevFetchingRef.current && !isFetchingNextPage && !isError) {
+      trackEvent(ANALYTICS_EVENTS.TRANSACTIONS_PAGE_LOADED_MORE)
+    }
+    prevFetchingRef.current = isFetchingNextPage
+  }, [isFetchingNextPage, isError, trackEvent])
+
+  // Show error toast when fetchNextPage fails
+  useEffect(() => {
+    if (isError) {
+      toast.error('Failed to load more transactions.', {
+        action: {
+          label: 'Retry',
+          onClick: () => fetchNextPage(),
+        },
+      })
+    }
+  }, [isError, fetchNextPage])
 
   const categoryOptions = useMemo<FilterOption[]>(() => {
     const enumToDisplay = new Map<string, string>()
@@ -145,8 +164,8 @@ export function TransactionsPage() {
     plaidPrimaries.forEach(p => enumToDisplay.set(p.enum, p.display))
 
     // Add any observed effective primaries not already in the curated list
-    const transactions = data?.transactions ?? []
-    transactions.forEach((t) => {
+    const txns = infiniteTransactions
+    txns.forEach((t) => {
       const effectivePrimary = t.pfc_primary_override ?? t.pfc_primary
       if (effectivePrimary && !enumToDisplay.has(effectivePrimary)) {
         enumToDisplay.set(effectivePrimary, formatPFCPrimary(effectivePrimary))
@@ -156,7 +175,7 @@ export function TransactionsPage() {
     return Array.from(enumToDisplay.entries())
       .sort(([, a], [, b]) => a.localeCompare(b))
       .map(([value, label]) => ({ value, label }))
-  }, [data?.transactions, plaidPrimaries])
+  }, [infiniteTransactions, plaidPrimaries])
 
   const handleEditTransaction = (transaction: Transaction) => {
     setSelectedTransaction(transaction)
@@ -169,7 +188,7 @@ export function TransactionsPage() {
   }, [])
 
   const handleEditorSave = useCallback((updatedTransaction: Transaction) => {
-    updateTransaction(updatedTransaction)
+    updateTransaction(updatedTransaction as unknown as import('@boostedbudget/api-client/models/transaction').Transaction)
     handleEditorClose()
   }, [updateTransaction, handleEditorClose])
 
@@ -204,7 +223,7 @@ export function TransactionsPage() {
     }
   }
 
-  const pendingCount = data?.transactions?.filter((t) => t.pending).length ?? 0
+  const pendingCount = infiniteTransactions.filter((t) => t.pending).length
 
   const handleSort = useCallback(
     (column: TransactionSortColumn, direction: SortDirection) => {
@@ -213,7 +232,16 @@ export function TransactionsPage() {
     [setSort],
   )
 
-  if (loading && !data) {
+  // Track whether we've ever received a non-empty result (to show loading only on initial load)
+  const [hasEverLoaded, setHasEverLoaded] = useState(false)
+  useEffect(() => {
+    if (infiniteTransactions.length > 0 && !hasEverLoaded) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setHasEverLoaded(true)
+    }
+  }, [infiniteTransactions.length, hasEverLoaded])
+
+  if (isLoading && !hasEverLoaded) {
     return (
       <main className="p-8 max-w-[1200px] mx-auto">
         <div className="text-center py-12 px-4">Loading your transactions...</div>
@@ -221,13 +249,13 @@ export function TransactionsPage() {
     )
   }
 
-  if (error) {
+  if (isError && !infiniteTransactions.length) {
     return (
       <main className="p-8 max-w-[1200px] mx-auto">
         <div className="text-center py-12 px-4">
           <p className="text-destructive mb-4 text-lg">Failed to load transactions. Please try again.</p>
           <button
-            onClick={refetch}
+            onClick={() => fetchNextPage()}
             className="px-6 py-3 text-base bg-primary text-primary-foreground border-none rounded cursor-pointer hover:opacity-90 transition-opacity"
           >
             Retry
@@ -237,7 +265,7 @@ export function TransactionsPage() {
     )
   }
 
-  const transactions = data?.transactions ?? []
+  const transactions = infiniteTransactions as unknown as Transaction[]
   const isEmpty = transactions.length === 0
 
   return (
@@ -268,7 +296,7 @@ export function TransactionsPage() {
         onStatusFilterChange={setStatusFilter}
         onClearFilter={clearFilter}
         onClearAllFilters={() => clearAllFilters()}
-        disabled={loading}
+        disabled={isLoading}
       />
 
       {isEmpty ? (
@@ -296,16 +324,15 @@ export function TransactionsPage() {
           <div className="mb-4">
             <p className="text-base text-muted-foreground m-0">
               {hasActiveFilters ? (
-                <>
-                  Showing {transactions.length} of {totalCount}{' '}
-                  {totalCount === 1 ? 'transaction' : 'transactions'}
-                </>
+                <>Showing {transactions.length.toLocaleString()} matching transactions</>
               ) : (
-                <>
-                  {totalCount} {totalCount === 1 ? 'transaction' : 'transactions'} total
-                </>
+                <>{transactions.length.toLocaleString()} transactions loaded</>
               )}
             </p>
+          </div>
+
+          <div role="status" aria-live="polite" className="sr-only">
+            {isFetchingNextPage ? 'Loading more transactions' : ''}
           </div>
 
           <div className="min-h-[200px] overflow-x-auto">
@@ -314,7 +341,7 @@ export function TransactionsPage() {
               accountsMap={accountsMap}
               onEdit={handleEditTransaction}
               onCategorize={handleCategorizeTransaction}
-              loading={loading}
+              loading={isLoading}
               sortable
               sortColumn={sortColumn}
               sortDirection={sortDirection}
@@ -327,31 +354,12 @@ export function TransactionsPage() {
               onCategoryFilterChange={handleCategoryFilterChange}
               amountRange={currentAmountRange}
               onAmountRangeChange={handleAmountRangeChange}
+              onScrollEnd={fetchNextPage}
+              hasMore={hasNextPage}
+              isFetchingMore={isFetchingNextPage}
             />
           </div>
 
-          {(hasMore || currentPage > 0) && (
-            <div className="flex justify-center gap-4 mt-8 pt-8 border-t border-border max-sm:flex-col">
-              {currentPage > 0 && (
-                <button
-                  onClick={previousPage}
-                  className="px-6 py-3 text-base bg-primary text-primary-foreground border-none rounded cursor-pointer hover:opacity-90 transition-opacity disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed max-sm:w-full"
-                  disabled={loading}
-                >
-                  Previous
-                </button>
-              )}
-              {hasMore && (
-                <button
-                  onClick={nextPage}
-                  className="px-6 py-3 text-base bg-primary text-primary-foreground border-none rounded cursor-pointer hover:opacity-90 transition-opacity disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed max-sm:w-full"
-                  disabled={loading}
-                >
-                  Next
-                </button>
-              )}
-            </div>
-          )}
         </>
       )}
 

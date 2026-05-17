@@ -34,3 +34,13 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 3. Add an entry to `.size-limit.json` with `limit` = measured gzipped size + 20%.
 
 **Local check:** `make check-bundle-size` (builds frontend, runs orphan guard, enforces all budgets).
+
+**Claude Code pre-push hook:** The Claude Code hook at `.claude/hooks/pre-push-checks.sh` invokes `make check-bundle-size` on every push that touches frontend files, enforcing both size-limit budgets AND the orphan-chunk guard automatically.
+
+**Current footprints (post-#1128, `@tanstack/react-virtual` included):**
+| Chunk | Budget | Actual (gzip) | Headroom |
+|-------|--------|---------------|----------|
+| `transactions` | 19 kB | 15.14 kB | 3.86 kB |
+| `tanstack` | 35 kB | 15.01 kB | 19.99 kB |
+
+`@tanstack/react-virtual` is bundled into the shared `tanstack` chunk (not the `transactions` chunk). The transactions chunk budget of 19 kB remains sufficient with ~3.9 kB headroom.
