@@ -1,6 +1,5 @@
 // Issue #575: Centralized transactions API mock for hook implementation tests
 // This file mocks at the API level so wrapper hooks can be tested with real implementation
-// Used by: useTransactions.test.tsx
 
 import { mock } from 'bun:test'
 import * as RealTransactionsModule from '@boostedbudget/api-client/endpoints/transactions/transactions'

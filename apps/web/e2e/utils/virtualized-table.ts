@@ -47,30 +47,26 @@ export async function collectVirtualizedRowIds(
 
   for (let i = 0; i < maxScrolls; i++) {
     const container = page.locator(scrollContainerSelector);
-    await container.evaluate((el, step) => { el.scrollTop += step; }, scrollStepPx);
 
-    if (requestUrlPattern) {
-      // Wait for a new network request if one is expected — deflakes the gap
-      // between a scroll event triggering a fetch and the response arriving.
-      try {
-        await page.waitForRequest(requestUrlPattern, { timeout: 2000 });
-      } catch {
-        // No new request — scroll didn't trigger a fetch (still on same page).
-      }
-    }
+    // Attach listener BEFORE triggering scroll so the synchronous mocked
+    // request cannot fire before Playwright is watching for it.
+    const waitForLoad = requestUrlPattern
+      ? page.waitForRequest(requestUrlPattern, { timeout: 5000 }).catch(() => null)
+      : Promise.resolve(null);
 
-    // Brief settle for virtual-window recalculation.
-    await page.waitForTimeout(300);
+    const scroll = container.evaluate(
+      (el, step) => { el.scrollTop += step; },
+      scrollStepPx,
+    );
+
+    await Promise.all([scroll, waitForLoad]);
+    await page.waitForTimeout(150);
     await collectVisible();
 
-    // Stop when the sentinel is present and not showing a loading spinner
-    // (i.e. `hasMore` is false and `isFetchingMore` is false — sentinel cell
-    // is empty or absent).
     const sentinel = page.locator('[data-testid="virtual-sentinel"]');
     if (await sentinel.count() > 0) {
       const text = (await sentinel.textContent()) ?? '';
       if (text.trim() === '') {
-        // Sentinel present but empty — no more pages to load.
         break;
       }
     }

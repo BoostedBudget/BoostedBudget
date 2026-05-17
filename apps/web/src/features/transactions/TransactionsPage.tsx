@@ -148,9 +148,14 @@ export function TransactionsPage() {
   // Show error toast when fetchNextPage fails
   useEffect(() => {
     if (isError) {
-      toast.error('Failed to load more transactions. Please try again.')
+      toast.error('Failed to load more transactions.', {
+        action: {
+          label: 'Retry',
+          onClick: () => fetchNextPage(),
+        },
+      })
     }
-  }, [isError])
+  }, [isError, fetchNextPage])
 
   const categoryOptions = useMemo<FilterOption[]>(() => {
     const enumToDisplay = new Map<string, string>()

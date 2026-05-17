@@ -6,9 +6,10 @@
  * NOTE: Runs with API-level mocks (getTransactions raw fetcher)
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, spyOn } from 'bun:test'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { InfiniteData } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { useInfiniteTransactions } from './useInfiniteTransactions'
 import type { TransactionFiltersState } from './useInfiniteTransactions'
@@ -191,4 +192,64 @@ describe('useInfiniteTransactions', () => {
       expect(result.current.transactions[0].id).toBe('txn-1')
     })
   })
+  describe('updateTransaction cache surgery', () => {
+    it('calls cancelQueries before setQueryData and updates the transaction in place', async () => {
+      // Load two pages, then update txn-2 (from page 1) in the cache.
+      // Verifies: cancelQueries fires before setQueryData (race prevention);
+      // updated fields appear in the combined transactions list.
+      mockGetTransactions
+        .mockResolvedValueOnce(page1Response)  // first page
+        .mockResolvedValueOnce(page2Response)  // second page (after fetchNextPage)
+
+      // Create a queryClient we can spy on.
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      })
+      const callOrder: string[] = []
+      const cancelSpy = spyOn(queryClient, 'cancelQueries').mockImplementation(async () => {
+        callOrder.push('cancelQueries')
+      })
+      const setDataSpy = spyOn(queryClient, 'setQueryData').mockImplementation((...args: unknown[]) => {
+        callOrder.push('setQueryData')
+        // Apply the real updater so the cache actually changes.
+        return QueryClient.prototype.setQueryData.apply(queryClient, args as Parameters<typeof queryClient.setQueryData>)
+      })
+
+      const wrapper = ({ children }: { children: React.ReactNode }) => (
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      )
+
+      const { result } = renderHook(() => useInfiniteTransactions(defaultOpts), { wrapper })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+      expect(result.current.transactions).toHaveLength(2)
+
+      // Load page 2
+      act(() => { result.current.fetchNextPage() })
+      await waitFor(() => expect(result.current.transactions).toHaveLength(4))
+
+      // Reset spy state so we only track the upcoming cache surgery call
+      callOrder.length = 0
+
+      const updatedTxn = { ...makeTxn('txn-2'), name: 'Updated Name' } as Parameters<typeof result.current.updateTransaction>[0]
+
+      await act(async () => {
+        await result.current.updateTransaction(updatedTxn)
+      })
+
+      // cancelQueries MUST precede setQueryData
+      expect(callOrder[0]).toBe('cancelQueries')
+      expect(callOrder[1]).toBe('setQueryData')
+
+      cancelSpy.mockRestore()
+      setDataSpy.mockRestore()
+
+      // After surgery the updated name should be reflected
+      await waitFor(() => {
+        const updated = result.current.transactions.find((t) => t.id === 'txn-2')
+        expect(updated?.name).toBe('Updated Name')
+      })
+    })
+  })
+
 })
