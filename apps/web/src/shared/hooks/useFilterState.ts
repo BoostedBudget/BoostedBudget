@@ -59,7 +59,7 @@ export type FilterSpec = Record<string, FilterFieldSpec>
 // InferFilters<S> — maps spec keys to their resolved runtime types
 // ---------------------------------------------------------------------------
 
-type InferScalarType<C extends ScalarCodec> = C extends 'string'
+type InferScalarType<C> = C extends 'string'
   ? string
   : C extends 'number'
     ? number
@@ -67,13 +67,15 @@ type InferScalarType<C extends ScalarCodec> = C extends 'string'
       ? number
       : C extends 'boolean'
         ? boolean
-        : unknown
+        : C extends { parse: (raw: string) => infer R }
+          ? R
+          : unknown
 
 type InferFieldValue<F extends FilterFieldSpec> = F extends { kind: 'multi-select' }
   ? string[]
   : F extends { kind: 'range' }
     ? { min?: number; max?: number } | undefined
-    : F extends { kind: 'scalar'; codec: infer C extends ScalarCodec }
+    : F extends { kind: 'scalar'; codec: infer C }
       ? InferScalarType<C> | undefined
       : never
 

@@ -37,7 +37,7 @@ const SPEC = {
   start_date:    { kind: 'scalar', codec: 'string' as const },
   end_date:      { kind: 'scalar', codec: 'string' as const },
   search:        { kind: 'scalar', codec: 'string' as const },
-  amount_type:   { kind: 'scalar', codec: 'string' as const },
+  amount_type:   { kind: 'scalar', codec: 'string' as const, defaultValue: 'all', activeWhen: (v: unknown) => v !== undefined && v !== 'all' },
   pending:       { kind: 'scalar', codec: 'boolean' as const },
 } as const satisfies FilterSpec
 
