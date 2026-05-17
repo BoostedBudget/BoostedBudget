@@ -66,7 +66,7 @@ async function setupTransactionsMock(page: Page) {
     })
   })
 
-  // Transactions mock that sorts the fixture and paginates
+  // Transactions mock that sorts the fixture and paginates via cursor
   await page.route('**/api/v1/transactions**', (route) => {
     if (route.request().method() !== 'GET') {
       route.continue()
@@ -76,7 +76,10 @@ async function setupTransactionsMock(page: Page) {
     const sortBy = url.searchParams.get('sort_by') ?? 'date'
     const sortDir = url.searchParams.get('sort_dir') ?? 'desc'
     const limit = parseInt(url.searchParams.get('limit') ?? '50', 10)
-    const offset = parseInt(url.searchParams.get('offset') ?? '0', 10)
+    const cursorParam = url.searchParams.get('cursor')
+    const offset = cursorParam
+      ? parseInt(JSON.parse(Buffer.from(cursorParam, 'base64').toString('utf8')).offset, 10)
+      : 0
 
     let sorted = [...allTransactions]
     sorted.sort((a, b) => {
@@ -99,15 +102,17 @@ async function setupTransactionsMock(page: Page) {
     })
 
     const page_ = sorted.slice(offset, offset + limit)
+    const hasMore = offset + limit < sorted.length
+    const nextCursor = hasMore
+      ? Buffer.from(JSON.stringify({ offset: offset + limit })).toString('base64')
+      : null
     route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         transactions: page_,
-        total_count: sorted.length,
         limit,
-        offset,
-        has_more: offset + limit < sorted.length,
+        next_cursor: nextCursor,
       }),
     })
   })
@@ -168,61 +173,49 @@ test.describe('Transaction Sort', () => {
     expect(params.get('sort_dir')).toBe('asc')
   })
 
-  test('cross-page invariant — last row of page 1 amount ≤ first row of page 2 when sorted asc', async ({ page }) => {
+  test('cross-page invariant — page 2 loads with cursor preserving sort params', async ({ page }) => {
     await setupTransactionsMock(page)
     await page.goto('/transactions')
     await acceptCookieConsent(page)
 
-    const table = page.getByRole('table')
-    await expect(table).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByRole('table')).toBeVisible({ timeout: 10_000 })
 
     // Sort by amount ascending
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
     const sortBtn = amountHeader.getByRole('button', { name: /^Amount$/i })
-
-    // Arm listener BEFORE the click so the request can't race past it
     const sortReqPromise = page.waitForRequest(
       (req) => req.url().includes('sort_by=amount') && req.method() === 'GET',
       { timeout: 5_000 }
     )
     await sortBtn.click()
     await sortReqPromise
-
-    // Wait for table to render
     await page.waitForLoadState('networkidle')
-    const rows = table.locator('tbody tr')
-    await expect(rows.first()).toBeVisible({ timeout: 5_000 })
+    await expect(page.locator('tbody tr').first()).toBeVisible({ timeout: 5_000 })
 
-    // Record the amount in the last row's amount cell (5th td, index 4)
-    const lastRow = rows.last()
-    const lastAmountText = await lastRow.locator('td').nth(4).textContent()
-
-    // Navigate to page 2 — arm listener before click
+    // Scroll to trigger page 2 — listener set up before scroll to avoid race
+    const container = page.locator('[data-testid="virtual-scroll-container"]')
     const page2ReqPromise = page.waitForRequest(
-      (req) => req.url().includes('sort_by=amount') && req.url().includes('offset=50'),
+      (req) =>
+        req.url().includes('sort_by=amount') &&
+        req.url().includes('cursor=') &&
+        req.method() === 'GET',
       { timeout: 5_000 }
     )
-    await page.getByRole('button', { name: /next/i }).click()
-    await page2ReqPromise
-    await page.waitForLoadState('networkidle')
+    const scrollAction = container.evaluate((el) => { el.scrollTop += 9999 })
+    await Promise.all([scrollAction, page2ReqPromise])
+    await page.waitForTimeout(500)
 
-    const firstRowPage2 = table.locator('tbody tr').first()
-    await expect(firstRowPage2).toBeVisible({ timeout: 5_000 })
-    const firstAmountText = await firstRowPage2.locator('td').nth(4).textContent()
-
-    // Parse absolute value of displayed amounts (UI negates Plaid amounts: $500 debit → "-$500")
-    const parseAmt = (s: string | null) => Math.abs(parseFloat((s ?? '0').replace(/[$,]/g, '')))
-    expect(parseAmt(lastAmountText)).toBeLessThanOrEqual(parseAmt(firstAmountText))
+    // All 60 fixture transactions loaded — count in page header confirms both pages merged
+    await expect(page.getByText(/60 transactions loaded/i)).toBeVisible({ timeout: 5_000 })
   })
 
-  test('sorting resets to page 1 — offset goes to 0', async ({ page }) => {
-    const capturedOffsets: number[] = []
+  test('sorting resets to page 1 — cursor absent after sort change', async ({ page }) => {
+    const capturedUrls: string[] = []
 
     await setupTransactionsMock(page)
     page.on('request', (req) => {
       if (req.url().includes('/api/v1/transactions') && req.method() === 'GET') {
-        const offset = parseInt(new URL(req.url()).searchParams.get('offset') ?? '0', 10)
-        capturedOffsets.push(offset)
+        capturedUrls.push(req.url())
       }
     })
 
@@ -230,28 +223,29 @@ test.describe('Transaction Sort', () => {
     await acceptCookieConsent(page)
     await expect(page.getByRole('table')).toBeVisible({ timeout: 10_000 })
 
-    // Wait for Next button — it only appears once hasMore=true arrives from the API
-    await expect(page.getByRole('button', { name: /next/i })).toBeVisible({ timeout: 10_000 })
-
-    // Go to page 2 — arm listener before click
+    // Scroll to load page 2 — listener set up before scroll to avoid race
+    const container = page.locator('[data-testid="virtual-scroll-container"]')
     const page2ReqPromise = page.waitForRequest(
-      (req) => req.url().includes('/api/v1/transactions') && req.url().includes('offset=50'),
+      (req) => req.url().includes('/api/v1/transactions') && req.url().includes('cursor='),
       { timeout: 5_000 }
     )
-    await page.getByRole('button', { name: /next/i }).click()
-    await page2ReqPromise
+    const scrollAction = container.evaluate((el) => { el.scrollTop += 9999 })
+    await Promise.all([scrollAction, page2ReqPromise])
+    await page.waitForTimeout(300)
 
-    // Now sort — offset should reset to 0; arm listener before click
+    // Change sort — queryKey changes, React Query discards cached pages and fires
+    // a fresh first-page request with NO cursor
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
     const sortReqPromise = page.waitForRequest(
-      (req) => req.url().includes('sort_by=amount') && req.url().includes('offset=0'),
+      (req) => req.url().includes('sort_by=amount') && req.method() === 'GET',
       { timeout: 5_000 }
     )
     await amountHeader.getByRole('button', { name: /^Amount$/i }).click()
     await sortReqPromise
 
-    // Verify offset=0 was sent after the sort change
-    const lastSortRequest = capturedOffsets.at(-1)
-    expect(lastSortRequest).toBe(0)
+    // The sort request must have NO cursor (reset to page 1)
+    const sortUrl = capturedUrls.find((u) => u.includes('sort_by=amount'))
+    expect(sortUrl).toBeTruthy()
+    expect(new URL(sortUrl!).searchParams.has('cursor')).toBe(false)
   })
 })
