@@ -286,6 +286,7 @@ export function useFilterState<S extends FilterSpec>(
 ): UseFilterStateReturn<S> {
   const [searchParams, setSearchParams] = useSearchParams()
 
+  // URL param key names never contain commas, so comma-join is a safe stable dep key
   const clearKeysKey = options?.clearKeysOnWrite?.join(',') ?? ''
 
   const applyClearKeys = useCallback(
