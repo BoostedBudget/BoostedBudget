@@ -296,7 +296,6 @@ jobs:
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-backend-test-${{ github.run_id }}
-      GOCACHE: ${{ runner.temp }}/go-build-${{ github.run_id }}-backend-test
 
     steps:
       - name: Clean workspace (fix permission issues)
@@ -312,6 +311,13 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
+
+      # Critical: Clean Go toolchain cache before tests to prevent corruption
+      # on macOS self-hosted runners. Go 1.25 can cache stale toolchain data.
+      # See: https://github.com/golang/go/issues
+      - name: Clean Go toolchain cache
+        if: runner.os == 'macOS'
+        run: go clean -cache
 
       - name: Restore Go modules cache
         id: cache-go-modules
@@ -376,9 +382,7 @@ jobs:
 
       - name: Final workspace cleanup
         if: always()
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-          rm -rf "${{ runner.temp }}/go-build-${{ github.run_id }}-backend-test" 2>/dev/null || true
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Frontend Tests (Single job - no sharding)
