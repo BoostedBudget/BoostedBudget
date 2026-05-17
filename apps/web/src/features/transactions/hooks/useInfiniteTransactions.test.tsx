@@ -9,7 +9,6 @@
 import { describe, it, expect, beforeEach, spyOn } from 'bun:test'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { InfiniteData } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { useInfiniteTransactions } from './useInfiniteTransactions'
 import type { TransactionFiltersState } from './useInfiniteTransactions'
