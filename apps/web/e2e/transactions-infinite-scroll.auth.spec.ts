@@ -178,7 +178,7 @@ test.describe('Transactions Page — Infinite Scroll', () => {
       scrollContainerSelector: '[data-testid="virtual-scroll-container"]',
       rowSelector: '[data-row-id]',
       rowIdAttribute: 'data-row-id',
-      scrollStepPx: 2000,
+      scrollStepPx: 9999,
       maxScrolls: 5,
       requestUrlPattern: '**/api/v1/transactions**',
     })
