@@ -821,7 +821,7 @@ describe('useFilterState — InferFilters type inference', () => {
     expectTypeOf(result.current.filters.pending).toEqualTypeOf<boolean | undefined>()
   })
 
-  it('infers unknown for scalar with custom codec (parse returns unknown; unknown|undefined simplifies to unknown)', () => {
+  it('infers parse return type for scalar with custom codec', () => {
     const spec = {
       ids: {
         kind: 'scalar',
@@ -832,8 +832,21 @@ describe('useFilterState — InferFilters type inference', () => {
       },
     } as const satisfies FilterSpec
     const { result } = renderHook(() => useFilterState(spec), { wrapper: createWrapper() })
-    // Custom codecs resolve to `unknown` — consumers must narrow/cast after reading filters.ids
-    expectTypeOf(result.current.filters.ids).toEqualTypeOf<unknown>()
+    expectTypeOf(result.current.filters.ids).toEqualTypeOf<number[] | undefined>()
+  })
+
+  it('infers union literal type for custom codec with enum parse return', () => {
+    const spec = {
+      pet: {
+        kind: 'scalar',
+        codec: {
+          parse: (raw: string) => raw as 'dog' | 'cat' | undefined,
+          serialize: (v: 'dog' | 'cat') => v,
+        },
+      },
+    } as const satisfies FilterSpec
+    const { result } = renderHook(() => useFilterState(spec), { wrapper: createWrapper() })
+    expectTypeOf(result.current.filters.pet).toEqualTypeOf<'dog' | 'cat' | undefined>()
   })
 
   it('setFilter return type is void for multi-select key', () => {

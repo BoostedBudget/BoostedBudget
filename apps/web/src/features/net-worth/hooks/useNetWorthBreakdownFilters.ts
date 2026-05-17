@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import type { RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import type { SortState } from '@/shared/components/DataTable'
 import { useSortUrlState } from '@/shared/hooks/useSortUrlState'
+import { useFilterState, type FilterSpec } from '@/shared/hooks/useFilterState'
 import { NET_WORTH_SORTABLE_COLUMNS } from '../components/AccountBreakdownTable'
 
 export type SortColumn = 'institution' | 'name' | 'type' | 'balance' | 'percent'
@@ -34,94 +35,67 @@ export interface UseNetWorthBreakdownFiltersResult {
   hasActiveFilters: boolean
 }
 
-const parseCSV = (value: string | null): string[] =>
-  value ? value.split(',').filter(Boolean).map((s) => s.trim()) : []
-
-const parseNumber = (value: string | null): number | undefined => {
-  if (!value) return undefined
-  const num = parseFloat(value)
-  return isNaN(num) ? undefined : num
-}
+const SPEC = {
+  institution: { kind: 'multi-select' },
+  type:        { kind: 'multi-select' },
+  balance:     { kind: 'range' },
+} as const satisfies FilterSpec
 
 export function useNetWorthBreakdownFilters(): UseNetWorthBreakdownFiltersResult {
-  const [searchParams, setSearchParams] = useSearchParams()
+  const state = useFilterState(SPEC)
+  const { setFilter } = state
+
+  // Needed for atomic clearAllFilters (single setSearchParams call avoids React Router
+  // batching issue where two sequential calls each read the pre-update URL).
+  const [, setSearchParams] = useSearchParams()
 
   const { sort, setSort, resetSort, toggleSortColumn } = useSortUrlState({
     defaultSort: null,
     validColumns: NET_WORTH_SORTABLE_COLUMNS,
   })
 
-  const filters = useMemo<NetWorthBreakdownFilters>(() => ({
-    institution: parseCSV(searchParams.get('institution')),
-    type: parseCSV(searchParams.get('type')),
-    balanceMin: parseNumber(searchParams.get('balance_min')),
-    balanceMax: parseNumber(searchParams.get('balance_max')),
-  }), [searchParams])
+  const filters = useMemo<NetWorthBreakdownFilters>(
+    () => ({
+      institution: state.filters.institution,
+      type:        state.filters.type,
+      balanceMin:  state.filters.balance?.min,
+      balanceMax:  state.filters.balance?.max,
+    }),
+    [state.filters],
+  )
 
-  const institutionFilter = filters.institution
-  const typeFilter = filters.type
-
-  const balanceRange: RangeValue | null = useMemo(() => {
-    if (filters.balanceMin === undefined && filters.balanceMax === undefined) return null
-    return { min: filters.balanceMin, max: filters.balanceMax }
-  }, [filters.balanceMin, filters.balanceMax])
+  const balanceRange = useMemo<RangeValue | null>(
+    () => state.filters.balance ?? null,
+    [state.filters.balance],
+  )
 
   const sortColumn = (sort?.columnId ?? null) as SortColumn | null
   const sortDirection: SortDirection = sort?.direction ?? 'asc'
+
+  const setInstitutionFilter = useCallback(
+    (value: string[]) => setFilter('institution', value),
+    [setFilter],
+  )
+
+  const setTypeFilter = useCallback(
+    (value: string[]) => setFilter('type', value),
+    [setFilter],
+  )
+
+  const setBalanceRange = useCallback(
+    (value: RangeValue | null) => setFilter('balance', value ?? undefined),
+    [setFilter],
+  )
 
   const setSortColumn = useCallback(
     (column: SortColumn) => toggleSortColumn(column),
     [toggleSortColumn],
   )
 
-  const updateParam = useCallback(
-    (key: string, value: string | null) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-          if (value) { next.set(key, value) } else { next.delete(key) }
-          return next
-        },
-        { replace: true },
-      )
-    },
-    [setSearchParams],
-  )
-
-  const setInstitutionFilter = useCallback(
-    (value: string[]) => updateParam('institution', value.length > 0 ? value.join(',') : null),
-    [updateParam],
-  )
-
-  const setTypeFilter = useCallback(
-    (value: string[]) => updateParam('type', value.length > 0 ? value.join(',') : null),
-    [updateParam],
-  )
-
-  const setBalanceRange = useCallback(
-    (value: RangeValue | null) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-          if (!value || (value.min === undefined && value.max === undefined)) {
-            next.delete('balance_min')
-            next.delete('balance_max')
-          } else {
-            if (value.min !== undefined) next.set('balance_min', String(value.min))
-            else next.delete('balance_min')
-            if (value.max !== undefined) next.set('balance_max', String(value.max))
-            else next.delete('balance_max')
-          }
-          return next
-        },
-        { replace: true },
-      )
-    },
-    [setSearchParams],
-  )
-
   const clearAllFilters = useCallback(
     (options?: { includeSort?: boolean }) => {
+      // Single atomic setSearchParams call — avoids React Router functional-update
+      // batching quirk where two calls both read the pre-update URL.
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev)
@@ -138,18 +112,10 @@ export function useNetWorthBreakdownFilters(): UseNetWorthBreakdownFiltersResult
     [setSearchParams],
   )
 
-  const activeFilterCount = useMemo(
-    () =>
-      (filters.institution.length > 0 ? 1 : 0) +
-      (filters.type.length > 0 ? 1 : 0) +
-      (filters.balanceMin !== undefined || filters.balanceMax !== undefined ? 1 : 0),
-    [filters],
-  )
-
   return {
     filters,
-    institutionFilter,
-    typeFilter,
+    institutionFilter: state.filters.institution,
+    typeFilter:        state.filters.type,
     balanceRange,
     sort,
     sortColumn,
@@ -161,7 +127,7 @@ export function useNetWorthBreakdownFilters(): UseNetWorthBreakdownFiltersResult
     resetSort,
     setSortColumn,
     clearAllFilters,
-    activeFilterCount,
-    hasActiveFilters: activeFilterCount > 0,
+    activeFilterCount:  state.activeFilterCount,
+    hasActiveFilters:   state.hasActiveFilters,
   }
 }

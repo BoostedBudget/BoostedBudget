@@ -55,15 +55,9 @@ export function useBudgetFilters(): UseBudgetFiltersResult {
     [state.filters.progress],
   )
 
-  const setPeriodFilter = useCallback(
-    (v: string[]) => setFilter('period', v),
-    [setFilter],
-  )
-
+  const setPeriodFilter = useCallback((v: string[]) => setFilter('period', v), [setFilter])
   const setProgressRange = useCallback(
-    (value: RangeValue | null) => {
-      setFilter('progress', value ?? undefined)
-    },
+    (value: RangeValue | null) => setFilter('progress', value ?? undefined),
     [setFilter],
   )
 

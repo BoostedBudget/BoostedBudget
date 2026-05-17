@@ -60,20 +60,10 @@ export function useRuleFilters(): UseRuleFiltersResult {
     [state.filters.priority],
   )
 
-  const setStatusFilter = useCallback(
-    (v: string[]) => setFilter('status', v),
-    [setFilter],
-  )
-
-  const setCategoryFilter = useCallback(
-    (v: string[]) => setFilter('category', v),
-    [setFilter],
-  )
-
+  const setStatusFilter = useCallback((v: string[]) => setFilter('status', v), [setFilter])
+  const setCategoryFilter = useCallback((v: string[]) => setFilter('category', v), [setFilter])
   const setPriorityRange = useCallback(
-    (value: RangeValue | null) => {
-      setFilter('priority', value ?? undefined)
-    },
+    (value: RangeValue | null) => setFilter('priority', value ?? undefined),
     [setFilter],
   )
 
