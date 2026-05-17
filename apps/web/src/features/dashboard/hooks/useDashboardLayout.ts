@@ -40,7 +40,7 @@ interface UseDashboardLayoutResult {
   updateLayout: (newLayout: DashboardLayout) => void;
   addWidget: (type: WidgetType, x?: number, y?: number) => void;
   removeWidget: (widgetId: string) => void;
-  resetToDefault: () => Promise<void>;
+  resetToDefault: () => Promise<boolean>;
   saveNow: () => Promise<void>;
 }
 
@@ -229,8 +229,7 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
 
   // Reset to default layout - uses mutation
   // Issue #449: Uses fetched default layout from API
-  const resetToDefault = useCallback(async () => {
-    // Clear any pending saves
+  const resetToDefault = useCallback(async (): Promise<boolean> => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = null;
@@ -242,11 +241,12 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
       const response = await resetMutation.mutateAsync();
       setLayout((response as DashboardPreferencesResponse).layout);
       setError(null);
+      return true;
     } catch (err) {
       console.error('Failed to reset dashboard preferences:', err);
       setError('Failed to reset layout');
-      // Still update local state to fetched default (Issue #449)
       setLayout(defaultLayout);
+      return false;
     } finally {
       setSaving(false);
     }

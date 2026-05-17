@@ -19,6 +19,8 @@ interface PlanChangeModalProps {
   isUpdating: boolean
   onChangePlan: (tier: string, interval: 'month' | 'year', prorationMode: 'prorated_immediately' | 'full_next_billing_period') => void
   onClose: () => void
+  initialTier?: string
+  initialInterval?: 'month' | 'year'
 }
 
 export function PlanChangeModal({
@@ -29,21 +31,26 @@ export function PlanChangeModal({
   isUpdating,
   onChangePlan,
   onClose,
+  initialTier,
+  initialInterval,
 }: PlanChangeModalProps) {
-  const [selectedTier, setSelectedTier] = useState<string | null>(null)
-  const [billingInterval, setBillingInterval] = useState<'month' | 'year'>(currentBillingInterval)
+  const [selectedTier, setSelectedTier] = useState<string | null>(initialTier ?? null)
+  const [billingInterval, setBillingInterval] = useState<'month' | 'year'>(initialInterval ?? currentBillingInterval)
   const [downgradeConfirmed, setDowngradeConfirmed] = useState(false)
 
   const previewUpdate = usePreviewPaddleSubscriptionUpdate()
 
-  // Reset state when modal closes
+  // Sync pre-fill when opening, reset when closing
   useEffect(() => {
-    if (!open) {
+    if (open) {
+      setSelectedTier(initialTier ?? null)
+      setBillingInterval(initialInterval ?? currentBillingInterval)
+    } else {
       setSelectedTier(null)
       setDowngradeConfirmed(false)
       setBillingInterval(currentBillingInterval)
     }
-  }, [open, currentBillingInterval])
+  }, [open, initialTier, initialInterval, currentBillingInterval])
 
   // Trigger preview when tier is selected
   useEffect(() => {
@@ -75,9 +82,6 @@ export function PlanChangeModal({
   // Determine if selected tier is upgrade or downgrade
   const isUpgrade = selectedTierData ? getPrice(selectedTierData) > getPrice(currentTierData) : false
 
-  // Helper for billing interval display
-  const getBillingLabel = () => billingInterval === 'month' ? 'month' : 'year'
-
   const canConfirm = selectedTier && (isUpgrade || downgradeConfirmed)
 
   const handleConfirm = () => {
@@ -107,7 +111,7 @@ export function PlanChangeModal({
           <div
             role="group"
             aria-label="Billing interval selection"
-            className="flex items-center justify-center gap-4 p-4 bg-gray-50 rounded-lg"
+            className="flex items-center justify-center gap-4 p-4 bg-muted rounded-lg"
           >
             <label className="flex items-center gap-2 cursor-pointer">
               <input
@@ -152,7 +156,7 @@ export function PlanChangeModal({
                 <div
                   key={key}
                   className={`border rounded-lg p-4 cursor-pointer transition-all ${
-                    isSelected ? 'border-2 border-blue-500 bg-blue-50' : 'border border-gray-200'
+                    isSelected ? 'border-2 border-blue-500 bg-info/10' : 'border border-border'
                   }`}
                   onClick={handleSelectTier}
                   role="button"
@@ -177,11 +181,11 @@ export function PlanChangeModal({
                   </div>
                   <div className="mb-3">
                     <div className="text-2xl font-bold">{formatPrice(tierPrice)}</div>
-                    <div className="text-sm text-gray-600">per {getBillingLabel()}</div>
+                    <div className="text-sm text-muted-foreground">per {billingInterval === 'month' ? 'month' : 'year'}</div>
                   </div>
                   <div className="text-sm space-y-1">
-                    <div className="text-gray-700">{tier.pricing.users_included} users</div>
-                    <div className="text-gray-700">{tier.limits.accounts} accounts</div>
+                    <div className="text-foreground">{tier.pricing.users_included} users</div>
+                    <div className="text-foreground">{tier.limits.accounts} accounts</div>
                   </div>
                 </div>
               )
@@ -190,18 +194,18 @@ export function PlanChangeModal({
 
           {/* Preview section */}
           {selectedTier && previewUpdate.isPending && (
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+            <div className="bg-muted border border-border rounded-lg p-4">
               <div className="flex items-center gap-2">
-                <div className="animate-spin h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full"></div>
-                <span className="text-sm text-gray-600">Loading preview...</span>
+                <div className="animate-spin h-4 w-4 border-2 border-info border-t-transparent rounded-full"></div>
+                <span className="text-sm text-muted-foreground">Loading preview...</span>
               </div>
             </div>
           )}
 
           {selectedTier && previewUpdate.isSuccess && previewUpdate.data && (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div className="bg-info/10 border border-info/30 rounded-lg p-4">
               {isUpgrade ? (
-                <div className="text-sm text-blue-900">
+                <div className="text-sm text-info">
                   <p>
                     <strong>Immediate charge:</strong> You'll be charged{' '}
                     {previewUpdate.data.currency} {previewUpdate.data.proration_amount} immediately.
@@ -213,7 +217,7 @@ export function PlanChangeModal({
                   </p>
                 </div>
               ) : (
-                <div className="text-sm text-blue-900">
+                <div className="text-sm text-info">
                   <p>
                     <strong>Changes take effect on {previewUpdate.data.next_charge_date}</strong>
                   </p>
@@ -233,7 +237,7 @@ export function PlanChangeModal({
                 onChange={(e) => setDowngradeConfirmed(e.target.checked)}
                 className="mt-1"
               />
-              <label htmlFor="downgrade-confirm" className="text-sm text-gray-700">
+              <label htmlFor="downgrade-confirm" className="text-sm text-foreground">
                 I understand I'll be switching to {selectedTierData?.display_name} with{' '}
                 {selectedTierData?.limits.accounts} accounts and {selectedTierData?.pricing.users_included} users
               </label>

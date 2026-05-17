@@ -11,6 +11,10 @@ export const ANALYTICS_EVENTS = {
   // Onboarding
   FIRST_ACCOUNT_LINKED: 'first_account_linked',
   FIRST_BUDGET_CREATED: 'first_budget_created',
+  GETTING_STARTED_VIEWED: 'getting_started_viewed',
+  GETTING_STARTED_DISMISSED: 'getting_started_dismissed',
+  GETTING_STARTED_STEP_CLICKED: 'getting_started_step_clicked',
+  GETTING_STARTED_COMPLETED: 'getting_started_completed',
 
   // Accounts
   PLAID_LINK_STARTED: 'plaid_link_started',
@@ -51,9 +55,50 @@ export const ANALYTICS_EVENTS = {
   // Profile
   PRIVACY_SETTINGS_CHANGED: 'privacy_settings_changed',
   PROFILE_UPDATED: 'profile_updated',
+  THEME_CHANGED: 'theme_changed',
+
+  // Reports
+  REPORTS_VIEWED: 'reports_viewed',
+  REPORT_DATE_CHANGED: 'report_date_changed',
+  REPORT_CATEGORY_CLICKED: 'report_category_clicked',
+  REPORT_MERCHANT_CLICKED: 'report_merchant_clicked',
 
   // Admin
   ADMIN_PAGE_VIEWED: 'admin_page_viewed',
+  ADMIN_DLQ_RETRY: 'admin_dlq_retry',
+  ADMIN_DLQ_DELETE: 'admin_dlq_delete',
+  ADMIN_DLQ_BULK_DELETE: 'admin_dlq_bulk_delete',
+
+  // Notifications (#952)
+  NOTIFICATION_DRAWER_OPENED: 'notification_drawer_opened',
+  NOTIFICATION_READ: 'notification_read',
+  NOTIFICATION_ALL_READ: 'notification_all_read',
+  NOTIFICATION_ACTION_CLICKED: 'notification_action_clicked',
+  TRANSFER_SUGGESTION_ACCEPTED: 'transfer_suggestion_accepted',
+  TRANSFER_SUGGESTION_REJECTED: 'transfer_suggestion_rejected',
+
+  // Net Worth (#955)
+  NET_WORTH_PAGE_VIEWED: 'net_worth_page_viewed',
+  NET_WORTH_RANGE_CHANGED: 'net_worth_range_changed',
+
+  // Savings Goals (#954)
+  SAVINGS_PAGE_VIEWED: 'savings_page_viewed',
+  SAVINGS_GOAL_CREATED: 'savings_goal_created',
+  SAVINGS_GOAL_EDITED: 'savings_goal_edited',
+  SAVINGS_GOAL_DELETED: 'savings_goal_deleted',
+  SAVINGS_FILTER_CHANGED: 'savings_filter_changed',
+  SAVINGS_SORT_CHANGED: 'savings_sort_changed',
+
+  ACCOUNT_REPLACED_FILTERED: 'account_replaced_filtered',
+
+  // DataTable column interactions
+  DATATABLE_COLUMN_RESIZED: 'datatable_column_resized',
+  DATATABLE_COLUMN_REORDERED: 'datatable_column_reordered',
+  DATATABLE_COLUMN_PINNED: 'datatable_column_pinned',
+  DATATABLE_COLUMN_VISIBILITY_TOGGLED: 'datatable_column_visibility_toggled',
+
+  // Transactions infinite scroll (#1128)
+  TRANSACTIONS_PAGE_LOADED_MORE: 'transactions_page_loaded_more',
 } as const
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[keyof typeof ANALYTICS_EVENTS]

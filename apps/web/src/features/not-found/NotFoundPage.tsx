@@ -11,14 +11,14 @@ export function NotFoundPage() {
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] px-4 text-center">
       <Compass
-        className="h-16 w-16 text-gray-300 dark:text-gray-700 mb-6"
+        className="h-16 w-16 text-muted mb-6"
         aria-hidden="true"
       />
-      <p className="text-7xl font-bold text-gray-300 dark:text-gray-700 mb-4">404</p>
-      <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+      <p className="text-7xl font-bold text-muted mb-4">404</p>
+      <h1 className="text-3xl font-bold text-foreground mb-4">
         Page Not Found
       </h1>
-      <p className="text-gray-600 dark:text-gray-400 max-w-md mb-8">
+      <p className="text-muted-foreground max-w-md mb-8">
         The page you&apos;re looking for doesn&apos;t exist or has been moved. Let us help you
         find your way back.
       </p>
@@ -28,7 +28,7 @@ export function NotFoundPage() {
         </Button>
         <a
           href="mailto:support@boostedbudget.com"
-          className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white underline underline-offset-4"
+          className="text-sm text-muted-foreground hover:text-foreground underline underline-offset-4"
         >
           Contact Support
         </a>

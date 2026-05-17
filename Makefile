@@ -1,4 +1,4 @@
-.PHONY: help dev build test clean migrate-up migrate-down generate docker-up docker-down docker-rebuild test-fast test-all
+.PHONY: help dev build test clean migrate-up migrate-down generate docker-up docker-down docker-rebuild test-fast test-all lighthouse check-bundle-size perf-check
 
 # Default target
 help:
@@ -291,3 +291,43 @@ clean:
 	rm -rf backend/tmp
 	rm -rf .turbo
 	docker-compose down -v
+
+# =============================================================================
+# Performance Checks
+# =============================================================================
+
+# Run Lighthouse CI audit against the local build
+.PHONY: lighthouse
+lighthouse:
+	@echo "========================================"
+	@echo "Running Lighthouse CI audit"
+	@echo "========================================"
+	@echo "Building frontend..."
+	@cd apps/web && bun run build
+	@echo "Running LHCI audit..."
+	@npx lhci autorun
+	@echo "✅ Lighthouse audit complete"
+
+# Check per-route bundle size against configured budgets.
+# Enforces two gates:
+#   1. Orphan-chunk guard: fails if any built JS chunk has no .size-limit.json entry
+#   2. size-limit: fails if any named chunk exceeds its budget
+.PHONY: check-bundle-size
+check-bundle-size:
+	@echo "========================================"
+	@echo "Checking bundle size"
+	@echo "========================================"
+	@echo "Building frontend..."
+	@cd apps/web && bun run build
+	@echo "Checking for unbudgeted chunks..."
+	@./scripts/check-orphan-chunks.sh
+	@echo "Checking sizes against budgets..."
+	@npx size-limit
+	@echo "✅ Bundle size check complete"
+
+# Run both lighthouse and bundle size checks
+.PHONY: perf-check
+perf-check: lighthouse check-bundle-size
+	@echo "========================================"
+	@echo "✅ All performance checks complete!"
+	@echo "========================================"

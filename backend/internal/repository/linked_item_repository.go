@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -99,16 +100,127 @@ type LinkedItemRepository interface {
 
 	// GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
 	GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error)
+
+	// UpdateInvestmentsLastSyncedDate updates the date through which investment transactions
+	// have been synced. Called after a successful investment transactions sync.
+	// Issue #659: Plaid Investments
+	UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error
+
+	// UpdateLiabilitiesLastSyncedAt updates the timestamp through which liabilities
+	// have been synced. Called after a successful liabilities sync.
+	// Issue #910: Plaid Liabilities
+	UpdateLiabilitiesLastSyncedAt(ctx context.Context, id string, t time.Time) error
 }
 
 // linkedItemRepository implements LinkedItemRepository using PostgreSQL
 type linkedItemRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
+// Standard SELECT columns for linked_items (used across all repository methods).
+// Order matters: MUST match the order in Scan calls.
+const linkedItemSelectCols = `id, user_id, item_id, access_token_encrypted,
+       institution_id, institution_name, provider, cursor, last_synced_at,
+       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
+       replaced_at, replaced_by_id,
+       created_at, updated_at,
+       investments_last_synced_date, liabilities_last_synced_at,
+       status_changed_at`
+
 // NewLinkedItemRepository creates a new LinkedItemRepository instance
-func NewLinkedItemRepository(db DB) LinkedItemRepository {
-	return &linkedItemRepository{db: db}
+func NewLinkedItemRepository(db DB, enc *appcrypto.FieldEncryptor) LinkedItemRepository {
+	return &linkedItemRepository{db: db, enc: enc}
+}
+
+// encryptLinkedItemPIIFields encrypts PII fields on the item before writing to the database.
+// It computes blind indexes from plaintext values (before encryption).
+// The access token is encrypted from item.AccessToken (plaintext) into item.AccessTokenEncrypted.
+// If item.AccessToken is empty but item.AccessTokenEncrypted is set (legacy), the existing
+// encrypted value is preserved.
+func (r *linkedItemRepository) encryptLinkedItemPIIFields(item *domain.LinkedItem) (itemIDBlind, institutionIDBlind string, err error) {
+	// Compute blind index from plaintext BEFORE encrypting (order matters)
+	itemIDBlind = r.enc.BlindIndex(item.ItemID)
+	if item.InstitutionID != "" {
+		institutionIDBlind = r.enc.BlindIndex(item.InstitutionID)
+	}
+
+	// Encrypt item_id
+	encItemID, err := r.enc.EncryptString(item.ItemID)
+	if err != nil {
+		return "", "", fmt.Errorf("encrypt item_id: %w", err)
+	}
+	item.ItemID = encItemID
+
+	// Encrypt institution_id (if set)
+	if item.InstitutionID != "" {
+		encInstID, err := r.enc.EncryptString(item.InstitutionID)
+		if err != nil {
+			return "", "", fmt.Errorf("encrypt institution_id: %w", err)
+		}
+		item.InstitutionID = encInstID
+	}
+
+	// Encrypt institution_name (if set)
+	if item.InstitutionName != "" {
+		encInstName, err := r.enc.EncryptString(item.InstitutionName)
+		if err != nil {
+			return "", "", fmt.Errorf("encrypt institution_name: %w", err)
+		}
+		item.InstitutionName = encInstName
+	}
+
+	// Encrypt access token: prefer plaintext AccessToken, fall back to existing encrypted value
+	if item.AccessToken != "" {
+		encToken, err := r.enc.EncryptString(item.AccessToken)
+		if err != nil {
+			return "", "", fmt.Errorf("encrypt access_token: %w", err)
+		}
+		item.AccessTokenEncrypted = encToken
+	}
+	// If item.AccessToken == "" and item.AccessTokenEncrypted != "", keep existing encrypted value (legacy)
+
+	return itemIDBlind, institutionIDBlind, nil
+}
+
+// decryptLinkedItemPIIFields decrypts PII fields on the item after reading from the database.
+// It also populates item.AccessToken by decrypting item.AccessTokenEncrypted.
+func (r *linkedItemRepository) decryptLinkedItemPIIFields(item *domain.LinkedItem) error {
+	// Decrypt item_id
+	plainItemID, err := r.enc.DecryptString(item.ItemID)
+	if err != nil {
+		return fmt.Errorf("decrypt item_id: %w", err)
+	}
+	item.ItemID = plainItemID
+
+	// Decrypt institution_id
+	if item.InstitutionID != "" {
+		plainInstID, err := r.enc.DecryptString(item.InstitutionID)
+		if err != nil {
+			return fmt.Errorf("decrypt institution_id: %w", err)
+		}
+		item.InstitutionID = plainInstID
+	}
+
+	// Decrypt institution_name
+	if item.InstitutionName != "" {
+		plainInstName, err := r.enc.DecryptString(item.InstitutionName)
+		if err != nil {
+			return fmt.Errorf("decrypt institution_name: %w", err)
+		}
+		item.InstitutionName = plainInstName
+	}
+
+	// Decrypt access token and populate AccessToken field
+	if item.AccessTokenEncrypted != "" {
+		plainToken, err := r.enc.DecryptString(item.AccessTokenEncrypted)
+		if err != nil {
+			return fmt.Errorf("decrypt access_token: %w", err)
+		}
+		item.AccessToken = plainToken
+	}
+
+	return nil
 }
 
 // Create creates a new linked item in the database
@@ -122,14 +234,21 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 	now := time.Now()
 	item.CreatedAt = now
 	item.UpdatedAt = now
+	item.StatusChangedAt = &now // Issue #1010: track when status was set
+
+	// Encrypt PII fields and compute blind indexes before writing
+	itemIDBlind, institutionIDBlind, err := r.encryptLinkedItemPIIFields(item)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt linked item fields: %w", err)
+	}
 
 	query := `
 		INSERT INTO linked_items
-		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at, item_id_blind_idx, institution_id_blind_idx, status_changed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`
 
-	_, err := r.db.Exec(ctx, query,
+	_, err = r.db.Exec(ctx, query,
 		item.ID,
 		item.UserID,
 		item.ItemID,
@@ -139,6 +258,9 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 		item.Provider,
 		item.CreatedAt,
 		item.UpdatedAt,
+		itemIDBlind,
+		institutionIDBlind,
+		item.StatusChangedAt,
 	)
 
 	if err != nil {
@@ -157,15 +279,7 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 // GetByID retrieves a linked item by its UUID
 // Issue #171: Updated to include status, error tracking, and soft-delete fields
 func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.LinkedItem, error) {
-	query := `
-		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider, cursor, last_synced_at,
-		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
-		       replaced_at, replaced_by_id,
-		       created_at, updated_at
-		FROM linked_items
-		WHERE id = $1
-	`
+	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE id = $1`
 
 	var item domain.LinkedItem
 	err := r.db.QueryRow(ctx, query, id).Scan(
@@ -188,6 +302,9 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 		&item.ReplacedByID,
 		&item.CreatedAt,
 		&item.UpdatedAt,
+		&item.InvestmentsLastSyncedDate,
+		&item.LiabilitiesLastSyncedAt,
+		&item.StatusChangedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -197,24 +314,17 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 		return nil, err
 	}
 
+	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
+		return nil, err
+	}
+
 	return &item, nil
 }
 
 // GetByUserID retrieves all linked items for a specific user
 // Issue #171: Updated to include status, error tracking, and soft-delete fields
 func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
-	query := `
-		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider,
-		       cursor, last_synced_at,
-		       status, error_code, error_message, last_error_at,
-		       retry_count, next_retry_at,
-		       replaced_at, replaced_by_id,
-		       created_at, updated_at
-		FROM linked_items
-		WHERE user_id = $1
-		ORDER BY created_at DESC
-	`
+	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE user_id = $1 ORDER BY created_at DESC`
 
 	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
@@ -245,8 +355,14 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 			&item.ReplacedByID,
 			&item.CreatedAt,
 			&item.UpdatedAt,
+			&item.InvestmentsLastSyncedDate,
+			&item.LiabilitiesLastSyncedAt,
+			&item.StatusChangedAt,
 		)
 		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -264,18 +380,11 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 
 // GetByItemID retrieves a linked item by its Plaid item ID
 func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (*domain.LinkedItem, error) {
-	query := `
-		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider, cursor, last_synced_at,
-		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
-		       replaced_at, replaced_by_id,
-		       created_at, updated_at
-		FROM linked_items
-		WHERE item_id = $1
-	`
+	blindIdx := r.enc.BlindIndex(itemID)
+	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE item_id_blind_idx = $1`
 
 	var item domain.LinkedItem
-	err := r.db.QueryRow(ctx, query, itemID).Scan(
+	err := r.db.QueryRow(ctx, query, blindIdx).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
@@ -295,12 +404,19 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 		&item.ReplacedByID,
 		&item.CreatedAt,
 		&item.UpdatedAt,
+		&item.InvestmentsLastSyncedDate,
+		&item.LiabilitiesLastSyncedAt,
+		&item.StatusChangedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrLinkedItemNotFound
 	}
 	if err != nil {
+		return nil, err
+	}
+
+	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 		return nil, err
 	}
 
@@ -339,28 +455,51 @@ func (r *linkedItemRepository) Update(ctx context.Context, item *domain.LinkedIt
 	now := time.Now()
 	item.UpdatedAt = now
 
+	// Encrypt PII fields and compute blind indexes before writing.
+	// institution_id and institution_name are decrypted when read, so must be re-encrypted on write.
+	// item_id is not updated here (set once on Create).
+	institutionIDBlind := ""
+	if item.InstitutionID != "" {
+		institutionIDBlind = r.enc.BlindIndex(item.InstitutionID)
+		encInstID, err := r.enc.EncryptString(item.InstitutionID)
+		if err != nil {
+			return fmt.Errorf("encrypt institution_id: %w", err)
+		}
+		item.InstitutionID = encInstID
+	}
+	if item.InstitutionName != "" {
+		encInstName, err := r.enc.EncryptString(item.InstitutionName)
+		if err != nil {
+			return fmt.Errorf("encrypt institution_name: %w", err)
+		}
+		item.InstitutionName = encInstName
+	}
+
 	query := `
 		UPDATE linked_items
 		SET institution_id = $2,
-		    institution_name = $3,
-		    provider = $4,
-		    cursor = $5,
-		    last_synced_at = $6,
-		    status = $7,
-		    error_code = $8,
-		    error_message = $9,
-		    last_error_at = $10,
-		    retry_count = $11,
-		    next_retry_at = $12,
-		    replaced_at = $13,
-		    replaced_by_id = $14,
-		    updated_at = $15
+		    institution_id_blind_idx = $3,
+		    institution_name = $4,
+		    provider = $5,
+		    cursor = $6,
+		    last_synced_at = $7,
+		    status = $8,
+		    error_code = $9,
+		    error_message = $10,
+		    last_error_at = $11,
+		    retry_count = $12,
+		    next_retry_at = $13,
+		    replaced_at = $14,
+		    replaced_by_id = $15,
+		    updated_at = $16,
+		    status_changed_at = $17
 		WHERE id = $1
 	`
 
 	ct, err := r.db.Exec(ctx, query,
 		item.ID,
 		item.InstitutionID,
+		institutionIDBlind,
 		item.InstitutionName,
 		item.Provider,
 		item.Cursor,
@@ -374,6 +513,7 @@ func (r *linkedItemRepository) Update(ctx context.Context, item *domain.LinkedIt
 		item.ReplacedAt,
 		item.ReplacedByID,
 		item.UpdatedAt,
+		item.StatusChangedAt,
 	)
 	if err != nil {
 		return err
@@ -387,24 +527,20 @@ func (r *linkedItemRepository) Update(ctx context.Context, item *domain.LinkedIt
 	return nil
 }
 
-// Delete removes a linked item from the database
+// Delete removes a linked item from the database.
+//
+// Safety: only deletes if no accounts (any status) still reference this item.
+// The accounts.linked_item_id FK is ON DELETE CASCADE — deleting while replaced
+// accounts still exist would cascade-delete historical balance snapshots.
+// This guard is a no-op (returns nil, 0 rows affected) when accounts remain.
 func (r *linkedItemRepository) Delete(ctx context.Context, id string) error {
 	query := `
 		DELETE FROM linked_items
 		WHERE id = $1
+		AND NOT EXISTS (SELECT 1 FROM accounts WHERE linked_item_id = $1)
 	`
-
-	ct, err := r.db.Exec(ctx, query, id)
-	if err != nil {
-		return err
-	}
-
-	// Check if any rows were affected
-	if ct.RowsAffected() == 0 {
-		return ErrLinkedItemNotFound
-	}
-
-	return nil
+	_, err := r.db.Exec(ctx, query, id)
+	return err
 }
 
 // GetByIDAndUser retrieves a linked item by ID with ownership validation.
@@ -416,15 +552,7 @@ func (r *linkedItemRepository) Delete(ctx context.Context, id string) error {
 // This is used by handlers to ensure users can only access their own linked items.
 // Issue #171: Updated to include status, error tracking, and soft-delete fields
 func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID string) (*domain.LinkedItem, error) {
-	query := `
-		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider, cursor, last_synced_at,
-		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
-		       replaced_at, replaced_by_id,
-		       created_at, updated_at
-		FROM linked_items
-		WHERE id = $1 AND user_id = $2
-	`
+	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE id = $1 AND user_id = $2`
 
 	var item domain.LinkedItem
 	err := r.db.QueryRow(ctx, query, id, userID).Scan(
@@ -447,12 +575,19 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 		&item.ReplacedByID,
 		&item.CreatedAt,
 		&item.UpdatedAt,
+		&item.InvestmentsLastSyncedDate,
+		&item.LiabilitiesLastSyncedAt,
+		&item.StatusChangedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrLinkedItemNotFound
 	}
 	if err != nil {
+		return nil, err
+	}
+
+	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 		return nil, err
 	}
 
@@ -505,18 +640,7 @@ func (r *linkedItemRepository) DeleteByUser(ctx context.Context, id, userID stri
 //
 // Returns ErrLinkedItemNotFound if the item doesn't exist.
 func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id string) (*domain.LinkedItem, error) {
-	query := `
-		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider,
-		       cursor, last_synced_at,
-		       status, error_code, error_message, last_error_at,
-		       retry_count, next_retry_at,
-		       replaced_at, replaced_by_id,
-		       created_at, updated_at
-		FROM linked_items
-		WHERE id = $1
-		FOR UPDATE
-	`
+	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE id = $1 FOR UPDATE`
 
 	var item domain.LinkedItem
 	err := tx.QueryRow(ctx, query, id).Scan(
@@ -539,12 +663,19 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 		&item.ReplacedByID,
 		&item.CreatedAt,
 		&item.UpdatedAt,
+		&item.InvestmentsLastSyncedDate,
+		&item.LiabilitiesLastSyncedAt,
+		&item.StatusChangedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrLinkedItemNotFound
 	}
 	if err != nil {
+		return nil, err
+	}
+
+	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 		return nil, err
 	}
 
@@ -557,21 +688,11 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 //
 // Returns nil, nil if no matching item found (not an error).
 func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, userID, institutionID, status string) (*domain.LinkedItem, error) {
-	query := `
-		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider,
-		       cursor, last_synced_at,
-		       status, error_code, error_message, last_error_at,
-		       retry_count, next_retry_at,
-		       replaced_at, replaced_by_id,
-		       created_at, updated_at
-		FROM linked_items
-		WHERE user_id = $1 AND institution_id = $2 AND status = $3
-		ORDER BY created_at DESC LIMIT 1
-	`
+	institutionIDBlind := r.enc.BlindIndex(institutionID)
+	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE user_id = $1 AND institution_id_blind_idx = $2 AND status = $3 ORDER BY created_at DESC LIMIT 1`
 
 	var item domain.LinkedItem
-	err := r.db.QueryRow(ctx, query, userID, institutionID, status).Scan(
+	err := r.db.QueryRow(ctx, query, userID, institutionIDBlind, status).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
@@ -591,6 +712,9 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 		&item.ReplacedByID,
 		&item.CreatedAt,
 		&item.UpdatedAt,
+		&item.InvestmentsLastSyncedDate,
+		&item.LiabilitiesLastSyncedAt,
+		&item.StatusChangedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -598,6 +722,10 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 		return nil, nil
 	}
 	if err != nil {
+		return nil, err
+	}
+
+	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 		return nil, err
 	}
 
@@ -622,7 +750,7 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 		       li.status, li.error_code, li.error_message, li.last_error_at, li.retry_count, li.next_retry_at,
 		       li.replaced_at, li.replaced_by_id,
 		       li.cleanup_notified_at, li.cleanup_scheduled_at,
-		       li.created_at, li.updated_at
+		       li.created_at, li.updated_at, li.investments_last_synced_date, li.liabilities_last_synced_at
 		FROM linked_items li
 		WHERE li.cleanup_scheduled_at IS NULL
 		  AND li.status NOT IN ('replaced', 'disconnected')
@@ -676,8 +804,14 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 			&item.CleanupScheduledAt,
 			&item.CreatedAt,
 			&item.UpdatedAt,
+			&item.InvestmentsLastSyncedDate,
+			&item.LiabilitiesLastSyncedAt,
+			&item.StatusChangedAt,
 		)
 		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -701,7 +835,7 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
 		       replaced_at, replaced_by_id,
 		       cleanup_notified_at, cleanup_scheduled_at,
-		       created_at, updated_at
+		       created_at, updated_at, investments_last_synced_date, liabilities_last_synced_at
 		FROM linked_items
 		WHERE cleanup_scheduled_at IS NOT NULL
 		  AND cleanup_scheduled_at < NOW()
@@ -740,8 +874,14 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 			&item.CleanupScheduledAt,
 			&item.CreatedAt,
 			&item.UpdatedAt,
+			&item.InvestmentsLastSyncedDate,
+			&item.LiabilitiesLastSyncedAt,
+			&item.StatusChangedAt,
 		)
 		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -808,7 +948,8 @@ func (r *linkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context,
 	query := `
 		UPDATE linked_items
 		SET status = 'disconnected',
-		    updated_at = $1
+		    updated_at = $1,
+		    status_changed_at = $1
 		WHERE user_id = $2
 		  AND status NOT IN ('disconnected', 'replaced')
 	`
@@ -819,19 +960,7 @@ func (r *linkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context,
 
 // GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
 func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
-	query := `
-		SELECT id, user_id, item_id, access_token_encrypted,
-		       institution_id, institution_name, provider,
-		       cursor, last_synced_at,
-		       status, error_code, error_message, last_error_at,
-		       retry_count, next_retry_at,
-		       replaced_at, replaced_by_id,
-		       created_at, updated_at
-		FROM linked_items
-		WHERE user_id = $1
-		  AND status NOT IN ('disconnected', 'replaced')
-		ORDER BY created_at DESC
-	`
+	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE user_id = $1 AND status NOT IN ('disconnected', 'replaced') ORDER BY created_at DESC`
 
 	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
@@ -862,8 +991,14 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 			&item.ReplacedByID,
 			&item.CreatedAt,
 			&item.UpdatedAt,
+			&item.InvestmentsLastSyncedDate,
+			&item.LiabilitiesLastSyncedAt,
+			&item.StatusChangedAt,
 		)
 		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -877,4 +1012,32 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 		return []domain.LinkedItem{}, nil
 	}
 	return items, nil
+}
+
+// UpdateInvestmentsLastSyncedDate updates the date through which investment transactions
+// have been synced. Called after a successful investment transactions sync (Issue #659).
+func (r *linkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
+	query := `UPDATE linked_items SET investments_last_synced_date = $1 WHERE id = $2`
+	ct, err := r.db.Exec(ctx, query, date, id)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrLinkedItemNotFound
+	}
+	return nil
+}
+
+// UpdateLiabilitiesLastSyncedAt updates the liabilities last synced timestamp.
+// Called after a successful liabilities sync (Issue #910).
+func (r *linkedItemRepository) UpdateLiabilitiesLastSyncedAt(ctx context.Context, id string, t time.Time) error {
+	query := `UPDATE linked_items SET liabilities_last_synced_at = $1 WHERE id = $2`
+	ct, err := r.db.Exec(ctx, query, t, id)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrLinkedItemNotFound
+	}
+	return nil
 }

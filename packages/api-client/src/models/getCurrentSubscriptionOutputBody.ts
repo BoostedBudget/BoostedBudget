@@ -22,7 +22,8 @@ Authorization: Bearer <your-jwt-token>
 
 ## Regions
 
-All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+Use the GET /api/v1/regions endpoint to discover available data residency regions.
+Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
@@ -34,13 +35,17 @@ export interface GetCurrentSubscriptionOutputBody {
   amount: string;
   /** Billing interval (month/year) */
   billing_interval: string;
+  /** Whether the subscription is scheduled to cancel at end of current period */
+  cancel_at_period_end: boolean;
   /** Currency code */
   currency: string;
   /** End of current billing period */
-  current_period_end: string;
+  current_period_end?: string;
   /** Next billing date */
   next_billing_date?: string;
-  /** Subscription status (active, trial, cancelled) */
+  /** RFC 3339 datetime when the scheduled cancel takes effect */
+  scheduled_change_at?: string;
+  /** Subscription status (active, trial, trialing, cancelled, past_due) */
   status: string;
   /** Paddle subscription ID */
   subscription_id: string;

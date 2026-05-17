@@ -4,11 +4,11 @@
  *
  * Component for selecting trigger type (schedule or event).
  * Integrates CronBuilder for scheduled triggers.
- * Disables event triggers for free tier users.
  */
 
 import { useCallback } from 'react'
-import { Calendar, Zap, Crown } from 'lucide-react'
+import { Calendar, Zap } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { CronBuilder } from './CronBuilder'
 import {
   TRIGGER_TYPE_LABELS,
@@ -18,15 +18,12 @@ import {
   DEFAULT_TIMEZONE,
 } from '../constants'
 import type { TriggerFormState, TriggerType, EventType } from '../types'
-import './TriggerSelector.css'
 
 export interface TriggerSelectorProps {
   /** Current trigger configuration */
   config: TriggerFormState
   /** Called when configuration changes */
   onChange: (config: TriggerFormState) => void
-  /** Whether user can use event triggers (false for free tier) */
-  canUseEventTriggers: boolean
   /** Disable all controls */
   disabled?: boolean
   /** Additional CSS class */
@@ -49,7 +46,6 @@ export interface TriggerSelectorProps {
  *     <TriggerSelector
  *       config={config}
  *       onChange={setConfig}
- *       canUseEventTriggers={tier !== 'free'}
  *     />
  *   )
  * }
@@ -58,14 +54,12 @@ export interface TriggerSelectorProps {
 export function TriggerSelector({
   config,
   onChange,
-  canUseEventTriggers,
   disabled = false,
   className = '',
 }: TriggerSelectorProps) {
   const handleTypeChange = useCallback(
     (newType: TriggerType) => {
       if (disabled) return
-      if (newType === 'event' && !canUseEventTriggers) return
 
       if (newType === 'schedule') {
         onChange({
@@ -80,7 +74,7 @@ export function TriggerSelector({
         })
       }
     },
-    [config, onChange, canUseEventTriggers, disabled]
+    [config, onChange, disabled]
   )
 
   const handleCronChange = useCallback(
@@ -116,18 +110,26 @@ export function TriggerSelector({
   )
 
   return (
-    <div className={`trigger-selector ${className}`.trim()}>
+    <div className={cn('flex flex-col gap-6', className)}>
       {/* Trigger Type Radio Group */}
       <fieldset
-        className="trigger-selector__fieldset"
+        className="m-0 border-none p-0"
         role="radiogroup"
         aria-label="Trigger type"
       >
-        <legend className="trigger-selector__legend">When should this rule run?</legend>
+        <legend className="mb-3 text-base font-semibold text-foreground">When should this rule run?</legend>
 
-        <div className="trigger-selector__options">
+        <div className="flex flex-col gap-3">
           {/* Schedule Option */}
-          <label className="trigger-selector__option">
+          <label
+            className={cn(
+              'flex cursor-pointer items-start gap-3 rounded-xl border-2 bg-card p-4 transition-all',
+              config.type === 'schedule'
+                ? 'border-primary bg-blue-50 dark:bg-blue-900'
+                : 'border-border hover:border-blue-300 dark:hover:border-blue-600',
+              disabled && 'cursor-not-allowed opacity-60'
+            )}
+          >
             <input
               type="radio"
               name="trigger-type"
@@ -135,16 +137,16 @@ export function TriggerSelector({
               checked={config.type === 'schedule'}
               onChange={() => handleTypeChange('schedule')}
               disabled={disabled}
-              className="trigger-selector__radio"
+              className="mt-0.5 h-5 w-5 accent-primary"
             />
-            <div className="trigger-selector__option-content">
-              <div className="trigger-selector__option-header">
-                <Calendar className="trigger-selector__icon" aria-hidden="true" />
-                <span className="trigger-selector__option-label">
+            <div className="flex-1">
+              <div className="mb-1 flex items-center gap-2">
+                <Calendar className="h-5 w-5 text-primary dark:text-blue-400" aria-hidden="true" />
+                <span className="font-semibold text-foreground">
                   {TRIGGER_TYPE_LABELS.schedule}
                 </span>
               </div>
-              <p className="trigger-selector__option-description">
+              <p className="m-0 text-sm text-muted-foreground">
                 {TRIGGER_TYPE_DESCRIPTIONS.schedule}
               </p>
             </div>
@@ -152,9 +154,13 @@ export function TriggerSelector({
 
           {/* Event Option */}
           <label
-            className={`trigger-selector__option ${
-              !canUseEventTriggers ? 'trigger-selector__option--disabled' : ''
-            }`}
+            className={cn(
+              'flex cursor-pointer items-start gap-3 rounded-xl border-2 bg-card p-4 transition-all',
+              config.type === 'event'
+                ? 'border-primary bg-blue-50 dark:bg-blue-900'
+                : 'border-border hover:border-blue-300 dark:hover:border-blue-600',
+              disabled && 'cursor-not-allowed opacity-60'
+            )}
           >
             <input
               type="radio"
@@ -162,23 +168,17 @@ export function TriggerSelector({
               value="event"
               checked={config.type === 'event'}
               onChange={() => handleTypeChange('event')}
-              disabled={disabled || !canUseEventTriggers}
-              className="trigger-selector__radio"
+              disabled={disabled}
+              className="mt-0.5 h-5 w-5 accent-primary"
             />
-            <div className="trigger-selector__option-content">
-              <div className="trigger-selector__option-header">
-                <Zap className="trigger-selector__icon" aria-hidden="true" />
-                <span className="trigger-selector__option-label">
+            <div className="flex-1">
+              <div className="mb-1 flex items-center gap-2">
+                <Zap className="h-5 w-5 text-primary dark:text-blue-400" aria-hidden="true" />
+                <span className="font-semibold text-foreground">
                   {TRIGGER_TYPE_LABELS.event}
                 </span>
-                {!canUseEventTriggers && (
-                  <span className="trigger-selector__premium-badge">
-                    <Crown className="trigger-selector__crown-icon" aria-hidden="true" />
-                    Premium
-                  </span>
-                )}
               </div>
-              <p className="trigger-selector__option-description">
+              <p className="m-0 text-sm text-muted-foreground">
                 {TRIGGER_TYPE_DESCRIPTIONS.event}
               </p>
             </div>
@@ -188,7 +188,7 @@ export function TriggerSelector({
 
       {/* Schedule Configuration */}
       {config.type === 'schedule' && (
-        <div className="trigger-selector__config">
+        <div className="rounded-xl border border-border bg-muted/20 p-4 dark:bg-muted/10">
           <CronBuilder
             cron={config.cron ?? DEFAULT_CRON}
             timezone={config.timezone ?? DEFAULT_TIMEZONE}
@@ -201,8 +201,8 @@ export function TriggerSelector({
 
       {/* Event Configuration */}
       {config.type === 'event' && (
-        <div className="trigger-selector__config">
-          <label htmlFor="event-type" className="trigger-selector__label">
+        <div className="rounded-xl border border-border bg-muted/20 p-4 dark:bg-muted/10">
+          <label htmlFor="event-type" className="mb-2 block text-sm font-medium text-foreground">
             Event type
           </label>
           <select
@@ -210,7 +210,7 @@ export function TriggerSelector({
             value={config.event ?? ''}
             onChange={handleEventChange}
             disabled={disabled}
-            className="trigger-selector__select"
+            className="w-full cursor-pointer rounded-lg border border-input bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-card"
           >
             <option value="">Select an event...</option>
             {EVENT_TYPE_OPTIONS.map((option) => (
@@ -220,7 +220,7 @@ export function TriggerSelector({
             ))}
           </select>
           {config.event && (
-            <p className="trigger-selector__event-description">
+            <p className="mt-2 text-xs text-muted-foreground">
               {EVENT_TYPE_OPTIONS.find((o) => o.value === config.event)?.description}
             </p>
           )}

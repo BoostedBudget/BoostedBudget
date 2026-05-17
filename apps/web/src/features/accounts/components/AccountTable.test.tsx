@@ -1,7 +1,8 @@
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { AccountTable } from './AccountTable'
 import type { Account } from '@boostedbudget/api-client/models'
+import { mockUseUser, mockClerkUser } from '@/test/mocks/clerk'
 
 // Mock account factory for reusable test data
 function createMockAccount(overrides?: Partial<Account>): Account {
@@ -272,8 +273,9 @@ describe('AccountTable', () => {
         />
       )
 
-      const nameHeader = screen.getByText('Account').closest('button')!
-      expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
+      // aria-sort lives on <th> (correct HTML semantics), not the sort button
+      const nameTh = screen.getByRole('columnheader', { name: /account/i })
+      expect(nameTh).toHaveAttribute('aria-sort', 'ascending')
     })
   })
 
@@ -307,6 +309,42 @@ describe('AccountTable', () => {
 
       expect(editButtons.length).toBe(3)
       expect(deleteButtons.length).toBe(3)
+    })
+  })
+
+  describe('Phase 5 – DataTable opt-in features', () => {
+    beforeEach(() => {
+      mockUseUser.mockReturnValue({ user: mockClerkUser, isLoaded: true, isSignedIn: true })
+    })
+
+    it('renders data-ph-mask on balance and mask columns', () => {
+      const { container } = render(<AccountTable accounts={mockAccounts} />)
+      const maskedTds = container.querySelectorAll('td[data-ph-mask]')
+      // mask + balance = 2 masked cells per row × 3 rows = 6
+      expect(maskedTds.length).toBe(mockAccounts.length * 2)
+    })
+
+    it('renders resize handles when resizable is true', () => {
+      const { container } = render(<AccountTable accounts={mockAccounts} />)
+      expect(container.querySelectorAll('[data-testid="resize-handle"]').length).toBeGreaterThan(0)
+    })
+
+    it('renders drag handles when reorderable is true', () => {
+      const { container } = render(<AccountTable accounts={mockAccounts} />)
+      expect(container.querySelectorAll('[data-testid="drag-handle"]').length).toBeGreaterThan(0)
+    })
+
+    it('balance column th has data-pinned="right"', () => {
+      render(<AccountTable accounts={mockAccounts} />)
+      const balanceTh = screen.getByRole('columnheader', { name: /balance/i })
+      expect(balanceTh).toHaveAttribute('data-pinned', 'right')
+    })
+
+    it('mask column appears in visibility menu', () => {
+      render(<AccountTable accounts={mockAccounts} />)
+      const columnsButton = screen.getByRole('button', { name: /columns/i })
+      fireEvent.click(columnsButton)
+      expect(screen.getByRole('menuitemcheckbox', { name: /acct #/i })).toBeInTheDocument()
     })
   })
 

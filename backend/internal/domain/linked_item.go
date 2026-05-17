@@ -36,6 +36,7 @@ type LinkedItem struct {
 	UserID               string     `json:"user_id" db:"user_id"`
 	ItemID               string     `json:"item_id" db:"item_id"` // Provider's item/connection ID
 	AccessTokenEncrypted string     `json:"-" db:"access_token_encrypted"` // Never expose in JSON
+	AccessToken          string     `json:"-" db:"-"` // Plaintext access token (populated by repo on read, never stored)
 	InstitutionID        string     `json:"institution_id,omitempty" db:"institution_id"`
 	InstitutionName      string     `json:"institution_name,omitempty" db:"institution_name"`
 	Provider             string     `json:"provider" db:"provider"` // plaid, teller, finicity, yodlee, manual
@@ -59,6 +60,17 @@ type LinkedItem struct {
 	CleanupNotifiedAt  *time.Time `json:"cleanup_notified_at,omitempty" db:"cleanup_notified_at"`   // When user was notified
 	CleanupScheduledAt *time.Time `json:"cleanup_scheduled_at,omitempty" db:"cleanup_scheduled_at"` // When cleanup will execute
 
+	// Investment sync tracking (Issue #659)
+	// NULL means never synced — uses 2-year lookback on first sync.
+	InvestmentsLastSyncedDate *time.Time `json:"investments_last_synced_date,omitempty" db:"investments_last_synced_date"`
+
+	// Liabilities sync tracking (Issue #910)
+	// NULL means never synced.
+	LiabilitiesLastSyncedAt *time.Time `json:"liabilities_last_synced_at,omitempty" db:"liabilities_last_synced_at"`
+
+	// Status change tracking (Issue #1010: TTL clock for fingerprint release after 90 days)
+	StatusChangedAt *time.Time `json:"status_changed_at,omitempty" db:"status_changed_at"`
+
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
@@ -71,7 +83,7 @@ func (l *LinkedItem) Validate() error {
 	if l.ItemID == "" {
 		return errors.New("item_id is required")
 	}
-	if l.AccessTokenEncrypted == "" {
+	if l.AccessToken == "" && l.AccessTokenEncrypted == "" {
 		return errors.New("access_token is required")
 	}
 	return nil

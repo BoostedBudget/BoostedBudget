@@ -27,11 +27,7 @@ import type {
 import { BudgetCategoryManager } from './category-management/BudgetCategoryManager';
 import { BudgetIncomeSection } from './budget-detail/BudgetIncomeSection';
 import { UnallocatedFundsCard } from './budget-detail/UnallocatedFundsCard';
-import './BudgetDetailPage.css';
 
-/**
- * Format a date string for display
- */
 function formatDate(dateString: string): string {
   return new Date(dateString).toLocaleDateString('en-US', {
     month: 'short',
@@ -40,9 +36,6 @@ function formatDate(dateString: string): string {
   });
 }
 
-/**
- * Format currency for display
- */
 function formatCurrency(amount: number, currencyCode = 'USD'): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -50,9 +43,6 @@ function formatCurrency(amount: number, currencyCode = 'USD'): string {
   }).format(amount);
 }
 
-/**
- * Capitalize the first letter of a string
- */
 function capitalize(str: string): string {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
@@ -69,22 +59,20 @@ export function BudgetDetailPage() {
     trackEvent(ANALYTICS_EVENTS.BUDGET_DETAIL_VIEWED)
   }, [trackEvent])
 
-  // Use generated mutation hooks for budget category operations
   const addCategoryMutation = useAddBudgetCategory();
   const updateCategoryMutation = useUpdateBudgetCategory();
   const deleteCategoryMutation = useDeleteBudgetCategory();
 
-  // Issue #498: Calculate income and allocation metrics
+  // Issue #498 / #1048: Calculate income and allocation metrics
   const incomeMetrics = useMemo(() => {
     if (!budget) return { expectedIncome: 0, actualIncome: 0, unallocated: 0, totalAllocated: 0 };
 
-    // Calculate expected income from manual income sources
-    const expectedIncome = (budget.income_sources || [])
-      .filter((src) => src.type === 'manual')
-      .reduce((sum, src) => sum + parseFloat(src.value || '0'), 0);
+    // Issue #1048: Use expected_income as the first-class field; fall back to
+    // amount for backwards compat with budgets created before this field existed.
+    const expectedIncome = budget.expected_income ?? budget.amount ?? 0;
 
-    // Use budget.income_amount as actual income (or fall back to expected)
-    const actualIncome = budget.income_amount || expectedIncome || budget.amount;
+    // Issue #1048: Actual income is what was received — no fallback to amount.
+    const actualIncome = budget.income_amount ?? 0;
 
     // Calculate total allocated from categories
     const totalAllocated = (budget.categories || []).reduce(
@@ -92,18 +80,16 @@ export function BudgetDetailPage() {
       0
     );
 
-    // Calculate unallocated funds
-    const unallocated = actualIncome - totalAllocated;
+    // Unallocated is relative to the planned target, not actual received income.
+    const unallocated = expectedIncome - totalAllocated;
 
     return { expectedIncome, actualIncome, unallocated, totalAllocated };
   }, [budget]);
 
-  // Handler for navigating to create savings goal
   const handleCreateSavingsGoal = useCallback(() => {
-    navigate('/budgets', { state: { openSavingsGoal: true } });
+    navigate('/savings', { state: { openCreateDialog: true } });
   }, [navigate]);
 
-  // Handler for adding a new category
   const handleAddCategory = useCallback(
     async (req: CreateBudgetCategoryRequest): Promise<BudgetCategory> => {
       const result = await addCategoryMutation.mutateAsync({
@@ -116,7 +102,6 @@ export function BudgetDetailPage() {
     [budgetId, refetch, addCategoryMutation]
   );
 
-  // Handler for updating a category
   const handleUpdateCategory = useCallback(
     async (categoryId: string, req: UpdateBudgetCategoryRequest): Promise<BudgetCategory> => {
       const result = await updateCategoryMutation.mutateAsync({
@@ -131,7 +116,6 @@ export function BudgetDetailPage() {
     [budgetId, refetch, trackEvent, updateCategoryMutation]
   );
 
-  // Handler for deleting a category
   const handleDeleteCategory = useCallback(
     async (categoryId: string): Promise<void> => {
       await deleteCategoryMutation.mutateAsync({
@@ -143,11 +127,10 @@ export function BudgetDetailPage() {
     [budgetId, refetch, deleteCategoryMutation]
   );
 
-  // Loading state
   if (loading) {
     return (
-      <div className="budget-detail-page">
-        <div className="budget-detail-page__loading">
+      <div className="max-w-[1200px] mx-auto p-6">
+        <div className="flex flex-col items-center justify-center min-h-[300px] gap-4 text-muted-foreground">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
           <p>Loading budget...</p>
         </div>
@@ -155,17 +138,16 @@ export function BudgetDetailPage() {
     );
   }
 
-  // Error state
   if (error) {
     return (
-      <div className="budget-detail-page">
-        <div className="budget-detail-page__error">
-          <span className="budget-detail-page__error-icon">!</span>
+      <div className="max-w-[1200px] mx-auto p-6">
+        <div className="flex flex-col items-center justify-center gap-4 p-8 bg-destructive/10 rounded-lg text-destructive">
+          <span className="flex items-center justify-center w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 font-semibold text-xl">!</span>
           <span>Error: {error.message}</span>
           <button
             type="button"
             onClick={refetch}
-            className="budget-detail-page__retry-btn"
+            className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 border-none rounded-md cursor-pointer transition-colors"
           >
             Retry
           </button>
@@ -174,13 +156,12 @@ export function BudgetDetailPage() {
     );
   }
 
-  // Not found state
   if (!budget) {
     return (
-      <div className="budget-detail-page">
-        <div className="budget-detail-page__not-found">
+      <div className="max-w-[1200px] mx-auto p-6">
+        <div className="flex flex-col items-center justify-center gap-4 p-8 text-muted-foreground">
           <p>Budget not found</p>
-          <Link to="/budgets" className="budget-detail-page__back-link">
+          <Link to="/budgets" className="inline-flex items-center gap-2 mb-4 text-sm text-blue-600 dark:text-blue-400 no-underline hover:text-blue-700 dark:hover:text-blue-300 transition-colors">
             <ArrowLeftIcon className="h-5 w-5" />
             Back to Budgets
           </Link>
@@ -190,48 +171,48 @@ export function BudgetDetailPage() {
   }
 
   return (
-    <div className="budget-detail-page">
+    <div className="max-w-[1200px] mx-auto p-6">
       {/* Header */}
-      <header className="budget-detail-page__header">
-        <Link to="/budgets" className="budget-detail-page__back-link">
+      <header className="mb-8">
+        <Link to="/budgets" className="inline-flex items-center gap-2 mb-4 text-sm text-blue-600 dark:text-blue-400 no-underline hover:text-blue-700 dark:hover:text-blue-300 transition-colors">
           <ArrowLeftIcon className="h-5 w-5" />
           Back to Budgets
         </Link>
 
-        <div className="budget-detail-page__title-row">
-          <h1 className="budget-detail-page__title">{budget.name}</h1>
+        <div className="flex items-center gap-3 mb-2">
+          <h1 className="m-0 text-3xl font-bold text-foreground">{budget.name}</h1>
           {budget.is_active && (
-            <span className="budget-detail-page__active-badge">Active</span>
+            <span className="px-3 py-1 text-xs font-semibold rounded-full text-green-700 dark:text-green-300 bg-green-100 dark:bg-green-900">Active</span>
           )}
         </div>
 
         {budget.description && (
-          <p className="budget-detail-page__description">{budget.description}</p>
+          <p className="m-0 mb-4 text-muted-foreground">{budget.description}</p>
         )}
 
-        <div className="budget-detail-page__meta">
-          <div className="budget-detail-page__meta-item">
-            <span className="budget-detail-page__meta-label">Period</span>
-            <span className="budget-detail-page__meta-value">
+        <div className="flex flex-wrap gap-6 p-4 bg-muted rounded-lg">
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Period</span>
+            <span className="text-sm font-semibold text-foreground">
               {capitalize(budget.period)}
             </span>
           </div>
-          <div className="budget-detail-page__meta-item">
-            <span className="budget-detail-page__meta-label">Dates</span>
-            <span className="budget-detail-page__meta-value">
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Dates</span>
+            <span className="text-sm font-semibold text-foreground">
               {formatDate(budget.start_date)}{budget.end_date ? ` - ${formatDate(budget.end_date)}` : ''}
             </span>
           </div>
-          <div className="budget-detail-page__meta-item">
-            <span className="budget-detail-page__meta-label">Budget Amount</span>
-            <span className="budget-detail-page__meta-value" data-ph-mask>
-              {formatCurrency(budget.amount, budget.currency_code)}
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Expected Income</span>
+            <span className="text-sm font-semibold text-foreground" data-ph-mask>
+              {formatCurrency(budget.expected_income ?? budget.amount, budget.currency_code)}
             </span>
           </div>
           {budget.income_amount > 0 && (
-            <div className="budget-detail-page__meta-item">
-              <span className="budget-detail-page__meta-label">Income</span>
-              <span className="budget-detail-page__meta-value" data-ph-mask>
+            <div className="flex flex-col gap-1">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Income</span>
+              <span className="text-sm font-semibold text-foreground" data-ph-mask>
                 {formatCurrency(budget.income_amount, budget.currency_code)}
               </span>
             </div>
@@ -239,10 +220,10 @@ export function BudgetDetailPage() {
         </div>
 
         {/* Issue #39: Quick-create automation rules */}
-        <div className="budget-detail-page__actions">
+        <div className="flex flex-wrap gap-3 mt-4">
           <Link
             to={`/rules/new?type=budget_alert&budget_id=${budgetId}`}
-            className="budget-detail-page__action-btn"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-lg no-underline hover:bg-blue-100 dark:hover:bg-blue-800 hover:border-blue-300 dark:hover:border-blue-600 transition-all"
             aria-label="Create budget alert rule"
           >
             <BellAlertIcon className="h-4 w-4" aria-hidden="true" />
@@ -250,7 +231,7 @@ export function BudgetDetailPage() {
           </Link>
           <Link
             to={`/rules/new?type=category_rollover&budget_id=${budgetId}`}
-            className="budget-detail-page__action-btn"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-lg no-underline hover:bg-blue-100 dark:hover:bg-blue-800 hover:border-blue-300 dark:hover:border-blue-600 transition-all"
             aria-label="Create category rollover rule"
           >
             <ArrowPathIcon className="h-4 w-4" aria-hidden="true" />
@@ -261,7 +242,7 @@ export function BudgetDetailPage() {
 
       {/* Issue #498: Income Section - shows expected vs actual income */}
       {(budget.income_sources?.length > 0 || incomeMetrics.expectedIncome > 0) && (
-        <section className="budget-detail-page__income-section">
+        <section className="mt-6">
           <BudgetIncomeSection
             expectedIncome={incomeMetrics.expectedIncome}
             actualIncome={incomeMetrics.actualIncome}
@@ -272,21 +253,21 @@ export function BudgetDetailPage() {
       )}
 
       {/* Issue #498: Unallocated Funds Card */}
-      <section className="budget-detail-page__unallocated-section">
+      <section className="mt-6">
         <UnallocatedFundsCard
           unallocatedAmount={incomeMetrics.unallocated}
-          totalIncome={incomeMetrics.actualIncome}
+          totalIncome={incomeMetrics.expectedIncome}
           currencyCode={budget.currency_code}
           onCreateSavingsGoal={handleCreateSavingsGoal}
         />
       </section>
 
       {/* Category Manager */}
-      <section className="budget-detail-page__content">
+      <section className="mt-8">
         <BudgetCategoryManager
           budgetId={budgetId || ''}
           categories={budget.categories || []}
-          totalIncome={budget.income_amount || budget.amount}
+          totalIncome={budget.expected_income ?? budget.amount}
           onAddCategory={handleAddCategory}
           onUpdateCategory={handleUpdateCategory}
           onDeleteCategory={handleDeleteCategory}

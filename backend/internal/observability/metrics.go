@@ -67,4 +67,52 @@ var (
 		Name: "dead_letter_queue_size",
 		Help: "Current number of jobs in the dead letter queue.",
 	})
+
+	// InvestmentHoldingsSyncDuration tracks how long holdings sync operations take.
+	// Issue #659: Plaid Investments
+	InvestmentHoldingsSyncDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "investment_holdings_sync_duration_seconds",
+		Help:    "Duration of Plaid investment holdings sync operations in seconds.",
+		Buckets: prometheus.DefBuckets,
+	})
+
+	// InvestmentTransactionsSyncDuration tracks how long investment transaction sync operations take.
+	// Issue #659: Plaid Investments
+	InvestmentTransactionsSyncDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "investment_transactions_sync_duration_seconds",
+		Help:    "Duration of Plaid investment transactions sync operations in seconds.",
+		Buckets: prometheus.DefBuckets,
+	})
+
+	// InvestmentHoldingsSynced counts holdings replaced per sync by outcome.
+	// Issue #659: Plaid Investments
+	InvestmentHoldingsSynced = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "investment_holdings_synced_total",
+		Help: "Total number of investment holdings synced by outcome (replaced/cleared).",
+	}, []string{"outcome"})
+
+	// InvestmentTransactionsSynced counts investment transactions processed by action.
+	// Issue #659: Plaid Investments
+	InvestmentTransactionsSynced = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "investment_transactions_synced_total",
+		Help: "Total number of investment transactions processed by action (inserted/skipped).",
+	}, []string{"action"})
+
+	// AccountsReplacedFiltered counts query executions that exclude replaced accounts or
+	// resolve a re-link chain (Issue #1109). The "family" label groups call sites by domain
+	// so we can confirm every filter path is exercised after a staging deploy.
+	//
+	// Expected families:
+	//   accounts_list      - GetAccountsWithInstitutionFiltered (active-only path)
+	//   balance_summary    - GetBalanceSummary, GetAccountTypes
+	//   dashboard_history  - GetLatestByUserID, GetAggregatedHistory
+	//   analytics          - analytics_repository spending/cash-flow joins
+	//   transaction_match  - MonitorForMatches chain resolution
+	//   automation         - rule execution chain resolution, savings goal creation
+	//   investments        - holdings/investment_transactions active filter
+	//   liabilities        - liability repositories active filter
+	AccountsReplacedFiltered = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "accounts_replaced_filtered_total",
+		Help: "Number of query executions that excluded at least one replaced account or expanded a re-link chain",
+	}, []string{"family"})
 )

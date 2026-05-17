@@ -27,7 +27,7 @@ test.describe('Health Endpoint', () => {
     await page.goto('/');
 
     // Wait for the page to load
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Verify page loaded successfully (check for main content)
     await expect(page).toHaveTitle(/BoostedBudget/i);

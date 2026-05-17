@@ -64,10 +64,28 @@ export const THEME_COLORS = {
 } as const;
 
 /**
+ * Category spending chart colors (colorblind-safe palette)
+ * Used for spending donut/stacked bar charts in reports
+ */
+export const CATEGORY_COLORS = [
+  '#3b82f6', // blue-500
+  '#10b981', // emerald-500
+  '#f59e0b', // amber-500
+  '#8b5cf6', // violet-500
+  '#f97316', // orange-500
+  '#06b6d4', // cyan-500
+  '#ec4899', // pink-500
+  '#84cc16', // lime-500
+  '#6366f1', // indigo-500
+  '#14b8a6', // teal-500
+] as const;
+
+/**
  * Combined chart colors export for convenience
  */
 export const CHART_COLORS = {
   ...ACCOUNT_TYPE_COLORS,
   ...CASH_FLOW_COLORS,
   theme: THEME_COLORS,
+  categories: CATEGORY_COLORS,
 } as const;

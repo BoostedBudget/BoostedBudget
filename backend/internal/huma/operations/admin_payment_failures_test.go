@@ -58,7 +58,7 @@ func setupAdminPaymentFailuresAPI(t *testing.T) (humatest.TestAPI, *MockPaddleTr
 	mockAdminSvc := new(MockAdminService)
 
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockAdminSvc, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, nil, mockAdminSvc, nil, nil, nil, cfg).
 		WithPaddleTransactionRepo(mockTxnRepo)
 	RegisterAdminPaymentFailuresOperations(api, handler)
 	return api, mockTxnRepo, mockAdminSvc
@@ -88,7 +88,7 @@ func TestGetPaymentFailures_OperationRegistered(t *testing.T) {
 func TestGetPaymentFailures_HandlerReturnsTransactions(t *testing.T) {
 	mockTxnRepo := new(MockPaddleTransactionRepository)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
 		WithPaddleTransactionRepo(mockTxnRepo)
 
 	now := time.Now()
@@ -123,7 +123,7 @@ func TestGetPaymentFailures_HandlerReturnsTransactions(t *testing.T) {
 func TestGetPaymentFailures_WithPagination(t *testing.T) {
 	mockTxnRepo := new(MockPaddleTransactionRepository)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
 		WithPaddleTransactionRepo(mockTxnRepo)
 
 	mockTxnRepo.On("GetFailedTransactions", mock.Anything, 10, 20).Return([]domain.PaddleTransaction{}, 0, nil)
@@ -145,7 +145,7 @@ func TestGetPaymentFailures_WithPagination(t *testing.T) {
 func TestGetPaymentFailures_RepoError(t *testing.T) {
 	mockTxnRepo := new(MockPaddleTransactionRepository)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
 		WithPaddleTransactionRepo(mockTxnRepo)
 
 	mockTxnRepo.On("GetFailedTransactions", mock.Anything, 20, 0).Return(nil, 0, errors.New("db error"))
@@ -160,7 +160,7 @@ func TestGetPaymentFailures_RepoError(t *testing.T) {
 // TestGetPaymentFailures_NilRepo tests 503 response when repo is not configured.
 func TestGetPaymentFailures_NilRepo(t *testing.T) {
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg)
 	// Do NOT set paddleTransactionRepo
 
 	input := &GetPaymentFailuresInput{Limit: 20, Offset: 0}

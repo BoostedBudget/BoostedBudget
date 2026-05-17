@@ -22,7 +22,8 @@ Authorization: Bearer <your-jwt-token>
 
 ## Regions
 
-All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+Use the GET /api/v1/regions endpoint to discover available data residency regions.
+Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
@@ -44,9 +45,9 @@ import type {
 
 import type {
   ErrorModel,
+  GetTransactionsOutputBody,
   GetTransactionsParams,
   Transaction,
-  TransactionListResponse,
   UpdateTransactionCategoryBody,
   UpdateTransactionTagsBody,
 } from "../../models";
@@ -93,7 +94,7 @@ export const getTransactions = (
   options?: SecondParameter<typeof customInstance>,
   signal?: AbortSignal,
 ) => {
-  return customInstance<TransactionListResponse>(
+  return customInstance<GetTransactionsOutputBody>(
     { url: `/api/v1/transactions`, method: "GET", params, signal },
     options,
   );

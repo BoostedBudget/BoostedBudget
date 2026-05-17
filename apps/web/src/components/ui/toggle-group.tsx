@@ -23,7 +23,7 @@ function ToggleGroup({
   return (
     <ToggleGroupPrimitive.Root
       data-slot="toggle-group"
-      className={cn("inline-flex items-center gap-1 rounded-lg bg-gray-100 p-1 dark:bg-gray-800", className)}
+      className={cn("inline-flex items-center gap-1 rounded-lg bg-muted p-1", className)}
       {...props}
     >
       <ToggleGroupContext.Provider value={{ variant, size }}>

@@ -22,7 +22,8 @@ Authorization: Bearer <your-jwt-token>
 
 ## Regions
 
-All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+Use the GET /api/v1/regions endpoint to discover available data residency regions.
+Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
@@ -465,10 +466,18 @@ export const getTestAutomationRuleResponseMock = (
       (_, i) => i + 1,
     ).map(() => ({
       actual: {},
+      actual_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       field: faker.string.alpha({ length: { min: 10, max: 20 } }),
       met: faker.datatype.boolean(),
       operator: faker.string.alpha({ length: { min: 10, max: 20 } }),
       value: {},
+      value_display: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     })),
     null,
   ]),

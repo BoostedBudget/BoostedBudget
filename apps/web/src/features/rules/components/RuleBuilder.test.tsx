@@ -25,7 +25,6 @@ import { mockUseGetSubscriptionTiers } from '@/test/mocks/subscription-api'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import { mockUseGetSavingsGoals } from '@/test/mocks/budgets-api'
 import { mockNavigate } from '@/test/mocks/react-router'
-import { mockUseRuleTierLimits } from '@/test/mocks/rule-tier-limits'
 import { mockUseBudgets } from '@/test/mocks/budgets-wrapper'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 
@@ -98,7 +97,6 @@ describe('RuleBuilder', () => {
     mockUpdateAutomationRuleMutateAsync.mockClear()
     mockUseGetAutomationRules.mockClear()
     mockUseGetAutomationRuleByID.mockClear()
-    mockUseRuleTierLimits.mockClear()
     mockUseBudgets.mockClear()
 
     // Configure API mocks
@@ -127,16 +125,6 @@ describe('RuleBuilder', () => {
       data: mockSubscriptionTiersResponse,
       isLoading: false,
       error: null,
-    })
-
-    mockUseRuleTierLimits.mockReturnValue({
-      ruleLimit: 5,
-      isUnlimited: false,
-      currentRuleCount: 1,
-      isAtLimit: false,
-      canUseEventTriggers: true,
-      shouldShowUpgradeBanner: false,
-      rulesCountDisplay: '1/5 rules used',
     })
 
     mockUseBudgets.mockReturnValue({

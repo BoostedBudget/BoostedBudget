@@ -17,17 +17,25 @@
  * ```
  */
 
+import type React from 'react';
 import Plotly from 'plotly.js-basic-dist';
 import createPlotlyComponent from 'react-plotly.js/factory';
 
-/**
- * Plot component created using the factory pattern with basic-dist bundle.
- * This provides access to cartesian chart types: scatter, bar, and related.
- */
-export const Plot = createPlotlyComponent(Plotly);
+// react-plotly.js resolves @types/plotly.js to a different minor version than
+// plotly.js-basic-dist does (Bun virtual store keeps both). Casting through
+// our version of Plotly types unifies the mismatch and resolves TS2769 on <Plot>.
+interface PlotProps {
+  data: Plotly.Data[];
+  layout?: Partial<Plotly.Layout>;
+  config?: Partial<Plotly.Config>;
+  style?: React.CSSProperties;
+  className?: string;
+  useResizeHandler?: boolean;
+  onClick?: (event: Plotly.PlotMouseEvent) => void;
+  onHover?: (event: Plotly.PlotHoverEvent) => void;
+  onRelayout?: (event: Plotly.PlotRelayoutEvent) => void;
+}
 
-/**
- * Re-export Plotly for direct API access if needed
- * (e.g., Plotly.toImage for export functionality)
- */
+export const Plot = createPlotlyComponent(Plotly) as unknown as React.ComponentType<PlotProps>;
+
 export { Plotly };

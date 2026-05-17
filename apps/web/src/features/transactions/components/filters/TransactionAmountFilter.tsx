@@ -105,7 +105,7 @@ export function TransactionAmountFilter({
 
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-sm font-medium text-gray-700">Amount Range</label>
+      <label className="text-sm font-medium text-foreground">Amount Range</label>
 
       {/* Quick shortcuts */}
       <div className="flex flex-wrap gap-1 mb-1">
@@ -119,8 +119,8 @@ export function TransactionAmountFilter({
               px-2 py-1 text-xs font-medium rounded-md transition-colors
               ${
                 isShortcutActive(shortcut)
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-foreground hover:bg-accent'
               }
               ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
             `}
@@ -132,7 +132,7 @@ export function TransactionAmountFilter({
 
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">$</span>
           <input
             type="text"
             inputMode="decimal"
@@ -143,16 +143,16 @@ export function TransactionAmountFilter({
             onKeyDown={(e) => handleKeyDown(e, 'min')}
             disabled={disabled}
             className={`
-              w-full pl-7 pr-3 py-2 text-sm border border-gray-300 rounded-lg
-              focus:ring-2 focus:ring-blue-500 focus:border-blue-500
-              ${disabled ? 'bg-gray-100 cursor-not-allowed' : 'bg-white'}
+              w-full pl-7 pr-3 py-2 text-sm border border-input rounded-lg text-foreground
+              focus:ring-2 focus:ring-ring focus:border-ring
+              ${disabled ? 'bg-muted cursor-not-allowed' : 'bg-card'}
             `}
             aria-label="Minimum amount"
           />
         </div>
-        <span className="text-gray-400">-</span>
+        <span className="text-muted-foreground">-</span>
         <div className="relative flex-1">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">$</span>
           <input
             type="text"
             inputMode="decimal"
@@ -163,9 +163,9 @@ export function TransactionAmountFilter({
             onKeyDown={(e) => handleKeyDown(e, 'max')}
             disabled={disabled}
             className={`
-              w-full pl-7 pr-3 py-2 text-sm border border-gray-300 rounded-lg
-              focus:ring-2 focus:ring-blue-500 focus:border-blue-500
-              ${disabled ? 'bg-gray-100 cursor-not-allowed' : 'bg-white'}
+              w-full pl-7 pr-3 py-2 text-sm border border-input rounded-lg text-foreground
+              focus:ring-2 focus:ring-ring focus:border-ring
+              ${disabled ? 'bg-muted cursor-not-allowed' : 'bg-card'}
             `}
             aria-label="Maximum amount"
           />

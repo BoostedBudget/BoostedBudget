@@ -1,5 +1,6 @@
 import { clerk } from '@clerk/testing/playwright';
 import { test as setup } from '@playwright/test';
+import { getAuthToken, API_BASE } from './helpers/api/client';
 
 const authFile = 'e2e/.auth/user.json';
 
@@ -78,68 +79,63 @@ setup('authenticate', async ({ page }) => {
     emailAddress: email,
   });
 
-  // Wait for the session to be established
-  // Clerk needs time to set up cookies and session state
-  // Note: networkidle can cause infinite loops if 401 responses trigger redirects
-  // before Clerk's session is fully hydrated. Use a brief timeout instead.
-  console.log('   Waiting for session to establish...');
+  // Wait for page to stabilize after sign-in.
+  // clerk.signIn() can trigger a page reload that destroys the JS execution context.
+  // Waiting for domcontentloaded + a brief hydration pause prevents "Execution context
+  // was destroyed" errors during subsequent page.evaluate() calls.
+  await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(2000);
 
-  // Wait for Clerk user button to appear (indicates logged in state)
-  // This ensures the session is properly established before proceeding
+  // Wait for Clerk session to be fully hydrated before proceeding.
+  console.log('   Waiting for session to establish...');
   try {
-    await page.waitForSelector('[data-testid="user-button"], button[aria-label*="User"], .cl-userButtonBox', {
-      timeout: 10000,
-    });
+    await page.waitForFunction(
+      () => {
+        const clerk = (window as unknown as { Clerk?: { session?: { id?: string } } }).Clerk;
+        return clerk?.session?.id != null;
+      },
+      { timeout: 15000 }
+    );
     console.log('   ✓ User session established');
   } catch {
-    console.log('   ⚠️  User button not found, session may not be established');
-    // Continue anyway - some UI may not show user button
+    console.log('   ⚠️  Clerk session not detected within 15s, continuing...');
   }
 
   // Issue #698: Grant trial subscription for E2E test user
   // This ensures the test user has an active subscription so PremiumRoute allows access to /dashboard
   console.log('   Granting trial subscription for E2E test...');
-  // Use E2E_BACKEND_PORT which is set by run-e2e-with-ports.sh for dynamic port allocation
-  const backendPort = process.env.E2E_BACKEND_PORT || '8080';
-  const apiUrl = `http://localhost:${backendPort}`;
 
-  // Extract Clerk JWT from browser session for direct API calls
-  // page.request.post() bypasses Axios/Clerk cookies, so we must attach the token manually
-  let authToken: string | null = null;
-  try {
-    authToken = await page.evaluate(async () => {
-      const clerk = (window as unknown as { Clerk?: { session?: { getToken: () => Promise<string | null> } } }).Clerk;
-      if (clerk?.session) {
-        return await clerk.session.getToken();
-      }
-      return null;
-    });
-    if (authToken) {
-      console.log('   ✓ Extracted Clerk JWT for API calls');
-    }
-  } catch (error) {
-    console.log(`   [Warning] Could not extract Clerk token: ${error}`);
+  const authToken = await getAuthToken(page);
+  if (authToken) {
+    console.log('   ✓ Extracted Clerk JWT for API calls');
   }
 
-  try {
-    const trialResponse = await page.request.post(
-      `${apiUrl}/api/v1/admin/subscription/grant-trial`,
-      {
-        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+  const doTrialGrant = async (token: string | null): Promise<boolean> => {
+    try {
+      const trialResponse = await page.request.post(
+        `${API_BASE}/api/v1/admin/subscription/grant-trial`,
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        }
+      );
+      if (trialResponse.ok()) {
+        const body = await trialResponse.json();
+        console.log(`   ✓ Trial grant: ${body.message}`);
+        return true;
+      } else {
+        const body = await trialResponse.text();
+        console.log(`   [Warning] Trial grant failed: ${trialResponse.status()} - ${body}`);
+        return false;
       }
-    );
-    if (trialResponse.ok()) {
-      const body = await trialResponse.json();
-      console.log(`   ✓ Trial grant: ${body.message}`);
-    } else {
-      const body = await trialResponse.text();
-      console.log(`   [Warning] Trial grant failed: ${trialResponse.status()} - ${body}`);
-      // Continue anyway - user might already have active subscription
+    } catch (error) {
+      console.log(`   [Warning] Trial grant request error: ${error}`);
+      return false;
     }
-  } catch (error) {
-    console.log(`   [Warning] Trial grant request error: ${error}`);
-    // Continue anyway - endpoint might not be available in some environments
+  };
+
+  const trialGranted = await doTrialGrant(authToken);
+  if (!trialGranted) {
+    console.log('   [Info] Trial grant failed — DB seeding should provide subscription');
   }
 
   // Verify by accessing protected page
@@ -174,7 +170,7 @@ setup('authenticate', async ({ page }) => {
 
   // Use Promise.race to detect which component appears first
   // Include all possible states for better diagnostics
-  const result = await Promise.race([
+  let result = await Promise.race([
     dashboard.waitFor({ timeout: 30000 }).then(() => 'dashboard' as const),
     profileError.waitFor({ timeout: 30000 }).then(() => 'profileError' as const),
     pricing.waitFor({ timeout: 30000 }).then(() => 'pricing' as const),
@@ -183,6 +179,26 @@ setup('authenticate', async ({ page }) => {
   ]).catch(() => 'timeout' as const);
 
   console.log(`   [Diagnostic] Page showing: ${result}`);
+
+  // Recovery: if we landed on pricing, the trial grant likely failed due to a race on the
+  // first attempt. Now the session is stable — re-extract the JWT and retry the grant.
+  if (result === 'pricing' || result === 'pricingLoading') {
+    console.log('   [Recovery] Pricing page detected — retrying trial grant with fresh JWT...');
+    const freshToken = await getAuthToken(page);
+    const granted = await doTrialGrant(freshToken);
+    if (granted) {
+      await page.goto('/dashboard');
+      await page.waitForLoadState('domcontentloaded');
+      result = await Promise.race([
+        dashboard.waitFor({ timeout: 30000 }).then(() => 'dashboard' as const),
+        profileError.waitFor({ timeout: 30000 }).then(() => 'profileError' as const),
+        pricing.waitFor({ timeout: 30000 }).then(() => 'pricing' as const),
+        pricingLoading.waitFor({ timeout: 30000 }).then(() => 'pricingLoading' as const),
+        pricingError.waitFor({ timeout: 30000 }).then(() => 'pricingError' as const),
+      ]).catch(() => 'timeout' as const);
+      console.log(`   [Diagnostic] Page showing after recovery: ${result}`);
+    }
+  }
 
   if (result !== 'dashboard') {
     // Take screenshot for debugging (will be uploaded as artifact)
@@ -198,11 +214,6 @@ setup('authenticate', async ({ page }) => {
     const isLoading = await loadingSkeleton.isVisible().catch(() => false);
     if (isLoading) {
       console.log('   [Diagnostic] Still showing loading skeleton - profile API may be hanging');
-    }
-
-    // Provide specific guidance based on result
-    if (result === 'pricing' || result === 'pricingLoading' || result === 'pricingError') {
-      console.log('   [Diagnostic] User appears to not have active subscription - trial grant may have failed');
     }
 
     throw new Error(`Auth verification failed - expected Dashboard but got: ${result}`);

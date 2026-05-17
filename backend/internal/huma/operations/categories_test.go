@@ -10,6 +10,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -64,6 +65,9 @@ func (m *mockCustomCategoryService) GetOrCreateCategory(ctx context.Context, use
 	}
 	return m.getOrCreateCat, nil
 }
+
+// SetJobQueue is a no-op for the mock (Issue #1123: satisfies updated interface).
+func (m *mockCustomCategoryService) SetJobQueue(_ queue.JobQueue) {}
 
 // Helper to create a test category
 func createTestCategory(userID, name string) *domain.CustomCategory {
@@ -364,6 +368,82 @@ func TestCategoryRouteRegistration(t *testing.T) {
 	// Verify the response contains expected error message
 	body := resp.Body.String()
 	assert.Contains(t, body, "User not authenticated")
+}
+
+// TestGetPlaidPrimaryCategories_ReturnsList verifies the handler returns all 18 PFCv2 primaries.
+func TestGetPlaidPrimaryCategories_ReturnsList(t *testing.T) {
+	mockService := &mockCustomCategoryService{}
+	handler := NewCategoryHandler(mockService)
+
+	input := &GetPlaidPrimaryCategoriesInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+
+	output, err := handler.GetPlaidPrimaryCategories(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Len(t, output.Body, 18, "should return all 18 PFCv2 primaries")
+
+	// Verify includes PFCv2 additions
+	enumSet := make(map[string]string)
+	for _, p := range output.Body {
+		enumSet[p.Enum] = p.Display
+	}
+	assert.Equal(t, "Loan Disbursements", enumSet["LOAN_DISBURSEMENTS"])
+	assert.Equal(t, "Other", enumSet["OTHER"])
+}
+
+// TestGetPlaidPrimaryCategories_RequiresAuth verifies the route is auth-protected.
+func TestGetPlaidPrimaryCategories_RequiresAuth(t *testing.T) {
+	mockService := &mockCustomCategoryService{}
+	_, api := humatest.New(t)
+	handler := NewCategoryHandler(mockService)
+	RegisterCategoryRoutes(api, handler)
+
+	resp := api.Get("/api/v1/categories/plaid-primaries")
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+	assert.Contains(t, resp.Body.String(), "User not authenticated")
+}
+
+// TestGetPlaidDetailedCategories_ReturnsList verifies the handler returns the full PFCv2 detailed taxonomy.
+func TestGetPlaidDetailedCategories_ReturnsList(t *testing.T) {
+	mockService := &mockCustomCategoryService{}
+	handler := NewCategoryHandler(mockService)
+
+	input := &GetPlaidDetailedCategoriesInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+
+	output, err := handler.GetPlaidDetailedCategories(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Greater(t, len(output.Body), 100, "should return ~120+ detailed entries")
+
+	// Verify LOAN_DISBURSEMENTS_AUTO is present (PFCv2 new primary)
+	found := false
+	for _, d := range output.Body {
+		if d.Enum == "LOAN_DISBURSEMENTS_AUTO" {
+			found = true
+			assert.Equal(t, "LOAN_DISBURSEMENTS", d.PrimaryEnum)
+			assert.Equal(t, "Loan Disbursements", d.PrimaryDisplay)
+			assert.Equal(t, "Auto", d.Display)
+		}
+	}
+	assert.True(t, found, "LOAN_DISBURSEMENTS_AUTO should be in the response")
+}
+
+// TestGetPlaidDetailedCategories_RequiresAuth verifies the route is auth-protected.
+func TestGetPlaidDetailedCategories_RequiresAuth(t *testing.T) {
+	mockService := &mockCustomCategoryService{}
+	_, api := humatest.New(t)
+	handler := NewCategoryHandler(mockService)
+	RegisterCategoryRoutes(api, handler)
+
+	resp := api.Get("/api/v1/categories/plaid-detailed")
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+	assert.Contains(t, resp.Body.String(), "User not authenticated")
 }
 
 // TestCategoryResponseJSON tests JSON serialization of response.

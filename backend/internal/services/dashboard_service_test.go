@@ -8,6 +8,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockBalanceSnapshotRepository is a mock for BalanceSnapshotRepository
@@ -889,4 +890,430 @@ func TestAccountTypeCategory(t *testing.T) {
 			assert.Equal(t, tc.expected, result)
 		})
 	}
+}
+
+// TestGetBalanceSummary_ExcludesReplacedAccounts verifies that replaced accounts
+// are excluded from balance summary (Issue #1109: re-link chain transparency).
+// The exclusion happens at the repository layer (GetByUserID now returns status='active' only),
+// so snapshots for replaced account IDs will not match any account in the map.
+func TestGetBalanceSummary_ExcludesReplacedAccounts(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-id"
+
+	activeBalance := 2000.00
+	replacedBalance := 1500.00
+
+	// Snapshots for both active and replaced account
+	snapshots := []domain.BalanceSnapshot{
+		{
+			ID:             "snapshot-active",
+			AccountID:      "account-active",
+			UserID:         userID,
+			CurrentBalance: &activeBalance,
+			SnapshotAt:     time.Now().UTC(),
+		},
+		{
+			ID:             "snapshot-replaced",
+			AccountID:      "account-replaced",
+			UserID:         userID,
+			CurrentBalance: &replacedBalance,
+			SnapshotAt:     time.Now().UTC(),
+		},
+	}
+
+	// GetByUserID now returns only active accounts (replaced filtered by repo)
+	activeOnlyAccounts := []domain.Account{
+		{
+			ID:     "account-active",
+			UserID: userID,
+			Name:   "Active Checking",
+			Type:   "depository",
+			Status: domain.AccountStatusActive,
+		},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(snapshots, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeOnlyAccounts, nil)
+	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]domain.BalanceSnapshot{}, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetBalanceSummary(ctx, userID, nil)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	// Only the active account's balance should count (replaced snapshot has no matching account)
+	assert.Equal(t, 2000.00, result.TotalBalance)
+	assert.Equal(t, 1, result.ByType["depository"].AccountCount)
+
+	mockSnapshotRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestGetAccountTypes_ExcludesReplacedAccounts verifies that replaced accounts
+// are excluded from account type listing (Issue #1109).
+func TestGetAccountTypes_ExcludesReplacedAccounts(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-id"
+
+	activeBalance := 3000.00
+	replacedBalance := 1000.00
+
+	// Snapshots for both active and replaced account
+	snapshots := []domain.BalanceSnapshot{
+		{
+			ID:             "snap-active",
+			AccountID:      "account-active",
+			UserID:         userID,
+			CurrentBalance: &activeBalance,
+			SnapshotAt:     time.Now().UTC(),
+		},
+		{
+			ID:             "snap-replaced",
+			AccountID:      "account-replaced",
+			UserID:         userID,
+			CurrentBalance: &replacedBalance,
+			SnapshotAt:     time.Now().UTC(),
+		},
+	}
+
+	// GetByUserID returns only active — replaced is excluded at repo level
+	activeOnlyAccounts := []domain.Account{
+		{
+			ID:     "account-active",
+			UserID: userID,
+			Name:   "Active Checking",
+			Type:   "depository",
+			Status: domain.AccountStatusActive,
+		},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(snapshots, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeOnlyAccounts, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetAccountTypes(ctx, userID)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	// Only one account type (depository) with 1 account — replaced account excluded
+	assert.Len(t, result.Types, 1)
+	assert.Equal(t, "depository", result.Types[0].Key)
+	assert.Equal(t, 1, result.Types[0].Count)
+	assert.Equal(t, 3000.00, result.Types[0].TotalBalance)
+
+	mockSnapshotRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+func TestDashboardService_GetNetWorth_ExcludesReplacedAccounts(t *testing.T) {
+	// Two accounts share the same user_account_id (same logical account after re-link).
+	// One is 'replaced' (old snapshot $500) and one is 'active' (snapshot $800).
+	// GetNetWorth must sum only the active account's balance ($800), NOT double-count ($1300).
+	ctx := context.Background()
+	userID := "test-user-net-worth"
+	stableUserAccountID := "user-acct-stable-001"
+
+	activeBalance := 800.00
+	// replacedBalance is intentionally NOT in the active accountMap so it's excluded
+
+	// GetLatestByUserID returns snapshots for both accounts
+	snapshots := []domain.BalanceSnapshot{
+		{
+			ID:             "snap-active",
+			AccountID:      "account-active",
+			UserID:         userID,
+			CurrentBalance: &activeBalance,
+			SnapshotAt:     time.Now().UTC(),
+		},
+	}
+
+	// GetByUserID returns only the active account (GetByUserID is active-only)
+	activeAccount := domain.Account{
+		ID:            "account-active",
+		UserID:        userID,
+		Name:          "Savings (current)",
+		Type:          "depository",
+		Status:        domain.AccountStatusActive,
+		UserAccountID: &stableUserAccountID,
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(snapshots, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
+	// Period comparison
+	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+		Return([]domain.BalanceSnapshot{}, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetNetWorth(ctx, userID, nil)
+
+	assert.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Should be $800 (active only), NOT $1300 (double-count of replaced + active)
+	assert.Equal(t, 800.00, result.TotalAssets,
+		"GetNetWorth must not double-count replaced + active account for same user_account_id")
+	assert.Equal(t, 0.00, result.TotalLiabilities)
+	assert.Equal(t, 800.00, result.NetWorth)
+
+	mockSnapshotRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestDashboardService_GetNetWorth_ResolvesByUserAccountID verifies that a snapshot
+// whose account_id points at a replaced row is still included via the user_account_id
+// chain key.
+func TestDashboardService_GetNetWorth_ResolvesByUserAccountID(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-chain-resolve"
+	stableUserAccountID := "ua-chain-stable-xyz"
+
+	activeBalance := 600.00
+	snapshot := domain.BalanceSnapshot{
+		ID:             "snap-from-replaced",
+		AccountID:      "account-replaced-id",
+		UserAccountID:  &stableUserAccountID,
+		UserID:         userID,
+		CurrentBalance: &activeBalance,
+		SnapshotAt:     time.Now().UTC(),
+	}
+
+	activeAccount := domain.Account{
+		ID:            "account-active-id",
+		UserID:        userID,
+		Name:          "Checking (active)",
+		Type:          "depository",
+		Status:        domain.AccountStatusActive,
+		UserAccountID: &stableUserAccountID,
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return([]domain.BalanceSnapshot{snapshot}, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
+	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID,
+		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+		Return([]domain.BalanceSnapshot{}, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetNetWorth(ctx, userID, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 600.00, result.TotalAssets,
+		"GetNetWorth must resolve snapshot via user_account_id when snapshot.AccountID is a replaced row")
+	assert.Equal(t, 600.00, result.NetWorth)
+
+	mockSnapshotRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestDashboardService_GetNetWorth_PreviousPeriodResolvesChain verifies that the
+// previous-period snapshot loop also resolves via user_account_id. Without the fix
+// a historical snapshot tagged with a replaced account_id would be silently dropped,
+// making period-over-period delta calculations wrong after a re-link.
+func TestDashboardService_GetNetWorth_PreviousPeriodResolvesChain(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-prev-period-chain"
+	stableUA := "ua-prev-period-stable"
+
+	currentBalance := 700.00
+	previousBalance := 500.00
+
+	currentSnapshot := domain.BalanceSnapshot{
+		ID:             "snap-current",
+		AccountID:      "account-active-id",
+		UserAccountID:  &stableUA,
+		UserID:         userID,
+		CurrentBalance: &currentBalance,
+		SnapshotAt:     time.Now().UTC(),
+	}
+	// Previous snapshot carries the OLD replaced account_id but the stable user_account_id.
+	previousSnapshot := domain.BalanceSnapshot{
+		ID:             "snap-previous-replaced",
+		AccountID:      "account-replaced-id",
+		UserAccountID:  &stableUA,
+		UserID:         userID,
+		CurrentBalance: &previousBalance,
+		SnapshotAt:     time.Now().UTC().AddDate(0, 0, -30),
+	}
+
+	activeAccount := domain.Account{
+		ID:            "account-active-id",
+		UserID:        userID,
+		Name:          "Checking",
+		Type:          "depository",
+		Status:        domain.AccountStatusActive,
+		UserAccountID: &stableUA,
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return([]domain.BalanceSnapshot{currentSnapshot}, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
+	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID,
+		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+		Return([]domain.BalanceSnapshot{previousSnapshot}, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetNetWorth(ctx, userID, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 700.00, result.TotalAssets, "current period should reflect active snapshot")
+	require.NotNil(t, result.PeriodComparison,
+		"previous-period snapshot must be resolved via user_account_id, not dropped")
+	assert.Equal(t, 500.00, result.PeriodComparison.PreviousAssets,
+		"pre-relink snapshot from replaced account must be included in previous-period total")
+	assert.InDelta(t, 200.00, result.PeriodComparison.NetWorthChange, 0.01,
+		"period delta must reflect diff between current and pre-relink snapshot")
+
+	mockSnapshotRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestGetBalanceSummary_PreviousPeriodChainDedup verifies that when both a replaced and
+// an active chain member have a previous-period snapshot, the balance is counted only
+// once (not double-counted). Issue #1109 W4-B.
+func TestGetBalanceSummary_PreviousPeriodChainDedup(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-dedup"
+	stableUA := "ua-dedup-stable"
+
+	currentBalance := 700.00
+	prevBalanceReplaced := 500.00 // snapshot tagged with replaced account
+	prevBalanceActive := 500.00   // snapshot tagged with active account — same value, same chain
+
+	currentSnapshot := domain.BalanceSnapshot{
+		ID:             "snap-current",
+		AccountID:      "account-active",
+		UserAccountID:  &stableUA,
+		UserID:         userID,
+		CurrentBalance: &currentBalance,
+	}
+
+	// Two previous-period snapshots for the SAME logical account (one per chain member).
+	// If both are summed the result is 1000; correct dedup gives 500.
+	prevSnapReplaced := domain.BalanceSnapshot{
+		ID:            "prev-replaced",
+		AccountID:     "account-replaced",
+		UserAccountID: &stableUA,
+		CurrentBalance: &prevBalanceReplaced,
+	}
+	prevSnapActive := domain.BalanceSnapshot{
+		ID:            "prev-active",
+		AccountID:     "account-active",
+		UserAccountID: &stableUA,
+		CurrentBalance: &prevBalanceActive,
+	}
+
+	activeAccount := domain.Account{
+		ID:            "account-active",
+		UserID:        userID,
+		Name:          "Checking",
+		Type:          "depository",
+		Status:        domain.AccountStatusActive,
+		UserAccountID: &stableUA,
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return([]domain.BalanceSnapshot{currentSnapshot}, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
+	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID,
+		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+		Return([]domain.BalanceSnapshot{prevSnapReplaced, prevSnapActive}, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetBalanceSummary(ctx, userID, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, result.PeriodComparison)
+	assert.Equal(t, 500.00, result.PeriodComparison.PreviousBalance,
+		"both replaced and active snapshots share the same chain key — must not be double-counted")
+	assert.Equal(t, 200.00, result.PeriodComparison.ChangeAmount)
+
+	mockSnapshotRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestGetNetWorth_PreviousPeriodChainDedup verifies that when both a replaced and an
+// active chain member have a previous-period snapshot, net worth period comparison
+// counts that chain only once. Issue #1109 W4-B.
+func TestGetNetWorth_PreviousPeriodChainDedup(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-nw-dedup"
+	stableUA := "ua-nw-dedup-stable"
+
+	currentBalance := 700.00
+	prevBalance := 500.00
+
+	currentSnapshot := domain.BalanceSnapshot{
+		ID:             "snap-current",
+		AccountID:      "account-active",
+		UserAccountID:  &stableUA,
+		UserID:         userID,
+		CurrentBalance: &currentBalance,
+	}
+
+	prevSnapReplaced := domain.BalanceSnapshot{
+		ID:            "prev-replaced",
+		AccountID:     "account-replaced",
+		UserAccountID: &stableUA,
+		CurrentBalance: &prevBalance,
+	}
+	prevSnapActive := domain.BalanceSnapshot{
+		ID:            "prev-active",
+		AccountID:     "account-active",
+		UserAccountID: &stableUA,
+		CurrentBalance: &prevBalance,
+	}
+
+	activeAccount := domain.Account{
+		ID:            "account-active",
+		UserID:        userID,
+		Name:          "Checking",
+		Type:          "depository",
+		Status:        domain.AccountStatusActive,
+		UserAccountID: &stableUA,
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return([]domain.BalanceSnapshot{currentSnapshot}, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
+	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID,
+		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+		Return([]domain.BalanceSnapshot{prevSnapReplaced, prevSnapActive}, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetNetWorth(ctx, userID, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, result.PeriodComparison)
+	assert.Equal(t, 500.00, result.PeriodComparison.PreviousAssets,
+		"both replaced and active snapshots share the same chain key — must not be double-counted")
+	assert.InDelta(t, 200.00, result.PeriodComparison.NetWorthChange, 0.01)
+
+	mockSnapshotRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
 }

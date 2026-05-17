@@ -1,53 +1,32 @@
-/**
- * useRuleFilters Hook
- * Issue #590: Inline Column Filtering
- *
- * Manages auto-categorization rule filter state with URL synchronization.
- * Thin wrapper around the generic useFilterState hook.
- */
-
 import { useCallback, useMemo } from 'react'
 import type { RangeValue } from '@/shared/components/ColumnFilterDropdown'
+import type { SortState } from '@/shared/components/DataTable'
+import { useSortUrlState } from '@/shared/hooks/useSortUrlState'
 import { useFilterState, type FilterSpec } from '@/shared/hooks/useFilterState'
+import { RULE_SORTABLE_COLUMNS } from '../components/AutoCategorizationRuleTable'
 
-
-/**
- * Rule filter state
- */
 export interface RuleFilters {
-  /** Rule statuses to filter by (enabled, disabled) */
   status: string[]
-  /** Target categories to filter by */
   category: string[]
-  /** Minimum priority */
   priorityMin?: number
-  /** Maximum priority */
   priorityMax?: number
 }
 
-/**
- * Result of useRuleFilters hook
- */
 export interface UseRuleFiltersResult {
-  /** Current filter state derived from URL */
   filters: RuleFilters
-  /** Status filter array */
   statusFilter: string[]
-  /** Category filter array */
   categoryFilter: string[]
-  /** Priority range filter */
   priorityRange: RangeValue | null
-  /** Set status filter */
+  sort: SortState | null
+  isDefaultSort: boolean
   setStatusFilter: (value: string[]) => void
-  /** Set category filter */
   setCategoryFilter: (value: string[]) => void
-  /** Set priority range filter */
   setPriorityRange: (value: RangeValue | null) => void
-  /** Clear all filters */
-  clearAllFilters: () => void
-  /** Number of active filters */
+  setSort: (next: SortState | null) => void
+  resetSort: () => void
+  toggleSortColumn: (columnId: string) => void
+  clearAllFilters: (options?: { includeSort?: boolean }) => void
   activeFilterCount: number
-  /** Whether any filters are active */
   hasActiveFilters: boolean
 }
 
@@ -57,19 +36,19 @@ const SPEC = {
   priority: { kind: 'range', codec: 'integer' as const },
 } as const satisfies FilterSpec
 
-/**
- * Hook for managing auto-categorization rule filters with URL state synchronization
- *
- * @returns Filter state and management functions
- */
 export function useRuleFilters(): UseRuleFiltersResult {
   const state = useFilterState(SPEC)
-  const { setFilter, clearAllFilters, activeFilterCount, hasActiveFilters } = state
+  const { setFilter, clearAllFilters: genericClearAll, activeFilterCount, hasActiveFilters } = state
+
+  const { sort, setSort, resetSort, toggleSortColumn, isDefaultSort } = useSortUrlState({
+    defaultSort: null,
+    validColumns: RULE_SORTABLE_COLUMNS,
+  })
 
   const filters = useMemo<RuleFilters>(
     () => ({
-      status: state.filters.status,
-      category: state.filters.category,
+      status:      state.filters.status,
+      category:    state.filters.category,
       priorityMin: state.filters.priority?.min,
       priorityMax: state.filters.priority?.max,
     }),
@@ -98,14 +77,27 @@ export function useRuleFilters(): UseRuleFiltersResult {
     [setFilter],
   )
 
+  const clearAllFilters = useCallback(
+    (options?: { includeSort?: boolean }) => {
+      genericClearAll()
+      if (options?.includeSort) resetSort()
+    },
+    [genericClearAll, resetSort],
+  )
+
   return {
     filters,
-    statusFilter: state.filters.status,
-    categoryFilter: state.filters.category,
+    statusFilter:    state.filters.status,
+    categoryFilter:  state.filters.category,
     priorityRange,
+    sort,
+    isDefaultSort,
     setStatusFilter,
     setCategoryFilter,
     setPriorityRange,
+    setSort,
+    resetSort,
+    toggleSortColumn,
     clearAllFilters,
     activeFilterCount,
     hasActiveFilters,

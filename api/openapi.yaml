@@ -1,5 +1,37 @@
 components:
   schemas:
+    AcceptTransferSuggestionInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AcceptTransferSuggestionInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        notes:
+          description: Optional notes for accepting the suggestion
+          type: string
+      type: object
+    AcceptTransferSuggestionOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AcceptTransferSuggestionOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          type: string
+        suggestion:
+          $ref: "#/components/schemas/TransferSuggestion"
+      required:
+        - message
+        - suggestion
+      type: object
     Account:
       additionalProperties: false
       properties:
@@ -158,6 +190,22 @@ components:
             - "null"
       required:
         - types
+      type: object
+    AddDLQNotesRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AddDLQNotesRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        notes:
+          description: Admin notes for this dead letter job
+          type: string
+      required:
+        - notes
       type: object
     AdminCreateOverrideInputBody:
       additionalProperties: false
@@ -631,6 +679,9 @@ components:
         end_date:
           format: date-time
           type: string
+        expected_income:
+          format: double
+          type: number
         id:
           type: string
         income_amount:
@@ -669,6 +720,7 @@ components:
         - updated_at
         - income_amount
         - income_sources
+        - expected_income
       type: object
     BudgetCategory:
       additionalProperties: false
@@ -685,18 +737,24 @@ components:
           type: number
         budget_id:
           type: string
-        category:
-          items:
-            type: string
-          type:
-            - array
-            - "null"
+        category_kind:
+          type: string
         created_at:
           format: date-time
+          type: string
+        custom_category_id:
           type: string
         id:
           type: string
         match_logic:
+          type: string
+        pfc_detailed:
+          type: string
+        pfc_detailed_display:
+          type: string
+        pfc_primary:
+          type: string
+        pfc_primary_display:
           type: string
         spent_amount:
           format: double
@@ -713,7 +771,7 @@ components:
       required:
         - id
         - budget_id
-        - category
+        - category_kind
         - allocated_amount
         - spent_amount
         - created_at
@@ -953,12 +1011,20 @@ components:
           type: string
         tag_behavior:
           type: string
-        target_category:
-          items:
-            type: string
-          type:
-            - array
-            - "null"
+        target_custom_category_display:
+          type: string
+        target_custom_category_id:
+          type: string
+        target_kind:
+          type: string
+        target_pfc_detailed:
+          type: string
+        target_pfc_detailed_display:
+          type: string
+        target_pfc_primary:
+          type: string
+        target_pfc_primary_display:
+          type: string
         target_tags:
           items:
             type: string
@@ -995,19 +1061,17 @@ components:
           format: uri
           readOnly: true
           type: string
-        categories:
-          items:
-            items:
-              type: string
-            type:
-              - array
-              - "null"
-          type:
-            - array
-            - "null"
+        category_kind:
+          type: string
+        custom_category_id:
+          type: string
         end_date:
           type: string
         match_logic:
+          type: string
+        pfc_detailed:
+          type: string
+        pfc_primary:
           type: string
         start_date:
           type: string
@@ -1018,7 +1082,7 @@ components:
             - array
             - "null"
       required:
-        - categories
+        - category_kind
         - match_logic
         - start_date
         - end_date
@@ -1042,6 +1106,21 @@ components:
       required:
         - transaction_count
         - total_amount
+      type: object
+    CategorySpending:
+      additionalProperties: false
+      properties:
+        category:
+          type: string
+        pfc_primary_display:
+          type: string
+        total:
+          format: double
+          type: number
+      required:
+        - category
+        - pfc_primary_display
+        - total
       type: object
     CategoryTransactionsResponse:
       additionalProperties: false
@@ -1113,6 +1192,8 @@ components:
       additionalProperties: false
       properties:
         actual: {}
+        actual_display:
+          type: string
         field:
           type: string
         met:
@@ -1120,6 +1201,8 @@ components:
         operator:
           type: string
         value: {}
+        value_display:
+          type: string
       required:
         - field
         - operator
@@ -1201,13 +1284,15 @@ components:
         allocated_amount:
           format: double
           type: number
-        category:
-          items:
-            type: string
-          type:
-            - array
-            - "null"
+        category_kind:
+          type: string
+        custom_category_id:
+          type: string
         match_logic:
+          type: string
+        pfc_detailed:
+          type: string
+        pfc_primary:
           type: string
         tags:
           items:
@@ -1216,7 +1301,7 @@ components:
             - array
             - "null"
       required:
-        - category
+        - category_kind
         - allocated_amount
       type: object
     CreateBudgetRequest:
@@ -1245,6 +1330,9 @@ components:
         end_date:
           format: date-time
           type: string
+        expected_income:
+          format: double
+          type: number
         income_amount:
           format: double
           type: number
@@ -1294,12 +1382,14 @@ components:
           type: integer
         tag_behavior:
           type: string
-        target_category:
-          items:
-            type: string
-          type:
-            - array
-            - "null"
+        target_custom_category_id:
+          type: string
+        target_kind:
+          type: string
+        target_pfc_detailed:
+          type: string
+        target_pfc_primary:
+          type: string
         target_tags:
           items:
             type: string
@@ -1354,7 +1444,7 @@ components:
           type: string
         name:
           type: string
-        parent_category:
+        parent_pfc_primary:
           type: string
       required:
         - name
@@ -1429,7 +1519,9 @@ components:
           type: string
         name:
           type: string
-        parent_category:
+        parent_pfc_primary:
+          type: string
+        parent_pfc_primary_display:
           type: string
         updated_at:
           format: date-time
@@ -1504,6 +1596,136 @@ components:
         - connections
         - latency_ms
       type: object
+    DeadLetterBulkDeleteRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DeadLetterBulkDeleteRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        end_date:
+          type: string
+        kind:
+          type: string
+        retried:
+          type: boolean
+        start_date:
+          type: string
+        user_id:
+          type: string
+      type: object
+    DeadLetterBulkDeleteResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DeadLetterBulkDeleteResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        deleted:
+          format: int64
+          type: integer
+      required:
+        - deleted
+      type: object
+    DeadLetterJob:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DeadLetterJob.json
+          format: uri
+          readOnly: true
+          type: string
+        args: {}
+        created_at:
+          format: date-time
+          type: string
+        errors: {}
+        failed_at:
+          format: date-time
+          type: string
+        id:
+          format: int64
+          type: integer
+        kind:
+          type: string
+        max_attempts:
+          format: int64
+          type: integer
+        notes:
+          type: string
+        notified:
+          type: boolean
+        original_job_id:
+          format: int64
+          type: integer
+        queue:
+          type: string
+        retried_at:
+          format: date-time
+          type: string
+        retry_job_id:
+          format: int64
+          type: integer
+        user_id:
+          type: string
+      required:
+        - id
+        - original_job_id
+        - kind
+        - queue
+        - args
+        - errors
+        - max_attempts
+        - created_at
+        - failed_at
+        - notified
+      type: object
+    DeadLetterJobListResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DeadLetterJobListResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        has_more:
+          type: boolean
+        jobs:
+          items:
+            $ref: "#/components/schemas/DeadLetterJob"
+          type:
+            - array
+            - "null"
+        page:
+          format: int64
+          type: integer
+        page_size:
+          format: int64
+          type: integer
+        total:
+          format: int64
+          type: integer
+        total_pages:
+          format: int64
+          type: integer
+      required:
+        - jobs
+        - total
+        - page
+        - page_size
+        - total_pages
+        - has_more
+      type: object
     DeadLetterMetrics:
       additionalProperties: false
       properties:
@@ -1516,6 +1738,82 @@ components:
       required:
         - count
         - oldest_job_age_hours
+      type: object
+    DeadLetterRetryResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DeadLetterRetryResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        dead_letter_id:
+          format: int64
+          type: integer
+        message:
+          type: string
+        new_job_id:
+          format: int64
+          type: integer
+        success:
+          type: boolean
+      required:
+        - success
+        - message
+        - dead_letter_id
+      type: object
+    DeadLetterStatsResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DeadLetterStatsResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        by_kind:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        last_24_hours:
+          format: int64
+          type: integer
+        retried:
+          format: int64
+          type: integer
+        total:
+          format: int64
+          type: integer
+        unnotified:
+          format: int64
+          type: integer
+      required:
+        - total
+        - unnotified
+        - retried
+        - last_24_hours
+        - by_kind
+      type: object
+    Detailed:
+      additionalProperties: false
+      properties:
+        display:
+          type: string
+        enum:
+          type: string
+        primary_display:
+          type: string
+        primary_enum:
+          type: string
+      required:
+        - primary_enum
+        - primary_display
+        - enum
+        - display
       type: object
     ErrorDetail:
       additionalProperties: false
@@ -1731,6 +2029,9 @@ components:
           examples:
             - month
           type: string
+        cancel_at_period_end:
+          description: Whether the subscription is scheduled to cancel at end of current period
+          type: boolean
         currency:
           description: Currency code
           examples:
@@ -1746,8 +2047,13 @@ components:
           examples:
             - "2026-03-01"
           type: string
+        scheduled_change_at:
+          description: RFC 3339 datetime when the scheduled cancel takes effect
+          examples:
+            - "2026-05-01T00:00:00Z"
+          type: string
         status:
-          description: Subscription status (active, trial, cancelled)
+          description: Subscription status (active, trial, trialing, cancelled, past_due)
           examples:
             - active
           type: string
@@ -1777,9 +2083,9 @@ components:
         - status
         - tier
         - billing_interval
-        - current_period_end
         - amount
         - currency
+        - cancel_at_period_end
       type: object
     GetPaymentFailuresOutputBody:
       additionalProperties: false
@@ -1811,6 +2117,31 @@ components:
         - total
         - limit
         - offset
+      type: object
+    GetTransactionsOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/GetTransactionsOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        limit:
+          format: int64
+          type: integer
+        next_cursor:
+          type: string
+        transactions:
+          items:
+            $ref: "#/components/schemas/Transaction"
+          type:
+            - array
+            - "null"
+      required:
+        - transactions
+        - limit
       type: object
     GetUnreadCountOutputBody:
       additionalProperties: false
@@ -1902,6 +2233,8 @@ components:
           type: string
         value:
           type: string
+        value_display:
+          type: string
       required:
         - type
         - value
@@ -1927,6 +2260,25 @@ components:
         - link_token
         - expiration
         - request_id
+      type: object
+    MarkAllNotificationsReadOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/MarkAllNotificationsReadOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        count:
+          format: int64
+          type: integer
+        message:
+          type: string
+      required:
+        - message
+        - count
       type: object
     MarkNotificationReadOutputBody:
       additionalProperties: false
@@ -2090,6 +2442,8 @@ components:
           type: string
         id:
           type: string
+        interaction_pattern:
+          type: string
         message:
           type: string
         read:
@@ -2097,6 +2451,8 @@ components:
         sent_email:
           type: boolean
         title:
+          type: string
+        transfer_suggestion_id:
           type: string
         type:
           type: string
@@ -2113,6 +2469,7 @@ components:
         - message
         - read
         - sent_email
+        - interaction_pattern
         - created_at
         - updated_at
       type: object
@@ -2373,6 +2730,17 @@ components:
         - next_charge_date
         - next_charge_amount
       type: object
+    Primary:
+      additionalProperties: false
+      properties:
+        display:
+          type: string
+        enum:
+          type: string
+      required:
+        - enum
+        - display
+      type: object
     PrivacySettings:
       additionalProperties: false
       properties:
@@ -2489,6 +2857,89 @@ components:
         - failed
         - completed_last_hour
       type: object
+    RegionResponse:
+      additionalProperties: false
+      properties:
+        city:
+          description: City name
+          type: string
+        code:
+          description: Fly.io IATA region code
+          type: string
+        country:
+          description: Country name
+          type: string
+        display_name:
+          description: Human-readable region name
+          type: string
+        flag:
+          description: Country flag emoji
+          type: string
+      required:
+        - code
+        - display_name
+        - country
+        - city
+        - flag
+      type: object
+    RegionsResponseBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RegionsResponseBody.json
+          format: uri
+          readOnly: true
+          type: string
+        default_region:
+          description: Default region for new users
+          type: string
+        regions:
+          additionalProperties:
+            $ref: "#/components/schemas/RegionResponse"
+          description: Available regions keyed by Fly.io IATA code
+          type: object
+        server_region:
+          description: Region this server instance runs in
+          type: string
+      required:
+        - regions
+        - default_region
+        - server_region
+      type: object
+    RejectTransferSuggestionInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RejectTransferSuggestionInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        notes:
+          description: Optional notes for rejecting the suggestion
+          type: string
+      type: object
+    RejectTransferSuggestionOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RejectTransferSuggestionOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          type: string
+        suggestion:
+          $ref: "#/components/schemas/TransferSuggestion"
+      required:
+        - message
+        - suggestion
+      type: object
     ReorderAccountsOutputBody:
       additionalProperties: false
       properties:
@@ -2555,6 +3006,8 @@ components:
         type:
           type: string
         value: {}
+        value_display:
+          type: string
       required:
         - type
         - value
@@ -2735,6 +3188,8 @@ components:
         updated_at:
           format: date-time
           type: string
+        user_account_id:
+          type: string
         user_id:
           type: string
       required:
@@ -2791,6 +3246,161 @@ components:
         - database
         - clerk
         - plaid
+      type: object
+    SpendingByCategory:
+      additionalProperties: false
+      properties:
+        category:
+          type: string
+        percentage:
+          format: double
+          type: number
+        pfc_primary_display:
+          type: string
+        total:
+          format: double
+          type: number
+        transaction_count:
+          format: int64
+          type: integer
+      required:
+        - category
+        - pfc_primary_display
+        - total
+        - percentage
+        - transaction_count
+      type: object
+    SpendingByCategoryResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SpendingByCategoryResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        categories:
+          items:
+            $ref: "#/components/schemas/SpendingByCategory"
+          type:
+            - array
+            - "null"
+        end_date:
+          type: string
+        start_date:
+          type: string
+        total_spent:
+          format: double
+          type: number
+      required:
+        - start_date
+        - end_date
+        - total_spent
+        - categories
+      type: object
+    SpendingByMerchant:
+      additionalProperties: false
+      properties:
+        merchant_name:
+          type: string
+        percentage:
+          format: double
+          type: number
+        total:
+          format: double
+          type: number
+        transaction_count:
+          format: int64
+          type: integer
+      required:
+        - merchant_name
+        - total
+        - transaction_count
+        - percentage
+      type: object
+    SpendingByMerchantResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SpendingByMerchantResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        end_date:
+          type: string
+        merchants:
+          items:
+            $ref: "#/components/schemas/SpendingByMerchant"
+          type:
+            - array
+            - "null"
+        start_date:
+          type: string
+        top_n:
+          format: int64
+          type: integer
+      required:
+        - start_date
+        - end_date
+        - top_n
+        - merchants
+      type: object
+    SpendingTrendPeriod:
+      additionalProperties: false
+      properties:
+        categories:
+          items:
+            $ref: "#/components/schemas/CategorySpending"
+          type:
+            - array
+            - "null"
+        period_end:
+          type: string
+        period_start:
+          type: string
+        total:
+          format: double
+          type: number
+      required:
+        - period_start
+        - period_end
+        - categories
+        - total
+      type: object
+    SpendingTrendsResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SpendingTrendsResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        end_date:
+          type: string
+        periods:
+          items:
+            $ref: "#/components/schemas/SpendingTrendPeriod"
+          type:
+            - array
+            - "null"
+        start_date:
+          type: string
+        top_categories:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - start_date
+        - end_date
+        - periods
+        - top_categories
       type: object
     SubscriptionFeatures:
       additionalProperties: false
@@ -3037,20 +3647,28 @@ components:
         authorized_date:
           format: date-time
           type: string
-        category:
-          type: string
-        category_override:
-          type: string
         category_override_date:
           format: date-time
+          type: string
+        category_override_kind:
           type: string
         category_source:
           type: string
         created_at:
           format: date-time
           type: string
+        custom_category_override_display:
+          type: string
+        custom_category_override_id:
+          type: string
         date:
           format: date-time
+          type: string
+        effective_category_name:
+          type: string
+        effective_pfc_detailed:
+          type: string
+        effective_pfc_primary:
           type: string
         external_metadata:
           type: string
@@ -3064,13 +3682,29 @@ components:
           type: string
         name:
           type: string
-        original_category:
-          type: string
         payment_channel:
           type: string
         pending:
           type: boolean
-        personal_finance_category:
+        pfc_category_icon_url:
+          type: string
+        pfc_confidence_level:
+          type: string
+        pfc_detailed:
+          type: string
+        pfc_detailed_display:
+          type: string
+        pfc_detailed_override:
+          type: string
+        pfc_detailed_override_display:
+          type: string
+        pfc_primary:
+          type: string
+        pfc_primary_display:
+          type: string
+        pfc_primary_override:
+          type: string
+        pfc_primary_override_display:
           type: string
         source:
           type: string
@@ -3111,39 +3745,59 @@ components:
         - created_at
         - updated_at
       type: object
-    TransactionListResponse:
+    TransferSuggestion:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/TransactionListResponse.json
-          format: uri
-          readOnly: true
+        amount:
+          format: double
+          type: number
+        created_at:
+          format: date-time
           type: string
-        has_more:
-          type: boolean
-        limit:
-          format: int64
-          type: integer
-        offset:
-          format: int64
-          type: integer
-        total_count:
-          format: int64
-          type: integer
-        transactions:
-          items:
-            $ref: "#/components/schemas/Transaction"
-          type:
-            - array
-            - "null"
+        currency_code:
+          type: string
+        expires_at:
+          format: date-time
+          type: string
+        from_account_id:
+          type: string
+        from_user_account_id:
+          type: string
+        id:
+          type: string
+        reason:
+          type: string
+        rule_execution_id:
+          type: string
+        rule_id:
+          type: string
+        source:
+          type: string
+        status:
+          type: string
+        to_account_id:
+          type: string
+        to_user_account_id:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        user_action_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+        user_notes:
+          type: string
       required:
-        - transactions
-        - total_count
-        - limit
-        - offset
-        - has_more
+        - id
+        - user_id
+        - amount
+        - currency_code
+        - source
+        - status
+        - created_at
+        - updated_at
       type: object
     TriggerAutomationRuleInputBody:
       additionalProperties: false
@@ -3302,6 +3956,9 @@ components:
         end_date:
           format: date-time
           type: string
+        expected_income:
+          format: double
+          type: number
         income_amount:
           format: double
           type: number
@@ -3346,10 +4003,14 @@ components:
           type: integer
         tag_behavior:
           type: string
-        target_category:
-          items:
-            type: string
-          type: array
+        target_custom_category_id:
+          type: string
+        target_kind:
+          type: string
+        target_pfc_detailed:
+          type: string
+        target_pfc_primary:
+          type: string
         target_tags:
           items:
             type: string
@@ -3371,7 +4032,7 @@ components:
           type: string
         name:
           type: string
-        parent_category:
+        parent_pfc_primary:
           type: string
       type: object
     UpdatePrivacySettingsRequest:
@@ -3458,6 +4119,14 @@ components:
           examples:
             - month
           type: string
+        current_billing_interval:
+          description: Current billing interval, used server-side to detect and reject no-op updates
+          enum:
+            - month
+            - year
+          examples:
+            - month
+          type: string
         new_tier:
           description: New subscription tier
           examples:
@@ -3517,15 +4186,24 @@ components:
           format: uri
           readOnly: true
           type: string
-        category:
-          description: Category hierarchy as string array
-          items:
-            type: string
-          type:
-            - array
-            - "null"
+        custom_category_id:
+          description: Custom category UUID (required when kind=custom)
+          type: string
+        kind:
+          description: Category override kind
+          enum:
+            - pfc
+            - custom
+            - clear
+          type: string
+        pfc_detailed:
+          description: PFC detailed enum (optional when kind=pfc)
+          type: string
+        pfc_primary:
+          description: PFC primary enum (required when kind=pfc)
+          type: string
       required:
-        - category
+        - kind
       type: object
     UpdateTransactionTagsBody:
       additionalProperties: false
@@ -3653,6 +4331,18 @@ components:
         paddle_subscription_id:
           type: string
         primary_region:
+          type: string
+        retention_expires_at:
+          format: date-time
+          type: string
+        retention_notice_30d_sent_at:
+          format: date-time
+          type: string
+        retention_notice_7d_sent_at:
+          format: date-time
+          type: string
+        retention_started_at:
+          format: date-time
           type: string
         subscription_ends_at:
           format: date-time
@@ -4061,7 +4751,8 @@ info:
 
     ## Regions
 
-    All data is stored in the us-east-1 (iad) region. Multi-region support planned for Phase 7+.
+    Use the GET /api/v1/regions endpoint to discover available data residency regions.
+    Multi-region support planned for Phase 7+.
   license:
     name: Proprietary
     url: https://boostedbudget.com/terms
@@ -4080,6 +4771,27 @@ paths:
           name: include_hidden
           schema:
             description: If 'true', includes hidden accounts
+            type: string
+        - description: "Filter by account status: 'active' (default), 'replaced', or 'all'"
+          explode: false
+          in: query
+          name: status
+          schema:
+            description: "Filter by account status: 'active' (default), 'replaced', or 'all'"
+            type: string
+        - description: If 'true', equivalent to status=all (backward-compat alias)
+          explode: false
+          in: query
+          name: include_replaced
+          schema:
+            description: If 'true', equivalent to status=all (backward-compat alias)
+            type: string
+        - description: When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set.
+          explode: false
+          in: query
+          name: user_account_id
+          schema:
+            description: When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set.
             type: string
       responses:
         "200":
@@ -4208,6 +4920,266 @@ paths:
       security:
         - clerk: []
       summary: Check if current user is admin
+      tags:
+        - Admin
+  /api/v1/admin/dead-letter-jobs:
+    get:
+      operationId: listAdminDeadLetterJobs
+      parameters:
+        - explode: false
+          in: query
+          name: page
+          schema:
+            default: 1
+            format: int64
+            minimum: 1
+            type: integer
+        - explode: false
+          in: query
+          name: page_size
+          schema:
+            default: 20
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+        - description: Filter by job kind
+          explode: false
+          in: query
+          name: kind
+          schema:
+            description: Filter by job kind
+            type: string
+        - description: Filter by user ID extracted from args
+          explode: false
+          in: query
+          name: user_id
+          schema:
+            description: Filter by user ID extracted from args
+            type: string
+        - description: "Filter by retried status: 'true', 'false', or empty for all"
+          explode: false
+          in: query
+          name: retried
+          schema:
+            description: "Filter by retried status: 'true', 'false', or empty for all"
+            type: string
+        - description: ISO 8601 start date filter
+          explode: false
+          in: query
+          name: start_date
+          schema:
+            description: ISO 8601 start date filter
+            type: string
+        - description: ISO 8601 end date filter
+          explode: false
+          in: query
+          name: end_date
+          schema:
+            description: ISO 8601 end date filter
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadLetterJobListResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List dead letter jobs (admin)
+      tags:
+        - Admin
+  /api/v1/admin/dead-letter-jobs/bulk-delete:
+    post:
+      operationId: bulkDeleteAdminDeadLetterJobs
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeadLetterBulkDeleteRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadLetterBulkDeleteResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Bulk delete dead letter jobs (admin)
+      tags:
+        - Admin
+  /api/v1/admin/dead-letter-jobs/stats:
+    get:
+      operationId: getAdminDeadLetterJobStats
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadLetterStatsResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get dead letter job statistics (admin)
+      tags:
+        - Admin
+  /api/v1/admin/dead-letter-jobs/{id}:
+    delete:
+      operationId: deleteAdminDeadLetterJob
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: int64
+            type: integer
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Delete a dead letter job (admin)
+      tags:
+        - Admin
+    get:
+      operationId: getAdminDeadLetterJobDetail
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadLetterJob"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get dead letter job detail (admin)
+      tags:
+        - Admin
+  /api/v1/admin/dead-letter-jobs/{id}/args:
+    get:
+      operationId: getAdminDeadLetterJobArgs
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties: {}
+                type: object
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get raw (unredacted) job args (admin)
+      tags:
+        - Admin
+  /api/v1/admin/dead-letter-jobs/{id}/notes:
+    post:
+      operationId: addAdminDeadLetterJobNotes
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: int64
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddDLQNotesRequest"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Add admin notes to a dead letter job (admin)
+      tags:
+        - Admin
+  /api/v1/admin/dead-letter-jobs/{id}/retry:
+    post:
+      operationId: retryAdminDeadLetterJob
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeadLetterRetryResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Retry a dead letter job (admin)
       tags:
         - Admin
   /api/v1/admin/payments/failures:
@@ -4781,6 +5753,181 @@ paths:
       security:
         - clerk: []
       summary: Get cash flow summary
+      tags:
+        - Analytics
+  /api/v1/analytics/spending-by-category:
+    get:
+      description: Returns spending totals grouped by category with percentages. Pass category param for subcategory drill-down.
+      operationId: getSpendingByCategory
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: Comma-separated account types to filter
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter
+            type: string
+        - description: Include transfer transactions (true/false, default false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfer transactions (true/false, default false)
+            type: string
+        - description: Primary category to drill into subcategories
+          explode: false
+          in: query
+          name: category
+          schema:
+            description: Primary category to drill into subcategories
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpendingByCategoryResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get spending by category
+      tags:
+        - Analytics
+  /api/v1/analytics/spending-by-merchant:
+    get:
+      description: Returns top merchants by spending with percentages.
+      operationId: getSpendingByMerchant
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: Comma-separated account types to filter
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter
+            type: string
+        - description: Include transfer transactions (true/false, default false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfer transactions (true/false, default false)
+            type: string
+        - description: Maximum number of merchants to return (default 10)
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 10
+            description: Maximum number of merchants to return (default 10)
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpendingByMerchantResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get spending by merchant
+      tags:
+        - Analytics
+  /api/v1/analytics/spending-trends:
+    get:
+      description: Returns monthly category spending trends for stacked bar charts. Top 5 categories plus Other.
+      operationId: getSpendingTrends
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: Comma-separated account types to filter
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter
+            type: string
+        - description: Include transfer transactions (true/false, default false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfer transactions (true/false, default false)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpendingTrendsResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get spending trends
       tags:
         - Analytics
   /api/v1/auto-categorization:
@@ -5459,6 +6606,58 @@ paths:
       summary: Get Plaid categories
       tags:
         - Categories
+  /api/v1/categories/plaid-detailed:
+    get:
+      description: Returns the full PFCv2 detailed taxonomy (~120 entries) sorted by primary then detailed display name. Used only by the rule editor's existing_pfc_detailed condition.
+      operationId: getPlaidDetailedCategories
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Detailed"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List curated Plaid PFC detailed categories
+      tags:
+        - Categories
+  /api/v1/categories/plaid-primaries:
+    get:
+      description: Returns all 18 PFCv2 curated primary categories sorted alphabetically. Used by every PFC selection surface.
+      operationId: getPlaidPrimaryCategories
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Primary"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List curated Plaid PFC primary categories
+      tags:
+        - Categories
   /api/v1/categories/{id}:
     delete:
       description: Removes a category from the user's collection.
@@ -5922,6 +7121,28 @@ paths:
       summary: Get user notifications
       tags:
         - Notifications
+  /api/v1/notifications/read-all:
+    patch:
+      description: Marks all unread notifications as read for the authenticated user.
+      operationId: markAllNotificationsAsRead
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarkAllNotificationsReadOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Mark all notifications as read
+      tags:
+        - Notifications
   /api/v1/notifications/unread/count:
     get:
       description: Returns the count of unread notifications for the authenticated user.
@@ -6050,6 +7271,30 @@ paths:
       summary: QA auth bypass
       tags:
         - QA
+  /api/v1/regions:
+    get:
+      description: Returns all available data residency regions. Use this to populate region selectors. This is a public endpoint.
+      operationId: getRegions
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegionsResponseBody"
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get available regions
+      tags:
+        - Regions
   /api/v1/rules:
     get:
       description: Retrieves all automation rules for the authenticated user, ordered by priority.
@@ -6916,26 +8161,23 @@ paths:
       description: Retrieves transactions for the authenticated user with optional filters and pagination.
       operationId: getTransactions
       parameters:
-        - description: Number of items to return (1-100)
+        - description: Opaque cursor from previous page's next_cursor; omit for first page
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: Opaque cursor from previous page's next_cursor; omit for first page
+            type: string
+        - description: Number of transactions to return (1-100)
           explode: false
           in: query
           name: limit
           schema:
             default: 50
-            description: Number of items to return (1-100)
+            description: Number of transactions to return (1-100)
             format: int64
             maximum: 100
             minimum: 1
-            type: integer
-        - description: Number of items to skip for pagination
-          explode: false
-          in: query
-          name: offset
-          schema:
-            default: 0
-            description: Number of items to skip for pagination
-            format: int64
-            minimum: 0
             type: integer
         - description: "Filter by specific account ID (deprecated: use account_ids)"
           explode: false
@@ -6965,19 +8207,19 @@ paths:
           schema:
             description: Filter transactions on or before this date (YYYY-MM-DD)
             type: string
-        - description: "Filter by category (deprecated: use categories)"
+        - description: Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)
           explode: false
           in: query
-          name: category
+          name: pfc_primaries
           schema:
-            description: "Filter by category (deprecated: use categories)"
+            description: Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)
             type: string
-        - description: Filter by multiple categories (comma-separated)
+        - description: Filter by custom category UUIDs (comma-separated)
           explode: false
           in: query
-          name: categories
+          name: custom_category_ids
           schema:
-            description: Filter by multiple categories (comma-separated)
+            description: Filter by custom category UUIDs (comma-separated)
             type: string
         - description: Search in merchant name or transaction name
           explode: false
@@ -7018,12 +8260,43 @@ paths:
               - expense
               - all
             type: string
+        - description: Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members
+          explode: false
+          in: query
+          name: user_account_id
+          schema:
+            description: Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members
+            type: string
+        - description: Column to sort by
+          explode: false
+          in: query
+          name: sort_by
+          schema:
+            default: date
+            description: Column to sort by
+            enum:
+              - date
+              - merchant
+              - amount
+              - category
+            type: string
+        - description: Sort direction
+          explode: false
+          in: query
+          name: sort_dir
+          schema:
+            default: desc
+            description: Sort direction
+            enum:
+              - asc
+              - desc
+            type: string
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TransactionListResponse"
+                $ref: "#/components/schemas/GetTransactionsOutputBody"
           description: OK
         default:
           content:
@@ -7138,6 +8411,104 @@ paths:
       summary: Update transaction tags
       tags:
         - Transactions
+  /api/v1/transfer-suggestions:
+    get:
+      description: Returns all pending transfer suggestions for the authenticated user.
+      operationId: getTransferSuggestions
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/TransferSuggestion"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get pending transfer suggestions
+      tags:
+        - TransferSuggestions
+  /api/v1/transfer-suggestions/{id}/accept:
+    patch:
+      description: Marks a pending transfer suggestion as accepted. Returns 404 if not found, 409 if already actioned.
+      operationId: acceptTransferSuggestion
+      parameters:
+        - description: Transfer suggestion UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Transfer suggestion UUID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcceptTransferSuggestionInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcceptTransferSuggestionOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Accept a transfer suggestion
+      tags:
+        - TransferSuggestions
+  /api/v1/transfer-suggestions/{id}/reject:
+    patch:
+      description: Marks a pending transfer suggestion as rejected. Returns 404 if not found, 409 if already actioned.
+      operationId: rejectTransferSuggestion
+      parameters:
+        - description: Transfer suggestion UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Transfer suggestion UUID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectTransferSuggestionInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RejectTransferSuggestionOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Reject a transfer suggestion
+      tags:
+        - TransferSuggestions
   /api/v1/user-accounts:
     get:
       description: Returns all stable user accounts for the authenticated user. These survive Plaid re-links and provide consistent references for querying transactions.

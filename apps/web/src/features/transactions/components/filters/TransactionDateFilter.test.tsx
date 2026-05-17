@@ -1,12 +1,28 @@
 /**
  * TransactionDateFilter Component Tests
  * Issue #529: Transaction page filtering
+ * Issue #953: Updated for shared DateRangePicker with calendar-aligned presets
  */
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TransactionDateFilter } from './TransactionDateFilter'
+
+// Mock ToggleGroup so tests don't depend on Radix internals
+mock.module('@/components/ui/toggle-group', () => ({
+  ToggleGroup: ({ children, onValueChange }: { children: React.ReactNode; onValueChange: (v: string) => void }) => (
+    <div data-testid="toggle-group" onClick={(e) => {
+      const btn = (e.target as HTMLElement).closest('[data-value]')
+      if (btn) onValueChange(btn.getAttribute('data-value') ?? '')
+    }}>
+      {children}
+    </div>
+  ),
+  ToggleGroupItem: ({ value, children }: { value: string; children: React.ReactNode }) => (
+    <button data-value={value} type="button">{children}</button>
+  ),
+}))
 
 describe('TransactionDateFilter', () => {
   const mockOnPresetChange = mock(() => {})
@@ -26,19 +42,14 @@ describe('TransactionDateFilter', () => {
   it('should render all preset buttons', () => {
     render(<TransactionDateFilter {...defaultProps} />)
 
-    expect(screen.getByRole('button', { name: '7 days' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '30 days' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '90 days' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '1 year' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'All time' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'This Week' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'This Month' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Last Month' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Last 3 Months' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Last 6 Months' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Year to Date' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'All Time' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Custom' })).toBeInTheDocument()
-  })
-
-  it('should highlight selected preset', () => {
-    render(<TransactionDateFilter {...defaultProps} preset="30d" />)
-
-    const selected = screen.getByRole('button', { name: '30 days' })
-    expect(selected).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('should call onPresetChange when preset clicked', async () => {
@@ -47,32 +58,22 @@ describe('TransactionDateFilter', () => {
 
     render(<TransactionDateFilter {...defaultProps} onPresetChange={onPresetChange} />)
 
-    await user.click(screen.getByRole('button', { name: '7 days' }))
+    await user.click(screen.getByRole('button', { name: 'This Week' }))
 
-    expect(onPresetChange).toHaveBeenCalledWith('7d')
+    expect(onPresetChange).toHaveBeenCalledWith('this_week')
   })
 
-  it('should show custom date inputs when Custom is selected', async () => {
-    const user = userEvent.setup()
-
-    render(<TransactionDateFilter {...defaultProps} />)
-
-    // Initially custom inputs should not be visible
-    expect(screen.queryByText('Start date')).not.toBeInTheDocument()
-
-    // Click Custom button
-    await user.click(screen.getByRole('button', { name: 'Custom' }))
-
-    // Custom inputs should be visible
-    expect(screen.getByText('Start date')).toBeInTheDocument()
-    expect(screen.getByText('End date')).toBeInTheDocument()
-  })
-
-  it('should show custom inputs when preset is custom', () => {
+  it('should show custom date inputs when preset is custom', () => {
     render(<TransactionDateFilter {...defaultProps} preset="custom" />)
 
-    expect(screen.getByText('Start date')).toBeInTheDocument()
-    expect(screen.getByText('End date')).toBeInTheDocument()
+    expect(screen.getByLabelText(/Start Date/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/End Date/i)).toBeInTheDocument()
+  })
+
+  it('should not show custom inputs for non-custom preset', () => {
+    render(<TransactionDateFilter {...defaultProps} preset="this_month" />)
+
+    expect(screen.queryByLabelText(/Start Date/i)).not.toBeInTheDocument()
   })
 
   it('should call onCustomRangeChange when Apply button clicked', async () => {
@@ -87,12 +88,11 @@ describe('TransactionDateFilter', () => {
       />
     )
 
-    // Find inputs using the label text parent container
-    const startInput = screen.getByText('Start date').parentElement?.querySelector('input')
-    const endInput = screen.getByText('End date').parentElement?.querySelector('input')
+    const startInput = screen.getByLabelText(/Start Date/i) as HTMLInputElement
+    const endInput = screen.getByLabelText(/End Date/i) as HTMLInputElement
 
-    if (startInput) fireEvent.change(startInput, { target: { value: '2025-01-01' } })
-    if (endInput) fireEvent.change(endInput, { target: { value: '2025-06-30' } })
+    fireEvent.change(startInput, { target: { value: '2025-01-01' } })
+    fireEvent.change(endInput, { target: { value: '2025-06-30' } })
 
     await user.click(screen.getByRole('button', { name: 'Apply Custom Range' }))
 
@@ -116,24 +116,14 @@ describe('TransactionDateFilter', () => {
       />
     )
 
-    // Find inputs using the label text parent container
-    const startInput = screen.getByText('Start date').parentElement?.querySelector('input') as HTMLInputElement
-    const endInput = screen.getByText('End date').parentElement?.querySelector('input') as HTMLInputElement
+    const startInput = screen.getByLabelText(/Start Date/i) as HTMLInputElement
+    const endInput = screen.getByLabelText(/End Date/i) as HTMLInputElement
 
-    expect(startInput?.value).toBe('2025-01-01')
-    expect(endInput?.value).toBe('2025-06-30')
+    expect(startInput.value).toBe('2025-01-01')
+    expect(endInput.value).toBe('2025-06-30')
   })
 
-  it('should disable all buttons when disabled prop is true', () => {
-    render(<TransactionDateFilter {...defaultProps} disabled />)
-
-    const buttons = screen.getAllByRole('button')
-    buttons.forEach((button) => {
-      expect(button).toBeDisabled()
-    })
-  })
-
-  it('should render label', () => {
+  it('should render the Date Range label', () => {
     render(<TransactionDateFilter {...defaultProps} />)
 
     expect(screen.getByText('Date Range')).toBeInTheDocument()

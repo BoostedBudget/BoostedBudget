@@ -9,7 +9,6 @@
 import { useCallback } from 'react';
 import type { MatchLogic } from '@boostedbudget/shared-types/matching';
 import { MATCH_LOGIC_LABELS, MATCH_LOGIC_DESCRIPTIONS } from '@boostedbudget/shared-types/matching';
-import './CategoryMatchConfig.css';
 
 export interface CategoryMatchConfigProps {
   /** Current match logic value */
@@ -35,12 +34,15 @@ export function CategoryMatchConfig({
   );
 
   return (
-    <fieldset className="category-match-config" disabled={disabled}>
-      <legend className="category-match-config__legend">Match Logic</legend>
-      <div className="category-match-config__options">
+    <fieldset
+      className="border border-border rounded-lg p-4 m-0 disabled:opacity-60"
+      disabled={disabled}
+    >
+      <legend className="text-sm font-semibold text-foreground px-2">Match Logic</legend>
+      <div className="flex flex-col gap-3 mt-2">
         {MATCH_LOGIC_OPTIONS.map((option) => (
-          <div key={option} className="category-match-config__option">
-            <div className="category-match-config__radio-wrapper">
+          <div key={option} className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
               <input
                 type="radio"
                 id={`match-logic-${option}`}
@@ -50,18 +52,18 @@ export function CategoryMatchConfig({
                 onChange={handleChange}
                 disabled={disabled}
                 aria-describedby={`match-logic-${option}-desc`}
-                className="category-match-config__radio"
+                className="w-4 h-4 accent-primary cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
               />
               <label
                 htmlFor={`match-logic-${option}`}
-                className="category-match-config__label"
+                className="text-sm font-medium text-foreground cursor-pointer peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
               >
                 {MATCH_LOGIC_LABELS[option]}
               </label>
             </div>
             <p
               id={`match-logic-${option}-desc`}
-              className="category-match-config__description"
+              className="text-xs text-muted-foreground m-0 pl-6 leading-snug"
             >
               {MATCH_LOGIC_DESCRIPTIONS[option]}
             </p>

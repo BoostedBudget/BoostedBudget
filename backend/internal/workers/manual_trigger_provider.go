@@ -12,35 +12,29 @@ import (
 )
 
 // Errors for ManualTriggerProvider.
-var (
-	ErrRuleDisabled            = errors.New("rule is disabled")
-	ErrExecutionLimitExceeded  = errors.New("daily execution limit exceeded")
-)
+var ErrRuleDisabled = errors.New("rule is disabled")
 
 // ManualTriggerProvider implements RuleTriggerProvider for on-demand rule execution.
 // It allows rules to be triggered manually via API with optional user-provided data.
 type ManualTriggerProvider struct {
-	logger          *slog.Logger
-	repo            RuleRepositoryInterface
-	executor        RuleExecutorInterface
-	subscriptionSvc SubscriptionLimitChecker
+	logger   *slog.Logger
+	repo     RuleRepositoryInterface
+	executor RuleExecutorInterface
 }
 
 // NewManualTriggerProvider creates a new ManualTriggerProvider.
 func NewManualTriggerProvider(
 	repo RuleRepositoryInterface,
 	executor RuleExecutorInterface,
-	subscriptionSvc SubscriptionLimitChecker,
 	logger *slog.Logger,
 ) *ManualTriggerProvider {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &ManualTriggerProvider{
-		logger:          logger,
-		repo:            repo,
-		executor:        executor,
-		subscriptionSvc: subscriptionSvc,
+		logger:   logger,
+		repo:     repo,
+		executor: executor,
 	}
 }
 
@@ -87,25 +81,7 @@ func (p *ManualTriggerProvider) TriggerRule(ctx context.Context, ruleID string, 
 		return nil, ErrRuleDisabled
 	}
 
-	// Check daily execution limit
-	allowed, remaining, err := p.subscriptionSvc.CheckDailyExecutionLimit(ctx, rule.UserID)
-	if err != nil {
-		p.logger.Error("error checking execution limit", "user_id", rule.UserID, "error", err)
-		return nil, err
-	}
-
-	if !allowed {
-		p.logger.Warn("user exceeded daily execution limit", "user_id", rule.UserID)
-		return nil, ErrExecutionLimitExceeded
-	}
-
-	p.logger.Info("triggering rule", "rule_id", ruleID, "user_id", rule.UserID, "remaining", remaining)
-
-	// Increment daily executions
-	if err := p.subscriptionSvc.IncrementDailyExecutions(ctx, rule.UserID); err != nil {
-		p.logger.Error("error incrementing daily executions", "user_id", rule.UserID, "error", err)
-		// Continue with execution anyway
-	}
+	p.logger.Info("triggering rule", "rule_id", ruleID, "user_id", rule.UserID)
 
 	// Build trigger data by merging user data with system metadata
 	mergedTriggerData := p.buildTriggerData(ruleID, rule.UserID, triggerData)

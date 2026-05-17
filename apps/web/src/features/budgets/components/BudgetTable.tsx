@@ -1,62 +1,46 @@
-/**
- * BudgetTable Component
- * Issue #584: Unified Card/Table View System
- *
- * Displays budgets in a table format with progress bars and actions.
- */
-
 import { useCallback } from 'react'
-import { Settings, Trash2, ChevronUp, ChevronDown } from 'lucide-react'
+import { Settings, Trash2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
+import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
+import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { BudgetWithMetrics } from '../types'
-import {
-  ColumnFilterDropdown,
-  type FilterOption,
-  type RangeValue,
-} from '@/shared/components/ColumnFilterDropdown'
-import './BudgetTable.css'
+import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 
 export type SortColumn = 'name' | 'period' | 'amount' | 'progress' | 'remaining'
 export type SortDirection = 'asc' | 'desc'
 
+// eslint-disable-next-line react-refresh/only-export-components
+export const BUDGET_COLUMN_IDS = ['name', 'period', 'amount', 'income', 'progress', 'remaining', 'categories'] as const
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const BUDGET_SORTABLE_COLUMNS = new Set([
+  'name',
+  'period',
+  'amount',
+  'progress',
+  'remaining',
+] as const)
+
 export interface BudgetTableProps {
-  /** Budgets to display */
   budgets: BudgetWithMetrics[]
-  /** Called when manage button is clicked */
   onManage?: (budget: BudgetWithMetrics) => void
-  /** Called when delete button is clicked */
   onDelete?: (budgetId: string) => void
-  /** Called when a row is clicked */
   onRowClick?: (budget: BudgetWithMetrics) => void
-  /** Show loading state */
   loading?: boolean
-  /** Enable sorting */
   sortable?: boolean
-  /** Currently sorted column */
   sortColumn?: SortColumn
-  /** Current sort direction */
   sortDirection?: SortDirection
-  /** Called when sort changes */
   onSort?: (column: SortColumn, direction: SortDirection) => void
-  /** Additional CSS class */
   className?: string
-
-  // Issue #590: Inline filter props
-  /** Available period options for filtering */
   periodOptions?: FilterOption[]
-  /** Current period filter value */
   periodFilter?: string[]
-  /** Called when period filter changes */
   onPeriodFilterChange?: (value: string[]) => void
-
-  /** Current progress range filter value (percentage) */
   progressRange?: RangeValue | null
-  /** Called when progress range filter changes */
   onProgressRangeChange?: (value: RangeValue | null) => void
 }
 
-/**
- * Format currency amount
- */
 function formatCurrency(amount: number): string {
   const absAmount = Math.abs(amount)
   const formatted = new Intl.NumberFormat('en-US', {
@@ -65,34 +49,20 @@ function formatCurrency(amount: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(absAmount)
-
-  if (amount < 0) return `-${formatted}`
-  return formatted
+  return amount < 0 ? `-${formatted}` : formatted
 }
 
-/**
- * Get human-readable period label
- */
 function getPeriodLabel(period: string): string {
   switch (period.toLowerCase()) {
-    case 'weekly':
-      return 'Weekly'
-    case 'monthly':
-      return 'Monthly'
-    case 'quarterly':
-      return 'Quarterly'
-    case 'yearly':
-      return 'Yearly'
-    case 'custom':
-      return 'Custom'
-    default:
-      return period.charAt(0).toUpperCase() + period.slice(1)
+    case 'weekly': return 'Weekly'
+    case 'monthly': return 'Monthly'
+    case 'quarterly': return 'Quarterly'
+    case 'yearly': return 'Yearly'
+    case 'custom': return 'Custom'
+    default: return period.charAt(0).toUpperCase() + period.slice(1)
   }
 }
 
-/**
- * BudgetTable displays budgets in a sortable table format with progress bars.
- */
 export function BudgetTable({
   budgets,
   onManage,
@@ -104,7 +74,6 @@ export function BudgetTable({
   sortDirection = 'asc',
   onSort,
   className = '',
-  // Issue #590: Inline filter props
   periodOptions,
   periodFilter,
   onPeriodFilterChange,
@@ -112,227 +81,250 @@ export function BudgetTable({
   onProgressRangeChange,
 }: BudgetTableProps) {
   const hasActions = !!(onManage || onDelete)
+  const hasActiveFilters = (periodFilter?.length ?? 0) > 0 || progressRange != null
 
-  const handleSort = useCallback(
-    (column: SortColumn) => {
-      if (!sortable || !onSort) return
-      const newDirection =
-        sortColumn === column && sortDirection === 'asc' ? 'desc' : 'asc'
-      onSort(column, newDirection)
+  const { sizing, onSizingChange, columnOrder, onColumnOrderChange, columnVisibility, onColumnVisibilityChange } =
+    useTablePreferences('budgets', [...BUDGET_COLUMN_IDS])
+
+  // Bridge DataTable 3-state sort → BudgetTable (column, direction) callback
+  const handleSortChange = useCallback(
+    (newSort: SortState) => {
+      if (!onSort || !sortable) return
+      if (newSort) {
+        onSort(newSort.columnId as SortColumn, newSort.direction)
+      } else if (sortColumn) {
+        onSort(sortColumn, sortDirection === 'asc' ? 'desc' : 'asc')
+      }
     },
-    [sortable, onSort, sortColumn, sortDirection]
+    [onSort, sortable, sortColumn, sortDirection]
   )
 
-  const renderSortableHeader = (label: string, column: SortColumn) => {
-    if (!sortable) {
-      return label
-    }
+  const sort: SortState =
+    sortColumn && sortable ? { columnId: sortColumn, direction: sortDirection } : null
 
-    const isActive = sortColumn === column
-    const ariaSort = isActive
-      ? sortDirection === 'asc'
-        ? 'ascending'
-        : 'descending'
-      : undefined
-
-    return (
-      <button
-        type="button"
-        onClick={() => handleSort(column)}
-        aria-sort={ariaSort}
-        className="budget-table__sort-btn"
-      >
-        {label}
-        <span className="budget-table__sort-icon">
-          {isActive && sortDirection === 'asc' && (
-            <ChevronUp aria-hidden="true" />
-          )}
-          {isActive && sortDirection === 'desc' && (
-            <ChevronDown aria-hidden="true" />
-          )}
-        </span>
-      </button>
-    )
+  const filters: FilterState = {
+    period: periodFilter ?? [],
+    progress: progressRange ?? null,
   }
 
-  // Issue #590: Compute if any filters are active
-  // Note: Use != null to check for both null and undefined
-  const hasActiveFilters =
-    (periodFilter?.length ?? 0) > 0 ||
-    progressRange != null
+  const handleFiltersChange = useCallback(
+    (newFilters: FilterState) => {
+      if (newFilters.period !== filters.period) {
+        onPeriodFilterChange?.(newFilters.period as string[])
+      }
+      if (newFilters.progress !== filters.progress) {
+        onProgressRangeChange?.(newFilters.progress as RangeValue | null)
+      }
+    },
+    [filters.period, filters.progress, onPeriodFilterChange, onProgressRangeChange]
+  )
 
-  // Only show empty state if no data AND no active filters
+  const columns: ColumnDef<BudgetWithMetrics>[] = [
+    {
+      id: 'name',
+      header: 'Name',
+      sortable,
+      resizable: true,
+      reorderable: true,
+      widthClass: 'min-w-[200px] max-sm:min-w-[150px]',
+      render: (row) => (
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-foreground">{row.name}</span>
+          {row.is_active ? (
+            <Badge variant="success">Active</Badge>
+          ) : (
+            <Badge variant="secondary">Inactive</Badge>
+          )}
+        </div>
+      ),
+    },
+    {
+      id: 'period',
+      header: 'Period',
+      sortable,
+      resizable: true,
+      reorderable: true,
+      render: (row) => <>{getPeriodLabel(row.period)}</>,
+      filter:
+        periodOptions && onPeriodFilterChange
+          ? { type: 'select', options: periodOptions, multiSelect: true }
+          : undefined,
+    },
+    {
+      id: 'amount',
+      header: 'Amount',
+      sortable,
+      resizable: true,
+      reorderable: true,
+      align: 'right',
+      numeric: true,
+      render: (row) => (
+        <span className="font-medium">
+          {formatCurrency(row.expected_income ?? row.amount)}
+        </span>
+      ),
+    },
+    {
+      id: 'income',
+      header: 'Income',
+      resizable: true,
+      reorderable: true,
+      hideable: true,
+      align: 'right',
+      numeric: true,
+      render: (row) =>
+        (row.expected_income ?? 0) > 0
+          ? `${formatCurrency(row.income_amount ?? 0)} / ${formatCurrency(row.expected_income!)}`
+          : '—',
+    },
+    {
+      id: 'progress',
+      header: 'Progress',
+      sortable,
+      resizable: true,
+      reorderable: true,
+      defaultPinned: 'left' as const,
+      widthClass: 'min-w-[140px]',
+      render: (row) => {
+        const percentUsed = Math.round(row.percent_used)
+        const isOverBudget = row.is_over_budget
+        return (
+          <div className="flex items-center gap-3 max-sm:flex-col max-sm:items-start max-sm:gap-1">
+            <div
+              className="flex-1 h-2 bg-muted rounded-full overflow-hidden"
+              role="progressbar"
+              aria-valuenow={percentUsed}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <div
+                className={cn(
+                  'h-full rounded-full transition-[width] duration-300',
+                  isOverBudget ? 'bg-destructive' : 'bg-primary'
+                )}
+                style={{ width: `${Math.min(percentUsed, 100)}%` }}
+              />
+            </div>
+            <span
+              className={cn(
+                'min-w-12 text-right text-xs font-medium max-sm:min-w-0 max-sm:text-left',
+                isOverBudget ? 'text-destructive' : 'text-muted-foreground'
+              )}
+            >
+              {percentUsed}%
+            </span>
+          </div>
+        )
+      },
+      filter: onProgressRangeChange ? { type: 'range', unit: 'percent' } : undefined,
+    },
+    {
+      id: 'remaining',
+      header: 'Remaining',
+      sortable,
+      resizable: true,
+      reorderable: true,
+      align: 'right',
+      render: (row) => (
+        <span
+          className={cn(
+            'font-semibold tabular-nums',
+            row.remaining_amount < 0
+              ? 'budget-table__remaining--negative text-destructive'
+              : 'budget-table__remaining--positive text-success'
+          )}
+        >
+          {formatCurrency(row.remaining_amount)}
+        </span>
+      ),
+    },
+    {
+      id: 'categories',
+      header: 'Categories',
+      resizable: true,
+      reorderable: true,
+      hideable: true,
+      align: 'center',
+      render: (row) => <>{row.categories?.length ?? 0}</>,
+    },
+  ]
+
   if (budgets.length === 0 && !hasActiveFilters) {
     return (
-      <div className={`budget-table__empty ${className}`.trim()}>
+      <div
+        className={cn(
+          'text-center py-12 px-6 text-muted-foreground bg-card border border-dashed border-border rounded-lg',
+          className
+        )}
+      >
         <p>No budgets found. Create a budget to get started.</p>
       </div>
     )
   }
 
   return (
-    <table
-      className={`budget-table ${loading ? 'budget-table--loading' : ''} ${className}`.trim()}
-    >
-      <thead>
-        <tr className="budget-table__header-row">
-          <th className="budget-table__th">
-            {renderSortableHeader('Name', 'name')}
-          </th>
-          <th className="budget-table__th">
-            <div className="budget-table__header-content">
-              {renderSortableHeader('Period', 'period')}
-              {periodOptions && onPeriodFilterChange && (
-                <ColumnFilterDropdown
-                  type="select"
-                  options={periodOptions}
-                  value={periodFilter}
-                  onChange={(val) => onPeriodFilterChange(val as string[])}
-                  multiSelect
-                  ariaLabel="Filter by period"
-                />
-              )}
-            </div>
-          </th>
-          <th className="budget-table__th budget-table__th--amount">
-            {renderSortableHeader('Amount', 'amount')}
-          </th>
-          <th className="budget-table__th budget-table__th--progress">
-            <div className="budget-table__header-content">
-              {renderSortableHeader('Progress', 'progress')}
-              {onProgressRangeChange && (
-                <ColumnFilterDropdown
-                  type="range"
-                  rangeValue={progressRange}
-                  onChange={(val) => onProgressRangeChange(val as RangeValue | null)}
-                  ariaLabel="Filter by progress"
-                />
-              )}
-            </div>
-          </th>
-          <th className="budget-table__th budget-table__th--remaining">
-            {renderSortableHeader('Remaining', 'remaining')}
-          </th>
-          <th className="budget-table__th">Categories</th>
-          {hasActions && (
-            <th className="budget-table__th budget-table__th--actions">
-              Actions
-            </th>
-          )}
-        </tr>
-      </thead>
-      <tbody>
-        {budgets.length === 0 ? (
-          <tr className="budget-table__empty-row">
-            <td colSpan={hasActions ? 7 : 6}>
-              No budgets match your filters. Try adjusting your criteria.
-            </td>
-          </tr>
-        ) : budgets.map((budget) => {
-          const categoryCount = budget.categories?.length ?? 0
-          const percentUsed = Math.round(budget.percent_used)
-          const isOverBudget = budget.is_over_budget
-
-          return (
-            <tr
-              key={budget.id}
-              className={`budget-table__row ${onRowClick ? 'budget-table__row--clickable' : ''} ${!budget.is_active ? 'budget-table__row--inactive' : ''}`}
-              onClick={onRowClick ? () => onRowClick(budget) : undefined}
-            >
-              <td className="budget-table__td budget-table__td--name">
-                <div className="budget-table__name-cell">
-                  <span className="budget-table__name">{budget.name}</span>
-                  <span
-                    className={`budget-table__status-badge ${
-                      budget.is_active
-                        ? 'budget-table__status-badge--active'
-                        : 'budget-table__status-badge--inactive'
-                    }`}
+    <DataTable<BudgetWithMetrics>
+      data={budgets}
+      columns={columns}
+      rowKey={(row) => row.id}
+      sort={sort}
+      onSortChange={handleSortChange}
+      filters={filters}
+      onFiltersChange={handleFiltersChange}
+      loading={loading}
+      onRowClick={onRowClick}
+      columnSizing={sizing}
+      onColumnSizingChange={onSizingChange}
+      columnOrder={columnOrder}
+      onColumnOrderChange={onColumnOrderChange}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
+      rowClassName={(row) =>
+        cn(
+          onRowClick && 'budget-table__row--clickable',
+          !row.is_active && 'opacity-60'
+        )
+      }
+      className={cn(loading && 'budget-table--loading', className)}
+      maskedColumnIds={['amount', 'income', 'remaining']}
+      emptyState={
+        <p className="py-12 px-4 text-center text-muted-foreground italic">
+          No budgets match your filters. Try adjusting your criteria.
+        </p>
+      }
+      rowActions={
+        hasActions
+          ? (row) => (
+              <div className="flex items-center justify-end gap-2">
+                {onManage && (
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => onManage(row)}
+                    disabled={loading}
+                    aria-label="Manage budget"
+                    title="Manage budget"
                   >
-                    {budget.is_active ? 'Active' : 'Inactive'}
-                  </span>
-                </div>
-              </td>
-              <td className="budget-table__td">{getPeriodLabel(budget.period)}</td>
-              <td className="budget-table__td budget-table__td--amount">
-                {formatCurrency(budget.amount)}
-              </td>
-              <td className="budget-table__td budget-table__td--progress">
-                <div className="budget-table__progress-cell">
-                  <div
-                    className="budget-table__progress-bar"
-                    role="progressbar"
-                    aria-valuenow={percentUsed}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
+                    <Settings aria-hidden="true" />
+                  </Button>
+                )}
+                {onDelete && (
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => onDelete(row.id)}
+                    disabled={loading}
+                    aria-label="Delete budget"
+                    title="Delete budget"
+                    className="hover:bg-destructive/10 hover:text-destructive"
                   >
-                    <div
-                      className={`budget-table__progress-fill ${
-                        isOverBudget ? 'budget-table__progress-fill--over' : ''
-                      }`}
-                      style={{ width: `${Math.min(percentUsed, 100)}%` }}
-                    />
-                  </div>
-                  <span
-                    className={`budget-table__progress-text ${
-                      isOverBudget ? 'budget-table__progress-text--over' : ''
-                    }`}
-                  >
-                    {percentUsed}%
-                  </span>
-                </div>
-              </td>
-              <td className="budget-table__td budget-table__td--remaining">
-                <span
-                  className={`budget-table__remaining ${
-                    budget.remaining_amount < 0
-                      ? 'budget-table__remaining--negative'
-                      : 'budget-table__remaining--positive'
-                  }`}
-                >
-                  {formatCurrency(budget.remaining_amount)}
-                </span>
-              </td>
-              <td className="budget-table__td budget-table__td--categories">
-                {categoryCount}
-              </td>
-              {hasActions && (
-                <td
-                  className="budget-table__td budget-table__td--actions"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="budget-table__actions">
-                    {onManage && (
-                      <button
-                        type="button"
-                        onClick={() => onManage(budget)}
-                        disabled={loading}
-                        className="budget-table__action-btn"
-                        aria-label="Manage budget"
-                        title="Manage budget"
-                      >
-                        <Settings aria-hidden="true" />
-                      </button>
-                    )}
-                    {onDelete && (
-                      <button
-                        type="button"
-                        onClick={() => onDelete(budget.id)}
-                        disabled={loading}
-                        className="budget-table__action-btn budget-table__action-btn--danger"
-                        aria-label="Delete budget"
-                        title="Delete budget"
-                      >
-                        <Trash2 aria-hidden="true" />
-                      </button>
-                    )}
-                  </div>
-                </td>
-              )}
-            </tr>
-          )
-        })}
-      </tbody>
-    </table>
+                    <Trash2 aria-hidden="true" />
+                  </Button>
+                )}
+              </div>
+            )
+          : undefined
+      }
+    />
   )
 }

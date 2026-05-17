@@ -112,15 +112,6 @@ describe('BudgetCard', () => {
   })
 
   describe('Interactions', () => {
-    it('should call onEdit when edit button is clicked', () => {
-      const onEdit = mock(() => {})
-      renderWithRouter(<BudgetCard budget={mockBudget} onEdit={onEdit} />)
-
-      fireEvent.click(screen.getByRole('button', { name: /edit/i }))
-
-      expect(onEdit).toHaveBeenCalledWith(mockBudget)
-    })
-
     it('should call onDelete when delete button is clicked', () => {
       const onDelete = mock(() => {})
       renderWithRouter(<BudgetCard budget={mockBudget} onDelete={onDelete} />)
@@ -130,10 +121,9 @@ describe('BudgetCard', () => {
       expect(onDelete).toHaveBeenCalledWith('budget-1')
     })
 
-    it('should not show action buttons when callbacks not provided', () => {
+    it('should not show delete button when callback not provided', () => {
       renderWithRouter(<BudgetCard budget={mockBudget} />)
 
-      expect(screen.queryByRole('button', { name: /edit/i })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument()
     })
   })
@@ -142,13 +132,39 @@ describe('BudgetCard', () => {
     it('should link to budget detail page and navigate when clicked', async () => {
       renderWithRouter(<BudgetCard budget={mockBudget} />)
 
-      const link = screen.getByRole('link', { name: /manage categories/i })
+      const link = screen.getByRole('link', { name: /manage budget/i })
       expect(link).toBeInTheDocument()
       expect(link).toHaveAttribute('href', '/budgets/budget-1')
 
       fireEvent.click(link)
 
       expect(screen.getByTestId('budget-detail-page')).toBeInTheDocument()
+    })
+  })
+
+  describe('Income Progress', () => {
+    it('renders income progress row when expected_income is set', () => {
+      const budgetWithIncome = { ...mockBudget, expected_income: 2000, income_amount: 800 }
+      renderWithRouter(<BudgetCard budget={budgetWithIncome} />)
+
+      expect(screen.getByText('Income')).toBeInTheDocument()
+      // The income amounts are rendered inside a single span with currency formatting
+      expect(screen.getByText('$800.00 of $2,000.00 expected')).toBeInTheDocument()
+
+    })
+
+    it('does not render income progress row when expected_income is 0', () => {
+      const budgetNoIncome = { ...mockBudget, expected_income: 0, income_amount: 0 }
+      renderWithRouter(<BudgetCard budget={budgetNoIncome} />)
+
+      expect(screen.queryByText('Income')).not.toBeInTheDocument()
+    })
+
+    it('does not render income progress row when expected_income is absent', () => {
+      // mockBudget has no expected_income field
+      renderWithRouter(<BudgetCard budget={mockBudget} />)
+
+      expect(screen.queryByText('Income')).not.toBeInTheDocument()
     })
   })
 })

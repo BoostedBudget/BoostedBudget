@@ -32,6 +32,12 @@ func writeClerkJSONError(ctx huma.Context, status int, message string) {
 	)))
 }
 
+// SubscriptionStatusReader can look up a user's subscription status by internal user ID.
+// Used by the Clerk middleware to store subscription status in context for read-only enforcement (#930).
+type SubscriptionStatusReader interface {
+	GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error)
+}
+
 // NewClerkMiddleware creates a Huma middleware for Clerk JWT validation.
 // It validates JWT tokens and resolves Clerk identities to internal user UUIDs.
 //
@@ -39,20 +45,30 @@ func writeClerkJSONError(ctx huma.Context, status int, message string) {
 //   - secretKey: The Clerk secret key (sk_test_... or sk_live_...)
 //   - identityRepo: Repository for looking up user identities
 //   - registrationService: Service for auto-registering new users
+//   - profileRepo: Repository for reading subscription status (nil = skip status check)
 //
 // The middleware stores:
 //   - user_id: Internal user UUID (for most operations)
 //   - clerk_user_id: Clerk user ID (for reference)
 //   - claims: Clerk session claims (for additional info)
+//   - subscription_status: User's subscription status (for read-only enforcement)
 func NewClerkMiddleware(
 	secretKey string,
 	identityRepo repository.UserIdentityRepository,
 	registrationService services.RegistrationService,
 	logger *slog.Logger,
+	profileRepo ...SubscriptionStatusReader,
 ) func(ctx huma.Context, next func(huma.Context)) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+
+	// Extract optional profile repo for subscription status lookup
+	var subStatusRepo SubscriptionStatusReader
+	if len(profileRepo) > 0 {
+		subStatusRepo = profileRepo[0]
+	}
+
 	// Initialize Clerk SDK with secret key
 	clerk.SetKey(secretKey)
 
@@ -156,6 +172,15 @@ func NewClerkMiddleware(
 		newCtx = context.WithValue(newCtx, inputs.ClerkUserIDKey, clerkUserID)
 		newCtx = context.WithValue(newCtx, inputs.ClerkClaimsKey, sessionClaims)
 		newCtx = observability.WithUserID(newCtx, identity.UserID)
+
+		// #930: Store subscription status for read-only enforcement middleware
+		if subStatusRepo != nil {
+			if subStatus, subErr := subStatusRepo.GetSubscriptionStatusByUserID(newCtx, identity.UserID); subErr == nil {
+				newCtx = context.WithValue(newCtx, inputs.SubscriptionStatusKey, subStatus)
+			} else {
+				logger.Warn("failed to fetch subscription status", "user_id", identity.UserID, "error", subErr)
+			}
+		}
 
 		// Update last_used_at asynchronously
 		go func() {

@@ -374,4 +374,62 @@ describe('useRuleFilters', () => {
       expect(result.current.statusFilter).toEqual(['enabled'])
     })
   })
+
+  describe('Sort (URL-persisted)', () => {
+    it('returns null sort when no URL param', () => {
+      window.history.replaceState({}, '', '/')
+      const { result } = renderHook(() => useRuleFilters(), { wrapper: createWrapper() })
+      expect(result.current.sort).toBeNull()
+      expect(result.current.isDefaultSort).toBe(true)
+    })
+
+    it('parses sort from URL', () => {
+      window.history.replaceState({}, '', '/?sort=priority%3Aasc')
+      const { result } = renderHook(() => useRuleFilters(), { wrapper: createWrapper() })
+      expect(result.current.sort).toEqual({ columnId: 'priority', direction: 'asc' })
+    })
+
+    it('setSort updates sort', () => {
+      window.history.replaceState({}, '', '/')
+      const { result } = renderHook(() => useRuleFilters(), { wrapper: createWrapper() })
+      act(() => {
+        result.current.setSort({ columnId: 'matches', direction: 'desc' })
+      })
+      expect(result.current.sort).toEqual({ columnId: 'matches', direction: 'desc' })
+    })
+
+    it('resetSort restores null default', () => {
+      window.history.replaceState({}, '', '/?sort=priority%3Aasc')
+      const { result } = renderHook(() => useRuleFilters(), { wrapper: createWrapper() })
+      act(() => {
+        result.current.resetSort()
+      })
+      expect(result.current.sort).toBeNull()
+    })
+
+    it('clearAllFilters preserves sort', () => {
+      window.history.replaceState({}, '', '/?status=enabled&sort=priority%3Aasc')
+      const { result } = renderHook(() => useRuleFilters(), { wrapper: createWrapper() })
+      act(() => {
+        result.current.clearAllFilters()
+      })
+      expect(result.current.statusFilter).toEqual([])
+      expect(result.current.sort).toEqual({ columnId: 'priority', direction: 'asc' })
+    })
+
+    it('clearAllFilters({ includeSort: true }) clears sort too', () => {
+      window.history.replaceState({}, '', '/?sort=priority%3Aasc')
+      const { result } = renderHook(() => useRuleFilters(), { wrapper: createWrapper() })
+      act(() => {
+        result.current.clearAllFilters({ includeSort: true })
+      })
+      expect(result.current.sort).toBeNull()
+    })
+
+    it('activeFilterCount does not count sort', () => {
+      window.history.replaceState({}, '', '/?sort=priority%3Aasc&status=enabled')
+      const { result } = renderHook(() => useRuleFilters(), { wrapper: createWrapper() })
+      expect(result.current.activeFilterCount).toBe(1)
+    })
+  })
 })

@@ -8,8 +8,11 @@ import (
 
 // RuleResult contains the outcome of evaluating rules against a transaction.
 type RuleResult struct {
-	// Category is set by the first matching rule with TargetCategory (first-match-wins).
-	Category []string
+	// Category action is set by the first matching rule with target category fields (first-match-wins).
+	TargetKind             *string
+	TargetPFCPrimary       *string
+	TargetPFCDetailed      *string
+	TargetCustomCategoryID *string
 	// CategoryRuleID is the ID of the rule that set the category.
 	CategoryRuleID string
 
@@ -48,7 +51,7 @@ func NewRuleEngineWithRegistry(registry *ConditionRegistry) *RuleEngine {
 //
 // Category assignment follows "first-match-wins" semantics:
 // - Rules are sorted by priority (highest first)
-// - First matching rule with TargetCategory sets the category
+// - First matching rule with a category action sets the category outcome
 //
 // Tag assignment follows "all-match" semantics:
 // - All matching rules contribute their tags
@@ -94,9 +97,12 @@ func (e *RuleEngine) EvaluateRules(tx *domain.Transaction, rules []*domain.Categ
 		// Record matched rule
 		result.MatchedRuleIDs = append(result.MatchedRuleIDs, rule.ID)
 
-		// Handle category (first-match-wins)
-		if result.Category == nil && rule.HasCategoryAction() {
-			result.Category = rule.TargetCategory
+		// Handle category action (first-match-wins)
+		if result.TargetKind == nil && rule.HasCategoryAction() {
+			result.TargetKind = rule.TargetKind
+			result.TargetPFCPrimary = rule.TargetPFCPrimary
+			result.TargetPFCDetailed = rule.TargetPFCDetailed
+			result.TargetCustomCategoryID = rule.TargetCustomCategoryID
 			result.CategoryRuleID = rule.ID
 		}
 

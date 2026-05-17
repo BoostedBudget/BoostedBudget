@@ -10,9 +10,12 @@ interface NavigationProps {
 
 const baseNavItems = [
   { to: '/dashboard', label: 'Dashboard' },
+  { to: '/net-worth', label: 'Net Worth' },
   { to: '/accounts', label: 'Accounts' },
   { to: '/transactions', label: 'Transactions' },
   { to: '/budgets', label: 'Budgets' },
+  { to: '/savings', label: 'Savings' },
+  { to: '/reports', label: 'Reports' },
   { to: '/rules', label: 'Rules' },
   { to: '/auto-categorization', label: 'Auto-Cat' },
 ]

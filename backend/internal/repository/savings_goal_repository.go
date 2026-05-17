@@ -56,9 +56,9 @@ func (r *savingsGoalRepository) Create(ctx context.Context, goal *domain.Savings
 	query := `
 		INSERT INTO savings_goals (
 			id, user_id, name, description, target_amount, current_amount,
-			currency_code, account_id, deadline, is_completed, completed_at,
+			currency_code, account_id, user_account_id, deadline, is_completed, completed_at,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 
 	_, err := r.db.Exec(ctx, query,
@@ -70,6 +70,7 @@ func (r *savingsGoalRepository) Create(ctx context.Context, goal *domain.Savings
 		goal.CurrentAmount,
 		goal.CurrencyCode,
 		goal.AccountID,
+		goal.UserAccountID,
 		goal.Deadline,
 		goal.IsCompleted,
 		goal.CompletedAt,
@@ -92,7 +93,7 @@ func (r *savingsGoalRepository) Create(ctx context.Context, goal *domain.Savings
 func (r *savingsGoalRepository) GetByID(ctx context.Context, id string) (*domain.SavingsGoal, error) {
 	query := `
 		SELECT id, user_id, name, description, target_amount, current_amount,
-			currency_code, account_id, deadline, is_completed, completed_at,
+			currency_code, account_id, user_account_id, deadline, is_completed, completed_at,
 			created_at, updated_at
 		FROM savings_goals
 		WHERE id = $1
@@ -108,6 +109,7 @@ func (r *savingsGoalRepository) GetByID(ctx context.Context, id string) (*domain
 		&goal.CurrentAmount,
 		&goal.CurrencyCode,
 		&goal.AccountID,
+		&goal.UserAccountID,
 		&goal.Deadline,
 		&goal.IsCompleted,
 		&goal.CompletedAt,
@@ -125,107 +127,30 @@ func (r *savingsGoalRepository) GetByID(ctx context.Context, id string) (*domain
 	return goal, nil
 }
 
+// goalSelectCols is the canonical SELECT list for savings goals to avoid duplication
+const goalSelectCols = `
+	id, user_id, name, description, target_amount, current_amount,
+	currency_code, account_id, user_account_id, deadline, is_completed, completed_at,
+	created_at, updated_at
+`
+
 // GetByUserID retrieves all savings goals for a specific user.
 func (r *savingsGoalRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
-	query := `
-		SELECT id, user_id, name, description, target_amount, current_amount,
-			currency_code, account_id, deadline, is_completed, completed_at,
-			created_at, updated_at
-		FROM savings_goals
-		WHERE user_id = $1
-		ORDER BY created_at DESC
-	`
-
-	rows, err := r.db.Query(ctx, query, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var goals []*domain.SavingsGoal
-	for rows.Next() {
-		goal := &domain.SavingsGoal{}
-		err := rows.Scan(
-			&goal.ID,
-			&goal.UserID,
-			&goal.Name,
-			&goal.Description,
-			&goal.TargetAmount,
-			&goal.CurrentAmount,
-			&goal.CurrencyCode,
-			&goal.AccountID,
-			&goal.Deadline,
-			&goal.IsCompleted,
-			&goal.CompletedAt,
-			&goal.CreatedAt,
-			&goal.UpdatedAt,
-		)
-		if err != nil {
-			return nil, err
-		}
-		goals = append(goals, goal)
-	}
-
-	if goals == nil {
-		goals = []*domain.SavingsGoal{}
-	}
-
-	return goals, nil
+	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE user_id = $1 ORDER BY created_at DESC`
+	return r.scanGoals(ctx, query, userID)
 }
 
 // GetActiveByUserID retrieves all active (not completed) savings goals for a user.
 func (r *savingsGoalRepository) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
-	query := `
-		SELECT id, user_id, name, description, target_amount, current_amount,
-			currency_code, account_id, deadline, is_completed, completed_at,
-			created_at, updated_at
-		FROM savings_goals
-		WHERE user_id = $1 AND is_completed = false
-		ORDER BY created_at DESC
-	`
-
-	rows, err := r.db.Query(ctx, query, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var goals []*domain.SavingsGoal
-	for rows.Next() {
-		goal := &domain.SavingsGoal{}
-		err := rows.Scan(
-			&goal.ID,
-			&goal.UserID,
-			&goal.Name,
-			&goal.Description,
-			&goal.TargetAmount,
-			&goal.CurrentAmount,
-			&goal.CurrencyCode,
-			&goal.AccountID,
-			&goal.Deadline,
-			&goal.IsCompleted,
-			&goal.CompletedAt,
-			&goal.CreatedAt,
-			&goal.UpdatedAt,
-		)
-		if err != nil {
-			return nil, err
-		}
-		goals = append(goals, goal)
-	}
-
-	if goals == nil {
-		goals = []*domain.SavingsGoal{}
-	}
-
-	return goals, nil
+	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE user_id = $1 AND is_completed = false ORDER BY created_at DESC`
+	return r.scanGoals(ctx, query, userID)
 }
 
 // GetByName retrieves a savings goal by user ID and name.
 func (r *savingsGoalRepository) GetByName(ctx context.Context, userID, name string) (*domain.SavingsGoal, error) {
 	query := `
 		SELECT id, user_id, name, description, target_amount, current_amount,
-			currency_code, account_id, deadline, is_completed, completed_at,
+			currency_code, account_id, user_account_id, deadline, is_completed, completed_at,
 			created_at, updated_at
 		FROM savings_goals
 		WHERE user_id = $1 AND name = $2
@@ -241,6 +166,7 @@ func (r *savingsGoalRepository) GetByName(ctx context.Context, userID, name stri
 		&goal.CurrentAmount,
 		&goal.CurrencyCode,
 		&goal.AccountID,
+		&goal.UserAccountID,
 		&goal.Deadline,
 		&goal.IsCompleted,
 		&goal.CompletedAt,
@@ -266,8 +192,8 @@ func (r *savingsGoalRepository) Update(ctx context.Context, goal *domain.Savings
 		UPDATE savings_goals
 		SET name = $1, description = $2, target_amount = $3, current_amount = $4,
 			currency_code = $5, account_id = $6, deadline = $7, is_completed = $8,
-			completed_at = $9, updated_at = $10
-		WHERE id = $11 AND user_id = $12
+			completed_at = $9, updated_at = $10, user_account_id = $11
+		WHERE id = $12 AND user_id = $13
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -281,6 +207,7 @@ func (r *savingsGoalRepository) Update(ctx context.Context, goal *domain.Savings
 		goal.IsCompleted,
 		goal.CompletedAt,
 		goal.UpdatedAt,
+		goal.UserAccountID,
 		goal.ID,
 		goal.UserID,
 	)
@@ -330,18 +257,19 @@ func (r *savingsGoalRepository) CountByUserID(ctx context.Context, userID string
 }
 
 // GetByAccountID retrieves all savings goals linked to a specific account.
-// This is used for balance sync when account balances change (Issue #452).
+// Issue #1109: Chain-expand via user_account_id to include pre-relink goals.
 func (r *savingsGoalRepository) GetByAccountID(ctx context.Context, accountID string) ([]*domain.SavingsGoal, error) {
-	query := `
-		SELECT id, user_id, name, description, target_amount, current_amount,
-			currency_code, account_id, deadline, is_completed, completed_at,
-			created_at, updated_at
-		FROM savings_goals
-		WHERE account_id = $1 AND is_completed = false
-		ORDER BY created_at DESC
-	`
+	query := `SELECT ` + goalSelectCols + ` FROM savings_goals
+	WHERE (
+		user_account_id = (SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL)
+		OR (account_id = $1 AND user_account_id IS NULL)
+	) AND is_completed = false ORDER BY created_at DESC`
+	return r.scanGoals(ctx, query, accountID)
+}
 
-	rows, err := r.db.Query(ctx, query, accountID)
+// scanGoals is a helper that scans savings goals from a query result.
+func (r *savingsGoalRepository) scanGoals(ctx context.Context, query string, args ...interface{}) ([]*domain.SavingsGoal, error) {
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +278,7 @@ func (r *savingsGoalRepository) GetByAccountID(ctx context.Context, accountID st
 	var goals []*domain.SavingsGoal
 	for rows.Next() {
 		goal := &domain.SavingsGoal{}
-		err := rows.Scan(
+		if err := rows.Scan(
 			&goal.ID,
 			&goal.UserID,
 			&goal.Name,
@@ -359,22 +287,25 @@ func (r *savingsGoalRepository) GetByAccountID(ctx context.Context, accountID st
 			&goal.CurrentAmount,
 			&goal.CurrencyCode,
 			&goal.AccountID,
+			&goal.UserAccountID,
 			&goal.Deadline,
 			&goal.IsCompleted,
 			&goal.CompletedAt,
 			&goal.CreatedAt,
 			&goal.UpdatedAt,
-		)
-		if err != nil {
+		); err != nil {
 			return nil, err
 		}
 		goals = append(goals, goal)
 	}
 
-	if goals == nil {
-		goals = []*domain.SavingsGoal{}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
+	if len(goals) == 0 {
+		return []*domain.SavingsGoal{}, nil
+	}
 	return goals, nil
 }
 

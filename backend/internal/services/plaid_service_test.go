@@ -239,8 +239,9 @@ func TestCreateLinkToken_IncludesCorrectUserID(t *testing.T) {
 	// Note: We can't directly verify userID is in token (it's opaque), but successful creation validates it
 }
 
-// TestCreateLinkToken_IncludesRequiredProducts tests that link token includes Phase 2 products
-// (#241): TRANSACTIONS + LIABILITIES + INVESTMENTS
+// TestCreateLinkToken_IncludesRequiredProducts tests that link token includes required + optional products
+// (#241): TRANSACTIONS (required) + LIABILITIES + INVESTMENTS (optional)
+// (#976): LIABILITIES + INVESTMENTS moved to optional to avoid NO_LIABILITY_ACCOUNTS errors
 func TestCreateLinkToken_IncludesRequiredProducts(t *testing.T) {
 	clientID := getTestEnv("PLAID_CLIENT_ID")
 	secret := getTestEnv("PLAID_SECRET")
@@ -264,15 +265,14 @@ func TestCreateLinkToken_IncludesRequiredProducts(t *testing.T) {
 	ctx := context.Background()
 	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 
-	// Then: Link token is created successfully with all 3 Phase 2 products configured:
-	// TRANSACTIONS + LIABILITIES + INVESTMENTS
-	require.NoError(t, err, "Expected no error - all 3 products should be accepted by Plaid sandbox")
+	// Then: Link token is created successfully with TRANSACTIONS (required) + LIABILITIES/INVESTMENTS (optional)
+	require.NoError(t, err, "Expected no error - required + optional products should be accepted by Plaid sandbox")
 	require.NotNil(t, response, "Expected response")
 	assert.NotEmpty(t, response.LinkToken, "Expected valid link token with products configured")
 }
 
 // TestCreateLinkToken_IncludesAllProducts verifies Phase 2 product configuration
-// (#241: TRANSACTIONS + LIABILITIES + INVESTMENTS)
+// (#241: TRANSACTIONS required + LIABILITIES/INVESTMENTS optional, #976: moved to optional)
 func TestCreateLinkToken_IncludesAllProducts(t *testing.T) {
 	clientID := getTestEnv("PLAID_CLIENT_ID")
 	secret := getTestEnv("PLAID_SECRET")
@@ -296,8 +296,8 @@ func TestCreateLinkToken_IncludesAllProducts(t *testing.T) {
 	ctx := context.Background()
 	response, err := service.CreateLinkToken(ctx, "user_test-user-123")
 
-	// Then: Plaid sandbox accepts all 3 Phase 2 products without error
-	require.NoError(t, err, "Expected no error with Phase 2 products")
+	// Then: Plaid sandbox accepts required + optional products without error
+	require.NoError(t, err, "Expected no error with required + optional products")
 	require.NotNil(t, response, "Expected response")
 	assert.NotEmpty(t, response.LinkToken, "Expected valid link token")
 	assert.NotEmpty(t, response.RequestID, "Expected request ID")
@@ -492,8 +492,8 @@ func TestCreateLinkTokenMinimal(t *testing.T) {
 	t.Logf("✅ Minimal link token created successfully: %s (RequestID: %s)", response.LinkToken, response.RequestID)
 }
 
-// TestCreateLinkTokenWithTransactions tests link token creation with Phase 2 products (#241)
-// TRANSACTIONS + LIABILITIES + INVESTMENTS
+// TestCreateLinkTokenWithTransactions tests link token creation with Phase 2 products (#241, #976)
+// TRANSACTIONS (required) + LIABILITIES/INVESTMENTS (optional)
 func TestCreateLinkTokenWithTransactions(t *testing.T) {
 	// Skip if Plaid credentials not available in environment
 	if getTestEnv("PLAID_CLIENT_ID") == "" || getTestEnv("PLAID_SECRET") == "" {
@@ -517,8 +517,8 @@ func TestCreateLinkTokenWithTransactions(t *testing.T) {
 
 	response, err := service.CreateLinkToken(ctx, userID)
 
-	// Then: Should succeed with all 3 Phase 2 products
-	require.NoError(t, err, "TRANSACTIONS+LIABILITIES+INVESTMENTS should not cause 400 error")
+	// Then: Should succeed with TRANSACTIONS required + LIABILITIES/INVESTMENTS optional
+	require.NoError(t, err, "TRANSACTIONS (required) + LIABILITIES/INVESTMENTS (optional) should not cause error")
 	assert.NotEmpty(t, response.LinkToken, "link token should not be empty")
 	assert.NotEmpty(t, response.Expiration, "expiration should not be empty")
 	assert.NotEmpty(t, response.RequestID, "request ID should not be empty")
@@ -946,4 +946,61 @@ func TestFireWebhook_ProductionEnvironment_ReturnsError(t *testing.T) {
 	assert.Error(t, err, "Expected error when calling FireWebhook in production")
 	assert.Contains(t, err.Error(), "sandbox", "Error should indicate sandbox-only operation")
 	assert.Nil(t, response, "Expected nil response on error")
+}
+
+// TestPlaidService_InvestmentsHoldingsGet_EmptyAccessToken verifies that
+// InvestmentsHoldingsGet returns an error for empty access token.
+func TestPlaidService_InvestmentsHoldingsGet_EmptyAccessToken(t *testing.T) {
+	cfg := &config.Config{
+		PlaidClientID: "test_client_id",
+		PlaidSecret:   "test_secret",
+		PlaidEnv:      "sandbox",
+	}
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	resp, err := service.InvestmentsHoldingsGet(ctx, "")
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "access token cannot be empty")
+	assert.Nil(t, resp)
+}
+
+// TestPlaidService_InvestmentsTransactionsGet_EmptyAccessToken verifies that
+// InvestmentsTransactionsGet returns an error for empty access token.
+func TestPlaidService_InvestmentsTransactionsGet_EmptyAccessToken(t *testing.T) {
+	cfg := &config.Config{
+		PlaidClientID: "test_client_id",
+		PlaidSecret:   "test_secret",
+		PlaidEnv:      "sandbox",
+	}
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	resp, err := service.InvestmentsTransactionsGet(ctx, "", "2024-01-01", "2024-12-31", 0, 500)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "access token cannot be empty")
+	assert.Nil(t, resp)
+}
+
+// TestPlaidService_InvestmentsTransactionsGet_ValidatesDateRange verifies that
+// InvestmentsTransactionsGet validates required date parameters.
+func TestPlaidService_InvestmentsTransactionsGet_ValidatesDateRange(t *testing.T) {
+	cfg := &config.Config{
+		PlaidClientID: "test_client_id",
+		PlaidSecret:   "test_secret",
+		PlaidEnv:      "sandbox",
+	}
+	service, err := NewPlaidService(cfg)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	resp, err := service.InvestmentsTransactionsGet(ctx, "access-token-123", "", "2024-12-31", 0, 500)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "start_date")
+	assert.Nil(t, resp)
 }

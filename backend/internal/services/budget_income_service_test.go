@@ -62,7 +62,7 @@ func TestBudgetIncomeService_CalculateBudgetIncome_PlaidCategory(t *testing.T) {
 	budget := &domain.Budget{
 		UserID: "user-123",
 		IncomeSources: []domain.IncomeSource{
-			{Type: domain.IncomeSourceTypePlaidCategory, Value: "Paycheck"},
+			{Type: domain.IncomeSourceTypePFCPrimary, Value: "Paycheck"},
 		},
 	}
 
@@ -142,7 +142,7 @@ func TestBudgetIncomeService_CalculateBudgetIncome_MixedSources(t *testing.T) {
 	budget := &domain.Budget{
 		UserID: "user-123",
 		IncomeSources: []domain.IncomeSource{
-			{Type: domain.IncomeSourceTypePlaidCategory, Value: "Paycheck"},
+			{Type: domain.IncomeSourceTypePFCPrimary, Value: "Paycheck"},
 			{Type: domain.IncomeSourceTypeTag, Value: "bonus"},
 			{Type: domain.IncomeSourceTypeManual, Value: "500.00"},
 		},
@@ -242,7 +242,7 @@ func TestBudgetIncomeService_CalculateBudgetIncome_RepositoryError(t *testing.T)
 	budget := &domain.Budget{
 		UserID: "user-123",
 		IncomeSources: []domain.IncomeSource{
-			{Type: domain.IncomeSourceTypePlaidCategory, Value: "Paycheck"},
+			{Type: domain.IncomeSourceTypePFCPrimary, Value: "Paycheck"},
 		},
 	}
 
@@ -257,12 +257,47 @@ func TestBudgetIncomeService_CalculateBudgetIncome_RepositoryError(t *testing.T)
 	mockRepo.AssertExpectations(t)
 }
 
+// RegressionGuard: manual source type MUST continue to sum into income_amount.
+// Retiring it would silently drop income for existing budgets on next sync,
+// breaking percent_used on budget-alert rule triggers. See issue #1048.
+//
+// TestBudgetIncomeService_CalculateBudgetIncome_ManualSourceStillSums verifies
+// that manual income sources are still summed alongside other source types.
+func TestBudgetIncomeService_CalculateBudgetIncome_ManualSourceStillSums(t *testing.T) {
+	mockRepo := new(MockIncomeTransactionGetter)
+	logger := testIncomeServiceLogger()
+	service := NewBudgetIncomeService(mockRepo, logger)
+
+	ctx := context.Background()
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
+
+	budget := &domain.Budget{
+		UserID: "user-123",
+		IncomeSources: []domain.IncomeSource{
+			{Type: domain.IncomeSourceTypeManual, Value: "800.00"},
+			{Type: domain.IncomeSourceTypeTag, Value: "bonus"},
+		},
+	}
+
+	// Mock returns $200 from the tag source
+	mockRepo.On("GetIncomeSumByTag", ctx, "user-123", "bonus", startDate, endDate).
+		Return(200.00, nil)
+
+	income, err := service.CalculateBudgetIncome(ctx, budget, startDate, endDate)
+
+	// Should return $1000.00: $800 (manual) + $200 (tag)
+	assert.NoError(t, err)
+	assert.Equal(t, 1000.00, income)
+	mockRepo.AssertExpectations(t)
+}
+
 // =============================================================================
 // GetMatchingIncomeTransactions Tests
 // =============================================================================
 
-// TestBudgetIncomeService_GetMatchingIncomeTransactions_PlaidCategory tests matching by category
-func TestBudgetIncomeService_GetMatchingIncomeTransactions_PlaidCategory(t *testing.T) {
+// TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimaryMatch tests matching by PFC primary
+func TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimaryMatch(t *testing.T) {
 	mockRepo := new(MockIncomeTransactionGetter)
 	logger := testIncomeServiceLogger()
 	service := NewBudgetIncomeService(mockRepo, logger)
@@ -272,15 +307,22 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_PlaidCategory(t *test
 	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
 
 	incomeSources := []domain.IncomeSource{
-		{Type: domain.IncomeSourceTypePlaidCategory, Value: "Paycheck"},
+		{Type: domain.IncomeSourceTypePFCPrimary, Value: "INCOME"},
 	}
 
-	paycheckCategory := `["Paycheck"]`
 	transactions := []domain.Transaction{
-		{ID: "tx-1", UserID: "user-123", Amount: 5000.00, Category: &paycheckCategory},        // Match
-		{ID: "tx-2", UserID: "user-123", Amount: -50.00, Category: &paycheckCategory},         // Negative, excluded
-		{ID: "tx-3", UserID: "user-123", Amount: 100.00, Category: incomeTestStrPtr(`["Other"]`)}, // Wrong category
-		{ID: "tx-4", UserID: "user-123", Amount: 2500.00, CategoryOverride: &paycheckCategory}, // Match via override
+		{ID: "tx-1", UserID: "user-123", Amount: -5000.00, PFCPrimary: incomeTestStrPtr("INCOME")},        // Match - inflow under PFCv2
+		{ID: "tx-2", UserID: "user-123", Amount: 50.00, PFCPrimary: incomeTestStrPtr("INCOME")},           // Outflow (positive), excluded by IsInflow check
+		{ID: "tx-3", UserID: "user-123", Amount: 100.00, PFCPrimary: incomeTestStrPtr("FOOD_AND_DRINK")}, // Outflow, wrong category
+		// Match via PFC override
+		{
+			ID:                   "tx-4",
+			UserID:               "user-123",
+			Amount:               -2500.00,
+			PFCPrimary:           incomeTestStrPtr("FOOD_AND_DRINK"),
+			CategoryOverrideKind: incomeTestStrPtr("pfc"),
+			PFCPrimaryOverride:   incomeTestStrPtr("INCOME"),
+		},
 	}
 
 	mockRepo.On("GetByUserIDWithFilters", ctx, "user-123", mock.Anything, 10000, 0).
@@ -308,10 +350,10 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_Tag(t *testing.T) {
 	}
 
 	transactions := []domain.Transaction{
-		{ID: "tx-1", UserID: "user-123", Amount: 5000.00, Tags: []string{"salary"}},         // Match
-		{ID: "tx-2", UserID: "user-123", Amount: -50.00, Tags: []string{"salary"}},          // Negative, excluded
-		{ID: "tx-3", UserID: "user-123", Amount: 100.00, Tags: []string{"bonus"}},           // Wrong tag
-		{ID: "tx-4", UserID: "user-123", Amount: 2500.00, Tags: []string{"salary", "main"}}, // Match with multiple tags
+		{ID: "tx-1", UserID: "user-123", Amount: -5000.00, Tags: []string{"salary"}},         // Match - inflow under PFCv2
+		{ID: "tx-2", UserID: "user-123", Amount: 50.00, Tags: []string{"salary"}},            // Outflow (positive), excluded by IsInflow check
+		{ID: "tx-3", UserID: "user-123", Amount: 100.00, Tags: []string{"bonus"}},            // Outflow, wrong tag
+		{ID: "tx-4", UserID: "user-123", Amount: -2500.00, Tags: []string{"salary", "main"}}, // Match with multiple tags - inflow
 	}
 
 	mockRepo.On("GetByUserIDWithFilters", ctx, "user-123", mock.Anything, 10000, 0).
@@ -339,7 +381,7 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_ManualSourceIgnored(t
 	}
 
 	transactions := []domain.Transaction{
-		{ID: "tx-1", UserID: "user-123", Amount: 5000.00, Tags: []string{"salary"}},
+		{ID: "tx-1", UserID: "user-123", Amount: -5000.00, Tags: []string{"salary"}}, // Inflow, but excluded because source is manual
 	}
 
 	mockRepo.On("GetByUserIDWithFilters", ctx, "user-123", mock.Anything, 10000, 0).
@@ -363,14 +405,13 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_Deduplication(t *test
 	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
 
 	incomeSources := []domain.IncomeSource{
-		{Type: domain.IncomeSourceTypePlaidCategory, Value: "Paycheck"},
+		{Type: domain.IncomeSourceTypePFCPrimary, Value: "INCOME"},
 		{Type: domain.IncomeSourceTypeTag, Value: "salary"},
 	}
 
-	paycheckCategory := `["Paycheck"]`
 	transactions := []domain.Transaction{
-		// This transaction matches BOTH category and tag sources
-		{ID: "tx-1", UserID: "user-123", Amount: 5000.00, Category: &paycheckCategory, Tags: []string{"salary"}},
+		// This transaction matches BOTH PFC primary and tag sources (inflow under PFCv2)
+		{ID: "tx-1", UserID: "user-123", Amount: -5000.00, PFCPrimary: incomeTestStrPtr("INCOME"), Tags: []string{"salary"}},
 	}
 
 	mockRepo.On("GetByUserIDWithFilters", ctx, "user-123", mock.Anything, 10000, 0).
@@ -394,7 +435,7 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_RepositoryError(t *te
 	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
 
 	incomeSources := []domain.IncomeSource{
-		{Type: domain.IncomeSourceTypePlaidCategory, Value: "Paycheck"},
+		{Type: domain.IncomeSourceTypePFCPrimary, Value: "Paycheck"},
 	}
 
 	mockRepo.On("GetByUserIDWithFilters", ctx, "user-123", mock.Anything, 10000, 0).
@@ -411,4 +452,109 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_RepositoryError(t *te
 // Helper function to create string pointer for income service tests
 func incomeTestStrPtr(s string) *string {
 	return &s
+}
+
+// =============================================================================
+// Issue #1066: PFC Primary Enum Matching Tests
+// =============================================================================
+
+// TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimary tests that transactions
+// matched via pfc_primary are included in the result.
+func TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimary(t *testing.T) {
+	mockRepo := new(MockIncomeTransactionGetter)
+	logger := testIncomeServiceLogger()
+	service := NewBudgetIncomeService(mockRepo, logger)
+
+	ctx := context.Background()
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
+
+	incomeSources := []domain.IncomeSource{
+		{Type: domain.IncomeSourceTypePFCPrimary, Value: "INCOME"},
+	}
+
+	transactions := []domain.Transaction{
+		// PFC primary matches — must be included (inflow = negative under PFCv2)
+		{
+			ID:         "tx-pfc-match",
+			UserID:     "user-123",
+			Amount:     -4200.00,
+			PFCPrimary: incomeTestStrPtr("INCOME"),
+		},
+		// PFC mismatch: primary is TRANSFER_IN, source expects INCOME — excluded by category
+		{
+			ID:         "tx-pfc-mismatch",
+			UserID:     "user-123",
+			Amount:     -1000.00,
+			PFCPrimary: incomeTestStrPtr("TRANSFER_IN"),
+		},
+		// PFC override matches INCOME — must be included (inflow = negative under PFCv2)
+		{
+			ID:                   "tx-pfc-override-match",
+			UserID:               "user-123",
+			Amount:               -3000.00,
+			PFCPrimary:           incomeTestStrPtr("FOOD_AND_DRINK"),
+			CategoryOverrideKind: incomeTestStrPtr("pfc"),
+			PFCPrimaryOverride:   incomeTestStrPtr("INCOME"),
+		},
+		// Positive amount (outflow/spending) with matching PFC primary — excluded by IsInflow check
+		{
+			ID:         "tx-positive",
+			UserID:     "user-123",
+			Amount:     100.00,
+			PFCPrimary: incomeTestStrPtr("INCOME"),
+		},
+		// Nil PFC primary — must be excluded (uncategorized), even though it's an inflow
+		{
+			ID:         "tx-nil-pfc",
+			UserID:     "user-123",
+			Amount:     -500.00,
+			PFCPrimary: nil,
+		},
+	}
+
+	mockRepo.On("GetByUserIDWithFilters", ctx, "user-123", mock.Anything, 10000, 0).
+		Return(transactions, nil)
+
+	result, err := service.GetMatchingIncomeTransactions(ctx, "user-123", incomeSources, startDate, endDate)
+
+	assert.NoError(t, err)
+	// tx-pfc-match and tx-pfc-override-match should be included; all others excluded
+	assert.Len(t, result, 2)
+	ids := make([]string, len(result))
+	for i, tx := range result {
+		ids[i] = tx.ID
+	}
+	assert.Contains(t, ids, "tx-pfc-match")
+	assert.Contains(t, ids, "tx-pfc-override-match")
+	mockRepo.AssertExpectations(t)
+}
+
+// TestBudgetIncomeService_CalculateBudgetIncome_PFCPrimary confirms the service forwards
+// PFC enum values to the repository unchanged for pfc_primary income sources.
+func TestBudgetIncomeService_CalculateBudgetIncome_PFCPrimary(t *testing.T) {
+	mockRepo := new(MockIncomeTransactionGetter)
+	logger := testIncomeServiceLogger()
+	service := NewBudgetIncomeService(mockRepo, logger)
+
+	ctx := context.Background()
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
+
+	budget := &domain.Budget{
+		UserID: "user-123",
+		IncomeSources: []domain.IncomeSource{
+			{Type: domain.IncomeSourceTypePFCPrimary, Value: "INCOME"},
+		},
+	}
+
+	// The service must forward the enum value "INCOME" to the repo exactly as stored.
+	mockRepo.On("GetIncomeSumByCategory", ctx, "user-123", "INCOME", startDate, endDate).
+		Return(4200.00, nil)
+
+	income, err := service.CalculateBudgetIncome(ctx, budget, startDate, endDate)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 4200.00, income)
+	mockRepo.AssertExpectations(t)
 }
