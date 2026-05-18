@@ -1,8 +1,8 @@
 import { useCallback, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
 import type { RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import type { SortState } from '@/shared/components/DataTable'
 import { useSortUrlState } from '@/shared/hooks/useSortUrlState'
+import { useFilterState, type FilterSpec } from '@/shared/hooks/useFilterState'
 import { BUDGET_SORTABLE_COLUMNS } from '../components/BudgetTable'
 
 export interface BudgetFilters {
@@ -27,107 +27,51 @@ export interface UseBudgetFiltersResult {
   hasActiveFilters: boolean
 }
 
+const SPEC = {
+  period:   { kind: 'multi-select' },
+  progress: { kind: 'range' },
+} as const satisfies FilterSpec
+
 export function useBudgetFilters(): UseBudgetFiltersResult {
-  const [searchParams, setSearchParams] = useSearchParams()
+  const state = useFilterState(SPEC)
+  const { setFilter, clearAllFilters: genericClearAll, activeFilterCount, hasActiveFilters } = state
 
   const { sort, setSort, resetSort, toggleSortColumn, isDefaultSort } = useSortUrlState({
     defaultSort: null,
     validColumns: BUDGET_SORTABLE_COLUMNS,
   })
 
-  const filters = useMemo<BudgetFilters>(() => {
-    const result: BudgetFilters = { period: [] }
-
-    const period = searchParams.get('period')
-    if (period) {
-      result.period = period.split(',').filter(Boolean).map((s) => s.trim())
-    }
-
-    const progressMin = searchParams.get('progress_min')
-    if (progressMin) {
-      const parsed = parseFloat(progressMin)
-      if (!isNaN(parsed)) result.progressMin = parsed
-    }
-
-    const progressMax = searchParams.get('progress_max')
-    if (progressMax) {
-      const parsed = parseFloat(progressMax)
-      if (!isNaN(parsed)) result.progressMax = parsed
-    }
-
-    return result
-  }, [searchParams])
-
-  const periodFilter = filters.period
-  const progressRange: RangeValue | null = useMemo(() => {
-    if (filters.progressMin === undefined && filters.progressMax === undefined) return null
-    return { min: filters.progressMin, max: filters.progressMax }
-  }, [filters.progressMin, filters.progressMax])
-
-  const setPeriodFilter = useCallback(
-    (value: string[]) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-          if (value.length === 0) next.delete('period')
-          else next.set('period', value.join(','))
-          return next
-        },
-        { replace: true },
-      )
-    },
-    [setSearchParams],
+  const filters = useMemo<BudgetFilters>(
+    () => ({
+      period:      state.filters.period,
+      progressMin: state.filters.progress?.min,
+      progressMax: state.filters.progress?.max,
+    }),
+    [state.filters],
   )
 
+  const progressRange = useMemo<RangeValue | null>(
+    () => state.filters.progress ?? null,
+    [state.filters.progress],
+  )
+
+  const setPeriodFilter = useCallback((v: string[]) => setFilter('period', v), [setFilter])
   const setProgressRange = useCallback(
-    (value: RangeValue | null) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-          if (!value || (value.min === undefined && value.max === undefined)) {
-            next.delete('progress_min')
-            next.delete('progress_max')
-          } else {
-            if (value.min !== undefined) next.set('progress_min', String(value.min))
-            else next.delete('progress_min')
-            if (value.max !== undefined) next.set('progress_max', String(value.max))
-            else next.delete('progress_max')
-          }
-          return next
-        },
-        { replace: true },
-      )
-    },
-    [setSearchParams],
+    (value: RangeValue | null) => setFilter('progress', value ?? undefined),
+    [setFilter],
   )
 
   const clearAllFilters = useCallback(
     (options?: { includeSort?: boolean }) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-          next.delete('period')
-          next.delete('progress_min')
-          next.delete('progress_max')
-          if (options?.includeSort) next.delete('sort')
-          return next
-        },
-        { replace: true },
-      )
+      genericClearAll()
+      if (options?.includeSort) resetSort()
     },
-    [setSearchParams],
+    [genericClearAll, resetSort],
   )
-
-  const activeFilterCount = useMemo(() => {
-    let count = 0
-    if (filters.period.length > 0) count++
-    if (filters.progressMin !== undefined || filters.progressMax !== undefined) count++
-    return count
-  }, [filters])
 
   return {
     filters,
-    periodFilter,
+    periodFilter:  state.filters.period,
     progressRange,
     sort,
     isDefaultSort,
@@ -138,6 +82,6 @@ export function useBudgetFilters(): UseBudgetFiltersResult {
     toggleSortColumn,
     clearAllFilters,
     activeFilterCount,
-    hasActiveFilters: activeFilterCount > 0,
+    hasActiveFilters,
   }
 }

@@ -1,8 +1,8 @@
 import { useCallback, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
 import type { RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import type { SortState } from '@/shared/components/DataTable'
 import { useSortUrlState } from '@/shared/hooks/useSortUrlState'
+import { useFilterState, type FilterSpec } from '@/shared/hooks/useFilterState'
 import { RULE_SORTABLE_COLUMNS } from '../components/AutoCategorizationRuleTable'
 
 export interface RuleFilters {
@@ -30,131 +30,55 @@ export interface UseRuleFiltersResult {
   hasActiveFilters: boolean
 }
 
+const SPEC = {
+  status:   { kind: 'multi-select' },
+  category: { kind: 'multi-select' },
+  priority: { kind: 'range', codec: 'integer' as const },
+} as const satisfies FilterSpec
+
 export function useRuleFilters(): UseRuleFiltersResult {
-  const [searchParams, setSearchParams] = useSearchParams()
+  const state = useFilterState(SPEC)
+  const { setFilter, clearAllFilters: genericClearAll, activeFilterCount, hasActiveFilters } = state
 
   const { sort, setSort, resetSort, toggleSortColumn, isDefaultSort } = useSortUrlState({
     defaultSort: null,
     validColumns: RULE_SORTABLE_COLUMNS,
   })
 
-  const filters = useMemo<RuleFilters>(() => {
-    const result: RuleFilters = { status: [], category: [] }
-
-    const status = searchParams.get('status')
-    if (status) {
-      result.status = status.split(',').filter(Boolean).map((s) => s.trim())
-    }
-
-    const category = searchParams.get('category')
-    if (category) {
-      result.category = category.split(',').filter(Boolean).map((s) => s.trim())
-    }
-
-    const priorityMin = searchParams.get('priority_min')
-    if (priorityMin) {
-      const parsed = parseInt(priorityMin, 10)
-      if (!isNaN(parsed)) result.priorityMin = parsed
-    }
-
-    const priorityMax = searchParams.get('priority_max')
-    if (priorityMax) {
-      const parsed = parseInt(priorityMax, 10)
-      if (!isNaN(parsed)) result.priorityMax = parsed
-    }
-
-    return result
-  }, [searchParams])
-
-  const statusFilter = filters.status
-  const categoryFilter = filters.category
-  const priorityRange: RangeValue | null = useMemo(() => {
-    if (filters.priorityMin === undefined && filters.priorityMax === undefined) return null
-    return { min: filters.priorityMin, max: filters.priorityMax }
-  }, [filters.priorityMin, filters.priorityMax])
-
-  const setStatusFilter = useCallback(
-    (value: string[]) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-          if (value.length === 0) next.delete('status')
-          else next.set('status', value.join(','))
-          return next
-        },
-        { replace: true },
-      )
-    },
-    [setSearchParams],
+  const filters = useMemo<RuleFilters>(
+    () => ({
+      status:      state.filters.status,
+      category:    state.filters.category,
+      priorityMin: state.filters.priority?.min,
+      priorityMax: state.filters.priority?.max,
+    }),
+    [state.filters],
   )
 
-  const setCategoryFilter = useCallback(
-    (value: string[]) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-          if (value.length === 0) next.delete('category')
-          else next.set('category', value.join(','))
-          return next
-        },
-        { replace: true },
-      )
-    },
-    [setSearchParams],
+  const priorityRange = useMemo<RangeValue | null>(
+    () => state.filters.priority ?? null,
+    [state.filters.priority],
   )
 
+  const setStatusFilter = useCallback((v: string[]) => setFilter('status', v), [setFilter])
+  const setCategoryFilter = useCallback((v: string[]) => setFilter('category', v), [setFilter])
   const setPriorityRange = useCallback(
-    (value: RangeValue | null) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-          if (!value || (value.min === undefined && value.max === undefined)) {
-            next.delete('priority_min')
-            next.delete('priority_max')
-          } else {
-            if (value.min !== undefined) next.set('priority_min', String(value.min))
-            else next.delete('priority_min')
-            if (value.max !== undefined) next.set('priority_max', String(value.max))
-            else next.delete('priority_max')
-          }
-          return next
-        },
-        { replace: true },
-      )
-    },
-    [setSearchParams],
+    (value: RangeValue | null) => setFilter('priority', value ?? undefined),
+    [setFilter],
   )
 
   const clearAllFilters = useCallback(
     (options?: { includeSort?: boolean }) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-          next.delete('status')
-          next.delete('category')
-          next.delete('priority_min')
-          next.delete('priority_max')
-          if (options?.includeSort) next.delete('sort')
-          return next
-        },
-        { replace: true },
-      )
+      genericClearAll()
+      if (options?.includeSort) resetSort()
     },
-    [setSearchParams],
+    [genericClearAll, resetSort],
   )
-
-  const activeFilterCount = useMemo(() => {
-    let count = 0
-    if (filters.status.length > 0) count++
-    if (filters.category.length > 0) count++
-    if (filters.priorityMin !== undefined || filters.priorityMax !== undefined) count++
-    return count
-  }, [filters])
 
   return {
     filters,
-    statusFilter,
-    categoryFilter,
+    statusFilter:    state.filters.status,
+    categoryFilter:  state.filters.category,
     priorityRange,
     sort,
     isDefaultSort,
@@ -166,6 +90,6 @@ export function useRuleFilters(): UseRuleFiltersResult {
     toggleSortColumn,
     clearAllFilters,
     activeFilterCount,
-    hasActiveFilters: activeFilterCount > 0,
+    hasActiveFilters,
   }
 }
