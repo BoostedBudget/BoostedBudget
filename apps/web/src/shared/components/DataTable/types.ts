@@ -108,4 +108,14 @@ export interface DataTableProps<T> {
    * exactly as today — no behavior change for other consumers.
    */
   virtualization?: DataTableVirtualizationOpts
+  /**
+   * When provided AND `loading` is true AND `data` is empty, render this many
+   * shimmer placeholder rows instead of the empty-state. Pass the React Query
+   * flag that goes true only when there is no cached data yet — `isPending` from
+   * `useQuery` or `isLoading` from `useInfiniteQuery`. Using `isFetching` will
+   * flicker back to skeleton on background refetches with empty filter results.
+   * Each skeleton row contains one `<td>` per visible column (plus one for
+   * `rowActions` when present) so column widths stay stable via `<colgroup>`.
+   */
+  skeletonRows?: number
 }

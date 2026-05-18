@@ -287,14 +287,6 @@ export function AccountsPage() {
     currentAccountCount: activeAccountsCount,
   })
 
-  if (loading || tiersLoading) {
-    return (
-      <div className="p-8 max-w-[1200px] mx-auto">
-        <div className="text-center py-12 px-4">Loading your accounts...</div>
-      </div>
-    )
-  }
-
   if (error) {
     return (
       <div className="p-8 max-w-[1200px] mx-auto">
@@ -351,7 +343,7 @@ export function AccountsPage() {
 
       {shouldShowUpgradeBanner && <UpgradeBanner />}
 
-      {accounts.length === 0 ? (
+      {!(loading || tiersLoading) && accounts.length === 0 ? (
         <EmptyState
           icon={<Landmark />}
           title="Connect your first bank account"
@@ -378,6 +370,7 @@ export function AccountsPage() {
           {view === 'table' ? (
             <AccountTable
               accounts={displayedAccounts}
+              loading={loading || tiersLoading}
               onEdit={handleEditAccount}
               onDelete={(account) => setAccountToDelete(account)}
               sortable
@@ -393,6 +386,15 @@ export function AccountsPage() {
               balanceRange={balanceRange}
               onBalanceRangeChange={setBalanceRange}
             />
+          ) : (loading || tiersLoading) && displayedAccounts.length === 0 ? (
+            <div role="status">
+              <span className="sr-only">Loading accounts…</span>
+              <div className="grid gap-6 max-sm:grid-cols-1" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }} aria-hidden="true">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="h-48 rounded-lg bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
+                ))}
+              </div>
+            </div>
           ) : (
             <div className="grid gap-6 max-sm:grid-cols-1" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
               {displayedAccounts.map((account) => (

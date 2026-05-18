@@ -249,7 +249,7 @@ export function BudgetTable({
     },
   ]
 
-  if (budgets.length === 0 && !hasActiveFilters) {
+  if (!loading && budgets.length === 0 && !hasActiveFilters) {
     return (
       <div
         className={cn(
@@ -272,6 +272,7 @@ export function BudgetTable({
       filters={filters}
       onFiltersChange={handleFiltersChange}
       loading={loading}
+      skeletonRows={3}
       onRowClick={onRowClick}
       columnSizing={sizing}
       onColumnSizingChange={onSizingChange}

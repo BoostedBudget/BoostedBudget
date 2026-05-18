@@ -251,7 +251,7 @@ export function RuleTable({
     },
   ]
 
-  if (rules.length === 0) {
+  if (!loading && rules.length === 0) {
     return (
       <div
         className={cn(
@@ -274,6 +274,7 @@ export function RuleTable({
       filters={{}}
       onFiltersChange={() => {}}
       loading={loading}
+      skeletonRows={5}
       onRowClick={onRowClick}
       columnSizing={sizing}
       onColumnSizingChange={onSizingChange}
