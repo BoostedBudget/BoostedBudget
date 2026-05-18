@@ -54,6 +54,16 @@ unconditional invariant under DataTable's control. Consumers declare columns wit
 | `columnVisibility` | `Record<string, boolean>` | Controlled visibility map (only `hideable` columns participate) |
 | `onColumnVisibilityChange` | `(v: Record<string, boolean>) => void` | Visibility change callback; required to render ColumnVisibilityMenu |
 | `density` | `'compact' \| 'comfortable' \| 'spacious'` | Cell padding preset (default: `'comfortable'`) |
+| `stickyHeader` | `boolean` | Sticks the `<thead>` to the top of the nearest scrolling ancestor (default: `false`). Implicitly `true` when `virtualization.enabled === true`. |
+| `stickyHeaderTopOffset` | `string` | CSS length value for the sticky header's `top` offset. Use `"4rem"` to clear the global app header (`h-16`). Only applied when sticky is active. |
+
+## Sticky Header
+
+Use `stickyHeader` explicitly on any table that lives in a document-scrolling page (e.g.
+`/accounts`) so the header stays visible as the user scrolls past it. When virtualization
+is enabled the header is already sticky implicitly — no need to set this prop. Set
+`stickyHeaderTopOffset="4rem"` on pages where the global `h-16` app header sits above the
+table so the sticky `<thead>` clears it rather than sliding underneath it.
 
 ## Persistence (`useTablePreferences`)
 
