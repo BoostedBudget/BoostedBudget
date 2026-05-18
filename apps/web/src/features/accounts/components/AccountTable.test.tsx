@@ -346,6 +346,14 @@ describe('AccountTable', () => {
       fireEvent.click(columnsButton)
       expect(screen.getByRole('menuitemcheckbox', { name: /acct #/i })).toBeInTheDocument()
     })
+
+    it('thead has sticky class and 4rem top offset for global header clearance', () => {
+      const { container } = render(<AccountTable accounts={mockAccounts} />)
+      const thead = container.querySelector('thead')
+      expect(thead).not.toBeNull()
+      expect(thead!.className).toContain('sticky')
+      expect(thead!.style.top).toBe('4rem')
+    })
   })
 
   describe('Action Button Tooltips', () => {
