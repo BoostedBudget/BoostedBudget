@@ -200,8 +200,8 @@ test.describe('DataTable — Sticky Header', () => {
     // With stickyHeaderTopOffset="4rem" (64px), the thead top must be
     // at ~64px from viewport top (allow 4px tolerance for borders/rounding).
     expect(box!.y).toBeGreaterThanOrEqual(60)
-    // Confirm it is actually pinned and visible (not scrolled off-screen)
-    expect(box!.y).toBeLessThan(200)
+    // Confirm it is pinned near the app header (< 80px catches regressions in the offset value)
+    expect(box!.y).toBeLessThan(80)
   })
 
   // ── Test 3: filter dropdown is not clipped by sticky thead ───────────────
