@@ -254,7 +254,7 @@ export function AccountTable({
     },
   ]
 
-  if (accounts.length === 0 && !hasActiveFilters) {
+  if (!loading && accounts.length === 0 && !hasActiveFilters) {
     return (
       <div
         className={cn(
@@ -277,6 +277,7 @@ export function AccountTable({
       filters={filters}
       onFiltersChange={handleFiltersChange}
       loading={loading}
+      skeletonRows={5}
       onRowClick={onRowClick}
       columnSizing={sizing}
       onColumnSizingChange={onSizingChange}

@@ -232,23 +232,6 @@ export function TransactionsPage() {
     [setSort],
   )
 
-  // Track whether we've ever received a non-empty result (to show loading only on initial load)
-  const [hasEverLoaded, setHasEverLoaded] = useState(false)
-  useEffect(() => {
-    if (infiniteTransactions.length > 0 && !hasEverLoaded) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setHasEverLoaded(true)
-    }
-  }, [infiniteTransactions.length, hasEverLoaded])
-
-  if (isLoading && !hasEverLoaded) {
-    return (
-      <main className="p-8 max-w-[1200px] mx-auto">
-        <div className="text-center py-12 px-4">Loading your transactions...</div>
-      </main>
-    )
-  }
-
   if (isError && !infiniteTransactions.length) {
     return (
       <main className="p-8 max-w-[1200px] mx-auto">
@@ -299,7 +282,7 @@ export function TransactionsPage() {
         disabled={isLoading}
       />
 
-      {isEmpty ? (
+      {!isLoading && isEmpty ? (
         <EmptyState
           icon={<Search />}
           title="No transactions found"
@@ -321,19 +304,23 @@ export function TransactionsPage() {
         />
       ) : (
         <>
-          <div className="mb-4">
-            <p className="text-base text-muted-foreground m-0">
-              {hasActiveFilters ? (
-                <>Showing {transactions.length.toLocaleString()} matching transactions</>
-              ) : (
-                <>{transactions.length.toLocaleString()} transactions loaded</>
-              )}
-            </p>
-          </div>
+          {!isLoading && (
+            <>
+              <div className="mb-4">
+                <p className="text-base text-muted-foreground m-0">
+                  {hasActiveFilters ? (
+                    <>Showing {transactions.length.toLocaleString()} matching transactions</>
+                  ) : (
+                    <>{transactions.length.toLocaleString()} transactions loaded</>
+                  )}
+                </p>
+              </div>
 
-          <div role="status" aria-live="polite" className="sr-only">
-            {isFetchingNextPage ? 'Loading more transactions' : ''}
-          </div>
+              <div role="status" aria-live="polite" className="sr-only">
+                {isFetchingNextPage ? 'Loading more transactions' : ''}
+              </div>
+            </>
+          )}
 
           <div className="min-h-[200px] overflow-x-auto">
             <TransactionTable

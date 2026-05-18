@@ -138,10 +138,18 @@ describe('BudgetsPage', () => {
   }
 
   describe('Loading & Error States', () => {
-    it('shows loading state while budgets are fetching', () => {
+    it('renders header immediately during loading and shows skeleton in table', () => {
+      localStorage.setItem(STORAGE_KEY_LIST_VIEW, 'table')
       setupMocks({ budgetsLoading: true })
-      render(<BudgetsPage />)
-      expect(screen.getByText(/loading/i)).toBeInTheDocument()
+      const { container } = render(<BudgetsPage />)
+      localStorage.removeItem(STORAGE_KEY_LIST_VIEW)
+      // Page header renders immediately — no full-page loading block
+      expect(screen.getByRole('heading', { level: 1, name: /budgets/i })).toBeInTheDocument()
+      // "No active budgets" empty state is gated on !loading — should not appear
+      expect(screen.queryByText(/no active budgets/i)).toBeNull()
+      // DataTable shows aria-busy on the table element
+      const table = container.querySelector('table')
+      expect(table?.getAttribute('aria-busy')).toBe('true')
     })
 
     it('shows error state when budgets fetch fails', () => {
