@@ -239,16 +239,20 @@ export function BudgetsPage() {
             progressRange={progressRange}
             onProgressRangeChange={setProgressRange}
           />
+        ) : budgetsLoading && activeBudgets.length === 0 ? (
+          <div role="status">
+            <span className="sr-only">Loading budgets…</span>
+            <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]" aria-hidden="true">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-48 rounded-lg bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
+              ))}
+            </div>
+          </div>
         ) : (
           <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
-            {budgetsLoading && activeBudgets.length === 0
-              ? Array.from({ length: 3 }).map((_, i) => (
-                  <div key={i} className="h-48 rounded-lg bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" aria-hidden="true" />
-                ))
-              : activeBudgets.map((budget) => (
-                  <BudgetCard key={budget.id} budget={budget} onDelete={handleDeleteBudgetClick} />
-                ))
-            }
+            {activeBudgets.map((budget) => (
+              <BudgetCard key={budget.id} budget={budget} onDelete={handleDeleteBudgetClick} />
+            ))}
           </div>
         )}
       </section>

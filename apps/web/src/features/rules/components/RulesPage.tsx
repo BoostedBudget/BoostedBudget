@@ -275,24 +275,30 @@ export function RulesPage() {
 
       <div className="min-h-[200px]">
         {view === 'cards' ? (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {isLoading && rules.length === 0
-              ? Array.from({ length: 3 }).map((_, i) => (
-                  <div key={i} className="h-48 rounded-lg bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" aria-hidden="true" />
-                ))
-              : rules.map((rule) => (
-                  <RuleCard
-                    key={rule.id}
-                    rule={rule}
-                    onEdit={handleEditRule}
-                    onDelete={handleDeleteClick}
-                    onToggle={handleToggleRule}
-                    onTest={handleTestRule}
-                    loading={toggleMutation.isPending || deleteMutation.isPending || testMutation.isPending}
-                  />
-                ))
-            }
-          </div>
+          isLoading && rules.length === 0 ? (
+            <div role="status">
+              <span className="sr-only">Loading rules…</span>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-hidden="true">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="h-48 rounded-lg bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {rules.map((rule) => (
+                <RuleCard
+                  key={rule.id}
+                  rule={rule}
+                  onEdit={handleEditRule}
+                  onDelete={handleDeleteClick}
+                  onToggle={handleToggleRule}
+                  onTest={handleTestRule}
+                  loading={toggleMutation.isPending || deleteMutation.isPending || testMutation.isPending}
+                />
+              ))}
+            </div>
+          )
         ) : (
           <RuleTable
             rules={sortedRules}

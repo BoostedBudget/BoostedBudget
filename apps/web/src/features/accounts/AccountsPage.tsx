@@ -386,21 +386,25 @@ export function AccountsPage() {
               balanceRange={balanceRange}
               onBalanceRangeChange={setBalanceRange}
             />
+          ) : (loading || tiersLoading) && displayedAccounts.length === 0 ? (
+            <div role="status">
+              <span className="sr-only">Loading accounts…</span>
+              <div className="grid gap-6 max-sm:grid-cols-1" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }} aria-hidden="true">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="h-48 rounded-lg bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
+                ))}
+              </div>
+            </div>
           ) : (
             <div className="grid gap-6 max-sm:grid-cols-1" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
-              {(loading || tiersLoading) && displayedAccounts.length === 0
-                ? Array.from({ length: 4 }).map((_, i) => (
-                    <div key={i} className="h-48 rounded-lg bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" aria-hidden="true" />
-                  ))
-                : displayedAccounts.map((account) => (
-                    <AccountCard
-                      key={account.id}
-                      account={account}
-                      onDelete={(acc) => setAccountToDelete(acc)}
-                      onEdit={handleEditAccount}
-                    />
-                  ))
-              }
+              {displayedAccounts.map((account) => (
+                <AccountCard
+                  key={account.id}
+                  account={account}
+                  onDelete={(acc) => setAccountToDelete(acc)}
+                  onEdit={handleEditAccount}
+                />
+              ))}
             </div>
           )}
         </div>
