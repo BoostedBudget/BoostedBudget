@@ -70,6 +70,16 @@ const bodyCellVariants = cva(
   }
 )
 
+const theadVariants = cva('', {
+  variants: {
+    sticky: {
+      true: 'sticky top-0 z-20 bg-card',
+      false: '',
+    },
+  },
+  defaultVariants: { sticky: false },
+})
+
 function getAriaSort(
   sort: SortState,
   colId: string
@@ -163,14 +173,14 @@ function SortableColHeader({
       className={cn(
         headerCellVariants({ align: col.align }),
         col.widthClass,
-        col.defaultPinned === 'left' && 'sticky left-0 z-20 bg-muted/50',
-        col.defaultPinned === 'right' && 'sticky right-0 z-20 bg-muted/50 max-md:relative max-md:right-auto',
+        col.defaultPinned === 'left' && 'sticky left-0 z-30 bg-muted/50',
+        col.defaultPinned === 'right' && 'sticky right-0 z-30 bg-muted/50 max-md:relative max-md:right-auto',
         isDndDragging && col.reorderable && 'opacity-50',
       )}
       style={col.reorderable && transform ? {
         transform: CSS.Transform.toString(transform),
         transition: transition ?? undefined,
-        zIndex: isDndDragging ? 30 : undefined,
+        zIndex: isDndDragging ? 40 : undefined,
       } : undefined}
       aria-sort={sortAriaVal}
       {...(col.defaultPinned ? { 'data-pinned': col.defaultPinned } : {})}
@@ -220,6 +230,8 @@ export function DataTable<T,>({
   tableId,
   virtualization,
   skeletonRows,
+  stickyHeader,
+  stickyHeaderTopOffset,
 }: DataTableProps<T>) {
   // totalCols is computed after visibleColumns below
 
@@ -330,9 +342,14 @@ export function DataTable<T,>({
   }, [virtualItems, rows.length, virtualization])
 
 
+  const headerIsSticky = stickyHeader === true || virtualization?.enabled === true
+
   // Shared thead renderer (used by both virtualized and non-virtualized paths)
   const theadEl = (
-    <thead style={virtualization?.enabled ? { position: 'sticky', top: 0, zIndex: 2 } : undefined}>
+    <thead
+      className={theadVariants({ sticky: headerIsSticky })}
+      style={headerIsSticky && stickyHeaderTopOffset ? { top: stickyHeaderTopOffset } : undefined}
+    >
       <SortableContext items={reorderableIds} strategy={horizontalListSortingStrategy}>
         <tr className="bg-muted/50">
           {visibleColumns.map((col) => (
