@@ -87,19 +87,6 @@ export function TopMerchantsTable({
     [data?.merchants, sort]
   )
 
-  if (loading) {
-    return (
-      <div
-        className={className}
-        aria-busy="true"
-        aria-label="Loading merchants"
-        data-testid="merchants-table"
-      >
-        <div className="h-48 animate-pulse rounded-lg bg-muted" />
-      </div>
-    )
-  }
-
   return (
     <div className={className} data-testid="merchants-table">
       <DataTable<SpendingMerchant>
@@ -110,6 +97,8 @@ export function TopMerchantsTable({
         onSortChange={onSortChange}
         filters={{}}
         onFiltersChange={() => {}}
+        loading={loading}
+        skeletonRows={5}
         maskedColumnIds={['total']}
         onRowClick={onMerchantClick ? (row) => onMerchantClick(row.merchant_name) : undefined}
         columnSizing={sizing}

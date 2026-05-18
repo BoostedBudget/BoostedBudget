@@ -43,8 +43,10 @@ function renderTable(overrides: Partial<{
 
 describe('TopMerchantsTable', () => {
   it('renders loading state', () => {
-    render(<TopMerchantsTable data={null} loading={true} sort={null} onSortChange={defaultMocks.onSortChange} />)
-    expect(screen.getByLabelText('Loading merchants')).toBeDefined()
+    const { container } = render(<TopMerchantsTable data={null} loading={true} sort={null} onSortChange={defaultMocks.onSortChange} />)
+    const table = container.querySelector('table')
+    expect(table).not.toBeNull()
+    expect(table?.getAttribute('aria-busy')).toBe('true')
   })
 
   it('renders empty state when no merchants', () => {

@@ -265,6 +265,7 @@ export function TransactionTable({
       filters={filters}
       onFiltersChange={handleFiltersChange}
       loading={loading}
+      skeletonRows={10}
       onRowClick={onRowClick}
       columnSizing={sizing}
       onColumnSizingChange={onSizingChange}
