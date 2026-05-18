@@ -420,6 +420,36 @@ export function DataTable<T,>({
     )
   }
 
+  function renderSkeletonRow(index: number) {
+    return (
+      <tr key={`skeleton-${index}`} aria-hidden="true">
+        {visibleColumns.map((col) => (
+          <td
+            key={col.id}
+            className={cn(
+              bodyCellVariants({
+                align: col.align,
+                numeric: col.numeric ?? false,
+                density,
+              }),
+              col.defaultPinned === 'left' && 'sticky left-0 z-10 bg-card',
+              col.defaultPinned === 'right' && 'sticky right-0 z-10 bg-card max-md:relative max-md:right-auto'
+            )}
+            {...(maskedColumnIds.includes(col.id) && { 'data-ph-mask': '' })}
+            {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
+          >
+            <div className="h-4 w-3/4 rounded bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
+          </td>
+        ))}
+        {rowActions && (
+          <td className={bodyCellVariants({ align: 'right', density })}>
+            <div className="h-4 w-12 ml-auto rounded bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
+          </td>
+        )}
+      </tr>
+    )
+  }
+
   // Shared colgroup
   const colgroupEl = (
     <colgroup>
@@ -491,33 +521,7 @@ export function DataTable<T,>({
                         <span role="status">Loading…</span>
                       </td>
                     </tr>
-                    {Array.from({ length: skeletonRows! }).map((_, i) => (
-                      <tr key={`skeleton-${i}`} aria-hidden="true">
-                        {visibleColumns.map((col) => (
-                          <td
-                            key={col.id}
-                            className={cn(
-                              bodyCellVariants({
-                                align: col.align,
-                                numeric: col.numeric ?? false,
-                                density,
-                              }),
-                              col.defaultPinned === 'left' && 'sticky left-0 z-10 bg-card',
-                              col.defaultPinned === 'right' && 'sticky right-0 z-10 bg-card max-md:relative max-md:right-auto'
-                            )}
-                            {...(maskedColumnIds.includes(col.id) && { 'data-ph-mask': '' })}
-                            {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
-                          >
-                            <div className="h-4 w-3/4 rounded bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
-                          </td>
-                        ))}
-                        {rowActions && (
-                          <td className={bodyCellVariants({ align: 'right', density })}>
-                            <div className="h-4 w-12 ml-auto rounded bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
-                          </td>
-                        )}
-                      </tr>
-                    ))}
+                    {Array.from({ length: skeletonRows! }).map((_, i) => renderSkeletonRow(i))}
                   </>
                 ) : null}
                 {!showSkeleton && virtualItems.map((virtualItem) => {
@@ -592,33 +596,7 @@ export function DataTable<T,>({
                       <span role="status">Loading…</span>
                     </td>
                   </tr>
-                  {Array.from({ length: skeletonRows! }).map((_, i) => (
-                    <tr key={`skeleton-${i}`} aria-hidden="true">
-                      {visibleColumns.map((col) => (
-                        <td
-                          key={col.id}
-                          className={cn(
-                            bodyCellVariants({
-                              align: col.align,
-                              numeric: col.numeric ?? false,
-                              density,
-                            }),
-                            col.defaultPinned === 'left' && 'sticky left-0 z-10 bg-card',
-                            col.defaultPinned === 'right' && 'sticky right-0 z-10 bg-card max-md:relative max-md:right-auto'
-                          )}
-                          {...(maskedColumnIds.includes(col.id) && { 'data-ph-mask': '' })}
-                          {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
-                        >
-                          <div className="h-4 w-3/4 rounded bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
-                        </td>
-                      ))}
-                      {rowActions && (
-                        <td className={bodyCellVariants({ align: 'right', density })}>
-                          <div className="h-4 w-12 ml-auto rounded bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
-                        </td>
-                      )}
-                    </tr>
-                  ))}
+                  {Array.from({ length: skeletonRows! }).map((_, i) => renderSkeletonRow(i))}
                 </>
               ) : rows.length === 0 ? (
                 <tr>

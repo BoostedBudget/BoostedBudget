@@ -183,20 +183,19 @@ export function ColumnFilterDropdown({
             {/* Multi-select actions */}
             {multiSelect && (
               <div className="flex gap-2 px-2 py-2 border-b border-border">
-                <button
-                  type="button"
-                  onClick={handleSelectAll}
-                  className="flex-1 px-2 py-1 text-xs font-medium border-none rounded bg-muted text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-border"
-                >
-                  Select All
-                </button>
-                <button
-                  type="button"
-                  onClick={handleClearAll}
-                  className="flex-1 px-2 py-1 text-xs font-medium border-none rounded bg-muted text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-border"
-                >
-                  Clear
-                </button>
+                {[
+                  { label: 'Select All', onClick: handleSelectAll },
+                  { label: 'Clear', onClick: handleClearAll },
+                ].map((action) => (
+                  <button
+                    key={action.label}
+                    type="button"
+                    onClick={action.onClick}
+                    className="flex-1 px-2 py-1 text-xs font-medium border-none rounded bg-muted text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-border"
+                  >
+                    {action.label}
+                  </button>
+                ))}
               </div>
             )}
 
