@@ -75,7 +75,7 @@ export function ColumnFilterDropdown({
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
-      if (disabled) return
+      if (disabled && open) return
       setIsOpen(open)
       // Reset search when opening or closing
       setSearchQuery('')
@@ -87,10 +87,6 @@ export function ColumnFilterDropdown({
     },
     [disabled, type, rangeValue]
   )
-
-  const handleToggle = useCallback(() => {
-    handleOpenChange(!isOpen)
-  }, [handleOpenChange, isOpen])
 
   const handleSelectOption = useCallback(
     (optionValue: string) => {
@@ -143,7 +139,6 @@ export function ColumnFilterDropdown({
         <PopoverTrigger asChild>
           <button
             type="button"
-            onClick={handleToggle}
             disabled={disabled}
             aria-label={ariaLabel}
             aria-expanded={isOpen}
