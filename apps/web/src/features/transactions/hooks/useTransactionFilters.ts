@@ -2,7 +2,8 @@ import { useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { getDateRange, inferPreset } from '@/shared/dates'
 import type { SortState } from '@/shared/components/DataTable'
-import { useSortUrlState, serializeSortParam, toggleSort } from '@/shared/hooks/useSortUrlState'
+import { useSortUrlState, serializeSortParam } from '@/shared/hooks/useSortUrlState'
+import { useFilterState, type FilterSpec } from '@/shared/hooks/useFilterState'
 import { TRANSACTION_SORTABLE_COLUMNS } from '../components/TransactionTable'
 import type { TransactionFilters, DatePreset, StatusFilter } from '../types'
 
@@ -28,41 +29,29 @@ export interface UseTransactionFiltersResult {
   setStatusFilter: (status: StatusFilter) => void
 }
 
-const ARRAY_PARAMS = ['account_ids', 'pfc_primaries'] as const
-const NUMERIC_PARAMS = ['min_amount', 'max_amount'] as const
-const TRANSACTION_FILTER_KEYS = [
-  ...ARRAY_PARAMS,
-  ...NUMERIC_PARAMS,
-  'start_date',
-  'end_date',
-  'search',
-  'amount_type',
-  'pending',
-  'offset',
-] as const
-
-function valueToUrlParam(value: unknown): string | null {
-  if (value === undefined || value === null || value === '') {
-    return null
-  }
-  if (Array.isArray(value)) {
-    if (value.length === 0) return null
-    return value.join(',')
-  }
-  if (typeof value === 'boolean' || typeof value === 'number') {
-    return String(value)
-  }
-  return value as string
-}
+const SPEC = {
+  account_ids:   { kind: 'multi-select' },
+  pfc_primaries: { kind: 'multi-select' },
+  min_amount:    { kind: 'scalar', codec: 'number' as const },
+  max_amount:    { kind: 'scalar', codec: 'number' as const },
+  start_date:    { kind: 'scalar', codec: 'string' as const },
+  end_date:      { kind: 'scalar', codec: 'string' as const },
+  search:        { kind: 'scalar', codec: 'string' as const },
+  amount_type:   { kind: 'scalar', codec: 'string' as const, defaultValue: 'all', activeWhen: (v: unknown) => v !== undefined && v !== 'all' },
+  pending:       { kind: 'scalar', codec: 'boolean' as const },
+} as const satisfies FilterSpec
 
 export function useTransactionFilters(): UseTransactionFiltersResult {
-  const [searchParams, setSearchParams] = useSearchParams()
+  const state = useFilterState(SPEC, { clearKeysOnWrite: ['offset'] })
+  const { setFilter, setFilters, clearFilter, clearAllFilters: genericClearAll } = state
 
-  const { sort, isDefaultSort } = useSortUrlState({
+  const { sort, resetSort, toggleSortColumn, isDefaultSort } = useSortUrlState({
     defaultSort: DEFAULT_SORT,
     validColumns: TRANSACTION_SORTABLE_COLUMNS,
   })
 
+  // Custom setSort that also clears offset (matches existing behavior)
+  const [, setSearchParams] = useSearchParams()
   const setSort = useCallback(
     (next: SortState | null) => {
       setSearchParams(
@@ -80,225 +69,94 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
     [setSearchParams],
   )
 
-  const resetSort = useCallback(() => setSort(null), [setSort])
-
-  const toggleSortColumn = useCallback(
-    (columnId: string) => setSort(toggleSort(sort, columnId)),
-    [sort, setSort],
-  )
-
-  const filters = useMemo<TransactionFilters>(() => {
-    const result: TransactionFilters = {}
-
-    // Parse array params (comma-separated)
-    for (const key of ARRAY_PARAMS) {
-      const value = searchParams.get(key)
-      if (value) {
-        const parsed = value.split(',').filter(Boolean).map((s) => s.trim())
-        if (parsed.length > 0) {
-          result[key] = parsed
-        }
-      }
-    }
-
-    // Parse numeric params
-    for (const key of NUMERIC_PARAMS) {
-      const value = searchParams.get(key)
-      if (value) {
-        const parsed = parseFloat(value)
-        if (!isNaN(parsed)) {
-          result[key] = parsed
-        }
-      }
-    }
-
-    // Parse string params
-    const stringParams = ['start_date', 'end_date', 'search', 'amount_type'] as const
-    for (const key of stringParams) {
-      const value = searchParams.get(key)
-      if (value) {
-        (result as Record<string, string>)[key] = value
-      }
-    }
-
-    // Parse boolean (pending)
-    const pending = searchParams.get('pending')
-    if (pending !== null) {
-      result.pending = pending === 'true'
-    }
-
-    return result
-  }, [searchParams])
-
-  const setFilter = useCallback(
-    <K extends keyof TransactionFilters>(key: K, value: TransactionFilters[K]) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-          const urlValue = valueToUrlParam(value)
-
-          if (urlValue === null) {
-            next.delete(key)
-          } else {
-            next.set(key, urlValue)
-          }
-
-          next.delete('offset')
-
-          return next
-        },
-        { replace: true }
-      )
-    },
-    [setSearchParams]
-  )
-
-  const setFilters = useCallback(
-    (updates: Partial<TransactionFilters>) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-
-          for (const [key, value] of Object.entries(updates)) {
-            const urlValue = valueToUrlParam(value)
-            if (urlValue === null) {
-              next.delete(key)
-            } else {
-              next.set(key, urlValue)
-            }
-          }
-
-          next.delete('offset')
-
-          return next
-        },
-        { replace: true }
-      )
-    },
-    [setSearchParams]
-  )
-
-  const clearFilter = useCallback(
-    (key: keyof TransactionFilters) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-          next.delete(key)
-          next.delete('offset')
-          return next
-        },
-        { replace: true }
-      )
-    },
-    [setSearchParams]
-  )
-
   const clearAllFilters = useCallback(
     (options?: { includeSort?: boolean }) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-          for (const key of TRANSACTION_FILTER_KEYS) {
-            next.delete(key)
-          }
-          if (options?.includeSort) next.delete('sort')
-          return next
-        },
-        { replace: true },
-      )
+      genericClearAll()
+      if (options?.includeSort) resetSort()
     },
-    [setSearchParams],
+    [genericClearAll, resetSort],
+  )
+
+  const filters = useMemo<TransactionFilters>(
+    () => ({
+      account_ids:   state.filters.account_ids.length > 0 ? state.filters.account_ids : undefined,
+      pfc_primaries: state.filters.pfc_primaries.length > 0 ? state.filters.pfc_primaries : undefined,
+      start_date:    state.filters.start_date,
+      end_date:      state.filters.end_date,
+      search:        state.filters.search,
+      pending:       state.filters.pending,
+      min_amount:    state.filters.min_amount,
+      max_amount:    state.filters.max_amount,
+      amount_type:   state.filters.amount_type as TransactionFilters['amount_type'],
+    }),
+    [state.filters],
   )
 
   const activeFilterCount = useMemo(() => {
     let count = 0
-
     if (filters.account_ids && filters.account_ids.length > 0) count++
-    if (filters.pfc_primaries && filters.pfc_primaries.length > 0) count++
+    if (state.filters.pfc_primaries.length > 0) count++
     if (filters.start_date || filters.end_date) count++
     if (filters.search) count++
     if (filters.pending !== undefined) count++
     if (filters.min_amount !== undefined || filters.max_amount !== undefined) count++
     if (filters.amount_type && filters.amount_type !== 'all') count++
-
     return count
-  }, [filters])
-
-  const hasActiveFilters = activeFilterCount > 0
+  }, [filters, state.filters.pfc_primaries])
 
   const datePreset = useMemo<DatePreset>(
-    () => inferPreset(filters.start_date, filters.end_date),
-    [filters.start_date, filters.end_date]
+    () => inferPreset(state.filters.start_date, state.filters.end_date),
+    [state.filters.start_date, state.filters.end_date],
   )
+
+  const statusFilter = useMemo<StatusFilter>(() => {
+    if (state.filters.pending === true) return 'pending'
+    if (state.filters.pending === false) return 'posted'
+    return 'all'
+  }, [state.filters.pending])
 
   const setDatePreset = useCallback(
     (preset: DatePreset) => {
       if (preset === 'custom') return
-
       const range = getDateRange(preset)
       if (range) {
-        setFilters({
-          start_date: range.startDate,
-          end_date: range.endDate,
-        })
+        setFilters({ start_date: range.startDate, end_date: range.endDate })
       } else {
-        setSearchParams(
-          (prev) => {
-            const next = new URLSearchParams(prev)
-            next.delete('start_date')
-            next.delete('end_date')
-            next.delete('offset')
-            return next
-          },
-          { replace: true }
-        )
+        setFilters({ start_date: undefined, end_date: undefined })
       }
     },
-    [setFilters, setSearchParams]
-  )
-
-  const statusFilter = useMemo<StatusFilter>(() => {
-    if (filters.pending === true) return 'pending'
-    if (filters.pending === false) return 'posted'
-    return 'all'
-  }, [filters.pending])
-
-  const setStatusFilter = useCallback(
-    (status: StatusFilter) => {
-      if (status === 'pending') {
-        setFilter('pending', true)
-      } else if (status === 'posted') {
-        setFilter('pending', false)
-      } else {
-        clearFilter('pending')
-      }
-    },
-    [setFilter, clearFilter]
+    [setFilters],
   )
 
   const setCustomDateRange = useCallback(
     (startDate: string, endDate: string) => {
-      setFilters({
-        start_date: startDate,
-        end_date: endDate,
-      })
+      setFilters({ start_date: startDate, end_date: endDate })
     },
-    [setFilters]
+    [setFilters],
+  )
+
+  const setStatusFilter = useCallback(
+    (status: StatusFilter) => {
+      if (status === 'pending')     setFilter('pending', true)
+      else if (status === 'posted') setFilter('pending', false)
+      else                          clearFilter('pending')
+    },
+    [setFilter, clearFilter],
   )
 
   return {
     filters,
     sort,
     isDefaultSort,
-    setFilter,
-    setFilters,
-    clearFilter,
+    setFilter:         setFilter as UseTransactionFiltersResult['setFilter'],
+    setFilters:        setFilters as UseTransactionFiltersResult['setFilters'],
+    clearFilter:       clearFilter as UseTransactionFiltersResult['clearFilter'],
     clearAllFilters,
     setSort,
     resetSort,
     toggleSortColumn,
     activeFilterCount,
-    hasActiveFilters,
+    hasActiveFilters:  activeFilterCount > 0,
     datePreset,
     setDatePreset,
     setCustomDateRange,

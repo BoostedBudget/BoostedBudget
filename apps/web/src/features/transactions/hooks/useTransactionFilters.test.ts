@@ -424,6 +424,64 @@ describe('useTransactionFilters', () => {
     })
   })
 
+  describe('clearKeysOnWrite — offset cleared on every mutation', () => {
+    it('should remove offset when setFilter is called', () => {
+      window.history.replaceState({}, '', '/?search=coffee&offset=50')
+
+      const { result } = renderHook(() => useTransactionFilters(), {
+        wrapper: createWrapper(),
+      })
+
+      act(() => {
+        result.current.setFilter('search', 'tea')
+      })
+
+      expect(new URLSearchParams(window.location.search).get('offset')).toBeNull()
+    })
+
+    it('should remove offset when setFilters is called', () => {
+      window.history.replaceState({}, '', '/?min_amount=5&offset=100')
+
+      const { result } = renderHook(() => useTransactionFilters(), {
+        wrapper: createWrapper(),
+      })
+
+      act(() => {
+        result.current.setFilters({ min_amount: 20 })
+      })
+
+      expect(new URLSearchParams(window.location.search).get('offset')).toBeNull()
+    })
+
+    it('should remove offset when clearFilter is called', () => {
+      window.history.replaceState({}, '', '/?search=coffee&offset=25')
+
+      const { result } = renderHook(() => useTransactionFilters(), {
+        wrapper: createWrapper(),
+      })
+
+      act(() => {
+        result.current.clearFilter('search')
+      })
+
+      expect(new URLSearchParams(window.location.search).get('offset')).toBeNull()
+    })
+
+    it('should remove offset when clearAllFilters is called', () => {
+      window.history.replaceState({}, '', '/?search=coffee&offset=75')
+
+      const { result } = renderHook(() => useTransactionFilters(), {
+        wrapper: createWrapper(),
+      })
+
+      act(() => {
+        result.current.clearAllFilters()
+      })
+
+      expect(new URLSearchParams(window.location.search).get('offset')).toBeNull()
+    })
+  })
+
   describe('URL State Persistence', () => {
     it('should maintain filter state across re-renders', () => {
       window.history.replaceState({}, '', '/?search=coffee')
