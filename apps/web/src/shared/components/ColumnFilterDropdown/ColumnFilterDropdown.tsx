@@ -142,7 +142,7 @@ export function ColumnFilterDropdown({
             disabled={disabled}
             aria-label={ariaLabel}
             aria-expanded={isOpen}
-            aria-haspopup="listbox"
+            aria-haspopup={type === 'select' ? 'listbox' : undefined}
             className={`flex items-center justify-center w-6 h-6 p-1 border-none rounded cursor-pointer bg-transparent transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
               isActive
                 ? 'column-filter__trigger--active text-primary bg-primary/10 hover:bg-primary/20 hover:text-primary'
@@ -154,7 +154,7 @@ export function ColumnFilterDropdown({
         </PopoverTrigger>
       </div>
       <PopoverContent
-        role="listbox"
+        role={type === 'select' ? 'listbox' : undefined}
         className="min-w-[180px] max-w-[280px] py-2 bg-card border border-border rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.15)]"
         align="start"
         sideOffset={4}
