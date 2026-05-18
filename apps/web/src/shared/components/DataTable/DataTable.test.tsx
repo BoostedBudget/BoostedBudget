@@ -1990,7 +1990,7 @@ describe('sticky header', () => {
     expect(tr.className).toContain('bg-muted/50')
   })
 
-  it('pinned header th uses z-30 when stickyHeader is active', () => {
+  it('pinned header th always uses z-30 (regardless of stickyHeader)', () => {
     const pinnedColumns = [
       { ...baseColumns[0], defaultPinned: 'left' as const },
       baseColumns[1],
@@ -2000,10 +2000,9 @@ describe('sticky header', () => {
     expect(pinnedTh.className).toContain('z-30')
   })
 
-  it('dragged column th uses inline zIndex 40 while dragging', () => {
-    // The dragged column zIndex is set conditionally: isDndDragging ? 40 : undefined
-    // We can verify the value by checking DataTable.tsx source directly (no test hook available for DnD state)
-    // Instead, verify that the non-dragging state has no inline zIndex on th
+  it('reorderable th has no inline zIndex when not dragging', () => {
+    // DnD drag state (isDndDragging ? 40 : undefined) cannot be triggered in JSDOM;
+    // verify the non-dragging baseline: inline zIndex is absent
     const { container } = renderTable()
     const th = container.querySelector('thead th')!
     expect(th.style.zIndex).toBe('')  // not set when not dragging
