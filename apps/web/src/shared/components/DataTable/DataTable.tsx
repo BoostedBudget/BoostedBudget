@@ -219,6 +219,7 @@ export function DataTable<T,>({
   density = 'comfortable',
   tableId,
   virtualization,
+  skeletonRows,
 }: DataTableProps<T>) {
   // totalCols is computed after visibleColumns below
 
@@ -242,6 +243,8 @@ export function DataTable<T,>({
   const hasHideableColumns = columns.some((col) => col.hideable)
   const totalCols = visibleColumns.length + (rowActions ? 1 : 0)
   const reorderableIds = visibleColumns.filter((c) => c.reorderable).map((c) => c.id)
+
+  const showSkeleton = loading && data.length === 0 && (skeletonRows ?? 0) > 0
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
@@ -447,7 +450,7 @@ export function DataTable<T,>({
             data-testid="virtual-scroll-container"
           >
             <table
-              className={cn(tableVariants({ loading }), className)}
+              className={cn(tableVariants({ loading: loading && !showSkeleton }), className)}
               aria-busy={loading ? true : undefined}
               style={{ width: '100%', borderCollapse: 'collapse' }}
             >
@@ -459,12 +462,48 @@ export function DataTable<T,>({
               {colgroupEl}
               {theadEl}
               <tbody
-                style={{
+                style={showSkeleton ? undefined : {
                   position: 'relative',
                   height: `${virtualizer.getTotalSize()}px`,
                 }}
               >
-                {virtualItems.map((virtualItem) => {
+                {showSkeleton ? (
+                  <>
+                    <tr>
+                      <td colSpan={totalCols} className="sr-only">
+                        <span role="status">Loading…</span>
+                      </td>
+                    </tr>
+                    {Array.from({ length: skeletonRows! }).map((_, i) => (
+                      <tr key={`skeleton-${i}`} aria-hidden="true">
+                        {visibleColumns.map((col) => (
+                          <td
+                            key={col.id}
+                            className={cn(
+                              bodyCellVariants({
+                                align: col.align,
+                                numeric: col.numeric ?? false,
+                                density,
+                              }),
+                              col.defaultPinned === 'left' && 'sticky left-0 z-10 bg-card',
+                              col.defaultPinned === 'right' && 'sticky right-0 z-10 bg-card max-md:relative max-md:right-auto'
+                            )}
+                            {...(maskedColumnIds.includes(col.id) && { 'data-ph-mask': '' })}
+                            {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
+                          >
+                            <div className="h-4 w-3/4 rounded bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
+                          </td>
+                        ))}
+                        {rowActions && (
+                          <td className={bodyCellVariants({ align: 'right', density })}>
+                            <div className="h-4 w-12 ml-auto rounded bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </>
+                ) : null}
+                {!showSkeleton && virtualItems.map((virtualItem) => {
                   const tanStackRow = rows[virtualItem.index]
                   if (!tanStackRow) return null
                   const row = tanStackRow.original
@@ -516,9 +555,9 @@ export function DataTable<T,>({
             </table>
           </div>
         ) : (
-          // ── NON-VIRTUALIZED PATH (unchanged) ───────────────────────
+          // ── NON-VIRTUALIZED PATH ────────────────────────────────────
           <table
-            className={cn(tableVariants({ loading }), className)}
+            className={cn(tableVariants({ loading: loading && !showSkeleton }), className)}
             aria-busy={loading ? true : undefined}
           >
             {caption && (
@@ -529,7 +568,42 @@ export function DataTable<T,>({
             {colgroupEl}
             {theadEl}
             <tbody>
-              {rows.length === 0 ? (
+              {showSkeleton ? (
+                <>
+                  <tr>
+                    <td colSpan={totalCols} className="sr-only">
+                      <span role="status">Loading…</span>
+                    </td>
+                  </tr>
+                  {Array.from({ length: skeletonRows! }).map((_, i) => (
+                    <tr key={`skeleton-${i}`} aria-hidden="true">
+                      {visibleColumns.map((col) => (
+                        <td
+                          key={col.id}
+                          className={cn(
+                            bodyCellVariants({
+                              align: col.align,
+                              numeric: col.numeric ?? false,
+                              density,
+                            }),
+                            col.defaultPinned === 'left' && 'sticky left-0 z-10 bg-card',
+                            col.defaultPinned === 'right' && 'sticky right-0 z-10 bg-card max-md:relative max-md:right-auto'
+                          )}
+                          {...(maskedColumnIds.includes(col.id) && { 'data-ph-mask': '' })}
+                          {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
+                        >
+                          <div className="h-4 w-3/4 rounded bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
+                        </td>
+                      ))}
+                      {rowActions && (
+                        <td className={bodyCellVariants({ align: 'right', density })}>
+                          <div className="h-4 w-12 ml-auto rounded bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </>
+              ) : rows.length === 0 ? (
                 <tr>
                   <td colSpan={totalCols}>{emptyState}</td>
                 </tr>

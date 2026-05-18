@@ -171,17 +171,6 @@ export function BudgetsPage() {
     })
   }, [sortColumn, sortDirection, periodFilter, progressRange])
 
-  if (budgetsLoading) {
-    return (
-      <div className="p-6 max-w-[1200px] mx-auto">
-        <div className="flex flex-col items-center justify-center h-[300px] gap-4 text-muted-foreground">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
-          <p>Loading budgets...</p>
-        </div>
-      </div>
-    )
-  }
-
   if (budgetsError) {
     return (
       <div className="p-6 max-w-[1200px] mx-auto">
@@ -219,7 +208,7 @@ export function BudgetsPage() {
             </ReadOnlyGuard>
           )}
         </div>
-        {activeBudgets.length === 0 ? (
+        {!budgetsLoading && activeBudgets.length === 0 ? (
           <EmptyState
             icon={<PieChart />}
             title="No active budgets"
@@ -239,6 +228,7 @@ export function BudgetsPage() {
             onManage={handleOpenBudget}
             onDelete={handleDeleteBudgetClick}
             onRowClick={handleOpenBudget}
+            loading={budgetsLoading}
             sortable
             sortColumn={sortColumn}
             sortDirection={sortDirection}
@@ -251,9 +241,14 @@ export function BudgetsPage() {
           />
         ) : (
           <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
-            {activeBudgets.map((budget) => (
-              <BudgetCard key={budget.id} budget={budget} onDelete={handleDeleteBudgetClick} />
-            ))}
+            {budgetsLoading && activeBudgets.length === 0
+              ? Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="h-48 rounded-lg bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" aria-hidden="true" />
+                ))
+              : activeBudgets.map((budget) => (
+                  <BudgetCard key={budget.id} budget={budget} onDelete={handleDeleteBudgetClick} />
+                ))
+            }
           </div>
         )}
       </section>

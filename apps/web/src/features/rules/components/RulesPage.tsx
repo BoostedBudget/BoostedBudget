@@ -11,7 +11,7 @@ import { useNavigate } from 'react-router-dom'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Loader2, Plus, Zap } from 'lucide-react'
+import { AlertCircle, Plus, Zap } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { Button } from '@/components/ui/button'
@@ -198,18 +198,6 @@ export function RulesPage() {
     [testMutation]
   )
 
-  // Loading state
-  if (isLoading) {
-    return (
-      <div className="mx-auto max-w-[1200px] p-6">
-        <div className="flex flex-col items-center justify-center px-6 py-16 text-center text-muted-foreground">
-          <Loader2 className="mb-4 h-8 w-8 animate-spin" />
-          <p>Loading automation rules...</p>
-        </div>
-      </div>
-    )
-  }
-
   // Error state
   if (error) {
     return (
@@ -231,8 +219,8 @@ export function RulesPage() {
     )
   }
 
-  // Empty state
-  if (rules.length === 0) {
+  // Empty state (guarded: during initial load, show skeleton in table instead)
+  if (!isLoading && rules.length === 0) {
     return (
       <div className="mx-auto max-w-[1200px] p-6">
         <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -288,17 +276,22 @@ export function RulesPage() {
       <div className="min-h-[200px]">
         {view === 'cards' ? (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {rules.map((rule) => (
-              <RuleCard
-                key={rule.id}
-                rule={rule}
-                onEdit={handleEditRule}
-                onDelete={handleDeleteClick}
-                onToggle={handleToggleRule}
-                onTest={handleTestRule}
-                loading={toggleMutation.isPending || deleteMutation.isPending || testMutation.isPending}
-              />
-            ))}
+            {isLoading && rules.length === 0
+              ? Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="h-48 rounded-lg bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" aria-hidden="true" />
+                ))
+              : rules.map((rule) => (
+                  <RuleCard
+                    key={rule.id}
+                    rule={rule}
+                    onEdit={handleEditRule}
+                    onDelete={handleDeleteClick}
+                    onToggle={handleToggleRule}
+                    onTest={handleTestRule}
+                    loading={toggleMutation.isPending || deleteMutation.isPending || testMutation.isPending}
+                  />
+                ))
+            }
           </div>
         ) : (
           <RuleTable
@@ -307,7 +300,7 @@ export function RulesPage() {
             onDelete={handleDeleteClick}
             onToggle={handleToggleRule}
             onTest={handleTestRule}
-            loading={toggleMutation.isPending || deleteMutation.isPending || testMutation.isPending}
+            loading={isLoading || toggleMutation.isPending || deleteMutation.isPending || testMutation.isPending}
             sortable
             sortColumn={sortColumn}
             sortDirection={sortDirection}

@@ -262,7 +262,7 @@ describe('AccountBreakdownTable', () => {
   })
 
   it('shows loading state', () => {
-    render(
+    const { container } = render(
       <AccountBreakdownTable
         assets={[]}
         liabilities={[]}
@@ -273,7 +273,11 @@ describe('AccountBreakdownTable', () => {
         {...defaultSortState}
       />
     )
-    expect(screen.getByRole('status')).toBeDefined()
+    // Two sections (Assets + Liabilities) each render a skeleton with a sr-only status announcement
+    expect(screen.getAllByRole('status').length).toBeGreaterThanOrEqual(1)
+    // Tables render aria-busy during skeleton
+    const tables = container.querySelectorAll('table')
+    tables.forEach((t) => expect(t.getAttribute('aria-busy')).toBe('true'))
   })
 
   it('shows error state', () => {

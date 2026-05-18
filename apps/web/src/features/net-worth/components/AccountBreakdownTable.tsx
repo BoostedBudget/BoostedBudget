@@ -50,6 +50,7 @@ function formatCurrency(value: number, currencyCode = 'USD'): string {
 
 interface AccountSectionProps extends Pick<
   AccountBreakdownTableProps,
+  | 'loading'
   | 'sortColumn'
   | 'sortDirection'
   | 'onSort'
@@ -75,6 +76,7 @@ function AccountSection({
   total,
   percentLabel,
   tableId,
+  loading,
   sortColumn,
   sortDirection,
   onSort,
@@ -143,7 +145,7 @@ function AccountSection({
     ]
   )
 
-  if (total === 0 && rows.length === 0) return null
+  if (!loading && total === 0 && rows.length === 0) return null
 
   const columns: ColumnDef<AccountBreakdownRow>[] = [
     {
@@ -225,6 +227,8 @@ function AccountSection({
       onSortChange={handleSortChange}
       filters={filters}
       onFiltersChange={handleFiltersChange}
+      loading={loading}
+      skeletonRows={3}
       caption={`${title} — ${formatCurrency(total)}`}
       maskedColumnIds={['balance']}
       tableId={tableId}
@@ -262,19 +266,11 @@ export function AccountBreakdownTable({
   balanceRange,
   onBalanceRangeChange,
 }: AccountBreakdownTableProps) {
-  if (loading) {
-    return (
-      <div role="status" aria-label="Loading account breakdown" className="flex justify-center py-8">
-        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
-      </div>
-    )
-  }
-
   if (error) {
     return <p className="text-sm text-destructive py-4">{error.message}</p>
   }
 
-  if (assetsTotal === 0 && liabilitiesTotal === 0 && assets.length === 0 && liabilities.length === 0) {
+  if (!loading && assetsTotal === 0 && liabilitiesTotal === 0 && assets.length === 0 && liabilities.length === 0) {
     return (
       <EmptyState
         icon={<TrendingUp />}
@@ -285,6 +281,7 @@ export function AccountBreakdownTable({
   }
 
   const sectionProps = {
+    loading,
     sortColumn,
     sortDirection,
     onSort,

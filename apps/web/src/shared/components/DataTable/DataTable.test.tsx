@@ -1671,11 +1671,67 @@ describe('DataTable virtualization', () => {
     expect(scrollContainer).toBeNull()
   })
 
+  it('regression — skeleton leaves virtualized non-empty path untouched (tbody position:relative, real rows)', () => {
+    const manyRowsLocal: Row[] = Array.from({ length: 20 }, (_, i) => ({
+      id: String(i + 1),
+      name: `User ${i + 1}`,
+      amount: (i + 1) * 10,
+    }))
+    const { container } = render(
+      <DataTable<Row>
+        data={manyRowsLocal}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        skeletonRows={5}
+        virtualization={{
+          enabled: true,
+          estimateRowHeight: 56,
+          scrollContainerHeight: '400px',
+        }}
+      />
+    )
+    const tbody = container.querySelector('tbody')!
+    expect(tbody.style.position).toBe('relative')
+    expect(container.querySelectorAll('tbody tr[aria-hidden="true"]').length).toBe(0)
+  })
+
+  it('skeleton in virtualized path — renders flow-layout rows, no absolute positioning, no position:relative on tbody', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={[]}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        loading={true}
+        skeletonRows={3}
+        virtualization={{
+          enabled: true,
+          estimateRowHeight: 56,
+          scrollContainerHeight: '400px',
+        }}
+      />
+    )
+    const skeletonRows = container.querySelectorAll('tbody tr[aria-hidden="true"]')
+    expect(skeletonRows.length).toBe(3)
+    // Skeleton rows must NOT be absolutely positioned
+    for (const tr of skeletonRows) {
+      const el = tr as HTMLElement
+      expect(el.style.position).not.toBe('absolute')
+    }
+    // tbody must NOT have position:relative when rendering skeleton (no virtual sizing needed)
+    const tbody = container.querySelector('tbody')!
+    expect(tbody.style.position).not.toBe('relative')
+  })
+
   it('calls onScrollEnd when last virtual item is within prefetchRows of the end', () => {
     const onScrollEnd = mock(() => {})
-    // Use a tiny dataset (5 rows) so the virtualizer renders ALL rows in the
-    // initial viewport (offsetHeight=400, estimateRowHeight=56 → ~7 visible).
-    // With prefetchRows=3 the threshold is count-3 = 2. lastIndex(4) >= 2 → fires.
     const tinyRows: Row[] = Array.from({ length: 5 }, (_, i) => ({
       id: String(i + 1),
       name: `User ${i + 1}`,
@@ -1702,5 +1758,187 @@ describe('DataTable virtualization', () => {
     // The virtualizer renders all 5 rows on mount (viewport=400px > total=5×56=280px).
     // The useEffect fires: lastIndex(4) >= count(5)-prefetchRows(3)=2 → onScrollEnd called.
     expect(onScrollEnd).toHaveBeenCalled()
+  })
+})
+
+// ── skeletonRows ──────────────────────────────────────────────────────────────
+describe('skeletonRows', () => {
+  const pinnedColumns: ColumnDef<Row>[] = [
+    { id: 'name', header: 'Name', key: 'name', defaultPinned: 'left' },
+    { id: 'amount', header: 'Amount', key: 'amount', numeric: true, defaultPinned: 'right' },
+  ]
+
+  // 1 — renders N skeleton rows when loading + data empty + skeletonRows set
+  it('renders N aria-hidden skeleton rows when loading and data is empty', () => {
+    const { container } = renderTable({ data: [], loading: true, skeletonRows: 3 })
+    const skeletonTrs = container.querySelectorAll('tbody tr[aria-hidden="true"]')
+    expect(skeletonTrs.length).toBe(3)
+  })
+
+  // 2 — skeleton row cell count matches visible columns + rowActions
+  it('each skeleton row has td count = visible columns + 1 when rowActions is set', () => {
+    const { container } = renderTable({
+      data: [],
+      loading: true,
+      skeletonRows: 2,
+      rowActions: (_row: Row) => <button type="button">Delete</button>,
+    })
+    const skeletonTrs = container.querySelectorAll('tbody tr[aria-hidden="true"]')
+    expect(skeletonTrs.length).toBe(2)
+    for (const tr of skeletonTrs) {
+      // baseColumns has 2 columns + 1 rowActions = 3
+      expect(tr.querySelectorAll('td').length).toBe(3)
+    }
+  })
+
+  // 3 — no skeleton when prop is not set (empty state shows instead)
+  it('does not render skeleton rows when skeletonRows prop is absent', () => {
+    const { container } = renderTable({ data: [], loading: true })
+    expect(container.querySelectorAll('tbody tr[aria-hidden="true"]').length).toBe(0)
+  })
+
+  // 4 — no skeleton when loading=false
+  it('does not render skeleton rows when loading is false', () => {
+    const { container } = renderTable({ data: [], loading: false, skeletonRows: 3 })
+    expect(container.querySelectorAll('tbody tr[aria-hidden="true"]').length).toBe(0)
+  })
+
+  // 5 — no skeleton when data exists even if loading=true (background refresh)
+  it('does not render skeleton when data is non-empty even if loading=true', () => {
+    const { container } = renderTable({ data: rows, loading: true, skeletonRows: 5 })
+    expect(container.querySelectorAll('tbody tr[aria-hidden="true"]').length).toBe(0)
+    // real rows still rendered
+    expect(screen.getByText('Alice')).toBeInTheDocument()
+  })
+
+  // 6 — data-ph-mask preserved on skeleton <td>s for maskedColumnIds
+  it('preserves data-ph-mask on skeleton tds for masked columns', () => {
+    const { container } = renderTable({
+      data: [],
+      loading: true,
+      skeletonRows: 2,
+      maskedColumnIds: ['amount'],
+    })
+    // 2 skeleton rows × 1 masked column (amount) = 2 masked tds
+    const maskedSkeletonTds = container.querySelectorAll('tbody tr[aria-hidden="true"] td[data-ph-mask]')
+    expect(maskedSkeletonTds.length).toBe(2)
+    // name column tds should NOT be masked
+    const allSkeletonTds = container.querySelectorAll('tbody tr[aria-hidden="true"] td')
+    const unmasked = Array.from(allSkeletonTds).filter(
+      (td) => !td.hasAttribute('data-ph-mask')
+    )
+    expect(unmasked.length).toBe(2) // 2 name-column tds
+  })
+
+  // 7 — data-pinned="left" preserved on skeleton tds
+  it('preserves data-pinned="left" on skeleton tds for left-pinned columns', () => {
+    const { container } = renderTable({
+      data: [],
+      loading: true,
+      skeletonRows: 2,
+      columns: pinnedColumns,
+    })
+    const leftPinnedTds = container.querySelectorAll(
+      'tbody tr[aria-hidden="true"] td[data-pinned="left"]'
+    )
+    expect(leftPinnedTds.length).toBe(2) // one per skeleton row
+  })
+
+  // 8 — data-pinned="right" preserved on skeleton tds
+  it('preserves data-pinned="right" on skeleton tds for right-pinned columns', () => {
+    const { container } = renderTable({
+      data: [],
+      loading: true,
+      skeletonRows: 2,
+      columns: pinnedColumns,
+    })
+    const rightPinnedTds = container.querySelectorAll(
+      'tbody tr[aria-hidden="true"] td[data-pinned="right"]'
+    )
+    expect(rightPinnedTds.length).toBe(2) // one per skeleton row
+  })
+
+  // 9 — skeleton respects hidden columns (only hideable:true columns participate in visibility)
+  it('respects columnVisibility — hideable column hidden from skeleton tds', () => {
+    const hideableColumns: ColumnDef<Row>[] = [
+      { id: 'name', header: 'Name', key: 'name' },
+      { id: 'amount', header: 'Amount', key: 'amount', numeric: true, hideable: true },
+    ]
+    const { container } = renderTable({
+      data: [],
+      loading: true,
+      skeletonRows: 3,
+      columns: hideableColumns,
+      columnVisibility: { amount: false },
+    })
+    const skeletonTrs = container.querySelectorAll('tbody tr[aria-hidden="true"]')
+    expect(skeletonTrs.length).toBe(3)
+    for (const tr of skeletonTrs) {
+      // only 1 visible column (name), amount is hidden
+      expect(tr.querySelectorAll('td').length).toBe(1)
+    }
+  })
+
+  // 10 — shimmer div carries motion-reduce:animate-none
+  it('skeleton shimmer divs carry motion-reduce:animate-none class', () => {
+    const { container } = renderTable({ data: [], loading: true, skeletonRows: 1 })
+    const shimmerDivs = container.querySelectorAll('tbody tr[aria-hidden="true"] td div')
+    expect(shimmerDivs.length).toBeGreaterThan(0)
+    for (const div of shimmerDivs) {
+      expect(div.className).toContain('motion-reduce:animate-none')
+    }
+  })
+
+  // 11 — action-cell skeleton uses w-12 ml-auto (not w-3/4)
+  it('action-cell skeleton placeholder uses w-12 ml-auto width', () => {
+    const { container } = renderTable({
+      data: [],
+      loading: true,
+      skeletonRows: 1,
+      rowActions: (_row: Row) => <button type="button">Del</button>,
+    })
+    const skeletonTr = container.querySelector('tbody tr[aria-hidden="true"]')!
+    const tds = skeletonTr.querySelectorAll('td')
+    // last td is the rowActions cell
+    const actionTd = tds[tds.length - 1]
+    const actionDiv = actionTd.querySelector('div')!
+    expect(actionDiv.className).toContain('w-12')
+    expect(actionDiv.className).toContain('ml-auto')
+    expect(actionDiv.className).not.toContain('w-3/4')
+  })
+
+  // 12 — role="status" element announces loading to screen readers
+  it('renders a role="status" announcement inside tbody during skeleton', () => {
+    const { container } = renderTable({ data: [], loading: true, skeletonRows: 3 })
+    const statusEl = container.querySelector('tbody [role="status"]')
+    expect(statusEl).not.toBeNull()
+  })
+
+  // 13 — no double-dim: loading cva variant NOT applied when skeleton is showing
+  it('table does not carry opacity-60 / pointer-events-none when skeleton is showing', () => {
+    const { container } = renderTable({ data: [], loading: true, skeletonRows: 3 })
+    const table = container.querySelector('table')!
+    expect(table.className).not.toContain('opacity-60')
+    expect(table.className).not.toContain('pointer-events-none')
+  })
+
+  // 14 — aria-busy still set on table during skeleton
+  it('table still has aria-busy="true" when skeleton is rendering', () => {
+    const { container } = renderTable({ data: [], loading: true, skeletonRows: 3 })
+    expect(container.querySelector('table')?.getAttribute('aria-busy')).toBe('true')
+  })
+
+  // 17 — caption renders above skeleton rows
+  it('caption prop renders above table even while skeleton rows are showing', () => {
+    const { container } = renderTable({
+      data: [],
+      loading: true,
+      skeletonRows: 2,
+      caption: 'My Skeleton Table',
+    })
+    const caption = container.querySelector('caption')
+    expect(caption).not.toBeNull()
+    expect(caption?.textContent).toBe('My Skeleton Table')
+    expect(container.querySelectorAll('tbody tr[aria-hidden="true"]').length).toBe(2)
   })
 })
