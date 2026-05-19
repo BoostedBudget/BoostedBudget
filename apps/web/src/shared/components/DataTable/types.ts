@@ -118,4 +118,17 @@ export interface DataTableProps<T> {
    * `rowActions` when present) so column widths stay stable via `<colgroup>`.
    */
   skeletonRows?: number
+  /**
+   * When true, `<thead>` is sticky to the top of the nearest scrolling ancestor.
+   * Implicitly true when `virtualization.enabled === true`.
+   * Use `stickyHeaderTopOffset` to clear a fixed page header above the table
+   * (e.g., `"4rem"` for the global app header at `h-16`).
+   */
+  stickyHeader?: boolean
+  /**
+   * CSS length value for the sticky header's `top` offset.
+   * Overrides the default `top-0` from the CVA variant.
+   * Only applied when `stickyHeader` is true or when `virtualization.enabled` is true.
+   */
+  stickyHeaderTopOffset?: string
 }

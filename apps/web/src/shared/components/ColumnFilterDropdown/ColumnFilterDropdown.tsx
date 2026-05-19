@@ -4,10 +4,14 @@
  *
  * A reusable popover filter dropdown for table column filtering.
  * Supports single-select, multi-select, and range filtering modes.
+ *
+ * Uses Radix Popover so the panel portals to document.body, escaping
+ * the sticky thead CSS stacking context (issue #1132).
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { Filter, Check, X } from 'lucide-react'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 
 export interface FilterOption {
   value: string
@@ -58,35 +62,6 @@ export function ColumnFilterDropdown({
   const [searchQuery, setSearchQuery] = useState('')
   const [localMin, setLocalMin] = useState<string>(rangeValue?.min?.toString() ?? '')
   const [localMax, setLocalMax] = useState<string>(rangeValue?.max?.toString() ?? '')
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  // Close on outside click
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false)
-      }
-    }
-
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
-      return () => document.removeEventListener('mousedown', handleClickOutside)
-    }
-  }, [isOpen])
-
-  // Close on Escape
-  useEffect(() => {
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setIsOpen(false)
-      }
-    }
-
-    if (isOpen) {
-      document.addEventListener('keydown', handleEscape)
-      return () => document.removeEventListener('keydown', handleEscape)
-    }
-  }, [isOpen])
 
   const isActive = type === 'range'
     ? rangeValue !== null && rangeValue !== undefined && (rangeValue.min !== undefined || rangeValue.max !== undefined)
@@ -98,18 +73,20 @@ export function ColumnFilterDropdown({
       )
     : options
 
-  const handleToggle = useCallback(() => {
-    if (!disabled) {
-      const newIsOpen = !isOpen
-      setIsOpen(newIsOpen)
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      if (disabled && open) return
+      setIsOpen(open)
+      // Reset search when opening or closing
       setSearchQuery('')
-      // Reset range inputs when opening
-      if (newIsOpen && type === 'range') {
+      // Seed range inputs from current rangeValue when opening
+      if (open && type === 'range') {
         setLocalMin(rangeValue?.min?.toString() ?? '')
         setLocalMax(rangeValue?.max?.toString() ?? '')
       }
-    }
-  }, [disabled, isOpen, type, rangeValue])
+    },
+    [disabled, type, rangeValue]
+  )
 
   const handleSelectOption = useCallback(
     (optionValue: string) => {
@@ -157,201 +134,204 @@ export function ColumnFilterDropdown({
   }, [onChange])
 
   return (
-    <div
-      ref={containerRef}
-      className={`relative inline-block ${className}`}
-    >
-      <button
-        type="button"
-        onClick={handleToggle}
-        disabled={disabled}
-        aria-label={ariaLabel}
-        aria-expanded={isOpen}
-        aria-haspopup="listbox"
-        className={`flex items-center justify-center w-6 h-6 p-1 border-none rounded cursor-pointer bg-transparent transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
-          isActive
-            ? 'column-filter__trigger--active text-primary bg-primary/10 hover:bg-primary/20 hover:text-primary'
-            : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-        }`}
+    <Popover open={isOpen} onOpenChange={handleOpenChange}>
+      <div className={`relative inline-block ${className}`}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            disabled={disabled}
+            aria-label={ariaLabel}
+            aria-expanded={isOpen}
+            aria-haspopup={type === 'select' ? 'listbox' : undefined}
+            className={`flex items-center justify-center w-6 h-6 p-1 border-none rounded cursor-pointer bg-transparent transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
+              isActive
+                ? 'column-filter__trigger--active text-primary bg-primary/10 hover:bg-primary/20 hover:text-primary'
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+          >
+            <Filter className="w-4 h-4" aria-hidden="true" />
+          </button>
+        </PopoverTrigger>
+      </div>
+      <PopoverContent
+        role={type === 'select' ? 'listbox' : undefined}
+        className="min-w-[180px] max-w-[280px] py-2 bg-card border border-border rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.15)]"
+        align="start"
+        sideOffset={4}
+        onOpenAutoFocus={(e) => {
+          // Let autoFocus on the search input handle focus in searchable multi-select;
+          // otherwise prevent Radix from stealing focus unexpectedly.
+          if (!searchable || !multiSelect) e.preventDefault()
+        }}
       >
-        <Filter className="w-4 h-4" aria-hidden="true" />
-      </button>
+        {type === 'select' ? (
+          <>
+            {/* Search input for searchable multi-select */}
+            {searchable && multiSelect && (
+              <div className="px-2 pb-2 border-b border-border">
+                <input
+                  type="text"
+                  placeholder="Search..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full px-2.5 py-1.5 text-sm border border-border rounded bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
+                  autoFocus
+                />
+              </div>
+            )}
 
-      {isOpen && (
-        <div
-          className="absolute top-full left-0 z-50 min-w-[180px] max-w-[280px] mt-1 py-2 bg-card border border-border rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.15)]"
-          role="listbox"
-        >
-          {type === 'select' ? (
-            <>
-              {/* Search input for searchable multi-select */}
-              {searchable && multiSelect && (
-                <div className="px-2 pb-2 border-b border-border">
-                  <input
-                    type="text"
-                    placeholder="Search..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-sm border border-border rounded bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
-                    autoFocus
-                  />
-                </div>
-              )}
-
-              {/* Multi-select actions */}
-              {multiSelect && (
-                <div className="flex gap-2 px-2 py-2 border-b border-border">
+            {/* Multi-select actions */}
+            {multiSelect && (
+              <div className="flex gap-2 px-2 py-2 border-b border-border">
+                {[
+                  { label: 'Select All', onClick: handleSelectAll },
+                  { label: 'Clear', onClick: handleClearAll },
+                ].map((action) => (
                   <button
+                    key={action.label}
                     type="button"
-                    onClick={handleSelectAll}
+                    onClick={action.onClick}
                     className="flex-1 px-2 py-1 text-xs font-medium border-none rounded bg-muted text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-border"
                   >
-                    Select All
+                    {action.label}
                   </button>
-                  <button
-                    type="button"
-                    onClick={handleClearAll}
-                    className="flex-1 px-2 py-1 text-xs font-medium border-none rounded bg-muted text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-border"
-                  >
-                    Clear
-                  </button>
-                </div>
+                ))}
+              </div>
+            )}
+
+            {/* Options list */}
+            <div className="max-h-60 overflow-y-auto">
+              {/* "All" option for single select */}
+              {!multiSelect && (
+                <button
+                  type="button"
+                  onClick={handleClearAll}
+                  className={`flex items-center w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
+                    value.length === 0
+                      ? 'bg-primary/10 text-primary'
+                      : 'bg-transparent text-foreground hover:bg-muted'
+                  }`}
+                >
+                  All
+                </button>
               )}
 
-              {/* Options list */}
-              <div className="max-h-60 overflow-y-auto">
-                {/* "All" option for single select */}
-                {!multiSelect && (
-                  <button
-                    type="button"
-                    onClick={handleClearAll}
-                    className={`flex items-center w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
-                      value.length === 0
-                        ? 'bg-primary/10 text-primary'
-                        : 'bg-transparent text-foreground hover:bg-muted'
-                    }`}
-                  >
-                    All
-                  </button>
-                )}
+              {filteredOptions.map((option) => {
+                const isSelected = value.includes(option.value)
 
-                {filteredOptions.map((option) => {
-                  const isSelected = value.includes(option.value)
-
-                  if (multiSelect) {
-                    return (
-                      <label
-                        key={option.value}
-                        className={`flex items-center gap-2 w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
-                          isSelected
-                            ? 'bg-primary/10 text-primary'
-                            : 'bg-transparent text-foreground hover:bg-muted'
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => handleSelectOption(option.value)}
-                          className="w-4 h-4 m-0 cursor-pointer"
-                        />
-                        <span className="flex-1">
-                          {option.label}
-                        </span>
-                        {isSelected && (
-                          <Check
-                            className="w-3.5 h-3.5 ml-auto text-primary"
-                            aria-hidden="true"
-                          />
-                        )}
-                      </label>
-                    )
-                  }
-
+                if (multiSelect) {
                   return (
-                    <button
+                    <label
                       key={option.value}
-                      type="button"
-                      onClick={() => handleSelectOption(option.value)}
-                      className={`flex items-center w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
+                      className={`flex items-center gap-2 w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
                         isSelected
-                          ? 'column-filter__option--selected bg-primary/10 text-primary hover:bg-primary/20'
+                          ? 'bg-primary/10 text-primary'
                           : 'bg-transparent text-foreground hover:bg-muted'
                       }`}
                     >
-                      {option.label}
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => handleSelectOption(option.value)}
+                        className="w-4 h-4 m-0 cursor-pointer"
+                      />
+                      <span className="flex-1">
+                        {option.label}
+                      </span>
                       {isSelected && (
                         <Check
                           className="w-3.5 h-3.5 ml-auto text-primary"
                           aria-hidden="true"
                         />
                       )}
-                    </button>
+                    </label>
                   )
-                })}
+                }
 
-                {filteredOptions.length === 0 && (
-                  <div className="px-4 py-4 text-sm text-muted-foreground text-center">
-                    No matching options
-                  </div>
-                )}
-              </div>
-            </>
-          ) : (
-            /* Range filter mode */
-            <div className="p-3">
-              <div className="flex items-end gap-2 mb-3">
-                <div className="flex-1">
-                  <label htmlFor="filter-min" className="block mb-1 text-xs font-medium text-muted-foreground">
-                    Min
-                  </label>
-                  <input
-                    id="filter-min"
-                    type="number"
-                    value={localMin}
-                    onChange={(e) => setLocalMin(e.target.value)}
-                    placeholder="0"
-                    className="w-full px-2 py-1.5 text-sm border border-border rounded bg-card text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
-                  />
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => handleSelectOption(option.value)}
+                    className={`flex items-center w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
+                      isSelected
+                        ? 'column-filter__option--selected bg-primary/10 text-primary hover:bg-primary/20'
+                        : 'bg-transparent text-foreground hover:bg-muted'
+                    }`}
+                  >
+                    {option.label}
+                    {isSelected && (
+                      <Check
+                        className="w-3.5 h-3.5 ml-auto text-primary"
+                        aria-hidden="true"
+                      />
+                    )}
+                  </button>
+                )
+              })}
+
+              {filteredOptions.length === 0 && (
+                <div className="px-4 py-4 text-sm text-muted-foreground text-center">
+                  No matching options
                 </div>
-                <div className="pb-2 text-muted-foreground">-</div>
-                <div className="flex-1">
-                  <label htmlFor="filter-max" className="block mb-1 text-xs font-medium text-muted-foreground">
-                    Max
-                  </label>
-                  <input
-                    id="filter-max"
-                    type="number"
-                    value={localMax}
-                    onChange={(e) => setLocalMax(e.target.value)}
-                    placeholder="999"
-                    className="w-full px-2 py-1.5 text-sm border border-border rounded bg-card text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
-                  />
-                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          /* Range filter mode */
+          <div className="p-3">
+            <div className="flex items-end gap-2 mb-3">
+              <div className="flex-1">
+                <label htmlFor="filter-min" className="block mb-1 text-xs font-medium text-muted-foreground">
+                  Min
+                </label>
+                <input
+                  id="filter-min"
+                  type="number"
+                  value={localMin}
+                  onChange={(e) => setLocalMin(e.target.value)}
+                  placeholder="0"
+                  className="w-full px-2 py-1.5 text-sm border border-border rounded bg-card text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
+                />
               </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={handleClearRange}
-                  className="flex-1 px-2 py-1 text-xs font-medium border border-border rounded bg-transparent text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-muted"
-                  aria-label="Clear"
-                >
-                  <X className="w-3 h-3 mr-1 align-middle inline" aria-hidden="true" />
-                  Clear
-                </button>
-                <button
-                  type="button"
-                  onClick={handleApplyRange}
-                  className="flex-1 px-2 py-1 text-xs font-medium border-none rounded bg-primary text-white cursor-pointer transition-colors duration-150 hover:bg-primary/90"
-                  aria-label="Apply"
-                >
-                  <Check className="w-3 h-3 mr-1 align-middle inline" aria-hidden="true" />
-                  Apply
-                </button>
+              <div className="pb-2 text-muted-foreground">-</div>
+              <div className="flex-1">
+                <label htmlFor="filter-max" className="block mb-1 text-xs font-medium text-muted-foreground">
+                  Max
+                </label>
+                <input
+                  id="filter-max"
+                  type="number"
+                  value={localMax}
+                  onChange={(e) => setLocalMax(e.target.value)}
+                  placeholder="999"
+                  className="w-full px-2 py-1.5 text-sm border border-border rounded bg-card text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
+                />
               </div>
             </div>
-          )}
-        </div>
-      )}
-    </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleClearRange}
+                className="flex-1 px-2 py-1 text-xs font-medium border border-border rounded bg-transparent text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-muted"
+                aria-label="Clear"
+              >
+                <X className="w-3 h-3 mr-1 align-middle inline" aria-hidden="true" />
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={handleApplyRange}
+                className="flex-1 px-2 py-1 text-xs font-medium border-none rounded bg-primary text-white cursor-pointer transition-colors duration-150 hover:bg-primary/90"
+                aria-label="Apply"
+              >
+                <Check className="w-3 h-3 mr-1 align-middle inline" aria-hidden="true" />
+                Apply
+              </button>
+            </div>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
   )
 }

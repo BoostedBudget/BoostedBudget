@@ -279,6 +279,8 @@ export function AccountTable({
       loading={loading}
       skeletonRows={5}
       onRowClick={onRowClick}
+      stickyHeader
+      stickyHeaderTopOffset="4rem"
       columnSizing={sizing}
       onColumnSizingChange={onSizingChange}
       columnOrder={columnOrder}
