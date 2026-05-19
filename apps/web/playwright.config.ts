@@ -137,12 +137,12 @@ export default defineConfig({
       },
       dependencies: ['setup'],
     },
-    // Safari/webkit — scoped to the virtualized infinite-scroll spec only.
-    // Catches sticky-thead-inside-table bugs specific to Safari rendering.
-    // If regressions appear, see the display:grid follow-up issue documented in the plan.
+    // Safari/webkit — sticky-table specs that catch Safari-specific rendering bugs:
+    // - position:sticky + thead + border-collapse background painting
+    // - virtualized scroll container stacking context
     {
-      name: 'webkit-virtualized',
-      testMatch: /transactions-infinite-scroll\.auth\.spec\.ts$/,
+      name: 'webkit-sticky',
+      testMatch: /(transactions-infinite-scroll|data-table-sticky-header)\.auth\.spec\.ts$/,
       use: {
         ...devices['Desktop Safari'],
         ...(existsSync(authFile) ? { storageState: authFile } : {}),
