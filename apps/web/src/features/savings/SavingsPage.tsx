@@ -217,7 +217,7 @@ export function SavingsPage() {
         title="Delete savings goal"
         description={
           deletingGoal
-            ? `Are you sure you want to delete "${deletingGoal.name}"? This cannot be undone.`
+            ? <>Are you sure you want to delete &ldquo;<span data-ph-mask>{deletingGoal.name}</span>&rdquo;? This cannot be undone.</>
             : 'Are you sure you want to delete this goal?'
         }
         variant="destructive"

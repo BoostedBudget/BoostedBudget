@@ -48,7 +48,7 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsG
             </span>
           )}
         </div>
-        {goal.description && <p className="m-0 text-sm text-muted-foreground">{goal.description}</p>}
+        {goal.description && <p className="m-0 text-sm text-muted-foreground"><span data-ph-mask>{goal.description}</span></p>}
       </div>
 
       <div className="flex items-baseline gap-1">
