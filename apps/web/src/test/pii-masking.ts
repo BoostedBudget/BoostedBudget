@@ -11,13 +11,14 @@ export interface PIIViolation {
 }
 
 // Covers: prefix symbols ($1,234 / -$45.99 / +$500 / €500), postfix codes (1,234 USD),
-// unicode minus (−$500), parenthetical negatives (($1,234)), single-digit amounts ($5).
+// prefix codes (USD 8.99), unicode minus (−$500), parenthetical negatives (($1,234)).
 const CURRENCY_RE =
-  /[-+]?\s?[$€£¥]\s?-?[\d,]+(?:\.\d+)?|[\d,]+(?:\.\d+)?\s?(?:USD|EUR|GBP|JPY)|−\s?[$€£¥]?[\d,]+(?:\.\d+)?|\([$€£¥]?[\d,]+(?:\.\d+)?\)/;
+  /[-+]?\s?[$€£¥]\s?-?[\d,]+(?:\.\d+)?|[\d,]+(?:\.\d+)?\s?(?:USD|EUR|GBP|JPY)|(?:USD|EUR|GBP|JPY)\s?[\d,]+(?:\.\d+)?|−\s?[$€£¥]?[\d,]+(?:\.\d+)?|\([$€£¥]?[\d,]+(?:\.\d+)?\)/;
 
 // Covers: •••• / **** / xxxx / ****-1234 / x-1234 followed by 3+ digits,
-// and "last4: 1234" patterns.
-const ACCOUNT_MASK_RE = /(?:[•●⚫⬤*xX]){2,}[-\s]?\d{3,}|last[_-]?4\s*:?\s*\d{4}/i;
+// "last4: 1234", and "ending in 1234" (card number display) patterns.
+const ACCOUNT_MASK_RE =
+  /(?:[•●⚫⬤*xX]){2,}[-\s]?\d{3,}|last[_-]?4\s*:?\s*\d{4}|ending\s+in\s+\d{4}/i;
 
 const SCANNED_ATTRS = [
   'aria-label',
