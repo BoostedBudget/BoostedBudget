@@ -69,7 +69,7 @@ export interface DataTableProps<T> {
   filters: FilterState
   onFiltersChange: (f: FilterState) => void
   emptyState?: ReactNode
-  caption?: string
+  caption?: ReactNode
   className?: string
   loading?: boolean
   onRowClick?: (row: T) => void
