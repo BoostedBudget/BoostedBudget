@@ -106,7 +106,7 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
         )}
 
         <div className="font-semibold text-sm text-muted-foreground uppercase tracking-wide flex-1">
-          {institution_name || 'Unknown Bank'}
+          <span data-ph-mask>{institution_name || 'Unknown Bank'}</span>
         </div>
 
         <div className="flex items-center gap-3">
@@ -151,7 +151,7 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
             className="text-xl font-semibold text-foreground m-0"
             style={custom_color ? { color: custom_color } : undefined}
           >
-            {displayName}
+            <span data-ph-mask>{displayName}</span>
           </h3>
         </div>
 

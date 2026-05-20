@@ -317,11 +317,11 @@ describe('AccountTable', () => {
       mockUseUser.mockReturnValue({ user: mockClerkUser, isLoaded: true, isSignedIn: true })
     })
 
-    it('renders data-ph-mask on balance and mask columns', () => {
+    it('renders data-ph-mask on institution, name, mask, and balance columns', () => {
       const { container } = render(<AccountTable accounts={mockAccounts} />)
       const maskedTds = container.querySelectorAll('td[data-ph-mask]')
-      // mask + balance = 2 masked cells per row × 3 rows = 6
-      expect(maskedTds.length).toBe(mockAccounts.length * 2)
+      // institution + name + mask + balance = 4 masked cells per row
+      expect(maskedTds.length).toBe(mockAccounts.length * 4)
     })
 
     it('renders resize handles when resizable is true', () => {

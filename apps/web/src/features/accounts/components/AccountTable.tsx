@@ -297,7 +297,7 @@ export function AccountTable({
         )
       }}
       className={cn(loading && 'account-table--loading', className)}
-      maskedColumnIds={['mask', 'balance']}
+      maskedColumnIds={['institution', 'name', 'mask', 'balance']}
       emptyState={
         <p className="py-12 px-4 text-center text-muted-foreground italic">
           No accounts match your filters. Try adjusting your criteria.
