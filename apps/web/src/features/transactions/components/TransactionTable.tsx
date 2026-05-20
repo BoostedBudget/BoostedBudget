@@ -281,7 +281,7 @@ export function TransactionTable({
         )
       }
       className={cn(loading && 'transaction-table--loading', className)}
-      maskedColumnIds={['amount']}
+      maskedColumnIds={['amount', 'merchant', 'account']}
       virtualization={onScrollEnd ? {
         enabled: true,
         estimateRowHeight: 56,

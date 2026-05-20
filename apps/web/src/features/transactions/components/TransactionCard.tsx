@@ -113,7 +113,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
   const showUncategorizedWarning = categoryLabel === 'Uncategorized'
   const { text: amountFormatted, signClass: amountClass, arrow, testId: arrowTestId } = formatTransactionAmount(amount)
 
-  const ariaLabel = `${displayName}, ${amountFormatted}, ${displayDate}${pending ? ', pending' : ''}`
+  const ariaLabel = `Transaction, ${displayDate}${pending ? ', pending' : ''}`
 
   // Issue #531: Get category color for the dot
   const categoryColor = getCategoryColor(categoryLabel)
@@ -151,7 +151,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
     >
       <div className="flex justify-between items-start gap-4">
         <div className="flex-1 min-w-0">
-          <div className="text-base font-semibold text-foreground mb-1 overflow-hidden text-ellipsis whitespace-nowrap">{displayName}</div>
+          <div className="text-base font-semibold text-foreground mb-1 overflow-hidden text-ellipsis whitespace-nowrap"><span data-ph-mask>{displayName}</span></div>
           {/* Issue #531: Account badge */}
           {account && (
             <div className="transaction-card__account mt-0.5">
@@ -160,7 +160,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
                 style={{ backgroundColor: accountBackgroundColor }}
               >
                 {account.custom_emoji && <span>{account.custom_emoji}</span>}
-                {accountDisplayName}
+                <span data-ph-mask>{accountDisplayName}</span>
               </span>
             </div>
           )}
@@ -190,7 +190,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
           {tags && tags.length > 0 && (
             <div className="transaction-card__tags flex flex-wrap gap-1 mt-1.5" data-testid="transaction-tags">
               {tags.map((tag) => (
-                <span key={tag} className="inline-block text-[11px] font-medium text-foreground bg-muted px-2 py-0.5 rounded-full whitespace-nowrap">
+                <span key={tag} data-ph-mask className="inline-block text-[11px] font-medium text-foreground bg-muted px-2 py-0.5 rounded-full whitespace-nowrap">
                   {tag}
                 </span>
               ))}
