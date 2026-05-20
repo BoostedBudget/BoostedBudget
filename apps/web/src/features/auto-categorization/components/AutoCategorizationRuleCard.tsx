@@ -83,7 +83,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
           </span>
         </div>
         {rule.description && (
-          <p className="mt-2 text-sm text-muted-foreground">{rule.description}</p>
+          <p className="mt-2 text-sm text-muted-foreground"><span data-ph-mask>{rule.description}</span></p>
         )}
       </div>
 
@@ -99,7 +99,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
                 <span className="text-muted-foreground">
                   {CONDITION_TYPE_LABELS[condition.type] || condition.type}
                 </span>
-                <span className="text-foreground font-medium">
+                <span className="text-foreground font-medium" data-ph-mask>
                   {formatConditionValue(condition)}
                 </span>
               </li>
@@ -124,7 +124,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
             {rule.target_kind === 'custom' && rule.target_custom_category_id && (
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-muted-foreground">Set custom category:</span>
-                <span className="text-foreground font-medium">{rule.target_custom_category_display ?? rule.target_custom_category_id}</span>
+                <span className="text-foreground font-medium" data-ph-mask>{rule.target_custom_category_display ?? rule.target_custom_category_id}</span>
               </div>
             )}
             {rule.target_kind === 'clear' && (
@@ -201,7 +201,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
         onOpenChange={(open) => !open && !deleting && setShowDeleteConfirm(false)}
         onConfirm={handleDeleteConfirm}
         title="Delete Rule"
-        description={`Are you sure you want to delete "${rule.name}"?`}
+        description={<>Are you sure you want to delete &ldquo;<span data-ph-mask>{rule.name}</span>&rdquo;?</>}
         variant="destructive"
         loading={deleting}
       />

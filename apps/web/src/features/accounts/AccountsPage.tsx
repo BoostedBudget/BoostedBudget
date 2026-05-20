@@ -119,12 +119,12 @@ export function AccountsPage() {
     const isLast = isLastAccountForItem(account)
     return (
       <span>
-        You are about to permanently delete <strong>{displayName}{maskPart}</strong>.
+        You are about to permanently delete <strong data-ph-mask>{displayName}{maskPart}</strong>.
         <br />Your transactions will be preserved.
         <br />Balance history will be removed.
         {isLast && (
           <>
-            <br />The bank connection to <strong>{account.institution_name}</strong> will also be removed.
+            <br />The bank connection to <strong data-ph-mask>{account.institution_name}</strong> will also be removed.
           </>
         )}
       </span>
@@ -153,6 +153,7 @@ export function AccountsPage() {
       .map((inst) => ({
         value: inst,
         label: inst,
+        masked: true,
       }))
   }, [accountsData?.accounts])
 

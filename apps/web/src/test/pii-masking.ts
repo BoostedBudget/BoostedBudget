@@ -10,13 +10,14 @@ export interface PIIViolation {
   via: 'text' | 'aria-label' | 'aria-description' | 'title' | 'placeholder' | 'alt' | 'value';
 }
 
-// Covers: prefix symbols ($1,234 / €500), postfix codes (1,234 USD), unicode minus
-// (−$500), parenthetical negatives (($1,234)), and single-digit amounts ($5).
+// Covers: prefix symbols ($1,234 / -$45.99 / +$500 / €500), postfix codes (1,234 USD),
+// unicode minus (−$500), parenthetical negatives (($1,234)), single-digit amounts ($5).
 const CURRENCY_RE =
-  /(?:[$€£¥])-?[\d,]+(?:\.\d+)?|[\d,]+(?:\.\d+)?\s?(?:USD|EUR|GBP|JPY)|−\s?[$€£¥]?[\d,]+(?:\.\d+)?|\([$€£¥]?[\d,]+(?:\.\d+)?\)/;
+  /[-+]?\s?[$€£¥]\s?-?[\d,]+(?:\.\d+)?|[\d,]+(?:\.\d+)?\s?(?:USD|EUR|GBP|JPY)|−\s?[$€£¥]?[\d,]+(?:\.\d+)?|\([$€£¥]?[\d,]+(?:\.\d+)?\)/;
 
-// Covers: •••• / **** / xxxx followed by 3+ digits, and "last4: 1234" patterns.
-const ACCOUNT_MASK_RE = /(?:[•●⚫⬤*xX]){2,}\s?\d{3,}|last[_-]?4\s*:?\s*\d{4}/i;
+// Covers: •••• / **** / xxxx / ****-1234 / x-1234 followed by 3+ digits,
+// and "last4: 1234" patterns.
+const ACCOUNT_MASK_RE = /(?:[•●⚫⬤*xX]){2,}[-\s]?\d{3,}|last[_-]?4\s*:?\s*\d{4}/i;
 
 const SCANNED_ATTRS = [
   'aria-label',
