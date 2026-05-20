@@ -124,7 +124,7 @@ Radix Dialog content renders in a portal but typically inherits `data-ph-mask` f
 ## How to verify
 
 ```bash
-# Automated regression gate (12 page-level tests)
+# Automated regression gate (10 page-level tests)
 cd apps/web && bun run test src/test/pii-coverage.test.tsx -v
 
 # Full frontend suite

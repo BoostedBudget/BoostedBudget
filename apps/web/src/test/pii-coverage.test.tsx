@@ -13,7 +13,8 @@
  */
 
 import { describe, test, expect, beforeEach, mock } from 'bun:test'
-import { render, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, waitFor, cleanup } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
@@ -26,7 +27,6 @@ import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import {
   mockGetTransactions,
   mockUseGetTransactions,
-  mockUseInfiniteTransactions,
 } from '@/test/mocks/transactions-api'
 import { mockUseGetUserTags } from '@/test/mocks/tags-api'
 import {
@@ -51,11 +51,6 @@ import { mockUseNetWorthData } from '@/test/mocks/net-worth-hooks'
 // --- Silence analytics in all tests (PostHog is no-op without POSTHOG_KEY) ---
 mock.module('@/shared/hooks/useTrackEvent', () => ({
   useTrackEvent: () => mock(() => {}),
-}))
-
-// Mock local useInfiniteTransactions to bypass useInfiniteQuery + virtualization in happy-dom
-mock.module('@/features/transactions/hooks/useInfiniteTransactions', () => ({
-  useInfiniteTransactions: (...args: unknown[]) => mockUseInfiniteTransactions(...args),
 }))
 
 // --- Page imports (static — mocks are preloaded before module resolution) ---
@@ -180,15 +175,6 @@ describe('PII coverage — Transactions page', () => {
       total_count: 1,
       limit: 50,
     })
-    mockUseInfiniteTransactions.mockReturnValue({
-      transactions: [makeTransaction()],
-      fetchNextPage: mock(() => {}),
-      hasNextPage: false,
-      isFetchingNextPage: false,
-      isLoading: false,
-      isError: false,
-      updateTransaction: mock(() => {}),
-    })
     mockUseGetUserTags.mockReturnValue({ data: { tags: [] }, isLoading: false, error: null })
     mockUseGetUserCategories.mockReturnValue({ data: { categories: [] }, isLoading: false, error: null })
     mockUseGetPlaidCategories.mockReturnValue({ data: null, isLoading: false })
@@ -231,13 +217,31 @@ describe('PII coverage — Accounts page', () => {
     })
   })
 
-  test('masks all PII', async () => {
+  test('masks all PII including institution filter dropdown', async () => {
+    const user = userEvent.setup()
     render(<AccountsPage />, { wrapper: createWrapper() })
     const sentinels: PIISentinel[] = [
       { value: SENTINEL_NICKNAME, fieldDescription: 'account.nickname' },
       { value: SENTINEL_INSTITUTION, fieldDescription: 'account.institution_name' },
     ]
     await waitForSentinels(sentinels)
+
+    // AccountsPage defaults to cards view; switch to table to expose filter buttons.
+    await user.click(screen.getByRole('button', { name: /^table$/i }))
+    await waitFor(
+      () => expect(screen.getAllByRole('button', { name: /filter by institution/i }).length).toBeGreaterThan(0),
+      { timeout: 3000 }
+    )
+
+    // Open institution filter so Radix portal mounts options into document.body.
+    // Without this the scanner never sees portaled option labels — the gate was blind.
+    const filterBtns = screen.getAllByRole('button', { name: /filter by institution/i })
+    await user.click(filterBtns[0])
+    await waitFor(
+      () => expect(screen.getByRole('listbox')).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 })
@@ -269,13 +273,23 @@ describe('PII coverage — Net Worth page', () => {
     })
   })
 
-  test('masks all PII', async () => {
+  test('masks all PII including institution filter dropdown', async () => {
+    const user = userEvent.setup()
     render(<NetWorthPage />, { wrapper: createWrapper() })
     const sentinels: PIISentinel[] = [
       { value: SENTINEL_NICKNAME, fieldDescription: 'account.nickname' },
       { value: SENTINEL_INSTITUTION, fieldDescription: 'account.institution_name' },
     ]
     await waitForSentinels(sentinels)
+
+    // Open institution filter so Radix portal mounts options into document.body.
+    const filterBtns = screen.getAllByRole('button', { name: /filter by institution/i })
+    await user.click(filterBtns[0])
+    await waitFor(
+      () => expect(screen.getByRole('listbox')).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 })
