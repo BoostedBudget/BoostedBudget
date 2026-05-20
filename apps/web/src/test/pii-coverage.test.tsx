@@ -147,12 +147,11 @@ function makeTransaction(overrides: Record<string, unknown> = {}) {
 
 async function waitForSentinels(sentinels: PIISentinel[]) {
   for (const s of sentinels) {
-    await waitFor(() => expect(document.body.textContent ?? '').toContain(s.value), {
-      timeout: 3000,
-    }).catch(() => {
-      // Sentinel not visible — scan anyway; test will fail either on
-      // timeout or on the PII assertion below.
-    })
+    await waitFor(
+      () =>
+        expect(document.body.textContent ?? '').toContain(s.value),
+      { timeout: 3000 }
+    )
   }
 }
 
@@ -398,7 +397,7 @@ describe('PII coverage — CategoryEditor component', () => {
   test('masks user-authored category names', async () => {
     render(
       <CategoryEditor
-        selectedCategory={[]}
+        selectedCategory={[SENTINEL_CATEGORY_NAME]}
         availableCategories={[sentinelCategory]}
         plaidPrimaries={[{ enum: 'FOOD_AND_DRINK', display: 'Food and Drink' }]}
         onChange={mock(() => {})}
@@ -421,24 +420,25 @@ describe('PII coverage — Budgets list page', () => {
     cleanup()
     mockUseGetPlaidPrimaryCategories.mockReturnValue({ data: [], isLoading: false, error: null })
     mockUseGetBudgets.mockReturnValue({
-      data: {
-        budgets: [
-          {
-            id: 'budget-sentinel',
-            user_id: 'user-1',
-            name: SENTINEL_BUDGET_NAME,
-            description: 'Sentinel budget',
-            currency_code: 'USD',
-            start_date: '2024-01-01',
-            end_date: '2024-01-31',
-            total_allocated: 99999.99,
-            total_spent: 12345.67,
-            total_income: 55555.55,
-            created_at: '2024-01-01T00:00:00Z',
-            updated_at: '2024-01-01T00:00:00Z',
-          },
-        ],
-      },
+      data: [
+        {
+          id: 'budget-sentinel',
+          user_id: 'user-1',
+          name: SENTINEL_BUDGET_NAME,
+          description: 'Sentinel budget description',
+          currency_code: 'USD',
+          period: 'monthly',
+          start_date: '2024-01-01',
+          end_date: '2024-01-31',
+          amount: 99999.99,
+          is_active: true,
+          income_amount: 0,
+          income_sources: [],
+          categories: [],
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+        },
+      ],
       isLoading: false,
       error: null,
       refetch: mock(() => {}),

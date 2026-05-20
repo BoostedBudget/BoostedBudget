@@ -219,7 +219,7 @@ export function TransactionsPage() {
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
     if (searchValue) {
       searchDebounceRef.current = setTimeout(() => {
-        trackEvent(ANALYTICS_EVENTS.TRANSACTION_SEARCHED, { query: searchValue })
+        trackEvent(ANALYTICS_EVENTS.TRANSACTION_SEARCHED, { query_length: searchValue.length })
       }, 500)
     }
   }
