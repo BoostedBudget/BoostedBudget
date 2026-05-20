@@ -299,7 +299,7 @@ export function BudgetsPage() {
         title="Delete Budget"
         description={deletingBudget ? (
           <>
-            Are you sure you want to delete &ldquo;{deletingBudget.name}&rdquo;? This budget and its{' '}
+            Are you sure you want to delete &ldquo;<span data-ph-mask>{deletingBudget.name}</span>&rdquo;? This budget and its{' '}
             {deletingBudget.categories?.length === 1 ? '1 category' : `${deletingBudget.categories?.length ?? 0} categories`}{' '}
             will be permanently deleted. This action cannot be undone.
           </>

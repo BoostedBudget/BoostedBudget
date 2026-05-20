@@ -180,14 +180,14 @@ export function BudgetDetailPage() {
         </Link>
 
         <div className="flex items-center gap-3 mb-2">
-          <h1 className="m-0 text-3xl font-bold text-foreground">{budget.name}</h1>
+          <h1 className="m-0 text-3xl font-bold text-foreground"><span data-ph-mask>{budget.name}</span></h1>
           {budget.is_active && (
             <span className="px-3 py-1 text-xs font-semibold rounded-full text-green-700 dark:text-green-300 bg-green-100 dark:bg-green-900">Active</span>
           )}
         </div>
 
         {budget.description && (
-          <p className="m-0 mb-4 text-muted-foreground">{budget.description}</p>
+          <p className="m-0 mb-4 text-muted-foreground"><span data-ph-mask>{budget.description}</span></p>
         )}
 
         <div className="flex flex-wrap gap-6 p-4 bg-muted rounded-lg">
