@@ -12,8 +12,8 @@
  * slice (Tasks 5–14) adds data-ph-mask coverage.
  */
 
-import { describe, test, expect, beforeEach, mock } from 'bun:test'
-import { render, screen, waitFor, cleanup } from '@testing-library/react'
+import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
+import { render, screen, within, waitFor, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -200,6 +200,9 @@ describe('PII coverage — Transactions page', () => {
     ]
     await waitForSentinels(sentinels)
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+    // Known limitation: TransactionTable is rendered directly (not TransactionsPage),
+    // so the account filter dropdown portal on TransactionsPage is not exercised here.
+    // Table-cell masking (maskedColumnIds) is verified above.
   })
 })
 
@@ -215,6 +218,12 @@ describe('PII coverage — Accounts page', () => {
       error: null,
       refetch: mock(() => {}),
     })
+  })
+
+  // Switching to table view writes 'accounts-list-view' to localStorage; remove it
+  // so this test file doesn't pollute AccountsPage.test.tsx when the suite runs together.
+  afterEach(() => {
+    localStorage.removeItem('accounts-list-view')
   })
 
   test('masks all PII including institution filter dropdown', async () => {
@@ -237,10 +246,12 @@ describe('PII coverage — Accounts page', () => {
     // Without this the scanner never sees portaled option labels — the gate was blind.
     const filterBtns = screen.getAllByRole('button', { name: /filter by institution/i })
     await user.click(filterBtns[0])
-    await waitFor(
-      () => expect(screen.getByRole('listbox')).toBeInTheDocument(),
+    const listbox = await waitFor(
+      () => screen.getByRole('listbox'),
       { timeout: 3000 }
     )
+    // Confirm the sentinel actually appears inside the portal (not just on the page body).
+    expect(within(listbox).getByText(SENTINEL_INSTITUTION)).toBeInTheDocument()
 
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
@@ -283,12 +294,15 @@ describe('PII coverage — Net Worth page', () => {
     await waitForSentinels(sentinels)
 
     // Open institution filter so Radix portal mounts options into document.body.
+    // Without this the scanner never sees portaled option labels — the gate was blind.
     const filterBtns = screen.getAllByRole('button', { name: /filter by institution/i })
     await user.click(filterBtns[0])
-    await waitFor(
-      () => expect(screen.getByRole('listbox')).toBeInTheDocument(),
+    const listbox = await waitFor(
+      () => screen.getByRole('listbox'),
       { timeout: 3000 }
     )
+    // Confirm the sentinel actually appears inside the portal (not just on the page body).
+    expect(within(listbox).getByText(SENTINEL_INSTITUTION)).toBeInTheDocument()
 
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
