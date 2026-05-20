@@ -109,7 +109,7 @@ export function CategoryEditor({
               data-testid="category-color"
               style={{ backgroundColor: currentCategoryObj?.color || '#6B7280' }}
             />
-            <span className="text-sm text-foreground">{currentLabel}</span>
+            <span className="text-sm text-foreground" data-ph-mask>{currentLabel}</span>
             <button
               type="button"
               className="inline-flex items-center justify-center w-5 h-5 p-0 border-none bg-muted rounded-full text-muted-foreground cursor-pointer text-sm leading-none hover:bg-border hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
@@ -159,7 +159,6 @@ export function CategoryEditor({
               <li
                 key={category.key}
                 role="option"
-                aria-label={category.name}
                 className={`flex items-center gap-2 px-3 py-2 cursor-pointer text-sm hover:bg-muted ${category.name === currentCategory ? 'bg-primary/5 font-medium' : ''}`}
                 onClick={() => handleSelectCategory(category.name)}
               >
@@ -167,7 +166,7 @@ export function CategoryEditor({
                   className="w-3 h-3 rounded-full shrink-0"
                   style={{ backgroundColor: category.color || '#6B7280' }}
                 />
-                {category.name}
+                <span data-ph-mask>{category.name}</span>
               </li>
             ))}
 

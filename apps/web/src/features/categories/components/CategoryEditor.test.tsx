@@ -442,7 +442,7 @@ describe('CategoryEditor', () => {
         // Exactly one entry matching "entertainment" (custom wins, keeps custom casing)
         const options = screen.getAllByRole('option')
         const entOptions = options.filter(opt =>
-          opt.getAttribute('aria-label')?.toLowerCase() === 'entertainment'
+          opt.textContent?.trim().toLowerCase() === 'entertainment'
         )
         expect(entOptions).toHaveLength(1)
       })
@@ -507,7 +507,7 @@ describe('CategoryEditor', () => {
       await waitFor(() => {
         const options = screen.getAllByRole('option')
         const labels = options
-          .map(o => o.getAttribute('aria-label'))
+          .map(o => o.textContent?.trim())
           .filter(Boolean)
           .filter(l => l !== 'Uncategorized')
         expect(labels).toEqual(['Food And Drink', 'Income', 'Transportation'])
