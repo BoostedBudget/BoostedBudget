@@ -110,7 +110,7 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
                   <span className="font-semibold text-muted-foreground text-xs uppercase tracking-wide">Email</span>
                 </div>
                 <div className="flex items-center gap-2 text-base text-foreground">
-                  <span>{user.email}</span>
+                  <span data-ph-mask>{user.email}</span>
                   {user.email_verified && (
                     <span title="Email verified">
                       <CheckCircle2
