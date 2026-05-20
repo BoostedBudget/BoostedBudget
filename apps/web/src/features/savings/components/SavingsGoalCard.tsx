@@ -80,7 +80,7 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsG
     <div className="bg-card border border-border rounded-xl p-6 flex flex-col gap-4 transition-shadow hover:shadow-md">
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2">
-          <h3 className="m-0 text-lg font-semibold text-foreground">{goal.name}</h3>
+          <h3 className="m-0 text-lg font-semibold text-foreground"><span data-ph-mask>{goal.name}</span></h3>
           {goal.is_completed && <span className="bg-success/10 text-success text-xs font-medium px-2 py-0.5 rounded-full">Completed</span>}
         </div>
         {goal.description && (

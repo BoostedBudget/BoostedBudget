@@ -103,7 +103,7 @@ export function RuleCard({
           <Icon className="h-5 w-5 text-blue-600 dark:text-blue-400" aria-hidden="true" />
         </div>
         <div className="min-w-0 flex-1">
-          <h3 className="truncate text-base font-semibold text-foreground">{rule.name}</h3>
+          <h3 className="truncate text-base font-semibold text-foreground"><span data-ph-mask>{rule.name}</span></h3>
           <span className="text-xs text-muted-foreground">{label}</span>
         </div>
         {onToggle && (
