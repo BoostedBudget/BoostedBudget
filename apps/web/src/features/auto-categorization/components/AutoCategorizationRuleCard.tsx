@@ -1,11 +1,5 @@
-/**
- * AutoCategorizationRuleCard Component
- *
- * Displays a single auto-categorization rule with toggle, edit, and delete actions.
- * Issue #346: Custom Transaction Categorization Rules
- */
-
 import { useState } from 'react'
+import { cn } from '@/lib/utils'
 import type { CategorizationRule, ConditionType } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -73,11 +67,18 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
   }
 
   return (
-    <div className={`bg-card border border-border rounded-lg p-4 mb-4 transition-shadow hover:shadow-md ${!rule.enabled ? 'opacity-70 bg-muted' : ''}`}>
+    <div className={cn('bg-card border border-border rounded-lg p-4 mb-4 transition-shadow hover:shadow-md', !rule.enabled && 'opacity-70 bg-muted')}>
       <div className="mb-4">
         <div className="flex items-center justify-between gap-2 mb-1">
-          <h3 className="m-0 text-lg font-semibold text-foreground"><span data-ph-mask>{rule.name}</span></h3>
-          <span className={`text-xs font-medium px-2 py-1 rounded uppercase tracking-wide ${rule.enabled ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'}`}>
+          <h3 className="m-0 text-lg font-semibold text-foreground">
+            <span data-ph-mask>{rule.name}</span>
+          </h3>
+          <span
+            className={cn(
+              'text-xs font-medium px-2 py-1 rounded uppercase tracking-wide',
+              rule.enabled ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'
+            )}
+          >
             {rule.enabled ? 'Active' : 'Disabled'}
           </span>
         </div>

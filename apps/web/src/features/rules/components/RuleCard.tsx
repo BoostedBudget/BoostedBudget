@@ -1,10 +1,3 @@
-/**
- * RuleCard Component
- * Issue #39: Rule Builder UI
- *
- * Displays a single automation rule in card format.
- */
-
 import { useMemo } from 'react'
 import {
   Bell,

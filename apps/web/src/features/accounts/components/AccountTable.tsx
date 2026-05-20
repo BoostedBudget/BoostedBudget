@@ -177,9 +177,7 @@ export function AccountTable({
         const displayName = row.nickname || row.name
         return (
           <div className="flex items-center gap-2">
-            {row.custom_emoji && (
-              <span className="text-lg">{row.custom_emoji}</span>
-            )}
+            {row.custom_emoji && <span className="text-lg">{row.custom_emoji}</span>}
             <span
               className="font-medium text-foreground"
               style={row.custom_color ? { color: row.custom_color } : undefined}
