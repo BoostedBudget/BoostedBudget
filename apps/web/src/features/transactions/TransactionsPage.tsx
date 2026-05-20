@@ -266,7 +266,7 @@ export function TransactionsPage() {
         />
       </div>
 
-          <TransactionFilterPanel
+      <TransactionFilterPanel
         filters={filters}
         datePreset={datePreset}
         statusFilter={statusFilter}
@@ -279,7 +279,7 @@ export function TransactionsPage() {
         onCustomDateChange={setCustomDateRange}
         onStatusFilterChange={setStatusFilter}
         onClearFilter={clearFilter}
-        onClearAllFilters={() => clearAllFilters()}
+        onClearAllFilters={clearAllFilters}
         disabled={isLoading}
       />
 
@@ -309,16 +309,13 @@ export function TransactionsPage() {
             <>
               <div className="mb-4">
                 <p className="text-base text-muted-foreground m-0">
-                  {hasActiveFilters ? (
-                    <>Showing {transactions.length.toLocaleString()} matching transactions</>
-                  ) : (
-                    <>{transactions.length.toLocaleString()} transactions loaded</>
-                  )}
+                  {hasActiveFilters
+                    ? `Showing ${transactions.length.toLocaleString()} matching transactions`
+                    : `${transactions.length.toLocaleString()} transactions loaded`}
                 </p>
               </div>
-
               <div role="status" aria-live="polite" className="sr-only">
-                {isFetchingNextPage ? 'Loading more transactions' : ''}
+                {isFetchingNextPage && 'Loading more transactions'}
               </div>
             </>
           )}

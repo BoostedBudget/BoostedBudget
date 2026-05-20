@@ -154,34 +154,32 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
           <div className="text-base font-semibold text-foreground mb-1 overflow-hidden text-ellipsis whitespace-nowrap"><span data-ph-mask>{displayName}</span></div>
           {/* Issue #531: Account badge */}
           {account && (
-            <div className="transaction-card__account mt-0.5">
-              <span
-                className="transaction-card__account-badge inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-white"
-                style={{ backgroundColor: accountBackgroundColor }}
-              >
-                {account.custom_emoji && <span>{account.custom_emoji}</span>}
-                <span data-ph-mask>{accountDisplayName}</span>
-              </span>
-            </div>
+            <span
+              className="transaction-card__account-badge inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-white"
+              style={{ backgroundColor: accountBackgroundColor }}
+            >
+              {account.custom_emoji && <span>{account.custom_emoji}</span>}
+              <span data-ph-mask>{accountDisplayName}</span>
+            </span>
           )}
-          <div className="transaction-card__meta flex gap-3 text-sm text-muted-foreground mt-1">
+          <div className="flex gap-3 text-sm text-muted-foreground mt-1">
             <TransactionBudgetBadge match={budgetMatch} />
-            <span className="transaction-card__category inline-flex items-center gap-1">
+            <span className="inline-flex items-center gap-1">
               {transaction.pfc_category_icon_url ? (
                 <img
                   src={transaction.pfc_category_icon_url}
                   alt=""
-                  className="transaction-card__category-icon w-4 h-4 shrink-0 mr-0.5"
+                  className="w-4 h-4 shrink-0 mr-0.5"
                   aria-hidden="true"
                 />
               ) : (
                 <span
-                  className="transaction-card__category-dot w-2 h-2 rounded-full shrink-0 mr-1"
+                  className="w-2 h-2 rounded-full shrink-0 mr-1"
                   style={{ backgroundColor: categoryColor }}
                 />
               )}
               {showUncategorizedWarning && (
-                <span className="transaction-card__uncategorized-warning text-xs leading-none" title="Uncategorized">⚠️</span>
+                <span title="Uncategorized">⚠️</span>
               )}
               {categoryLabel}
             </span>
@@ -199,7 +197,6 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
         </div>
         <div className="flex flex-col items-end gap-1">
           <div className={cn('text-lg font-bold whitespace-nowrap inline-flex items-center', amountClass)} data-ph-mask>
-            {/* PFCv2: outflow = expense arrow down, inflow = income arrow up */}
             {arrow === 'down' ? (
               <ArrowDownRight className="w-4 h-4 mr-0.5 inline-block align-middle" data-testid={arrowTestId} />
             ) : arrow === 'up' ? (
@@ -207,7 +204,6 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
             ) : null}
             {amountFormatted}
           </div>
-          {/* Issue #531: Enhanced pending badge */}
           {pending && (
             <div
               className="transaction-card__pending-badge inline-flex items-center gap-1 text-xs font-semibold text-yellow-700 dark:text-yellow-300 bg-yellow-100 dark:bg-yellow-800 px-2 py-0.5 rounded-full uppercase tracking-wide"
@@ -218,7 +214,6 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
             </div>
           )}
         </div>
-        {/* Issue #531: Quick action buttons */}
         {(onEdit || onCategorize) && (
           <div className="transaction-card__quick-actions hidden absolute right-4 top-1/2 -translate-y-1/2 gap-1 group-hover:flex [article:hover_&]:flex [article:focus-within_&]:flex">
             {onEdit && (

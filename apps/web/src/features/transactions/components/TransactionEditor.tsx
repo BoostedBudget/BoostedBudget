@@ -123,7 +123,9 @@ export function TransactionEditor({
         aria-labelledby="transaction-editor-title"
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <h2 id="transaction-editor-title" className="m-0 text-lg font-semibold text-foreground">Edit Transaction</h2>
+          <h2 id="transaction-editor-title" className="m-0 text-lg font-semibold text-foreground">
+            Edit Transaction
+          </h2>
           <button
             type="button"
             className="flex items-center justify-center w-8 h-8 p-0 border-none bg-transparent text-muted-foreground cursor-pointer text-2xl leading-none rounded hover:bg-muted hover:text-foreground transition-colors"
@@ -135,7 +137,9 @@ export function TransactionEditor({
         </div>
 
         <div className="flex items-center justify-between px-6 py-4 bg-muted">
-          <div className="text-sm font-medium text-foreground"><span data-ph-mask>{displayName}</span></div>
+          <div className="text-sm font-medium text-foreground">
+            <span data-ph-mask>{displayName}</span>
+          </div>
           <div className="text-base font-semibold text-foreground" data-ph-mask>
             {new Intl.NumberFormat('en-US', {
               style: 'currency',

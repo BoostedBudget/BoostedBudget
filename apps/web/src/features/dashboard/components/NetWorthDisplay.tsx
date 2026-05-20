@@ -46,11 +46,7 @@ export function NetWorthDisplay({ summary, history, showSparkline, linkTo }: Net
   return (
     <div className="flex flex-col h-full">
       {linkTo ? (
-        <Link
-          to={linkTo}
-          aria-label="View net worth details"
-          className="hover:opacity-80 transition-opacity w-fit"
-        >
+        <Link to={linkTo} aria-label="View net worth details" className="hover:opacity-80 transition-opacity w-fit">
           {headline}
         </Link>
       ) : (

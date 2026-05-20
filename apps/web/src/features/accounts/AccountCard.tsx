@@ -98,7 +98,6 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
       style={custom_color ? { borderLeftColor: custom_color, borderLeftWidth: '4px', borderLeftStyle: 'solid' } : undefined}
     >
       <div className="flex items-center gap-3 mb-4 pb-3 border-b border-border">
-        {/* Drag handle */}
         {dragHandleProps && (
           <div className="cursor-grab p-1 rounded hover:bg-black/5 transition-colors" {...dragHandleProps}>
             <GripVertical className="h-5 w-5 text-muted-foreground" />
@@ -110,7 +109,6 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Issue #679, #680: Disconnected badge when subscription expires */}
           {isDisconnected && (
             <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-warning/20 text-warning" title="Account disconnected - resubscribe to reconnect">
               <Unplug className="h-3 w-3" />
@@ -133,8 +131,7 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
 
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
-          {/* Icon or Emoji */}
-          {custom_emoji ? (
+            {custom_emoji ? (
             <span className="text-xl leading-none" aria-label="Custom emoji">
               {custom_emoji}
             </span>
@@ -160,12 +157,16 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
         <div className="mt-4 flex flex-col gap-3">
           <div className="flex justify-between items-center">
             <span className="text-sm text-muted-foreground">Current Balance</span>
-            <span className="text-lg font-semibold text-primary" data-ph-mask>{currentBalanceFormatted}</span>
+            <span className="text-lg font-semibold text-primary" data-ph-mask>
+              {currentBalanceFormatted}
+            </span>
           </div>
           {available_balance !== undefined && available_balance !== current_balance && (
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Available Balance</span>
-              <span className="text-lg font-semibold text-primary" data-ph-mask>{availableBalanceFormatted}</span>
+              <span className="text-lg font-semibold text-primary" data-ph-mask>
+                {availableBalanceFormatted}
+              </span>
             </div>
           )}
         </div>
