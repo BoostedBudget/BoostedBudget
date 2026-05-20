@@ -16,6 +16,8 @@ import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover
 export interface FilterOption {
   value: string
   label: string
+  /** When true, wraps the label in data-ph-mask for PostHog session replay */
+  masked?: boolean
 }
 
 export interface RangeValue {
@@ -236,7 +238,7 @@ export function ColumnFilterDropdown({
                         className="w-4 h-4 m-0 cursor-pointer"
                       />
                       <span className="flex-1">
-                        {option.label}
+                        {option.masked ? <span data-ph-mask>{option.label}</span> : option.label}
                       </span>
                       {isSelected && (
                         <Check
@@ -259,7 +261,7 @@ export function ColumnFilterDropdown({
                         : 'bg-transparent text-foreground hover:bg-muted'
                     }`}
                   >
-                    {option.label}
+                    {option.masked ? <span data-ph-mask>{option.label}</span> : option.label}
                     {isSelected && (
                       <Check
                         className="w-3.5 h-3.5 ml-auto text-primary"
