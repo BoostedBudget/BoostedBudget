@@ -80,6 +80,7 @@ export function TransactionsPage() {
     return accs.map((acc) => ({
       value: acc.id,
       label: acc.nickname || acc.name,
+      masked: true,
     }))
   }, [accountsList])
 

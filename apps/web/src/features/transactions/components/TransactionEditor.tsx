@@ -135,7 +135,7 @@ export function TransactionEditor({
         </div>
 
         <div className="flex items-center justify-between px-6 py-4 bg-muted">
-          <div className="text-sm font-medium text-foreground">{displayName}</div>
+          <div className="text-sm font-medium text-foreground"><span data-ph-mask>{displayName}</span></div>
           <div className="text-base font-semibold text-foreground" data-ph-mask>
             {new Intl.NumberFormat('en-US', {
               style: 'currency',
