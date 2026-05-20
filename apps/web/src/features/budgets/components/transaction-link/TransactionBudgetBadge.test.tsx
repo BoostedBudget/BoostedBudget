@@ -160,7 +160,7 @@ describe('TransactionBudgetBadge - interaction', () => {
     const badge = screen.getByRole('link')
     expect(badge).toHaveAttribute(
       'aria-label',
-      'Budget: Food And Drink › Restaurants (Matched by category)'
+      'Budget match: Matched by category'
     )
   })
 

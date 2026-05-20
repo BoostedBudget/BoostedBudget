@@ -8,7 +8,7 @@ import type { CustomCategory } from '../../categories/types'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
 import { TagEditor } from '../../tags/components/TagEditor'
 import { CategoryEditor } from '../../categories/components/CategoryEditor'
-import { getEffectiveCategory, getEffectiveCategoryLabel } from '@/shared/categories/getEffectiveCategory'
+import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
 import {
   useUpdateTransactionTags,
   useUpdateTransactionCategory,
@@ -94,7 +94,7 @@ export function TransactionEditor({
           id: transaction.id,
           data: categoryRequest,
         })) as Transaction
-        trackEvent(ANALYTICS_EVENTS.TRANSACTION_CATEGORIZED, { category: getEffectiveCategoryLabel(getEffectiveCategory(updatedTransaction)) })
+        trackEvent(ANALYTICS_EVENTS.TRANSACTION_CATEGORIZED)
       }
 
       // Pass the updated transaction to parent for immediate state update

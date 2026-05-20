@@ -112,6 +112,7 @@ export function AllocationBreakdown({
         aria-live="polite"
         aria-atomic="true"
         className="sr-only"
+        data-ph-mask
       >
         {`${percentAllocated}% of budget allocated. ${
           isOverAllocated
@@ -131,7 +132,7 @@ export function AllocationBreakdown({
       {/* Over-allocation warning — soft, non-blocking (live region is the sr-only div above) */}
       {isOverAllocated && (
         <Alert variant="warning">
-          Allocations exceed expected income by {formatCurrency(Math.abs(unallocated))}. You&apos;ll be dipping into savings or going over budget.
+          Allocations exceed expected income by <span data-ph-mask>{formatCurrency(Math.abs(unallocated))}</span>. You&apos;ll be dipping into savings or going over budget.
         </Alert>
       )}
 
@@ -153,7 +154,7 @@ export function AllocationBreakdown({
               width: `${segment.percent}%`,
               backgroundColor: segment.color,
             }}
-            aria-label={`${segment.name}: ${formatCurrency(segment.amount)} (${Math.round(segment.percent)}%)`}
+            aria-label={`${Math.round(segment.percent)}% of budget`}
           />
         ))}
         {segments.length === 0 && totalIncome === 0 && (
@@ -174,10 +175,10 @@ export function AllocationBreakdown({
               className="w-3 h-3 rounded-full shrink-0"
               style={{ backgroundColor: getCategoryColor(index) }}
             />
-            <span className="text-foreground whitespace-nowrap overflow-hidden text-ellipsis max-w-[150px]">
+            <span className="text-foreground whitespace-nowrap overflow-hidden text-ellipsis max-w-[150px]" data-ph-mask>
               {formatBudgetCategoryLabel(cat)}
             </span>
-            <span className="text-muted-foreground font-medium whitespace-nowrap">
+            <span className="text-muted-foreground font-medium whitespace-nowrap" data-ph-mask>
               {formatCurrency(cat.allocated_amount)}
             </span>
           </div>
@@ -189,7 +190,7 @@ export function AllocationBreakdown({
               style={{ backgroundColor: 'var(--color-border)' }}
             />
             <span className="text-foreground whitespace-nowrap">Unallocated</span>
-            <span className="text-muted-foreground font-medium whitespace-nowrap">
+            <span className="text-muted-foreground font-medium whitespace-nowrap" data-ph-mask>
               {formatCurrency(unallocated)}
             </span>
           </div>
@@ -200,20 +201,20 @@ export function AllocationBreakdown({
       <div className="text-[0.8125rem] text-muted-foreground pt-2 border-t border-border">
         <div className="allocation-breakdown__summary">
           <span className="allocation-breakdown__total-label">
-            Total Budget: {formatCurrency(totalIncome)}
+            Total Budget: <span data-ph-mask>{formatCurrency(totalIncome)}</span>
           </span>
           <div className="allocation-breakdown__stats">
-            <span>Allocated: {formatCurrency(totalAllocated)} ({percentAllocated}%)</span>
+            <span>Allocated: <span data-ph-mask>{formatCurrency(totalAllocated)}</span> ({percentAllocated}%)</span>
             <span className="allocation-breakdown__divider">|</span>
             <span className={isOverAllocated ? 'allocation-breakdown__over text-amber-600 dark:text-amber-400' : ''}>
               {isOverAllocated
-                ? `Over expected income: ${formatCurrency(Math.abs(unallocated))}`
-                : `Unallocated: ${formatCurrency(unallocated)} (${100 - percentAllocated}%)`
+                ? <>Over expected income: <span data-ph-mask>{formatCurrency(Math.abs(unallocated))}</span></>
+                : <>Unallocated: <span data-ph-mask>{formatCurrency(unallocated)}</span> ({100 - percentAllocated}%)</>
               }
             </span>
           </div>
         </div>
-        <span className="sr-only">Total Income: {formatCurrency(totalIncome)}</span>
+        <span className="sr-only" data-ph-mask>Total Income: {formatCurrency(totalIncome)}</span>
       </div>
     </div>
   );
