@@ -48,7 +48,7 @@ export function NetWorthDisplay({ summary, history, showSparkline, linkTo }: Net
       {linkTo ? (
         <Link
           to={linkTo}
-          aria-label={`View net worth details — ${formatCurrency(summary.net_worth)}`}
+          aria-label="View net worth details"
           className="hover:opacity-80 transition-opacity w-fit"
         >
           {headline}

@@ -229,8 +229,8 @@ function AccountSection({
       onFiltersChange={handleFiltersChange}
       loading={loading}
       skeletonRows={3}
-      caption={`${title} — ${formatCurrency(total)}`}
-      maskedColumnIds={['balance']}
+      caption={<>{title} — <span data-ph-mask>{formatCurrency(total)}</span></>}
+      maskedColumnIds={['institution', 'name', 'balance']}
       tableId={tableId}
       columnSizing={sizing}
       onColumnSizingChange={onSizingChange}
