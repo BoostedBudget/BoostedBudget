@@ -6,30 +6,18 @@
  * All chart-related functionality should be imported from this module.
  */
 
-// ECharts component (NEW)
+// ECharts component
 export { EChartsChart } from './EChartsChart';
 export type { EChartsChartProps } from './EChartsChart';
 
-// ECharts option builders (NEW)
+// ECharts option builders
 export { getBaseOption } from './options/base';
 export { getCurrencyOption } from './options/currency';
 export { getBarOption } from './options/bar';
 export { createMarkLineData } from './options/referenceLine';
 
-// Plot component (DEPRECATED - will be removed in Phase 7)
-export { Plot, Plotly } from './PlotlyChart';
-
 // Hooks
 export { useDarkMode } from './useDarkMode';
-
-// Layout utilities
-export {
-  DEFAULT_CONFIG,
-  getBaseLayout,
-  getCurrencyLayout,
-  getBarChartLayout,
-  createHorizontalReferenceLine,
-} from './layout';
 
 // Colors
 export {
@@ -45,10 +33,6 @@ export {
   formatCurrency,
   formatCurrencyCompact,
   formatCurrencyFull,
-  getCurrencyTickFormat,
-  getCurrencyCompactTickFormat,
-  createCurrencyHoverTemplate,
-  createTimeSeriesHoverTemplate,
 } from './formatters';
 
 // Types
@@ -58,8 +42,4 @@ export type {
   BalanceDataPoint,
   CashFlowDataPoint,
   ChartTheme,
-  PlotlyTraceType,
-  PlotlyScatterMode,
-  PlotProps,
-  ChartConfigOptions,
 } from './types';
