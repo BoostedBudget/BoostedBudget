@@ -243,7 +243,7 @@ describe('RuleTable', () => {
       const nameHeader = screen.getByText('Name').closest('button')!
       fireEvent.click(nameHeader)
 
-      expect(onSort).toHaveBeenCalledWith('name', 'asc')
+      expect(onSort).toHaveBeenCalledWith({ columnId: 'name', direction: 'asc' })
     })
 
     it('should toggle sort direction on second click', () => {
@@ -261,7 +261,25 @@ describe('RuleTable', () => {
       const nameHeader = screen.getByText('Name').closest('button')!
       fireEvent.click(nameHeader)
 
-      expect(onSort).toHaveBeenCalledWith('name', 'desc')
+      expect(onSort).toHaveBeenCalledWith({ columnId: 'name', direction: 'desc' })
+    })
+
+    it('should emit null on third click to clear sort (3-state cycle)', () => {
+      const onSort = mock(() => {})
+      render(
+        <RuleTable
+          rules={mockRules}
+          sortable
+          sortColumn="name"
+          sortDirection="desc"
+          onSort={onSort}
+        />
+      )
+
+      const nameHeader = screen.getByText('Name').closest('button')!
+      fireEvent.click(nameHeader)
+
+      expect(onSort).toHaveBeenCalledWith(null)
     })
 
     it('should show sort indicator on sorted column', () => {
