@@ -38,7 +38,7 @@ export function BalanceHistoryChart({
     const { snapshots } = history;
     const accountTypes = !showTypeBreakdown || !snapshots.some((s) => s.by_type)
       ? []
-      : Object.keys(snapshots[0]?.by_type || {});
+      : [...new Set(snapshots.flatMap((s) => Object.keys((s.by_type as Record<string, number>) || {})))];
 
     const series: EChartsOption['series'] = showTypeBreakdown && accountTypes.length > 0
       ? accountTypes.map((typeKey) => {
@@ -71,8 +71,8 @@ export function BalanceHistoryChart({
       tooltip: {
         trigger: 'axis',
         formatter: (params: unknown) => {
+          if (!Array.isArray(params) || params.length === 0) return '';
           const points = params as Array<{ seriesName: string; value: number; dataIndex: number }>;
-          if (!points.length) return '';
           const snapshot = snapshots[points[0].dataIndex];
           const label = snapshot ? format(parseISO(snapshot.date), 'MMMM d, yyyy') : '';
           return `<b>${label}</b><br>${points.map((p) => `${p.seriesName}: ${formatCurrency(p.value)}`).join('<br>')}`;

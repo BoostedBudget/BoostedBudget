@@ -81,4 +81,32 @@ describe('EChartsChart', () => {
   it('has a displayName for debugging', () => {
     expect(EChartsChart.displayName).toBe('EChartsChart')
   })
+
+  it('wraps chart in a data-ph-mask container', () => {
+    const { container } = render(<EChartsChart option={{ series: [] }} />)
+    const wrapper = container.firstChild as HTMLElement
+    expect(wrapper.dataset.phMask).toBeDefined()
+  })
+
+  it('has role="img" on the container', () => {
+    render(<EChartsChart option={{ series: [] }} />)
+    expect(screen.getByRole('img')).toBeDefined()
+  })
+
+  it('uses default aria-label when ariaLabel prop omitted', () => {
+    render(<EChartsChart option={{ series: [] }} />)
+    expect(screen.getByRole('img').getAttribute('aria-label')).toBe('Financial chart')
+  })
+
+  it('uses custom ariaLabel prop when provided', () => {
+    render(<EChartsChart option={{ series: [] }} ariaLabel="Balance history chart" />)
+    expect(screen.getByRole('img').getAttribute('aria-label')).toBe('Balance history chart')
+  })
+
+  it('updates theme when isDark changes', () => {
+    const { rerender } = render(<EChartsChart option={{ series: [] }} isDark={false} />)
+    expect(screen.getByTestId('echarts-core').dataset.theme).toBe('bb-light')
+    rerender(<EChartsChart option={{ series: [] }} isDark={true} />)
+    expect(screen.getByTestId('echarts-core').dataset.theme).toBe('bb-dark')
+  })
 })

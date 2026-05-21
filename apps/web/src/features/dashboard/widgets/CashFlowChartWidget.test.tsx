@@ -135,10 +135,16 @@ describe('CashFlowChartWidget', () => {
       expect(names).toContain('Net Cash Flow')
     })
 
-    it('should have reference line (markLine) on Income series', () => {
+    it('should have reference line (markLine) on Income series only', () => {
       mockUseCashFlowHistory.mockReturnValue({ data: mockHistoryData, loading: false, error: null, refetch: mockCashFlowHistoryRefetch })
       render(<TestWrapper contextValue={mockContextValue}><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
-      expect(screen.getByTestId('echarts-chart').dataset.hasMarkline).toBe('true')
+      const chart = screen.getByTestId('echarts-chart')
+      expect(chart.dataset.hasMarkline).toBe('true')
+      // Regression guard (Codex H2): markLine must be on Income (always visible),
+      // NOT on Net Cash Flow (legend-hideable — hiding it would hide the y=0 reference line).
+      const marklineSeries = JSON.parse(chart.dataset.marklineSeries ?? '[]') as string[]
+      expect(marklineSeries).toContain('Income')
+      expect(marklineSeries).not.toContain('Net Cash Flow')
     })
 
     it('data-renderer is always svg', () => {

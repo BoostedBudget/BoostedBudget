@@ -29,8 +29,8 @@ export function NetWorthHistoryChart({ history }: NetWorthHistoryChartProps) {
       tooltip: {
         trigger: 'axis',
         formatter: (params: unknown) => {
+          if (!Array.isArray(params) || params.length === 0) return '';
           const points = params as Array<{ seriesName: string; value: number; dataIndex: number }>;
-          if (!points.length) return '';
           const snapshot = snapshots[points[0].dataIndex];
           const label = snapshot ? format(parseISO(snapshot.date), 'MMMM d, yyyy') : '';
           return `<b>${label}</b><br>${points.map((p) => `${p.seriesName}: ${formatCurrency(p.value)}`).join('<br>')}`;
