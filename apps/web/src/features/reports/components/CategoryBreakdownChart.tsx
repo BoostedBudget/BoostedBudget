@@ -30,7 +30,9 @@ export function CategoryBreakdownChart({
       tooltip: {
         trigger: 'item',
         formatter: (params: unknown) => {
+          if (!params || typeof params !== 'object') return '';
           const { name, value, percent } = params as { name: string; value: number; percent: number };
+          if (typeof value !== 'number' || typeof percent !== 'number') return String(name ?? '');
           return `${name}<br>${formatCurrencyFull(value)} (${percent.toFixed(1)}%)`;
         },
       },

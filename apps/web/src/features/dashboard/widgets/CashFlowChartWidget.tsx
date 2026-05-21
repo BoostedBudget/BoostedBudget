@@ -80,6 +80,7 @@ function CashFlowChartWidget() {
       tooltip: {
         trigger: 'axis',
         formatter: (params: unknown) => {
+          if (!Array.isArray(params)) return ''
           const points = params as Array<{ seriesName: string; value: number }>
           return points.map((p) => {
             const isNet = p.seriesName === 'Net Cash Flow'

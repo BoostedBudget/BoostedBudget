@@ -82,6 +82,7 @@ export function SpendingTrendsChart({ data, loading, className }: SpendingTrends
       tooltip: {
         trigger: 'axis',
         formatter: (params: unknown) => {
+          if (!Array.isArray(params)) return '';
           const points = params as Array<{ seriesName: string; value: number }>;
           return points.map((p) => `${p.seriesName}: ${formatCurrencyFull(p.value)}`).join('<br>');
         },

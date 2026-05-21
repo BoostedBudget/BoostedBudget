@@ -103,6 +103,7 @@ const EChartsChartMockComponent = ({
 }) => {
   const series = option?.series ?? []
   const hasMarkline = series.some((s) => s.markLine !== undefined)
+  const marklineSeries = series.filter((s) => s.markLine !== undefined).map((s) => s.name ?? '')
 
   // Hidden trigger buttons for testing click events.
   // For pie/donut charts (single series with data[]), buttons correspond to each data point.
@@ -130,6 +131,7 @@ const EChartsChartMockComponent = ({
       'data-series-names': JSON.stringify(series.map((s) => s.name)),
       'data-series-types': JSON.stringify(series.map((s) => s.type)),
       'data-has-markline': hasMarkline ? 'true' : 'false',
+      'data-markline-series': JSON.stringify(marklineSeries),
       'data-renderer': 'svg',
       style,
     },
