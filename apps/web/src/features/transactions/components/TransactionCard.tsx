@@ -153,33 +153,39 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
         <div className="flex-1 min-w-0">
           <div className="text-base font-semibold text-foreground mb-1 overflow-hidden text-ellipsis whitespace-nowrap"><span data-ph-mask>{displayName}</span></div>
           {/* Issue #531: Account badge */}
+          {/* Test-contract CSS classes: transaction-card__account / __meta / __category /
+              __category-dot / __category-icon / __uncategorized-warning are queried by
+              TransactionCard.test.tsx via container.querySelector() AND by
+              e2e/transaction-visual-enhancements.auth.spec.ts. Do not remove — see commits
+              d8c6bce6 (#835) and this commit for prior restorations after Tailwind/PII
+              migrations. transaction-card__account-badge is also part of this contract. */}
           {account && (
             <span
-              className="transaction-card__account-badge inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-white"
+              className="transaction-card__account transaction-card__account-badge inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-white"
               style={{ backgroundColor: accountBackgroundColor }}
             >
               {account.custom_emoji && <span>{account.custom_emoji}</span>}
               <span data-ph-mask>{accountDisplayName}</span>
             </span>
           )}
-          <div className="flex gap-3 text-sm text-muted-foreground mt-1">
+          <div className="transaction-card__meta flex gap-3 text-sm text-muted-foreground mt-1">
             <TransactionBudgetBadge match={budgetMatch} />
-            <span className="inline-flex items-center gap-1">
+            <span className="transaction-card__category inline-flex items-center gap-1">
               {transaction.pfc_category_icon_url ? (
                 <img
                   src={transaction.pfc_category_icon_url}
                   alt=""
-                  className="w-4 h-4 shrink-0 mr-0.5"
+                  className="transaction-card__category-icon w-4 h-4 shrink-0 mr-0.5"
                   aria-hidden="true"
                 />
               ) : (
                 <span
-                  className="w-2 h-2 rounded-full shrink-0 mr-1"
+                  className="transaction-card__category-dot w-2 h-2 rounded-full shrink-0 mr-1"
                   style={{ backgroundColor: categoryColor }}
                 />
               )}
               {showUncategorizedWarning && (
-                <span title="Uncategorized">⚠️</span>
+                <span className="transaction-card__uncategorized-warning" title="Uncategorized">⚠️</span>
               )}
               {categoryLabel}
             </span>

@@ -545,9 +545,11 @@ describe('TransactionCard', () => {
         <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
       )
 
-      // Badge should be present with the budget category name
-      // The BudgetCategory in the mock has no display fields, so formatPFCEnum is used
-      expect(screen.getByRole('link', { name: /Food And Drink/i })).toBeInTheDocument()
+      // Badge link aria-label is "Budget match: <tooltip>" (PII-safe: name is in text content only)
+      const badge = screen.getByRole('link', { name: /Budget match/i })
+      expect(badge).toBeInTheDocument()
+      // Category name still visible in text content (data-ph-mask protects session replay)
+      expect(badge).toHaveTextContent('Food And Drink')
     })
 
     it('should not render badge when budgetMatch is null', () => {
@@ -556,7 +558,7 @@ describe('TransactionCard', () => {
       )
 
       // No badge link should be present
-      expect(screen.queryByRole('link', { name: /Budget:/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: /Budget match:/i })).not.toBeInTheDocument()
     })
 
     it('should not render badge when budgetMatch is undefined', () => {
@@ -564,7 +566,7 @@ describe('TransactionCard', () => {
         <TransactionCard transaction={mockTransaction} budgetMatch={undefined} />
       )
 
-      expect(screen.queryByRole('link', { name: /Budget:/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: /Budget match:/i })).not.toBeInTheDocument()
     })
 
     it('should render badge without budgetMatch prop (backwards compatible)', () => {
@@ -572,7 +574,7 @@ describe('TransactionCard', () => {
       render(<TransactionCard transaction={mockTransaction} />)
 
       expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument()
-      expect(screen.queryByRole('link', { name: /Budget:/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: /Budget match:/i })).not.toBeInTheDocument()
     })
 
     it('should position badge before category', () => {
@@ -604,7 +606,7 @@ describe('TransactionCard', () => {
         <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
       )
 
-      const link = screen.getByRole('link', { name: /Budget:/i })
+      const link = screen.getByRole('link', { name: /Budget match:/i })
       expect(link).toHaveAttribute('href', '/budgets/budget-456')
     })
 
@@ -615,7 +617,7 @@ describe('TransactionCard', () => {
         <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
       )
 
-      const link = screen.getByRole('link', { name: /Budget:/i })
+      const link = screen.getByRole('link', { name: /Budget match:/i })
       expect(link).toHaveAttribute('title', 'Matched by category')
     })
 
@@ -626,7 +628,7 @@ describe('TransactionCard', () => {
         <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
       )
 
-      const link = screen.getByRole('link', { name: /Budget:/i })
+      const link = screen.getByRole('link', { name: /Budget match:/i })
       expect(link).toHaveAttribute('title', 'Matched by tag')
     })
 
@@ -637,7 +639,7 @@ describe('TransactionCard', () => {
         <TransactionCard transaction={mockTransaction} budgetMatch={budgetMatch} />
       )
 
-      const link = screen.getByRole('link', { name: /Budget:/i })
+      const link = screen.getByRole('link', { name: /Budget match:/i })
       expect(link).toHaveAttribute('title', 'Matched by category and tag')
     })
   })
