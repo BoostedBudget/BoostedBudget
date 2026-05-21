@@ -114,7 +114,7 @@ config/
 When implementing new features or modifying user-facing flows:
 - **Frontend**: Fire analytics events for meaningful user actions using `useTrackEvent()` hook and constants from `ANALYTICS_EVENTS` (`apps/web/src/shared/analytics/events.ts`). Add new event constants when adding new trackable actions.
 - **Backend**: Fire analytics events for significant system/service actions using the `phclient.Analytics` interface and constants from `backend/internal/integration/posthog/events.go`. Services receive analytics via `SetAnalytics()` setter injection.
-- **PII masking**: Add `data-ph-mask` attribute to any element displaying financial amounts, account numbers, or other sensitive data (for PostHog session replay).
+- **PII masking**: Add `data-ph-mask` attribute to any element displaying financial amounts, account numbers, or other sensitive data (for PostHog session replay). See `docs/security/posthog-pii-masking.md` for the full PII masking policy and the regression test that enforces it.
 - **No-op safe**: All analytics code is nil/no-op safe when PostHog is not configured (local dev, QA).
 
 ### Standard Workflow (MANDATORY for all tasks)

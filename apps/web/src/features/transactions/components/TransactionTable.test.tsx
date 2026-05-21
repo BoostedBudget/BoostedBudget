@@ -218,24 +218,25 @@ describe('TransactionTable', () => {
   })
 
   describe('PII Masking', () => {
-    it('should apply data-ph-mask to the amount <td> via maskedColumnIds prop', () => {
+    it('should apply data-ph-mask to amount, merchant, and account <td>s via maskedColumnIds', () => {
       const { container } = renderTable()
-      // The amount column <td> must carry data-ph-mask (PostHog session replay protection).
-      // This test locks in the maskedColumnIds={['amount']} prop on <DataTable> so a future
-      // re-render cannot silently un-mask the column (e.g. by moving text outside the <td>).
+      // maskedColumnIds={['amount', 'merchant', 'account']} — 3 columns × 3 rows = 9 masked tds
       const maskedTds = container.querySelectorAll('td[data-ph-mask]')
-      // One masked <td> per transaction row
-      expect(maskedTds.length).toBe(3)
+      expect(maskedTds.length).toBe(9)
     })
 
-    it('should not apply data-ph-mask to non-amount columns', () => {
+    it('should NOT apply data-ph-mask to date and category columns', () => {
       const { container } = renderTable()
-      // Verify masking is column-scoped: date, description, account, and category cells are NOT masked
-      const allTds = container.querySelectorAll('td')
-      const maskedTds = Array.from(container.querySelectorAll('td[data-ph-mask]'))
-      const unmaskedTds = Array.from(allTds).filter((td) => !td.hasAttribute('data-ph-mask'))
-      // Must have more unmasked than masked — most columns are unmasked
-      expect(unmaskedTds.length).toBeGreaterThan(maskedTds.length)
+      // date and category are MAY-leave-unmasked per PII policy; verify they have no mask
+      const ths = Array.from(container.querySelectorAll('th'))
+      const dateColIdx = ths.findIndex((th) => th.textContent?.includes('Date'))
+      const categoryColIdx = ths.findIndex((th) => th.textContent?.includes('Category'))
+      const rows = Array.from(container.querySelectorAll('tbody tr'))
+      rows.forEach((row) => {
+        const tds = Array.from(row.querySelectorAll('td'))
+        if (dateColIdx >= 0) expect(tds[dateColIdx]?.hasAttribute('data-ph-mask')).toBe(false)
+        if (categoryColIdx >= 0) expect(tds[categoryColIdx]?.hasAttribute('data-ph-mask')).toBe(false)
+      })
     })
   })
 
@@ -389,10 +390,11 @@ describe('TransactionTable', () => {
   })
 
   describe('Phase 5 – DataTable opt-in features', () => {
-    it('PII mask retention: amount column still has data-ph-mask after feature wiring', () => {
+    it('PII mask retention: amount, merchant, account columns have data-ph-mask after feature wiring', () => {
       const { container } = renderTable()
       const maskedTds = container.querySelectorAll('td[data-ph-mask]')
-      expect(maskedTds.length).toBe(3)
+      // maskedColumnIds={['amount', 'merchant', 'account']} — 3 columns × 3 rows = 9
+      expect(maskedTds.length).toBe(9)
     })
 
     it('Resize handles render on columns with resizable:true', () => {

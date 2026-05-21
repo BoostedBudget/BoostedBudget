@@ -113,7 +113,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
   const showUncategorizedWarning = categoryLabel === 'Uncategorized'
   const { text: amountFormatted, signClass: amountClass, arrow, testId: arrowTestId } = formatTransactionAmount(amount)
 
-  const ariaLabel = `${displayName}, ${amountFormatted}, ${displayDate}${pending ? ', pending' : ''}`
+  const ariaLabel = `Transaction, ${displayDate}${pending ? ', pending' : ''}`
 
   // Issue #531: Get category color for the dot
   const categoryColor = getCategoryColor(categoryLabel)
@@ -151,18 +151,22 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
     >
       <div className="flex justify-between items-start gap-4">
         <div className="flex-1 min-w-0">
-          <div className="text-base font-semibold text-foreground mb-1 overflow-hidden text-ellipsis whitespace-nowrap">{displayName}</div>
+          <div className="text-base font-semibold text-foreground mb-1 overflow-hidden text-ellipsis whitespace-nowrap"><span data-ph-mask>{displayName}</span></div>
           {/* Issue #531: Account badge */}
+          {/* Test-contract CSS classes: transaction-card__account / __meta / __category /
+              __category-dot / __category-icon / __uncategorized-warning are queried by
+              TransactionCard.test.tsx via container.querySelector() AND by
+              e2e/transaction-visual-enhancements.auth.spec.ts. Do not remove — see commits
+              d8c6bce6 (#835) and this commit for prior restorations after Tailwind/PII
+              migrations. transaction-card__account-badge is also part of this contract. */}
           {account && (
-            <div className="transaction-card__account mt-0.5">
-              <span
-                className="transaction-card__account-badge inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-white"
-                style={{ backgroundColor: accountBackgroundColor }}
-              >
-                {account.custom_emoji && <span>{account.custom_emoji}</span>}
-                {accountDisplayName}
-              </span>
-            </div>
+            <span
+              className="transaction-card__account transaction-card__account-badge inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-white"
+              style={{ backgroundColor: accountBackgroundColor }}
+            >
+              {account.custom_emoji && <span>{account.custom_emoji}</span>}
+              <span data-ph-mask>{accountDisplayName}</span>
+            </span>
           )}
           <div className="transaction-card__meta flex gap-3 text-sm text-muted-foreground mt-1">
             <TransactionBudgetBadge match={budgetMatch} />
@@ -181,7 +185,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
                 />
               )}
               {showUncategorizedWarning && (
-                <span className="transaction-card__uncategorized-warning text-xs leading-none" title="Uncategorized">⚠️</span>
+                <span className="transaction-card__uncategorized-warning" title="Uncategorized">⚠️</span>
               )}
               {categoryLabel}
             </span>
@@ -190,7 +194,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
           {tags && tags.length > 0 && (
             <div className="transaction-card__tags flex flex-wrap gap-1 mt-1.5" data-testid="transaction-tags">
               {tags.map((tag) => (
-                <span key={tag} className="inline-block text-[11px] font-medium text-foreground bg-muted px-2 py-0.5 rounded-full whitespace-nowrap">
+                <span key={tag} data-ph-mask className="inline-block text-[11px] font-medium text-foreground bg-muted px-2 py-0.5 rounded-full whitespace-nowrap">
                   {tag}
                 </span>
               ))}
@@ -199,7 +203,6 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
         </div>
         <div className="flex flex-col items-end gap-1">
           <div className={cn('text-lg font-bold whitespace-nowrap inline-flex items-center', amountClass)} data-ph-mask>
-            {/* PFCv2: outflow = expense arrow down, inflow = income arrow up */}
             {arrow === 'down' ? (
               <ArrowDownRight className="w-4 h-4 mr-0.5 inline-block align-middle" data-testid={arrowTestId} />
             ) : arrow === 'up' ? (
@@ -207,7 +210,6 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
             ) : null}
             {amountFormatted}
           </div>
-          {/* Issue #531: Enhanced pending badge */}
           {pending && (
             <div
               className="transaction-card__pending-badge inline-flex items-center gap-1 text-xs font-semibold text-yellow-700 dark:text-yellow-300 bg-yellow-100 dark:bg-yellow-800 px-2 py-0.5 rounded-full uppercase tracking-wide"
@@ -218,7 +220,6 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
             </div>
           )}
         </div>
-        {/* Issue #531: Quick action buttons */}
         {(onEdit || onCategorize) && (
           <div className="transaction-card__quick-actions hidden absolute right-4 top-1/2 -translate-y-1/2 gap-1 group-hover:flex [article:hover_&]:flex [article:focus-within_&]:flex">
             {onEdit && (

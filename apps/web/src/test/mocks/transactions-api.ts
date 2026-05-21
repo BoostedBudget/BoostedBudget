@@ -39,6 +39,7 @@ export const mockUseInfiniteTransactions = mock(() => ({
   isFetchingNextPage: false,
   isLoading: false,
   isError: false,
+  isSuccess: false,
   updateTransaction: mock(() => Promise.resolve()),
 }))
 

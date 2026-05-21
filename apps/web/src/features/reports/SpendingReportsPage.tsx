@@ -85,7 +85,7 @@ export function SpendingReportsPage() {
   }
 
   const handleMerchantClick = (merchantName: string) => {
-    trackEvent(ANALYTICS_EVENTS.REPORT_MERCHANT_CLICKED, { merchant: merchantName })
+    trackEvent(ANALYTICS_EVENTS.REPORT_MERCHANT_CLICKED)
     if (startDate && endDate) {
       navigate(
         `/transactions?start_date=${startDate}&end_date=${endDate}&search=${encodeURIComponent(merchantName)}`

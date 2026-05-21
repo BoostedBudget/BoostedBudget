@@ -1,11 +1,5 @@
-/**
- * AutoCategorizationRuleCard Component
- *
- * Displays a single auto-categorization rule with toggle, edit, and delete actions.
- * Issue #346: Custom Transaction Categorization Rules
- */
-
 import { useState } from 'react'
+import { cn } from '@/lib/utils'
 import type { CategorizationRule, ConditionType } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -73,16 +67,23 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
   }
 
   return (
-    <div className={`bg-card border border-border rounded-lg p-4 mb-4 transition-shadow hover:shadow-md ${!rule.enabled ? 'opacity-70 bg-muted' : ''}`}>
+    <div className={cn('bg-card border border-border rounded-lg p-4 mb-4 transition-shadow hover:shadow-md', !rule.enabled && 'opacity-70 bg-muted')}>
       <div className="mb-4">
         <div className="flex items-center justify-between gap-2 mb-1">
-          <h3 className="m-0 text-lg font-semibold text-foreground">{rule.name}</h3>
-          <span className={`text-xs font-medium px-2 py-1 rounded uppercase tracking-wide ${rule.enabled ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'}`}>
+          <h3 className="m-0 text-lg font-semibold text-foreground">
+            <span data-ph-mask>{rule.name}</span>
+          </h3>
+          <span
+            className={cn(
+              'text-xs font-medium px-2 py-1 rounded uppercase tracking-wide',
+              rule.enabled ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'
+            )}
+          >
             {rule.enabled ? 'Active' : 'Disabled'}
           </span>
         </div>
         {rule.description && (
-          <p className="mt-2 text-sm text-muted-foreground">{rule.description}</p>
+          <p className="mt-2 text-sm text-muted-foreground"><span data-ph-mask>{rule.description}</span></p>
         )}
       </div>
 
@@ -98,7 +99,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
                 <span className="text-muted-foreground">
                   {CONDITION_TYPE_LABELS[condition.type] || condition.type}
                 </span>
-                <span className="text-foreground font-medium">
+                <span className="text-foreground font-medium" data-ph-mask>
                   {formatConditionValue(condition)}
                 </span>
               </li>
@@ -123,7 +124,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
             {rule.target_kind === 'custom' && rule.target_custom_category_id && (
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-muted-foreground">Set custom category:</span>
-                <span className="text-foreground font-medium">{rule.target_custom_category_display ?? rule.target_custom_category_id}</span>
+                <span className="text-foreground font-medium" data-ph-mask>{rule.target_custom_category_display ?? rule.target_custom_category_id}</span>
               </div>
             )}
             {rule.target_kind === 'clear' && (
@@ -139,7 +140,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
                 </span>
                 <span className="text-foreground font-medium flex flex-wrap gap-1">
                   {rule.target_tags.map((tag) => (
-                    <span key={tag} className="bg-info/10 text-info px-1.5 py-0.5 rounded text-xs font-medium">{tag}</span>
+                    <span key={tag} data-ph-mask className="bg-info/10 text-info px-1.5 py-0.5 rounded text-xs font-medium">{tag}</span>
                   ))}
                 </span>
               </div>
@@ -200,7 +201,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
         onOpenChange={(open) => !open && !deleting && setShowDeleteConfirm(false)}
         onConfirm={handleDeleteConfirm}
         title="Delete Rule"
-        description={`Are you sure you want to delete "${rule.name}"?`}
+        description={<>Are you sure you want to delete &ldquo;<span data-ph-mask>{rule.name}</span>&rdquo;?</>}
         variant="destructive"
         loading={deleting}
       />

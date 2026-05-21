@@ -99,7 +99,7 @@ export function TopMerchantsTable({
         onFiltersChange={() => {}}
         loading={loading}
         skeletonRows={5}
-        maskedColumnIds={['total']}
+        maskedColumnIds={['merchant_name', 'total']}
         onRowClick={onMerchantClick ? (row) => onMerchantClick(row.merchant_name) : undefined}
         columnSizing={sizing}
         onColumnSizingChange={onSizingChange}
