@@ -1,16 +1,8 @@
-/**
- * Category Breakdown Chart
- * Issue #953: Spending Reports Page
- *
- * Donut chart showing spending distribution by category with click-to-drill interaction.
- */
-
 import { useMemo } from 'react'
-import type { Data } from 'plotly.js'
+import type { EChartsOption } from 'echarts'
 import {
-  Plot,
+  EChartsChart,
   useDarkMode,
-  DEFAULT_CONFIG,
   CATEGORY_COLORS,
   formatCurrencyFull,
 } from '@/shared/charts'
@@ -30,49 +22,38 @@ export function CategoryBreakdownChart({
   className,
 }: CategoryBreakdownChartProps) {
   const isDark = useDarkMode()
+  const categories = data?.categories ?? []
 
-  const chartData: Data[] = useMemo(() => {
-    const categories = data?.categories ?? []
-    if (categories.length === 0) return []
-
-    return [
-      {
-        type: 'pie',
-        hole: 0.5,
-        labels: categories.map((c) => c.pfc_primary_display),
-        values: categories.map((c) => c.total),
-        marker: {
-          colors: CATEGORY_COLORS.slice(0, categories.length) as string[],
+  const option = useMemo((): EChartsOption => {
+    if (categories.length === 0) return {}
+    return {
+      tooltip: {
+        trigger: 'item',
+        formatter: (params: unknown) => {
+          const p = params as { name: string; value: number; percent: number }
+          return `${p.name}<br>${formatCurrencyFull(p.value)} (${p.percent.toFixed(1)}%)`
         },
-        hovertemplate: '%{label}<br>%{value:$,.2f} (%{percent})<extra></extra>',
-        textinfo: 'percent',
-        textposition: 'inside',
-      } as Data,
-    ]
-  }, [data])
-
-  const layout = useMemo(
-    () => ({
-      autosize: true,
-      showlegend: true,
-      margin: { t: 10, r: 10, b: 10, l: 10 },
-      paper_bgcolor: isDark ? '#1f2937' : '#ffffff',
-      plot_bgcolor: 'rgba(0,0,0,0)',
-      font: {
-        color: isDark ? '#f3f4f6' : '#111827',
       },
       legend: {
-        orientation: 'v' as const,
-        x: 1.02,
-        y: 0.5,
-        font: {
-          size: 12,
-          color: isDark ? '#f3f4f6' : '#111827',
-        },
+        orient: 'vertical',
+        right: 0,
+        top: 'middle',
       },
-    }),
-    [isDark]
-  )
+      series: [
+        {
+          type: 'pie',
+          radius: ['40%', '70%'],
+          avoidLabelOverlap: false,
+          label: { show: true, position: 'inside', formatter: '{d}%' },
+          data: categories.map((c, i) => ({
+            name: c.pfc_primary_display,
+            value: c.total,
+            itemStyle: { color: CATEGORY_COLORS[i % CATEGORY_COLORS.length] },
+          })),
+        },
+      ],
+    }
+  }, [categories])
 
   if (loading) {
     return (
@@ -82,7 +63,6 @@ export function CategoryBreakdownChart({
     )
   }
 
-  const categories = data?.categories ?? []
   if (categories.length === 0) {
     return (
       <div className={className} role="status" data-testid="category-chart">
@@ -91,6 +71,16 @@ export function CategoryBreakdownChart({
     )
   }
 
+  const onEvents = onCategoryClick
+    ? {
+        click: (params: unknown) => {
+          const p = params as { dataIndex: number }
+          const cat = categories[p.dataIndex]
+          if (cat) onCategoryClick(cat.category, cat.pfc_primary_display ?? cat.category)
+        },
+      }
+    : undefined
+
   return (
     <div className={className} data-testid="category-chart">
       {data && (
@@ -98,24 +88,11 @@ export function CategoryBreakdownChart({
           Total: <span className="font-medium" data-ph-mask>{formatCurrencyFull(data.total_spent)}</span>
         </p>
       )}
-      <Plot
-        data={chartData}
-        layout={layout}
-        config={DEFAULT_CONFIG}
+      <EChartsChart
+        option={option}
+        isDark={isDark}
         style={{ width: '100%', height: '320px' }}
-        useResizeHandler
-        onClick={
-          onCategoryClick
-            ? (event) => {
-                const point = event.points?.[0]
-                if (point) {
-                  const idx = point.pointIndex
-                  const cat = categories[idx]
-                  if (cat) onCategoryClick(cat.category, cat.pfc_primary_display ?? cat.category)
-                }
-              }
-            : undefined
-        }
+        onEvents={onEvents}
       />
     </div>
   )
