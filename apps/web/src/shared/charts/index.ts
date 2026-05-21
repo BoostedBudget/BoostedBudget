@@ -1,23 +1,22 @@
 /**
  * Shared Charts Module
- * Issue #445: Recharts to Plotly Migration
+ * Issue #1169: Plotly to ECharts Migration
  *
  * Centralized exports for chart components, utilities, and types.
  * All chart-related functionality should be imported from this module.
- *
- * Usage:
- * ```tsx
- * import {
- *   Plot,
- *   useDarkMode,
- *   getBaseLayout,
- *   CHART_COLORS,
- *   formatCurrency,
- * } from '@/shared/charts';
- * ```
  */
 
-// Plot component
+// ECharts component (NEW)
+export { EChartsChart } from './EChartsChart';
+export type { EChartsChartProps } from './EChartsChart';
+
+// ECharts option builders (NEW)
+export { getBaseOption } from './options/base';
+export { getCurrencyOption } from './options/currency';
+export { getBarOption } from './options/bar';
+export { createMarkLineData } from './options/referenceLine';
+
+// Plot component (DEPRECATED - will be removed in Phase 7)
 export { Plot, Plotly } from './PlotlyChart';
 
 // Hooks
