@@ -5,9 +5,9 @@ import type { BalanceHistory } from '../types'
 // Issue #575: Use centralized @/shared/charts mock to prevent pollution
 import '@/test/mocks/shared-charts'
 import {
-  MockPlot as mockPlot,
+  MockEChartsChart as mockEChartsChart,
   mockUseDarkMode,
-  mockGetBaseLayout,
+  mockGetCurrencyOption,
   mockFormatCurrency,
 } from '@/test/mocks/shared-charts'
 
@@ -86,16 +86,16 @@ describe('BalanceHistoryChart', () => {
   };
 
   beforeEach(() => {
-    mockPlot.mockClear()
+    mockEChartsChart.mockClear()
     mockUseDarkMode.mockClear()
-    mockGetBaseLayout.mockClear()
+    mockGetCurrencyOption.mockClear()
     mockFormatCurrency.mockClear()
   })
 
   describe('Rendering', () => {
     it('should render chart with balance history data', () => {
       render(<BalanceHistoryChart history={mockHistory} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument();
     });
 
     it('should not render a title (WidgetWrapper provides it)', () => {
@@ -105,40 +105,37 @@ describe('BalanceHistoryChart', () => {
 
     it('should render chart even with empty snapshots (parent handles empty state)', () => {
       render(<BalanceHistoryChart history={mockEmptyHistory} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument();
     });
   });
 
-  describe('Plotly Chart Configuration', () => {
-    it('should render with responsive config and resize handler', () => {
+  describe('ECharts Chart Configuration', () => {
+    it('should render with SVG renderer', () => {
       render(<BalanceHistoryChart history={mockHistory} />);
-      const chart = screen.getByTestId('plotly-chart');
+      const chart = screen.getByTestId('echarts-chart');
       expect(chart).toBeInTheDocument();
-      expect(chart.getAttribute('data-responsive')).toBe('true');
-      expect(chart.getAttribute('data-use-resize-handler')).toBe('true');
+      expect(chart.dataset.renderer).toBe('svg');
       expect(chart).toHaveStyle({ width: '100%', height: '100%' });
     });
   });
 
   describe('showTypeBreakdown Prop', () => {
-    it('should default to total balance (single trace)', () => {
+    it('should default to total balance (single series)', () => {
       render(<BalanceHistoryChart history={mockHistory} />);
-      const chart = screen.getByTestId('plotly-chart');
-      expect(chart.getAttribute('data-trace-count')).toBe('1');
+      const chart = screen.getByTestId('echarts-chart');
+      expect(chart.dataset.seriesCount).toBe('1');
     });
 
-    it('should display type breakdown with multiple traces when enabled', () => {
+    it('should display type breakdown with multiple series when enabled', () => {
       render(
         <BalanceHistoryChart history={mockHistory} showTypeBreakdown={true} />
       );
-      const chart = screen.getByTestId('plotly-chart');
-      expect(chart.getAttribute('data-trace-count')).toBe('3');
-      const traceNames = JSON.parse(
-        chart.getAttribute('data-trace-names') || '[]'
-      );
-      expect(traceNames).toContain('Depository');
-      expect(traceNames).toContain('Credit');
-      expect(traceNames).toContain('Investment');
+      const chart = screen.getByTestId('echarts-chart');
+      expect(chart.dataset.seriesCount).toBe('3');
+      const seriesNames = JSON.parse(chart.dataset.seriesNames ?? '[]') as string[];
+      expect(seriesNames).toContain('Depository');
+      expect(seriesNames).toContain('Credit');
+      expect(seriesNames).toContain('Investment');
     });
   });
 
@@ -152,12 +149,12 @@ describe('BalanceHistoryChart', () => {
       };
 
       render(<BalanceHistoryChart history={singleSnapshot} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument();
     });
 
     it('should handle missing by_type data', () => {
       render(<BalanceHistoryChart history={mockHistoryWithoutByType} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument();
     });
 
     it('should handle mixed data (some snapshots with by_type, some without)', () => {
@@ -186,7 +183,7 @@ describe('BalanceHistoryChart', () => {
       render(
         <BalanceHistoryChart history={mixedHistory} showTypeBreakdown={true} />
       );
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument();
     });
 
     it('should handle large balance amounts', () => {
@@ -201,7 +198,7 @@ describe('BalanceHistoryChart', () => {
       };
 
       render(<BalanceHistoryChart history={largeBalances} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument();
     });
 
     it('should handle negative balances', () => {
@@ -216,7 +213,7 @@ describe('BalanceHistoryChart', () => {
       };
 
       render(<BalanceHistoryChart history={negativeBalances} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument();
     });
 
     it('should handle zero balance', () => {
@@ -231,9 +228,10 @@ describe('BalanceHistoryChart', () => {
       };
 
       render(<BalanceHistoryChart history={zeroBalance} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument();
     });
   });
+
   describe('Styling', () => {
     it('should apply h-full and responsive dimensions without wrapper styling', () => {
       const { container } = render(
@@ -242,7 +240,7 @@ describe('BalanceHistoryChart', () => {
       const outerDiv = container.firstChild as HTMLElement;
       expect(outerDiv).toHaveClass('h-full');
 
-      const chart = screen.getByTestId('plotly-chart');
+      const chart = screen.getByTestId('echarts-chart');
       expect(chart).toHaveStyle({ height: '100%', minHeight: '200px' });
       expect(outerDiv).not.toHaveClass('bg-white', 'shadow', 'p-6', 'rounded-lg');
     });
@@ -251,7 +249,7 @@ describe('BalanceHistoryChart', () => {
   describe('Empty Snapshots', () => {
     it('should render chart with empty data (parent BalanceHistoryWidget handles empty state)', () => {
       render(<BalanceHistoryChart history={mockEmptyHistory} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument();
     });
   });
 });
