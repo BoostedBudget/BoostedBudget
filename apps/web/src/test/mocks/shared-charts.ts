@@ -175,19 +175,23 @@ const EChartsChartMockComponent = ({
   const series = option?.series ?? []
   const hasMarkline = series.some((s) => s.markLine !== undefined)
 
-  // Hidden per-series trigger buttons for testing click events.
-  // Fires onEvents.click with { dataIndex: N } ONLY — no name/data per plan Codex H1.
-  const triggerButtons = onEvents?.click
-    ? series.map((_: SeriesEntry, idx: number) =>
-        React.createElement('button', {
-          key: idx,
-          'aria-hidden': 'true',
-          style: { display: 'none' },
-          'data-testid': `echarts-point-${idx}`,
-          onClick: () => onEvents.click!({ dataIndex: idx }),
-        })
-      )
-    : []
+  // Hidden trigger buttons for testing click events.
+  // For pie/donut charts (single series with data[]), buttons correspond to each data point.
+  // For multi-series charts, buttons correspond to each series.
+  // Fires onEvents.click with { dataIndex: N } ONLY — no name/data per Codex H1.
+  const firstSeriesData = series[0]?.data as unknown[] | undefined
+  const triggerCount = onEvents?.click
+    ? (Array.isArray(firstSeriesData) && firstSeriesData.length > 0 ? firstSeriesData.length : series.length)
+    : 0
+  const triggerButtons = Array.from({ length: triggerCount }, (_, idx) =>
+    React.createElement('button', {
+      key: idx,
+      'aria-hidden': 'true',
+      style: { display: 'none' },
+      'data-testid': `echarts-point-${idx}`,
+      onClick: () => onEvents?.click?.({ dataIndex: idx }),
+    })
+  )
 
   return React.createElement(
     'div',
