@@ -427,10 +427,12 @@ test.describe('Savings Page - Delete Flow', () => {
     const card = page.locator('.bg-card').filter({ hasText: 'Vacation Fund' }).first()
     await card.getByRole('button', { name: /delete/i }).click()
 
-    await expect(page.getByRole('alertdialog', { name: /delete savings goal/i })).toBeVisible()
-    await expect(
-      page.getByText(/are you sure you want to delete "Vacation Fund"/i)
-    ).toBeVisible()
+    const dialog = page.getByRole('alertdialog', { name: /delete savings goal/i })
+    await expect(dialog).toBeVisible()
+    // toContainText concatenates descendant text nodes, so the data-ph-mask <span>
+    // wrap around the goal name does not split the match.
+    await expect(dialog).toContainText(/are you sure you want to delete/i)
+    await expect(dialog).toContainText('Vacation Fund')
   })
 
   test('confirming delete removes goal from grid', async ({ page }) => {
