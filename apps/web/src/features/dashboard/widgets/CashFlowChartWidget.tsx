@@ -1,23 +1,18 @@
 /**
  * Cash Flow Chart Widget
  * Issue #354: Cash Flow Analysis & Income/Expense Visualization
- * Issue #445: Migrated from Recharts to Plotly
- * Issue #525: Auto-scale axes on filter timeframe changes
- *
- * Displays a dual bar chart showing income and expenses per period
- * with a net cash flow trend line overlay.
+ * Issue #1169: Plotly to ECharts Migration
  */
 
 import { useContext, useMemo } from 'react'
 import { format, parseISO } from 'date-fns'
 import { BarChart3 } from 'lucide-react'
-import type { Data, Layout } from 'plotly.js'
+import type { EChartsOption } from 'echarts'
 import {
-  Plot,
+  EChartsChart,
   useDarkMode,
-  getBarChartLayout,
-  createHorizontalReferenceLine,
-  DEFAULT_CONFIG,
+  getBarOption,
+  createMarkLineData,
   CASH_FLOW_COLORS,
   formatCurrencyFull,
 } from '@/shared/charts'
@@ -36,16 +31,11 @@ interface ChartDataPoint {
 
 function formatPeriodLabel(period: CashFlowPeriodData, grouping: string): string {
   const date = parseISO(period.period_start)
-
   switch (grouping) {
-    case 'daily':
-      return format(date, 'MMM d')
-    case 'weekly':
-      return `Week of ${format(date, 'MMM d')}`
-    case 'monthly':
-      return format(date, 'MMM yyyy')
-    default:
-      return format(date, 'MMM d')
+    case 'daily': return format(date, 'MMM d')
+    case 'weekly': return `Week of ${format(date, 'MMM d')}`
+    case 'monthly': return format(date, 'MMM yyyy')
+    default: return format(date, 'MMM d')
   }
 }
 
@@ -63,16 +53,6 @@ function CashFlowChartWidget(_props: WidgetProps) {
     [context?.filters]
   )
 
-  const filterKey = useMemo(
-    () =>
-      JSON.stringify({
-        startDate: filters.startDate,
-        endDate: filters.endDate,
-        accountTypes: filters.accountTypes,
-      }),
-    [filters.startDate, filters.endDate, filters.accountTypes]
-  )
-
   const { data, loading, error } = useCashFlowHistory({
     filters,
     enabled: Boolean(filters.startDate && filters.endDate),
@@ -80,7 +60,6 @@ function CashFlowChartWidget(_props: WidgetProps) {
 
   const chartData = useMemo<ChartDataPoint[]>(() => {
     if (!data?.periods) return []
-
     return data.periods.map((period) => ({
       label: formatPeriodLabel(period, data.grouping),
       income: period.income,
@@ -89,63 +68,60 @@ function CashFlowChartWidget(_props: WidgetProps) {
     }))
   }, [data])
 
-  const traces = useMemo((): Data[] => {
-    if (chartData.length === 0) return []
+  const option = useMemo((): EChartsOption => {
+    if (chartData.length === 0) return {}
+    const base = getBarOption(isDark)
+    const labels = chartData.map((d) => d.label)
 
-    return [
-      {
-        x: chartData.map((d) => d.label),
-        y: chartData.map((d) => d.income),
-        type: 'bar' as const,
-        name: 'Income',
-        marker: { color: CASH_FLOW_COLORS.income },
-        hovertemplate: chartData.map(
-          (d) => `<b>Income</b>: ${formatCurrencyFull(d.income)}<extra></extra>`
-        ),
-      },
-      {
-        x: chartData.map((d) => d.label),
-        y: chartData.map((d) => d.expenses),
-        type: 'bar' as const,
-        name: 'Expenses',
-        marker: { color: CASH_FLOW_COLORS.expenses },
-        hovertemplate: chartData.map(
-          (d) =>
-            `<b>Expenses</b>: ${formatCurrencyFull(d.expenses)}<extra></extra>`
-        ),
-      },
-      {
-        x: chartData.map((d) => d.label),
-        y: chartData.map((d) => d.net),
-        type: 'scatter' as const,
-        mode: 'lines+markers' as const,
-        name: 'Net Cash Flow',
-        line: {
-          color: CASH_FLOW_COLORS.netPositive,
-          width: 2,
-        },
-        marker: { size: 6 },
-        hovertemplate: chartData.map((d) => {
-          const color = d.net >= 0 ? 'green' : 'red'
-          return `<b style="color:${color}">Net</b>: ${formatCurrencyFull(d.net)}<extra></extra>`
-        }),
-      },
-    ]
-  }, [chartData])
-
-  const layout = useMemo((): Partial<Layout> => {
-    const base = getBarChartLayout(isDark)
     return {
       ...base,
-      margin: { t: 10, r: 10, b: 40, l: 60 },
-      uirevision: filterKey,
-      yaxis: {
-        ...base.yaxis,
-        tickformat: '$.2s',
+      xAxis: { type: 'category', data: labels },
+      yAxis: {
+        ...(base.yAxis as object),
+        axisLabel: {
+          formatter: (v: unknown) => typeof v === 'number' ? formatCurrencyFull(v) : String(v),
+        },
       },
-      shapes: createHorizontalReferenceLine(0, isDark),
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: unknown) => {
+          const points = params as Array<{ seriesName: string; value: number }>
+          return points.map((p) => {
+            const isNet = p.seriesName === 'Net Cash Flow'
+            const color = isNet ? (p.value >= 0 ? 'green' : 'red') : 'inherit'
+            return `<b style="color:${color}">${p.seriesName}</b>: ${formatCurrencyFull(p.value)}`
+          }).join('<br>')
+        },
+      },
+      series: [
+        {
+          name: 'Income',
+          type: 'bar',
+          data: chartData.map((d) => d.income),
+          itemStyle: { color: CASH_FLOW_COLORS.income },
+          barCategoryGap: '20%',
+          // Attach markLine to Income (always present when data exists — Codex H2)
+          markLine: createMarkLineData(0, isDark),
+        },
+        {
+          name: 'Expenses',
+          type: 'bar',
+          data: chartData.map((d) => d.expenses),
+          itemStyle: { color: CASH_FLOW_COLORS.expenses },
+        },
+        {
+          name: 'Net Cash Flow',
+          type: 'line',
+          data: chartData.map((d) => d.net),
+          smooth: false,
+          symbol: 'circle',
+          symbolSize: 6,
+          lineStyle: { color: CASH_FLOW_COLORS.netPositive, width: 2 },
+          itemStyle: { color: CASH_FLOW_COLORS.netPositive },
+        },
+      ],
     }
-  }, [isDark, filterKey])
+  }, [chartData, isDark])
 
   if (!context?.filters.startDate || !context?.filters.endDate) {
     return (
@@ -172,7 +148,6 @@ function CashFlowChartWidget(_props: WidgetProps) {
   }
 
   const isAllZero = chartData.every(d => d.income === 0 && d.expenses === 0 && d.net === 0)
-
   if (!data || chartData.length === 0 || isAllZero) {
     return <WidgetEmptyState widgetType="cash-flow-chart" />
   }
@@ -180,12 +155,10 @@ function CashFlowChartWidget(_props: WidgetProps) {
   return (
     <div className="h-full flex flex-col">
       <div className="flex-1 min-h-0">
-        <Plot
-          data={traces}
-          layout={layout}
-          config={DEFAULT_CONFIG}
+        <EChartsChart
+          option={option}
+          isDark={isDark}
           style={{ width: '100%', height: '100%', minHeight: 200 }}
-          useResizeHandler={true}
         />
       </div>
     </div>
