@@ -210,7 +210,7 @@ describe('AutoCategorizationRuleCard', () => {
       const cancelButton = screen.getByRole('button', { name: 'Cancel' })
       fireEvent.click(cancelButton)
 
-      expect(screen.queryByText('Are you sure you want to delete "Coffee Shops"?')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     it('should call onDelete when confirmed', async () => {
