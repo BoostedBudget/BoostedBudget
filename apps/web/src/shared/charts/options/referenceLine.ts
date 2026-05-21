@@ -1,10 +1,10 @@
 import { THEME_COLORS } from '../colors'
 
-interface MarkLineConfig {
+export interface MarkLineConfig {
   silent: boolean
   symbol: string[]
   animation: boolean
-  data: Array<{ yAxis: number; lineStyle: { type: string; color: string } }>
+  data: Array<{ yAxis: number; lineStyle: { type: 'dotted'; color: string } }>
 }
 
 export function createMarkLineData(yValue: number, isDark: boolean): MarkLineConfig {
