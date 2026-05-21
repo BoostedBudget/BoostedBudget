@@ -155,8 +155,88 @@ export const mockCreateTimeSeriesHoverTemplate = mock(
   () => '%{x}<br>%{y:$,.2f}<extra></extra>'
 )
 
-// === Mock the module ===
+// === EChartsChart mock ===
+type SeriesEntry = { name?: string; type?: string; markLine?: unknown; data?: unknown[] }
+type EChartsOption = { series?: SeriesEntry[] }
+
+const EChartsChartMockComponent = ({
+  option = {},
+  style,
+  onEvents,
+}: {
+  option?: EChartsOption
+  style?: React.CSSProperties
+  isDark?: boolean
+  className?: string
+  notMerge?: boolean
+  lazyUpdate?: boolean
+  onEvents?: Record<string, (params: { dataIndex: number }) => void>
+}) => {
+  const series = option?.series ?? []
+  const hasMarkline = series.some((s) => s.markLine !== undefined)
+
+  // Hidden per-series trigger buttons for testing click events.
+  // Fires onEvents.click with { dataIndex: N } ONLY — no name/data per plan Codex H1.
+  const triggerButtons = onEvents?.click
+    ? series.map((_: SeriesEntry, idx: number) =>
+        React.createElement('button', {
+          key: idx,
+          'aria-hidden': 'true',
+          style: { display: 'none' },
+          'data-testid': `echarts-point-${idx}`,
+          onClick: () => onEvents.click!({ dataIndex: idx }),
+        })
+      )
+    : []
+
+  return React.createElement(
+    'div',
+    {
+      'data-testid': 'echarts-chart',
+      'data-series-count': series.length,
+      'data-series-names': JSON.stringify(series.map((s) => s.name)),
+      'data-series-types': JSON.stringify(series.map((s) => s.type)),
+      'data-has-markline': hasMarkline ? 'true' : 'false',
+      'data-renderer': 'svg',
+      style,
+    },
+    'ECharts Mock',
+    ...triggerButtons
+  )
+}
+export const MockEChartsChart = mock(EChartsChartMockComponent)
+
+// === New ECharts option builder mocks ===
+export const mockGetBaseOption = mock(() => ({
+  animation: true,
+  animationDuration: 400,
+  grid: { top: 10, right: 10, bottom: 40, left: 60 },
+  xAxis: { type: 'category' },
+  yAxis: { type: 'value' },
+  legend: { orient: 'horizontal', bottom: 0, left: 'center' },
+  tooltip: { trigger: 'item' },
+}))
+
+export const mockGetCurrencyOption = mock(() => ({
+  ...mockGetBaseOption(),
+  yAxis: { type: 'value', axisLabel: { formatter: (v: number) => `$${v}` } },
+}))
+
+export const mockGetBarOption = mock(() => ({
+  ...mockGetCurrencyOption(),
+  tooltip: { trigger: 'axis' },
+}))
+
+export const mockCreateMarkLineData = mock((yValue: number) => ({
+  silent: true,
+  symbol: ['none', 'none'],
+  animation: false,
+  data: [{ yAxis: yValue, lineStyle: { type: 'dotted', color: '#e5e7eb' } }],
+}))
+
+// === Mock the module (both OLD Plotly surface + NEW ECharts surface) ===
 mock.module('@/shared/charts', () => ({
+  // --- OLD Plotly surface (preserved until Phase 6.5) ---
   Plot: MockPlot,
   Plotly: MockPlotly,
   useDarkMode: mockUseDarkMode,
@@ -165,6 +245,17 @@ mock.module('@/shared/charts', () => ({
   getCurrencyLayout: mockGetCurrencyLayout,
   getBarChartLayout: mockGetBarChartLayout,
   createHorizontalReferenceLine: mockCreateHorizontalReferenceLine,
+  getCurrencyTickFormat: mockGetCurrencyTickFormat,
+  getCurrencyCompactTickFormat: mockGetCurrencyCompactTickFormat,
+  createCurrencyHoverTemplate: mockCreateCurrencyHoverTemplate,
+  createTimeSeriesHoverTemplate: mockCreateTimeSeriesHoverTemplate,
+  // --- NEW ECharts surface ---
+  EChartsChart: MockEChartsChart,
+  getBaseOption: mockGetBaseOption,
+  getCurrencyOption: mockGetCurrencyOption,
+  getBarOption: mockGetBarOption,
+  createMarkLineData: mockCreateMarkLineData,
+  // --- Shared (unchanged) ---
   CHART_COLORS: MOCK_CHART_COLORS,
   ACCOUNT_TYPE_COLORS: MOCK_ACCOUNT_TYPE_COLORS,
   CASH_FLOW_COLORS: MOCK_CASH_FLOW_COLORS,
@@ -173,8 +264,4 @@ mock.module('@/shared/charts', () => ({
   formatCurrency: mockFormatCurrency,
   formatCurrencyCompact: mockFormatCurrencyCompact,
   formatCurrencyFull: mockFormatCurrencyFull,
-  getCurrencyTickFormat: mockGetCurrencyTickFormat,
-  getCurrencyCompactTickFormat: mockGetCurrencyCompactTickFormat,
-  createCurrencyHoverTemplate: mockCreateCurrencyHoverTemplate,
-  createTimeSeriesHoverTemplate: mockCreateTimeSeriesHoverTemplate,
 }))
