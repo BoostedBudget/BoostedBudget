@@ -17,29 +17,23 @@ interface NetWorthHistoryChartProps {
   filterKey: string
 }
 
-export function NetWorthHistoryChart({ history, filterKey: _filterKey }: NetWorthHistoryChartProps) {
+export function NetWorthHistoryChart({ history }: NetWorthHistoryChartProps) {
   const isDark = useDarkMode()
-  const snapshots = history.snapshots
-  const hasEnoughData = snapshots.length >= 2
-
-  const dates = useMemo(
-    () => snapshots.map((s) => format(parseISO(s.date), 'MMM d')),
-    [snapshots]
-  )
+  const { snapshots } = history
 
   const option = useMemo((): EChartsOption => {
-    const base = getCurrencyOption(isDark)
+    const base = getCurrencyOption(isDark);
     return {
       ...base,
-      xAxis: { type: 'category', data: dates },
+      xAxis: { type: 'category', data: snapshots.map((s) => format(parseISO(s.date), 'MMM d')) },
       tooltip: {
         trigger: 'axis',
         formatter: (params: unknown) => {
-          const points = params as Array<{ seriesName: string; value: number; dataIndex: number }>
-          if (!points.length) return ''
-          const snapshot = snapshots[points[0].dataIndex]
-          const label = snapshot ? format(parseISO(snapshot.date), 'MMMM d, yyyy') : ''
-          return `<b>${label}</b><br>` + points.map((p) => `${p.seriesName}: ${formatCurrency(p.value)}`).join('<br>')
+          const points = params as Array<{ seriesName: string; value: number; dataIndex: number }>;
+          if (!points.length) return '';
+          const snapshot = snapshots[points[0].dataIndex];
+          const label = snapshot ? format(parseISO(snapshot.date), 'MMMM d, yyyy') : '';
+          return `<b>${label}</b><br>${points.map((p) => `${p.seriesName}: ${formatCurrency(p.value)}`).join('<br>')}`;
         },
       },
       series: [
@@ -71,15 +65,15 @@ export function NetWorthHistoryChart({ history, filterKey: _filterKey }: NetWort
           itemStyle: { color: CASH_FLOW_COLORS.netNegative },
         },
       ],
-    }
-  }, [isDark, snapshots, dates])
+    };
+  }, [isDark, snapshots]);
 
-  if (!hasEnoughData) {
+  if (snapshots.length < 2) {
     return (
       <div className="flex items-center justify-center h-[300px] text-sm text-muted-foreground">
         Not enough history yet to display a chart.
       </div>
-    )
+    );
   }
 
   return (

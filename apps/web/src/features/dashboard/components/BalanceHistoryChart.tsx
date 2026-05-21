@@ -30,77 +30,57 @@ interface BalanceHistoryChartProps {
 export function BalanceHistoryChart({
   history,
   showTypeBreakdown = false,
-  filterKey: _filterKey,
 }: BalanceHistoryChartProps) {
   const isDark = useDarkMode();
 
-  const dates = useMemo(
-    () => history.snapshots.map((s) => format(parseISO(s.date), 'MMM d')),
-    [history.snapshots]
-  );
-
-  const accountTypes = useMemo(() => {
-    if (!showTypeBreakdown || !history.snapshots.some((s) => s.by_type)) {
-      return [];
-    }
-    return Object.keys(history.snapshots[0]?.by_type || {});
-  }, [history.snapshots, showTypeBreakdown]);
-
   const option = useMemo((): EChartsOption => {
     const base = getCurrencyOption(isDark);
+    const { snapshots } = history;
+    const accountTypes = !showTypeBreakdown || !snapshots.some((s) => s.by_type)
+      ? []
+      : Object.keys(snapshots[0]?.by_type || {});
 
-    const series: EChartsOption['series'] = showTypeBreakdown
-      ? accountTypes.map((typeKey) => ({
-          name: typeKey.charAt(0).toUpperCase() + typeKey.slice(1),
-          type: 'line' as const,
-          data: history.snapshots.map(
-            (s) => ((s.by_type as Record<string, number> | undefined)?.[typeKey]) ?? 0
-          ),
-          smooth: true,
-          showSymbol: true,
-          symbolSize: 6,
-          lineStyle: {
-            color:
-              ACCOUNT_TYPE_COLORS[typeKey as keyof typeof ACCOUNT_TYPE_COLORS] ||
-              '#6b7280',
-            width: 2,
-          },
-          itemStyle: {
-            color:
-              ACCOUNT_TYPE_COLORS[typeKey as keyof typeof ACCOUNT_TYPE_COLORS] ||
-              '#6b7280',
-          },
-        }))
-      : [
-          {
-            name: 'Total Balance',
+    const series: EChartsOption['series'] = showTypeBreakdown && accountTypes.length > 0
+      ? accountTypes.map((typeKey) => {
+          const color = ACCOUNT_TYPE_COLORS[typeKey as keyof typeof ACCOUNT_TYPE_COLORS] || '#6b7280';
+          return {
+            name: typeKey.charAt(0).toUpperCase() + typeKey.slice(1),
             type: 'line' as const,
-            data: history.snapshots.map((s) => s.balance),
+            data: snapshots.map((s) => (s.by_type as Record<string, number> | undefined)?.[typeKey] ?? 0),
             smooth: true,
             showSymbol: true,
             symbolSize: 6,
-            lineStyle: { color: ACCOUNT_TYPE_COLORS.balance, width: 2 },
-            itemStyle: { color: ACCOUNT_TYPE_COLORS.balance },
-          },
-        ];
+            lineStyle: { color, width: 2 },
+            itemStyle: { color },
+          };
+        })
+      : [{
+          name: 'Total Balance',
+          type: 'line' as const,
+          data: snapshots.map((s) => s.balance),
+          smooth: true,
+          showSymbol: true,
+          symbolSize: 6,
+          lineStyle: { color: ACCOUNT_TYPE_COLORS.balance, width: 2 },
+          itemStyle: { color: ACCOUNT_TYPE_COLORS.balance },
+        }];
 
     return {
       ...base,
-      xAxis: { type: 'category', data: dates },
+      xAxis: { type: 'category', data: snapshots.map((s) => format(parseISO(s.date), 'MMM d')) },
       tooltip: {
         trigger: 'axis',
         formatter: (params: unknown) => {
-          const points = params as Array<{ seriesName: string; value: number; dataIndex: number }>
-          if (!points.length) return ''
-          const snapshot = history.snapshots[points[0].dataIndex]
-          const label = snapshot ? format(parseISO(snapshot.date), 'MMMM d, yyyy') : ''
-          return `<b>${label}</b><br>` +
-            points.map((p) => `${p.seriesName}: ${formatCurrency(p.value)}`).join('<br>')
+          const points = params as Array<{ seriesName: string; value: number; dataIndex: number }>;
+          if (!points.length) return '';
+          const snapshot = snapshots[points[0].dataIndex];
+          const label = snapshot ? format(parseISO(snapshot.date), 'MMMM d, yyyy') : '';
+          return `<b>${label}</b><br>${points.map((p) => `${p.seriesName}: ${formatCurrency(p.value)}`).join('<br>')}`;
         },
       },
       series,
     };
-  }, [isDark, history.snapshots, dates, showTypeBreakdown, accountTypes]);
+  }, [isDark, history, showTypeBreakdown]);
 
   return (
     <div className="h-full">

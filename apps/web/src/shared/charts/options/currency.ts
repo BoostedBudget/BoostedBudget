@@ -3,10 +3,11 @@ import { formatCurrency, formatCurrencyCompact } from '../formatters'
 import { getBaseOption } from './base'
 
 export function getCurrencyOption(isDark: boolean, compact = false): EChartsOption {
-  const base = getBaseOption(isDark)
-  const formatter = compact
-    ? (v: unknown) => (typeof v === 'number' ? formatCurrencyCompact(v) : String(v))
-    : (v: unknown) => (typeof v === 'number' ? formatCurrency(v) : String(v))
+  const base = getBaseOption(isDark);
+  const formatter = (v: unknown) => {
+    if (typeof v !== 'number') return String(v);
+    return compact ? formatCurrencyCompact(v) : formatCurrency(v);
+  };
 
   return {
     ...base,
@@ -17,5 +18,5 @@ export function getCurrencyOption(isDark: boolean, compact = false): EChartsOpti
         formatter,
       },
     },
-  }
+  };
 }
