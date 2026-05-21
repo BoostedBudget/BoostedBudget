@@ -301,8 +301,8 @@ test.describe('Dashboard - Authenticated User', () => {
   // Happy Path Tests
   // ==========================================================================
 
-  // SKIPPED: Issue #615 - Dashboard API mocking and selectors need verification
-  test.describe.skip('Happy Path', () => {
+  // Un-skipped in #1169: ECharts migration preserves all UI selectors used here.
+  test.describe('Happy Path', () => {
     test('should display dashboard with balance overview, chart, and account cards', async ({
       page,
     }) => {
@@ -337,8 +337,8 @@ test.describe('Dashboard - Authenticated User', () => {
   // Interactive Features Tests
   // ==========================================================================
 
-  // SKIPPED: Issue #615 - Dashboard interactive features need selector verification
-  test.describe.skip('Interactive Features', () => {
+  // Un-skipped in #1169: ECharts migration preserves all UI selectors used here.
+  test.describe('Interactive Features', () => {
     test('should update chart when timeframe filter changes to 90 days', async ({
       page,
     }) => {
@@ -448,8 +448,8 @@ test.describe('Dashboard - Authenticated User', () => {
   // Error States Tests
   // ==========================================================================
 
-  // SKIPPED: Issue #615 - Dashboard error state UI needs verification
-  test.describe.skip('Error States', () => {
+  // Un-skipped in #1169: ECharts migration preserves all UI selectors used here.
+  test.describe('Error States', () => {
     test('should show error message and allow retry when API fails', async ({
       page,
     }) => {
@@ -487,6 +487,26 @@ test.describe('Dashboard - Authenticated User', () => {
   // ==========================================================================
   // Empty States Tests
   // ==========================================================================
+
+  // ==========================================================================
+  // PII Masking Tests (Issue #1169: ECharts migration — Codex L12)
+  // ==========================================================================
+
+  test.describe('PII Masking', () => {
+    test('financial chart container carries data-ph-mask for PostHog session replay', async ({
+      page,
+    }) => {
+      // SVG-rendered ECharts produces DOM tooltips inside a data-ph-mask wrapper,
+      // enabling PostHog to mask financial amounts (see docs/security/posthog-pii-masking.md).
+      await mockDashboardAPIs(page)
+      await page.goto('/dashboard')
+      await page.waitForLoadState('networkidle')
+
+      // The EChartsChart wrapper renders <div role="img" data-ph-mask> around every chart.
+      const maskedChartContainer = page.locator('[role="img"][data-ph-mask]').first()
+      await expect(maskedChartContainer).toBeVisible()
+    })
+  })
 
   test.describe('Empty States', () => {
     // TODO: This test requires investigation - mocking empty data structures
