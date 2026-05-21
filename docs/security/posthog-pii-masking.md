@@ -114,7 +114,7 @@ Radix Dialog content renders in a portal but typically inherits `data-ph-mask` f
 
 ## Known limitations
 
-- **Plotly hover tooltips** (`NetWorthHistoryChart`, `BalanceHistoryChart`, `CashFlowChartWidget`): Plotly renders tooltips via canvas/SVG outside the React tree. `data-ph-mask` cannot reach them. Follow-up: replace with React-rendered tooltips.
+- **ECharts SVG tooltips** (`NetWorthHistoryChart`, `BalanceHistoryChart`, `CashFlowChartWidget`): ECharts renders tooltips as DOM nodes inside the SVG tree. The chart container or its ancestor should carry `data-ph-mask` to mask tooltip content. Issue #1169 migrated from Plotly canvas tooltips (which were unreachable) to SVG-rendered tooltips that CAN be masked — apply `data-ph-mask` to the chart wrapper if tooltip content contains PII.
 - **`merchant_id` URL param** (`SpendingReportsPage`): The backend `/spending/by-merchant` endpoint accepts `search` but not `merchant_id`, so the merchant name is currently in the URL. Follow-up: backend API change to accept `merchant_id`.
 - **Shadow DOM**: `TreeWalker` does not cross Shadow DOM boundaries. The codebase uses light DOM only (Radix portals render to `document.body`). If Shadow DOM is ever adopted, this policy must be revisited.
 - **PostHog server-side**: `before_send` is client-side only. Consider a PostHog Cloud transformation pipeline as a defence-in-depth backstop.

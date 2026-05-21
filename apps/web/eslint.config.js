@@ -121,10 +121,10 @@ export default [
         'warn',
         { allowConstantExport: true },
       ],
-      'no-restricted-imports': ['error', {
+      '@typescript-eslint/no-restricted-imports': ['error', {
         paths: [
-          { name: 'echarts', message: "Import from 'echarts/core' + per-feature paths to keep the bundle tree-shaken." },
-          { name: 'echarts-for-react', message: "Import ReactEChartsCore from 'echarts-for-react/lib/core' instead." },
+          { name: 'echarts', message: "Import from 'echarts/core' + per-feature paths to keep the bundle tree-shaken.", allowTypeImports: true },
+          { name: 'echarts-for-react', message: "Import ReactEChartsCore from 'echarts-for-react/lib/core' instead.", allowTypeImports: true },
         ],
       }],
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],

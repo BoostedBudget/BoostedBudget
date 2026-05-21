@@ -20,7 +20,7 @@ import { useCashFlowHistory } from '../hooks/useCashFlowData'
 import { DashboardContext } from '../context/DashboardContext'
 import { registerWidget } from './registry'
 import { WidgetEmptyState } from './WidgetEmptyState'
-import type { WidgetProps, CashFlowPeriodData } from '../types'
+import type { CashFlowPeriodData } from '../types'
 
 interface ChartDataPoint {
   label: string
@@ -39,34 +39,29 @@ function formatPeriodLabel(period: CashFlowPeriodData, grouping: string): string
   }
 }
 
-function CashFlowChartWidget(_props: WidgetProps) {
+function CashFlowChartWidget() {
   const context = useContext(DashboardContext)
   const isDark = useDarkMode()
 
-  const filters = useMemo(
-    () => ({
+  const { data, loading, error } = useCashFlowHistory({
+    filters: {
       startDate: context?.filters.startDate || '',
       endDate: context?.filters.endDate || '',
       accountTypes: context?.filters.accountTypes,
       includeTransfers: false,
-    }),
-    [context?.filters]
-  )
-
-  const { data, loading, error } = useCashFlowHistory({
-    filters,
-    enabled: Boolean(filters.startDate && filters.endDate),
+    },
+    enabled: Boolean(context?.filters.startDate && context?.filters.endDate),
   })
 
   const chartData = useMemo<ChartDataPoint[]>(() => {
-    if (!data?.periods) return []
+    if (!data?.periods) return [];
     return data.periods.map((period) => ({
       label: formatPeriodLabel(period, data.grouping),
       income: period.income,
       expenses: period.expenses,
       net: period.net_cash_flow,
-    }))
-  }, [data])
+    }));
+  }, [data]);
 
   const option = useMemo((): EChartsOption => {
     if (chartData.length === 0) return {}
@@ -147,8 +142,7 @@ function CashFlowChartWidget(_props: WidgetProps) {
     )
   }
 
-  const isAllZero = chartData.every(d => d.income === 0 && d.expenses === 0 && d.net === 0)
-  if (!data || chartData.length === 0 || isAllZero) {
+  if (!data || chartData.length === 0 || chartData.every(d => d.income === 0 && d.expenses === 0 && d.net === 0)) {
     return <WidgetEmptyState widgetType="cash-flow-chart" />
   }
 

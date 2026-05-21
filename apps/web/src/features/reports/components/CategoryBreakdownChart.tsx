@@ -25,13 +25,13 @@ export function CategoryBreakdownChart({
   const categories = data?.categories ?? []
 
   const option = useMemo((): EChartsOption => {
-    if (categories.length === 0) return {}
+    if (categories.length === 0) return {};
     return {
       tooltip: {
         trigger: 'item',
         formatter: (params: unknown) => {
-          const p = params as { name: string; value: number; percent: number }
-          return `${p.name}<br>${formatCurrencyFull(p.value)} (${p.percent.toFixed(1)}%)`
+          const { name, value, percent } = params as { name: string; value: number; percent: number };
+          return `${name}<br>${formatCurrencyFull(value)} (${percent.toFixed(1)}%)`;
         },
       },
       legend: {
@@ -39,21 +39,20 @@ export function CategoryBreakdownChart({
         right: 0,
         top: 'middle',
       },
-      series: [
-        {
-          type: 'pie',
-          radius: ['40%', '70%'],
-          avoidLabelOverlap: false,
-          label: { show: true, position: 'inside', formatter: '{d}%' },
-          data: categories.map((c, i) => ({
-            name: c.pfc_primary_display,
-            value: c.total,
-            itemStyle: { color: CATEGORY_COLORS[i % CATEGORY_COLORS.length] },
-          })),
-        },
-      ],
-    }
-  }, [categories])
+      series: [{
+        type: 'pie',
+        radius: ['40%', '70%'],
+        avoidLabelOverlap: false,
+        label: { show: true, position: 'inside', formatter: '{d}%' },
+        data: categories.map((c, i) => ({
+          name: c.pfc_primary_display,
+          value: c.total,
+          itemStyle: { color: CATEGORY_COLORS[i % CATEGORY_COLORS.length] },
+        })),
+      }],
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
 
   if (loading) {
     return (
@@ -71,16 +70,6 @@ export function CategoryBreakdownChart({
     )
   }
 
-  const onEvents = onCategoryClick
-    ? {
-        click: (params: unknown) => {
-          const p = params as { dataIndex: number }
-          const cat = categories[p.dataIndex]
-          if (cat) onCategoryClick(cat.category, cat.pfc_primary_display ?? cat.category)
-        },
-      }
-    : undefined
-
   return (
     <div className={className} data-testid="category-chart">
       {data && (
@@ -92,8 +81,14 @@ export function CategoryBreakdownChart({
         option={option}
         isDark={isDark}
         style={{ width: '100%', height: '320px' }}
-        onEvents={onEvents}
+        onEvents={onCategoryClick ? {
+          click: (params: unknown) => {
+            const { dataIndex } = params as { dataIndex: number };
+            const cat = categories[dataIndex];
+            if (cat) onCategoryClick(cat.category, cat.pfc_primary_display ?? cat.category);
+          },
+        } : undefined}
       />
     </div>
-  )
+  );
 }
