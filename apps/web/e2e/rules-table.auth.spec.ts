@@ -1,19 +1,16 @@
 /**
  * Rules Page — Table E2E Smoke Tests
  * Issue #1110: Verify RuleTable renders correctly after DataTable migration.
+ * Issue #1134: Sort wiring — full asc/desc/unsorted cycle verified end-to-end.
  *
  * Covers:
  * - Page loads and renders the "Automation Rules" heading
  * - Switching to table view renders a <table> element
  * - Table shows expected column headers (Name, Priority, Status, Actions)
  * - At least one rule row is visible
+ * - Clicking a sortable header cycles aria-sort asc → desc → unsorted
  *
  * Uses API mocking (page.route) — no live backend required.
- *
- * Note: RulesPage currently does not wire up sort props to RuleTable
- * (the sort chevrons are present but non-functional). Sort wiring is
- * tracked as a follow-up in issue #1134. Sort assertions are therefore
- * skipped here.
  */
 
 import { test, expect } from '@playwright/test'
@@ -165,16 +162,27 @@ test.describe('Rules Page — Table View', () => {
     await expect(page.getByText('Tag Coffee Purchases')).toBeVisible()
   })
 
-  // Sort is currently not wired up in RulesPage (tracked in issue #1134)
-  test.skip('clicking a sortable header updates aria-sort (skipped — sort not wired up, see #1134)', async ({ page }) => {
+  test('clicking the Name header cycles aria-sort asc → desc → unsorted (#1134)', async ({ page }) => {
     await mockRulesDependencies(page)
     await page.goto('/rules')
     await page.waitForLoadState('networkidle')
 
     await page.getByTitle('Table view').click()
 
-    const nameHeader = page.getByRole('columnheader', { name: /name/i })
-    await nameHeader.getByRole('button', { name: /^Name$/i }).click()
-    await expect(nameHeader).toHaveAttribute('aria-sort', /ascending|descending/)
+    const nameHeader = page.getByRole('columnheader', { name: /^Name$/i })
+    const nameButton = nameHeader.getByRole('button', { name: /^Name$/i })
+
+    // 1st click → ascending
+    await nameButton.click()
+    await expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
+
+    // 2nd click → descending
+    await nameButton.click()
+    await expect(nameHeader).toHaveAttribute('aria-sort', 'descending')
+
+    // 3rd click → sort cleared (no aria-sort)
+    await nameButton.click()
+    await expect(nameHeader).not.toHaveAttribute('aria-sort', 'ascending')
+    await expect(nameHeader).not.toHaveAttribute('aria-sort', 'descending')
   })
 })
