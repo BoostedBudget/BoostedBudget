@@ -1,27 +1,18 @@
 /**
  * Contract test for @/shared/charts mock surface.
- * Verifies both OLD Plotly surface (preserved during Phase 5 transitional period)
- * and NEW ECharts surface are exported correctly from the mock.
- *
- * Phase 6.5: This test will be updated to ECharts-only + negative assertions
- * after all 5 chart consumers are migrated.
+ * Phase 6.5+: ECharts-only surface. Negative assertions verify deprecated
+ * Plotly exports are fully removed from both the mock and the barrel.
  */
 import './shared-charts'
 import { describe, it, expect } from 'bun:test'
 import {
-  // OLD Plotly surface (must stay until Phase 6.5)
-  MockPlot,
-  MockPlotly,
+  // NEW ECharts surface
+  MockEChartsChart,
   mockUseDarkMode,
-  mockGetBaseLayout,
-  mockGetCurrencyLayout,
-  mockGetBarChartLayout,
-  mockCreateHorizontalReferenceLine,
-  MOCK_DEFAULT_CONFIG,
-  mockGetCurrencyTickFormat,
-  mockGetCurrencyCompactTickFormat,
-  mockCreateCurrencyHoverTemplate,
-  mockCreateTimeSeriesHoverTemplate,
+  mockGetBaseOption,
+  mockGetCurrencyOption,
+  mockGetBarOption,
+  mockCreateMarkLineData,
   MOCK_CHART_COLORS,
   MOCK_ACCOUNT_TYPE_COLORS,
   MOCK_CASH_FLOW_COLORS,
@@ -30,50 +21,77 @@ import {
   mockFormatCurrency,
   mockFormatCurrencyCompact,
   mockFormatCurrencyFull,
-  // NEW ECharts surface
-  MockEChartsChart,
-  mockGetBaseOption,
-  mockGetCurrencyOption,
-  mockGetBarOption,
-  mockCreateMarkLineData,
 } from './shared-charts'
 import React from 'react'
 import { render, screen, fireEvent } from '@testing-library/react'
 
 // ========================
-// OLD Plotly surface checks
+// NEGATIVE assertions — deprecated Plotly surface must be gone
 // ========================
 
-describe('shared-charts mock: OLD Plotly surface (preserved until Phase 6.5)', () => {
-  it('exports MockPlot as a callable mock', () => {
-    expect(typeof MockPlot).toBe('function')
+describe('shared-charts mock: deprecated Plotly surface must be absent', () => {
+  it('mock does not export MockPlot', async () => {
+    const mod = await import('./shared-charts')
+    expect((mod as Record<string, unknown>)['MockPlot']).toBeUndefined()
   })
 
-  it('exports MockPlotly as an object', () => {
-    expect(typeof MockPlotly).toBe('object')
+  it('mock does not export MockPlotly', async () => {
+    const mod = await import('./shared-charts')
+    expect((mod as Record<string, unknown>)['MockPlotly']).toBeUndefined()
+  })
+
+  it('mock does not export mockGetBaseLayout', async () => {
+    const mod = await import('./shared-charts')
+    expect((mod as Record<string, unknown>)['mockGetBaseLayout']).toBeUndefined()
+  })
+
+  it('mock does not export MOCK_DEFAULT_CONFIG', async () => {
+    const mod = await import('./shared-charts')
+    expect((mod as Record<string, unknown>)['MOCK_DEFAULT_CONFIG']).toBeUndefined()
+  })
+
+  it('barrel (@/shared/charts) does not export Plot', async () => {
+    const barrel = await import('@/shared/charts')
+    expect((barrel as Record<string, unknown>)['Plot']).toBeUndefined()
+  })
+
+  it('barrel (@/shared/charts) does not export Plotly', async () => {
+    const barrel = await import('@/shared/charts')
+    expect((barrel as Record<string, unknown>)['Plotly']).toBeUndefined()
+  })
+
+  it('barrel (@/shared/charts) does not export getBaseLayout', async () => {
+    const barrel = await import('@/shared/charts')
+    expect((barrel as Record<string, unknown>)['getBaseLayout']).toBeUndefined()
+  })
+
+  it('barrel (@/shared/charts) does not export DEFAULT_CONFIG', async () => {
+    const barrel = await import('@/shared/charts')
+    expect((barrel as Record<string, unknown>)['DEFAULT_CONFIG']).toBeUndefined()
+  })
+})
+
+// ========================
+// NEW ECharts surface checks
+// ========================
+
+describe('shared-charts mock: ECharts surface', () => {
+  it('exports MockEChartsChart as a callable mock', () => {
+    expect(typeof MockEChartsChart).toBe('function')
   })
 
   it('exports mockUseDarkMode as a callable mock', () => {
     expect(typeof mockUseDarkMode).toBe('function')
   })
 
-  it('exports old layout mocks', () => {
-    expect(typeof mockGetBaseLayout).toBe('function')
-    expect(typeof mockGetCurrencyLayout).toBe('function')
-    expect(typeof mockGetBarChartLayout).toBe('function')
-    expect(typeof mockCreateHorizontalReferenceLine).toBe('function')
+  it('exports option builder mocks', () => {
+    expect(typeof mockGetBaseOption).toBe('function')
+    expect(typeof mockGetCurrencyOption).toBe('function')
+    expect(typeof mockGetBarOption).toBe('function')
+    expect(typeof mockCreateMarkLineData).toBe('function')
   })
 
-  it('exports MOCK_DEFAULT_CONFIG', () => {
-    expect(MOCK_DEFAULT_CONFIG).toBeDefined()
-    expect(MOCK_DEFAULT_CONFIG.responsive).toBe(true)
-  })
-
-  it('exports old formatter mocks', () => {
-    expect(typeof mockGetCurrencyTickFormat).toBe('function')
-    expect(typeof mockGetCurrencyCompactTickFormat).toBe('function')
-    expect(typeof mockCreateCurrencyHoverTemplate).toBe('function')
-    expect(typeof mockCreateTimeSeriesHoverTemplate).toBe('function')
+  it('exports formatter mocks', () => {
     expect(typeof mockFormatCurrency).toBe('function')
     expect(typeof mockFormatCurrencyCompact).toBe('function')
     expect(typeof mockFormatCurrencyFull).toBe('function')
@@ -85,16 +103,6 @@ describe('shared-charts mock: OLD Plotly surface (preserved until Phase 6.5)', (
     expect(MOCK_CASH_FLOW_COLORS).toBeDefined()
     expect(MOCK_CATEGORY_COLORS).toBeDefined()
     expect(MOCK_THEME_COLORS).toBeDefined()
-  })
-})
-
-// ========================
-// NEW ECharts surface checks
-// ========================
-
-describe('shared-charts mock: NEW ECharts surface', () => {
-  it('exports MockEChartsChart as a callable mock', () => {
-    expect(typeof MockEChartsChart).toBe('function')
   })
 
   it('MockEChartsChart renders data-testid="echarts-chart"', () => {
@@ -160,18 +168,10 @@ describe('shared-charts mock: NEW ECharts surface', () => {
       option: { series: [{ name: 'Groceries', type: 'pie', data: [{ value: 100, name: 'Food' }] }] },
       onEvents,
     }))
-    // First data point trigger button
     const btn = screen.getByTestId('echarts-point-0')
     fireEvent.click(btn)
     expect(capturedEvent).toEqual({ dataIndex: 0 })
     expect((capturedEvent as Record<string, unknown>).name).toBeUndefined()
     expect((capturedEvent as Record<string, unknown>).data).toBeUndefined()
-  })
-
-  it('exports new option builder mocks', () => {
-    expect(typeof mockGetBaseOption).toBe('function')
-    expect(typeof mockGetCurrencyOption).toBe('function')
-    expect(typeof mockGetBarOption).toBe('function')
-    expect(typeof mockCreateMarkLineData).toBe('function')
   })
 })
