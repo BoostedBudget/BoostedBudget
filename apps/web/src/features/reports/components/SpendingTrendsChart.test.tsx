@@ -1,10 +1,8 @@
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
-import React from 'react'
-
 import '@/test/mocks/shared-charts'
 import { SpendingTrendsChart } from './SpendingTrendsChart'
-import type { SpendingTrendsResponse } from '@boostedbudget/api-client/models'
+import type { SpendingTrendsResponse, SpendingTrendPeriod } from '@boostedbudget/api-client/models'
 
 const mockData: SpendingTrendsResponse = {
   start_date: '2024-01-01',
@@ -49,15 +47,21 @@ describe('SpendingTrendsChart', () => {
     expect(screen.getByText(/No trend data/)).toBeDefined()
   })
 
-  it('renders chart with data', () => {
+  it('renders echarts chart with data', () => {
     render(<SpendingTrendsChart data={mockData} loading={false} />)
-    expect(screen.getByTestId('plotly-chart')).toBeDefined()
+    expect(screen.getByTestId('echarts-chart')).toBeDefined()
   })
 
-  it('renders the correct number of traces', () => {
+  it('renders the correct number of series', () => {
     render(<SpendingTrendsChart data={mockData} loading={false} />)
-    const chart = screen.getByTestId('plotly-chart')
-    expect(chart.getAttribute('data-trace-count')).toBe('2')
+    const chart = screen.getByTestId('echarts-chart')
+    expect(chart.dataset.seriesCount).toBe('2')
+  })
+
+  it('all series have type bar (stacked)', () => {
+    render(<SpendingTrendsChart data={mockData} loading={false} />)
+    const types = JSON.parse(screen.getByTestId('echarts-chart').dataset.seriesTypes ?? '[]') as string[]
+    expect(types.every((t) => t === 'bar')).toBe(true)
   })
 
   it('falls back to formatted display name when pfc_primary_display is absent', () => {
@@ -70,17 +74,15 @@ describe('SpendingTrendsChart', () => {
           period_start: '2024-01-01',
           period_end: '2024-01-31',
           total: 100,
-          categories: [{ category: 'LOAN_PAYMENTS', total: 100 } as SpendingTrendsResponse['periods'][0]['categories'][0]],
+          categories: [{ category: 'LOAN_PAYMENTS', total: 100 } as NonNullable<SpendingTrendPeriod['categories']>[0]],
         },
       ],
     }
     render(<SpendingTrendsChart data={sparseData} loading={false} />)
-    const chart = screen.getByTestId('plotly-chart')
-    const names = JSON.parse(chart.getAttribute('data-trace-names') ?? '[]') as string[]
+    const names = JSON.parse(screen.getByTestId('echarts-chart').dataset.seriesNames ?? '[]') as string[]
     expect(names[0]).toBe('Loan Payments')
     expect(names[0]).not.toBe('LOAN_PAYMENTS')
   })
-})
 
   it('falls back to "Custom Category" when a custom:<uuid> category has no pfc_primary_display', () => {
     const customData: SpendingTrendsResponse = {
@@ -96,16 +98,14 @@ describe('SpendingTrendsChart', () => {
             {
               category: 'custom:7a93a4f0-dead-beef-1234-abcdef012345',
               total: 150,
-            } as SpendingTrendsResponse['periods'][0]['categories'][0],
+            } as NonNullable<SpendingTrendPeriod['categories']>[0],
           ],
         },
       ],
     }
     render(<SpendingTrendsChart data={customData} loading={false} />)
-    const chart = screen.getByTestId('plotly-chart')
-    const names = JSON.parse(chart.getAttribute('data-trace-names') ?? '[]') as string[]
-    // Should not contain the raw UUID
+    const names = JSON.parse(screen.getByTestId('echarts-chart').dataset.seriesNames ?? '[]') as string[]
     expect(names[0]).not.toContain('7a93a4f0-dead-beef-1234-abcdef012345')
-    // Should be a readable fallback
     expect(names[0]).toBe('Custom Category')
   })
+})
