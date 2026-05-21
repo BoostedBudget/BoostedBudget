@@ -72,8 +72,15 @@ if command -v lcov &> /dev/null; then
         FUNCTIONS=$(echo "$SUMMARY" | grep "functions" | grep -oE '[0-9]+\.[0-9]+%' | head -1 | sed 's/%//')
         BRANCHES=$(echo "$SUMMARY" | grep "branches" | grep -oE '[0-9]+\.[0-9]+%' | head -1 | sed 's/%//')
 
-        # Coverage thresholds
-        LINES_THRESHOLD=25
+        # Coverage thresholds — FLOOR pattern, not ratchet (#1169).
+        # Formula: THRESHOLD = max(floor(baseline), floor(measured) - 1).
+        # All comparisons are integer-percent. Bumping the floor up is fine and welcome.
+        # Lowering the floor requires a written reason in the PR description.
+        # Measured 2026-05-21 (post-ECharts migration): lines=64.9%, functions=no data, branches=no data.
+        # Baseline pre-migration (main): lines=25%, functions=67%, branches=68%.
+        # functions/branches: Bun LCOV does not emit per-function/branch data; checks are
+        # silently skipped for empty values. Thresholds retained for when the toolchain adds support.
+        LINES_THRESHOLD=63
         FUNCTIONS_THRESHOLD=67
         BRANCHES_THRESHOLD=68
 
@@ -117,8 +124,12 @@ fi
 if command -v genhtml &> /dev/null; then
     echo ""
     echo "Generating HTML coverage report..."
-    genhtml coverage/combined.lcov -o coverage/html --quiet
-    echo "✅ HTML report: coverage/html/index.html"
+    # genhtml can fail on source path mismatches (local vs CI workspace) — non-fatal
+    if genhtml coverage/combined.lcov -o coverage/html --quiet 2>/dev/null; then
+        echo "✅ HTML report: coverage/html/index.html"
+    else
+        echo "⚠️  HTML report skipped (source path resolution; threshold check still valid)"
+    fi
 fi
 
 echo ""
