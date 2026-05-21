@@ -1,6 +1,7 @@
 /**
  * Spending Trends Chart
  * Issue #953: Spending Reports Page
+ * Issue #1169: Plotly to ECharts Migration
  *
  * Stacked bar chart showing top 5 spending categories over time.
  * Other categories are bucketed into "Other".
@@ -8,13 +9,13 @@
 
 import { useMemo } from 'react'
 import { format, parseISO } from 'date-fns'
-import type { Data } from 'plotly.js'
+import type { EChartsOption } from 'echarts'
 import {
-  Plot,
+  EChartsChart,
   useDarkMode,
-  getBarChartLayout,
-  DEFAULT_CONFIG,
+  getBarOption,
   CATEGORY_COLORS,
+  formatCurrencyFull,
 } from '@/shared/charts'
 import { formatPFCPrimary } from '@/shared/categories/formatPfc'
 import type { SpendingTrendsResponse } from '@boostedbudget/api-client/models'
@@ -28,11 +29,11 @@ interface SpendingTrendsChartProps {
 export function SpendingTrendsChart({ data, loading, className }: SpendingTrendsChartProps) {
   const isDark = useDarkMode()
 
-  const chartData: Data[] = useMemo(() => {
+  const option = useMemo((): EChartsOption => {
     const periods = data?.periods ?? []
     const topCategories = data?.top_categories ?? []
 
-    if (periods.length === 0 || topCategories.length === 0) return []
+    if (periods.length === 0 || topCategories.length === 0) return {}
 
     const allCategories = [...topCategories]
     const hasOther = periods.some((p) =>
@@ -59,34 +60,42 @@ export function SpendingTrendsChart({ data, loading, className }: SpendingTrends
       return formatPFCPrimary(cat)
     }
 
-    return allCategories.map((cat, i) => {
+    const base = getBarOption(isDark)
+    const series = allCategories.map((cat, i) => {
       const displayName = findDisplayName(cat)
-
       const values = periods.map((p) => {
         const found = p.categories?.find((c) => c.category === cat)
         return found?.total ?? 0
       })
-
       return {
-        type: 'bar',
+        type: 'bar' as const,
         name: displayName,
-        x: xLabels,
-        y: values,
-        marker: {
-          color: CATEGORY_COLORS[i % CATEGORY_COLORS.length],
-        },
-        hovertemplate: `${displayName}<br>%{y:$,.2f}<extra></extra>`,
-      } as Data
+        stack: 'total',
+        data: values,
+        itemStyle: { color: CATEGORY_COLORS[i % CATEGORY_COLORS.length] },
+      }
     })
-  }, [data])
 
-  const layout = useMemo(
-    () => ({
-      ...getBarChartLayout(isDark),
-      barmode: 'stack' as const,
-    }),
-    [isDark]
-  )
+    return {
+      ...base,
+      xAxis: { type: 'category', data: xLabels },
+      yAxis: {
+        ...(base.yAxis as object),
+        axisLabel: {
+          formatter: (v: unknown) =>
+            typeof v === 'number' ? formatCurrencyFull(v) : String(v),
+        },
+      },
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: unknown) => {
+          const points = params as Array<{ seriesName: string; value: number }>
+          return points.map((p) => `${p.seriesName}: ${formatCurrencyFull(p.value)}`).join('<br>')
+        },
+      },
+      series,
+    }
+  }, [data, isDark])
 
   if (loading) {
     return (
@@ -107,12 +116,10 @@ export function SpendingTrendsChart({ data, loading, className }: SpendingTrends
 
   return (
     <div className={className} data-testid="trends-chart">
-      <Plot
-        data={chartData}
-        layout={layout}
-        config={DEFAULT_CONFIG}
+      <EChartsChart
+        option={option}
+        isDark={isDark}
         style={{ width: '100%', height: '320px' }}
-        useResizeHandler
       />
     </div>
   )
