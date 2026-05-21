@@ -80,6 +80,7 @@ export function TransactionsPage() {
     return accs.map((acc) => ({
       value: acc.id,
       label: acc.nickname || acc.name,
+      masked: true,
     }))
   }, [accountsList])
 
@@ -218,7 +219,7 @@ export function TransactionsPage() {
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
     if (searchValue) {
       searchDebounceRef.current = setTimeout(() => {
-        trackEvent(ANALYTICS_EVENTS.TRANSACTION_SEARCHED, { query: searchValue })
+        trackEvent(ANALYTICS_EVENTS.TRANSACTION_SEARCHED, { query_length: searchValue.length })
       }, 500)
     }
   }
@@ -265,7 +266,7 @@ export function TransactionsPage() {
         />
       </div>
 
-          <TransactionFilterPanel
+      <TransactionFilterPanel
         filters={filters}
         datePreset={datePreset}
         statusFilter={statusFilter}
@@ -278,7 +279,7 @@ export function TransactionsPage() {
         onCustomDateChange={setCustomDateRange}
         onStatusFilterChange={setStatusFilter}
         onClearFilter={clearFilter}
-        onClearAllFilters={() => clearAllFilters()}
+        onClearAllFilters={clearAllFilters}
         disabled={isLoading}
       />
 
@@ -308,16 +309,13 @@ export function TransactionsPage() {
             <>
               <div className="mb-4">
                 <p className="text-base text-muted-foreground m-0">
-                  {hasActiveFilters ? (
-                    <>Showing {transactions.length.toLocaleString()} matching transactions</>
-                  ) : (
-                    <>{transactions.length.toLocaleString()} transactions loaded</>
-                  )}
+                  {hasActiveFilters
+                    ? `Showing ${transactions.length.toLocaleString()} matching transactions`
+                    : `${transactions.length.toLocaleString()} transactions loaded`}
                 </p>
               </div>
-
               <div role="status" aria-live="polite" className="sr-only">
-                {isFetchingNextPage ? 'Loading more transactions' : ''}
+                {isFetchingNextPage && 'Loading more transactions'}
               </div>
             </>
           )}

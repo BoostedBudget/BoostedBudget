@@ -104,7 +104,8 @@ describe('AllocationBreakdown', () => {
       // Unallocated now appears in multiple places (legend, stats section)
       const unallocatedElements = screen.getAllByText(/unallocated/i);
       expect(unallocatedElements.length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('$200.00')).toBeInTheDocument();
+      // $200.00 appears in both legend and stats section spans, so use getAllByText
+      expect(screen.getAllByText('$200.00').length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -395,8 +396,10 @@ describe('AllocationBreakdown', () => {
         />
       );
 
-      // Should show unallocated amount
-      const unallocatedElements = screen.getAllByText(/unallocated.*\$500/i);
+      // Amount is split across element nodes so use textContent-based matcher
+      const unallocatedElements = screen.getAllByText(
+        (_, element) => Boolean(element?.textContent?.match(/unallocated.*\$500/i))
+      );
       expect(unallocatedElements.length).toBeGreaterThanOrEqual(1);
     });
 

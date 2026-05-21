@@ -171,7 +171,7 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    await user.click(screen.getByRole('button', { name: /^Edit Food And Drink.*Restaurants$/i }))
+    await user.click(screen.getByRole('button', { name: /^Edit category$/i }))
 
     // Issue #575: Real form uses dialog role and title
     await waitFor(() => {
@@ -191,7 +191,7 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    await user.click(screen.getByRole('button', { name: /^Delete Food And Drink.*Restaurants$/i }))
+    await user.click(screen.getByRole('button', { name: /^Delete category$/i }))
 
     await waitFor(() => {
       expect(screen.getByRole('alertdialog')).toBeInTheDocument()
@@ -203,7 +203,7 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    await user.click(screen.getByRole('button', { name: /^Delete Food And Drink.*Restaurants$/i }))
+    await user.click(screen.getByRole('button', { name: /^Delete category$/i }))
     await user.click(screen.getByRole('button', { name: /^delete$/i }))
 
     await waitFor(() => {
@@ -216,7 +216,7 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    await user.click(screen.getByRole('button', { name: /^Delete Food And Drink.*Restaurants$/i }))
+    await user.click(screen.getByRole('button', { name: /^Delete category$/i }))
     await user.click(screen.getByRole('button', { name: /cancel/i }))
 
     await waitFor(() => {
@@ -235,8 +235,8 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
     renderManager({ categories, disabled: true })
     // Issue #575: Real component uses aria-label for buttons
-    expect(screen.getByRole('button', { name: /^Edit Food And Drink.*Restaurants$/i })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /^Delete Food And Drink.*Restaurants$/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Edit category$/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Delete category$/i })).toBeDisabled()
   })
 
   it('should pass correct props to AllocationBreakdown', () => {

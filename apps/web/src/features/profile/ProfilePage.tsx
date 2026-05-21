@@ -51,8 +51,6 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
     )
   }
 
-  // If we get here, user should exist (TypeScript knows this from the loading/error guards above)
-  // But add a safety check just in case
   if (!user) {
     return (
       <div className="max-w-4xl mx-auto px-4 sm:px-8 py-8">
@@ -110,7 +108,7 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
                   <span className="font-semibold text-muted-foreground text-xs uppercase tracking-wide">Email</span>
                 </div>
                 <div className="flex items-center gap-2 text-base text-foreground">
-                  <span>{user.email}</span>
+                  <span data-ph-mask>{user.email}</span>
                   {user.email_verified && (
                     <span title="Email verified">
                       <CheckCircle2
@@ -167,11 +165,9 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
           </section>
 
           <section className="bg-card border border-border rounded-lg p-6 mb-8">
-            <div className="bg-card border border-border rounded-lg p-6">
-              <h2 className="text-base font-semibold text-foreground mb-1">Appearance</h2>
-              <p className="text-sm text-muted-foreground mb-4">Choose how BoostedBudget looks to you.</p>
-              <ThemeSelector />
-            </div>
+            <h2 className="text-base font-semibold text-foreground mb-1">Appearance</h2>
+            <p className="text-sm text-muted-foreground mb-4">Choose how BoostedBudget looks to you.</p>
+            <ThemeSelector />
           </section>
 
           <ProfileForm user={user} onProfileUpdate={handleProfileUpdate} />

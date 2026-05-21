@@ -70,7 +70,7 @@ export function BudgetCategoryCard({
       {/* Header */}
       <div className="budget-category-card__header flex justify-between items-start gap-2 mb-3">
         <h3 className="budget-category-card__title text-[0.9375rem] font-semibold text-foreground m-0 leading-snug">
-          {categoryPath}
+          <span data-ph-mask>{categoryPath}</span>
         </h3>
         <span className="budget-category-card__badge text-[0.6875rem] font-medium text-primary bg-primary/10 py-0.5 px-2 rounded-full whitespace-nowrap shrink-0">
           {matchLogicLabel}
@@ -81,7 +81,7 @@ export function BudgetCategoryCard({
       <div className="budget-category-card__amounts flex flex-col gap-1 mb-3">
         <div className="budget-category-card__amount-row flex justify-between items-center">
           <span className="budget-category-card__label text-[0.8125rem] text-muted-foreground">Allocated:</span>
-          <span className="budget-category-card__value text-sm font-semibold text-foreground">
+          <span className="budget-category-card__value text-sm font-semibold text-foreground" data-ph-mask>
             {formatCurrency(category.allocated_amount)}
           </span>
         </div>
@@ -92,6 +92,7 @@ export function BudgetCategoryCard({
               'budget-category-card__value text-sm font-semibold',
               isOverBudget ? 'budget-category-card__value--over text-destructive' : 'text-foreground'
             )}
+            data-ph-mask
           >
             {formatCurrency(category.spent_amount)}
           </span>
@@ -116,6 +117,7 @@ export function BudgetCategoryCard({
               <span
                 key={tag}
                 className="budget-category-card__tag text-[0.6875rem] text-muted-foreground bg-muted py-0.5 px-1.5 rounded"
+                data-ph-mask
               >
                 {tag}
               </span>
@@ -133,7 +135,7 @@ export function BudgetCategoryCard({
               className="budget-category-card__action-btn inline-flex items-center gap-1 px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground bg-transparent border border-border rounded-md cursor-pointer transition-all duration-150 hover:enabled:bg-muted hover:enabled:text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={onEdit}
               disabled={disabled}
-              aria-label={`Edit ${categoryPath}`}
+              aria-label="Edit category"
             >
               <PencilIcon className="budget-category-card__action-icon w-3.5 h-3.5" />
               Edit
@@ -145,7 +147,7 @@ export function BudgetCategoryCard({
               className="budget-category-card__action-btn budget-category-card__action-btn--delete inline-flex items-center gap-1 px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground bg-transparent border border-border rounded-md cursor-pointer transition-all duration-150 hover:enabled:bg-destructive/5 hover:enabled:border-destructive hover:enabled:text-destructive disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={onDelete}
               disabled={disabled}
-              aria-label={`Delete ${categoryPath}`}
+              aria-label="Delete category"
             >
               <TrashIcon className="budget-category-card__action-icon w-3.5 h-3.5" />
               Delete
@@ -157,7 +159,7 @@ export function BudgetCategoryCard({
               className="budget-category-card__action-btn budget-category-card__action-btn--transactions ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground bg-transparent border border-border rounded-md cursor-pointer transition-all duration-150 hover:enabled:bg-primary/5 hover:enabled:border-primary hover:enabled:text-primary disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={() => setIsTransactionsExpanded(!isTransactionsExpanded)}
               aria-expanded={isTransactionsExpanded}
-              aria-label={isTransactionsExpanded ? `Hide transactions for ${categoryPath}` : `View transactions for ${categoryPath}`}
+              aria-label={isTransactionsExpanded ? 'Hide transactions' : 'View transactions'}
             >
               {isTransactionsExpanded ? (
                 <>

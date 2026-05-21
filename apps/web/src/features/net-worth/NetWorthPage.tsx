@@ -51,11 +51,11 @@ export function NetWorthPage() {
 
   const institutionOptions = useMemo(() => {
     const seen = new Set<string>()
-    const opts: Array<{ value: string; label: string }> = []
+    const opts: Array<{ value: string; label: string; masked?: boolean }> = []
     for (const row of [...rawAssets, ...rawLiabilities]) {
       if (!seen.has(row.institutionName)) {
         seen.add(row.institutionName)
-        opts.push({ value: row.institutionName, label: row.institutionName })
+        opts.push({ value: row.institutionName, label: row.institutionName, masked: true })
       }
     }
     return opts.sort((a, b) => a.label.localeCompare(b.label))

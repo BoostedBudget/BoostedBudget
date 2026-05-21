@@ -8,7 +8,7 @@ import type { CustomCategory } from '../../categories/types'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
 import { TagEditor } from '../../tags/components/TagEditor'
 import { CategoryEditor } from '../../categories/components/CategoryEditor'
-import { getEffectiveCategory, getEffectiveCategoryLabel } from '@/shared/categories/getEffectiveCategory'
+import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
 import {
   useUpdateTransactionTags,
   useUpdateTransactionCategory,
@@ -94,7 +94,7 @@ export function TransactionEditor({
           id: transaction.id,
           data: categoryRequest,
         })) as Transaction
-        trackEvent(ANALYTICS_EVENTS.TRANSACTION_CATEGORIZED, { category: getEffectiveCategoryLabel(getEffectiveCategory(updatedTransaction)) })
+        trackEvent(ANALYTICS_EVENTS.TRANSACTION_CATEGORIZED)
       }
 
       // Pass the updated transaction to parent for immediate state update
@@ -123,7 +123,9 @@ export function TransactionEditor({
         aria-labelledby="transaction-editor-title"
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <h2 id="transaction-editor-title" className="m-0 text-lg font-semibold text-foreground">Edit Transaction</h2>
+          <h2 id="transaction-editor-title" className="m-0 text-lg font-semibold text-foreground">
+            Edit Transaction
+          </h2>
           <button
             type="button"
             className="flex items-center justify-center w-8 h-8 p-0 border-none bg-transparent text-muted-foreground cursor-pointer text-2xl leading-none rounded hover:bg-muted hover:text-foreground transition-colors"
@@ -135,7 +137,9 @@ export function TransactionEditor({
         </div>
 
         <div className="flex items-center justify-between px-6 py-4 bg-muted">
-          <div className="text-sm font-medium text-foreground">{displayName}</div>
+          <div className="text-sm font-medium text-foreground">
+            <span data-ph-mask>{displayName}</span>
+          </div>
           <div className="text-base font-semibold text-foreground" data-ph-mask>
             {new Intl.NumberFormat('en-US', {
               style: 'currency',

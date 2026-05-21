@@ -86,11 +86,11 @@ export function BudgetCard({ budget, onDelete }: BudgetCardProps) {
     >
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2">
-          <h3 className="m-0 text-lg font-semibold text-foreground">{budget.name}</h3>
+          <h3 className="m-0 text-lg font-semibold text-foreground"><span data-ph-mask>{budget.name}</span></h3>
           {budget.is_active && <Badge variant="success">Active</Badge>}
         </div>
         {budget.description && (
-          <p className="m-0 text-sm text-muted-foreground">{budget.description}</p>
+          <p className="m-0 text-sm text-muted-foreground"><span data-ph-mask>{budget.description}</span></p>
         )}
       </div>
 

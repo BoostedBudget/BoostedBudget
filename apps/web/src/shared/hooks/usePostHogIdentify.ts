@@ -18,10 +18,7 @@ export function usePostHogIdentify(): void {
 
     if (!prevUser && user) {
       // Transition: signed out → signed in
-      const email = user.primaryEmailAddress?.emailAddress
       posthog.identify(user.id, {
-        ...(email ? { email } : {}),
-        name: user.fullName,
         subscription_tier: user.publicMetadata?.subscription_tier,
         primary_region: user.publicMetadata?.primary_region,
       })

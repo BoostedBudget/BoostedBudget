@@ -104,8 +104,8 @@ export function BudgetProgressBar({
     <div className={`flex flex-col gap-2 w-full budget-progress--${size} budget-progress--${status}`}>
       {showAmounts && (
         <div className={`flex justify-between items-center ${textSizeClass}`}>
-          <span className={`font-semibold ${spentColorClass}`}>{formatCurrency(spent, currencyCode)}</span>
-          <span className="text-muted-foreground">of {formatCurrency(total, currencyCode)}</span>
+          <span className={`font-semibold ${spentColorClass}`} data-ph-mask>{formatCurrency(spent, currencyCode)}</span>
+          <span className="text-muted-foreground" data-ph-mask>of {formatCurrency(total, currencyCode)}</span>
         </div>
       )}
 
