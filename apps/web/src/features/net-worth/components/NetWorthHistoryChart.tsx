@@ -1,11 +1,10 @@
 import { useMemo } from 'react'
 import { format, parseISO } from 'date-fns'
-import type { Data, Layout } from 'plotly.js'
+import type { EChartsOption } from 'echarts'
 import {
-  Plot,
+  EChartsChart,
   useDarkMode,
-  getBaseLayout,
-  DEFAULT_CONFIG,
+  getCurrencyOption,
   CASH_FLOW_COLORS,
   formatCurrency,
 } from '@/shared/charts'
@@ -18,7 +17,7 @@ interface NetWorthHistoryChartProps {
   filterKey: string
 }
 
-export function NetWorthHistoryChart({ history, filterKey }: NetWorthHistoryChartProps) {
+export function NetWorthHistoryChart({ history, filterKey: _filterKey }: NetWorthHistoryChartProps) {
   const isDark = useDarkMode()
   const snapshots = history.snapshots
   const hasEnoughData = snapshots.length >= 2
@@ -28,51 +27,52 @@ export function NetWorthHistoryChart({ history, filterKey }: NetWorthHistoryChar
     [snapshots]
   )
 
-  const traces = useMemo((): Data[] => [
-    {
-      x: dates,
-      y: snapshots.map((s) => s.net_worth),
-      type: 'scatter',
-      mode: 'lines',
-      name: 'Net Worth',
-      line: { color: NET_WORTH_COLOR, width: 2, shape: 'spline' },
-      hovertemplate: snapshots.map(
-        (s) => `<b>${format(parseISO(s.date), 'MMMM d, yyyy')}</b><br>Net Worth: ${formatCurrency(s.net_worth)}<extra></extra>`
-      ),
-    },
-    {
-      x: dates,
-      y: snapshots.map((s) => s.total_assets),
-      type: 'scatter',
-      mode: 'lines',
-      name: 'Assets',
-      line: { color: CASH_FLOW_COLORS.netPositive, width: 1.5, shape: 'spline' },
-      hovertemplate: snapshots.map(
-        (s) => `<b>${format(parseISO(s.date), 'MMMM d, yyyy')}</b><br>Assets: ${formatCurrency(s.total_assets)}<extra></extra>`
-      ),
-    },
-    {
-      x: dates,
-      y: snapshots.map((s) => s.total_liabilities),
-      type: 'scatter',
-      mode: 'lines',
-      name: 'Liabilities',
-      line: { color: CASH_FLOW_COLORS.netNegative, width: 1.5, shape: 'spline' },
-      hovertemplate: snapshots.map(
-        (s) => `<b>${format(parseISO(s.date), 'MMMM d, yyyy')}</b><br>Liabilities: ${formatCurrency(s.total_liabilities)}<extra></extra>`
-      ),
-    },
-  ], [snapshots, dates])
-
-  const layout = useMemo((): Partial<Layout> => {
-    const base = getBaseLayout(isDark)
+  const option = useMemo((): EChartsOption => {
+    const base = getCurrencyOption(isDark)
     return {
       ...base,
-      margin: { t: 10, r: 20, b: 40, l: 70 },
-      uirevision: filterKey,
-      yaxis: { ...base.yaxis, tickformat: '$,.0f' },
+      xAxis: { type: 'category', data: dates },
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: unknown) => {
+          const points = params as Array<{ seriesName: string; value: number; dataIndex: number }>
+          if (!points.length) return ''
+          const snapshot = snapshots[points[0].dataIndex]
+          const label = snapshot ? format(parseISO(snapshot.date), 'MMMM d, yyyy') : ''
+          return `<b>${label}</b><br>` + points.map((p) => `${p.seriesName}: ${formatCurrency(p.value)}`).join('<br>')
+        },
+      },
+      series: [
+        {
+          name: 'Net Worth',
+          type: 'line',
+          data: snapshots.map((s) => s.net_worth),
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { color: NET_WORTH_COLOR, width: 2 },
+          itemStyle: { color: NET_WORTH_COLOR },
+        },
+        {
+          name: 'Assets',
+          type: 'line',
+          data: snapshots.map((s) => s.total_assets),
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { color: CASH_FLOW_COLORS.netPositive, width: 1.5 },
+          itemStyle: { color: CASH_FLOW_COLORS.netPositive },
+        },
+        {
+          name: 'Liabilities',
+          type: 'line',
+          data: snapshots.map((s) => s.total_liabilities),
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { color: CASH_FLOW_COLORS.netNegative, width: 1.5 },
+          itemStyle: { color: CASH_FLOW_COLORS.netNegative },
+        },
+      ],
     }
-  }, [isDark, filterKey])
+  }, [isDark, snapshots, dates])
 
   if (!hasEnoughData) {
     return (
@@ -84,12 +84,10 @@ export function NetWorthHistoryChart({ history, filterKey }: NetWorthHistoryChar
 
   return (
     <div className="h-[300px] sm:h-[400px] lg:h-[500px]" data-testid="net-worth-history-chart">
-      <Plot
-        data={traces}
-        layout={layout}
-        config={DEFAULT_CONFIG}
+      <EChartsChart
+        option={option}
+        isDark={isDark}
         style={{ width: '100%', height: '100%' }}
-        useResizeHandler
       />
     </div>
   )
