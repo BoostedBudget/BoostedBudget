@@ -65,7 +65,7 @@ export function RuleTable({
   onSelectionChange,
   className = '',
 }: RuleTableProps) {
-  const hasActions = !!(onEdit || onDelete || onToggle || onTest)
+  const hasActions = Boolean(onEdit || onDelete || onToggle || onTest)
 
   const {
     sizing,
@@ -113,8 +113,7 @@ export function RuleTable({
     [onSort, sortable]
   )
 
-  const sort: SortState =
-    sortColumn && sortable ? { columnId: sortColumn, direction: sortDirection } : null
+  const sort: SortState | null = sortColumn && sortable ? { columnId: sortColumn, direction: sortDirection } : null
 
   const columns: ColumnDef<AutomationRule>[] = [
     ...(selectable

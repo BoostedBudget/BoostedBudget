@@ -27,9 +27,8 @@ import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
 import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
-import type { SortState } from '@/shared/components/DataTable'
 import { RuleCard } from './RuleCard'
-import { RuleTable, type SortColumn, type SortDirection } from './RuleTable'
+import { RuleTable, type SortColumn } from './RuleTable'
 import { useRuleFilters } from '../hooks/useRuleFilters'
 import { sortRules } from '../utils/sortRules'
 
@@ -56,7 +55,7 @@ export function RulesPage() {
 
   const { sort, setSort } = useRuleFilters()
   const sortColumn = sort?.columnId as SortColumn | undefined
-  const sortDirection: SortDirection = sort?.direction ?? 'asc'
+  const sortDirection = sort?.direction ?? 'asc'
 
   // Fetch rules
   const {
@@ -150,10 +149,6 @@ export function RulesPage() {
   const handleDeleteCancel = useCallback(() => {
     setDeleteConfirm(null)
   }, [])
-
-  const handleSort = useCallback((state: SortState | null) => {
-    setSort(state)
-  }, [setSort])
 
   const sortedRules = useMemo(
     () => sortRules(rules, sortColumn, sortDirection),
@@ -283,7 +278,7 @@ export function RulesPage() {
             sortable
             sortColumn={sortColumn}
             sortDirection={sortDirection}
-            onSort={handleSort}
+            onSort={setSort}
           />
         )}
       </div>
