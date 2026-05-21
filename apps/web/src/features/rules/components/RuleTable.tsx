@@ -41,7 +41,7 @@ export interface RuleTableProps {
   sortable?: boolean
   sortColumn?: SortColumn
   sortDirection?: SortDirection
-  onSort?: (column: SortColumn, direction: SortDirection) => void
+  onSort?: (state: SortState | null) => void
   selectable?: boolean
   selectedIds?: string[]
   onSelectionChange?: (selectedIds: string[]) => void
@@ -105,17 +105,12 @@ export function RuleTable({
     [onToggle, loading]
   )
 
-  // Bridge DataTable 3-state sort → RuleTable (column, direction) callback
   const handleSortChange = useCallback(
     (newSort: SortState) => {
       if (!onSort || !sortable) return
-      if (newSort) {
-        onSort(newSort.columnId as SortColumn, newSort.direction)
-      } else if (sortColumn) {
-        onSort(sortColumn, sortDirection === 'asc' ? 'desc' : 'asc')
-      }
+      onSort(newSort)
     },
-    [onSort, sortable, sortColumn, sortDirection]
+    [onSort, sortable]
   )
 
   const sort: SortState =
