@@ -252,4 +252,18 @@ describe('BalanceHistoryChart', () => {
       expect(screen.getByTestId('echarts-chart')).toBeInTheDocument();
     });
   });
+
+  describe('Dark Mode', () => {
+    it('passes isDark=true to EChartsChart when dark mode is active', () => {
+      mockUseDarkMode.mockReturnValue(true)
+      render(<BalanceHistoryChart history={mockHistory} />)
+      expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
+    })
+
+    it('passes isDark=false to EChartsChart when light mode is active', () => {
+      mockUseDarkMode.mockReturnValue(false)
+      render(<BalanceHistoryChart history={mockHistory} />)
+      expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
+    })
+  })
 });
