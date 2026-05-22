@@ -17,6 +17,7 @@ import {
   getCurrencyOption,
   ACCOUNT_TYPE_COLORS,
   formatCurrency,
+  escapeHtml,
 } from '@/shared/charts';
 import type { BalanceHistory } from '../types';
 
@@ -74,7 +75,7 @@ export function BalanceHistoryChart({
           const points = params as Array<{ seriesName: string; value: number; dataIndex: number }>;
           const snapshot = snapshots[points[0].dataIndex];
           const label = snapshot ? format(parseISO(snapshot.date), 'MMMM d, yyyy') : '';
-          return `<b>${label}</b><br>${points.map((p) => `${p.seriesName}: ${formatCurrency(p.value)}`).join('<br>')}`;
+          return `<b>${escapeHtml(label)}</b><br>${points.map((p) => `${escapeHtml(p.seriesName)}: ${formatCurrency(p.value)}`).join('<br>')}`;
         },
       },
       series,

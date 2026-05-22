@@ -34,6 +34,9 @@ export {
   formatCurrencyFull,
 } from './formatters';
 
+// Utilities
+export { escapeHtml } from './escapeHtml';
+
 // Types
 export type {
   BaseChartProps,

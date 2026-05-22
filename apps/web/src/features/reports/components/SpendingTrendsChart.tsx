@@ -15,6 +15,7 @@ import {
   getBarOption,
   CATEGORY_COLORS,
   formatCurrencyFull,
+  escapeHtml,
 } from '@/shared/charts'
 import { formatPFCPrimary } from '@/shared/categories/formatPfc'
 import type { SpendingTrendsResponse } from '@boostedbudget/api-client/models'
@@ -83,7 +84,7 @@ export function SpendingTrendsChart({ data, loading, className }: SpendingTrends
         formatter: (params: unknown) => {
           if (!Array.isArray(params)) return '';
           const points = params as Array<{ seriesName: string; value: number }>;
-          return points.map((p) => `${p.seriesName}: ${formatCurrencyFull(p.value)}`).join('<br>');
+          return points.map((p) => `${escapeHtml(p.seriesName)}: ${formatCurrencyFull(p.value)}`).join('<br>');
         },
       },
       series,

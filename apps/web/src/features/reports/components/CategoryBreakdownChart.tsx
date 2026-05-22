@@ -5,6 +5,7 @@ import {
   useDarkMode,
   CATEGORY_COLORS,
   formatCurrencyFull,
+  escapeHtml,
 } from '@/shared/charts'
 import type { SpendingByCategoryResponse } from '@boostedbudget/api-client/models'
 
@@ -33,7 +34,7 @@ export function CategoryBreakdownChart({
           if (!params || typeof params !== 'object') return '';
           const { name, value, percent } = params as { name: string; value: number; percent: number };
           if (typeof value !== 'number' || typeof percent !== 'number') return String(name ?? '');
-          return `${name}<br>${formatCurrencyFull(value)} (${percent.toFixed(1)}%)`;
+          return `${escapeHtml(name)}<br>${formatCurrencyFull(value)} (${percent.toFixed(1)}%)`;
         },
       },
       legend: {

@@ -14,6 +14,7 @@ import {
   createMarkLineData,
   CASH_FLOW_COLORS,
   formatCurrencyFull,
+  escapeHtml,
 } from '@/shared/charts'
 import { useCashFlowHistory } from '../hooks/useCashFlowData'
 import { DashboardContext } from '../context/DashboardContext'
@@ -84,7 +85,7 @@ function CashFlowChartWidget() {
           return points.map((p) => {
             const isNet = p.seriesName === 'Net Cash Flow'
             const color = isNet ? (p.value >= 0 ? 'green' : 'red') : 'inherit'
-            return `<b style="color:${color}">${p.seriesName}</b>: ${formatCurrencyFull(p.value)}`
+            return `<b style="color:${color}">${escapeHtml(p.seriesName)}</b>: ${formatCurrencyFull(p.value)}`
           }).join('<br>')
         },
       },
