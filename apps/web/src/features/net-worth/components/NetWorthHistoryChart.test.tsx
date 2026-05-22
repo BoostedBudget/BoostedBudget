@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import '@/test/mocks/shared-charts'
-import { mockUseDarkMode } from '@/test/mocks/shared-charts'
+import { mockUseDarkMode, MockEChartsChart } from '@/test/mocks/shared-charts'
 import { NetWorthHistoryChart } from './NetWorthHistoryChart'
 import type { NetWorthHistory } from '@/features/dashboard/types'
 
@@ -64,5 +64,15 @@ describe('NetWorthHistoryChart', () => {
   it('renders with net-worth-history-chart testid', () => {
     render(<NetWorthHistoryChart history={historyWithData} filterKey="test" />)
     expect(screen.getByTestId('net-worth-history-chart')).toBeInTheDocument()
+  })
+
+  it('tooltip formatter escapes malicious series names (XSS regression — #1169)', () => {
+    render(<NetWorthHistoryChart history={historyWithData} filterKey="test" />)
+    const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+      tooltip?: { formatter?: (p: unknown) => string }
+    }
+    const formatted = option.tooltip!.formatter!([{ seriesName: '<svg onload=alert(1)>', value: 9000, dataIndex: 0 }])
+    expect(formatted).not.toMatch(/<(svg|script|img)/i)
+    expect(formatted).toContain('&lt;svg')
   })
 })

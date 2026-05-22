@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import '@/test/mocks/shared-charts'
-import { mockUseDarkMode } from '@/test/mocks/shared-charts'
+import { mockUseDarkMode, MockEChartsChart } from '@/test/mocks/shared-charts'
 import { SpendingTrendsChart } from './SpendingTrendsChart'
 import type { SpendingTrendsResponse, SpendingTrendPeriod } from '@boostedbudget/api-client/models'
 
@@ -121,5 +121,15 @@ describe('SpendingTrendsChart', () => {
       render(<SpendingTrendsChart data={mockData} loading={false} />)
       expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
     })
+  })
+
+  it('tooltip formatter escapes malicious series names (XSS regression — #1169)', () => {
+    render(<SpendingTrendsChart data={mockData} loading={false} />)
+    const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+      tooltip?: { formatter?: (p: unknown) => string }
+    }
+    const formatted = option.tooltip!.formatter!([{ seriesName: '<img src=x onerror=alert(1)>', value: 200 }])
+    expect(formatted).not.toMatch(/<(img|script|svg)/i)
+    expect(formatted).toContain('&lt;img')
   })
 })
