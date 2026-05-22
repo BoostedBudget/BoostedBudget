@@ -89,14 +89,6 @@ fi
 
 printf '\n'
 
-# --- Helper: Build frontend once if needed
-ensure_frontend_build() {
-  if [ ! -d "$PROJECT_ROOT/apps/web/dist" ]; then
-    printf '  Building frontend...\n'
-    (cd "$PROJECT_ROOT/apps/web" && bun run build 2>&1) || true
-  fi
-}
-
 # =========================================================================
 # 2. Bundle size check — runs BEFORE tests for fast feedback on size regressions.
 #    make check-bundle-size = bun run build + orphan-chunk guard + size-limit.
@@ -127,21 +119,8 @@ run_check "make test-fast       (backend + frontend)" \
 printf '\n'
 
 # =========================================================================
-# 4. Lighthouse CI audit
+# 4. Lighthouse CI audit — runs in GitHub Actions; skip locally.
 # =========================================================================
-printf 'Lighthouse:\n'
-
-if command -v bun &>/dev/null; then
-  ensure_frontend_build
-  run_check "npx lhci autorun     (Performance/A11y/SEO)" \
-    "$PROJECT_ROOT" \
-    "npx lhci autorun" || true
-else
-  printf '  %-50s⚠️  (bun not installed)\n' "npx lhci autorun"
-  WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"
-fi
-
-printf '\n'
 
 # =========================================================================
 # Result
