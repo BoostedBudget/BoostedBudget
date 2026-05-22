@@ -33,7 +33,7 @@ export function CategoryBreakdownChart({
         formatter: (params: unknown) => {
           if (!params || typeof params !== 'object') return '';
           const { name, value, percent } = params as { name: string; value: number; percent: number };
-          if (typeof value !== 'number' || typeof percent !== 'number') return String(name ?? '');
+          if (typeof value !== 'number' || typeof percent !== 'number') return escapeHtml(String(name ?? ''));
           return `${escapeHtml(name)}<br>${formatCurrencyFull(value)} (${percent.toFixed(1)}%)`;
         },
       },
