@@ -519,25 +519,32 @@ test.describe('Dashboard - Authenticated User', () => {
       const maskedChart = page.locator('[role="img"][data-ph-mask]').first()
       await expect(maskedChart).toBeVisible()
 
-      // Hover over the center of the chart to trigger the ECharts tooltip
+      // Hover over the chart to trigger the ECharts tooltip
       const box = await maskedChart.boundingBox()
       if (box) {
-        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
-        // Wait briefly for the tooltip to be injected by ECharts
-        await page.waitForTimeout(400)
+        await page.mouse.move(box.x + box.width * 0.25, box.y + box.height / 2)
+        await page.waitForTimeout(500)
 
-        // ECharts injects the tooltip as a positioned div inside the chart container.
-        // If appendToBody:true is ever set, this assertion will catch the regression.
-        const tooltip = maskedChart.locator('[style*="position: absolute"]').first()
-        const tooltipVisible = await tooltip.isVisible().catch(() => false)
+        // Use a PAGE-LEVEL locator (not scoped to maskedChart) to catch the
+        // appendToBody:true regression: if the tooltip is portaled to <body>, a
+        // maskedChart-scoped search would miss it and silently pass.
+        // ECharts tooltip has `white-space: nowrap` + `position: absolute` inline.
+        const tooltipVisible = await page
+          .locator('[style*="white-space: nowrap"][style*="position: absolute"]')
+          .first()
+          .isVisible()
+          .catch(() => false)
+
         if (tooltipVisible) {
-          const ancestorMasked = await tooltip.evaluate(
-            (el) => !!el.closest('[data-ph-mask]')
-          )
+          // CRITICAL: any visible tooltip must be inside a [data-ph-mask] ancestor.
+          // Failure means ECharts is portaling tooltips outside the masked container.
+          const ancestorMasked = await page
+            .locator('[style*="white-space: nowrap"][style*="position: absolute"]')
+            .first()
+            .evaluate((el) => !!el.closest('[data-ph-mask]'))
           expect(ancestorMasked).toBe(true)
         }
-        // Whether or not the tooltip appeared (depends on chart having data at that
-        // hover position), the wrapper mask assertion above already confirms coverage.
+        // If no tooltip appeared the wrapper mask assertion above still confirms PII coverage.
       }
     })
   })
