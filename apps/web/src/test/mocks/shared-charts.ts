@@ -96,12 +96,12 @@ const EChartsChartMockComponent = ({
   option?: EChartsOption
   style?: React.CSSProperties
   isDark?: boolean
-  className?: string
-  notMerge?: boolean
-  lazyUpdate?: boolean
   onEvents?: Record<string, (params: { dataIndex: number }) => void>
 }) => {
   const series = option?.series ?? []
+  // Internal series (name starting with __) are implementation details — exclude from
+  // visible counts/names so tests assert on the user-facing chart surface only.
+  const visibleSeries = series.filter((s) => !s.name?.startsWith('__'))
   const hasMarkline = series.some((s) => s.markLine !== undefined)
   const marklineSeries = series.filter((s) => s.markLine !== undefined).map((s) => s.name ?? '')
 
@@ -127,9 +127,9 @@ const EChartsChartMockComponent = ({
     'div',
     {
       'data-testid': 'echarts-chart',
-      'data-series-count': series.length,
-      'data-series-names': JSON.stringify(series.map((s) => s.name)),
-      'data-series-types': JSON.stringify(series.map((s) => s.type)),
+      'data-series-count': visibleSeries.length,
+      'data-series-names': JSON.stringify(visibleSeries.map((s) => s.name)),
+      'data-series-types': JSON.stringify(visibleSeries.map((s) => s.type)),
       'data-has-markline': hasMarkline ? 'true' : 'false',
       'data-markline-series': JSON.stringify(marklineSeries),
       'data-renderer': 'svg',

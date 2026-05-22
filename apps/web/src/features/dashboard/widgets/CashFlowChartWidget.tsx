@@ -72,7 +72,7 @@ function CashFlowChartWidget() {
       ...base,
       xAxis: { type: 'category', data: labels },
       yAxis: {
-        ...(base.yAxis as object),
+        ...base.yAxis,
         axisLabel: {
           formatter: (v: unknown) => typeof v === 'number' ? formatCurrencyFull(v) : String(v),
         },
@@ -82,12 +82,20 @@ function CashFlowChartWidget() {
         formatter: (params: unknown) => {
           if (!Array.isArray(params)) return ''
           const points = params as Array<{ seriesName: string; value: number }>
-          return points.map((p) => {
-            const isNet = p.seriesName === 'Net Cash Flow'
-            const color = isNet ? (p.value >= 0 ? 'green' : 'red') : 'inherit'
-            return `<b style="color:${color}">${escapeHtml(p.seriesName)}</b>: ${formatCurrencyFull(p.value)}`
-          }).join('<br>')
+          return points
+            .filter((p) => !p.seriesName.startsWith('__'))
+            .map((p) => {
+              const isNet = p.seriesName === 'Net Cash Flow'
+              const color = isNet ? (p.value >= 0 ? 'green' : 'red') : 'inherit'
+              return `<b style="color:${color}">${escapeHtml(p.seriesName)}</b>: ${formatCurrencyFull(p.value)}`
+            }).join('<br>')
         },
+      },
+      // Explicit legend.data excludes __refline__ so the user can never legend-toggle the
+      // reference line away. ECharts only legend-filters series that appear in legend.data.
+      legend: {
+        ...base.legend,
+        data: ['Income', 'Expenses', 'Net Cash Flow'],
       },
       series: [
         {
@@ -96,8 +104,6 @@ function CashFlowChartWidget() {
           data: chartData.map((d) => d.income),
           itemStyle: { color: CASH_FLOW_COLORS.income },
           barCategoryGap: '20%',
-          // Attach markLine to Income (always present when data exists — Codex H2)
-          markLine: createMarkLineData(0, isDark),
         },
         {
           name: 'Expenses',
@@ -114,6 +120,16 @@ function CashFlowChartWidget() {
           symbolSize: 6,
           lineStyle: { color: CASH_FLOW_COLORS.netPositive, width: 2 },
           itemStyle: { color: CASH_FLOW_COLORS.netPositive },
+        },
+        // Hidden series that hosts the y=0 reference line. Not in legend.data so it is
+        // never legend-deselected — ECharts will always include it in the render pass.
+        {
+          name: '__refline__',
+          type: 'line',
+          data: [],
+          silent: true,
+          tooltip: { show: false },
+          markLine: createMarkLineData(0, isDark),
         },
       ],
     }
