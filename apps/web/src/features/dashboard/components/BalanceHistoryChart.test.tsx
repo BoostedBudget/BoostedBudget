@@ -224,4 +224,14 @@ describe('BalanceHistoryChart', () => {
       expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
     })
   })
+
+  it('tooltip formatter escapes malicious series names (XSS regression — #1169)', () => {
+    render(<BalanceHistoryChart history={mockHistory} />)
+    const option = mockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+      tooltip?: { formatter?: (p: unknown) => string }
+    }
+    const formatted = option.tooltip!.formatter!([{ seriesName: '<img src=x onerror=alert(1)>', value: 100, dataIndex: 0 }])
+    expect(formatted).not.toMatch(/<(img|script|svg)/i)
+    expect(formatted).toContain('&lt;img')
+  })
 });

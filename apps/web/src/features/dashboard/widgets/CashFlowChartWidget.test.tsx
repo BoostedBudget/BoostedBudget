@@ -12,7 +12,7 @@ import {
   mockUseCashFlowHistory,
   mockCashFlowHistoryRefetch,
 } from '@/test/mocks/cash-flow-hooks'
-import { mockUseDarkMode } from '@/test/mocks/shared-charts'
+import { mockUseDarkMode, MockEChartsChart } from '@/test/mocks/shared-charts'
 
 import { CashFlowChartWidget } from './CashFlowChartWidget'
 import {
@@ -192,5 +192,16 @@ describe('CashFlowChartWidget', () => {
       render(<TestWrapper><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
       expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
     })
+  })
+
+  it('tooltip formatter escapes malicious series names (XSS regression — #1169)', () => {
+    mockUseCashFlowHistory.mockReturnValue({ data: mockHistoryData, loading: false, error: null, refetch: mockCashFlowHistoryRefetch })
+    render(<TestWrapper><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
+    const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+      tooltip?: { formatter?: (p: unknown) => string }
+    }
+    const formatted = option.tooltip!.formatter!([{ seriesName: '<script>alert(1)</script>', value: 400 }])
+    expect(formatted).not.toMatch(/<(script|img|svg)/i)
+    expect(formatted).toContain('&lt;script')
   })
 })
