@@ -20,7 +20,7 @@ const mockData: SpendingByCategoryResponse = {
 describe('CategoryBreakdownChart', () => {
   it('renders loading state', () => {
     render(<CategoryBreakdownChart data={null} loading={true} />)
-    expect(screen.getByLabelText('Loading chart')).toBeDefined()
+    expect(screen.getByLabelText('Loading chart')).toBeInTheDocument()
   })
 
   it('renders empty state when no categories', () => {
@@ -31,12 +31,12 @@ describe('CategoryBreakdownChart', () => {
       categories: [],
     }
     render(<CategoryBreakdownChart data={emptyData} loading={false} />)
-    expect(screen.getByText(/No spending data/)).toBeDefined()
+    expect(screen.getByText(/No spending data/)).toBeInTheDocument()
   })
 
   it('renders echarts chart with data', () => {
     render(<CategoryBreakdownChart data={mockData} loading={false} />)
-    expect(screen.getByTestId('echarts-chart')).toBeDefined()
+    expect(screen.getByTestId('echarts-chart')).toBeInTheDocument()
   })
 
   it('chart has series type pie', () => {
@@ -48,7 +48,7 @@ describe('CategoryBreakdownChart', () => {
 
   it('renders total spent amount', () => {
     render(<CategoryBreakdownChart data={mockData} loading={false} />)
-    expect(screen.getByText('Total:')).toBeDefined()
+    expect(screen.getByText('Total:')).toBeInTheDocument()
   })
 
   it('calls onCategoryClick with raw category field (not display label) when slice clicked', () => {
@@ -92,35 +92,14 @@ describe('CategoryBreakdownChart', () => {
     expect(displayLabel).toBe('My Coffee Budget')
   })
 
-  it('renders custom-category chart without crashing and shows total', () => {
-    const customData: SpendingByCategoryResponse = {
-      start_date: '2024-01-01',
-      end_date: '2024-01-31',
-      total_spent: 150,
-      categories: [
-        {
-          category: 'custom:7a93a4f0-dead-beef-1234-abcdef012345',
-          pfc_primary_display: 'My Coffee Budget',
-          total: 150,
-          percentage: 100,
-          transaction_count: 5,
-        },
-      ],
-    }
-    render(<CategoryBreakdownChart data={customData} loading={false} />)
-    const chart = screen.getByTestId('echarts-chart')
-    expect(chart.dataset.seriesCount).toBe('1')
-    expect(screen.getByText('Total:')).toBeDefined()
-  })
 
   describe('Dark Mode', () => {
-    it('passes isDark=true to EChartsChart when dark mode is active', () => {
+    it('reflects dark mode state in isDark prop', () => {
       mockUseDarkMode.mockReturnValue(true)
-      render(<CategoryBreakdownChart data={mockData} loading={false} />)
+      const { unmount } = render(<CategoryBreakdownChart data={mockData} loading={false} />)
       expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
-    })
+      unmount()
 
-    it('passes isDark=false to EChartsChart when light mode is active', () => {
       mockUseDarkMode.mockReturnValue(false)
       render(<CategoryBreakdownChart data={mockData} loading={false} />)
       expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')

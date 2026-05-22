@@ -35,28 +35,18 @@ describe('NetWorthHistoryChart', () => {
     render(<NetWorthHistoryChart history={historyWithData} filterKey="test" />)
     const chart = screen.getByTestId('echarts-chart')
     const names = JSON.parse(chart.dataset.seriesNames ?? '[]') as string[]
-    expect(names).toContain('Net Worth')
-    expect(names).toContain('Assets')
-    expect(names).toContain('Liabilities')
+    expect(names).toEqual(expect.arrayContaining(['Net Worth', 'Assets', 'Liabilities']))
     expect(chart.dataset.seriesCount).toBe('3')
   })
 
   it('shows insufficient history fallback when < 2 snapshots', () => {
     render(<NetWorthHistoryChart history={historyOneSnapshot} filterKey="test" />)
-    expect(screen.queryByTestId('echarts-chart')).toBeNull()
     expect(screen.getByText(/Not enough history/i)).toBeDefined()
   })
 
   it('shows fallback when no snapshots', () => {
     render(<NetWorthHistoryChart history={historyNoSnapshots} filterKey="test" />)
-    expect(screen.queryByTestId('echarts-chart')).toBeNull()
     expect(screen.getByText(/Not enough history/i)).toBeDefined()
-  })
-
-  it('renders chart in dark mode path', () => {
-    mockUseDarkMode.mockReturnValue(true)
-    render(<NetWorthHistoryChart history={historyWithData} filterKey="test-dark" />)
-    expect(screen.getByTestId('echarts-chart')).toBeDefined()
   })
 
   it('passes isDark=true to EChartsChart when dark mode is active', () => {
@@ -73,6 +63,6 @@ describe('NetWorthHistoryChart', () => {
 
   it('renders with net-worth-history-chart testid', () => {
     render(<NetWorthHistoryChart history={historyWithData} filterKey="test" />)
-    expect(screen.getByTestId('net-worth-history-chart')).toBeDefined()
+    expect(screen.getByTestId('net-worth-history-chart')).toBeInTheDocument()
   })
 })

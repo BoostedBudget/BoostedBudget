@@ -22,18 +22,17 @@ import {
 
 const TestWrapper = ({
   children,
-  contextValue,
+  contextValue = mockContextValue,
 }: {
   children: React.ReactNode
-  contextValue: DashboardContextValue | null
+  contextValue?: DashboardContextValue | null
 }) => (
   <DashboardContext.Provider value={contextValue}>
     {children}
   </DashboardContext.Provider>
 )
 
-describe('CashFlowChartWidget', () => {
-  const mockContextValue: DashboardContextValue = {
+const mockContextValue: DashboardContextValue = {
     filters: {
       startDate: '2024-01-01',
       endDate: '2024-01-31',
@@ -45,9 +44,9 @@ describe('CashFlowChartWidget', () => {
     setIsEditing: mock(() => {}),
     hasAccounts: false,
     accountsLoading: false,
-  }
+}
 
-  const mockHistoryData = {
+const mockHistoryData = {
     start_date: '2024-01-01',
     end_date: '2024-01-31',
     grouping: 'weekly' as const,
@@ -71,6 +70,7 @@ describe('CashFlowChartWidget', () => {
     ],
   }
 
+describe('CashFlowChartWidget', () => {
   beforeEach(() => {
     mockUseCashFlowHistory.mockClear()
     mockCashFlowHistoryRefetch.mockClear()
@@ -95,24 +95,24 @@ describe('CashFlowChartWidget', () => {
 
     it('should show loading spinner when loading', () => {
       mockUseCashFlowHistory.mockReturnValue({ data: null, loading: true, error: null, refetch: mockCashFlowHistoryRefetch })
-      render(<TestWrapper contextValue={mockContextValue}><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
+      render(<TestWrapper><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
       expect(document.querySelector('.animate-spin')).toBeInTheDocument()
     })
 
     it('should show error message when error occurs', () => {
       mockUseCashFlowHistory.mockReturnValue({ data: null, loading: false, error: 'Failed to load chart data', refetch: mockCashFlowHistoryRefetch })
-      render(<TestWrapper contextValue={mockContextValue}><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
+      render(<TestWrapper><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
       expect(screen.getByText('Failed to load chart data')).toBeInTheDocument()
     })
 
     it('should show empty state when data is null', () => {
-      render(<TestWrapper contextValue={mockContextValue}><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
+      render(<TestWrapper><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
       expect(screen.getByRole('status')).toBeInTheDocument()
     })
 
     it('should show empty state when periods array is empty', () => {
       mockUseCashFlowHistory.mockReturnValue({ data: { ...mockHistoryData, periods: [] }, loading: false, error: null, refetch: mockCashFlowHistoryRefetch })
-      render(<TestWrapper contextValue={mockContextValue}><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
+      render(<TestWrapper><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
       expect(screen.getByRole('status')).toBeInTheDocument()
     })
   })
@@ -120,13 +120,13 @@ describe('CashFlowChartWidget', () => {
   describe('ECharts Rendering', () => {
     it('should render ECharts chart component', () => {
       mockUseCashFlowHistory.mockReturnValue({ data: mockHistoryData, loading: false, error: null, refetch: mockCashFlowHistoryRefetch })
-      render(<TestWrapper contextValue={mockContextValue}><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
+      render(<TestWrapper><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
       expect(screen.getByTestId('echarts-chart')).toBeInTheDocument()
     })
 
     it('should render 3 series with correct names', () => {
       mockUseCashFlowHistory.mockReturnValue({ data: mockHistoryData, loading: false, error: null, refetch: mockCashFlowHistoryRefetch })
-      render(<TestWrapper contextValue={mockContextValue}><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
+      render(<TestWrapper><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
       const chart = screen.getByTestId('echarts-chart')
       expect(chart.dataset.seriesCount).toBe('3')
       const names = JSON.parse(chart.dataset.seriesNames ?? '[]') as string[]
@@ -137,7 +137,7 @@ describe('CashFlowChartWidget', () => {
 
     it('should have reference line (markLine) on Income series only', () => {
       mockUseCashFlowHistory.mockReturnValue({ data: mockHistoryData, loading: false, error: null, refetch: mockCashFlowHistoryRefetch })
-      render(<TestWrapper contextValue={mockContextValue}><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
+      render(<TestWrapper><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
       const chart = screen.getByTestId('echarts-chart')
       expect(chart.dataset.hasMarkline).toBe('true')
       // Regression guard (Codex H2): markLine must be on Income (always visible),
@@ -149,14 +149,14 @@ describe('CashFlowChartWidget', () => {
 
     it('data-renderer is always svg', () => {
       mockUseCashFlowHistory.mockReturnValue({ data: mockHistoryData, loading: false, error: null, refetch: mockCashFlowHistoryRefetch })
-      render(<TestWrapper contextValue={mockContextValue}><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
+      render(<TestWrapper><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
       expect(screen.getByTestId('echarts-chart').dataset.renderer).toBe('svg')
     })
   })
 
   describe('Context Integration', () => {
     it('should pass correct filters to useCashFlowHistory', () => {
-      render(<TestWrapper contextValue={mockContextValue}><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
+      render(<TestWrapper><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
       expect(mockUseCashFlowHistory).toHaveBeenCalledWith(
         expect.objectContaining({
           filters: expect.objectContaining({ startDate: '2024-01-01', endDate: '2024-01-31' }),
@@ -181,17 +181,15 @@ describe('CashFlowChartWidget', () => {
   })
 
   describe('Dark Mode', () => {
-    it('passes isDark=true to EChartsChart when dark mode is active', () => {
+    it('reflects dark mode state in isDark prop', () => {
+      mockUseCashFlowHistory.mockReturnValue({ data: mockHistoryData, loading: false, error: null, refetch: mockCashFlowHistoryRefetch })
       mockUseDarkMode.mockReturnValue(true)
-      mockUseCashFlowHistory.mockReturnValue({ data: mockHistoryData, loading: false, error: null, refetch: mockCashFlowHistoryRefetch })
-      render(<TestWrapper contextValue={mockContextValue}><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
+      const { unmount } = render(<TestWrapper><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
       expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
-    })
+      unmount()
 
-    it('passes isDark=false to EChartsChart when light mode is active', () => {
       mockUseDarkMode.mockReturnValue(false)
-      mockUseCashFlowHistory.mockReturnValue({ data: mockHistoryData, loading: false, error: null, refetch: mockCashFlowHistoryRefetch })
-      render(<TestWrapper contextValue={mockContextValue}><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
+      render(<TestWrapper><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
       expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
     })
   })

@@ -20,15 +20,12 @@ describe('escapeHtml', () => {
 
   it('neutralises a script injection payload', () => {
     const payload = '<script>alert(1)</script>'
-    const escaped = escapeHtml(payload)
-    expect(escaped).not.toContain('<script>')
-    expect(escaped).toBe('&lt;script&gt;alert(1)&lt;/script&gt;')
+    expect(escapeHtml(payload)).toBe('&lt;script&gt;alert(1)&lt;/script&gt;')
   })
 
   it('neutralises an img onerror payload', () => {
     const payload = '<img src=x onerror=alert(1)>'
-    const escaped = escapeHtml(payload)
-    expect(escaped).not.toContain('<img')
+    expect(escapeHtml(payload)).toBe('&lt;img src=x onerror=alert(1)&gt;')
   })
 
   it('leaves safe strings unchanged', () => {
