@@ -65,49 +65,35 @@ describe('SpendingTrendsChart', () => {
     expect(types.every((t) => t === 'bar')).toBe(true)
   })
 
-  it('falls back to formatted display name when pfc_primary_display is absent', () => {
+  it.each([
+    {
+      name: 'falls back to formatted display name when pfc_primary_display is absent',
+      category: 'LOAN_PAYMENTS',
+      expected: 'Loan Payments',
+    },
+    {
+      name: 'falls back to "Custom Category" when custom:<uuid> has no pfc_primary_display',
+      category: 'custom:7a93a4f0-dead-beef-1234-abcdef012345',
+      expected: 'Custom Category',
+    },
+  ])('$name', ({ category, expected }) => {
     type CategoryType = NonNullable<SpendingTrendPeriod['categories']>[0]
-    const sparseData: SpendingTrendsResponse = {
+    const testData: SpendingTrendsResponse = {
       start_date: '2024-01-01',
       end_date: '2024-01-31',
-      top_categories: ['LOAN_PAYMENTS'],
-      periods: [
-        {
-          period_start: '2024-01-01',
-          period_end: '2024-01-31',
-          total: 100,
-          categories: [{ category: 'LOAN_PAYMENTS', total: 100 } as CategoryType],
-        },
-      ],
-    }
-    render(<SpendingTrendsChart data={sparseData} loading={false} />)
-    const names = JSON.parse(screen.getByTestId('echarts-chart').dataset.seriesNames ?? '[]') as string[]
-    expect(names[0]).toBe('Loan Payments')
-  })
-
-  it('falls back to "Custom Category" when a custom:<uuid> category has no pfc_primary_display', () => {
-    type CategoryType = NonNullable<SpendingTrendPeriod['categories']>[0]
-    const customData: SpendingTrendsResponse = {
-      start_date: '2024-01-01',
-      end_date: '2024-01-31',
-      top_categories: ['custom:7a93a4f0-dead-beef-1234-abcdef012345'],
+      top_categories: [category],
       periods: [
         {
           period_start: '2024-01-01',
           period_end: '2024-01-31',
           total: 150,
-          categories: [
-            {
-              category: 'custom:7a93a4f0-dead-beef-1234-abcdef012345',
-              total: 150,
-            } as CategoryType,
-          ],
+          categories: [{ category, total: 150 } as CategoryType],
         },
       ],
     }
-    render(<SpendingTrendsChart data={customData} loading={false} />)
+    render(<SpendingTrendsChart data={testData} loading={false} />)
     const names = JSON.parse(screen.getByTestId('echarts-chart').dataset.seriesNames ?? '[]') as string[]
-    expect(names[0]).toBe('Custom Category')
+    expect(names[0]).toBe(expected)
   })
 
   describe('Dark Mode', () => {

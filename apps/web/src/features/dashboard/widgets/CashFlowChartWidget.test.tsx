@@ -74,6 +74,7 @@ describe('CashFlowChartWidget', () => {
   beforeEach(() => {
     mockUseCashFlowHistory.mockClear()
     mockCashFlowHistoryRefetch.mockClear()
+    mockUseDarkMode.mockReturnValue(false)
     mockUseCashFlowHistory.mockReturnValue({
       data: null,
       loading: false,
