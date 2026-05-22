@@ -37,12 +37,15 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 
 **Claude Code pre-push hook:** The Claude Code hook at `.claude/hooks/pre-push-checks.sh` invokes `make check-bundle-size` on every push that touches frontend files, enforcing both size-limit budgets AND the orphan-chunk guard automatically.
 
-**Current footprints (post-#1169, Plotly → ECharts migration):**
+**Current footprints (post-#1172, TanStack column-sizing everywhere):**
 | Chunk | Budget | Actual (gzip) | Headroom |
 |-------|--------|---------------|----------|
 | `vendor` | 700 kB | 616.72 kB | 83.28 kB |
-| `transactions` | 19 kB | 14.83 kB | 4.17 kB |
+| `transactions` | 19 kB | 14.84 kB | 4.16 kB |
 | `tanstack` | 35 kB | 15.03 kB | 19.97 kB |
+| `admin` | 28 kB | 27.55 kB | 0.45 kB |
+
+The `admin` budget was raised from 27 kB to 28 kB after issue #1172: three admin pages (UsersPage, WebhooksPage, DeadLetterPage) now wire `columnSizing`/`onColumnSizingChange` to `<DataTable>` — adding column resize persistence that was previously missing.
 
 The `vendor` budget was reduced from 911 kB to 700 kB after issue #1169 (Plotly → Apache ECharts): ECharts tree-shaken via `echarts/core` weighs ~617 kB gzip vs Plotly's ~911 kB budget — a **~294 kB (32%) reduction**.
 

@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import { useUser } from '@clerk/react-router'
+import type { ColumnSizingState } from '@/shared/lib/tanstack'
 
 /**
  * Persistence versioning:
@@ -35,9 +36,11 @@ interface LegacyTablePrefs {
   columnVisibility: Record<string, boolean>
 }
 
+export type SizingUpdater = ColumnSizingState | ((prev: ColumnSizingState) => ColumnSizingState)
+
 export interface UseTablePreferencesResult {
   sizing: Record<string, number>
-  onSizingChange: (sizing: Record<string, number>) => void
+  onSizingChange: (updater: SizingUpdater) => void
   columnOrder: string[]
   onColumnOrderChange: (order: string[]) => void
   columnVisibility: Record<string, boolean>
@@ -188,9 +191,10 @@ export function useTablePreferences(
   }
 
   const onSizingChange = useCallback(
-    (newSizing: Record<string, number>) => {
+    (updater: SizingUpdater) => {
       if (!userId) return
       setPrefs((prev) => {
+        const newSizing = typeof updater === 'function' ? updater(prev.sizing) : updater
         const next = { ...prev, sizing: newSizing }
         savePrefs(userId, tableId, knownColumnIds, next)
         return next

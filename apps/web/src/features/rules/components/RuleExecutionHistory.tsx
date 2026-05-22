@@ -9,7 +9,7 @@
 import { Loader2, AlertCircle } from 'lucide-react'
 import { useGetRuleExecutions } from '@boostedbudget/api-client/endpoints/automation-rules/automation-rules'
 import type { RuleExecution } from '@boostedbudget/api-client/models'
-import { DataTable, TablePagination } from '@/shared/components/DataTable'
+import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
 
 export interface RuleExecutionHistoryProps {
@@ -24,6 +24,8 @@ export interface RuleExecutionHistoryProps {
   /** Additional CSS class */
   className?: string
 }
+
+const EXECUTION_COLUMN_IDS = ['time', 'status', 'duration', 'trigger', 'details']
 
 function formatDateTime(dateStr: string): string {
   const date = new Date(dateStr)
@@ -58,6 +60,8 @@ export function RuleExecutionHistory({
   onPageChange,
   className = '',
 }: RuleExecutionHistoryProps) {
+  const { sizing, onSizingChange } = useTablePreferences('rule-executions-history', EXECUTION_COLUMN_IDS)
+
   const params = limit ? { limit, offset } : undefined
   const { data, isLoading, error, refetch } = useGetRuleExecutions(
     ruleId,
@@ -81,7 +85,6 @@ export function RuleExecutionHistory({
     }
   }
 
-  // Loading state
   if (isLoading) {
     return (
       <div className={`bg-background border border-border rounded-lg overflow-hidden ${className}`.trim()}>
@@ -93,7 +96,6 @@ export function RuleExecutionHistory({
     )
   }
 
-  // Error state
   if (error) {
     return (
       <div className={`bg-background border border-border rounded-lg overflow-hidden ${className}`.trim()}>
@@ -113,7 +115,6 @@ export function RuleExecutionHistory({
     )
   }
 
-  // Empty state
   if (executions.length === 0) {
     return (
       <div className={`bg-background border border-border rounded-lg overflow-hidden ${className}`.trim()}>
@@ -198,10 +199,13 @@ export function RuleExecutionHistory({
         data={executions}
         columns={columns}
         rowKey={(e) => e.id}
+        tableId="rule-executions-history"
         sort={null}
         onSortChange={() => {}}
         filters={{}}
         onFiltersChange={() => {}}
+        columnSizing={sizing}
+        onColumnSizingChange={onSizingChange}
       />
 
       {showPagination && (

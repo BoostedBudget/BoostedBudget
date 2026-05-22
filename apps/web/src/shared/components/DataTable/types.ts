@@ -87,9 +87,10 @@ export interface DataTableProps<T> {
   /**
    * Phase 3a: controlled column sizing. Keys are column IDs, values are pixel widths.
    * If omitted, DataTable manages sizing internally with useState.
+   * Accepts a plain value OR a function updater (TanStack Updater<ColumnSizingState> shape).
    */
   columnSizing?: ColumnSizingState
-  onColumnSizingChange?: (sizing: ColumnSizingState) => void
+  onColumnSizingChange?: (updater: ColumnSizingState | ((prev: ColumnSizingState) => ColumnSizingState)) => void
   /**
    * Phase 3b: controlled column order (array of column ids).
    * If omitted, DataTable manages order internally with useState.
