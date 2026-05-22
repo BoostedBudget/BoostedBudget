@@ -7,6 +7,7 @@ import {
   getCurrencyOption,
   CASH_FLOW_COLORS,
   formatCurrency,
+  escapeHtml,
 } from '@/shared/charts'
 import type { NetWorthHistory } from '@/features/dashboard/types'
 
@@ -33,7 +34,7 @@ export function NetWorthHistoryChart({ history }: NetWorthHistoryChartProps) {
           const points = params as Array<{ seriesName: string; value: number; dataIndex: number }>;
           const snapshot = snapshots[points[0].dataIndex];
           const label = snapshot ? format(parseISO(snapshot.date), 'MMMM d, yyyy') : '';
-          return `<b>${label}</b><br>${points.map((p) => `${p.seriesName}: ${formatCurrency(p.value)}`).join('<br>')}`;
+          return `<b>${escapeHtml(label)}</b><br>${points.map((p) => `${escapeHtml(p.seriesName)}: ${formatCurrency(p.value)}`).join('<br>')}`;
         },
       },
       series: [
