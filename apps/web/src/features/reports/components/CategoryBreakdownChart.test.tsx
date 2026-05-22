@@ -69,7 +69,7 @@ describe('CategoryBreakdownChart', () => {
     expect(displayLabel).toBe('Food And Drink')
   })
 
-  it('passes custom-category id correctly (not display label) to onCategoryClick', () => {
+  it('passes custom-category id with UUID (not display label) to onCategoryClick', () => {
     const onCategoryClick = mock(() => {})
     const customData: SpendingByCategoryResponse = {
       start_date: '2024-01-01',

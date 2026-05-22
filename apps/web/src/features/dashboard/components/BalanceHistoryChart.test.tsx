@@ -7,7 +7,6 @@ import '@/test/mocks/shared-charts'
 import {
   MockEChartsChart as mockEChartsChart,
   mockUseDarkMode,
-  mockGetCurrencyOption,
 } from '@/test/mocks/shared-charts'
 
 import { BalanceHistoryChart } from './BalanceHistoryChart'
@@ -87,7 +86,6 @@ describe('BalanceHistoryChart', () => {
   beforeEach(() => {
     mockEChartsChart.mockClear()
     mockUseDarkMode.mockClear()
-    mockGetCurrencyOption.mockClear()
   })
 
   describe('Rendering', () => {
