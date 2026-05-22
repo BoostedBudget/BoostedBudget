@@ -1,6 +1,5 @@
 /**
  * Cash Flow Chart Widget Tests
- * Issue #1169: Plotly to ECharts Migration
  */
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test'

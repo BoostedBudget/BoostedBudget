@@ -2,7 +2,6 @@
  * Balance History Chart
  * Issue #418: Fresh implementation from scratch
  * Issue #525: Auto-scale axes on filter timeframe changes
- * Issue #1169: Plotly to ECharts Migration
  *
  * Pure ECharts visualization component for balance trends over time.
  * No title - WidgetWrapper provides it.

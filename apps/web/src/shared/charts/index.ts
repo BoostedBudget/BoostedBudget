@@ -1,6 +1,5 @@
 /**
  * Shared Charts Module
- * Issue #1169: Plotly to ECharts Migration
  *
  * Centralized exports for chart components, utilities, and types.
  * All chart-related functionality should be imported from this module.

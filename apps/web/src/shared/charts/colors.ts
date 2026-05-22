@@ -1,6 +1,5 @@
 /**
  * Chart Color Palette
- * Issue #445: Recharts to Plotly Migration
  *
  * Colorblind-safe palette for all chart visualizations.
  * Colors are consistent with Tailwind's color system.

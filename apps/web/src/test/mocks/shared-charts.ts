@@ -1,5 +1,4 @@
-// Issue #1169: Plotly to ECharts Migration — ECharts-only mock
-// Centralized @/shared/charts mock for component tests.
+// Centralized @/shared/charts mock for component tests (ECharts surface).
 
 import { mock } from 'bun:test'
 import React from 'react'

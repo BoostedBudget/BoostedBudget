@@ -1,6 +1,5 @@
 /**
  * Chart Formatters
- * Issue #1169: Plotly to ECharts Migration
  *
  * Currency formatting utilities for chart axes and tooltips.
  */

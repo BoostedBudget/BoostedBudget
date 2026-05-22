@@ -1,7 +1,6 @@
 /**
  * Cash Flow Chart Widget
  * Issue #354: Cash Flow Analysis & Income/Expense Visualization
- * Issue #1169: Plotly to ECharts Migration
  */
 
 import { useContext, useMemo } from 'react'

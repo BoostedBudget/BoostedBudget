@@ -1,6 +1,5 @@
 /**
  * Chart Type Definitions
- * Issue #1169: Plotly to ECharts Migration
  */
 
 export interface BaseChartProps {
