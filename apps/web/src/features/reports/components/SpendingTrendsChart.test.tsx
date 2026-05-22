@@ -34,7 +34,7 @@ const mockData: SpendingTrendsResponse = {
 describe('SpendingTrendsChart', () => {
   it('renders loading state', () => {
     render(<SpendingTrendsChart data={null} loading={true} />)
-    expect(screen.getByLabelText('Loading trends chart')).toBeDefined()
+    expect(screen.getByLabelText('Loading trends chart')).toBeInTheDocument()
   })
 
   it('renders empty state when no periods', () => {
@@ -45,12 +45,12 @@ describe('SpendingTrendsChart', () => {
       periods: [],
     }
     render(<SpendingTrendsChart data={emptyData} loading={false} />)
-    expect(screen.getByText(/No trend data/)).toBeDefined()
+    expect(screen.getByText(/No trend data/)).toBeInTheDocument()
   })
 
   it('renders echarts chart with data', () => {
     render(<SpendingTrendsChart data={mockData} loading={false} />)
-    expect(screen.getByTestId('echarts-chart')).toBeDefined()
+    expect(screen.getByTestId('echarts-chart')).toBeInTheDocument()
   })
 
   it('renders the correct number of series', () => {
@@ -66,6 +66,7 @@ describe('SpendingTrendsChart', () => {
   })
 
   it('falls back to formatted display name when pfc_primary_display is absent', () => {
+    type CategoryType = NonNullable<SpendingTrendPeriod['categories']>[0]
     const sparseData: SpendingTrendsResponse = {
       start_date: '2024-01-01',
       end_date: '2024-01-31',
@@ -75,17 +76,17 @@ describe('SpendingTrendsChart', () => {
           period_start: '2024-01-01',
           period_end: '2024-01-31',
           total: 100,
-          categories: [{ category: 'LOAN_PAYMENTS', total: 100 } as NonNullable<SpendingTrendPeriod['categories']>[0]],
+          categories: [{ category: 'LOAN_PAYMENTS', total: 100 } as CategoryType],
         },
       ],
     }
     render(<SpendingTrendsChart data={sparseData} loading={false} />)
     const names = JSON.parse(screen.getByTestId('echarts-chart').dataset.seriesNames ?? '[]') as string[]
     expect(names[0]).toBe('Loan Payments')
-    expect(names[0]).not.toBe('LOAN_PAYMENTS')
   })
 
   it('falls back to "Custom Category" when a custom:<uuid> category has no pfc_primary_display', () => {
+    type CategoryType = NonNullable<SpendingTrendPeriod['categories']>[0]
     const customData: SpendingTrendsResponse = {
       start_date: '2024-01-01',
       end_date: '2024-01-31',
@@ -99,25 +100,23 @@ describe('SpendingTrendsChart', () => {
             {
               category: 'custom:7a93a4f0-dead-beef-1234-abcdef012345',
               total: 150,
-            } as NonNullable<SpendingTrendPeriod['categories']>[0],
+            } as CategoryType,
           ],
         },
       ],
     }
     render(<SpendingTrendsChart data={customData} loading={false} />)
     const names = JSON.parse(screen.getByTestId('echarts-chart').dataset.seriesNames ?? '[]') as string[]
-    expect(names[0]).not.toContain('7a93a4f0-dead-beef-1234-abcdef012345')
     expect(names[0]).toBe('Custom Category')
   })
 
   describe('Dark Mode', () => {
-    it('passes isDark=true to EChartsChart when dark mode is active', () => {
+    it('reflects dark mode state in isDark prop', () => {
       mockUseDarkMode.mockReturnValue(true)
-      render(<SpendingTrendsChart data={mockData} loading={false} />)
+      const { unmount } = render(<SpendingTrendsChart data={mockData} loading={false} />)
       expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
-    })
+      unmount()
 
-    it('passes isDark=false to EChartsChart when light mode is active', () => {
       mockUseDarkMode.mockReturnValue(false)
       render(<SpendingTrendsChart data={mockData} loading={false} />)
       expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')

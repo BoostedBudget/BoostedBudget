@@ -42,22 +42,22 @@ const FORBIDDEN_BARREL_EXPORTS = [
   'getBarChartLayout', 'DEFAULT_CONFIG',
 ] as const
 
-describe('shared-charts mock: deprecated legacy surface must be absent', () => {
-  for (const name of FORBIDDEN_MOCK_EXPORTS) {
-    it(`mock does not export ${name}`, async () => {
-      const mod = await import('./shared-charts')
+describe('shared-charts: deprecated legacy surface must be absent', () => {
+  const testLegacyAbsent = async (names: readonly string[], source: 'mock' | 'barrel') => {
+    const path = source === 'mock' ? './shared-charts' : '@/shared/charts'
+    const mod = await import(path)
+    for (const name of names) {
       expect((mod as Record<string, unknown>)[name]).toBeUndefined()
-    })
+    }
   }
-})
 
-describe('shared-charts barrel: deprecated legacy surface must be absent', () => {
-  for (const name of FORBIDDEN_BARREL_EXPORTS) {
-    it(`barrel (@/shared/charts) does not export ${name}`, async () => {
-      const barrel = await import('@/shared/charts')
-      expect((barrel as Record<string, unknown>)[name]).toBeUndefined()
-    })
-  }
+  it('mock does not export legacy exports', async () => {
+    await testLegacyAbsent(FORBIDDEN_MOCK_EXPORTS, 'mock')
+  })
+
+  it('barrel (@/shared/charts) does not export legacy exports', async () => {
+    await testLegacyAbsent(FORBIDDEN_BARREL_EXPORTS, 'barrel')
+  })
 })
 
 // ========================
