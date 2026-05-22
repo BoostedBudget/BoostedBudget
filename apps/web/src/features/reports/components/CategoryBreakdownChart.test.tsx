@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import React from 'react'
 
 import '@/test/mocks/shared-charts'
+import { mockUseDarkMode } from '@/test/mocks/shared-charts'
 import { CategoryBreakdownChart } from './CategoryBreakdownChart'
 import type { SpendingByCategoryResponse } from '@boostedbudget/api-client/models'
 
@@ -110,5 +111,19 @@ describe('CategoryBreakdownChart', () => {
     const chart = screen.getByTestId('echarts-chart')
     expect(chart.dataset.seriesCount).toBe('1')
     expect(screen.getByText('Total:')).toBeDefined()
+  })
+
+  describe('Dark Mode', () => {
+    it('passes isDark=true to EChartsChart when dark mode is active', () => {
+      mockUseDarkMode.mockReturnValue(true)
+      render(<CategoryBreakdownChart data={mockData} loading={false} />)
+      expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
+    })
+
+    it('passes isDark=false to EChartsChart when light mode is active', () => {
+      mockUseDarkMode.mockReturnValue(false)
+      render(<CategoryBreakdownChart data={mockData} loading={false} />)
+      expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
+    })
   })
 })

@@ -90,6 +90,7 @@ type EChartsOption = { series?: SeriesEntry[] }
 const EChartsChartMockComponent = ({
   option = {},
   style,
+  isDark,
   onEvents,
 }: {
   option?: EChartsOption
@@ -132,6 +133,7 @@ const EChartsChartMockComponent = ({
       'data-has-markline': hasMarkline ? 'true' : 'false',
       'data-markline-series': JSON.stringify(marklineSeries),
       'data-renderer': 'svg',
+      'data-is-dark': isDark ? 'true' : 'false',
       style,
     },
     'ECharts Mock',

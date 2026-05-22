@@ -59,6 +59,18 @@ describe('NetWorthHistoryChart', () => {
     expect(screen.getByTestId('echarts-chart')).toBeDefined()
   })
 
+  it('passes isDark=true to EChartsChart when dark mode is active', () => {
+    mockUseDarkMode.mockReturnValue(true)
+    render(<NetWorthHistoryChart history={historyWithData} filterKey="test-dark" />)
+    expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
+  })
+
+  it('passes isDark=false to EChartsChart when light mode is active', () => {
+    mockUseDarkMode.mockReturnValue(false)
+    render(<NetWorthHistoryChart history={historyWithData} filterKey="test-light" />)
+    expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
+  })
+
   it('renders with net-worth-history-chart testid', () => {
     render(<NetWorthHistoryChart history={historyWithData} filterKey="test" />)
     expect(screen.getByTestId('net-worth-history-chart')).toBeDefined()

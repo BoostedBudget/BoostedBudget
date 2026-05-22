@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import '@/test/mocks/shared-charts'
+import { mockUseDarkMode } from '@/test/mocks/shared-charts'
 import { SpendingTrendsChart } from './SpendingTrendsChart'
 import type { SpendingTrendsResponse, SpendingTrendPeriod } from '@boostedbudget/api-client/models'
 
@@ -107,5 +108,19 @@ describe('SpendingTrendsChart', () => {
     const names = JSON.parse(screen.getByTestId('echarts-chart').dataset.seriesNames ?? '[]') as string[]
     expect(names[0]).not.toContain('7a93a4f0-dead-beef-1234-abcdef012345')
     expect(names[0]).toBe('Custom Category')
+  })
+
+  describe('Dark Mode', () => {
+    it('passes isDark=true to EChartsChart when dark mode is active', () => {
+      mockUseDarkMode.mockReturnValue(true)
+      render(<SpendingTrendsChart data={mockData} loading={false} />)
+      expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
+    })
+
+    it('passes isDark=false to EChartsChart when light mode is active', () => {
+      mockUseDarkMode.mockReturnValue(false)
+      render(<SpendingTrendsChart data={mockData} loading={false} />)
+      expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
+    })
   })
 })

@@ -12,6 +12,7 @@ import {
   mockUseCashFlowHistory,
   mockCashFlowHistoryRefetch,
 } from '@/test/mocks/cash-flow-hooks'
+import { mockUseDarkMode } from '@/test/mocks/shared-charts'
 
 import { CashFlowChartWidget } from './CashFlowChartWidget'
 import {
@@ -176,6 +177,22 @@ describe('CashFlowChartWidget', () => {
       const chart = screen.getByTestId('echarts-chart')
       expect(chart.parentElement).toHaveClass('flex-1')
       expect(chart.parentElement).toHaveClass('min-h-0')
+    })
+  })
+
+  describe('Dark Mode', () => {
+    it('passes isDark=true to EChartsChart when dark mode is active', () => {
+      mockUseDarkMode.mockReturnValue(true)
+      mockUseCashFlowHistory.mockReturnValue({ data: mockHistoryData, loading: false, error: null, refetch: mockCashFlowHistoryRefetch })
+      render(<TestWrapper contextValue={mockContextValue}><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
+      expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
+    })
+
+    it('passes isDark=false to EChartsChart when light mode is active', () => {
+      mockUseDarkMode.mockReturnValue(false)
+      mockUseCashFlowHistory.mockReturnValue({ data: mockHistoryData, loading: false, error: null, refetch: mockCashFlowHistoryRefetch })
+      render(<TestWrapper contextValue={mockContextValue}><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
+      expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
     })
   })
 })
