@@ -148,6 +148,21 @@ describe('shared-charts mock: ECharts surface', () => {
     expect(screen.getByTestId('echarts-chart').dataset.renderer).toBe('svg')
   })
 
+  it('MockEChartsChart exposes data-is-dark reflecting the isDark prop', () => {
+    const { unmount } = render(React.createElement(MockEChartsChart, {
+      option: { series: [] },
+      isDark: true,
+    }))
+    expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
+    unmount()
+
+    render(React.createElement(MockEChartsChart, {
+      option: { series: [] },
+      isDark: false,
+    }))
+    expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
+  })
+
   it('MockEChartsChart click fires onEvents.click with {dataIndex: N} ONLY (no name/data)', () => {
     let capturedEvent: unknown = null
     const onEvents = {
