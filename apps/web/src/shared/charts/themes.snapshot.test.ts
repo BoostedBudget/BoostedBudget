@@ -1,5 +1,5 @@
 /**
- * Palette drift guard — #1169 (Codex L7).
+ * Palette documentation snapshot — #1169.
  *
  * Two color systems coexist in this codebase:
  *   1. CATEGORY_COLORS (colors.ts) — custom colorblind-safe hex palette,
@@ -7,6 +7,10 @@
  *   2. --chart-N CSS tokens (index.css) — Tailwind/shadcn-ui chart tokens,
  *      used by any shadcn component that reads CSS variables. They differ
  *      between light and dark themes, and differ from CATEGORY_COLORS by design.
+ *
+ * NOTE: This is NOT a cross-system drift detector — the two palettes are
+ * intentionally separate (hex vs oklch, different design systems). Changes to
+ * either system are visible here, prompting deliberate review.
  *
  * If you intentionally change CATEGORY_COLORS, update the snapshots here and
  * verify all charts still look correct in both light and dark mode.
@@ -59,7 +63,7 @@ function extractChartTokens(css: string, block: 'light' | 'dark'): Record<string
   return tokens
 }
 
-describe('CSS --chart-N token documentation', () => {
+describe('CSS --chart-N token documentation (separate palette from CATEGORY_COLORS)', () => {
   let cssContent = ''
   try {
     cssContent = readFileSync(join(__dirname, '../../../index.css'), 'utf8')

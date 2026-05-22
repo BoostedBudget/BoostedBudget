@@ -15,7 +15,6 @@ const NET_WORTH_COLOR = '#3b82f6'
 
 interface NetWorthHistoryChartProps {
   history: NetWorthHistory
-  filterKey: string
 }
 
 export function NetWorthHistoryChart({ history }: NetWorthHistoryChartProps) {
