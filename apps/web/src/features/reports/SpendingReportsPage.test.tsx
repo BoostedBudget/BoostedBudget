@@ -102,8 +102,8 @@ describe('SpendingReportsPage drill-down guard', () => {
 
   it('does not enter drilldown when a custom-category slice is clicked', () => {
     renderPage()
-    // plotly-point-0 corresponds to customCategoryData.categories[0] = 'custom:uuid-123'
-    fireEvent.click(screen.getByTestId('plotly-point-0'))
+    // echarts-point-0 corresponds to customCategoryData.categories[0] = 'custom:uuid-123'
+    fireEvent.click(screen.getByTestId('echarts-point-0'))
     // guard should prevent drilldown; description must stay on the top-level prompt
     expect(screen.queryByText('Click a subcategory to view its transactions.')).toBeNull()
     expect(screen.getByText('Click a category to drill into subcategories.')).toBeDefined()
@@ -111,8 +111,8 @@ describe('SpendingReportsPage drill-down guard', () => {
 
   it('enters drilldown when a PFC category slice is clicked', () => {
     renderPage()
-    // plotly-point-1 corresponds to customCategoryData.categories[1] = 'FOOD_AND_DRINK'
-    fireEvent.click(screen.getByTestId('plotly-point-1'))
+    // echarts-point-1 corresponds to customCategoryData.categories[1] = 'FOOD_AND_DRINK'
+    fireEvent.click(screen.getByTestId('echarts-point-1'))
     expect(screen.getByText('Click a subcategory to view its transactions.')).toBeDefined()
   })
 })

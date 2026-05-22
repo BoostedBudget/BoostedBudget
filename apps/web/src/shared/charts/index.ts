@@ -1,36 +1,22 @@
 /**
  * Shared Charts Module
- * Issue #445: Recharts to Plotly Migration
  *
  * Centralized exports for chart components, utilities, and types.
  * All chart-related functionality should be imported from this module.
- *
- * Usage:
- * ```tsx
- * import {
- *   Plot,
- *   useDarkMode,
- *   getBaseLayout,
- *   CHART_COLORS,
- *   formatCurrency,
- * } from '@/shared/charts';
- * ```
  */
 
-// Plot component
-export { Plot, Plotly } from './PlotlyChart';
+// ECharts component
+export { EChartsChart } from './EChartsChart';
+export type { EChartsChartProps } from './EChartsChart';
+
+// ECharts option builders
+export { getBaseOption } from './options/base';
+export { getCurrencyOption } from './options/currency';
+export { getBarOption } from './options/bar';
+export { createMarkLineData } from './options/referenceLine';
 
 // Hooks
 export { useDarkMode } from './useDarkMode';
-
-// Layout utilities
-export {
-  DEFAULT_CONFIG,
-  getBaseLayout,
-  getCurrencyLayout,
-  getBarChartLayout,
-  createHorizontalReferenceLine,
-} from './layout';
 
 // Colors
 export {
@@ -46,11 +32,10 @@ export {
   formatCurrency,
   formatCurrencyCompact,
   formatCurrencyFull,
-  getCurrencyTickFormat,
-  getCurrencyCompactTickFormat,
-  createCurrencyHoverTemplate,
-  createTimeSeriesHoverTemplate,
 } from './formatters';
+
+// Utilities
+export { escapeHtml } from './escapeHtml';
 
 // Types
 export type {
@@ -59,8 +44,4 @@ export type {
   BalanceDataPoint,
   CashFlowDataPoint,
   ChartTheme,
-  PlotlyTraceType,
-  PlotlyScatterMode,
-  PlotProps,
-  ChartConfigOptions,
 } from './types';

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import '@/test/mocks/shared-charts'
-import { mockUseDarkMode } from '@/test/mocks/shared-charts'
+import { mockUseDarkMode, MockEChartsChart } from '@/test/mocks/shared-charts'
 import { NetWorthHistoryChart } from './NetWorthHistoryChart'
 import type { NetWorthHistory } from '@/features/dashboard/types'
 
@@ -31,36 +31,48 @@ describe('NetWorthHistoryChart', () => {
     mockUseDarkMode.mockReturnValue(false)
   })
 
-  it('renders three traces with correct names', () => {
-    render(<NetWorthHistoryChart history={historyWithData} filterKey="test" />)
-    const chart = screen.getByTestId('plotly-chart')
-    const names = JSON.parse(chart.getAttribute('data-trace-names') ?? '[]')
-    expect(names).toContain('Net Worth')
-    expect(names).toContain('Assets')
-    expect(names).toContain('Liabilities')
-    expect(chart.getAttribute('data-trace-count')).toBe('3')
+  it('renders three series with correct names', () => {
+    render(<NetWorthHistoryChart history={historyWithData} />)
+    const chart = screen.getByTestId('echarts-chart')
+    const names = JSON.parse(chart.dataset.seriesNames ?? '[]') as string[]
+    expect(names).toEqual(expect.arrayContaining(['Net Worth', 'Assets', 'Liabilities']))
+    expect(chart.dataset.seriesCount).toBe('3')
   })
 
   it('shows insufficient history fallback when < 2 snapshots', () => {
-    render(<NetWorthHistoryChart history={historyOneSnapshot} filterKey="test" />)
-    expect(screen.queryByTestId('plotly-chart')).toBeNull()
+    render(<NetWorthHistoryChart history={historyOneSnapshot} />)
     expect(screen.getByText(/Not enough history/i)).toBeDefined()
   })
 
   it('shows fallback when no snapshots', () => {
-    render(<NetWorthHistoryChart history={historyNoSnapshots} filterKey="test" />)
-    expect(screen.queryByTestId('plotly-chart')).toBeNull()
+    render(<NetWorthHistoryChart history={historyNoSnapshots} />)
     expect(screen.getByText(/Not enough history/i)).toBeDefined()
   })
 
-  it('renders chart in dark mode path', () => {
+  it('passes isDark=true to EChartsChart when dark mode is active', () => {
     mockUseDarkMode.mockReturnValue(true)
-    render(<NetWorthHistoryChart history={historyWithData} filterKey="test-dark" />)
-    expect(screen.getByTestId('plotly-chart')).toBeDefined()
+    render(<NetWorthHistoryChart history={historyWithData} />)
+    expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
+  })
+
+  it('passes isDark=false to EChartsChart when light mode is active', () => {
+    mockUseDarkMode.mockReturnValue(false)
+    render(<NetWorthHistoryChart history={historyWithData} />)
+    expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
   })
 
   it('renders with net-worth-history-chart testid', () => {
-    render(<NetWorthHistoryChart history={historyWithData} filterKey="test" />)
-    expect(screen.getByTestId('net-worth-history-chart')).toBeDefined()
+    render(<NetWorthHistoryChart history={historyWithData} />)
+    expect(screen.getByTestId('net-worth-history-chart')).toBeInTheDocument()
+  })
+
+  it('tooltip formatter escapes malicious series names (XSS regression — #1169)', () => {
+    render(<NetWorthHistoryChart history={historyWithData} />)
+    const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+      tooltip?: { formatter?: (p: unknown) => string }
+    }
+    const formatted = option.tooltip!.formatter!([{ seriesName: '<svg onload=alert(1)>', value: 9000, dataIndex: 0 }])
+    expect(formatted).not.toMatch(/<(svg|script|img)/i)
+    expect(formatted).toContain('&lt;svg')
   })
 })

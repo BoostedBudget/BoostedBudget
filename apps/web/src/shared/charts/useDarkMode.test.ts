@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
-import { renderHook, act } from '@testing-library/react'
+import { renderHook, act, waitFor } from '@testing-library/react'
 import { useDarkMode } from './useDarkMode'
 
 describe('useDarkMode', () => {
@@ -26,11 +26,10 @@ describe('useDarkMode', () => {
     const { result } = renderHook(() => useDarkMode())
     expect(result.current).toBe(false)
 
-    await act(async () => {
+    act(() => {
       document.documentElement.classList.add('dark')
-      await new Promise(resolve => setTimeout(resolve, 0))
     })
-    expect(result.current).toBe(true)
+    await waitFor(() => expect(result.current).toBe(true))
   })
 
   it('reacts to dark class being removed', async () => {
@@ -38,10 +37,9 @@ describe('useDarkMode', () => {
     const { result } = renderHook(() => useDarkMode())
     expect(result.current).toBe(true)
 
-    await act(async () => {
+    act(() => {
       document.documentElement.classList.remove('dark')
-      await new Promise(resolve => setTimeout(resolve, 0))
     })
-    expect(result.current).toBe(false)
+    await waitFor(() => expect(result.current).toBe(false))
   })
 })
