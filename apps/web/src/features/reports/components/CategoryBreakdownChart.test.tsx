@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import React from 'react'
 
 import '@/test/mocks/shared-charts'
-import { mockUseDarkMode } from '@/test/mocks/shared-charts'
+import { mockUseDarkMode, MockEChartsChart } from '@/test/mocks/shared-charts'
 import { CategoryBreakdownChart } from './CategoryBreakdownChart'
 import type { SpendingByCategoryResponse } from '@boostedbudget/api-client/models'
 
@@ -92,6 +92,16 @@ describe('CategoryBreakdownChart', () => {
     expect(displayLabel).toBe('My Coffee Budget')
   })
 
+
+  it('tooltip formatter escapes malicious labels in fallback path (XSS regression — #1169)', () => {
+    render(<CategoryBreakdownChart data={mockData} loading={false} />)
+    const lastCall = MockEChartsChart.mock.calls.at(-1)
+    const option = lastCall?.[0]?.option as { tooltip?: { formatter?: (p: unknown) => string } }
+    // Fallback path: value/percent not numbers (e.g. zero-total category)
+    const formatted = option.tooltip!.formatter!({ name: '<img src=x onerror=alert(1)>', value: undefined, percent: undefined })
+    expect(formatted).toContain('&lt;img')
+    expect(formatted).not.toContain('<img src')
+  })
 
   describe('Dark Mode', () => {
     it('reflects dark mode state in isDark prop', () => {
