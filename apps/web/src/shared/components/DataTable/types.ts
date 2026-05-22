@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import type { RangeValue } from '../ColumnFilterDropdown'
-import type { RowSelectionState } from '@/shared/lib/tanstack'
+import type { RowSelectionState, ColumnSizingState } from '@/shared/lib/tanstack'
 
 export type { RangeValue }
 
@@ -30,6 +30,10 @@ export type ColumnDef<T> = {
   resizable?: boolean
   /** Default pixel width used for resize reset (Home key) and initial sizing */
   defaultSize?: number
+  /** Minimum pixel width enforced during resize */
+  minSize?: number
+  /** Maximum pixel width enforced during resize */
+  maxSize?: number
   /** Phase 3b: opt-in column reordering via drag-and-drop / keyboard */
   reorderable?: boolean
   /** Phase 3c: opt-in sticky column pinning. Left-pin always honored; right-pin degrades to non-sticky on mobile (max-md). */
@@ -84,8 +88,8 @@ export interface DataTableProps<T> {
    * Phase 3a: controlled column sizing. Keys are column IDs, values are pixel widths.
    * If omitted, DataTable manages sizing internally with useState.
    */
-  columnSizing?: Record<string, number>
-  onColumnSizingChange?: (sizing: Record<string, number>) => void
+  columnSizing?: ColumnSizingState
+  onColumnSizingChange?: (sizing: ColumnSizingState) => void
   /**
    * Phase 3b: controlled column order (array of column ids).
    * If omitted, DataTable manages order internally with useState.

@@ -129,11 +129,18 @@ export function RuleExecutionHistory({
     {
       id: 'time',
       header: 'Time',
+      resizable: true,
+      defaultSize: 180,
+      minSize: 140,
+      maxSize: 220,
       render: (execution) => formatDateTime(execution.started_at),
     },
     {
       id: 'status',
       header: 'Status',
+      defaultSize: 110,
+      minSize: 90,
+      maxSize: 140,
       render: (execution) => (
         <span className={statusBadgeClass(execution.status)}>
           {execution.status}
@@ -143,11 +150,17 @@ export function RuleExecutionHistory({
     {
       id: 'duration',
       header: 'Duration',
+      defaultSize: 110,
+      minSize: 80,
+      maxSize: 140,
       render: (execution) => formatDuration(execution.execution_duration_ms),
     },
     {
       id: 'trigger',
       header: 'Trigger',
+      resizable: true,
+      defaultSize: 200,
+      minSize: 140,
       render: (execution) => (
         <span className="capitalize">{getTriggerType(execution.trigger_context)}</span>
       ),
@@ -155,6 +168,9 @@ export function RuleExecutionHistory({
     {
       id: 'details',
       header: 'Details',
+      resizable: true,
+      defaultSize: 320,
+      minSize: 200,
       render: (execution) => (
         <span className="max-w-[200px] block">
           {execution.status === 'failed' && execution.error_message && (

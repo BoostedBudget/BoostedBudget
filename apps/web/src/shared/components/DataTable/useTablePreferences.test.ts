@@ -15,7 +15,20 @@ const DEFAULT_PREFS = {
   columnVisibility: {},
 }
 
+const SIZING_VERSION = 'v2-fixed-layout'
+
 function makeStoredPrefs(overrides?: object) {
+  return JSON.stringify({
+    schemaVersion: DEFAULT_VERSION,
+    sizingVersion: SIZING_VERSION,
+    sizing: {},
+    columnOrder: [],
+    columnVisibility: {},
+    ...overrides,
+  })
+}
+
+function makeLegacyStoredPrefs(overrides?: object) {
   return JSON.stringify({
     version: DEFAULT_VERSION,
     sizing: {},
@@ -128,7 +141,7 @@ describe('useTablePreferences', () => {
       expect(stored.columnVisibility).toEqual({ amount: false })
     })
 
-    it('persists the version string as knownColumnIds joined by comma', () => {
+    it('persists schemaVersion as knownColumnIds joined by comma', () => {
       const { result } = renderHook(() =>
         useTablePreferences(TABLE_ID, KNOWN_IDS)
       )
@@ -136,7 +149,8 @@ describe('useTablePreferences', () => {
         result.current.onSizingChange({ name: 100 })
       })
       const stored = JSON.parse(localStorage.getItem(STORAGE_KEY)!)
-      expect(stored.version).toBe(DEFAULT_VERSION)
+      expect(stored.schemaVersion).toBe(DEFAULT_VERSION)
+      expect(stored.sizingVersion).toBe(SIZING_VERSION)
     })
   })
 
@@ -253,11 +267,12 @@ describe('useTablePreferences', () => {
         isLoaded: true,
         isSignedIn: true,
       })
-      // Store with old version (different column set)
+      // Store with old schemaVersion (different column set)
       localStorage.setItem(
         STORAGE_KEY,
         JSON.stringify({
-          version: 'old_col,another_col',
+          schemaVersion: 'old_col,another_col',
+          sizingVersion: SIZING_VERSION,
           sizing: { old_col: 300 },
           columnOrder: ['old_col', 'another_col'],
           columnVisibility: { old_col: false },
@@ -272,7 +287,7 @@ describe('useTablePreferences', () => {
       expect(result.current.columnVisibility).toEqual({})
     })
 
-    it('persists the reset to localStorage with new version', () => {
+    it('persists the reset to localStorage with new schemaVersion', () => {
       mockUseUser.mockReturnValue({
         user: mockClerkUser,
         isLoaded: true,
@@ -281,7 +296,8 @@ describe('useTablePreferences', () => {
       localStorage.setItem(
         STORAGE_KEY,
         JSON.stringify({
-          version: 'stale,version,string',
+          schemaVersion: 'stale,version,string',
+          sizingVersion: SIZING_VERSION,
           sizing: { stale: 100 },
           columnOrder: ['stale'],
           columnVisibility: {},
@@ -291,7 +307,7 @@ describe('useTablePreferences', () => {
       renderHook(() => useTablePreferences(TABLE_ID, KNOWN_IDS))
 
       const stored = JSON.parse(localStorage.getItem(STORAGE_KEY)!)
-      expect(stored.version).toBe(DEFAULT_VERSION)
+      expect(stored.schemaVersion).toBe(DEFAULT_VERSION)
       expect(stored.sizing).toEqual({})
     })
   })
@@ -344,6 +360,89 @@ describe('useTablePreferences', () => {
       expect(result.current.sizing).toEqual({ name: 180, amount: 120 })
       expect(result.current.columnOrder).toEqual(['amount', 'name', 'date'])
       expect(result.current.columnVisibility).toEqual({ date: false })
+    })
+  })
+
+  // Test 8: sizingVersion mismatch → resets ONLY sizing; preserves order and visibility
+  describe('sizingVersion mismatch', () => {
+    beforeEach(() => {
+      mockUseUser.mockReturnValue({ user: mockClerkUser, isLoaded: true, isSignedIn: true })
+    })
+
+    it('resets only sizing when sizingVersion mismatches; preserves order and visibility', () => {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          schemaVersion: DEFAULT_VERSION,
+          sizingVersion: 'v1-old',   // stale
+          sizing: { name: 200, amount: 120 },
+          columnOrder: ['amount', 'name', 'date'],
+          columnVisibility: { date: false },
+        })
+      )
+
+      const { result } = renderHook(() => useTablePreferences(TABLE_ID, KNOWN_IDS))
+
+      expect(result.current.sizing).toEqual({})
+      expect(result.current.columnOrder).toEqual(['amount', 'name', 'date'])
+      expect(result.current.columnVisibility).toEqual({ date: false })
+    })
+
+    it('writes the new sizingVersion to localStorage after reset', () => {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          schemaVersion: DEFAULT_VERSION,
+          sizingVersion: 'v1-old',
+          sizing: { name: 200 },
+          columnOrder: [],
+          columnVisibility: {},
+        })
+      )
+
+      renderHook(() => useTablePreferences(TABLE_ID, KNOWN_IDS))
+
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY)!)
+      expect(stored.sizingVersion).toBe(SIZING_VERSION)
+      expect(stored.sizing).toEqual({})
+    })
+  })
+
+  // Test 9: Legacy migration (old `version` field, no schemaVersion)
+  describe('legacy shape migration (version → schemaVersion)', () => {
+    beforeEach(() => {
+      mockUseUser.mockReturnValue({ user: mockClerkUser, isLoaded: true, isSignedIn: true })
+    })
+
+    it('reads legacy shape — schemaVersion maps from version; sizing is reset (missing sizingVersion)', () => {
+      localStorage.setItem(STORAGE_KEY, makeLegacyStoredPrefs({
+        sizing: { name: 200 },
+        columnOrder: ['amount', 'name', 'date'],
+        columnVisibility: { date: false },
+      }))
+
+      const { result } = renderHook(() => useTablePreferences(TABLE_ID, KNOWN_IDS))
+
+      // Sizing reset because sizingVersion was missing (treated as mismatch)
+      expect(result.current.sizing).toEqual({})
+      // Order and visibility preserved
+      expect(result.current.columnOrder).toEqual(['amount', 'name', 'date'])
+      expect(result.current.columnVisibility).toEqual({ date: false })
+    })
+
+    it('schema mismatch on legacy shape resets everything', () => {
+      localStorage.setItem(STORAGE_KEY, makeLegacyStoredPrefs({
+        version: 'old,schema',
+        sizing: { name: 200 },
+        columnOrder: ['old'],
+        columnVisibility: { old: false },
+      }))
+
+      const { result } = renderHook(() => useTablePreferences(TABLE_ID, KNOWN_IDS))
+
+      expect(result.current.sizing).toEqual({})
+      expect(result.current.columnOrder).toEqual([])
+      expect(result.current.columnVisibility).toEqual({})
     })
   })
 })

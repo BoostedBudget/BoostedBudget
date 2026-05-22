@@ -63,12 +63,13 @@ export async function collectVirtualizedRowIds(
     await page.waitForTimeout(150);
     await collectVisible();
 
+    // Break only when the sentinel disappears entirely — that means hasMore
+    // flipped to false (all pages loaded). While hasMore is still true the
+    // sentinel is present (possibly with empty text between fetches); we must
+    // keep scrolling to accumulate rows from subsequent pages.
     const sentinel = page.locator('[data-testid="virtual-sentinel"]');
-    if (await sentinel.count() > 0) {
-      const text = (await sentinel.textContent()) ?? '';
-      if (text.trim() === '') {
-        break;
-      }
+    if (await sentinel.count() === 0) {
+      break;
     }
   }
 

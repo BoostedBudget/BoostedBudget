@@ -154,7 +154,9 @@ export function AccountTable({
       sortable,
       resizable: true,
       reorderable: true,
-      widthClass: 'min-w-[120px] max-md:min-w-[100px]',
+      defaultSize: 180,
+      minSize: 120,
+      maxSize: 240,
       render: (row) => (
         <span className="font-medium text-foreground">
           {row.institution_name || 'Unknown'}
@@ -171,7 +173,8 @@ export function AccountTable({
       sortable,
       resizable: true,
       reorderable: true,
-      widthClass: 'min-w-[180px] max-md:min-w-[150px]',
+      defaultSize: 220,
+      minSize: 160,
       render: (row) => {
         const isDisconnected = row.linked_item_status === 'disconnected'
         const displayName = row.nickname || row.name
@@ -209,6 +212,9 @@ export function AccountTable({
       sortable,
       resizable: true,
       reorderable: true,
+      defaultSize: 140,
+      minSize: 100,
+      maxSize: 200,
       render: (row) => <>{getAccountTypeLabel(row.type, row.subtype)}</>,
       filter:
         typeOptions && onTypeFilterChange
@@ -222,6 +228,9 @@ export function AccountTable({
       resizable: true,
       reorderable: true,
       hideable: true,
+      defaultSize: 100,
+      minSize: 80,
+      maxSize: 130,
       render: (row) => <>{row.mask ? `••••${row.mask}` : '—'}</>,
     },
     {
@@ -233,6 +242,9 @@ export function AccountTable({
       defaultPinned: 'right' as const,
       align: 'right',
       numeric: true,
+      defaultSize: 160,
+      minSize: 120,
+      maxSize: 220,
       render: (row) => {
         const isNegative = row.current_balance !== undefined && row.current_balance < 0
         return (
