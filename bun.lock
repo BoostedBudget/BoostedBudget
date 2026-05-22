@@ -50,7 +50,7 @@
         "echarts": "^6.1.0",
         "echarts-for-react": "^3.0.6",
         "gridstack": "^12.6.0",
-        "js-cookie": "^3.0.5",
+        "js-cookie": "^3.0.7",
         "lucide-react": "^1.11.0",
         "posthog-js": "^1.369.3",
         "react": "^19.2.5",
@@ -131,6 +131,7 @@
     "fast-uri": ">=3.1.2",
     "flatted": ">=3.4.2",
     "follow-redirects": ">=1.16.0",
+    "js-cookie": ">=3.0.7",
     "markdown-it": ">=14.1.1",
     "minimatch": ">=10.2.3",
     "picomatch": ">=4.0.4",
@@ -1302,7 +1303,7 @@
 
     "jpeg-js": ["jpeg-js@0.4.4", "", {}, "sha512-WZzeDOEtTOBK4Mdsar0IqEU5sMr3vSV2RqkAIzUEV2BHnUfKGyswWFPFwK5EeDo93K3FohSHbLAjj0s1Wzd+dg=="],
 
-    "js-cookie": ["js-cookie@3.0.5", "", {}, "sha512-cEiJEAEoIbWfCZYKWhVwFuvPX1gETRYPw6LlaTKoxD3s2AkXzkCjnp6h0V77ozyqj0jakteJ4YqDJT830+lVGw=="],
+    "js-cookie": ["js-cookie@3.0.7", "", {}, "sha512-z/wZZgDrkNV1eA0ULjM/F9/50Ya8fbzgKneSpoPsXSGd0KnpdtHfOZWK+GcwLk+EZbS4F9RBhU+K2RgzuDaItw=="],
 
     "js-library-detector": ["js-library-detector@6.7.0", "", {}, "sha512-c80Qupofp43y4cJ7+8TTDN/AsDwLi5oOm/plBrWI+iQt485vKXCco+yVmOwEgdo9VOdsYTuV0UlTeetVPTriXA=="],
 
