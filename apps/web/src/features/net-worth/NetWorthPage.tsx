@@ -160,7 +160,7 @@ export function NetWorthPage() {
       <div className="space-y-4">
         {hasEnoughHistory && history && (
           <NetWorthSection title="History">
-            <NetWorthHistoryChart history={history} filterKey={`${preset}-${startDate}-${endDate}`} />
+            <NetWorthHistoryChart history={history} />
           </NetWorthSection>
         )}
 
