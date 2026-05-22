@@ -66,7 +66,7 @@ function extractChartTokens(css: string, block: 'light' | 'dark'): Record<string
 describe('CSS --chart-N token documentation (separate palette from CATEGORY_COLORS)', () => {
   let cssContent = ''
   try {
-    cssContent = readFileSync(join(__dirname, '../../../index.css'), 'utf8')
+    cssContent = readFileSync(join(import.meta.dirname, '../../../index.css'), 'utf8')
   } catch {
     // index.css not present in all test environments — tests skip gracefully
   }
