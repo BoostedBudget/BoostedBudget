@@ -294,7 +294,6 @@ export function DataTable<T,>({
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
-
   const handleSort = useCallback(
     (colId: string, _dirFromCell: SortDirection) => {
       const currentSort = sort as SortState
@@ -360,12 +359,9 @@ export function DataTable<T,>({
 
   const virtualItems = virtualizer.getVirtualItems()
 
-  // Virtualizer remeasurement on resize-end.
-  // `columnResizeMode: 'onChange'` fires state updates on every pointermove during drag.
-  // Calling measure() on every update would shift virtual offsets mid-drag causing scroll jumps.
-  // Instead we track the true→false transition and schedule a single rAF-delayed measure.
+  // Track resize-end to remeasure virtualizer once (avoid scroll jumps from measure() on every pointermove)
   const wasResizingRef = useRef(false)
-  const isResizing = table.getState().columnSizingInfo?.isResizingColumn !== false
+  const isResizing = Boolean(table.getState().columnSizingInfo?.isResizingColumn)
   useEffect(() => {
     if (!virtualization?.enabled || virtualization.dynamicRowHeight === false) return
     if (wasResizingRef.current && !isResizing) {
@@ -376,8 +372,7 @@ export function DataTable<T,>({
     if (isResizing) wasResizingRef.current = true
   }, [isResizing, virtualization?.enabled, virtualization?.dynamicRowHeight, virtualizer])
 
-  // Toggle `data-resizing` on <html> so the global col-resize cursor rule in index.css
-  // prevents cursor flicker across the page during a drag.
+  // Set data-resizing on <html> to prevent cursor flicker during drag (via index.css rule)
   useEffect(() => {
     if (isResizing) {
       document.documentElement.dataset.resizing = ''
@@ -400,11 +395,9 @@ export function DataTable<T,>({
     }
   }, [virtualItems, rows.length, virtualization])
 
-
   const headerIsSticky = stickyHeader === true || virtualization?.enabled === true
 
-  // Map column id → TanStack header object. Rebuilt on every sizing state change so
-  // header.getSize() / header.getResizeHandler() / header.column.getIsResizing() are fresh.
+  // Rebuild map on sizing change so header.getSize() / header.getResizeHandler() stay fresh
   const tanstackHeaderMap = useMemo(() => {
     const map = new Map<string, TanStackHeader<T, unknown>>()
     for (const h of table.getFlatHeaders()) {
@@ -554,12 +547,12 @@ export function DataTable<T,>({
         <div aria-live="polite" aria-atomic="true" className="sr-only">
           {liveText}
         </div>
-        {hasHideableColumns && onColumnVisibilityChange && (
+        {((hasHideableColumns && onColumnVisibilityChange) || onColumnSizingChange) && (
           <div className="flex items-center justify-end">
             <ColumnVisibilityMenu
               columns={columns}
               visibility={columnVisibility}
-              onChange={onColumnVisibilityChange}
+              onChange={onColumnVisibilityChange ?? (() => {})}
               tableId={tableId}
               columnSizing={columnSizing}
               onResetSizing={onColumnSizingChange ? () => onColumnSizingChange({}) : undefined}

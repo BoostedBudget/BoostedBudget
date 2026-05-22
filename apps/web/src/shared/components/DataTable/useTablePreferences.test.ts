@@ -445,4 +445,40 @@ describe('useTablePreferences', () => {
       expect(result.current.columnVisibility).toEqual({})
     })
   })
+
+  // Test 10: Function-updater support on onSizingChange
+  describe('onSizingChange accepts function updater', () => {
+    beforeEach(() => {
+      mockUseUser.mockReturnValue({ user: mockClerkUser, isLoaded: true, isSignedIn: true })
+    })
+
+    it('applies function updater to current sizing and persists the result', () => {
+      localStorage.setItem(STORAGE_KEY, makeStoredPrefs({ sizing: { name: 200 } }))
+
+      const { result } = renderHook(() => useTablePreferences(TABLE_ID, KNOWN_IDS))
+
+      act(() => {
+        result.current.onSizingChange((prev: Record<string, number>) => ({ ...prev, name: (prev.name ?? 0) + 50 }))
+      })
+
+      expect(result.current.sizing).toEqual({ name: 250 })
+
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY)!)
+      expect(stored.sizing).toEqual({ name: 250 })
+      // Function updater must not be persisted — value must be a plain object
+      expect(typeof stored.sizing).toBe('object')
+    })
+
+    it('plain-value updater still works alongside function updater', () => {
+      localStorage.setItem(STORAGE_KEY, makeStoredPrefs({ sizing: { name: 200 } }))
+
+      const { result } = renderHook(() => useTablePreferences(TABLE_ID, KNOWN_IDS))
+
+      act(() => {
+        result.current.onSizingChange({ name: 300, amount: 120 })
+      })
+
+      expect(result.current.sizing).toEqual({ name: 300, amount: 120 })
+    })
+  })
 })

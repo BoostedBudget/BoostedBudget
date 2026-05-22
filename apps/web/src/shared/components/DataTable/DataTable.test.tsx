@@ -2056,27 +2056,21 @@ describe('column sizing', () => {
     expect(resizeHandles.length).toBe(1)
   })
 
-  it('onColumnSizingChange is called with resolved value when function updater is used internally', () => {
+  it('keyboard resize calls onColumnSizingChange with a plain value (bridge resolves updaters)', () => {
     const onColumnSizingChange = mock((_: Record<string, number>) => {})
     const { container } = renderTable({
       columns: sizingColumns,
       columnSizing: { name: 200 },
       onColumnSizingChange,
     })
-    // Simulate the function-updater path by triggering resize state change via keyboard
-    // We verify the bridge resolves function updaters to plain values before forwarding.
-    // The bridge: typeof updater === 'function' ? updater(current) : updater
-    // Direct unit verification: render with controlled sizing, programmatically trigger
-    // keyboard resize on ResizeHandle (ArrowRight → +10px from useColumnResize).
     const handle = container.querySelector('[data-testid="resize-handle"]') as HTMLElement
-    if (handle) {
-      fireEvent.keyDown(handle, { key: 'ArrowRight' })
-      // If called, the value must be a plain object (not a function)
-      if (onColumnSizingChange.mock.calls.length > 0) {
-        const called = onColumnSizingChange.mock.calls[0][0]
-        expect(typeof called).toBe('object')
-        expect(called).not.toBeNull()
-      }
-    }
+    expect(handle).not.toBeNull()
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    expect(onColumnSizingChange.mock.calls.length).toBe(1)
+    const called = onColumnSizingChange.mock.calls[0][0]
+    // Must be a plain object (bridge resolved any function updater before forwarding)
+    expect(typeof called).toBe('object')
+    expect(called).not.toBeNull()
+    expect(typeof (called as Record<string, unknown>).name).toBe('number')
   })
 })
