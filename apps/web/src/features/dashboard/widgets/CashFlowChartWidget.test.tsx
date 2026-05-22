@@ -136,16 +136,24 @@ describe('CashFlowChartWidget', () => {
       expect(names).toContain('Net Cash Flow')
     })
 
-    it('should have reference line (markLine) on Income series only', () => {
+    it('reference line is decoupled from legend-visible series — Income toggle cannot hide y=0 line (Codex Third Loop C1)', () => {
       mockUseCashFlowHistory.mockReturnValue({ data: mockHistoryData, loading: false, error: null, refetch: mockCashFlowHistoryRefetch })
       render(<TestWrapper><CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} /></TestWrapper>)
-      const chart = screen.getByTestId('echarts-chart')
-      expect(chart.dataset.hasMarkline).toBe('true')
-      // Regression guard (Codex H2): markLine must be on Income (always visible),
-      // NOT on Net Cash Flow (legend-hideable — hiding it would hide the y=0 reference line).
-      const marklineSeries = JSON.parse(chart.dataset.marklineSeries ?? '[]') as string[]
-      expect(marklineSeries).toContain('Income')
-      expect(marklineSeries).not.toContain('Net Cash Flow')
+      const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+        series?: Array<{ name?: string; markLine?: unknown }>
+        legend?: { data?: string[] }
+      }
+      // Visible series must NOT carry markLine — toggling them via legend cannot hide the y=0 line.
+      const visibleNames = ['Income', 'Expenses', 'Net Cash Flow']
+      for (const name of visibleNames) {
+        const s = option.series?.find((s) => s.name === name)
+        expect(s?.markLine).toBeUndefined()
+      }
+      // Hidden series (__refline__) hosts the reference line.
+      const reflineSeries = option.series?.find((s) => s.name === '__refline__')
+      expect(reflineSeries?.markLine).toBeDefined()
+      // legend.data excludes __refline__ — user cannot toggle it off.
+      expect(option.legend?.data).toEqual(visibleNames)
     })
 
     it('data-renderer is always svg', () => {
