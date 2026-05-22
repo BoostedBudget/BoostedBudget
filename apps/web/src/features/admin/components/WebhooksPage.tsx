@@ -88,7 +88,7 @@ export function WebhooksPage() {
   const hasMore = data?.HasMore ?? false
   const isEmpty = !isLoading && !error && events.length === 0
 
-  const { columnVisibility, onColumnVisibilityChange } = useTablePreferences(
+  const { sizing, onSizingChange, columnVisibility, onColumnVisibilityChange } = useTablePreferences(
     'admin-webhooks',
     [...ADMIN_WEBHOOKS_COLUMN_IDS]
   )
@@ -99,6 +99,9 @@ export function WebhooksPage() {
     {
       id: 'event_type',
       header: 'Event Type',
+      resizable: true,
+      defaultSize: 180,
+      minSize: 120,
       render: (event) => (
         <span className="font-mono text-[0.8125rem] font-medium">{event.event_type}</span>
       ),
@@ -106,7 +109,10 @@ export function WebhooksPage() {
     {
       id: 'event_id',
       header: 'Event ID',
+      resizable: true,
       hideable: true,
+      defaultSize: 220,
+      minSize: 160,
       render: (event) => (
         <span className="font-mono text-[0.8125rem] text-muted-foreground max-w-[180px] overflow-hidden text-ellipsis whitespace-nowrap block">
           {event.event_id}
@@ -116,6 +122,9 @@ export function WebhooksPage() {
     {
       id: 'status',
       header: 'Status',
+      defaultSize: 110,
+      minSize: 90,
+      maxSize: 140,
       render: (event) => (
         <span
           className={cn(
@@ -136,12 +145,18 @@ export function WebhooksPage() {
       header: 'Attempts',
       hideable: true,
       numeric: true,
+      defaultSize: 100,
+      minSize: 80,
+      maxSize: 130,
       key: 'processing_attempts',
     },
     {
       id: 'error',
       header: 'Error',
+      resizable: true,
       hideable: true,
+      defaultSize: 280,
+      minSize: 180,
       render: (event) => (
         <span className="text-[0.8125rem] text-destructive max-w-[200px] overflow-hidden text-ellipsis whitespace-nowrap block">
           {event.processing_error
@@ -154,6 +169,10 @@ export function WebhooksPage() {
     {
       id: 'created_at',
       header: 'Created',
+      resizable: true,
+      defaultSize: 180,
+      minSize: 140,
+      maxSize: 220,
       render: (event) => event.created_at ? new Date(event.created_at).toLocaleString() : '—',
     },
   ]
@@ -303,6 +322,8 @@ export function WebhooksPage() {
             onRowClick={(event) => setSelectedWebhookId(event.id ?? null)}
             maskedColumnIds={['event_id', 'error']}
             tableId="admin-webhooks"
+            columnSizing={sizing}
+            onColumnSizingChange={onSizingChange}
             columnVisibility={columnVisibility}
             onColumnVisibilityChange={onColumnVisibilityChange}
             rowActions={(event) => (

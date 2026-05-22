@@ -95,12 +95,6 @@
   --color-blue-900: oklch(0.231 0.07 253.226);
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-
 body {
   min-width: 320px;
   min-height: 100vh;
@@ -212,11 +206,19 @@ body {
 
 @layer base {
   * {
+    box-sizing: border-box;
+    margin: 0;
     @apply border-border outline-ring/50;
   }
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* col-resize cursor stays stable during drag across the whole page */
+html[data-resizing] * {
+  cursor: col-resize !important;
+  user-select: none;
 }
 
 /* GridStack.js resize handle overrides (cannot be expressed as Tailwind utilities on library DOM) */

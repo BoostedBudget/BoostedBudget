@@ -29,6 +29,9 @@ export type {
   PaginationState,
   VisibilityState,
   RowSelectionState,
+  ColumnSizingState,
+  ColumnSizingInfoState,
+  OnChangeFn,
 } from '@tanstack/react-table'
 
 export { useVirtualizer } from '@tanstack/react-virtual'

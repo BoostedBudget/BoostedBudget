@@ -9,6 +9,8 @@ interface ColumnVisibilityMenuProps<T> {
   visibility: Record<string, boolean>
   onChange: (visibility: Record<string, boolean>) => void
   tableId?: string
+  columnSizing?: Record<string, number>
+  onResetSizing?: () => void
 }
 
 export function ColumnVisibilityMenu<T,>({
@@ -16,6 +18,8 @@ export function ColumnVisibilityMenu<T,>({
   visibility,
   onChange,
   tableId,
+  columnSizing,
+  onResetSizing,
 }: ColumnVisibilityMenuProps<T>) {
   const trackEvent = useTrackEvent()
   const [open, setOpen] = useState(false)
@@ -24,6 +28,7 @@ export function ColumnVisibilityMenu<T,>({
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
 
   const hideableColumns = columns.filter((col) => col.hideable)
+  const hasSizingOverrides = onResetSizing !== undefined && Object.keys(columnSizing ?? {}).length > 0
 
   function isVisible(colId: string): boolean {
     return visibility[colId] !== false
@@ -64,26 +69,23 @@ export function ColumnVisibilityMenu<T,>({
   }, [open])
 
   // Keyboard: Escape closes and returns focus; Arrow keys move between items (roving focus)
-  const handleMenuKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (e.key === 'Escape') {
-        setOpen(false)
-        triggerRef.current?.focus()
-        return
-      }
-      const items = itemRefs.current.filter(Boolean) as HTMLButtonElement[]
-      const focused = document.activeElement
-      const idx = items.indexOf(focused as HTMLButtonElement)
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        items[(idx + 1) % items.length]?.focus()
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        items[(idx - 1 + items.length) % items.length]?.focus()
-      }
-    },
-    []
-  )
+  const handleMenuKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      setOpen(false)
+      triggerRef.current?.focus()
+      return
+    }
+    const items = itemRefs.current.filter(Boolean) as HTMLButtonElement[]
+    const focused = document.activeElement
+    const idx = items.indexOf(focused as HTMLButtonElement)
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      items[(idx + 1) % items.length]?.focus()
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      items[(idx - 1 + items.length) % items.length]?.focus()
+    }
+  }, [])
 
   return (
     <div className="relative inline-block">
@@ -166,6 +168,32 @@ export function ColumnVisibilityMenu<T,>({
               </button>
             )
           })}
+          {onResetSizing !== undefined && (
+            <>
+              <div role="separator" className="my-1 h-px bg-border" />
+              <button
+                ref={(el) => { itemRefs.current[hideableColumns.length] = el }}
+                type="button"
+                role="menuitem"
+                tabIndex={-1}
+                disabled={!hasSizingOverrides}
+                onClick={() => {
+                  if (hasSizingOverrides) {
+                    onResetSizing()
+                    setOpen(false)
+                  }
+                }}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm',
+                  'text-popover-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  !hasSizingOverrides && 'cursor-not-allowed opacity-50'
+                )}
+              >
+                Reset column widths
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
