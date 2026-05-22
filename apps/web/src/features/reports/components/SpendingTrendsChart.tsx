@@ -1,7 +1,6 @@
 /**
  * Spending Trends Chart
  * Issue #953: Spending Reports Page
- * Issue #1169: Plotly to ECharts Migration
  *
  * Stacked bar chart showing top 5 spending categories over time.
  * Other categories are bucketed into "Other".

@@ -16,7 +16,7 @@ describe('getBaseOption', () => {
     expect(opt.animationEasing).toBe('cubicInOut')
   })
 
-  it('includes grid margins mapping Plotly margin convention', () => {
+  it('includes grid margins matching legacy layout convention', () => {
     const opt = getBaseOption(false)
     expect(opt.grid).toBeDefined()
     expect(opt.grid).toMatchObject({ top: 10, right: 10, bottom: 40, left: 60 })

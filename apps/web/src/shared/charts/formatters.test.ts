@@ -1,6 +1,5 @@
 /**
  * Chart Formatters Tests
- * Issue #1169: Plotly to ECharts Migration
  */
 
 import { describe, it, expect } from 'bun:test'

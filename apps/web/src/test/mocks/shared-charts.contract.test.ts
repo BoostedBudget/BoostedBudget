@@ -1,7 +1,7 @@
 /**
  * Contract test for @/shared/charts mock surface.
- * Phase 6.5+: ECharts-only surface. Negative assertions verify deprecated
- * Plotly exports are fully removed from both the mock and the barrel.
+ * ECharts-only surface. Negative assertions verify deprecated legacy exports
+ * are absent from both the mock and the barrel.
  */
 import './shared-charts'
 import { describe, it, expect } from 'bun:test'
@@ -26,49 +26,38 @@ import React from 'react'
 import { render, screen, fireEvent } from '@testing-library/react'
 
 // ========================
-// NEGATIVE assertions — deprecated Plotly surface must be gone
+// NEGATIVE assertions — deprecated legacy exports must be absent
+// Regression guard: if any of these reappear, the migration regressed.
 // ========================
 
-describe('shared-charts mock: deprecated Plotly surface must be absent', () => {
-  it('mock does not export MockPlot', async () => {
-    const mod = await import('./shared-charts')
-    expect((mod as Record<string, unknown>)['MockPlot']).toBeUndefined()
-  })
+// Forbidden mock exports (legacy chart library surface)
+const FORBIDDEN_MOCK_EXPORTS = [
+  'MockPlot', 'MockPlotly', 'mockGetBaseLayout', 'mockGetCurrencyLayout',
+  'mockGetBarChartLayout', 'MOCK_DEFAULT_CONFIG',
+] as const
 
-  it('mock does not export MockPlotly', async () => {
-    const mod = await import('./shared-charts')
-    expect((mod as Record<string, unknown>)['MockPlotly']).toBeUndefined()
-  })
+// Forbidden barrel exports (legacy chart library surface)
+const FORBIDDEN_BARREL_EXPORTS = [
+  'Plot', 'Plotly', 'getBaseLayout', 'getCurrencyLayout',
+  'getBarChartLayout', 'DEFAULT_CONFIG',
+] as const
 
-  it('mock does not export mockGetBaseLayout', async () => {
-    const mod = await import('./shared-charts')
-    expect((mod as Record<string, unknown>)['mockGetBaseLayout']).toBeUndefined()
-  })
+describe('shared-charts mock: deprecated legacy surface must be absent', () => {
+  for (const name of FORBIDDEN_MOCK_EXPORTS) {
+    it(`mock does not export ${name}`, async () => {
+      const mod = await import('./shared-charts')
+      expect((mod as Record<string, unknown>)[name]).toBeUndefined()
+    })
+  }
+})
 
-  it('mock does not export MOCK_DEFAULT_CONFIG', async () => {
-    const mod = await import('./shared-charts')
-    expect((mod as Record<string, unknown>)['MOCK_DEFAULT_CONFIG']).toBeUndefined()
-  })
-
-  it('barrel (@/shared/charts) does not export Plot', async () => {
-    const barrel = await import('@/shared/charts')
-    expect((barrel as Record<string, unknown>)['Plot']).toBeUndefined()
-  })
-
-  it('barrel (@/shared/charts) does not export Plotly', async () => {
-    const barrel = await import('@/shared/charts')
-    expect((barrel as Record<string, unknown>)['Plotly']).toBeUndefined()
-  })
-
-  it('barrel (@/shared/charts) does not export getBaseLayout', async () => {
-    const barrel = await import('@/shared/charts')
-    expect((barrel as Record<string, unknown>)['getBaseLayout']).toBeUndefined()
-  })
-
-  it('barrel (@/shared/charts) does not export DEFAULT_CONFIG', async () => {
-    const barrel = await import('@/shared/charts')
-    expect((barrel as Record<string, unknown>)['DEFAULT_CONFIG']).toBeUndefined()
-  })
+describe('shared-charts barrel: deprecated legacy surface must be absent', () => {
+  for (const name of FORBIDDEN_BARREL_EXPORTS) {
+    it(`barrel (@/shared/charts) does not export ${name}`, async () => {
+      const barrel = await import('@/shared/charts')
+      expect((barrel as Record<string, unknown>)[name]).toBeUndefined()
+    })
+  }
 })
 
 // ========================
