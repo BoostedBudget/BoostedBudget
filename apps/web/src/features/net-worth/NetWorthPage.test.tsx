@@ -108,14 +108,14 @@ describe('NetWorthPage', () => {
   it('renders chart when history has multiple snapshots', () => {
     mockUseNetWorthData.mockReturnValue({ summary: baseSummary, history: baseHistory, loading: false, error: null, refetch: mockNetWorthRefetch })
     renderPage()
-    expect(screen.getByTestId('plotly-chart')).toBeDefined()
+    expect(screen.getByTestId('echarts-chart')).toBeDefined()
   })
 
   it('hides chart when insufficient history', () => {
     const singleSnapshotHistory = { ...baseHistory, snapshots: baseHistory.snapshots.slice(0, 1) }
     mockUseNetWorthData.mockReturnValue({ summary: baseSummary, history: singleSnapshotHistory, loading: false, error: null, refetch: mockNetWorthRefetch })
     renderPage()
-    expect(screen.queryByTestId('plotly-chart')).toBeNull()
+    expect(screen.queryByTestId('echarts-chart')).toBeNull()
   })
 
   it('renders breakdown table section', () => {
@@ -141,7 +141,7 @@ describe('NetWorthPage', () => {
     mockUseNetWorthData.mockReturnValue({ summary: zeroSummary, history: baseHistory, loading: false, error: null, refetch: mockNetWorthRefetch })
     renderPage()
     expect(screen.getByText(/connect a bank account/i)).toBeDefined()
-    expect(screen.queryByTestId('plotly-chart')).toBeNull()
+    expect(screen.queryByTestId('echarts-chart')).toBeNull()
   })
 
   // --- Integration: filter + sort from URL ---

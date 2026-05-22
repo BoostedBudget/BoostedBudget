@@ -1,10 +1,9 @@
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
-import React from 'react'
-
 import '@/test/mocks/shared-charts'
+import { mockUseDarkMode, MockEChartsChart } from '@/test/mocks/shared-charts'
 import { SpendingTrendsChart } from './SpendingTrendsChart'
-import type { SpendingTrendsResponse } from '@boostedbudget/api-client/models'
+import type { SpendingTrendsResponse, SpendingTrendPeriod } from '@boostedbudget/api-client/models'
 
 const mockData: SpendingTrendsResponse = {
   start_date: '2024-01-01',
@@ -35,7 +34,7 @@ const mockData: SpendingTrendsResponse = {
 describe('SpendingTrendsChart', () => {
   it('renders loading state', () => {
     render(<SpendingTrendsChart data={null} loading={true} />)
-    expect(screen.getByLabelText('Loading trends chart')).toBeDefined()
+    expect(screen.getByLabelText('Loading trends chart')).toBeInTheDocument()
   })
 
   it('renders empty state when no periods', () => {
@@ -46,66 +45,77 @@ describe('SpendingTrendsChart', () => {
       periods: [],
     }
     render(<SpendingTrendsChart data={emptyData} loading={false} />)
-    expect(screen.getByText(/No trend data/)).toBeDefined()
+    expect(screen.getByText(/No trend data/)).toBeInTheDocument()
   })
 
-  it('renders chart with data', () => {
+  it('renders echarts chart with data', () => {
     render(<SpendingTrendsChart data={mockData} loading={false} />)
-    expect(screen.getByTestId('plotly-chart')).toBeDefined()
+    expect(screen.getByTestId('echarts-chart')).toBeInTheDocument()
   })
 
-  it('renders the correct number of traces', () => {
+  it('renders the correct number of series', () => {
     render(<SpendingTrendsChart data={mockData} loading={false} />)
-    const chart = screen.getByTestId('plotly-chart')
-    expect(chart.getAttribute('data-trace-count')).toBe('2')
+    const chart = screen.getByTestId('echarts-chart')
+    expect(chart.dataset.seriesCount).toBe('2')
   })
 
-  it('falls back to formatted display name when pfc_primary_display is absent', () => {
-    const sparseData: SpendingTrendsResponse = {
+  it('all series have type bar (stacked)', () => {
+    render(<SpendingTrendsChart data={mockData} loading={false} />)
+    const types = JSON.parse(screen.getByTestId('echarts-chart').dataset.seriesTypes ?? '[]') as string[]
+    expect(types.every((t) => t === 'bar')).toBe(true)
+  })
+
+  it.each([
+    {
+      name: 'falls back to formatted display name when pfc_primary_display is absent',
+      category: 'LOAN_PAYMENTS',
+      expected: 'Loan Payments',
+    },
+    {
+      name: 'falls back to "Custom Category" when custom:<uuid> has no pfc_primary_display',
+      category: 'custom:7a93a4f0-dead-beef-1234-abcdef012345',
+      expected: 'Custom Category',
+    },
+  ])('$name', ({ category, expected }) => {
+    type CategoryType = NonNullable<SpendingTrendPeriod['categories']>[0]
+    const testData: SpendingTrendsResponse = {
       start_date: '2024-01-01',
       end_date: '2024-01-31',
-      top_categories: ['LOAN_PAYMENTS'],
-      periods: [
-        {
-          period_start: '2024-01-01',
-          period_end: '2024-01-31',
-          total: 100,
-          categories: [{ category: 'LOAN_PAYMENTS', total: 100 } as SpendingTrendsResponse['periods'][0]['categories'][0]],
-        },
-      ],
-    }
-    render(<SpendingTrendsChart data={sparseData} loading={false} />)
-    const chart = screen.getByTestId('plotly-chart')
-    const names = JSON.parse(chart.getAttribute('data-trace-names') ?? '[]') as string[]
-    expect(names[0]).toBe('Loan Payments')
-    expect(names[0]).not.toBe('LOAN_PAYMENTS')
-  })
-})
-
-  it('falls back to "Custom Category" when a custom:<uuid> category has no pfc_primary_display', () => {
-    const customData: SpendingTrendsResponse = {
-      start_date: '2024-01-01',
-      end_date: '2024-01-31',
-      top_categories: ['custom:7a93a4f0-dead-beef-1234-abcdef012345'],
+      top_categories: [category],
       periods: [
         {
           period_start: '2024-01-01',
           period_end: '2024-01-31',
           total: 150,
-          categories: [
-            {
-              category: 'custom:7a93a4f0-dead-beef-1234-abcdef012345',
-              total: 150,
-            } as SpendingTrendsResponse['periods'][0]['categories'][0],
-          ],
+          categories: [{ category, total: 150 } as CategoryType],
         },
       ],
     }
-    render(<SpendingTrendsChart data={customData} loading={false} />)
-    const chart = screen.getByTestId('plotly-chart')
-    const names = JSON.parse(chart.getAttribute('data-trace-names') ?? '[]') as string[]
-    // Should not contain the raw UUID
-    expect(names[0]).not.toContain('7a93a4f0-dead-beef-1234-abcdef012345')
-    // Should be a readable fallback
-    expect(names[0]).toBe('Custom Category')
+    render(<SpendingTrendsChart data={testData} loading={false} />)
+    const names = JSON.parse(screen.getByTestId('echarts-chart').dataset.seriesNames ?? '[]') as string[]
+    expect(names[0]).toBe(expected)
   })
+
+  describe('Dark Mode', () => {
+    it('reflects dark mode state in isDark prop', () => {
+      mockUseDarkMode.mockReturnValue(true)
+      const { unmount } = render(<SpendingTrendsChart data={mockData} loading={false} />)
+      expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
+      unmount()
+
+      mockUseDarkMode.mockReturnValue(false)
+      render(<SpendingTrendsChart data={mockData} loading={false} />)
+      expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
+    })
+  })
+
+  it('tooltip formatter escapes malicious series names (XSS regression — #1169)', () => {
+    render(<SpendingTrendsChart data={mockData} loading={false} />)
+    const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+      tooltip?: { formatter?: (p: unknown) => string }
+    }
+    const formatted = option.tooltip!.formatter!([{ seriesName: '<img src=x onerror=alert(1)>', value: 200 }])
+    expect(formatted).not.toMatch(/<(img|script|svg)/i)
+    expect(formatted).toContain('&lt;img')
+  })
+})

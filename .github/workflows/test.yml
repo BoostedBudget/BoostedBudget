@@ -444,11 +444,11 @@ jobs:
           bun run test:isolated:coverage
           echo "::endgroup::"
 
-      - name: Combine coverage reports
+      - name: Combine coverage reports and enforce thresholds
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: |
-          echo "::group::Combining coverage reports"
-          bun run test:coverage:combine
+          echo "::group::Combining coverage reports and checking thresholds"
+          bun run test:coverage:combine:check
           echo "::endgroup::"
 
       - name: Upload combined coverage report

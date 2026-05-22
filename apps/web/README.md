@@ -25,7 +25,7 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 - Initial budgets were set at the time lazy-loading was introduced (issue #1126).
 
 **If CI fails on bundle size:**
-1. **Chunk exceeded its budget** — either shrink the chunk back below budget, or raise the budget in the same PR with a reasoned justification in the PR description (e.g., "added recharts dependency for new chart, +15 KB gzipped").
+1. **Chunk exceeded its budget** — either shrink the chunk back below budget, or raise the budget in the same PR with a reasoned justification in the PR description (e.g., "added echarts component, +X KB gzipped").
 2. **Orphan chunk detected** — a new Rollup chunk has no size-limit entry. Add a `manualChunks` branch in `apps/web/vite.config.ts` to give it a stable name, then add a matching entry to `.size-limit.json`.
 
 **Adding a new route:**
@@ -37,10 +37,13 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 
 **Claude Code pre-push hook:** The Claude Code hook at `.claude/hooks/pre-push-checks.sh` invokes `make check-bundle-size` on every push that touches frontend files, enforcing both size-limit budgets AND the orphan-chunk guard automatically.
 
-**Current footprints (post-#1128, `@tanstack/react-virtual` included):**
+**Current footprints (post-#1169, Plotly → ECharts migration):**
 | Chunk | Budget | Actual (gzip) | Headroom |
 |-------|--------|---------------|----------|
-| `transactions` | 19 kB | 15.14 kB | 3.86 kB |
-| `tanstack` | 35 kB | 15.01 kB | 19.99 kB |
+| `vendor` | 700 kB | 616.72 kB | 83.28 kB |
+| `transactions` | 19 kB | 14.83 kB | 4.17 kB |
+| `tanstack` | 35 kB | 15.03 kB | 19.97 kB |
 
-`@tanstack/react-virtual` is bundled into the shared `tanstack` chunk (not the `transactions` chunk). The transactions chunk budget of 19 kB remains sufficient with ~3.9 kB headroom.
+The `vendor` budget was reduced from 911 kB to 700 kB after issue #1169 (Plotly → Apache ECharts): ECharts tree-shaken via `echarts/core` weighs ~617 kB gzip vs Plotly's ~911 kB budget — a **~294 kB (32%) reduction**.
+
+`@tanstack/react-virtual` is bundled into the shared `tanstack` chunk (not the `transactions` chunk). The transactions chunk budget of 19 kB remains sufficient with ~4.2 kB headroom.

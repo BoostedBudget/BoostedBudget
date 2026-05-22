@@ -126,7 +126,7 @@ Add to `@theme inline`:
   - `bg-green-50 dark:bg-green-950`, `text-green-900 dark:text-green-100`
   - Same pattern for red, purple, amber, gray
 - **User-chosen dynamic colors** (category icons, tag colors): Keep as inline styles — intentionally user-controlled
-- **Plotly charts**: Handled by chart hook update (Section 6)
+- **ECharts charts** (migrated from Plotly in Issue #1169): Handled via `bb-light`/`bb-dark` ECharts theme registration in `shared/charts/themes.ts`. The `<EChartsChart isDark={isDark}>` prop triggers a `key`-based remount on theme flip — see `EChartsChart.tsx`.
 - **Tier/status badges**: Use semantic opacity variants (`bg-success/10 text-success`)
 - **Hover states**: `hover:bg-accent` replaces `hover:bg-gray-50`, `hover:bg-gray-100`, etc.
 - **Focus rings**: Already handled by `ring-ring` in shadcn/ui base styles

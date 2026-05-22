@@ -204,7 +204,7 @@
 - `backend/internal/services/transaction_mapper_test.go` (fixed NewTransactionSyncService calls)
 - `backend/internal/services/transaction_sync_service_test.go` (fixed NewTransactionSyncService calls)
 
-**Next:** Phase 4 - Frontend Dashboard (React components, hooks, Recharts integration)
+**Next:** Phase 4 - Frontend Dashboard (React components, hooks, chart library integration)
 
 #### Planning Phase
 - **Completed:** Comprehensive codebase exploration using Plan subagent

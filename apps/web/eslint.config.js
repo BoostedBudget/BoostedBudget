@@ -119,8 +119,14 @@ export default [
       ...reactHooks.configs.recommended.rules,
       'react-refresh/only-export-components': [
         'warn',
-        { allowConstantExport: true, extraHOCs: ['createPlotlyComponent'] },
+        { allowConstantExport: true },
       ],
+      '@typescript-eslint/no-restricted-imports': ['error', {
+        paths: [
+          { name: 'echarts', message: "Import from 'echarts/core' + per-feature paths to keep the bundle tree-shaken.", allowTypeImports: true },
+          { name: 'echarts-for-react', message: "Import ReactEChartsCore from 'echarts-for-react/lib/core' instead.", allowTypeImports: true },
+        ],
+      }],
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/no-explicit-any': 'warn',
     },
