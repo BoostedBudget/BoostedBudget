@@ -104,54 +104,62 @@ func (r *balanceSnapshotRepository) GetByUserIDAndDateRange(ctx context.Context,
 	return r.scanSnapshots(ctx, query, userID, startDate, endDate)
 }
 
-// GetAggregatedHistory retrieves aggregated balance history for dashboard charts
+// GetAggregatedHistory retrieves aggregated balance history for dashboard charts.
+// The query LEFT JOINs accounts unconditionally so that per-type breakdowns are always
+// available for net-worth computation. Orphaned snapshots (deleted account rows) are
+// included in TotalBalance but omitted from ByType.
 func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
 	// Canary counter: every call applies the re-link chain CTE dedup (Issue #1109).
 	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
 
-	// CTE deduplicates by chain_key per day before aggregating, preventing
-	// double-counting when both old and new accounts have snapshots on the re-link day.
-	const baseQuery = `
+	// Base query with parameterized account-type filter in CTE.
+	// If accountTypes is provided, add AND a.type = ANY($4) to the WHERE clause.
+	const queryBase = `
 		WITH latest_per_account_per_day AS (
 		    SELECT
 		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
 		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
-		        MAX(snapshot_at) AS latest_at
+		        MAX(snapshot_at) AS latest_at,
+		        MAX(bs.id::text) AS latest_id
 		    FROM balance_snapshots bs
-		    %s
+		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
 		      AND bs.snapshot_at >= $2
 		      AND bs.snapshot_at <= $3
 		      %s
 		    GROUP BY snapshot_date, chain_key
 		),
-		deduped_snapshots AS (
-		    SELECT bs.current_balance, (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date
+		deduped AS (
+		    SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
+		           bs.current_balance, a.type AS account_type
 		    FROM balance_snapshots bs
 		    JOIN latest_per_account_per_day l
 		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
 		      AND bs.snapshot_at = l.latest_at
+		      AND bs.id::text = l.latest_id
+		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
 		)
-		SELECT snapshot_date, SUM(current_balance) as total_balance
-		FROM deduped_snapshots
-		GROUP BY snapshot_date
-		ORDER BY snapshot_date ASC
+		SELECT snapshot_date,
+		       COALESCE(account_type, '') AS account_type,
+		       SUM(current_balance) AS type_balance
+		FROM deduped
+		GROUP BY snapshot_date, account_type
+		ORDER BY snapshot_date ASC, account_type ASC
 	`
 
-	var joinClause, typeFilter string
+	var query string
 	var args []interface{}
 
 	if len(accountTypes) > 0 {
-		joinClause = "JOIN accounts a ON a.id = bs.account_id"
-		typeFilter = "AND a.type = ANY($4)"
+		query = fmt.Sprintf(queryBase, "AND a.type = ANY($4)")
 		args = []interface{}{userID, startDate, endDate, accountTypes}
 	} else {
+		query = fmt.Sprintf(queryBase, "")
 		args = []interface{}{userID, startDate, endDate}
 	}
 
-	query := fmt.Sprintf(baseQuery, joinClause, typeFilter)
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -159,12 +167,22 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 	defer rows.Close()
 
 	var history []domain.BalanceHistoryPoint
+	var current *domain.BalanceHistoryPoint
 	for rows.Next() {
-		var point domain.BalanceHistoryPoint
-		if err := rows.Scan(&point.Date, &point.TotalBalance); err != nil {
+		var d time.Time
+		var accountType string
+		var bal float64
+		if err := rows.Scan(&d, &accountType, &bal); err != nil {
 			return nil, err
 		}
-		history = append(history, point)
+		if current == nil || !current.Date.Equal(d) {
+			history = append(history, domain.BalanceHistoryPoint{Date: d, ByType: map[string]float64{}})
+			current = &history[len(history)-1]
+		}
+		current.TotalBalance += bal
+		if accountType != "" {
+			current.ByType[accountType] += bal
+		}
 	}
 
 	if err = rows.Err(); err != nil {

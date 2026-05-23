@@ -1,5 +1,4 @@
 import { useMemo } from 'react'
-import { format, parseISO } from 'date-fns'
 import type { EChartsOption } from 'echarts'
 import {
   EChartsChart,
@@ -9,6 +8,7 @@ import {
   formatCurrency,
   escapeHtml,
 } from '@/shared/charts'
+import { formatHistoryLabel } from '@/shared/dates'
 import type { NetWorthHistory } from '@/features/dashboard/types'
 
 const NET_WORTH_COLOR = '#3b82f6'
@@ -25,14 +25,14 @@ export function NetWorthHistoryChart({ history }: NetWorthHistoryChartProps) {
     const base = getCurrencyOption(isDark);
     return {
       ...base,
-      xAxis: { type: 'category', data: snapshots.map((s) => format(parseISO(s.date), 'MMM d')) },
+      xAxis: { type: 'category', data: snapshots.map((s) => formatHistoryLabel(s.date, 'MMM d')) },
       tooltip: {
         trigger: 'axis',
         formatter: (params: unknown) => {
           if (!Array.isArray(params) || params.length === 0) return '';
           const points = params as Array<{ seriesName: string; value: number; dataIndex: number }>;
           const snapshot = snapshots[points[0].dataIndex];
-          const label = snapshot ? format(parseISO(snapshot.date), 'MMMM d, yyyy') : '';
+          const label = snapshot ? formatHistoryLabel(snapshot.date, 'MMMM d, yyyy') : '';
           return `<b>${escapeHtml(label)}</b><br>${points.map((p) => `${escapeHtml(p.seriesName)}: ${formatCurrency(p.value)}`).join('<br>')}`;
         },
       },

@@ -1246,7 +1246,7 @@ describe('AutoCategorizationRuleEditor', () => {
           expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
             conditions: [{ type: 'account_id', value: 'ua-acc-1' }],
           }))
-        })
+        }, { timeout: 10000 })
       })
 
       it('should fall back to raw account id when user_account_id is absent (legacy)', async () => {

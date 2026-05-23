@@ -1,7 +1,7 @@
 /**
  * Dashboard Context
  * Issue #354: Customizable Dashboard Widget System
- * Issue #953: Migrated timeframe to shared DatePreset with calendar-aligned ranges
+ * Issue #953: Migrated timeframe to shared DatePreset (rolling windows ending today)
  *
  * Provides shared state for dashboard widgets including filters,
  * user info, and shared services.
@@ -65,8 +65,7 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
     setTimeframeState(newTimeframe);
     // Reset custom date range when switching timeframe
     if (newTimeframe !== 'custom') {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      setCustomFilters(({ startDate, endDate, ...rest }) => rest);
+      setCustomFilters(({ startDate: _s, endDate: _e, ...rest }) => rest);
     }
   }, []);
 

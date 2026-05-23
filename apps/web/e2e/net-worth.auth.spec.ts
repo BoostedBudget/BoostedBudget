@@ -201,11 +201,25 @@ test.describe('Net Worth Page — Core Rendering', () => {
     await expect(page.getByRole('heading', { level: 1, name: /net worth/i })).toBeVisible()
   })
 
-  test('renders the history chart', async ({ page }) => {
+  test('renders the history chart with non-flat data', async ({ page }) => {
     await mockNetWorthDependencies(page)
     await page.goto('/net-worth')
     await page.waitForLoadState('networkidle')
-    await expect(page.getByTestId('net-worth-history-chart')).toBeVisible()
+    const chart = page.getByTestId('net-worth-history-chart')
+    await expect(chart).toBeVisible()
+    // Bug A regression guard — chart must render distinct y-values, not a flat zero line.
+    // FIXTURE_HISTORY has 4 snapshots with distinct net_worth values; the ECharts SVG
+    // must contain > 1 unique rounded y-coordinate across all <path> elements.
+    const yCoords = await chart.locator('path').evaluateAll((paths: Element[]) => {
+      const ys = new Set<number>()
+      paths.forEach((p) => {
+        const d = p.getAttribute('d') ?? ''
+        const matches = d.matchAll(/[ML]\s*[\d.]+\s+([\d.]+)/g)
+        for (const m of matches) ys.add(Math.round(parseFloat(m[1])))
+      })
+      return [...ys]
+    })
+    expect(yCoords.length).toBeGreaterThan(2)
   })
 
   test('Institution column header is visible in the Breakdown section', async ({ page }) => {
