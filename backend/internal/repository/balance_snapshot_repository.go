@@ -120,7 +120,7 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
 		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
 		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id) AS latest_id
+		        MAX(bs.id::text) AS latest_id
 		    FROM balance_snapshots bs
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
@@ -137,7 +137,7 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
 		      AND bs.snapshot_at = l.latest_at
-		      AND bs.id = l.latest_id
+		      AND bs.id::text = l.latest_id
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
 		)
