@@ -202,12 +202,12 @@ describe('DashboardContext', () => {
         result.current.setTimeframe('last_3_months')
       })
 
-      // last_3_months: start = 1st of 3 months ago, end = last day of last month
+      // last_3_months: rolling window — 3 months back from today, end = today
       expect(result.current.filters.startDate).toBe(
-        format(startOfMonth(subMonths(mockToday, 3)), 'yyyy-MM-dd')
+        format(subMonths(mockToday, 3), 'yyyy-MM-dd')
       )
       expect(result.current.filters.endDate).toBe(
-        format(endOfMonth(subMonths(mockToday, 1)), 'yyyy-MM-dd')
+        format(mockToday, 'yyyy-MM-dd')
       )
     })
 
@@ -218,12 +218,12 @@ describe('DashboardContext', () => {
         result.current.setTimeframe('last_6_months')
       })
 
-      // last_6_months: start = 1st of 6 months ago, end = last day of last month
+      // last_6_months: rolling window — 6 months back from today, end = today
       expect(result.current.filters.startDate).toBe(
-        format(startOfMonth(subMonths(mockToday, 6)), 'yyyy-MM-dd')
+        format(subMonths(mockToday, 6), 'yyyy-MM-dd')
       )
       expect(result.current.filters.endDate).toBe(
-        format(endOfMonth(subMonths(mockToday, 1)), 'yyyy-MM-dd')
+        format(mockToday, 'yyyy-MM-dd')
       )
     })
 

@@ -232,4 +232,48 @@ describe('BalanceHistoryChart', () => {
     expect(formatted).not.toMatch(/<(img|script|svg)/i)
     expect(formatted).toContain('&lt;img')
   })
+
+  // Bug C regression — Issue #1173: midnight-UTC RFC3339 dates must not shift back one
+  // day in negative-offset timezones. Old code used format(parseISO()), new code uses
+  // formatHistoryLabel() which anchors to noon UTC.
+  describe('TZ-safe date labels (Bug C — Issue #1173)', () => {
+    it('x-axis labels use UTC calendar date for midnight-UTC RFC3339 snapshots', () => {
+      const aprilHistory: BalanceHistory = {
+        start_date: '2024-04-28T00:00:00Z',
+        end_date: '2024-04-29T00:00:00Z',
+        granularity: 'daily',
+        snapshots: [
+          { date: '2024-04-28T00:00:00Z', balance: 4000 },
+          { date: '2024-04-29T00:00:00Z', balance: 4100 },
+        ],
+      }
+      render(<BalanceHistoryChart history={aprilHistory} />)
+      const option = mockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+        xAxis?: { data?: string[] }
+      }
+      const labels = option.xAxis?.data ?? []
+      expect(labels).toContain('Apr 28')
+      expect(labels).toContain('Apr 29')
+      expect(labels).not.toContain('Apr 27') // Old code would have shifted back one day
+    })
+
+    it('tooltip header uses UTC calendar date for midnight-UTC RFC3339 snapshots', () => {
+      const aprilHistory: BalanceHistory = {
+        start_date: '2024-04-29T00:00:00Z',
+        end_date: '2024-04-29T00:00:00Z',
+        granularity: 'daily',
+        snapshots: [
+          { date: '2024-04-29T00:00:00Z', balance: 4100 },
+          { date: '2024-04-30T00:00:00Z', balance: 4200 },
+        ],
+      }
+      render(<BalanceHistoryChart history={aprilHistory} />)
+      const option = mockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+        tooltip?: { formatter?: (p: unknown) => string }
+      }
+      const formatted = option.tooltip!.formatter!([{ seriesName: 'Total Balance', value: 4100, dataIndex: 0 }])
+      expect(formatted).toContain('April 29, 2024')
+      expect(formatted).not.toContain('April 28, 2024') // Old code would have shifted back one day
+    })
+  })
 });

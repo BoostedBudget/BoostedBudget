@@ -871,6 +871,52 @@ func TestGetNetWorthHistory_InvalidDateRange(t *testing.T) {
 	assert.Contains(t, err.Error(), "start_date must be before or equal to end_date")
 }
 
+// TestGetNetWorthHistory_LiabilitiesSignedCorrectly ensures the service correctly handles
+// negative-balance liability accounts: TotalLiabilities must be positive after abs-normalization,
+// and NetWorth = TotalAssets - TotalLiabilities. Regression for Issue #1173 Bug A sign-flip.
+func TestGetNetWorthHistory_LiabilitiesSignedCorrectly(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-id"
+	startDate := time.Now().UTC().AddDate(0, 0, -7).Truncate(24 * time.Hour)
+	endDate := time.Now().UTC().Truncate(24 * time.Hour)
+
+	// Plaid typically returns credit/loan balances as negative values in our snapshot store.
+	history := []domain.BalanceHistoryPoint{
+		{
+			Date:         startDate,
+			TotalBalance: 100000.00,
+			ByType: map[string]float64{
+				"depository": 20000.00,
+				"investment": 80000.00,
+				"credit":     -2000.00,  // negative → abs-normalization should make this 2000 liability
+				"loan":       -56302.00, // negative → abs-normalization should make this 56302 liability
+			},
+		},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockSnapshotRepo.On("GetAggregatedHistory", ctx, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), []string(nil)).Return(history, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	filters := &domain.DashboardFilters{StartDate: &startDate, EndDate: &endDate}
+	result, err := service.GetNetWorthHistory(ctx, userID, filters)
+
+	assert.NoError(t, err)
+	require.Len(t, result.Snapshots, 1)
+	snap := result.Snapshots[0]
+
+	// Assets: depository + investment
+	assert.InDelta(t, 100000.00, snap.TotalAssets, 0.01)
+	// Liabilities must be positive (abs of credit + abs of loan)
+	assert.InDelta(t, 58302.00, snap.TotalLiabilities, 0.01, "TotalLiabilities must be positive after abs-normalization")
+	// NetWorth = assets - liabilities
+	assert.InDelta(t, 41698.00, snap.NetWorth, 0.01)
+
+	mockSnapshotRepo.AssertExpectations(t)
+}
+
 func TestAccountTypeCategory(t *testing.T) {
 	// Test the helper function
 	tests := []struct {
