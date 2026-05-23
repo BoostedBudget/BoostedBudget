@@ -247,7 +247,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory(t *testing.T) {
 		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
 		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
 		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id) AS latest_id
+		        MAX(bs.id::text) AS latest_id
 		    FROM balance_snapshots bs
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
@@ -264,7 +264,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory(t *testing.T) {
 		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
 		      AND bs.snapshot_at = l.latest_at
-      AND bs.id = l.latest_id
+      AND bs.id::text = l.latest_id
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
 		)
@@ -308,7 +308,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_AllAccountTypes(t *testi
 		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
 		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
 		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id) AS latest_id
+		        MAX(bs.id::text) AS latest_id
 		    FROM balance_snapshots bs
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
@@ -324,7 +324,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_AllAccountTypes(t *testi
 		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
 		      AND bs.snapshot_at = l.latest_at
-      AND bs.id = l.latest_id
+      AND bs.id::text = l.latest_id
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
 		)
@@ -657,7 +657,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_MultipleSnapshotsPerDay(
 		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
 		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
 		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id) AS latest_id
+		        MAX(bs.id::text) AS latest_id
 		    FROM balance_snapshots bs
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
@@ -673,7 +673,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_MultipleSnapshotsPerDay(
 		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
 		      AND bs.snapshot_at = l.latest_at
-      AND bs.id = l.latest_id
+      AND bs.id::text = l.latest_id
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
 		)
@@ -717,7 +717,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_TimezoneConsistency(t *t
 		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
 		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
 		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id) AS latest_id
+		        MAX(bs.id::text) AS latest_id
 		    FROM balance_snapshots bs
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
@@ -733,7 +733,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_TimezoneConsistency(t *t
 		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
 		      AND bs.snapshot_at = l.latest_at
-      AND bs.id = l.latest_id
+      AND bs.id::text = l.latest_id
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
 		)
@@ -829,7 +829,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_NoDoubleCountOnRelinkDay
 		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
 		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
 		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id) AS latest_id
+		        MAX(bs.id::text) AS latest_id
 		    FROM balance_snapshots bs
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
@@ -845,7 +845,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_NoDoubleCountOnRelinkDay
 		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
 		      AND bs.snapshot_at = l.latest_at
-      AND bs.id = l.latest_id
+      AND bs.id::text = l.latest_id
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
 		)
@@ -888,7 +888,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_LegacyNullUserAccountID(
 		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
 		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
 		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id) AS latest_id
+		        MAX(bs.id::text) AS latest_id
 		    FROM balance_snapshots bs
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
@@ -904,7 +904,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_LegacyNullUserAccountID(
 		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
 		      AND bs.snapshot_at = l.latest_at
-      AND bs.id = l.latest_id
+      AND bs.id::text = l.latest_id
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
 		)
@@ -950,7 +950,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_PopulatesByType(t *testi
 		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
 		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
 		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id) AS latest_id
+		        MAX(bs.id::text) AS latest_id
 		    FROM balance_snapshots bs
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
@@ -966,7 +966,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_PopulatesByType(t *testi
 		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
 		      AND bs.snapshot_at = l.latest_at
-      AND bs.id = l.latest_id
+      AND bs.id::text = l.latest_id
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
 		)
@@ -1013,7 +1013,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_AccountTypesFilter_Popul
 		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
 		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
 		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id) AS latest_id
+		        MAX(bs.id::text) AS latest_id
 		    FROM balance_snapshots bs
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
@@ -1030,7 +1030,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_AccountTypesFilter_Popul
 		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
 		      AND bs.snapshot_at = l.latest_at
-      AND bs.id = l.latest_id
+      AND bs.id::text = l.latest_id
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
 		)
@@ -1075,7 +1075,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_OrphanSnapshot(t *testin
 		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
 		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
 		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id) AS latest_id
+		        MAX(bs.id::text) AS latest_id
 		    FROM balance_snapshots bs
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
@@ -1091,7 +1091,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_OrphanSnapshot(t *testin
 		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
 		      AND bs.snapshot_at = l.latest_at
-      AND bs.id = l.latest_id
+      AND bs.id::text = l.latest_id
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
 		)
