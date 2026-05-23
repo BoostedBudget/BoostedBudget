@@ -76,8 +76,8 @@ export const PRESETS: PresetDefinition[] = [
     getRange: () => {
       const today = new Date()
       return {
-        startDate: fmt(startOfMonth(subMonths(today, 3))),
-        endDate: fmt(endOfMonth(subMonths(today, 1))),
+        startDate: fmt(subMonths(today, 3)),
+        endDate: fmt(today),
       }
     },
   },
@@ -87,8 +87,8 @@ export const PRESETS: PresetDefinition[] = [
     getRange: () => {
       const today = new Date()
       return {
-        startDate: fmt(startOfMonth(subMonths(today, 6))),
-        endDate: fmt(endOfMonth(subMonths(today, 1))),
+        startDate: fmt(subMonths(today, 6)),
+        endDate: fmt(today),
       }
     },
   },

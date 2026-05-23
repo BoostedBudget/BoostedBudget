@@ -3,11 +3,11 @@ import { formatRelativeTime } from './formatRelativeTime'
 
 describe('formatRelativeTime', () => {
   const FIXED_NOW = new Date('2024-01-15T12:00:00.000Z')
+  // Capture before any patching so afterEach can restore the real constructor.
+  const OriginalDate = Date
 
   beforeEach(() => {
     mock.module('bun:test', () => ({}))
-    // Freeze time by replacing Date constructor
-    const OriginalDate = Date
     globalThis.Date = class extends OriginalDate {
       constructor(...args: ConstructorParameters<typeof OriginalDate>) {
         if (args.length === 0) {
@@ -23,8 +23,7 @@ describe('formatRelativeTime', () => {
   })
 
   afterEach(() => {
-    // Restore original Date
-    globalThis.Date = Date
+    globalThis.Date = OriginalDate
   })
 
   it('returns "just now" for a date less than 1 minute ago', () => {
