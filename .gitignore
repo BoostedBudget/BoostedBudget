@@ -377,3 +377,7 @@ dogfood-output/
 
 # Plans/docs (local only)
 docs/plans/
+
+# Issue-prefixed screenshots (local debugging artifacts, not committed)
+[0-9][0-9][0-9][0-9]-*.png
+[0-9][0-9][0-9][0-9]-*.jpg

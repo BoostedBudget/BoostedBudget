@@ -29,6 +29,8 @@ import { bbSortToTanStack } from './adapters/sortAdapter'
 import { bbFiltersToTanStack } from './adapters/filterAdapter'
 import { toTanStackSizingColumns } from './adapters/columnSizingAdapter'
 import { useKeyboardColumnResize } from './useKeyboardColumnResize'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { ResizeHandle } from './ResizeHandle'
 import { useColumnOrder } from './useColumnOrder'
 import { DragHandle } from './DragHandle'
@@ -239,6 +241,8 @@ export function DataTable<T,>({
 }: DataTableProps<T>) {
   // totalCols is computed after visibleColumns below
 
+  const trackEvent = useTrackEvent()
+
   // ── Column sizing state ──────────────────────────────────────────────────────
   // TanStack owns all sizing state. For uncontrolled tables we hold internal state
   // here; for controlled tables the parent owns it via controlledSizing.
@@ -381,6 +385,17 @@ export function DataTable<T,>({
     }
     return () => { delete document.documentElement.dataset.resizing }
   }, [isResizing])
+
+  // Fire PostHog event on pointer-drag resize completion (when isResizing: true → false)
+  const resizingColumnRef = useRef<string | undefined>(undefined)
+  const resizingColumn = table.getState().columnSizingInfo?.isResizingColumn
+  useEffect(() => {
+    if (typeof resizingColumn === 'string') resizingColumnRef.current = resizingColumn
+    if (!isResizing && resizingColumnRef.current !== undefined) {
+      trackEvent(ANALYTICS_EVENTS.DATATABLE_COLUMN_RESIZED, { tableId, columnId: resizingColumnRef.current })
+      resizingColumnRef.current = undefined
+    }
+  }, [isResizing, resizingColumn, trackEvent, tableId])
 
   const scrollEndFiredRef = useRef(false)
   useEffect(() => {

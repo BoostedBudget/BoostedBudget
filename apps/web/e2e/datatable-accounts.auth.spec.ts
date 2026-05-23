@@ -1,19 +1,11 @@
 /**
- * DataTable column resize E2E — Accounts (non-virtualized, right-pinned balance)
- * Issue #1172: Fix Transactions table formatting + TanStack column sizing everywhere
- *
- * Covers:
- * - Drag a non-pinned column; body cells track in real time
- * - Persistence across reload
- * - Right-pinned column (`balance`) remains at right edge during horizontal scroll
- *
- * Uses API mocking — no live backend required.
- *
- * Run with: bun run test:e2e -- --grep 'datatable-accounts' --reporter=line
+ * DataTable column resize E2E — Accounts (#1172)
+ * Covers: drag non-pinned columns, persistence, right-pinned sticky positioning
  */
 
 import { test, expect, type Page } from '@playwright/test'
 import { mockAuthDependencies } from './helpers/api-mocks'
+import { dragHandleInPhases } from './helpers/datatable-resize'
 
 function buildAccounts(count: number) {
   return Array.from({ length: count }, (_, i) => ({
@@ -81,10 +73,15 @@ async function switchToTableView(page: Page) {
 
 test.describe('DataTable resize — Accounts', () => {
   test.beforeEach(async ({ page }) => {
+    // Clear table-prefs on the FIRST navigation only — sessionStorage persists across
+    // reloads within a tab so we use it as a one-time flag.
     await page.addInitScript(() => {
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const key = localStorage.key(i)
-        if (key?.startsWith('bb:table-prefs:')) localStorage.removeItem(key)
+      if (!sessionStorage.getItem('e2e-prefs-cleared')) {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i)
+          if (key?.startsWith('bb:table-prefs:')) localStorage.removeItem(key)
+        }
+        sessionStorage.setItem('e2e-prefs-cleared', '1')
       }
     })
   })
@@ -98,33 +95,56 @@ test.describe('DataTable resize — Accounts', () => {
     expect(tableLayout).toBe('fixed')
   })
 
-  test('drag name column; body cells track in sync', async ({ page }) => {
+  test('drag name column; body cells track live (mid-drag)', async ({ page }) => {
     await mockDependencies(page)
     await page.goto('/accounts')
     await switchToTableView(page)
 
-    const nameTh = page.locator('th').filter({ hasText: 'Name' }).first()
+    const nameTh = page.locator('th').filter({ hasText: 'Account' }).first()
     await expect(nameTh).toBeVisible()
 
     const handle = nameTh.locator('[data-testid="resize-handle"]')
     await expect(handle).toBeVisible()
 
-    // Measure initial body cell width for Name column (2nd col: institution, name, type, mask, balance)
+    // Account column is 2nd col: institution, account, type, mask, balance
     const bodyCell = page.locator('table tbody tr').first().locator('td').nth(1)
     const initialWidth = await bodyCell.evaluate((el) => el.getBoundingClientRect().width)
 
-    const handleBox = await handle.boundingBox()
-    expect(handleBox).not.toBeNull()
-    const startX = handleBox!.x + handleBox!.width / 2
-    const startY = handleBox!.y + handleBox!.height / 2
+    const { midWidth, finalWidth } = await dragHandleInPhases(page, handle, {
+      dx: 50,
+      cellLocator: bodyCell,
+    })
 
-    await page.mouse.move(startX, startY)
-    await page.mouse.down()
-    await page.mouse.move(startX + 50, startY, { steps: 10 })
-    await page.mouse.up()
+    expect(midWidth).toBeGreaterThan(initialWidth + 10)
+    expect(finalWidth).toBeGreaterThan(initialWidth + 30)
+  })
 
-    const newWidth = await bodyCell.evaluate((el) => el.getBoundingClientRect().width)
-    expect(newWidth).toBeGreaterThan(initialWidth + 30)
+  test('right-pinned balance column stays at viewport right edge during horizontal scroll', async ({ page }) => {
+    await mockDependencies(page)
+    // Use 900px — above md breakpoint (768px) so max-md:relative doesn't override sticky
+    await page.setViewportSize({ width: 900, height: 800 })
+    await page.goto('/accounts')
+    await switchToTableView(page)
+
+    const balanceTh = page.locator('th').filter({ hasText: 'Balance' }).first()
+    await expect(balanceTh).toBeVisible()
+
+    const tableWrapper = page.locator('.overflow-x-auto').first()
+    if (await tableWrapper.count() > 0) {
+      await tableWrapper.evaluate((el) => { el.scrollLeft = 200 })
+    } else {
+      await page.evaluate(() => window.scrollBy(200, 0))
+    }
+    await page.waitForTimeout(100)
+
+    const balanceTd = page.locator('table tbody tr').first().locator('td[data-pinned="right"]').first()
+    if (await balanceTd.count() > 0) {
+      const position = await balanceTd.evaluate((el) => getComputedStyle(el).position)
+      expect(position).toBe('sticky')
+    } else {
+      const position = await balanceTh.evaluate((el) => getComputedStyle(el).position)
+      expect(position).toBe('sticky')
+    }
   })
 
   test('resized width persists across reload', async ({ page }) => {
@@ -132,7 +152,7 @@ test.describe('DataTable resize — Accounts', () => {
     await page.goto('/accounts')
     await switchToTableView(page)
 
-    const nameTh = page.locator('th').filter({ hasText: 'Name' }).first()
+    const nameTh = page.locator('th').filter({ hasText: 'Account' }).first()
     const handle = nameTh.locator('[data-testid="resize-handle"]')
     const handleBox = await handle.boundingBox()
     const startX = handleBox!.x + handleBox!.width / 2

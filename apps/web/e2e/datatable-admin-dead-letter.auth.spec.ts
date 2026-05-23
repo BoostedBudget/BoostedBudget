@@ -1,19 +1,11 @@
 /**
- * DataTable column resize E2E — Admin Dead Letter Queue
- * Issue #1172: Fix Transactions table formatting + TanStack column sizing everywhere
- *
- * Covers:
- * - Admin consumer that previously wired only visibility (now also wires sizing)
- * - Drag a column; body cells track (columnResizeMode: 'onChange')
- * - Persistence: resized width survives page reload
- *
- * Uses API mocking with isAdmin: true — no live backend required.
- *
- * Run with: bun run test:e2e -- --grep 'datatable-admin-dead-letter' --reporter=line
+ * DataTable column resize E2E — Admin Dead Letter Queue (#1172)
+ * Covers: admin resizing, live drag tracking, persistence
  */
 
 import { test, expect, type Page } from '@playwright/test'
 import { mockAuthDependencies } from './helpers/api-mocks'
+import { dragHandleInPhases } from './helpers/datatable-resize'
 
 function buildDeadLetterJobs(count: number) {
   const kinds = ['transaction_sync', 'webhook_delivery', 'rule_evaluation']
@@ -48,9 +40,6 @@ async function mockDependencies(page: Page) {
 
   const jobs = buildDeadLetterJobs(15)
 
-  // Register the more-specific /stats route FIRST — Playwright matches in
-  // registration order (last-registered wins for overlapping globs), so register
-  // the narrow pattern first to ensure the jobs route never intercepts it.
   await page.route('**/api/v1/admin/dead-letter-jobs/stats*', (route) =>
     route.fulfill({
       status: 200,
@@ -64,15 +53,8 @@ async function mockDependencies(page: Page) {
     })
   )
 
-  // Register the jobs list route after /stats to avoid it swallowing the stats URL.
-  // The handler guards against non-GET methods to allow retry/delete POSTs to pass through.
   await page.route('**/api/v1/admin/dead-letter-jobs*', (route) => {
-    if (route.request().method() !== 'GET') {
-      route.continue()
-      return
-    }
-    // Don't intercept /stats (belt-and-suspenders in case Playwright routing order flips)
-    if (route.request().url().includes('/stats')) {
+    if (route.request().method() !== 'GET' || route.request().url().includes('/stats')) {
       route.continue()
       return
     }
@@ -90,11 +72,18 @@ async function waitForTable(page: Page) {
 
 test.describe('DataTable resize — Admin Dead Letter Queue', () => {
   test.beforeEach(async ({ page }) => {
+    // Clear table-prefs on the FIRST navigation only — sessionStorage persists across
+    // reloads within a tab so we use it as a one-time flag.
     await page.addInitScript(() => {
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const key = localStorage.key(i)
-        if (key?.startsWith('bb:table-prefs:')) localStorage.removeItem(key)
+      if (!sessionStorage.getItem('e2e-prefs-cleared')) {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i)
+          if (key?.startsWith('bb:table-prefs:')) localStorage.removeItem(key)
+        }
+        sessionStorage.setItem('e2e-prefs-cleared', '1')
       }
+      // AdminRoute also checks localStorage 'boosted-admin-mode' === 'true'
+      localStorage.setItem('boosted-admin-mode', 'true')
     })
   })
 
@@ -107,7 +96,7 @@ test.describe('DataTable resize — Admin Dead Letter Queue', () => {
     expect(tableLayout).toBe('fixed')
   })
 
-  test('drag kind column; body cells track in sync', async ({ page }) => {
+  test('drag kind column; body cells track in sync (mid-drag)', async ({ page }) => {
     await mockDependencies(page)
     await page.goto('/admin/dead-letter')
     await waitForTable(page)
@@ -118,22 +107,13 @@ test.describe('DataTable resize — Admin Dead Letter Queue', () => {
     const handle = kindTh.locator('[data-testid="resize-handle"]')
     await expect(handle).toBeVisible()
 
-    // First body cell (kind column)
     const bodyCell = page.locator('table tbody tr').first().locator('td').first()
     const initialWidth = await bodyCell.evaluate((el) => el.getBoundingClientRect().width)
 
-    const handleBox = await handle.boundingBox()
-    expect(handleBox).not.toBeNull()
-    const startX = handleBox!.x + handleBox!.width / 2
-    const startY = handleBox!.y + handleBox!.height / 2
+    const { midWidth, finalWidth } = await dragHandleInPhases(page, handle, { dx: 60 })
 
-    await page.mouse.move(startX, startY)
-    await page.mouse.down()
-    await page.mouse.move(startX + 50, startY, { steps: 10 })
-    await page.mouse.up()
-
-    const newWidth = await bodyCell.evaluate((el) => el.getBoundingClientRect().width)
-    expect(newWidth).toBeGreaterThan(initialWidth + 30)
+    expect(midWidth).toBeGreaterThan(initialWidth + 10)
+    expect(finalWidth).toBeGreaterThan(initialWidth + 30)
   })
 
   test('resized width persists across reload', async ({ page }) => {

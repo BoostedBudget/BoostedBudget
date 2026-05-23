@@ -114,18 +114,42 @@ export async function isAuthenticated(page: Page): Promise<boolean> {
 }
 
 /**
- * Accept cookie consent banner (GDPR)
+ * Accept cookie consent banner (GDPR).
+ *
+ * Handles two call patterns:
+ *
+ * Pattern A — called BEFORE goto() (e.g. category-editor, savings):
+ *   page.addInitScript() pre-sets the cookie before the next navigation so the
+ *   banner never renders. The DOM-click fallback is a no-op (no page loaded yet).
+ *
+ * Pattern B — called AFTER goto() (e.g. landing page):
+ *   addInitScript() takes effect on future navigations only, so we also perform
+ *   a DOM-click to dismiss any banner already visible on the current page.
+ *   This also restores the implicit ~2 s timing buffer that the old implementation
+ *   provided (waiting for the banner) which gave the React app time to hydrate.
+ *
  * @param page - Playwright page object
  */
 export async function acceptCookieConsent(page: Page): Promise<void> {
+  // 1. Register init script for future navigations (Pattern A — before goto)
+  await page.addInitScript(() => {
+    const consent = {
+      consents: { necessary: true, analytics: false, advertising: false },
+      timestamp: '2026-01-01T00:00:00.000Z',
+      version: '2.0', // Must match COOKIE_CONSENT_VERSION in src/privacy/types.ts
+    }
+    document.cookie = `boostedbudget_cookie_consent=${encodeURIComponent(JSON.stringify(consent))}; path=/; SameSite=Strict`
+  })
+
+  // 2. Dismiss any banner already on the page (Pattern B — after goto)
   try {
-    const acceptButton = page.locator('button:has-text("Accept"), button:has-text("Accept All")');
+    const acceptButton = page.locator('button:has-text("Accept"), button:has-text("Accept All")')
     if (await acceptButton.isVisible({ timeout: 2000 })) {
-      await acceptButton.click();
-      await page.locator('[aria-label="Cookie Consent"]').waitFor({ state: 'hidden', timeout: 5_000 });
+      await acceptButton.click()
+      await page.locator('[aria-label="Cookie Consent"]').waitFor({ state: 'hidden', timeout: 5_000 })
     }
   } catch {
-    // Cookie banner not present or already accepted
+    // Cookie banner not present or already accepted — no action needed
   }
 }
 

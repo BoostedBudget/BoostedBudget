@@ -12,8 +12,18 @@ import { acceptCookieConsent } from './helpers/auth';
 
 test.describe('Landing Page - Unauthenticated', () => {
   test.beforeEach(async ({ page }) => {
+    // Extend per-test budget: Clerk SDK initialization under parallel worker load can
+    // exceed the global 15 s default, causing the beforeEach hook to be killed before
+    // the header appears.  60 s gives ample headroom without making CI excessively slow.
+    test.setTimeout(60000);
     // Navigate to home page as unauthenticated user
     await page.goto('/');
+    // Wait for the landing header to appear — proves Clerk and React have hydrated.
+    // Without this wait, intermittent flakiness occurs because page.goto() resolves
+    // at the browser 'load' event, before React renders the Clerk-dependent header.
+    // 50 s timeout: Clerk SDK initialization under parallel worker load occasionally
+    // takes much longer than expected (network + JS bundle parsing under load).
+    await page.locator('header[role="banner"]').waitFor({ state: 'visible', timeout: 50000 });
     await acceptCookieConsent(page);
   });
 
@@ -120,6 +130,13 @@ test.describe('Landing Page - Unauthenticated', () => {
       // The parent beforeEach already navigated to '/' — no need to navigate again.
       await page.reload();
       await page.waitForLoadState('domcontentloaded');
+      // Wait for the pricing section to render: the tiers API mock must respond and
+      // React must process it before assertions on pricing content will succeed.
+      // (domcontentloaded fires before async React state updates complete.)
+      await page.getByRole('heading', { name: /simple.*pricing/i }).waitFor({
+        state: 'visible',
+        timeout: 30000,
+      });
     });
 
     test('should display pricing section', async ({ page }) => {
@@ -261,6 +278,7 @@ test.describe('Landing Page - Unauthenticated', () => {
       });
       // Re-navigate with mock
       await page.goto('/');
+      await page.locator('header[role="banner"]').waitFor({ state: 'visible', timeout: 50000 });
       await acceptCookieConsent(page);
       await page.setViewportSize({ width: 1280, height: 720 });
 
