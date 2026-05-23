@@ -81,7 +81,7 @@ export function DeadLetterPage() {
   // Populate kind dropdown from stats
   const kindOptions = statsData?.by_kind ? Object.keys(statsData.by_kind) : []
 
-  const { columnVisibility, onColumnVisibilityChange } = useTablePreferences(
+  const { sizing, onSizingChange, columnVisibility, onColumnVisibilityChange } = useTablePreferences(
     'admin-dead-letter',
     [...ADMIN_DLQ_COLUMN_IDS]
   )
@@ -92,6 +92,9 @@ export function DeadLetterPage() {
     {
       id: 'kind',
       header: 'Kind',
+      resizable: true,
+      defaultSize: 180,
+      minSize: 120,
       render: (job) => (
         <span className="font-mono text-[0.8125rem] font-medium">{job.kind}</span>
       ),
@@ -100,6 +103,9 @@ export function DeadLetterPage() {
       id: 'queue',
       header: 'Queue',
       hideable: true,
+      defaultSize: 140,
+      minSize: 100,
+      maxSize: 200,
       render: (job) => (
         <span className="font-mono text-[0.8125rem] text-muted-foreground">{job.queue}</span>
       ),
@@ -107,6 +113,9 @@ export function DeadLetterPage() {
     {
       id: 'user_id',
       header: 'User ID',
+      resizable: true,
+      defaultSize: 220,
+      minSize: 160,
       render: (job) => (
         <span className="font-mono text-[0.8125rem] text-muted-foreground max-w-[140px] overflow-hidden text-ellipsis whitespace-nowrap block">
           {job.user_id ?? '—'}
@@ -116,6 +125,9 @@ export function DeadLetterPage() {
     {
       id: 'failed_at',
       header: 'Failed At',
+      defaultSize: 180,
+      minSize: 140,
+      maxSize: 220,
       render: (job) => (
         <span className="text-[0.8125rem] whitespace-nowrap">
           {new Date(job.failed_at).toLocaleString()}
@@ -125,6 +137,9 @@ export function DeadLetterPage() {
     {
       id: 'status',
       header: 'Status',
+      defaultSize: 120,
+      minSize: 90,
+      maxSize: 160,
       render: (job) => (
         <span
           className={cn(
@@ -141,7 +156,10 @@ export function DeadLetterPage() {
     {
       id: 'notes',
       header: 'Notes',
+      resizable: true,
       hideable: true,
+      defaultSize: 280,
+      minSize: 180,
       render: (job) => (
         <span className="text-[0.8125rem] text-muted-foreground max-w-[160px] overflow-hidden text-ellipsis whitespace-nowrap block">
           {job.notes
@@ -368,6 +386,8 @@ export function DeadLetterPage() {
             onRowClick={(job) => setSelectedJobId(job.id)}
             maskedColumnIds={['user_id', 'notes']}
             tableId="admin-dead-letter"
+            columnSizing={sizing}
+            onColumnSizingChange={onSizingChange}
             columnVisibility={columnVisibility}
             onColumnVisibilityChange={onColumnVisibilityChange}
             rowActions={(job) => (

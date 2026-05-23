@@ -140,7 +140,7 @@ export function UsersPage() {
   const users = data?.users ?? []
   const isEmpty = !isLoading && users.length === 0
 
-  const { columnVisibility, onColumnVisibilityChange } = useTablePreferences(
+  const { sizing, onSizingChange, columnVisibility, onColumnVisibilityChange } = useTablePreferences(
     'admin-users',
     [...ADMIN_USERS_COLUMN_IDS]
   )
@@ -151,7 +151,10 @@ export function UsersPage() {
     {
       id: 'email',
       header: 'Email',
+      resizable: true,
       defaultPinned: 'left',
+      defaultSize: 260,
+      minSize: 180,
       render: (user) => (
         <div className="flex items-center gap-1.5 font-medium">
           {user.email}
@@ -164,6 +167,9 @@ export function UsersPage() {
     {
       id: 'tier',
       header: 'Tier',
+      defaultSize: 110,
+      minSize: 90,
+      maxSize: 140,
       render: (user) => {
         const effectiveTier = user.manual_tier_override ?? user.subscription_tier
         return (
@@ -176,6 +182,9 @@ export function UsersPage() {
     {
       id: 'status',
       header: 'Status',
+      defaultSize: 110,
+      minSize: 90,
+      maxSize: 140,
       render: (user) => (
         <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium capitalize', statusBadgeClass(user.subscription_status))}>
           {STATUS_ICON[user.subscription_status]}
@@ -187,6 +196,9 @@ export function UsersPage() {
       id: 'override_status',
       header: 'Override Status',
       hideable: true,
+      defaultSize: 140,
+      minSize: 110,
+      maxSize: 180,
       render: (user) => {
         const overrideStatus = getOverrideStatus(user.manual_tier_override, user.manual_tier_ends_at)
         return overrideStatus ? (
@@ -202,6 +214,9 @@ export function UsersPage() {
       id: 'region',
       header: 'Region',
       hideable: true,
+      defaultSize: 110,
+      minSize: 90,
+      maxSize: 140,
       render: (user) => (
         <span className="font-mono text-[0.8125rem] text-muted-foreground">
           {getRegionWithFlag(user.primary_region)}
@@ -211,7 +226,11 @@ export function UsersPage() {
     {
       id: 'last_login',
       header: 'Last Login',
+      resizable: true,
       hideable: true,
+      defaultSize: 180,
+      minSize: 140,
+      maxSize: 220,
       render: (user) => formatDate(user.last_login_at),
     },
     {
@@ -220,6 +239,9 @@ export function UsersPage() {
       align: 'center',
       numeric: true,
       hideable: true,
+      defaultSize: 100,
+      minSize: 80,
+      maxSize: 130,
       key: 'linked_accounts_count',
     },
     {
@@ -228,6 +250,9 @@ export function UsersPage() {
       align: 'center',
       numeric: true,
       hideable: true,
+      defaultSize: 100,
+      minSize: 80,
+      maxSize: 130,
       key: 'automation_rules_count',
     },
     {
@@ -236,6 +261,9 @@ export function UsersPage() {
       align: 'center',
       numeric: true,
       hideable: true,
+      defaultSize: 110,
+      minSize: 80,
+      maxSize: 140,
       key: 'referrals_count',
     },
   ]
@@ -321,6 +349,8 @@ export function UsersPage() {
             onRowClick={(user) => setSelectedUserId(user.id)}
             maskedColumnIds={['email']}
             emptyState={<p className="py-12 px-4 text-center text-muted-foreground">No users found{hasActiveFilters ? '. Try adjusting your filters.' : '.'}</p>}
+            columnSizing={sizing}
+            onColumnSizingChange={onSizingChange}
             columnVisibility={columnVisibility}
             onColumnVisibilityChange={onColumnVisibilityChange}
             rowActions={(user) => (

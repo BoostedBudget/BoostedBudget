@@ -10,7 +10,7 @@ export type {
   RangeValue,
 } from './types'
 export { ResizeHandle } from './ResizeHandle'
-export { useColumnResize } from './useColumnResize'
+export { useKeyboardColumnResize } from './useKeyboardColumnResize'
 export { ColumnVisibilityMenu } from './ColumnVisibilityMenu'
 export { useTablePreferences } from './useTablePreferences'
 export type { UseTablePreferencesResult } from './useTablePreferences'

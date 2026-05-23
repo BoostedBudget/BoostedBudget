@@ -18,7 +18,7 @@ interface TopMerchantsTableProps {
 export const TOP_MERCHANTS_COLUMN_IDS = ['merchant_name', 'total', 'transaction_count', 'percentage'] as const
 
 const columns: ColumnDef<SpendingMerchant>[] = [
-  { id: 'merchant_name', header: 'Merchant', sortable: true, resizable: true, reorderable: true, key: 'merchant_name' },
+  { id: 'merchant_name', header: 'Merchant', sortable: true, resizable: true, reorderable: true, key: 'merchant_name', defaultSize: 280, minSize: 180 },
   {
     id: 'total',
     header: 'Total',
@@ -27,6 +27,9 @@ const columns: ColumnDef<SpendingMerchant>[] = [
     reorderable: true,
     align: 'right',
     numeric: true,
+    defaultSize: 160,
+    minSize: 120,
+    maxSize: 220,
     render: (row) => formatCurrencyFull(row.total),
   },
   {
@@ -38,6 +41,9 @@ const columns: ColumnDef<SpendingMerchant>[] = [
     hideable: true,
     align: 'right',
     numeric: true,
+    defaultSize: 160,
+    minSize: 120,
+    maxSize: 220,
     render: (row) => <span className="text-muted-foreground">{row.transaction_count}</span>,
   },
   {
@@ -48,6 +54,9 @@ const columns: ColumnDef<SpendingMerchant>[] = [
     reorderable: true,
     align: 'right',
     numeric: true,
+    defaultSize: 130,
+    minSize: 100,
+    maxSize: 180,
     render: (row) => <span className="text-muted-foreground">{row.percentage.toFixed(1)}%</span>,
   },
 ]

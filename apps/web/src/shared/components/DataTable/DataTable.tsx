@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { cva } from 'class-variance-authority'
 import { cn } from '@/lib/utils'
 import { TableHeaderCell } from '../TableHeaderCell'
@@ -7,6 +7,9 @@ import {
   useReactTable,
   getCoreRowModel,
   useVirtualizer,
+  type ColumnSizingState,
+  type OnChangeFn,
+  type TanStackHeader,
 } from '@/shared/lib/tanstack'
 import {
   DndContext,
@@ -24,7 +27,10 @@ import { CSS } from '@dnd-kit/utilities'
 import type { DataTableProps, SortState, SortDirection, ColumnDef } from './types'
 import { bbSortToTanStack } from './adapters/sortAdapter'
 import { bbFiltersToTanStack } from './adapters/filterAdapter'
-import { useColumnResize } from './useColumnResize'
+import { toTanStackSizingColumns } from './adapters/columnSizingAdapter'
+import { useKeyboardColumnResize } from './useKeyboardColumnResize'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { ResizeHandle } from './ResizeHandle'
 import { useColumnOrder } from './useColumnOrder'
 import { DragHandle } from './DragHandle'
@@ -44,7 +50,7 @@ const tableVariants = cva(
 )
 
 const headerCellVariants = cva(
-  'relative border-b border-border px-4 py-3 text-xs font-semibold uppercase tracking-[0.05em] text-muted-foreground',
+  'relative border-b border-border px-4 py-3 text-xs font-semibold text-muted-foreground',
   {
     variants: {
       align: { left: 'text-left', right: 'text-right', center: 'text-center' },
@@ -235,8 +241,40 @@ export function DataTable<T,>({
 }: DataTableProps<T>) {
   // totalCols is computed after visibleColumns below
 
-  const { sizing, isFinePointer, colRefs, getWidth, handleKeyDown, handlePointerDown } =
-    useColumnResize(controlledSizing, onColumnSizingChange, tableId)
+  const trackEvent = useTrackEvent()
+
+  // ── Column sizing state ──────────────────────────────────────────────────────
+  // TanStack owns all sizing state. For uncontrolled tables we hold internal state
+  // here; for controlled tables the parent owns it via controlledSizing.
+  const [internalColumnSizing, setInternalColumnSizing] = useState<ColumnSizingState>({})
+  const isColumnSizingControlled = controlledSizing !== undefined
+  const columnSizing = useMemo(
+    () => (isColumnSizingControlled ? (controlledSizing ?? {}) : internalColumnSizing),
+    [isColumnSizingControlled, controlledSizing, internalColumnSizing]
+  )
+
+  // Bridge: TanStack passes Updater<ColumnSizingState> (function OR value); our
+  // public API and useColumnResize both expect plain values. Resolve here.
+  const handleColumnSizingChange: OnChangeFn<ColumnSizingState> = useCallback(
+    (updater) => {
+      const next = typeof updater === 'function' ? updater(columnSizing) : updater
+      if (isColumnSizingControlled) {
+        onColumnSizingChange?.(next)
+      } else {
+        setInternalColumnSizing(next)
+      }
+    },
+    [columnSizing, isColumnSizingControlled, onColumnSizingChange]
+  )
+
+  // Bridge: keyboard resize writes plain values; same bridge as pointer drag.
+  const handleColumnSizingValue = useCallback(
+    (sizing: Record<string, number>) => handleColumnSizingChange(sizing),
+    [handleColumnSizingChange]
+  )
+
+  const { isFinePointer, colRefs, getWidth, handleKeyDown } =
+    useKeyboardColumnResize(columnSizing, handleColumnSizingValue, tableId)
 
   const {
     orderedColumns,
@@ -260,15 +298,6 @@ export function DataTable<T,>({
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
-  // Stable ref for <col> element lookups during pointer drag
-  const colElRefs = useRef<Map<string, HTMLTableColElement | null>>(new Map())
-  function setColRef(columnId: string) {
-    return (el: HTMLTableColElement | null) => {
-      colElRefs.current.set(columnId, el)
-      colRefs.current.set(columnId, el)
-    }
-  }
-
   const handleSort = useCallback(
     (colId: string, _dirFromCell: SortDirection) => {
       const currentSort = sort as SortState
@@ -290,43 +319,83 @@ export function DataTable<T,>({
     [filters, onFiltersChange]
   )
 
+  // Column sizing adapter: build TanStack ColumnDef[] carrying only sizing metadata.
+  // Rendering still uses our own <td> markup (never flexRender) to keep data-ph-mask in our control.
+  const tanstackColumns = useMemo(() => toTanStackSizingColumns(columns), [columns])
+
   // Wire up TanStack's useReactTable for state management.
   // manualSorting/manualFiltering/manualPagination = true → we own data fetching.
-  // We still render our own <td> markup (never flexRender) to keep data-ph-mask in our control.
-  // Sort and filter events are owned by handleSort/handleFilterChange above (not TanStack's
-  // onChange callbacks) — this preserves the data-ph-mask guarantee on <td> and the
-  // controlled server-state contract. TanStack state is kept in sync via the state: { sorting, columnFilters } props.
+  // columnResizeMode: 'onChange' → body cells track header drag live.
   const table = useReactTable({
     data,
-    columns: [],
+    columns: tanstackColumns,
     getCoreRowModel: getCoreRowModel(),
     manualSorting: true,
     manualFiltering: true,
     manualPagination: true,
+    columnResizeMode: 'onChange',
     state: {
       sorting: bbSortToTanStack(sort),
       columnFilters: bbFiltersToTanStack(filters),
+      columnSizing,
     },
+    onColumnSizingChange: handleColumnSizingChange,
+    enableColumnResizing: true,
   })
 
   // Use TanStack's row model for iteration — row.original gives back the typed T.
   const rows = table.getRowModel().rows
 
   const scrollRef = useRef<HTMLDivElement>(null)
+  const isVirtualizationEnabled = virtualization?.enabled ?? false
 
   const virtualizer = useVirtualizer({
-    count: virtualization?.enabled ? rows.length : 0,
-    getScrollElement: () => (virtualization?.enabled ? scrollRef.current : null),
+    count: isVirtualizationEnabled ? rows.length : 0,
+    getScrollElement: () => (isVirtualizationEnabled ? scrollRef.current : null),
     estimateSize: () => virtualization?.estimateRowHeight ?? 40,
     overscan: virtualization?.overscan ?? 8,
     measureElement:
-      virtualization?.enabled && virtualization.dynamicRowHeight !== false
+      isVirtualizationEnabled && virtualization?.dynamicRowHeight !== false
         ? (el: Element) => el.getBoundingClientRect().height
         : undefined,
-    enabled: virtualization?.enabled ?? false,
+    enabled: isVirtualizationEnabled,
   })
 
   const virtualItems = virtualizer.getVirtualItems()
+
+  // Track resize-end to remeasure virtualizer once (avoid scroll jumps from measure() on every pointermove)
+  const wasResizingRef = useRef(false)
+  const isResizing = Boolean(table.getState().columnSizingInfo?.isResizingColumn)
+  useEffect(() => {
+    if (!virtualization?.enabled || virtualization.dynamicRowHeight === false) return
+    if (wasResizingRef.current && !isResizing) {
+      const frame = requestAnimationFrame(() => virtualizer.measure())
+      wasResizingRef.current = false
+      return () => cancelAnimationFrame(frame)
+    }
+    if (isResizing) wasResizingRef.current = true
+  }, [isResizing, virtualization?.enabled, virtualization?.dynamicRowHeight, virtualizer])
+
+  // Set data-resizing on <html> to prevent cursor flicker during drag (via index.css rule)
+  useEffect(() => {
+    if (isResizing) {
+      document.documentElement.dataset.resizing = ''
+    } else {
+      delete document.documentElement.dataset.resizing
+    }
+    return () => { delete document.documentElement.dataset.resizing }
+  }, [isResizing])
+
+  // Fire PostHog event on pointer-drag resize completion (when isResizing: true → false)
+  const resizingColumnRef = useRef<string | undefined>(undefined)
+  const resizingColumn = table.getState().columnSizingInfo?.isResizingColumn
+  useEffect(() => {
+    if (typeof resizingColumn === 'string') resizingColumnRef.current = resizingColumn
+    if (!isResizing && resizingColumnRef.current !== undefined) {
+      trackEvent(ANALYTICS_EVENTS.DATATABLE_COLUMN_RESIZED, { tableId, columnId: resizingColumnRef.current })
+      resizingColumnRef.current = undefined
+    }
+  }, [isResizing, resizingColumn, trackEvent, tableId])
 
   const scrollEndFiredRef = useRef(false)
   useEffect(() => {
@@ -341,8 +410,16 @@ export function DataTable<T,>({
     }
   }, [virtualItems, rows.length, virtualization])
 
-
   const headerIsSticky = stickyHeader === true || virtualization?.enabled === true
+
+  // Rebuild map on sizing change so header.getSize() / header.getResizeHandler() stay fresh
+  const tanstackHeaderMap = useMemo(() => {
+    const map = new Map<string, TanStackHeader<T, unknown>>()
+    for (const h of table.getFlatHeaders()) {
+      map.set(h.id, h)
+    }
+    return map
+  }, [table, columnSizing]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Shared thead renderer (used by both virtualized and non-virtualized paths)
   const theadEl = (
@@ -361,17 +438,21 @@ export function DataTable<T,>({
               isFinePointerDnd={isFinePointerDnd}
               onDragHandleKeyDown={handleDragHandleKeyDown}
               headerContent={renderHeaderContent(col, sort, filters, handleSort, handleFilterChange)}
-              resizeHandle={col.resizable ? (
-                <ResizeHandle
-                  columnId={col.id}
-                  currentWidth={getWidth(col.id, col.defaultSize)}
-                  isCoarsePointer={!isFinePointer}
-                  onKeyDown={(e) => handleKeyDown(e, col.id, col.defaultSize)}
-                  onPointerDown={(e) =>
-                    handlePointerDown(e, col.id, colElRefs.current.get(col.id) ?? null)
-                  }
-                />
-              ) : null}
+              resizeHandle={col.resizable ? (() => {
+                const header = tanstackHeaderMap.get(col.id)
+                return (
+                  <ResizeHandle
+                    columnId={col.id}
+                    currentWidth={header?.getSize() ?? getWidth(col.id, col.defaultSize)}
+                    isCoarsePointer={!isFinePointer}
+                    isResizing={header?.column.getIsResizing() ?? false}
+                    minSize={col.minSize}
+                    maxSize={col.maxSize}
+                    onKeyDown={(e) => handleKeyDown(e, col.id, col.defaultSize, col.minSize, col.maxSize)}
+                    onPointerDown={header ? (header.getResizeHandler() as (e: React.PointerEvent) => void) : () => {}}
+                  />
+                )
+              })() : null}
             />
           ))}
           {rowActions && (
@@ -450,16 +531,20 @@ export function DataTable<T,>({
     )
   }
 
-  // Shared colgroup
+  // Build a lookup from column id → TanStack header for getSize() calls.
+  // Shared colgroup — every <col> gets an explicit width so table-layout: fixed works.
   const colgroupEl = (
     <colgroup>
-      {visibleColumns.map((col) => (
-        <col
-          key={col.id}
-          ref={setColRef(col.id)}
-          style={sizing[col.id] ? { width: `${sizing[col.id]}px` } : undefined}
-        />
-      ))}
+      {visibleColumns.map((col) => {
+        const width = tanstackHeaderMap.get(col.id)?.getSize() ?? col.defaultSize ?? 150
+        return (
+          <col
+            key={col.id}
+            ref={(el) => { if (el) colRefs.current.set(col.id, el) }}
+            style={{ width: `${width}px` }}
+          />
+        )
+      })}
       {rowActions && <col style={{ width: '96px' }} />}
     </colgroup>
   )
@@ -477,13 +562,15 @@ export function DataTable<T,>({
         <div aria-live="polite" aria-atomic="true" className="sr-only">
           {liveText}
         </div>
-        {hasHideableColumns && onColumnVisibilityChange && (
+        {((hasHideableColumns && onColumnVisibilityChange) || onColumnSizingChange) && (
           <div className="flex items-center justify-end">
             <ColumnVisibilityMenu
               columns={columns}
               visibility={columnVisibility}
-              onChange={onColumnVisibilityChange}
+              onChange={onColumnVisibilityChange ?? (() => {})}
               tableId={tableId}
+              columnSizing={columnSizing}
+              onResetSizing={onColumnSizingChange ? () => onColumnSizingChange({}) : undefined}
             />
           </div>
         )}
@@ -499,7 +586,7 @@ export function DataTable<T,>({
             <table
               className={cn(tableVariants({ loading: loading && !showSkeleton }), className)}
               aria-busy={loading ? true : undefined}
-              style={{ width: '100%', borderCollapse: 'collapse' }}
+              style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}
             >
               {caption && (
                 <caption className="caption-top text-left text-sm font-semibold text-foreground mb-2">
@@ -555,6 +642,7 @@ export function DataTable<T,>({
                 {/* Sentinel row — always rendered at bottom of virtual space */}
                 {(virtualization.isFetchingMore || virtualization.hasMore) && (
                   <tr
+                    aria-hidden="true"
                     style={{
                       position: 'absolute',
                       top: 0,
@@ -580,6 +668,7 @@ export function DataTable<T,>({
           <table
             className={cn(tableVariants({ loading: loading && !showSkeleton }), className)}
             aria-busy={loading ? true : undefined}
+            style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}
           >
             {caption && (
               <caption className="caption-top text-left text-sm font-semibold text-foreground mb-2">

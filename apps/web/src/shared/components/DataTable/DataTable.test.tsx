@@ -1,5 +1,5 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DataTable } from './DataTable'
 import type { ColumnDef, SortState, FilterState } from './types'
@@ -46,7 +46,6 @@ function renderTable(overrides: Partial<{
   )
 }
 
-// ── Critical Regression Test 1 ───────────────────────────────────────────────
 describe('sort — asc → desc → null lifecycle', () => {
   it('emits asc on first click, desc on second, null on third; sets aria-sort on th', () => {
     const onSortChange = noopSort()
@@ -109,7 +108,6 @@ describe('sort — asc → desc → null lifecycle', () => {
   })
 })
 
-// ── Critical Regression Test 2 ───────────────────────────────────────────────
 describe('multi-select filter', () => {
   it('emits string[] payload keyed by column id via onFiltersChange', async () => {
     const onFiltersChange = noopFilters()
@@ -183,7 +181,6 @@ describe('multi-select filter', () => {
   })
 })
 
-// ── Critical Regression Test 3 ───────────────────────────────────────────────
 describe('range filter', () => {
   it('emits { min, max } payload keyed by column id via onFiltersChange', async () => {
     const onFiltersChange = noopFilters()
@@ -217,7 +214,6 @@ describe('range filter', () => {
   })
 })
 
-// ── Critical Regression Test 4 ───────────────────────────────────────────────
 describe('maskedColumnIds', () => {
   it('applies data-ph-mask only to specified column tds, not others', () => {
     const { container } = renderTable({ maskedColumnIds: ['amount'] })
@@ -247,7 +243,6 @@ describe('maskedColumnIds', () => {
   })
 })
 
-// ── Critical Regression Test 5 ───────────────────────────────────────────────
 describe('empty state', () => {
   it('renders emptyState inside tbody with colSpan = columns + rowActions column', () => {
     render(
@@ -292,7 +287,6 @@ describe('empty state', () => {
   })
 })
 
-// ── Critical Regression Test 6 ───────────────────────────────────────────────
 describe('rowActions', () => {
   it('td stops propagation so onRowClick does not fire when action is clicked', () => {
     const onRowClick = mock((_: Row) => {})
@@ -337,7 +331,6 @@ describe('rowActions', () => {
   })
 })
 
-// ── Critical Regression Test 7 ───────────────────────────────────────────────
 describe('custom ReactNode header', () => {
   it('renders ReactNode header content directly in th', () => {
     const columns: ColumnDef<Row>[] = [
@@ -364,7 +357,6 @@ describe('custom ReactNode header', () => {
   })
 })
 
-// ── Additional coverage ───────────────────────────────────────────────────────
 describe('caption', () => {
   it('renders caption element when caption prop is provided', () => {
     const { container } = renderTable({ caption: 'My Table' })
@@ -462,7 +454,6 @@ describe('onRowClick', () => {
   })
 })
 
-// ── Phase 1 Addition: PII mask retention ─────────────────────────────────────
 describe('maskedColumnIds data-ph-mask attribute', () => {
   it('column with render function + in maskedColumnIds → td has data-ph-mask', () => {
     const columns: ColumnDef<Row>[] = [
@@ -520,7 +511,6 @@ describe('maskedColumnIds data-ph-mask attribute', () => {
   })
 })
 
-// ── Phase 1 Addition: rowSelection API skeleton ───────────────────────────────
 describe('rowSelection prop', () => {
   it('DataTable without rowSelection renders no checkbox column', () => {
     const { container } = renderTable()
@@ -539,11 +529,6 @@ describe('rowSelection prop', () => {
   })
 })
 
-// ── Critical Regression Test 8 ───────────────────────────────────────────────
-// Server-side filter boundary contract: DataTable never calls APIs.
-// It only emits via onFiltersChange — parents decide whether that triggers
-// a server refetch or an in-memory filter. This test locks the boundary so
-// a future refactor cannot accidentally add a fetch() inside DataTable.
 describe('server-side filter boundary', () => {
   it('does not call fetch when filters change — only emits via onFiltersChange', async () => {
     const fetchSpy = mock(() => Promise.resolve(new Response('{}', { status: 200 })))
@@ -597,7 +582,6 @@ describe('server-side filter boundary', () => {
   })
 })
 
-// Phase 3a: Column Resize
 describe('column resize', () => {
   const resizableColumns: ColumnDef<Row>[] = [
     { id: 'name', header: 'Name', key: 'name', resizable: true },
@@ -816,12 +800,8 @@ describe('column resize', () => {
     expect(onColumnSizingChange).toHaveBeenCalledWith({ name: 208 })
   })
 
-  // TODO: PostHog event on resize -- skip in automated tests (PostHog not configured in test infra).
-  // Manual verification: confirm `column_resized` event fires with { column_id, new_width } in
-  // PostHog dashboard after dragging or keyboard-resizing a column header in staging/prod.
 })
 
-// Phase 3b: Column Reorder
 describe('column reorder', () => {
   const reorderableColumns: ColumnDef<Row>[] = [
     { id: 'name', header: 'Name', key: 'name', reorderable: true },
@@ -1071,7 +1051,6 @@ describe('column reorder', () => {
   })
 })
 
-// Phase 3d: Column Visibility
 describe('column visibility', () => {
   const visibilityColumns: ColumnDef<Row>[] = [
     { id: 'name', header: 'Name', key: 'name', hideable: true },
@@ -1247,7 +1226,6 @@ describe('column visibility', () => {
   })
 })
 
-// Phase 3d: Density
 describe('density', () => {
   it('density="compact" applies compact padding classes to body cells', () => {
     const { container } = renderTable({ density: 'compact' })
@@ -1273,7 +1251,6 @@ describe('density', () => {
   })
 })
 
-// Phase 3c: Column Pin
 describe('column pin', () => {
   const pinnedColumns: ColumnDef<Row>[] = [
     { id: 'name', header: 'Name', key: 'name', defaultPinned: 'left' },
@@ -1414,7 +1391,6 @@ describe('column pin', () => {
   })
 })
 
-// ── Phase G1/RC2: columnheader a11y-name ─────────────────────────────────────
 describe('columnheader accessible name (RC2 — DragHandle pollution fix)', () => {
   it('reorderable+sortable column: getByRole columnheader finds header by exact column label', () => {
     render(
@@ -1453,7 +1429,6 @@ describe('columnheader accessible name (RC2 — DragHandle pollution fix)', () =
   })
 })
 
-// ── Phase G1/D2b: DragHandle column-specific accessible names ─────────────────
 describe('DragHandle column-specific accessible names (D2b — Codex finding)', () => {
   const multiReorderColumns: ColumnDef<Row>[] = [
     { id: 'name', header: 'Account', sortable: true, reorderable: true, key: 'name' },
@@ -1496,13 +1471,7 @@ describe('DragHandle column-specific accessible names (D2b — Codex finding)', 
   })
 })
 
-// ── Task I: Row Virtualization ────────────────────────────────────────────────
 describe('DataTable virtualization', () => {
-  // JSDOM doesn't implement real layout.
-  // @tanstack/react-virtual reads offsetHeight (via getRect) synchronously on mount
-  // to determine the visible viewport size. Without mocking it, outerSize = 0 and
-  // the virtualizer renders nothing. We also mock getBoundingClientRect for
-  // measureElement (dynamic row heights).
   const originalGetBCR = Element.prototype.getBoundingClientRect
   let offsetHeightDesc: PropertyDescriptor | undefined
   let offsetWidthDesc: PropertyDescriptor | undefined
@@ -1761,7 +1730,6 @@ describe('DataTable virtualization', () => {
   })
 })
 
-// ── skeletonRows ──────────────────────────────────────────────────────────────
 describe('skeletonRows', () => {
   const pinnedColumns: ColumnDef<Row>[] = [
     { id: 'name', header: 'Name', key: 'name', defaultPinned: 'left' },
@@ -1943,7 +1911,6 @@ describe('skeletonRows', () => {
   })
 })
 
-// ── Task C: stickyHeader and stickyHeaderTopOffset ────────────────────────────
 describe('sticky header', () => {
   it('thead has no sticky classes when stickyHeader is omitted', () => {
     const { container } = renderTable()
@@ -2012,5 +1979,158 @@ describe('sticky header', () => {
     const { container } = renderTable({ stickyHeader: false })
     const thead = container.querySelector('thead')!
     expect(thead.className).not.toContain('sticky')
+  })
+})
+
+describe('column sizing', () => {
+  const sizingColumns: ColumnDef<Row>[] = [
+    { id: 'name', header: 'Name', key: 'name', defaultSize: 200, minSize: 100, maxSize: 400, resizable: true },
+    { id: 'amount', header: 'Amount', key: 'amount', defaultSize: 120, numeric: true },
+  ]
+
+  it('<table> has tableLayout fixed on non-virtualized path', () => {
+    const { container } = renderTable({ columns: sizingColumns })
+    const table = container.querySelector('table') as HTMLTableElement
+    expect(table.style.tableLayout).toBe('fixed')
+  })
+
+  it('header cells have no text-transform uppercase (Title Case, not ALLCAPS)', () => {
+    const { container } = renderTable({ columns: sizingColumns })
+    const th = container.querySelector('thead th') as HTMLElement
+    // jsdom doesn't apply external CSS, but className must not contain 'uppercase'
+    expect(th.className).not.toContain('uppercase')
+  })
+
+  it('each <col> gets an explicit width when defaultSize is set', () => {
+    const { container } = renderTable({ columns: sizingColumns })
+    const cols = container.querySelectorAll('col')
+    // 2 data columns; no rowActions
+    expect(cols.length).toBe(2)
+    expect((cols[0] as HTMLElement).style.width).toBe('200px')
+    expect((cols[1] as HTMLElement).style.width).toBe('120px')
+  })
+
+  it('controlled columnSizing overrides defaultSize in <col> width', () => {
+    const { container } = renderTable({
+      columns: sizingColumns,
+      columnSizing: { name: 280 },
+      onColumnSizingChange: mock(() => {}),
+    })
+    const cols = container.querySelectorAll('col')
+    expect((cols[0] as HTMLElement).style.width).toBe('280px')
+    // amount not in columnSizing → falls back to defaultSize
+    expect((cols[1] as HTMLElement).style.width).toBe('120px')
+  })
+
+  it('columns without resizable:true do not get a resize handle', () => {
+    const { container } = renderTable({ columns: sizingColumns })
+    const resizeHandles = container.querySelectorAll('[data-testid="resize-handle"]')
+    // only 'name' has resizable:true → 1 handle
+    expect(resizeHandles.length).toBe(1)
+  })
+
+  it('keyboard resize calls onColumnSizingChange with a plain value (bridge resolves updaters)', () => {
+    const onColumnSizingChange = mock((_: Record<string, number>) => {})
+    const { container } = renderTable({
+      columns: sizingColumns,
+      columnSizing: { name: 200 },
+      onColumnSizingChange,
+    })
+    const handle = container.querySelector('[data-testid="resize-handle"]') as HTMLElement
+    expect(handle).not.toBeNull()
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    expect(onColumnSizingChange.mock.calls.length).toBe(1)
+    const called = onColumnSizingChange.mock.calls[0][0]
+    // Must be a plain object (bridge resolved any function updater before forwarding)
+    expect(typeof called).toBe('object')
+    expect(called).not.toBeNull()
+    expect(typeof (called as Record<string, unknown>).name).toBe('number')
+  })
+
+  it('pointer-drag resize calls onColumnSizingChange with a plain object (function-updater bridge)', async () => {
+    // TanStack passes a function updater to onColumnSizingChange during pointer-drag
+    // (columnResizeMode: 'onChange'). Our bridge must resolve it before forwarding so
+    // consumers always receive a plain ColumnSizingState, never a stale function.
+    const onColumnSizingChange = mock((_: Record<string, number>) => {})
+    const { container } = renderTable({
+      columns: sizingColumns,
+      columnSizing: { name: 200 },
+      onColumnSizingChange,
+    })
+    const handle = container.querySelector('[data-testid="resize-handle"]') as HTMLElement
+    expect(handle).not.toBeNull()
+
+    await act(async () => { fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 }) })
+    await act(async () => { fireEvent.mouseMove(document, { clientX: 150 }) })
+    await act(async () => { fireEvent.mouseUp(document, { clientX: 150 }) })
+
+    // At least one call to consumer's onColumnSizingChange
+    expect(onColumnSizingChange.mock.calls.length).toBeGreaterThan(0)
+    for (const call of onColumnSizingChange.mock.calls) {
+      const arg = call[0]
+      // Must always be a plain object, never a function
+      expect(typeof arg).toBe('object')
+      expect(arg).not.toBeNull()
+      expect(typeof arg).not.toBe('function')
+      // Must contain the column id we dragged
+      expect(typeof (arg as Record<string, unknown>).name).toBe('number')
+    }
+  })
+
+  it('conditional column toggle preserves sizing of unchanged columns', () => {
+    // Simulates RuleTable pattern: a `select` column is conditionally prepended.
+    // When it appears/disappears, columns that remain (e.g. `name`) should retain
+    // their persisted sizing — TanStack keys by id, so rebuilt defs don't reset widths.
+    const baseColsForToggle: ColumnDef<Row>[] = [
+      { id: 'name', header: 'Name', key: 'name', defaultSize: 200, resizable: true },
+    ]
+    const selectCol: ColumnDef<Row> = { id: 'select', header: '', key: 'id', defaultSize: 48, minSize: 48, maxSize: 48 }
+
+    const sizing: Record<string, number> = { name: 300 }
+    const onColumnSizingChange = mock((_: Record<string, number>) => {})
+
+    // Render without select column
+    const { container, rerender } = render(
+      <DataTable<Row>
+        data={rows}
+        columns={baseColsForToggle}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnSizing={sizing}
+        onColumnSizingChange={onColumnSizingChange}
+      />
+    )
+
+    // Verify initial width
+    const colsBefore = container.querySelectorAll('col')
+    expect((colsBefore[0] as HTMLElement).style.width).toBe('300px')
+
+    // Toggle: add select column
+    rerender(
+      <DataTable<Row>
+        data={rows}
+        columns={[selectCol, ...baseColsForToggle]}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnSizing={sizing}
+        onColumnSizingChange={onColumnSizingChange}
+      />
+    )
+
+    const colsAfter = container.querySelectorAll('col')
+    expect(colsAfter.length).toBe(2)
+
+    // useColumnOrder appends new columns at the end of the current order,
+    // so after toggling [select, name] the rendered order is [name, select].
+    // The key guarantee: `name`'s persisted sizing (300px) is unaffected.
+    const widths = Array.from(colsAfter).map((col) => (col as HTMLElement).style.width)
+    expect(widths).toContain('300px') // name column still has its persisted width
+    expect(widths).toContain('48px')  // select column uses its defaultSize
   })
 })

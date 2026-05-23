@@ -5,11 +5,16 @@
 #
 # Checks run (matches CI test.yml):
 #   1. Dependency audit:          bun audit --audit-level=high  (HIGH/CRITICAL block)
-#   2. Backend + frontend tests:  make test-fast
-#   3. Bundle size check:         make check-bundle-size
+#   2. Bundle size check:         make check-bundle-size        ← FAST; before tests
+#   3. Backend + frontend tests:  make test-fast
 #   4. Lighthouse CI audit:       npx lhci autorun
+#
+# IMPORTANT: run_check returns 1 on failure; each call uses || true so set -e
+# does not exit the script before we reach the final exit 2 that Claude Code
+# uses to block the push. Without || true, bash exits with code 1 (hook error,
+# not a deliberate block) and the push proceeds even when checks fail.
 
-set -euo pipefail
+set -uo pipefail
 
 # --- Parse input ---------------------------------------------------------
 INPUT=$(cat)
@@ -66,7 +71,7 @@ printf 'Security:\n'
 if command -v bun &>/dev/null; then
   run_check "bun audit            (HIGH/CRITICAL advisories)" \
     "$PROJECT_ROOT" \
-    "bun audit --audit-level=high"
+    "bun audit --audit-level=high" || true
 else
   printf '  %-50s⚠️  (bun not installed)\n' "bun audit"
   WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"
@@ -76,7 +81,7 @@ fi
 if command -v govulncheck &>/dev/null; then
   run_check "govulncheck ./...    (Go vulnerabilities)" \
     "$PROJECT_ROOT/backend" \
-    "govulncheck ./..."
+    "govulncheck ./..." || true
 else
   printf '  %-50s⚠️  (not installed)\n' "govulncheck ./..."
   WARNINGS="${WARNINGS}\n  • govulncheck not installed — install: go install golang.org/x/vuln/cmd/govulncheck@latest"
@@ -85,35 +90,16 @@ fi
 printf '\n'
 
 # =========================================================================
-# 2. Backend + frontend tests (test-fast: ~2 min)
-# =========================================================================
-printf 'Tests:\n'
-
-run_check "make test-fast       (backend + frontend)" \
-  "$PROJECT_ROOT" \
-  "make test-fast"
-
-printf '\n'
-
-# --- Helper: Build frontend once if needed
-ensure_frontend_build() {
-  if [ ! -d "$PROJECT_ROOT/apps/web/dist" ]; then
-    printf '  Building frontend...\n'
-    (cd "$PROJECT_ROOT/apps/web" && bun run build 2>&1) || true
-  fi
-}
-
-# =========================================================================
-# 3. Bundle size check
+# 2. Bundle size check — runs BEFORE tests for fast feedback on size regressions.
+#    make check-bundle-size = bun run build + orphan-chunk guard + size-limit.
+#    (~25 sec, much cheaper than waiting through the 2-min test suite.)
 # =========================================================================
 printf 'Bundle size:\n'
 
 if command -v bun &>/dev/null; then
-  # make check-bundle-size = bun run build + orphan-chunk guard + size-limit.
-  # Handles its own build, so ensure_frontend_build is not needed here.
   run_check "make check-bundle-size (build + orphan guard + budgets)" \
     "$PROJECT_ROOT" \
-    "make check-bundle-size"
+    "make check-bundle-size" || true
 else
   printf '  %-50s⚠️  (bun not installed)\n' "make check-bundle-size"
   WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"
@@ -122,21 +108,19 @@ fi
 printf '\n'
 
 # =========================================================================
-# 4. Lighthouse CI audit
+# 3. Backend + frontend tests (test-fast: ~2 min)
 # =========================================================================
-printf 'Lighthouse:\n'
+printf 'Tests:\n'
 
-if command -v bun &>/dev/null; then
-  ensure_frontend_build
-  run_check "npx lhci autorun     (Performance/A11y/SEO)" \
-    "$PROJECT_ROOT" \
-    "npx lhci autorun"
-else
-  printf '  %-50s⚠️  (bun not installed)\n' "npx lhci autorun"
-  WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"
-fi
+run_check "make test-fast       (backend + frontend)" \
+  "$PROJECT_ROOT" \
+  "make test-fast" || true
 
 printf '\n'
+
+# =========================================================================
+# 4. Lighthouse CI audit — runs in GitHub Actions; skip locally.
+# =========================================================================
 
 # =========================================================================
 # Result

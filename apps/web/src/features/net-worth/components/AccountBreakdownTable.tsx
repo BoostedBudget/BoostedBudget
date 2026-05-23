@@ -154,6 +154,8 @@ function AccountSection({
       sortable: true,
       resizable: true,
       reorderable: true,
+      defaultSize: 220,
+      minSize: 140,
       key: 'institutionName',
       filter:
         institutionOptions && onInstitutionFilterChange
@@ -171,6 +173,8 @@ function AccountSection({
       sortable: true,
       resizable: true,
       reorderable: true,
+      defaultSize: 240,
+      minSize: 160,
       key: 'name',
     },
     {
@@ -180,6 +184,9 @@ function AccountSection({
       resizable: true,
       reorderable: true,
       hideable: true,
+      defaultSize: 140,
+      minSize: 100,
+      maxSize: 200,
       render: (row) => (
         <span className="text-muted-foreground capitalize">{row.type}</span>
       ),
@@ -196,6 +203,9 @@ function AccountSection({
       reorderable: true,
       align: 'right',
       numeric: true,
+      defaultSize: 160,
+      minSize: 120,
+      maxSize: 220,
       render: (row) => formatCurrency(row.currentBalance, row.currencyCode),
       filter: onBalanceRangeChange ? { type: 'range' } : undefined,
     },
@@ -207,6 +217,9 @@ function AccountSection({
       reorderable: true,
       align: 'right',
       numeric: true,
+      defaultSize: 110,
+      minSize: 90,
+      maxSize: 140,
       render: (row) => (
         <span
           data-testid={`breakdown-percent-${row.id}`}

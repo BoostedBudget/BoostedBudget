@@ -221,7 +221,8 @@ export function AutoCategorizationRuleTable({
       resizable: true,
       reorderable: true,
       sortAccessor: (r) => r.name,
-      widthClass: 'min-w-[180px] max-md:min-w-[150px]',
+      defaultSize: 220,
+      minSize: 160,
       render: (r) => (
         <div className="flex flex-col gap-1">
           <span className="font-medium text-foreground">{r.name}</span>
@@ -244,6 +245,9 @@ export function AutoCategorizationRuleTable({
       resizable: true,
       reorderable: true,
       defaultPinned: 'left' as const,
+      defaultSize: 120,
+      minSize: 90,
+      maxSize: 160,
       sortAccessor: (r) => (r.enabled ? 'enabled' : 'disabled'),
       filter: statusOptions
         ? { type: 'select', options: statusOptions, multiSelect: true }
@@ -269,6 +273,9 @@ export function AutoCategorizationRuleTable({
       sortAccessor: (r) => r.priority,
       align: 'center' as const,
       numeric: true,
+      defaultSize: 110,
+      minSize: 80,
+      maxSize: 140,
       key: 'priority' as keyof CategorizationRule,
       filter: onPriorityRangeChange ? { type: 'range' as const } : undefined,
     },
@@ -277,6 +284,9 @@ export function AutoCategorizationRuleTable({
       header: 'Conditions',
       resizable: true,
       reorderable: true,
+      defaultSize: 160,
+      minSize: 120,
+      maxSize: 220,
       render: (r) => formatConditions(r.conditions, r.condition_logic),
     },
     {
@@ -286,7 +296,9 @@ export function AutoCategorizationRuleTable({
       resizable: true,
       reorderable: true,
       sortAccessor: (r) => getCategoryLabel(r),
-      widthClass: 'min-w-[150px]',
+      defaultSize: 200,
+      minSize: 150,
+      maxSize: 280,
       filter: categoryOptions
         ? { type: 'select', options: categoryOptions, multiSelect: true, searchable: true }
         : undefined,
@@ -315,6 +327,9 @@ export function AutoCategorizationRuleTable({
       reorderable: true,
       hideable: true,
       sortAccessor: (r) => r.match_count,
+      defaultSize: 110,
+      minSize: 80,
+      maxSize: 140,
       key: 'match_count' as keyof CategorizationRule,
     },
   ], [sortable, statusOptions, categoryOptions, onPriorityRangeChange])

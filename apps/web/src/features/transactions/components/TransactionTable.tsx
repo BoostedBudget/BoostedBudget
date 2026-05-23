@@ -139,9 +139,11 @@ export function TransactionTable({
       sortable,
       resizable: true,
       reorderable: true,
-      widthClass: 'whitespace-nowrap',
+      defaultSize: 110,
+      minSize: 90,
+      maxSize: 160,
       render: (row) => (
-        <span className="text-muted-foreground">
+        <span className="whitespace-nowrap text-muted-foreground">
           {formatDate(row.authorized_date || row.date)}
         </span>
       ),
@@ -152,7 +154,8 @@ export function TransactionTable({
       sortable,
       resizable: true,
       reorderable: true,
-      widthClass: 'min-w-[200px] max-md:min-w-[150px]',
+      defaultSize: 320,
+      minSize: 200,
       render: (row) => (
         <div>
           <div className="font-medium text-foreground">
@@ -179,13 +182,21 @@ export function TransactionTable({
       resizable: true,
       reorderable: true,
       hideable: true,
+      defaultSize: 200,
+      minSize: 140,
+      maxSize: 280,
       render: (row) => {
         const account = accountsMap[row.account_id]
+        const accentColor = account?.custom_color
         return (
-          <span
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-gray-800"
-            style={{ backgroundColor: account?.custom_color || '#E5E7EB' }}
-          >
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-1 text-xs font-medium text-foreground">
+            {accentColor && (
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{ backgroundColor: accentColor }}
+                aria-hidden="true"
+              />
+            )}
             {account?.custom_emoji && <span>{account.custom_emoji}</span>}
             {account ? account.nickname || account.name : 'Unknown'}
           </span>
@@ -203,6 +214,9 @@ export function TransactionTable({
       resizable: true,
       reorderable: true,
       hideable: true,
+      defaultSize: 200,
+      minSize: 140,
+      maxSize: 280,
       render: (row) => {
         const categoryLabel = getEffectiveCategoryLabel(getEffectiveCategory(row))
         return (
@@ -229,6 +243,9 @@ export function TransactionTable({
       defaultPinned: 'right',
       align: 'right',
       numeric: true,
+      defaultSize: 140,
+      minSize: 110,
+      maxSize: 200,
       render: (row) => (
         <div className="flex flex-col items-end gap-1">
           <span

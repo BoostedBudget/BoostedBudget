@@ -11,8 +11,18 @@ module.exports = {
       // Do NOT reuse Playwright's Chromium — it's a patched non-stock build
       // that can produce different scores and breaks after Playwright updates.
       settings: {
-        // Desktop emulation — BoostedBudget targets desktop users
+        // Desktop emulation — BoostedBudget targets desktop users.
+        // Lighthouse 12+ requires screenEmulation.mobile to be explicitly false
+        // when formFactor is 'desktop' — omitting it leaves the default mobile:true
+        // which conflicts with formFactor:'desktop' and causes a hard error.
         formFactor: 'desktop',
+        screenEmulation: {
+          mobile: false,
+          width: 1350,
+          height: 940,
+          deviceScaleFactor: 1,
+          disabled: false,
+        },
         // Chrome flags for macOS Mac Mini CI stability.
         // --headless (not --headless=new): old headless is proven stable in macOS CI;
         //   --headless=new causes EPERM/WebSocket failures on self-hosted macOS runners.

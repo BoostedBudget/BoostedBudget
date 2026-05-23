@@ -1,16 +1,46 @@
 import { useState, useCallback } from 'react'
 import { useUser } from '@clerk/react-router'
+import type { ColumnSizingState } from '@/shared/lib/tanstack'
+
+/**
+ * Persistence versioning:
+ *
+ * `schemaVersion` = knownColumnIds.join(',')
+ *   — resets ALL slots (sizing + order + visibility) when the column-id schema changes.
+ *
+ * `sizingVersion` = SIZING_VERSION constant below
+ *   — resets ONLY the sizing slot; preserves user-customized order and visibility.
+ *   — Bump SIZING_VERSION whenever defaultSize / minSize / maxSize values change across
+ *     a release so stale pixel widths don't persist across deploys.
+ *     Convention: use a short semantic tag, e.g. 'v2-fixed-layout', 'v3-new-defaults'.
+ *
+ * Migration: if the stored object has a `version` field but no `schemaVersion`, treat
+ * it as the old shape — `version` maps to `schemaVersion`, and `sizingVersion` is missing
+ * (triggers a one-time sizing reset only; preserves order and visibility).
+ */
+const SIZING_VERSION = 'v2-fixed-layout'
 
 interface TablePrefs {
+  schemaVersion: string
+  sizingVersion: string
+  sizing: Record<string, number>
+  columnOrder: string[]
+  columnVisibility: Record<string, boolean>
+}
+
+// Old shape from before the schemaVersion/sizingVersion split
+interface LegacyTablePrefs {
   version: string
   sizing: Record<string, number>
   columnOrder: string[]
   columnVisibility: Record<string, boolean>
 }
 
+export type SizingUpdater = ColumnSizingState | ((prev: ColumnSizingState) => ColumnSizingState)
+
 export interface UseTablePreferencesResult {
   sizing: Record<string, number>
-  onSizingChange: (sizing: Record<string, number>) => void
+  onSizingChange: (updater: SizingUpdater) => void
   columnOrder: string[]
   onColumnOrderChange: (order: string[]) => void
   columnVisibility: Record<string, boolean>
@@ -42,7 +72,7 @@ function loadPrefs(
   knownColumnIds: string[]
 ): Pick<TablePrefs, 'sizing' | 'columnOrder' | 'columnVisibility'> {
   const key = storageKey(userId, tableId)
-  const expectedVersion = knownColumnIds.join(',')
+  const expectedSchema = knownColumnIds.join(',')
   const knownSet = new Set(knownColumnIds)
 
   let raw: string | null
@@ -54,28 +84,62 @@ function loadPrefs(
 
   if (raw === null) return DEFAULT_PREFS
 
-  let parsed: TablePrefs
+  let parsed: TablePrefs | LegacyTablePrefs
   try {
-    parsed = JSON.parse(raw) as TablePrefs
+    parsed = JSON.parse(raw) as TablePrefs | LegacyTablePrefs
   } catch {
     return DEFAULT_PREFS
   }
 
-  // Version mismatch → reset to defaults and persist
-  if (parsed.version !== expectedVersion) {
-    const reset: TablePrefs = { version: expectedVersion, ...DEFAULT_PREFS }
-    try {
-      localStorage.setItem(key, JSON.stringify(reset))
-    } catch {
-      // ignore write errors
+  // Detect old shape (has `version`, no `schemaVersion`) and migrate.
+  // Map `version` → `schemaVersion`; treat sizingVersion as missing.
+  let isLegacy = false
+  if ('version' in parsed && !('schemaVersion' in parsed)) {
+    isLegacy = true
+    parsed = {
+      schemaVersion: (parsed as LegacyTablePrefs).version,
+      sizingVersion: '',
+      sizing: (parsed as LegacyTablePrefs).sizing ?? {},
+      columnOrder: (parsed as LegacyTablePrefs).columnOrder ?? [],
+      columnVisibility: (parsed as LegacyTablePrefs).columnVisibility ?? {},
+    } as TablePrefs
+  }
+
+  const p = parsed as TablePrefs
+
+  // Schema version mismatch (column ids changed) → reset everything
+  if (p.schemaVersion !== expectedSchema) {
+    const reset: TablePrefs = {
+      schemaVersion: expectedSchema,
+      sizingVersion: SIZING_VERSION,
+      ...DEFAULT_PREFS,
     }
+    try { localStorage.setItem(key, JSON.stringify(reset)) } catch { /* ignore */ }
     return DEFAULT_PREFS
   }
 
+  // Sizing version mismatch (defaults changed) → reset only sizing
+  const sizingOk = !isLegacy && p.sizingVersion === SIZING_VERSION
+  const sizing = sizingOk
+    ? filterByKnownIds(p.sizing ?? {}, knownSet)
+    : {}
+
+  if (!sizingOk) {
+    // Persist the corrected prefs (reset sizing, keep order + visibility)
+    const fixed: TablePrefs = {
+      schemaVersion: expectedSchema,
+      sizingVersion: SIZING_VERSION,
+      sizing: {},
+      columnOrder: (p.columnOrder ?? []).filter((id) => knownSet.has(id)),
+      columnVisibility: filterByKnownIds(p.columnVisibility ?? {}, knownSet),
+    }
+    try { localStorage.setItem(key, JSON.stringify(fixed)) } catch { /* ignore */ }
+  }
+
   return {
-    sizing: filterByKnownIds(parsed.sizing ?? {}, knownSet),
-    columnOrder: (parsed.columnOrder ?? []).filter((id) => knownSet.has(id)),
-    columnVisibility: filterByKnownIds(parsed.columnVisibility ?? {}, knownSet),
+    sizing,
+    columnOrder: (p.columnOrder ?? []).filter((id) => knownSet.has(id)),
+    columnVisibility: filterByKnownIds(p.columnVisibility ?? {}, knownSet),
   }
 }
 
@@ -89,7 +153,11 @@ function savePrefs(
   try {
     localStorage.setItem(
       key,
-      JSON.stringify({ version: knownColumnIds.join(','), ...prefs })
+      JSON.stringify({
+        schemaVersion: knownColumnIds.join(','),
+        sizingVersion: SIZING_VERSION,
+        ...prefs,
+      })
     )
   } catch {
     // ignore storage quota errors
@@ -102,7 +170,8 @@ function savePrefs(
  *
  * When the user is not authenticated, returns defaults and all setters are no-ops.
  * Unknown column IDs (not in knownColumnIds) are filtered out on read.
- * If the stored version (knownColumnIds.join(',')) doesn't match, prefs are reset.
+ * If the stored schemaVersion (knownColumnIds.join(',')) doesn't match, all prefs reset.
+ * If only sizingVersion mismatches, only sizing resets (order + visibility preserved).
  */
 export function useTablePreferences(
   tableId: string,
@@ -111,15 +180,10 @@ export function useTablePreferences(
   const { user } = useUser()
   const userId = user?.id ?? null
 
-  // Single state atom — prevents stale-closure cross-field overwrites when two setters
-  // fire in the same render cycle. Lazy initializer runs only once (on mount).
-  const [prefs, setPrefs] = useState<Pick<TablePrefs, 'sizing' | 'columnOrder' | 'columnVisibility'>>(
-    () => (userId ? loadPrefs(userId, tableId, knownColumnIds) : DEFAULT_PREFS)
+  const [prefs, setPrefs] = useState<Pick<TablePrefs, 'sizing' | 'columnOrder' | 'columnVisibility'>>(() =>
+    userId ? loadPrefs(userId, tableId, knownColumnIds) : DEFAULT_PREFS
   )
 
-  // Derived state: when Clerk resolves userId after the initial null render, reload prefs.
-  // Calling setState during render (React's recommended pattern for derived state) avoids
-  // an extra commit cycle compared to useEffect.
   const [lastLoadedUserId, setLastLoadedUserId] = useState(userId)
   if (userId !== lastLoadedUserId) {
     setLastLoadedUserId(userId)
@@ -127,9 +191,10 @@ export function useTablePreferences(
   }
 
   const onSizingChange = useCallback(
-    (newSizing: Record<string, number>) => {
+    (updater: SizingUpdater) => {
       if (!userId) return
       setPrefs((prev) => {
+        const newSizing = typeof updater === 'function' ? updater(prev.sizing) : updater
         const next = { ...prev, sizing: newSizing }
         savePrefs(userId, tableId, knownColumnIds, next)
         return next
