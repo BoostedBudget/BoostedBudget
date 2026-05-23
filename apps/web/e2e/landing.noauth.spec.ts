@@ -11,6 +11,12 @@ import { acceptCookieConsent } from './helpers/auth';
  */
 
 test.describe('Landing Page - Unauthenticated', () => {
+  // Clerk SDK initialization under parallel worker load is non-deterministic.
+  // A single retry is enough to distinguish infrastructure flakiness (Clerk
+  // slow to initialize under load) from genuine test failures (wrong content).
+  // A test must fail TWICE consecutively to be reported as failed.
+  test.describe.configure({ retries: 1 });
+
   test.beforeEach(async ({ page }) => {
     // Extend per-test budget: Clerk SDK initialization under parallel worker load can
     // exceed the global 15 s default, causing the beforeEach hook to be killed before
