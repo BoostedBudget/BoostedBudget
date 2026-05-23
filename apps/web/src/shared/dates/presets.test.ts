@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test'
+import { describe, test, expect, beforeAll, afterAll, setSystemTime } from 'bun:test'
 import {
   getDateRange,
   PRESETS,
@@ -70,33 +70,34 @@ describe('getDateRange', () => {
     )
   })
 
-  test('last_3_months start is 3 months before last_month end', () => {
+  test('last_3_months is a rolling window ending today', () => {
     const range = getDateRange('last_3_months')
     expect(range).not.toBeNull()
-    const start = new Date(range!.startDate)
-    const end = new Date(range!.endDate)
-    // Start should be on the 1st of a month
-    expect(start.getUTCDate()).toBe(1)
-    // End should be last day of a month
-    const nextDay = new Date(end)
-    nextDay.setUTCDate(end.getUTCDate() + 1)
-    expect(nextDay.getUTCDate()).toBe(1)
-    // start is before end
+    const start = new Date(range!.startDate + 'T12:00:00Z')
+    const end = new Date(range!.endDate + 'T12:00:00Z')
+    const today = new Date()
+    expect(end.getUTCFullYear()).toBe(today.getFullYear())
+    expect(end.getUTCMonth()).toBe(today.getMonth())
     expect(start.getTime()).toBeLessThan(end.getTime())
-  })
-
-  test('last_6_months start is 6 months before last_month end', () => {
-    const range = getDateRange('last_6_months')
-    expect(range).not.toBeNull()
-    const start = new Date(range!.startDate)
-    const end = new Date(range!.endDate)
-    expect(start.getUTCDate()).toBe(1)
-    expect(start.getTime()).toBeLessThan(end.getTime())
-    // Should span at least 5 months
     const monthDiff =
       (end.getUTCFullYear() - start.getUTCFullYear()) * 12 +
       (end.getUTCMonth() - start.getUTCMonth())
-    expect(monthDiff).toBeGreaterThanOrEqual(5)
+    expect(monthDiff).toBe(3)
+  })
+
+  test('last_6_months is a rolling window ending today', () => {
+    const range = getDateRange('last_6_months')
+    expect(range).not.toBeNull()
+    const start = new Date(range!.startDate + 'T12:00:00Z')
+    const end = new Date(range!.endDate + 'T12:00:00Z')
+    const today = new Date()
+    expect(end.getUTCFullYear()).toBe(today.getFullYear())
+    expect(end.getUTCMonth()).toBe(today.getMonth())
+    expect(start.getTime()).toBeLessThan(end.getTime())
+    const monthDiff =
+      (end.getUTCFullYear() - start.getUTCFullYear()) * 12 +
+      (end.getUTCMonth() - start.getUTCMonth())
+    expect(monthDiff).toBe(6)
   })
 
   test('ytd starts on Jan 1 of current year', () => {
@@ -129,6 +130,26 @@ describe('getDateRange', () => {
 
   test('custom returns null', () => {
     expect(getDateRange('custom')).toBeNull()
+  })
+
+  describe('rolling window end-today semantics (Issue #1173)', () => {
+    // Freeze to noon UTC to avoid local-TZ date shifts; last_3/6_months end TODAY
+    beforeAll(() => setSystemTime(new Date('2026-05-23T12:00:00.000Z')))
+    afterAll(() => setSystemTime())
+
+    test('last_3_months rolls back 3 months and ends today', () => {
+      const range = getDateRange('last_3_months')
+      expect(range).not.toBeNull()
+      expect(range!.startDate).toBe('2026-02-23')
+      expect(range!.endDate).toBe('2026-05-23')
+    })
+
+    test('last_6_months rolls back 6 months and ends today', () => {
+      const range = getDateRange('last_6_months')
+      expect(range).not.toBeNull()
+      expect(range!.startDate).toBe('2025-11-23')
+      expect(range!.endDate).toBe('2026-05-23')
+    })
   })
 
   test('start is always <= end for all non-null presets', () => {
