@@ -65,7 +65,7 @@ export function RuleTable({
   onSelectionChange,
   className = '',
 }: RuleTableProps) {
-  const hasActions = Boolean(onEdit || onDelete || onToggle || onTest)
+  const hasActions = !!(onEdit || onDelete || onToggle || onTest)
 
   const {
     sizing,
@@ -129,7 +129,9 @@ export function RuleTable({
                 className="h-4 w-4 cursor-pointer accent-primary"
               />
             ),
-            widthClass: 'w-12',
+            defaultSize: 48,
+            minSize: 48,
+            maxSize: 48,
             render: (row: AutomationRule) => (
               <div
                 className="flex justify-center"
@@ -153,6 +155,8 @@ export function RuleTable({
       sortable,
       resizable: true,
       reorderable: true,
+      defaultSize: 240,
+      minSize: 160,
       render: (row) => (
         <div className="flex flex-col gap-1">
           <span className="font-medium text-foreground">{row.name}</span>
@@ -168,6 +172,9 @@ export function RuleTable({
       sortable,
       resizable: true,
       reorderable: true,
+      defaultSize: 140,
+      minSize: 100,
+      maxSize: 200,
       render: (row) => {
         const ruleType = row.rule_type as RuleType
         return <>{RULE_TYPE_LABELS[ruleType] || row.rule_type}</>
@@ -180,6 +187,9 @@ export function RuleTable({
       resizable: true,
       reorderable: true,
       defaultPinned: 'left' as const,
+      defaultSize: 120,
+      minSize: 90,
+      maxSize: 160,
       render: (row) => (
         <span
           className={cn(
@@ -199,6 +209,9 @@ export function RuleTable({
       sortable,
       resizable: true,
       reorderable: true,
+      defaultSize: 200,
+      minSize: 140,
+      maxSize: 280,
       render: (row) => {
         const triggerType = row.trigger_config?.type || 'schedule'
         return (
@@ -225,6 +238,9 @@ export function RuleTable({
       resizable: true,
       reorderable: true,
       hideable: true,
+      defaultSize: 180,
+      minSize: 140,
+      maxSize: 220,
       render: (row) =>
         row.last_executed_at ? (
           <span title={new Date(row.last_executed_at).toLocaleString()}>
@@ -241,6 +257,9 @@ export function RuleTable({
       resizable: true,
       reorderable: true,
       hideable: true,
+      defaultSize: 110,
+      minSize: 80,
+      maxSize: 140,
       render: (row) => <span className="tabular-nums text-muted-foreground">{row.priority}</span>,
     },
   ]
@@ -277,14 +296,12 @@ export function RuleTable({
       onColumnOrderChange={onColumnOrderChange}
       columnVisibility={columnVisibility}
       onColumnVisibilityChange={onColumnVisibilityChange}
-      rowClassName={(row) => {
-        const parts: string[] = []
-        if (onRowClick) parts.push('rule-table__row--clickable')
-        if (selectedIds.includes(row.id)) {
-          parts.push('bg-blue-50 hover:bg-blue-100 dark:bg-blue-900 dark:hover:bg-blue-800')
-        }
-        return parts.join(' ')
-      }}
+      rowClassName={(row) =>
+        cn(
+          onRowClick && 'rule-table__row--clickable',
+          selectedIds.includes(row.id) && 'bg-blue-50 hover:bg-blue-100 dark:bg-blue-900 dark:hover:bg-blue-800'
+        )
+      }
       className={cn(loading && 'rule-table--loading', className)}
       rowActions={
         hasActions

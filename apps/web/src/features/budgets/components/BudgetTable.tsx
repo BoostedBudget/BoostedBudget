@@ -126,7 +126,8 @@ export function BudgetTable({
       sortable,
       resizable: true,
       reorderable: true,
-      widthClass: 'min-w-[200px] max-sm:min-w-[150px]',
+      defaultSize: 240,
+      minSize: 160,
       render: (row) => (
         <div className="flex items-center gap-2">
           <span className="font-medium text-foreground">{row.name}</span>
@@ -144,6 +145,9 @@ export function BudgetTable({
       sortable,
       resizable: true,
       reorderable: true,
+      defaultSize: 120,
+      minSize: 100,
+      maxSize: 160,
       render: (row) => <>{getPeriodLabel(row.period)}</>,
       filter:
         periodOptions && onPeriodFilterChange
@@ -158,6 +162,9 @@ export function BudgetTable({
       reorderable: true,
       align: 'right',
       numeric: true,
+      defaultSize: 140,
+      minSize: 110,
+      maxSize: 200,
       render: (row) => (
         <span className="font-medium">
           {formatCurrency(row.expected_income ?? row.amount)}
@@ -172,6 +179,9 @@ export function BudgetTable({
       hideable: true,
       align: 'right',
       numeric: true,
+      defaultSize: 140,
+      minSize: 110,
+      maxSize: 200,
       render: (row) =>
         (row.expected_income ?? 0) > 0
           ? `${formatCurrency(row.income_amount ?? 0)} / ${formatCurrency(row.expected_income!)}`
@@ -184,7 +194,9 @@ export function BudgetTable({
       resizable: true,
       reorderable: true,
       defaultPinned: 'left' as const,
-      widthClass: 'min-w-[140px]',
+      defaultSize: 200,
+      minSize: 140,
+      maxSize: 280,
       render: (row) => {
         const percentUsed = Math.round(row.percent_used)
         const isOverBudget = row.is_over_budget
@@ -225,6 +237,9 @@ export function BudgetTable({
       resizable: true,
       reorderable: true,
       align: 'right',
+      defaultSize: 140,
+      minSize: 110,
+      maxSize: 200,
       render: (row) => (
         <span
           className={cn(
@@ -245,6 +260,9 @@ export function BudgetTable({
       reorderable: true,
       hideable: true,
       align: 'center',
+      defaultSize: 110,
+      minSize: 80,
+      maxSize: 140,
       render: (row) => <>{row.categories?.length ?? 0}</>,
     },
   ]
