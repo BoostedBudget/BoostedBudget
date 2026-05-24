@@ -29,6 +29,7 @@ Multi-region support planned for Phase 7+.
  */
 
 export interface SpendingByMerchant {
+  merchant_id?: string;
   merchant_name: string;
   percentage: number;
   total: number;
