@@ -39,6 +39,8 @@ type DeadLetterJobFilters struct {
 	StartDate *time.Time `json:"start_date,omitempty"`
 	EndDate   *time.Time `json:"end_date,omitempty"`
 	Retried   *bool      `json:"retried,omitempty"`
+	SortBy    string     `json:"sort_by,omitempty"`  // validated enum: failed_at|kind|retried_at
+	SortDir   string     `json:"sort_dir,omitempty"` // validated enum: asc|desc
 }
 
 // DeadLetterJobListResponse is the paginated response for listing dead letter jobs.
