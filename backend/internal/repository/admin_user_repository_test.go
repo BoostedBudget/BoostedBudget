@@ -493,7 +493,7 @@ func TestListUsersSort(t *testing.T) {
 			name:        "last_login_at asc with NULLS LAST",
 			sortBy:      "last_login_at",
 			sortDir:     "asc",
-			expectOrder: "ORDER BY u.last_login_at NULLS LAST ASC",
+			expectOrder: "ORDER BY u.last_login_at ASC NULLS LAST",
 		},
 		{
 			name:        "subscription_tier desc",

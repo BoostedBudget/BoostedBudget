@@ -40,12 +40,12 @@ func NewAdminUserRepository(db DB, enc *appcrypto.FieldEncryptor) AdminUserRepos
 // usersOrderByAllowlist maps frontend sort_by values to safe SQL expressions.
 // The u. prefix is required because of the LEFT JOINs in the query.
 // NULLS LAST is applied to nullable columns so nulls always sort to the bottom
-// regardless of direction.
-var usersOrderByAllowlist = map[string]string{
-	"created_at":          "u.created_at",
-	"last_login_at":       "u.last_login_at NULLS LAST",
-	"subscription_tier":   "u.subscription_tier",
-	"subscription_status": "u.subscription_status",
+// regardless of direction (must appear AFTER the sort direction in PostgreSQL).
+var usersOrderByAllowlist = map[string]orderByEntry{
+	"created_at":          {"u.created_at", false},
+	"last_login_at":       {"u.last_login_at", true},
+	"subscription_tier":   {"u.subscription_tier", false},
+	"subscription_status": {"u.subscription_status", false},
 }
 
 // ListUsers returns a paginated list of users with aggregated counts
@@ -63,13 +63,17 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 	}
 
 	// Resolve ORDER BY from allowlist; fallback to created_at if not provided or invalid
-	orderCol := usersOrderByAllowlist[filters.SortBy]
-	if orderCol == "" {
-		orderCol = "u.created_at" // fallback (Huma enum prevents this in normal operation)
+	entry := usersOrderByAllowlist[filters.SortBy]
+	if entry.col == "" {
+		entry = orderByEntry{"u.created_at", false} // fallback (Huma enum prevents this in normal operation)
 	}
 	orderDir := strings.ToUpper(filters.SortDir)
 	if orderDir != "ASC" && orderDir != "DESC" {
 		orderDir = "DESC"
+	}
+	nullsClause := ""
+	if entry.nullsLast {
+		nullsClause = " NULLS LAST"
 	}
 
 	// Main query with counts via subqueries
@@ -99,7 +103,7 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 			GROUP BY referrer_id
 		) ref ON ref.referrer_id = u.id
 		WHERE u.is_deleted = FALSE%s
-		ORDER BY %s %s LIMIT $%d OFFSET $%d`, whereClause, orderCol, orderDir, argIndex, argIndex+1)
+		ORDER BY %s %s%s LIMIT $%d OFFSET $%d`, whereClause, entry.col, orderDir, nullsClause, argIndex, argIndex+1)
 	args = append(args, limit, offset)
 
 	// Execute main query
