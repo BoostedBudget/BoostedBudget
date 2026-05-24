@@ -39,7 +39,6 @@ export interface UseWebhookFiltersResult {
   setEndDate: (v: string) => void
   setPage: (v: number) => void
   hasActiveFilters: boolean
-  resetFilters: () => void
   /** Current sort state (null = unsorted) */
   sort: SortState
   /** Set sort state; passing null clears sort. Resets page to 1. */
@@ -91,31 +90,26 @@ export function useWebhookFilters(): UseWebhookFiltersResult {
     (v: string) => setFilters((prev) => ({ ...prev, eventType: v, page: 1 })),
     []
   )
-
   const setProcessed = useCallback(
     (v: string) => setFilters((prev) => ({ ...prev, processed: v, page: 1 })),
     []
   )
-
   const setStartDate = useCallback(
     (v: string) => setFilters((prev) => ({ ...prev, startDate: v, page: 1 })),
     []
   )
-
   const setEndDate = useCallback(
     (v: string) => setFilters((prev) => ({ ...prev, endDate: v, page: 1 })),
     []
   )
-
   const setPage = useCallback((v: number) => setFilters((prev) => ({ ...prev, page: v })), [])
 
-  const hasActiveFilters =
-    filters.eventType !== '' ||
-    filters.processed !== '' ||
-    filters.startDate !== '' ||
-    filters.endDate !== ''
-
-  const resetFilters = useCallback(() => setFilters(DEFAULT_FILTERS), [])
+  const hasActiveFilters = [
+    filters.eventType,
+    filters.processed,
+    filters.startDate,
+    filters.endDate,
+  ].some((f) => f !== '')
 
   // Format params for API call
   const apiParams = useMemo<ListAdminPaddleWebhooksParams>(() => {
@@ -156,7 +150,6 @@ export function useWebhookFilters(): UseWebhookFiltersResult {
     setEndDate,
     setPage,
     hasActiveFilters,
-    resetFilters,
     sort,
     setSort,
     apiParams,

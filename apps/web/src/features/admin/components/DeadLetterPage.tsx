@@ -44,7 +44,6 @@ export function DeadLetterPage() {
     setEndDate,
     setPage,
     hasActiveFilters,
-    resetFilters,
     sort,
     setSort,
     apiParams,
@@ -191,7 +190,12 @@ export function DeadLetterPage() {
       onSuccess: (result) => {
         trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_BULK_DELETE, { deleted: result?.deleted })
         setConfirmBulkDelete(false)
-        resetFilters()
+        setKind('')
+        setUserId('')
+        setRetried('')
+        setStartDate('')
+        setEndDate('')
+        setPage(1)
       },
     })
   }
@@ -328,7 +332,14 @@ export function DeadLetterPage() {
           <button
             type="button"
             className={cn(buttonClass, 'gap-1.5')}
-            onClick={resetFilters}
+            onClick={() => {
+              setKind('')
+              setUserId('')
+              setRetried('')
+              setStartDate('')
+              setEndDate('')
+              setPage(1)
+            }}
             aria-label="Reset filters"
           >
             Reset Filters

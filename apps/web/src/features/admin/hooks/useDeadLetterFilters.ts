@@ -41,7 +41,6 @@ export interface UseDeadLetterFiltersResult {
   setEndDate: (v: string) => void
   setPage: (v: number) => void
   hasActiveFilters: boolean
-  resetFilters: () => void
   /** Current sort state (null = unsorted) */
   sort: SortState
   /** Set sort state; passing null clears sort. Resets page to 1. */
@@ -94,37 +93,31 @@ export function useDeadLetterFilters(): UseDeadLetterFiltersResult {
     (v: string) => setFilters((prev) => ({ ...prev, kind: v, page: 1 })),
     []
   )
-
   const setUserId = useCallback(
     (v: string) => setFilters((prev) => ({ ...prev, userId: v, page: 1 })),
     []
   )
-
   const setRetried = useCallback(
     (v: string) => setFilters((prev) => ({ ...prev, retried: v, page: 1 })),
     []
   )
-
   const setStartDate = useCallback(
     (v: string) => setFilters((prev) => ({ ...prev, startDate: v, page: 1 })),
     []
   )
-
   const setEndDate = useCallback(
     (v: string) => setFilters((prev) => ({ ...prev, endDate: v, page: 1 })),
     []
   )
-
   const setPage = useCallback((v: number) => setFilters((prev) => ({ ...prev, page: v })), [])
 
-  const hasActiveFilters =
-    filters.kind !== '' ||
-    filters.userId !== '' ||
-    filters.retried !== '' ||
-    filters.startDate !== '' ||
-    filters.endDate !== ''
-
-  const resetFilters = useCallback(() => setFilters(DEFAULT_FILTERS), [])
+  const hasActiveFilters = [
+    filters.kind,
+    filters.userId,
+    filters.retried,
+    filters.startDate,
+    filters.endDate,
+  ].some((f) => f !== '')
 
   // Format params for API call
   const apiParams = useMemo<ListAdminDeadLetterJobsParams>(() => {
@@ -170,7 +163,6 @@ export function useDeadLetterFilters(): UseDeadLetterFiltersResult {
     setEndDate,
     setPage,
     hasActiveFilters,
-    resetFilters,
     sort,
     setSort,
     apiParams,

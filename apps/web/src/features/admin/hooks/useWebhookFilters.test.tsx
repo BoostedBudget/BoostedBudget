@@ -160,7 +160,7 @@ describe('useWebhookFilters', () => {
     expect(result.current.filters.page).toBe(1)
   })
 
-  it('resetFilters clears all and resets page', () => {
+  it('clearing all filters resets hasActiveFilters and page', () => {
     const { result } = renderHook(() => useWebhookFilters(), {
       wrapper: createWrapper(),
     })
@@ -174,7 +174,11 @@ describe('useWebhookFilters', () => {
     })
 
     act(() => {
-      result.current.resetFilters()
+      result.current.setEventType('')
+      result.current.setProcessed('')
+      result.current.setStartDate('')
+      result.current.setEndDate('')
+      result.current.setPage(1)
     })
 
     expect(result.current.filters).toEqual({
@@ -250,7 +254,7 @@ describe('useWebhookFilters', () => {
       expect(result.current.apiParams.sort_dir).toBeUndefined()
     })
 
-    it('resetFilters preserves active sort', () => {
+    it('clearing filters preserves active sort in URL', () => {
       const { result } = renderHook(() => useWebhookFilters(), {
         wrapper: createMemoryWrapper('/admin/webhooks?sort=created_at:desc'),
       })
@@ -260,12 +264,18 @@ describe('useWebhookFilters', () => {
         result.current.setPage(3)
       })
 
+      // Simulate a full filter reset (no resetFilters helper — done via individual setters)
       act(() => {
-        result.current.resetFilters()
+        result.current.setEventType('')
+        result.current.setProcessed('')
+        result.current.setStartDate('')
+        result.current.setEndDate('')
+        result.current.setPage(1)
       })
 
       expect(result.current.hasActiveFilters).toBe(false)
       expect(result.current.filters.page).toBe(1)
+      // Sort (URL-driven) must not be affected by filter resets
       expect(result.current.sort).toEqual({ columnId: 'created_at', direction: 'desc' })
     })
   })
