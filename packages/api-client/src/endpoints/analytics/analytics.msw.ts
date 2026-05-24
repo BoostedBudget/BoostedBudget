@@ -125,6 +125,10 @@ export const getGetSpendingByMerchantResponseMock = (
       { length: faker.number.int({ min: 1, max: 10 }) },
       (_, i) => i + 1,
     ).map(() => ({
+      merchant_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       merchant_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
       percentage: faker.number.float({ fractionDigits: 2 }),
       total: faker.number.float({ fractionDigits: 2 }),

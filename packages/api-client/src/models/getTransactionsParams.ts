@@ -91,6 +91,10 @@ export type GetTransactionsParams = {
    */
   user_account_id?: string;
   /**
+   * Filter transactions by merchant UUID
+   */
+  merchant_id?: string;
+  /**
    * Column to sort by
    */
   sort_by?: GetTransactionsSortBy;

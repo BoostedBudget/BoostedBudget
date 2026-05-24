@@ -51,6 +51,7 @@ export interface Transaction {
   external_transaction_id?: string;
   id: string;
   linked_item_id: string;
+  merchant_id?: string;
   merchant_name?: string;
   name: string;
   payment_channel?: string;

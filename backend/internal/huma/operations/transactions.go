@@ -45,6 +45,7 @@ type GetTransactionsInput struct {
 	MaxAmount         string `query:"max_amount" doc:"Filter by maximum absolute amount"`
 	AmountType        string `query:"amount_type" enum:"income,expense,all" doc:"Filter by transaction type"`
 	UserAccountID     string `query:"user_account_id" doc:"Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members"`
+	MerchantID        string `query:"merchant_id" doc:"Filter transactions by merchant UUID" example:"550e8400-e29b-41d4-a716-446655440000"`
 
 	// Sort parameters
 	SortBy  string `query:"sort_by"  enum:"date,merchant,amount,category" default:"date"  doc:"Column to sort by"`
@@ -233,6 +234,11 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 	// Stable identifier that returns transactions from all chain members
 	if input.UserAccountID != "" {
 		filters.UserAccountID = &input.UserAccountID
+	}
+
+	// Merchant ID filter (Issue #1163: PII URL leak fix)
+	if input.MerchantID != "" {
+		filters.MerchantID = &input.MerchantID
 	}
 
 	// Sort parameters — apply defaults if Huma did not populate them (e.g. direct handler calls)
