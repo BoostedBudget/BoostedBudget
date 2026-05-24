@@ -34,6 +34,7 @@ func TestBuildAccountMaps_AfterRelink_OnlyContainsNewAccount(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -82,7 +83,7 @@ func TestBuildAccountMaps_Depth2Chain_OnlyContainsCurrentAccount(t *testing.T) {
 	service := NewTransactionSyncService(
 		nil, nil, nil,
 		mockAccountRepo,
-		nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()

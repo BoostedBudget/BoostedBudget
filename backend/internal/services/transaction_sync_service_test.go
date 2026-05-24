@@ -108,6 +108,7 @@ func TestProcessWebhook_Success(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // merchantRepo - not needed for these tests
 		nil, // logger
 	)
 
@@ -203,6 +204,7 @@ func TestProcessWebhook_WebhookNotFound(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // merchantRepo - not needed for these tests
 		nil, // logger
 	)
 
@@ -235,6 +237,7 @@ func TestProcessWebhook_ItemIDMissing(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // merchantRepo - not needed for these tests
 		nil, // logger
 	)
 
@@ -283,6 +286,7 @@ func TestProcessWebhook_LinkedItemNotFound(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // merchantRepo - not needed for these tests
 		nil, // logger
 	)
 
@@ -345,6 +349,7 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // merchantRepo - not needed for these tests
 		nil, // logger
 	)
 
@@ -407,6 +412,7 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // merchantRepo - not needed for these tests
 		nil, // logger
 	)
 
@@ -474,6 +480,7 @@ func TestSyncTransactions_PlaidErrorFirstPage(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // merchantRepo - not needed for these tests
 		nil, // logger
 	)
 
@@ -517,6 +524,7 @@ func TestSyncTransactions_PlaidErrorSubsequentPage(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // merchantRepo - not needed for these tests
 		nil, // logger
 	)
 
@@ -569,6 +577,7 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // merchantRepo - not needed for these tests
 		nil, // logger
 	)
 
@@ -622,6 +631,7 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // merchantRepo - not needed for these tests
 		nil, // logger
 	)
 
@@ -679,6 +689,7 @@ func TestBuildAccountMap_Success(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService) // Type assert to access private method
 
@@ -736,6 +747,7 @@ func TestBuildAccountMap_EmptyAccounts(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -773,6 +785,7 @@ func TestBuildAccountMap_RepositoryError(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -815,6 +828,7 @@ func TestProcessAddedTransactions_Success(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -891,6 +905,7 @@ func TestProcessAddedTransactions_Deduplication(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -956,6 +971,7 @@ func TestProcessAddedTransactions_PartialFailure(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -1030,6 +1046,7 @@ func TestProcessAddedTransactions_EmptySlice(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -1076,6 +1093,7 @@ func TestProcessModifiedTransactions_Success(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -1175,6 +1193,7 @@ func TestProcessModifiedTransactions_NewTransactionNoUserNotes(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -1245,6 +1264,7 @@ func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -1301,6 +1321,7 @@ func TestProcessModifiedTransactions_EmptySlice(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -1345,6 +1366,7 @@ func TestProcessRemovedTransactions_Success(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -1394,6 +1416,7 @@ func TestProcessRemovedTransactions_IdempotentNotFound(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -1440,6 +1463,7 @@ func TestProcessRemovedTransactions_EmptySlice(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -1478,6 +1502,7 @@ func TestProcessRemovedTransactions_NilTransactionID(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -1531,6 +1556,7 @@ func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -1680,6 +1706,7 @@ func TestProcessAddedTransactions_SetsPFCFields(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	).(*transactionSyncService)
 
@@ -1897,6 +1924,7 @@ func TestSyncTransactions_CursorPersistsAfterTxnStorageFailure(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // merchantRepo - not needed for these tests
 		nil, // logger
 	)
 
@@ -1972,6 +2000,7 @@ func TestSyncTransactions_CursorResumeFromLastSuccessfulPage(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // merchantRepo - not needed for these tests
 		nil, // logger
 	)
 
@@ -2053,7 +2082,7 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 			service := NewTransactionSyncService(
 				nil, mockLinkedItemRepo, mockTransactionRepo, mockAccountRepo, mockProfileRepo,
 				nil, mockPlaidService, subscriptionService,
-				nil, nil, nil, nil,
+				nil, nil, nil, nil, nil,
 			)
 
 			linkedItem := &domain.LinkedItem{
@@ -2129,6 +2158,7 @@ func TestSyncTransactions_FinalPageCursorUpdate(t *testing.T) {
 		nil, // ruleApplicationService - not needed for these tests
 		nil, // budgetSyncService - not needed for these tests
 		nil, // transactionMonitorService - not needed for these tests
+		nil, // merchantRepo - not needed for these tests
 		nil, // logger
 	)
 
@@ -2202,6 +2232,7 @@ func TestSyncTransactions_InvalidCursorAutoReset(t *testing.T) {
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	)
 
@@ -2248,7 +2279,7 @@ func TestSyncTransactions_InvalidCursorResetFailure(t *testing.T) {
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	service := NewTransactionSyncService(
 		nil, mockLinkedItemRepo, nil, nil, nil, nil,
-		mockPlaidService, nil, nil, nil, nil, nil,
+		mockPlaidService, nil, nil, nil, nil, nil, nil,
 	)
 
 	// LinkedItem with corrupted cursor
@@ -2327,6 +2358,7 @@ func TestTransactionSyncService_SyncTransactions_SetsUserAccountID(t *testing.T)
 		nil, // ruleApplicationService
 		nil, // budgetSyncService
 		nil, // transactionMonitorService
+		nil, // merchantRepo
 		nil, // logger
 	)
 
@@ -2423,7 +2455,7 @@ func TestTransactionSyncService_SyncTransactions_LooksUpUserAccountFromAccount(t
 		nil, nil,
 		mockPlaidService,
 		nil, // subscriptionService
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 	)
 
 	ctx := context.Background()
@@ -2513,7 +2545,7 @@ func TestTransactionSyncService_ProcessAddedTransactions_SetsUserAccountID(t *te
 	service := NewTransactionSyncService(
 		nil, nil,
 		mockTransactionRepo,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -2580,7 +2612,7 @@ func TestTransactionSyncService_ProcessAddedTransactions_NullUserAccountID_Handl
 	service := NewTransactionSyncService(
 		nil, nil,
 		mockTransactionRepo,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -2643,7 +2675,7 @@ func TestTransactionSyncService_Relink_PreservesEnrichments(t *testing.T) {
 	service := NewTransactionSyncService(
 		nil, nil,
 		mockTransactionRepo,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -2712,7 +2744,7 @@ func TestTransactionSyncService_ModifiedTransactions_SetsUserAccountID(t *testin
 	service := NewTransactionSyncService(
 		nil, nil,
 		mockTransactionRepo,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	).(*transactionSyncService)
 
 	ctx := context.Background()
@@ -2815,4 +2847,167 @@ func TestTransactionSyncService_MapPlaidTransaction_NilIconURL(t *testing.T) {
 	tx, err := svc.mapPlaidTransaction(ctx, plaidTxn, "linked-item-1", "user-1", accountMap, userAccountMap)
 	require.NoError(t, err)
 	assert.Nil(t, tx.PFCCategoryIconURL)
+}
+
+// ============================================================================
+// Issue #1163: Merchant ID stamping tests
+// ============================================================================
+
+// MockMerchantRepo mocks the repository.MerchantRepo interface.
+type MockMerchantRepo struct {
+	mock.Mock
+}
+
+func (m *MockMerchantRepo) GetOrCreateMerchants(ctx context.Context, names []string) (map[string]string, error) {
+	args := m.Called(ctx, names)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string]string), args.Error(1)
+}
+
+// TestProcessAddedTransactions_StampsMerchantID verifies that when transactions have
+// a MerchantName, GetOrCreateMerchants is called once and MerchantID is stamped on
+// each transaction before CreateBatch is invoked.
+func TestProcessAddedTransactions_StampsMerchantID(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockMerchantRepo := new(MockMerchantRepo)
+
+	service := NewTransactionSyncService(
+		nil, nil,
+		mockTransactionRepo,
+		nil, nil, nil, nil, nil, nil, nil, nil,
+		mockMerchantRepo,
+		nil, // logger
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-123", UserID: "user-456"}
+
+	merchantName := "Starbucks"
+	starbucksID := "merchant-uuid-starbucks"
+
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	added := []plaid.Transaction{
+		{
+			TransactionId: "txn-1",
+			AccountId:     "plaid-acc-1",
+			Amount:        5.50,
+			Date:          "2024-03-01",
+			Name:          "STARBUCKS",
+			MerchantName:  *plaid.NewNullableString(&merchantName),
+			Pending:       false,
+		},
+	}
+
+	// GetOrCreateMerchants should be called exactly once with the deduplicated name set
+	mockMerchantRepo.On("GetOrCreateMerchants", ctx, mock.MatchedBy(func(names []string) bool {
+		return len(names) == 1 && names[0] == "Starbucks"
+	})).Return(map[string]string{"Starbucks": starbucksID}, nil)
+
+	// CreateBatch must receive the transaction with MerchantID stamped
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		if len(txns) != 1 {
+			return false
+		}
+		if txns[0].MerchantID == nil {
+			t.Log("MerchantID was not stamped")
+			return false
+		}
+		return *txns[0].MerchantID == starbucksID
+	})).Return(nil)
+
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
+
+	require.NoError(t, err)
+	mockMerchantRepo.AssertExpectations(t)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessAddedTransactions_MerchantUpsertError_ContinuesSync verifies that when
+// GetOrCreateMerchants fails, the sync continues without MerchantID (best-effort).
+func TestProcessAddedTransactions_MerchantUpsertError_ContinuesSync(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockMerchantRepo := new(MockMerchantRepo)
+
+	service := NewTransactionSyncService(
+		nil, nil,
+		mockTransactionRepo,
+		nil, nil, nil, nil, nil, nil, nil, nil,
+		mockMerchantRepo,
+		nil, // logger
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-123", UserID: "user-456"}
+
+	merchantName := "Amazon"
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	added := []plaid.Transaction{
+		{
+			TransactionId: "txn-2",
+			AccountId:     "plaid-acc-1",
+			Amount:        19.99,
+			Date:          "2024-03-02",
+			Name:          "AMAZON",
+			MerchantName:  *plaid.NewNullableString(&merchantName),
+			Pending:       false,
+		},
+	}
+
+	// Simulate merchant upsert failure
+	mockMerchantRepo.On("GetOrCreateMerchants", ctx, mock.Anything).Return(nil, errors.New("db error"))
+
+	// CreateBatch must still be called — MerchantID will be nil (best-effort)
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		return len(txns) == 1 && txns[0].MerchantID == nil
+	})).Return(nil)
+
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
+
+	require.NoError(t, err, "sync must not fail when merchant upsert errors")
+	mockMerchantRepo.AssertExpectations(t)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessAddedTransactions_NoMerchantName_SkipsMerchantUpsert verifies that when
+// no transactions have a MerchantName, GetOrCreateMerchants is never called.
+func TestProcessAddedTransactions_NoMerchantName_SkipsMerchantUpsert(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockMerchantRepo := new(MockMerchantRepo)
+
+	service := NewTransactionSyncService(
+		nil, nil,
+		mockTransactionRepo,
+		nil, nil, nil, nil, nil, nil, nil, nil,
+		mockMerchantRepo,
+		nil, // logger
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-123", UserID: "user-456"}
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	// Transaction with no MerchantName
+	added := []plaid.Transaction{
+		{
+			TransactionId: "txn-3",
+			AccountId:     "plaid-acc-1",
+			Amount:        10.00,
+			Date:          "2024-03-03",
+			Name:          "Unknown Charge",
+			Pending:       false,
+		},
+	}
+
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil)
+
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
+
+	require.NoError(t, err)
+	// GetOrCreateMerchants must NOT have been called
+	mockMerchantRepo.AssertNotCalled(t, "GetOrCreateMerchants")
+	mockTransactionRepo.AssertExpectations(t)
 }
