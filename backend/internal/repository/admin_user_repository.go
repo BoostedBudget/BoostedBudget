@@ -37,6 +37,17 @@ func NewAdminUserRepository(db DB, enc *appcrypto.FieldEncryptor) AdminUserRepos
 	return &adminUserRepository{db: db, enc: enc}
 }
 
+// usersOrderByAllowlist maps frontend sort_by values to safe SQL expressions.
+// The u. prefix is required because of the LEFT JOINs in the query.
+// NULLS LAST is applied to nullable columns so nulls always sort to the bottom
+// regardless of direction.
+var usersOrderByAllowlist = map[string]string{
+	"created_at":          "u.created_at",
+	"last_login_at":       "u.last_login_at NULLS LAST",
+	"subscription_tier":   "u.subscription_tier",
+	"subscription_status": "u.subscription_status",
+}
+
 // ListUsers returns a paginated list of users with aggregated counts
 // Supports filtering by email search and subscription tier
 func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.AdminUserFilters, limit, offset int) ([]domain.AdminUserListItem, int, error) {
@@ -49,6 +60,16 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 	err := r.db.QueryRow(ctx, countQuery, args...).Scan(&totalCount)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to count users: %w", err)
+	}
+
+	// Resolve ORDER BY from allowlist; fallback to created_at if not provided or invalid
+	orderCol := usersOrderByAllowlist[filters.SortBy]
+	if orderCol == "" {
+		orderCol = "u.created_at" // fallback (Huma enum prevents this in normal operation)
+	}
+	orderDir := strings.ToUpper(filters.SortDir)
+	if orderDir != "ASC" && orderDir != "DESC" {
+		orderDir = "DESC"
 	}
 
 	// Main query with counts via subqueries
@@ -78,7 +99,7 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 			GROUP BY referrer_id
 		) ref ON ref.referrer_id = u.id
 		WHERE u.is_deleted = FALSE%s
-		ORDER BY u.created_at DESC LIMIT $%d OFFSET $%d`, whereClause, argIndex, argIndex+1)
+		ORDER BY %s %s LIMIT $%d OFFSET $%d`, whereClause, orderCol, orderDir, argIndex, argIndex+1)
 	args = append(args, limit, offset)
 
 	// Execute main query
