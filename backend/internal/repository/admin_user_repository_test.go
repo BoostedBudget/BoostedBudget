@@ -507,6 +507,25 @@ func TestListUsersSort(t *testing.T) {
 			sortDir:     "asc",
 			expectOrder: "ORDER BY u.subscription_status ASC",
 		},
+		// Fallback cases — Huma enum prevents these in production, but repos are defense-in-depth
+		{
+			name:        "empty sort_by falls back to created_at desc",
+			sortBy:      "",
+			sortDir:     "",
+			expectOrder: "ORDER BY u.created_at DESC",
+		},
+		{
+			name:        "unknown sort_by falls back to created_at desc",
+			sortBy:      "nonexistent_column",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY u.created_at DESC",
+		},
+		{
+			name:        "unknown sort_dir falls back to DESC",
+			sortBy:      "created_at",
+			sortDir:     "invalid",
+			expectOrder: "ORDER BY u.created_at DESC",
+		},
 	}
 
 	for _, tt := range tests {

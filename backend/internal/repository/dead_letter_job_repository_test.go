@@ -166,6 +166,25 @@ func TestListAllDLQSort(t *testing.T) {
 			sortDir:     "asc",
 			expectOrder: "ORDER BY retried_at ASC NULLS LAST",
 		},
+		// Fallback cases — Huma enum prevents these in production, but repos are defense-in-depth
+		{
+			name:        "empty sort_by falls back to failed_at desc",
+			sortBy:      "",
+			sortDir:     "",
+			expectOrder: "ORDER BY failed_at DESC",
+		},
+		{
+			name:        "unknown sort_by falls back to failed_at desc",
+			sortBy:      "nonexistent_column",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY failed_at DESC",
+		},
+		{
+			name:        "unknown sort_dir falls back to DESC",
+			sortBy:      "failed_at",
+			sortDir:     "invalid",
+			expectOrder: "ORDER BY failed_at DESC",
+		},
 	}
 
 	for _, tc := range tests {
