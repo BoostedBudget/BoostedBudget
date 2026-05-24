@@ -112,9 +112,10 @@ func TestGetSpendingByMerchant(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"merchant_name", "total", "transaction_count"}).
-			AddRow("Starbucks", 145.0, 18).
-			AddRow("Amazon", 320.0, 5)
+		starbucksID := "uuid-starbucks-001"
+		rows := pgxmock.NewRows([]string{"merchant_name", "merchant_id", "total", "transaction_count"}).
+			AddRow("Starbucks", &starbucksID, 145.0, 18).
+			AddRow("Amazon", nil, 320.0, 5)
 
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
@@ -126,13 +127,16 @@ func TestGetSpendingByMerchant(t *testing.T) {
 		assert.Equal(t, "Starbucks", result[0].MerchantName)
 		assert.Equal(t, 145.0, result[0].Total)
 		assert.Equal(t, 18, result[0].TransactionCount)
+		require.NotNil(t, result[0].MerchantID)
+		assert.Equal(t, starbucksID, *result[0].MerchantID)
+		assert.Nil(t, result[1].MerchantID)
 	})
 
 	t.Run("returns empty slice when no data", func(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"merchant_name", "total", "transaction_count"})
+		rows := pgxmock.NewRows([]string{"merchant_name", "merchant_id", "total", "transaction_count"})
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
 			WillReturnRows(rows)
@@ -318,8 +322,8 @@ func TestGetSpendingByMerchant_IncludesReplacedAccountTransactions(t *testing.T)
 	}
 	limit := 10
 
-	rows := pgxmock.NewRows([]string{"merchant_name", "total", "transaction_count"}).
-		AddRow("Starbucks", 50.0, 3)
+	rows := pgxmock.NewRows([]string{"merchant_name", "merchant_id", "total", "transaction_count"}).
+		AddRow("Starbucks", nil, 50.0, 3)
 
 	mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
 		WithArgs(userID, filters.StartDate, filters.EndDate, limit).
