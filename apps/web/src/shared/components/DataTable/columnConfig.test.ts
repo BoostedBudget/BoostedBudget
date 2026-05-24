@@ -30,7 +30,7 @@ const CONSUMERS: Array<{ file: string; columnIds: string[] }> = [
   },
   {
     file: 'src/features/admin/components/UsersPage.tsx',
-    columnIds: ['email', 'tier', 'status', 'override_status', 'region', 'last_login', 'accounts', 'rules', 'referrals'],
+    columnIds: ['email', 'subscription_tier', 'subscription_status', 'override_status', 'region', 'last_login_at', 'created_at', 'accounts', 'rules', 'referrals'],
   },
   {
     file: 'src/features/admin/components/WebhooksPage.tsx',

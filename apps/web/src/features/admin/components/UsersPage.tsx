@@ -105,7 +105,7 @@ const formatDate = (dateString: string | undefined | null): string => {
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
-export const ADMIN_USERS_COLUMN_IDS = ['email', 'tier', 'status', 'override_status', 'region', 'last_login', 'accounts', 'rules', 'referrals'] as const
+export const ADMIN_USERS_COLUMN_IDS = ['email', 'subscription_tier', 'subscription_status', 'override_status', 'region', 'last_login_at', 'created_at', 'accounts', 'rules', 'referrals'] as const
 
 interface SelectedUser {
   id: string
@@ -116,7 +116,7 @@ interface SelectedUser {
  * UsersPage - Unified admin user + subscription management page
  */
 export function UsersPage() {
-  const { filters, setSearch, setTier, setPage, apiParams, hasActiveFilters } = useUserFilters()
+  const { filters, setSearch, setTier, setPage, apiParams, hasActiveFilters, sort, setSort } = useUserFilters()
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
   const [overrideUser, setOverrideUser] = useState<SelectedUser | null>(null)
   const trackEvent = useTrackEvent()
@@ -165,8 +165,9 @@ export function UsersPage() {
       ),
     },
     {
-      id: 'tier',
+      id: 'subscription_tier',
       header: 'Tier',
+      sortable: true,
       defaultSize: 110,
       minSize: 90,
       maxSize: 140,
@@ -180,8 +181,9 @@ export function UsersPage() {
       },
     },
     {
-      id: 'status',
+      id: 'subscription_status',
       header: 'Status',
+      sortable: true,
       defaultSize: 110,
       minSize: 90,
       maxSize: 140,
@@ -224,14 +226,25 @@ export function UsersPage() {
       ),
     },
     {
-      id: 'last_login',
+      id: 'last_login_at',
       header: 'Last Login',
+      sortable: true,
       resizable: true,
       hideable: true,
       defaultSize: 180,
       minSize: 140,
       maxSize: 220,
       render: (user) => formatDate(user.last_login_at),
+    },
+    {
+      id: 'created_at',
+      header: 'Member Since',
+      sortable: true,
+      hideable: true,
+      defaultSize: 180,
+      minSize: 140,
+      maxSize: 220,
+      render: (u) => formatDate(u.created_at),
     },
     {
       id: 'accounts',
@@ -341,8 +354,8 @@ export function UsersPage() {
             data={users}
             columns={columns}
             rowKey={(u) => u.id}
-            sort={null}
-            onSortChange={() => {}}
+            sort={sort}
+            onSortChange={setSort}
             filters={{}}
             onFiltersChange={() => {}}
             loading={isLoading}

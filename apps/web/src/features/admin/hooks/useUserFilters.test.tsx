@@ -7,15 +7,22 @@
 
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
+import { BrowserRouter, MemoryRouter } from 'react-router-dom'
+import { createElement } from 'react'
 import type { ReactNode } from 'react'
 import { useUserFilters } from './useUserFilters'
 
-// Wrapper with router
+// Wrapper with router (pre-existing tests use BrowserRouter + window.history.replaceState)
 function createWrapper() {
   return function Wrapper({ children }: { children: ReactNode }) {
     return <BrowserRouter>{children}</BrowserRouter>
   }
+}
+
+// MemoryRouter wrapper for sort tests (project pattern: MemoryRouter + initialEntries)
+function createMemoryWrapper(initialUrl = '/') {
+  return ({ children }: { children: ReactNode }) =>
+    createElement(MemoryRouter, { initialEntries: [initialUrl] }, children)
 }
 
 describe('useUserFilters', () => {
@@ -294,6 +301,85 @@ describe('useUserFilters', () => {
       // Should not include search or tier if they're empty
       expect(result.current.apiParams.search).toBeUndefined()
       expect(result.current.apiParams.tier).toBeUndefined()
+    })
+  })
+
+  describe('sort state', () => {
+    it('parses sort from URL', () => {
+      const { result } = renderHook(() => useUserFilters(), {
+        wrapper: createMemoryWrapper('/admin/users?sort=last_login_at:asc'),
+      })
+
+      expect(result.current.sort).toEqual({ columnId: 'last_login_at', direction: 'asc' })
+    })
+
+    it('ignores invalid sort column', () => {
+      const { result } = renderHook(() => useUserFilters(), {
+        wrapper: createMemoryWrapper('/admin/users?sort=invalid_col:asc'),
+      })
+
+      expect(result.current.sort).toBeNull()
+    })
+
+    it('setSort updates URL and resets page atomically', () => {
+      const { result } = renderHook(() => useUserFilters(), {
+        wrapper: createMemoryWrapper('/admin/users?page=3'),
+      })
+
+      expect(result.current.filters.page).toBe(3)
+
+      act(() => {
+        result.current.setSort({ columnId: 'subscription_tier', direction: 'desc' })
+      })
+
+      expect(result.current.sort).toEqual({ columnId: 'subscription_tier', direction: 'desc' })
+      expect(result.current.filters.page).toBe(1)
+    })
+
+    it('setSort(null) clears sort from URL', () => {
+      const { result } = renderHook(() => useUserFilters(), {
+        wrapper: createMemoryWrapper('/admin/users?sort=created_at:asc'),
+      })
+
+      act(() => {
+        result.current.setSort(null)
+      })
+
+      expect(result.current.sort).toBeNull()
+    })
+
+    it('apiParams includes sort_by and sort_dir when sort is set', () => {
+      const { result } = renderHook(() => useUserFilters(), {
+        wrapper: createMemoryWrapper('/admin/users?sort=subscription_tier:asc'),
+      })
+
+      expect(result.current.apiParams.sort_by).toBe('subscription_tier')
+      expect(result.current.apiParams.sort_dir).toBe('asc')
+    })
+
+    it('apiParams omits sort fields when sort is null', () => {
+      const { result } = renderHook(() => useUserFilters(), {
+        wrapper: createMemoryWrapper('/admin/users'),
+      })
+
+      expect(result.current.apiParams.sort_by).toBeUndefined()
+      expect(result.current.apiParams.sort_dir).toBeUndefined()
+    })
+
+    it('clearFilters preserves active sort', () => {
+      const { result } = renderHook(() => useUserFilters(), {
+        wrapper: createMemoryWrapper('/admin/users?search=test&tier=premium&sort=created_at:desc'),
+      })
+
+      expect(result.current.hasActiveFilters).toBe(true)
+      expect(result.current.sort).toEqual({ columnId: 'created_at', direction: 'desc' })
+
+      act(() => {
+        result.current.clearFilters()
+      })
+
+      expect(result.current.hasActiveFilters).toBe(false)
+      expect(result.current.sort).toEqual({ columnId: 'created_at', direction: 'desc' })
     })
   })
 })
