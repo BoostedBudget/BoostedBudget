@@ -84,13 +84,13 @@ export function SpendingReportsPage() {
     }
   }
 
-  const handleMerchantClick = (merchantName: string) => {
+  const handleMerchantClick = ({ id, name }: { id?: string | null; name: string }) => {
     trackEvent(ANALYTICS_EVENTS.REPORT_MERCHANT_CLICKED)
-    if (startDate && endDate) {
-      navigate(
-        `/transactions?start_date=${startDate}&end_date=${endDate}&search=${encodeURIComponent(merchantName)}`
-      )
-    }
+    if (!startDate || !endDate || !id) return
+    navigate(
+      `/transactions?merchant_id=${id}&start_date=${startDate}&end_date=${endDate}`,
+      { state: { merchantName: name } }
+    )
   }
 
   return (
