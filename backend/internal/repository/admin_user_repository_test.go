@@ -475,6 +475,92 @@ func TestGetUserDetail_NilManualTierOverride(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestListUsersSort tests that sort_by and sort_dir parameters produce the correct ORDER BY clause
+func TestListUsersSort(t *testing.T) {
+	tests := []struct {
+		name        string
+		sortBy      string
+		sortDir     string
+		expectOrder string // substring that must appear in the SQL
+	}{
+		{
+			name:        "default sort created_at desc",
+			sortBy:      "created_at",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY u.created_at DESC",
+		},
+		{
+			name:        "last_login_at asc with NULLS LAST",
+			sortBy:      "last_login_at",
+			sortDir:     "asc",
+			expectOrder: "ORDER BY u.last_login_at ASC NULLS LAST",
+		},
+		{
+			name:        "subscription_tier desc",
+			sortBy:      "subscription_tier",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY u.subscription_tier DESC",
+		},
+		{
+			name:        "subscription_status asc",
+			sortBy:      "subscription_status",
+			sortDir:     "asc",
+			expectOrder: "ORDER BY u.subscription_status ASC",
+		},
+		// Fallback cases — Huma enum prevents these in production, but repos are defense-in-depth
+		{
+			name:        "empty sort_by falls back to created_at desc",
+			sortBy:      "",
+			sortDir:     "",
+			expectOrder: "ORDER BY u.created_at DESC",
+		},
+		{
+			name:        "unknown sort_by falls back to created_at desc",
+			sortBy:      "nonexistent_column",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY u.created_at DESC",
+		},
+		{
+			name:        "unknown sort_dir falls back to DESC",
+			sortBy:      "created_at",
+			sortDir:     "invalid",
+			expectOrder: "ORDER BY u.created_at DESC",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock, err := pgxmock.NewPool()
+			require.NoError(t, err)
+			defer mock.Close()
+
+			repo := NewAdminUserRepository(mock, newTestFieldEncryptor(t))
+			filters := domain.AdminUserFilters{
+				SortBy:  tt.sortBy,
+				SortDir: tt.sortDir,
+			}
+
+			ctx := context.Background()
+
+			mock.ExpectQuery(`SELECT COUNT`).
+				WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(0))
+
+			mock.ExpectQuery(regexp.QuoteMeta(tt.expectOrder)).
+				WithArgs(20, 0).
+				WillReturnRows(pgxmock.NewRows([]string{
+					"id", "email", "subscription_tier", "subscription_status",
+					"manual_tier_override", "manual_tier_ends_at", "primary_region",
+					"created_at", "last_login_at", "is_active",
+					"linked_accounts_count", "automation_rules_count", "referrals_count",
+				}))
+
+			_, _, err = repo.ListUsers(ctx, filters, 20, 0)
+			require.NoError(t, err)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
 // TestUpdateUserTier_AuditLogWithSpecialChars tests that special chars in reason don't break JSON
 func TestUpdateUserTier_AuditLogWithSpecialChars(t *testing.T) {
 	mock, repo := setupAdminMockDB(t)

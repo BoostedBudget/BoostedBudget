@@ -26,6 +26,8 @@ type ListPaddleWebhooksInput struct {
 	Processed string `query:"processed" doc:"Filter by processed status: 'true', 'false', or empty for all"`
 	StartDate string `query:"start_date" doc:"ISO 8601 date string"`
 	EndDate   string `query:"end_date" doc:"ISO 8601 date string"`
+	SortBy    string `query:"sort_by"  enum:"created_at,attempts,status" default:"created_at"  doc:"Column to sort by"`
+	SortDir   string `query:"sort_dir" enum:"asc,desc"                   default:"desc"         doc:"Sort direction"`
 }
 
 // ListPaddleWebhooksOutput represents the response for listing Paddle webhook events.
@@ -122,6 +124,8 @@ func (h *AdminHandler) buildWebhookEventFilters(input *ListPaddleWebhooksInput) 
 	if t, _ := dateutil.ParseOptionalDate(input.EndDate, "end_date"); t != nil {
 		filters.EndDate = t
 	}
+	filters.SortBy = input.SortBy
+	filters.SortDir = input.SortDir
 	return filters
 }
 

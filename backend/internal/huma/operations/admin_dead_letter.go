@@ -28,6 +28,8 @@ type ListDeadLetterJobsInput struct {
 	Retried  string `query:"retried" doc:"Filter by retried status: 'true', 'false', or empty for all"`
 	Start    string `query:"start_date" doc:"ISO 8601 start date filter"`
 	End      string `query:"end_date" doc:"ISO 8601 end date filter"`
+	SortBy   string `query:"sort_by"  enum:"failed_at,kind,retried_at" default:"failed_at" doc:"Column to sort by"`
+	SortDir  string `query:"sort_dir" enum:"asc,desc"                  default:"desc"      doc:"Sort direction"`
 }
 
 // ListDeadLetterJobsOutput is the response for listing DLQ entries.
@@ -152,6 +154,8 @@ func (h *AdminHandler) buildDLQFilters(input *ListDeadLetterJobsInput) domain.De
 	if t, _ := dateutil.ParseOptionalDate(input.End, "end_date"); t != nil {
 		filters.EndDate = t
 	}
+	filters.SortBy = input.SortBy
+	filters.SortDir = input.SortDir
 	return filters
 }
 

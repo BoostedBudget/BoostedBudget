@@ -4978,6 +4978,29 @@ paths:
           schema:
             description: ISO 8601 end date filter
             type: string
+        - description: Column to sort by
+          explode: false
+          in: query
+          name: sort_by
+          schema:
+            default: failed_at
+            description: Column to sort by
+            enum:
+              - failed_at
+              - kind
+              - retried_at
+            type: string
+        - description: Sort direction
+          explode: false
+          in: query
+          name: sort_dir
+          schema:
+            default: desc
+            description: Sort direction
+            enum:
+              - asc
+              - desc
+            type: string
       responses:
         "200":
           content:
@@ -5338,6 +5361,30 @@ paths:
           schema:
             description: Filter by subscription tier
             type: string
+        - description: Column to sort by
+          explode: false
+          in: query
+          name: sort_by
+          schema:
+            default: created_at
+            description: Column to sort by
+            enum:
+              - created_at
+              - last_login_at
+              - subscription_tier
+              - subscription_status
+            type: string
+        - description: Sort direction
+          explode: false
+          in: query
+          name: sort_dir
+          schema:
+            default: desc
+            description: Sort direction
+            enum:
+              - asc
+              - desc
+            type: string
       responses:
         "200":
           content:
@@ -5536,6 +5583,29 @@ paths:
           name: end_date
           schema:
             description: ISO 8601 date string
+            type: string
+        - description: Column to sort by
+          explode: false
+          in: query
+          name: sort_by
+          schema:
+            default: created_at
+            description: Column to sort by
+            enum:
+              - created_at
+              - attempts
+              - status
+            type: string
+        - description: Sort direction
+          explode: false
+          in: query
+          name: sort_dir
+          schema:
+            default: desc
+            description: Sort direction
+            enum:
+              - asc
+              - desc
             type: string
       responses:
         "200":

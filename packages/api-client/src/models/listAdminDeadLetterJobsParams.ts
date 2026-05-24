@@ -27,6 +27,8 @@ Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
+import type { ListAdminDeadLetterJobsSortBy } from "./listAdminDeadLetterJobsSortBy";
+import type { ListAdminDeadLetterJobsSortDir } from "./listAdminDeadLetterJobsSortDir";
 
 export type ListAdminDeadLetterJobsParams = {
   /**
@@ -58,4 +60,12 @@ export type ListAdminDeadLetterJobsParams = {
    * ISO 8601 end date filter
    */
   end_date?: string;
+  /**
+   * Column to sort by
+   */
+  sort_by?: ListAdminDeadLetterJobsSortBy;
+  /**
+   * Sort direction
+   */
+  sort_dir?: ListAdminDeadLetterJobsSortDir;
 };

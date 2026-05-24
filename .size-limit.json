@@ -80,7 +80,7 @@
   {
     "name": "admin",
     "path": "apps/web/dist/assets/admin-*.js",
-    "limit": "28 KB",
+    "limit": "30 KB",
     "gzip": true
   },
   {

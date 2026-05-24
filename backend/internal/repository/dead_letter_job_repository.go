@@ -76,18 +76,38 @@ func (r *DeadLetterJobRepository) GetByID(ctx context.Context, id int64) (*domai
 	return job, nil
 }
 
+// dlqOrderByAllowlist maps sort_by column names to safe SQL ORDER BY entries.
+var dlqOrderByAllowlist = map[string]orderByEntry{
+	"failed_at":  {col: "failed_at"},
+	"kind":       {col: "kind"},
+	"retried_at": {col: "retried_at", nullsLast: true}, // nullable — NULLS LAST
+}
+
 // ListAll returns a paginated list of dead letter jobs with optional filters.
 // Returns the jobs, total count, and any error.
 func (r *DeadLetterJobRepository) ListAll(ctx context.Context, filters domain.DeadLetterJobFilters, limit, offset int) ([]*domain.DeadLetterJob, int, error) {
 	where, args := buildDLQWhereClause(filters)
+
+	entry := dlqOrderByAllowlist[filters.SortBy]
+	if entry.col == "" {
+		entry = orderByEntry{col: "failed_at"} // fallback
+	}
+	orderDir := strings.ToUpper(filters.SortDir)
+	if orderDir != "ASC" && orderDir != "DESC" {
+		orderDir = "DESC"
+	}
+	nullsClause := ""
+	if entry.nullsLast {
+		nullsClause = " NULLS LAST"
+	}
 
 	listQuery := fmt.Sprintf(`
 		SELECT id, original_job_id, kind, queue, args, errors, max_attempts,
 		       created_at, failed_at, user_id, notified, retried_at, retry_job_id, notes
 		FROM dead_letter_jobs
 		%s
-		ORDER BY failed_at DESC
-		LIMIT %d OFFSET %d`, where, limit, offset)
+		ORDER BY %s %s%s
+		LIMIT %d OFFSET %d`, where, entry.col, orderDir, nullsClause, limit, offset)
 
 	rows, err := r.db.Query(ctx, listQuery, args...)
 	if err != nil {

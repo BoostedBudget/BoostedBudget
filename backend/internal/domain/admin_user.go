@@ -35,6 +35,10 @@ type AdminUserFilters struct {
 	Search string
 	// Tier filters by subscription_tier
 	Tier string
+	// SortBy is the column to sort by; validated enum: created_at|last_login_at|subscription_tier|subscription_status
+	SortBy string
+	// SortDir is the sort direction; validated enum: asc|desc
+	SortDir string
 }
 
 // AdminUserListResponse contains paginated user list results for admin view.

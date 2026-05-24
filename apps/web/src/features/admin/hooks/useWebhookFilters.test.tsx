@@ -1,15 +1,38 @@
 /**
  * useWebhookFilters Hook Tests
  * Issue #747: Paddle Webhook Admin UI
+ * Issue #1148: Server-side sort for admin tables
  */
 
-import { describe, it, expect } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
+import { BrowserRouter, MemoryRouter } from 'react-router-dom'
+import { createElement } from 'react'
+import type { ReactNode } from 'react'
 import { useWebhookFilters } from './useWebhookFilters'
 
+// BrowserRouter wrapper for existing filter tests
+function createWrapper() {
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <BrowserRouter>{children}</BrowserRouter>
+  }
+}
+
+// MemoryRouter wrapper for sort tests (initialEntries for URL-synced sort)
+function createMemoryWrapper(initialUrl = '/') {
+  return ({ children }: { children: ReactNode }) =>
+    createElement(MemoryRouter, { initialEntries: [initialUrl] }, children)
+}
+
 describe('useWebhookFilters', () => {
+  beforeEach(() => {
+    window.history.replaceState({}, '', '/')
+  })
+
   it('returns default state', () => {
-    const { result } = renderHook(() => useWebhookFilters())
+    const { result } = renderHook(() => useWebhookFilters(), {
+      wrapper: createWrapper(),
+    })
 
     expect(result.current.filters).toEqual({
       eventType: '',
@@ -21,7 +44,9 @@ describe('useWebhookFilters', () => {
   })
 
   it('setEventType resets page to 1', () => {
-    const { result } = renderHook(() => useWebhookFilters())
+    const { result } = renderHook(() => useWebhookFilters(), {
+      wrapper: createWrapper(),
+    })
 
     act(() => {
       result.current.setPage(3)
@@ -36,7 +61,9 @@ describe('useWebhookFilters', () => {
   })
 
   it('setProcessed resets page to 1', () => {
-    const { result } = renderHook(() => useWebhookFilters())
+    const { result } = renderHook(() => useWebhookFilters(), {
+      wrapper: createWrapper(),
+    })
 
     act(() => {
       result.current.setPage(2)
@@ -50,7 +77,9 @@ describe('useWebhookFilters', () => {
   })
 
   it('setPage does not reset other filters', () => {
-    const { result } = renderHook(() => useWebhookFilters())
+    const { result } = renderHook(() => useWebhookFilters(), {
+      wrapper: createWrapper(),
+    })
 
     act(() => {
       result.current.setEventType('transaction.completed')
@@ -67,12 +96,16 @@ describe('useWebhookFilters', () => {
   })
 
   it('hasActiveFilters is false by default', () => {
-    const { result } = renderHook(() => useWebhookFilters())
+    const { result } = renderHook(() => useWebhookFilters(), {
+      wrapper: createWrapper(),
+    })
     expect(result.current.hasActiveFilters).toBe(false)
   })
 
   it('hasActiveFilters is true when eventType is set', () => {
-    const { result } = renderHook(() => useWebhookFilters())
+    const { result } = renderHook(() => useWebhookFilters(), {
+      wrapper: createWrapper(),
+    })
 
     act(() => {
       result.current.setEventType('subscription.canceled')
@@ -82,7 +115,9 @@ describe('useWebhookFilters', () => {
   })
 
   it('hasActiveFilters is true when processed is set', () => {
-    const { result } = renderHook(() => useWebhookFilters())
+    const { result } = renderHook(() => useWebhookFilters(), {
+      wrapper: createWrapper(),
+    })
 
     act(() => {
       result.current.setProcessed('false')
@@ -92,7 +127,9 @@ describe('useWebhookFilters', () => {
   })
 
   it('setStartDate resets page to 1', () => {
-    const { result } = renderHook(() => useWebhookFilters())
+    const { result } = renderHook(() => useWebhookFilters(), {
+      wrapper: createWrapper(),
+    })
 
     act(() => {
       result.current.setPage(3)
@@ -107,7 +144,9 @@ describe('useWebhookFilters', () => {
   })
 
   it('setEndDate resets page to 1', () => {
-    const { result } = renderHook(() => useWebhookFilters())
+    const { result } = renderHook(() => useWebhookFilters(), {
+      wrapper: createWrapper(),
+    })
 
     act(() => {
       result.current.setPage(2)
@@ -121,8 +160,10 @@ describe('useWebhookFilters', () => {
     expect(result.current.filters.page).toBe(1)
   })
 
-  it('resetFilters clears all and resets page', () => {
-    const { result } = renderHook(() => useWebhookFilters())
+  it('clearing all filters resets hasActiveFilters and page', () => {
+    const { result } = renderHook(() => useWebhookFilters(), {
+      wrapper: createWrapper(),
+    })
 
     act(() => {
       result.current.setEventType('subscription.created')
@@ -133,7 +174,11 @@ describe('useWebhookFilters', () => {
     })
 
     act(() => {
-      result.current.resetFilters()
+      result.current.setEventType('')
+      result.current.setProcessed('')
+      result.current.setStartDate('')
+      result.current.setEndDate('')
+      result.current.setPage(1)
     })
 
     expect(result.current.filters).toEqual({
@@ -144,5 +189,94 @@ describe('useWebhookFilters', () => {
       page: 1,
     })
     expect(result.current.hasActiveFilters).toBe(false)
+  })
+
+  describe('sort state', () => {
+    it('returns null sort by default', () => {
+      const { result } = renderHook(() => useWebhookFilters(), {
+        wrapper: createMemoryWrapper('/admin/webhooks'),
+      })
+
+      expect(result.current.sort).toBeNull()
+    })
+
+    it('setSort updates sort and resets page to 1', () => {
+      const { result } = renderHook(() => useWebhookFilters(), {
+        wrapper: createMemoryWrapper('/admin/webhooks'),
+      })
+
+      act(() => {
+        result.current.setPage(3)
+      })
+      expect(result.current.filters.page).toBe(3)
+
+      act(() => {
+        result.current.setSort({ columnId: 'attempts', direction: 'asc' })
+      })
+
+      expect(result.current.sort).toEqual({ columnId: 'attempts', direction: 'asc' })
+      expect(result.current.filters.page).toBe(1)
+    })
+
+    it('setSort(null) clears sort', () => {
+      const { result } = renderHook(() => useWebhookFilters(), {
+        wrapper: createMemoryWrapper('/admin/webhooks?sort=created_at:desc'),
+      })
+
+      expect(result.current.sort).toEqual({ columnId: 'created_at', direction: 'desc' })
+
+      act(() => {
+        result.current.setSort(null)
+      })
+
+      expect(result.current.sort).toBeNull()
+    })
+
+    it('apiParams includes sort_by and sort_dir when sort is set', () => {
+      const { result } = renderHook(() => useWebhookFilters(), {
+        wrapper: createMemoryWrapper('/admin/webhooks'),
+      })
+
+      act(() => {
+        result.current.setSort({ columnId: 'attempts', direction: 'asc' })
+      })
+
+      expect(result.current.apiParams.sort_by).toBe('attempts')
+      expect(result.current.apiParams.sort_dir).toBe('asc')
+    })
+
+    it('apiParams omits sort_by and sort_dir when sort is null', () => {
+      const { result } = renderHook(() => useWebhookFilters(), {
+        wrapper: createMemoryWrapper('/admin/webhooks'),
+      })
+
+      expect(result.current.apiParams.sort_by).toBeUndefined()
+      expect(result.current.apiParams.sort_dir).toBeUndefined()
+    })
+
+    it('clearing filters preserves active sort in URL', () => {
+      const { result } = renderHook(() => useWebhookFilters(), {
+        wrapper: createMemoryWrapper('/admin/webhooks?sort=created_at:desc'),
+      })
+
+      act(() => {
+        result.current.setEventType('subscription.created')
+        result.current.setPage(3)
+      })
+
+      // Simulate a full filter reset (no resetFilters helper — done via individual setters)
+      act(() => {
+        result.current.setEventType('')
+        result.current.setProcessed('')
+        result.current.setStartDate('')
+        result.current.setEndDate('')
+        result.current.setPage(1)
+      })
+
+      expect(result.current.hasActiveFilters).toBe(false)
+      expect(result.current.filters.page).toBe(1)
+      // Sort (URL-driven) must not be affected by filter resets
+      expect(result.current.sort).toEqual({ columnId: 'created_at', direction: 'desc' })
+    })
   })
 })
