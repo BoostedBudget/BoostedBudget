@@ -139,6 +139,83 @@ func TestDeadLetterJobRepository_ListAll_Empty(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// --- ListAll sort ---
+
+func TestListAllDLQSort(t *testing.T) {
+	tests := []struct {
+		name        string
+		sortBy      string
+		sortDir     string
+		expectOrder string
+	}{
+		{
+			name:        "default sort failed_at desc",
+			sortBy:      "failed_at",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY failed_at DESC",
+		},
+		{
+			name:        "kind asc",
+			sortBy:      "kind",
+			sortDir:     "asc",
+			expectOrder: "ORDER BY kind ASC",
+		},
+		{
+			name:        "retried_at asc with NULLS LAST",
+			sortBy:      "retried_at",
+			sortDir:     "asc",
+			expectOrder: "ORDER BY retried_at ASC NULLS LAST",
+		},
+		// Fallback cases — Huma enum prevents these in production, but repos are defense-in-depth
+		{
+			name:        "empty sort_by falls back to failed_at desc",
+			sortBy:      "",
+			sortDir:     "",
+			expectOrder: "ORDER BY failed_at DESC",
+		},
+		{
+			name:        "unknown sort_by falls back to failed_at desc",
+			sortBy:      "nonexistent_column",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY failed_at DESC",
+		},
+		{
+			name:        "unknown sort_dir falls back to DESC",
+			sortBy:      "failed_at",
+			sortDir:     "invalid",
+			expectOrder: "ORDER BY failed_at DESC",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock, repo := setupDLQMockDB(t)
+			defer mock.Close()
+
+			ctx := context.Background()
+			userID := "user123"
+
+			mock.ExpectQuery(regexp.MustCompile(regexp.QuoteMeta(tc.expectOrder)).String()).
+				WillReturnRows(pgxmock.NewRows(dlqScanColumns).
+					AddRow(newDLQRow(1, "plaid_sync", "default", &userID, nil)...))
+
+			mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*)`)).
+				WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+
+			filters := domain.DeadLetterJobFilters{
+				SortBy:  tc.sortBy,
+				SortDir: tc.sortDir,
+			}
+			jobs, total, err := repo.ListAll(ctx, filters, 20, 0)
+
+			require.NoError(t, err)
+			assert.Equal(t, 1, total)
+			assert.Len(t, jobs, 1)
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
 // --- DeleteByID ---
 
 func TestDeadLetterJobRepository_DeleteByID_Success(t *testing.T) {

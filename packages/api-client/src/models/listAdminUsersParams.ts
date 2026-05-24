@@ -27,6 +27,8 @@ Multi-region support planned for Phase 7+.
 
  * OpenAPI spec version: 1.0.0
  */
+import type { ListAdminUsersSortBy } from "./listAdminUsersSortBy";
+import type { ListAdminUsersSortDir } from "./listAdminUsersSortDir";
 
 export type ListAdminUsersParams = {
   /**
@@ -48,4 +50,12 @@ export type ListAdminUsersParams = {
    * Filter by subscription tier
    */
   tier?: string;
+  /**
+   * Column to sort by
+   */
+  sort_by?: ListAdminUsersSortBy;
+  /**
+   * Sort direction
+   */
+  sort_dir?: ListAdminUsersSortDir;
 };

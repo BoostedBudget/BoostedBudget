@@ -8,6 +8,8 @@ type WebhookEventFilters struct {
 	Processed *bool
 	StartDate *time.Time
 	EndDate   *time.Time
+	SortBy    string // validated enum: created_at|attempts|status
+	SortDir   string // validated enum: asc|desc
 }
 
 // WebhookEventListResponse is a paginated response for webhook events.

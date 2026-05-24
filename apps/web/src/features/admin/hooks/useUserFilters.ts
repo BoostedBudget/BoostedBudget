@@ -8,11 +8,20 @@
 
 import { useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import type { ListAdminUsersParams } from '@boostedbudget/api-client/models'
+import type { ListAdminUsersParams, ListAdminUsersSortBy, ListAdminUsersSortDir } from '@boostedbudget/api-client/models'
+import { parseSortParam, serializeSortParam } from '@/shared/hooks/useSortUrlState'
+import type { SortState } from '@/shared/components/DataTable'
 
 // Default values
 const DEFAULT_PAGE = 1
 const DEFAULT_PAGE_SIZE = 20
+
+const USERS_SORT_COLUMNS = new Set([
+  'created_at',
+  'last_login_at',
+  'subscription_tier',
+  'subscription_status',
+]) as ReadonlySet<string>
 
 /**
  * User filter state
@@ -48,6 +57,10 @@ export interface UseUserFiltersResult {
   hasActiveFilters: boolean
   /** Params formatted for API call */
   apiParams: ListAdminUsersParams
+  /** Current sort state */
+  sort: SortState
+  /** Set sort state (atomically resets page to 1) */
+  setSort: (next: SortState) => void
 }
 
 /**
@@ -61,6 +74,33 @@ export interface UseUserFiltersResult {
  */
 export function useUserFilters(): UseUserFiltersResult {
   const [searchParams, setSearchParams] = useSearchParams()
+
+  // Parse sort from URL
+  const sort = useMemo<SortState>(
+    () => parseSortParam(searchParams.get('sort'), USERS_SORT_COLUMNS),
+    [searchParams]
+  )
+
+  // Set sort (atomically updates sort + resets page)
+  const setSort = useCallback(
+    (next: SortState) => {
+      setSearchParams(
+        (prev) => {
+          const updated = new URLSearchParams(prev)
+          const serialized = serializeSortParam(next)
+          if (serialized) {
+            updated.set('sort', serialized)
+          } else {
+            updated.delete('sort')
+          }
+          updated.delete('page') // Reset to page 1 on sort change
+          return updated
+        },
+        { replace: true }
+      )
+    },
+    [setSearchParams]
+  )
 
   // Parse filters from URL
   const filters = useMemo<UserFilters>(() => {
@@ -146,9 +186,18 @@ export function useUserFilters(): UseUserFiltersResult {
     [setSearchParams]
   )
 
-  // Clear all filters
+  // Clear all filters (preserves sort — sort is not a "filter" in this hook's model)
   const clearFilters = useCallback(() => {
-    setSearchParams(new URLSearchParams(), { replace: true })
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams()
+        // Preserve sort — it is not a "filter" in this hook's model
+        const sort = prev.get('sort')
+        if (sort) next.set('sort', sort)
+        return next
+      },
+      { replace: true }
+    )
   }, [setSearchParams])
 
   // Check if any filters are active (excluding pagination)
@@ -171,8 +220,13 @@ export function useUserFilters(): UseUserFiltersResult {
       params.tier = filters.tier
     }
 
+    if (sort) {
+      params.sort_by = sort.columnId as ListAdminUsersSortBy
+      params.sort_dir = sort.direction as ListAdminUsersSortDir
+    }
+
     return params
-  }, [filters])
+  }, [filters, sort])
 
   return {
     filters,
@@ -183,5 +237,7 @@ export function useUserFilters(): UseUserFiltersResult {
     clearFilters,
     hasActiveFilters,
     apiParams,
+    sort,
+    setSort,
   }
 }

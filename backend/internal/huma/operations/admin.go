@@ -196,8 +196,10 @@ type CheckRoleResponseBody struct {
 type ListUsersInput struct {
 	inputs.AdminAuthenticatedInput
 	inputs.PagePaginationInput
-	Search string `query:"search" doc:"Search by email (partial match)"`
-	Tier   string `query:"tier" doc:"Filter by subscription tier"`
+	Search  string `query:"search"   doc:"Search by email (partial match)"`
+	Tier    string `query:"tier"     doc:"Filter by subscription tier"`
+	SortBy  string `query:"sort_by"  enum:"created_at,last_login_at,subscription_tier,subscription_status" default:"created_at"  doc:"Column to sort by"`
+	SortDir string `query:"sort_dir" enum:"asc,desc"                                                      default:"desc"         doc:"Sort direction"`
 }
 
 // ListUsersOutput represents the response for user listing.
@@ -368,8 +370,10 @@ func (h *AdminHandler) ListUsers(ctx context.Context, input *ListUsersInput) (*L
 
 	// Build filters from input
 	filters := domain.AdminUserFilters{
-		Search: input.Search,
-		Tier:   input.Tier,
+		Search:  input.Search,
+		Tier:    input.Tier,
+		SortBy:  input.SortBy,
+		SortDir: input.SortDir,
 	}
 
 	// Get users from service
