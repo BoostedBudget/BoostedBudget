@@ -1,8 +1,26 @@
 name: Deploy to Staging
 
 # Manual trigger only - use GitHub Actions UI or gh workflow run
+# Note: Rotating VITE_* secrets requires force_rebuild=true (VITE_* vars are baked at build time)
 on:
   workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: 'Force rebuild of both components (use after rotating baked secrets or debugging)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      allow_rollback:
+        description: 'Allow deploying a commit that is not a descendant of the last released commit'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 # Only allow one staging deployment at a time
 concurrency:
@@ -17,16 +35,149 @@ env:
 
 jobs:
   # =============================================================================
+  # Detect Component Changes
+  # Resolves deploy_sha once and diffs against per-component release tags.
+  # All downstream jobs pin to deploy_sha — never github.sha.
+  # =============================================================================
+  detect-changes:
+    name: Detect Component Changes
+    runs-on: [self-hosted, macOS, mac-mini]
+    permissions:
+      contents: read
+    outputs:
+      deploy_sha:         ${{ steps.resolve-sha.outputs.deploy_sha }}
+      backend_changed:    ${{ steps.compute.outputs.backend_changed }}
+      frontend_changed:   ${{ steps.compute.outputs.frontend_changed }}
+      backend_prior_sha:  ${{ steps.resolve-tags.outputs.backend_prior_sha }}
+      frontend_prior_sha: ${{ steps.resolve-tags.outputs.frontend_prior_sha }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: staging
+          fetch-depth: 0
+          fetch-tags: true
+
+      - id: resolve-sha
+        run: |
+          set -euo pipefail
+          # Pin once to staging tip so mid-deploy mutations from sync-staging.yml
+          # don't change what we're deploying. All downstream jobs use this SHA.
+          DEPLOY_SHA="$(git rev-parse origin/staging)"
+          echo "deploy_sha=${DEPLOY_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Pinned deploy_sha=${DEPLOY_SHA}"
+
+      - id: resolve-tags
+        run: |
+          set -euo pipefail
+          # Belt-and-suspenders fetch in case fetch-tags: true missed them
+          git fetch --force origin \
+            'refs/tags/backend-staging-latest:refs/tags/backend-staging-latest' \
+            'refs/tags/frontend-staging-latest:refs/tags/frontend-staging-latest' 2>/dev/null || true
+
+          resolve() {
+            local tag="$1"
+            if git rev-parse --verify --quiet "refs/tags/${tag}^{commit}" >/dev/null 2>&1; then
+              git rev-parse "refs/tags/${tag}^{commit}"
+            else
+              echo ""
+            fi
+          }
+          BACKEND_PRIOR="$(resolve backend-staging-latest)"
+          FRONTEND_PRIOR="$(resolve frontend-staging-latest)"
+          echo "backend_prior_sha=${BACKEND_PRIOR}"   >> "$GITHUB_OUTPUT"
+          echo "frontend_prior_sha=${FRONTEND_PRIOR}" >> "$GITHUB_OUTPUT"
+          echo "bootstrap_backend=$([ -z "$BACKEND_PRIOR" ] && echo true || echo false)"   >> "$GITHUB_OUTPUT"
+          echo "bootstrap_frontend=$([ -z "$FRONTEND_PRIOR" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - id: rollback-guard
+        env:
+          DEPLOY_SHA: ${{ steps.resolve-sha.outputs.deploy_sha }}
+          ALLOW_ROLLBACK: ${{ inputs.allow_rollback }}
+          BACKEND_PRIOR: ${{ steps.resolve-tags.outputs.backend_prior_sha }}
+          FRONTEND_PRIOR: ${{ steps.resolve-tags.outputs.frontend_prior_sha }}
+        run: |
+          set -euo pipefail
+          check() {
+            local prior="$1" tag="$2"
+            if [ -n "$prior" ] && ! git merge-base --is-ancestor "$prior" "$DEPLOY_SHA"; then
+              if [ "$ALLOW_ROLLBACK" = "true" ]; then
+                echo "::warning::deploy_sha ($DEPLOY_SHA) is not a descendant of $tag ($prior). allow_rollback=true; proceeding."
+              else
+                echo "::error::deploy_sha ($DEPLOY_SHA) is not a descendant of $tag ($prior)."
+                echo "::error::Re-run with allow_rollback=true to override."
+                exit 1
+              fi
+            fi
+          }
+          check "$BACKEND_PRIOR"  backend-staging-latest
+          check "$FRONTEND_PRIOR" frontend-staging-latest
+
+      - id: filter-backend
+        if: steps.resolve-tags.outputs.bootstrap_backend == 'false'
+        uses: dorny/paths-filter@v4
+        with:
+          base: ${{ steps.resolve-tags.outputs.backend_prior_sha }}
+          ref:  ${{ steps.resolve-sha.outputs.deploy_sha }}
+          filters: |
+            backend:  ['backend/**', 'go.mod', 'go.sum', 'config/**', '.dockerignore']
+            api:      ['api/**', 'api/openapi.yaml']
+            workflow: ['.github/workflows/**']
+
+      - id: filter-frontend
+        if: steps.resolve-tags.outputs.bootstrap_frontend == 'false'
+        uses: dorny/paths-filter@v4
+        with:
+          base: ${{ steps.resolve-tags.outputs.frontend_prior_sha }}
+          ref:  ${{ steps.resolve-sha.outputs.deploy_sha }}
+          filters: |
+            frontend: ['apps/web/**', 'packages/**', 'package.json', 'bun.lock']
+            api:      ['api/**', 'api/openapi.yaml']
+            workflow: ['.github/workflows/**']
+
+      - id: compute
+        env:
+          FORCE_REBUILD: ${{ inputs.force_rebuild }}
+          BOOT_BE: ${{ steps.resolve-tags.outputs.bootstrap_backend }}
+          BOOT_FE: ${{ steps.resolve-tags.outputs.bootstrap_frontend }}
+          BE_BACKEND: ${{ steps.filter-backend.outputs.backend }}
+          BE_API: ${{ steps.filter-backend.outputs.api }}
+          BE_WORKFLOW: ${{ steps.filter-backend.outputs.workflow }}
+          FE_FRONTEND: ${{ steps.filter-frontend.outputs.frontend }}
+          FE_API: ${{ steps.filter-frontend.outputs.api }}
+          FE_WORKFLOW: ${{ steps.filter-frontend.outputs.workflow }}
+        run: |
+          set -euo pipefail
+          backend_changed=false
+          if [ "$FORCE_REBUILD" = "true" ] || [ "$BOOT_BE" = "true" ] || \
+             [ "$BE_BACKEND" = "true" ] || [ "$BE_API" = "true" ] || [ "$BE_WORKFLOW" = "true" ]; then
+            backend_changed=true
+          fi
+
+          frontend_changed=false
+          if [ "$FORCE_REBUILD" = "true" ] || [ "$BOOT_FE" = "true" ] || \
+             [ "$FE_FRONTEND" = "true" ] || [ "$FE_API" = "true" ] || [ "$FE_WORKFLOW" = "true" ]; then
+            frontend_changed=true
+          fi
+
+          echo "backend_changed=${backend_changed}"   >> "$GITHUB_OUTPUT"
+          echo "frontend_changed=${frontend_changed}" >> "$GITHUB_OUTPUT"
+          echo "Backend changed: ${backend_changed}, Frontend changed: ${frontend_changed}"
+
+  # =============================================================================
   # Build and Push Backend Image to GHCR
   # =============================================================================
   build-backend:
     name: Build Backend Image
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.backend_changed == 'true' }}
     runs-on: [self-hosted, macOS, mac-mini]
     permissions:
       contents: read
       packages: write
     env:
       UNIQUE_WORKSPACE: workspace-build-backend-${{ github.run_id }}
+      DEPLOY_SHA: ${{ needs.detect-changes.outputs.deploy_sha }}
 
     steps:
       - name: Clean workspace
@@ -35,7 +186,7 @@ jobs:
       - name: Checkout staging branch
         uses: actions/checkout@v6
         with:
-          ref: staging
+          ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Set up Docker Buildx
@@ -89,13 +240,13 @@ jobs:
           pull: true
           no-cache: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:staging-${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:staging-${{ env.DEPLOY_SHA }}
             ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:staging-latest
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:buildcache-go${{ env.GO_VERSION }}
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:buildcache-go${{ env.GO_VERSION }},mode=max
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
-            VERSION=staging-${{ github.sha }}
+            VERSION=staging-${{ env.DEPLOY_SHA }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
           provenance: false
 
@@ -103,7 +254,7 @@ jobs:
         run: |
           echo "### Backend Image Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:staging-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:staging-${DEPLOY_SHA}\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Final workspace cleanup
         if: always()
@@ -114,11 +265,13 @@ jobs:
   # =============================================================================
   push-to-fly-registry:
     name: Push Backend to Fly.io
-    needs: build-backend
-    if: ${{ needs.build-backend.result == 'success' }}
+    needs: [detect-changes, build-backend]
+    if: ${{ needs.detect-changes.outputs.backend_changed == 'true' && needs.build-backend.result == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
     environment:
       name: staging
+    env:
+      DEPLOY_SHA: ${{ needs.detect-changes.outputs.deploy_sha }}
 
     steps:
       - name: Cleanup Docker storage
@@ -163,15 +316,15 @@ jobs:
 
       - name: Pull and push to Fly.io registry
         run: |
-          GHCR_IMAGE="${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:staging-${{ github.sha }}"
+          GHCR_IMAGE="${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:staging-${DEPLOY_SHA}"
           for i in 1 2 3; do
             docker pull --platform linux/amd64 ${GHCR_IMAGE} && break
             [ $i -lt 3 ] && sleep 15
           done
-          docker tag ${GHCR_IMAGE} registry.fly.io/staging-boostedbudget-api:staging-${{ github.sha }}
+          docker tag ${GHCR_IMAGE} "registry.fly.io/staging-boostedbudget-api:staging-${DEPLOY_SHA}"
           docker tag ${GHCR_IMAGE} registry.fly.io/staging-boostedbudget-api:latest
           for i in 1 2 3; do
-            docker push registry.fly.io/staging-boostedbudget-api:staging-${{ github.sha }} && break
+            docker push "registry.fly.io/staging-boostedbudget-api:staging-${DEPLOY_SHA}" && break
             [ $i -lt 3 ] && sleep 15
           done
           for i in 1 2 3; do
@@ -186,10 +339,13 @@ jobs:
 
   # =============================================================================
   # Deploy Backend to Fly.io Staging
+  # Always runs (even when backend unchanged) so machines roll and health-check.
+  # Uses prior image when backend hasn't changed.
   # =============================================================================
   deploy-backend:
     name: Deploy Backend to Fly.io Staging
-    needs: [build-backend, push-to-fly-registry]
+    needs: [detect-changes, build-backend, push-to-fly-registry]
+    if: always() && !cancelled() && needs.detect-changes.result == 'success' && (needs.build-backend.result == 'success' || needs.build-backend.result == 'skipped') && (needs.push-to-fly-registry.result == 'success' || needs.push-to-fly-registry.result == 'skipped')
     runs-on: [self-hosted, macOS, mac-mini]
     environment:
       name: staging
@@ -204,22 +360,48 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          ref: staging
+          ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Setup Fly.io CLI
         uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Select image and preflight check
+        id: image-select
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          DEPLOY_SHA: ${{ needs.detect-changes.outputs.deploy_sha }}
+          PRIOR_SHA: ${{ needs.detect-changes.outputs.backend_prior_sha }}
+          BACKEND_CHANGED: ${{ needs.detect-changes.outputs.backend_changed }}
+        run: |
+          set -euo pipefail
+          if [ "$BACKEND_CHANGED" = "true" ]; then
+            IMAGE_TAG="staging-${DEPLOY_SHA}"
+          else
+            IMAGE_TAG="staging-${PRIOR_SHA}"
+          fi
+
+          flyctl auth docker
+          if ! docker manifest inspect "registry.fly.io/staging-boostedbudget-api:${IMAGE_TAG}" >/dev/null 2>&1; then
+            echo "::error::Image registry.fly.io/staging-boostedbudget-api:${IMAGE_TAG} not found in Fly registry."
+            echo "::error::Re-run this workflow with force_rebuild=true to rebuild from source."
+            exit 1
+          fi
+
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Image selected: registry.fly.io/staging-boostedbudget-api:${IMAGE_TAG}"
 
       - name: Deploy to Fly.io Staging
         id: deploy
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          IMAGE_TAG: ${{ steps.image-select.outputs.image_tag }}
         run: |
           for attempt in 1 2 3; do
             flyctl deploy \
               --app staging-boostedbudget-api \
-              --image registry.fly.io/staging-boostedbudget-api:staging-${{ github.sha }} \
+              --image "registry.fly.io/staging-boostedbudget-api:${IMAGE_TAG}" \
               --config backend/fly.staging.toml && {
               echo "deploy-attempts=$attempt" >> $GITHUB_OUTPUT
               break
@@ -239,11 +421,21 @@ jobs:
           flyctl status --app staging-boostedbudget-api
           flyctl logs -a staging-boostedbudget-api -n 2>&1 | head -20 || true
 
-      - name: Deployment summary
+      - name: Record deployed image digest
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          IMAGE_TAG: ${{ steps.image-select.outputs.image_tag }}
+          DEPLOY_SHA: ${{ needs.detect-changes.outputs.deploy_sha }}
+          BACKEND_CHANGED: ${{ needs.detect-changes.outputs.backend_changed }}
         run: |
+          DIGEST=$(flyctl status --app staging-boostedbudget-api --json 2>/dev/null | \
+            jq -r '.ImageDetails.Digest // "unknown"' 2>/dev/null || echo "unknown")
           echo "### Backend Staging Deployment" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** \`staging-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image tag:** \`registry.fly.io/staging-boostedbudget-api:${IMAGE_TAG}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** \`${DIGEST}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Deploy SHA:** \`${DEPLOY_SHA}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Backend rebuilt:** ${BACKEND_CHANGED}" >> $GITHUB_STEP_SUMMARY
           echo "**URL:** https://staging-api.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
           echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
 
@@ -256,6 +448,8 @@ jobs:
   # =============================================================================
   deploy-frontend:
     name: Deploy Frontend to Cloudflare Pages
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.frontend_changed == 'true' }}
     runs-on: [self-hosted, macOS, mac-mini]
     environment:
       name: staging
@@ -270,7 +464,7 @@ jobs:
       - name: Checkout staging branch
         uses: actions/checkout@v6
         with:
-          ref: staging
+          ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Setup Bun
@@ -318,7 +512,8 @@ jobs:
   # =============================================================================
   smoke-tests:
     name: Staging Smoke Tests
-    needs: [deploy-backend, deploy-frontend]
+    needs: [detect-changes, deploy-backend, deploy-frontend]
+    if: always() && !cancelled() && needs.deploy-backend.result == 'success' && (needs.deploy-frontend.result == 'success' || needs.deploy-frontend.result == 'skipped')
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-smoke-tests-staging-${{ github.run_id }}
@@ -330,7 +525,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          ref: staging
+          ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Run smoke tests
@@ -348,13 +543,102 @@ jobs:
 
       - name: Smoke tests summary
         if: success()
+        env:
+          ACTOR: ${{ github.actor }}
         run: |
           echo "### Staging Smoke Tests Passed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Backend health check: https://staging-api.boostedbudget.com/health" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Deployment Trigger:** Manual workflow_dispatch" >> $GITHUB_STEP_SUMMARY
-          echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** @${ACTOR}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # Update Release Tags
+  # Advances per-component moving tags only after a fully successful deploy + smoke tests.
+  # Tags are NOT updated when a component was skipped (no-change run).
+  # =============================================================================
+  update-release-tags:
+    name: Update Release Tags
+    needs: [detect-changes, build-backend, deploy-backend, deploy-frontend, smoke-tests]
+    if: always() && !cancelled() && needs.smoke-tests.result == 'success' && needs.deploy-backend.result == 'success'
+    runs-on: [self-hosted, macOS, mac-mini]
+    permissions:
+      contents: write
+    env:
+      UNIQUE_WORKSPACE: workspace-release-tags-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.detect-changes.outputs.deploy_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Update backend release tags
+        if: needs.detect-changes.outputs.backend_changed == 'true' && needs.build-backend.result == 'success'
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        env:
+          SHA: ${{ needs.detect-changes.outputs.deploy_sha }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse --verify --quiet "refs/tags/backend-staging-${SHA}" >/dev/null 2>&1; then
+            git tag "backend-staging-${SHA}" "${SHA}"
+            git push origin "refs/tags/backend-staging-${SHA}"
+          fi
+          git tag -f backend-staging-latest "${SHA}"
+          git push origin refs/tags/backend-staging-latest --force
+
+      - name: Update frontend release tags
+        if: needs.detect-changes.outputs.frontend_changed == 'true' && needs.deploy-frontend.result == 'success'
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        env:
+          SHA: ${{ needs.detect-changes.outputs.deploy_sha }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse --verify --quiet "refs/tags/frontend-staging-${SHA}" >/dev/null 2>&1; then
+            git tag "frontend-staging-${SHA}" "${SHA}"
+            git push origin "refs/tags/frontend-staging-${SHA}"
+          fi
+          git tag -f frontend-staging-latest "${SHA}"
+          git push origin refs/tags/frontend-staging-latest --force
+
+      - name: Tag update summary
+        env:
+          DEPLOY_SHA: ${{ needs.detect-changes.outputs.deploy_sha }}
+          BACKEND_CHANGED: ${{ needs.detect-changes.outputs.backend_changed }}
+          FRONTEND_CHANGED: ${{ needs.detect-changes.outputs.frontend_changed }}
+        run: |
+          echo "### Release Tags Updated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$BACKEND_CHANGED" = "true" ]; then
+            echo "- \`backend-staging-latest\` → \`${DEPLOY_SHA}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- \`backend-staging-${DEPLOY_SHA}\` (immutable)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- backend tags unchanged (no backend change)" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "$FRONTEND_CHANGED" = "true" ]; then
+            echo "- \`frontend-staging-latest\` → \`${DEPLOY_SHA}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- \`frontend-staging-${DEPLOY_SHA}\` (immutable)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- frontend tags unchanged (no frontend change)" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Final workspace cleanup
         if: always()
@@ -365,9 +649,20 @@ jobs:
   # =============================================================================
   deployment-summary:
     name: Deployment Summary
-    needs: [build-backend, deploy-backend, deploy-frontend, smoke-tests]
+    needs: [detect-changes, build-backend, deploy-backend, deploy-frontend, smoke-tests, update-release-tags]
     runs-on: [self-hosted, macOS, mac-mini]
     if: always()
+    env:
+      DEPLOY_SHA: ${{ needs.detect-changes.outputs.deploy_sha }}
+      BACKEND_CHANGED: ${{ needs.detect-changes.outputs.backend_changed }}
+      FRONTEND_CHANGED: ${{ needs.detect-changes.outputs.frontend_changed }}
+      ACTOR: ${{ github.actor }}
+      DETECT_RESULT: ${{ needs.detect-changes.result }}
+      BUILD_BACKEND_RESULT: ${{ needs.build-backend.result }}
+      DEPLOY_BACKEND_RESULT: ${{ needs.deploy-backend.result }}
+      DEPLOY_FRONTEND_RESULT: ${{ needs.deploy-frontend.result }}
+      SMOKE_TESTS_RESULT: ${{ needs.smoke-tests.result }}
+      UPDATE_TAGS_RESULT: ${{ needs.update-release-tags.result }}
 
     steps:
       - name: Create deployment summary
@@ -375,14 +670,20 @@ jobs:
           echo "### Staging Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Branch:** staging" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Deploy SHA:** \`${DEPLOY_SHA}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** @${ACTOR}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Change Detection:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend changed: ${BACKEND_CHANGED}" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend changed: ${FRONTEND_CHANGED}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Job Results:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Build Backend: ${{ needs.build-backend.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Deploy Backend: ${{ needs.deploy-backend.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Deploy Frontend: ${{ needs.deploy-frontend.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Smoke Tests: ${{ needs.smoke-tests.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Detect Changes: ${DETECT_RESULT}" >> $GITHUB_STEP_SUMMARY
+          echo "- Build Backend: ${BUILD_BACKEND_RESULT}" >> $GITHUB_STEP_SUMMARY
+          echo "- Deploy Backend: ${DEPLOY_BACKEND_RESULT}" >> $GITHUB_STEP_SUMMARY
+          echo "- Deploy Frontend: ${DEPLOY_FRONTEND_RESULT}" >> $GITHUB_STEP_SUMMARY
+          echo "- Smoke Tests: ${SMOKE_TESTS_RESULT}" >> $GITHUB_STEP_SUMMARY
+          echo "- Update Release Tags: ${UPDATE_TAGS_RESULT}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**URLs:**" >> $GITHUB_STEP_SUMMARY
           echo "- Backend API: https://staging-api.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
