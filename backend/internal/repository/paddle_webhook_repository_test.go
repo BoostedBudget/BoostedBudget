@@ -999,6 +999,25 @@ func TestListWebhookEventsSort(t *testing.T) {
 			sortDir:     "desc",
 			expectOrder: "ORDER BY processed DESC",
 		},
+		// Fallback cases — Huma enum prevents these in production, but repos are defense-in-depth
+		{
+			name:        "empty sort_by falls back to created_at desc",
+			sortBy:      "",
+			sortDir:     "",
+			expectOrder: "ORDER BY created_at DESC",
+		},
+		{
+			name:        "unknown sort_by falls back to created_at desc",
+			sortBy:      "nonexistent_column",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY created_at DESC",
+		},
+		{
+			name:        "unknown sort_dir falls back to DESC",
+			sortBy:      "created_at",
+			sortDir:     "invalid",
+			expectOrder: "ORDER BY created_at DESC",
+		},
 	}
 
 	for _, tc := range tests {
