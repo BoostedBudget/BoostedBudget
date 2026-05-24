@@ -92,6 +92,7 @@ type Transaction struct {
 	AuthorizedDate *time.Time `json:"authorized_date,omitempty" db:"authorized_date"`
 	Name           string     `json:"name" db:"name"`
 	MerchantName   *string    `json:"merchant_name,omitempty" db:"merchant_name"`
+	MerchantID     *string    `json:"merchant_id,omitempty" db:"merchant_id"`
 
 	// PFCv2 source columns (from Plaid)
 	PFCPrimary           *string `json:"pfc_primary,omitempty" db:"pfc_primary"`
@@ -311,6 +312,10 @@ type TransactionFilters struct {
 	// for this logical account. Use instead of AccountID when the caller has a
 	// user_account_id (e.g. the frontend after re-link transparency work in #1109).
 	UserAccountID *string
+
+	// MerchantID filters transactions by a specific merchant UUID.
+	// Nil means no filter; non-nil matches exactly the given merchant_id.
+	MerchantID *string
 
 	// SortBy specifies the column to sort by. Allowed values: date, merchant, amount, category.
 	// Defaults to "date" when empty. Validated by Huma enum tag at the operation layer.
