@@ -34,8 +34,6 @@ const EVENT_TYPE_OPTIONS = [
   { value: 'transaction.payment_failed', label: 'transaction.payment_failed' },
 ]
 
-const PAGE_SIZE = 20
-
 const statusBadgeClass = (processed: boolean, hasError: boolean): string => {
   if (processed) return 'bg-success/10 text-success'
   if (hasError) return 'bg-destructive/10 text-destructive'
@@ -56,19 +54,9 @@ export function WebhooksPage() {
     trackEvent(ANALYTICS_EVENTS.ADMIN_PAGE_VIEWED, { page: 'webhooks' })
   }, [trackEvent])
 
-  const { filters, setEventType, setProcessed, setStartDate, setEndDate, setPage, hasActiveFilters, resetFilters } = useWebhookFilters()
+  const { filters, setEventType, setProcessed, setStartDate, setEndDate, setPage, hasActiveFilters, resetFilters, sort, setSort, apiParams } = useWebhookFilters()
 
-  // Build API params
-  const listParams = {
-    limit: PAGE_SIZE,
-    offset: (filters.page - 1) * PAGE_SIZE,
-    ...(filters.eventType && { event_type: filters.eventType }),
-    ...(filters.processed !== '' && { processed: filters.processed }),
-    ...(filters.startDate && { start_date: filters.startDate }),
-    ...(filters.endDate && { end_date: filters.endDate }),
-  }
-
-  const { data, isLoading, error } = useListAdminPaddleWebhooks(listParams, {
+  const { data, isLoading, error } = useListAdminPaddleWebhooks(apiParams, {
     query: {
       refetchInterval: autoRefresh ? 30000 : false,
     },
@@ -122,6 +110,7 @@ export function WebhooksPage() {
     {
       id: 'status',
       header: 'Status',
+      sortable: true,
       defaultSize: 110,
       minSize: 90,
       maxSize: 140,
@@ -143,6 +132,7 @@ export function WebhooksPage() {
     {
       id: 'attempts',
       header: 'Attempts',
+      sortable: true,
       hideable: true,
       numeric: true,
       defaultSize: 100,
@@ -169,6 +159,7 @@ export function WebhooksPage() {
     {
       id: 'created_at',
       header: 'Created',
+      sortable: true,
       resizable: true,
       defaultSize: 180,
       minSize: 140,
@@ -314,8 +305,8 @@ export function WebhooksPage() {
             data={events}
             columns={columns}
             rowKey={(e) => e.id ?? ''}
-            sort={null}
-            onSortChange={() => {}}
+            sort={sort}
+            onSortChange={setSort}
             filters={{}}
             onFiltersChange={() => {}}
             loading={isLoading}
