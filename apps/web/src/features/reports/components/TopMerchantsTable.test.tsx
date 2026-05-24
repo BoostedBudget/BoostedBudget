@@ -12,14 +12,14 @@ const mockData: SpendingByMerchantResponse = {
   end_date: '2024-01-31',
   top_n: 10,
   merchants: [
-    { merchant_name: 'Starbucks', total: 150, transaction_count: 15, percentage: 30 },
+    { merchant_id: 'uuid-starbucks', merchant_name: 'Starbucks', total: 150, transaction_count: 15, percentage: 30 },
     { merchant_name: 'Amazon', total: 350, transaction_count: 5, percentage: 70 },
   ],
 }
 
 const defaultMocks = {
   onSortChange: mock((_: SortState) => {}),
-  onMerchantClick: mock((name: string) => name),
+  onMerchantClick: mock((_: { id?: string | null; name: string }) => {}),
 }
 
 function renderTable(overrides: Partial<{
@@ -117,9 +117,16 @@ describe('TopMerchantsTable', () => {
     expect(rows[1].textContent).toContain('Amazon')
   })
 
-  it('calls onMerchantClick when row is clicked', () => {
+  it('calls onMerchantClick with { id, name } object when row is clicked', () => {
     renderTable({ onMerchantClick: defaultMocks.onMerchantClick })
     fireEvent.click(screen.getByText('Starbucks'))
-    expect(defaultMocks.onMerchantClick).toHaveBeenCalledWith('Starbucks')
+    expect(defaultMocks.onMerchantClick).toHaveBeenCalledWith({ id: 'uuid-starbucks', name: 'Starbucks' })
+  })
+
+  it('calls onMerchantClick with id=undefined when merchant has no merchant_id', () => {
+    const onMerchantClick = mock((_: { id?: string | null; name: string }) => {})
+    renderTable({ onMerchantClick })
+    fireEvent.click(screen.getByText('Amazon'))
+    expect(onMerchantClick).toHaveBeenCalledWith({ id: undefined, name: 'Amazon' })
   })
 })
