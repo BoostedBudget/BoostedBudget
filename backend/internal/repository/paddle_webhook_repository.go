@@ -85,17 +85,12 @@ type PaddleWebhookRepository interface {
 	ResetProcessingStatus(ctx context.Context, id string) error
 }
 
-// webhookOrderByEntry specifies a SQL column name for webhook sort ordering.
-type webhookOrderByEntry struct {
-	col string
-}
-
 // webhooksOrderByAllowlist maps frontend sort_by values to safe SQL column names.
 // No NULLS LAST needed because none of these columns are nullable.
-var webhooksOrderByAllowlist = map[string]webhookOrderByEntry{
-	"created_at": {"created_at"},
-	"attempts":   {"processing_attempts"},
-	"status":     {"processed"},
+var webhooksOrderByAllowlist = map[string]orderByEntry{
+	"created_at": {col: "created_at"},
+	"attempts":   {col: "processing_attempts"},
+	"status":     {col: "processed"},
 }
 
 // paddleWebhookRepository implements PaddleWebhookRepository using PostgreSQL
@@ -418,7 +413,7 @@ func (r *paddleWebhookRepository) ListWebhookEvents(ctx context.Context, filters
 
 	entry := webhooksOrderByAllowlist[filters.SortBy]
 	if entry.col == "" {
-		entry = webhookOrderByEntry{"created_at"} // fallback
+		entry = orderByEntry{col: "created_at"} // fallback
 	}
 	orderDir := strings.ToUpper(filters.SortDir)
 	if orderDir != "ASC" && orderDir != "DESC" {
