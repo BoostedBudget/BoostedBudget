@@ -103,6 +103,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
     if (filters.pending !== undefined) count++
     if (filters.min_amount !== undefined || filters.max_amount !== undefined) count++
     if (filters.amount_type && filters.amount_type !== 'all') count++
+    if (filters.merchant_id) count++
     return count
   }, [filters, state.filters.pfc_primaries])
 

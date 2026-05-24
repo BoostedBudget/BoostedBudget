@@ -246,6 +246,17 @@ describe('useTransactionFilters', () => {
 
       expect(result.current.activeFilterCount).toBe(0)
     })
+
+    it('should count merchant_id as active filter', () => {
+      window.history.replaceState({}, '', '/?merchant_id=uuid-merchant-abc')
+
+      const { result } = renderHook(() => useTransactionFilters(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.activeFilterCount).toBe(1)
+      expect(result.current.hasActiveFilters).toBe(true)
+    })
   })
 
   describe('Date Presets', () => {
