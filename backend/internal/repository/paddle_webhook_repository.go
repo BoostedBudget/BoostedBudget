@@ -85,6 +85,19 @@ type PaddleWebhookRepository interface {
 	ResetProcessingStatus(ctx context.Context, id string) error
 }
 
+// webhookOrderByEntry specifies a SQL column name for webhook sort ordering.
+type webhookOrderByEntry struct {
+	col string
+}
+
+// webhooksOrderByAllowlist maps frontend sort_by values to safe SQL column names.
+// No NULLS LAST needed because none of these columns are nullable.
+var webhooksOrderByAllowlist = map[string]webhookOrderByEntry{
+	"created_at": {"created_at"},
+	"attempts":   {"processing_attempts"},
+	"status":     {"processed"},
+}
+
 // paddleWebhookRepository implements PaddleWebhookRepository using PostgreSQL
 type paddleWebhookRepository struct {
 	db  DB
@@ -403,9 +416,18 @@ func (r *paddleWebhookRepository) ListWebhookEvents(ctx context.Context, filters
 		return nil, 0, fmt.Errorf("failed to count paddle webhook events: %w", err)
 	}
 
+	entry := webhooksOrderByAllowlist[filters.SortBy]
+	if entry.col == "" {
+		entry = webhookOrderByEntry{"created_at"} // fallback
+	}
+	orderDir := strings.ToUpper(filters.SortDir)
+	if orderDir != "ASC" && orderDir != "DESC" {
+		orderDir = "DESC"
+	}
+
 	listQuery := fmt.Sprintf(
-		`SELECT id, event_id, event_type, payload, signature, signature_valid, processed, processed_at, processing_error, processing_attempts, created_at, updated_at FROM paddle_webhook_events %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`,
-		whereClause, argIdx, argIdx+1,
+		`SELECT id, event_id, event_type, payload, signature, signature_valid, processed, processed_at, processing_error, processing_attempts, created_at, updated_at FROM paddle_webhook_events %s ORDER BY %s %s LIMIT $%d OFFSET $%d`,
+		whereClause, entry.col, orderDir, argIdx, argIdx+1,
 	)
 	listArgs := append(args, limit, offset)
 

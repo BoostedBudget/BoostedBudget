@@ -972,3 +972,63 @@ func TestResetProcessingStatus_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrPaddleWebhookNotFound)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestListWebhookEventsSort tests that sort_by/sort_dir fields produce the correct ORDER BY clause.
+func TestListWebhookEventsSort(t *testing.T) {
+	tests := []struct {
+		name        string
+		sortBy      string
+		sortDir     string
+		expectOrder string
+	}{
+		{
+			name:        "default sort created_at desc",
+			sortBy:      "created_at",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY created_at DESC",
+		},
+		{
+			name:        "attempts asc maps to processing_attempts",
+			sortBy:      "attempts",
+			sortDir:     "asc",
+			expectOrder: "ORDER BY processing_attempts ASC",
+		},
+		{
+			name:        "status desc maps to processed column",
+			sortBy:      "status",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY processed DESC",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock, repo := setupPaddleWebhookMockDB(t)
+			defer mock.Close()
+
+			ctx := context.Background()
+			now := time.Now()
+
+			countRows := pgxmock.NewRows([]string{"count"}).AddRow(int64(1))
+			mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM paddle_webhook_events`)).
+				WillReturnRows(countRows)
+
+			listRows := pgxmock.NewRows(webhookEventColumns)
+			addWebhookEventRow(listRows, "evt_sort_01", "subscription.created", true, now)
+			mock.ExpectQuery(regexp.QuoteMeta(tc.expectOrder)).
+				WithArgs(10, 0).
+				WillReturnRows(listRows)
+
+			filters := domain.WebhookEventFilters{
+				SortBy:  tc.sortBy,
+				SortDir: tc.sortDir,
+			}
+			events, total, err := repo.ListWebhookEvents(ctx, filters, 10, 0)
+
+			require.NoError(t, err)
+			assert.Equal(t, 1, total)
+			assert.Len(t, events, 1)
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
