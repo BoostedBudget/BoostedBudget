@@ -3011,3 +3011,138 @@ func TestProcessAddedTransactions_NoMerchantName_SkipsMerchantUpsert(t *testing.
 	mockMerchantRepo.AssertNotCalled(t, "GetOrCreateMerchants")
 	mockTransactionRepo.AssertExpectations(t)
 }
+
+// TestProcessModifiedTransactions_StampsMerchantID verifies that when modified
+// transactions have a MerchantName, GetOrCreateMerchants is called once (per batch)
+// and MerchantID is stamped on each transaction before Update is invoked.
+// This is the GREEN test for Gap 1 of the #1163 gap analysis.
+func TestProcessModifiedTransactions_StampsMerchantID(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockMerchantRepo := new(MockMerchantRepo)
+
+	service := NewTransactionSyncService(
+		nil, nil,
+		mockTransactionRepo,
+		nil, nil, nil, nil, nil, nil, nil, nil,
+		mockMerchantRepo,
+		nil, // logger
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	userID := "user-456"
+	linkedItem := &domain.LinkedItem{ID: "linked-item-123", UserID: userID}
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	merchantName := "Starbucks"
+	starbucksID := "merchant-uuid-starbucks"
+	externalID := "plaid-txn-mod-1"
+
+	modified := []plaid.Transaction{
+		{
+			TransactionId: externalID,
+			AccountId:     "plaid-acc-1",
+			Amount:        5.75,
+			Date:          "2024-03-01",
+			Name:          "STARBUCKS",
+			MerchantName:  *plaid.NewNullableString(&merchantName),
+			Pending:       false,
+		},
+	}
+
+	existingUserNotes := "my coffee note"
+	existingTxn := &domain.Transaction{
+		ID:                    "txn-uuid-existing",
+		UserID:                userID,
+		AccountID:             "account-uuid-1",
+		ExternalTransactionID: &externalID,
+		Amount:                5.50,
+		Name:                  "STARBUCKS",
+		UserNotes:             &existingUserNotes,
+	}
+
+	// GetOrCreateMerchants must be called once with the merchant name from the batch
+	mockMerchantRepo.On("GetOrCreateMerchants", ctx, mock.MatchedBy(func(names []string) bool {
+		return len(names) == 1 && names[0] == "Starbucks"
+	})).Return(map[string]string{"Starbucks": starbucksID}, nil)
+
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, externalID, userID).Return(existingTxn, nil)
+
+	// Update must be called with MerchantID stamped AND user_notes preserved
+	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+		if txn.MerchantID == nil {
+			t.Log("MerchantID was not stamped on modified transaction")
+			return false
+		}
+		if *txn.MerchantID != starbucksID {
+			t.Logf("MerchantID = %s, want %s", *txn.MerchantID, starbucksID)
+			return false
+		}
+		if txn.UserNotes == nil || *txn.UserNotes != existingUserNotes {
+			t.Log("user_notes not preserved on modified transaction")
+			return false
+		}
+		return true
+	})).Return(nil)
+
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
+
+	require.NoError(t, err)
+	mockMerchantRepo.AssertExpectations(t)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessModifiedTransactions_MerchantUpsertError_ContinuesUpdate verifies that when
+// GetOrCreateMerchants fails during modification, the Update still proceeds without MerchantID.
+func TestProcessModifiedTransactions_MerchantUpsertError_ContinuesUpdate(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockMerchantRepo := new(MockMerchantRepo)
+
+	service := NewTransactionSyncService(
+		nil, nil,
+		mockTransactionRepo,
+		nil, nil, nil, nil, nil, nil, nil, nil,
+		mockMerchantRepo,
+		nil, // logger
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	userID := "user-456"
+	linkedItem := &domain.LinkedItem{ID: "linked-item-123", UserID: userID}
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	merchantName := "Amazon"
+	externalID := "plaid-txn-mod-2"
+
+	modified := []plaid.Transaction{
+		{
+			TransactionId: externalID,
+			AccountId:     "plaid-acc-1",
+			Amount:        19.99,
+			Date:          "2024-03-02",
+			Name:          "AMAZON",
+			MerchantName:  *plaid.NewNullableString(&merchantName),
+			Pending:       false,
+		},
+	}
+
+	existingTxn := &domain.Transaction{
+		ID:     "txn-uuid-existing-2",
+		UserID: userID,
+	}
+
+	// Simulate merchant upsert failure
+	mockMerchantRepo.On("GetOrCreateMerchants", ctx, mock.Anything).Return(nil, errors.New("db error"))
+
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, externalID, userID).Return(existingTxn, nil)
+
+	// Update must still be called — MerchantID will be nil (best-effort)
+	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+		return txn.MerchantID == nil
+	})).Return(nil)
+
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
+
+	require.NoError(t, err, "update must not fail when merchant upsert errors")
+	mockMerchantRepo.AssertExpectations(t)
+	mockTransactionRepo.AssertExpectations(t)
+}

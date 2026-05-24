@@ -555,6 +555,31 @@ func (s *transactionSyncService) processModifiedTransactions(
 	successCount := 0
 	skippedCount := 0
 
+	// Issue #1163: Batch-upsert merchants and stamp merchant_id (one DB round-trip, best-effort)
+	// Mirrors processAddedTransactions. If upsert fails, Update proceeds with merchant_id = nil.
+	var merchantIDs map[string]string
+	if s.merchantRepo != nil {
+		nameSet := make(map[string]struct{})
+		for _, plaidTxn := range modified {
+			if mn := plaidTxn.MerchantName.Get(); mn != nil && *mn != "" {
+				nameSet[*mn] = struct{}{}
+			}
+		}
+		if len(nameSet) > 0 {
+			names := make([]string, 0, len(nameSet))
+			for name := range nameSet {
+				names = append(names, name)
+			}
+			ids, err := s.merchantRepo.GetOrCreateMerchants(ctx, names)
+			if err != nil {
+				// Non-blocking: merchant_id is best-effort, sync must not fail
+				s.logger.Warn("failed to upsert merchants, continuing without merchant_id", "err", err)
+			} else {
+				merchantIDs = ids
+			}
+		}
+	}
+
 	for _, plaidTxn := range modified {
 		// Map Plaid transaction to domain.Transaction (new data from Plaid)
 		newTxn, err := s.mapPlaidTransaction(ctx, plaidTxn, linkedItem.ID, linkedItem.UserID, accountMap, userAccountMap)
@@ -577,6 +602,13 @@ func (s *transactionSyncService) processModifiedTransactions(
 
 		// Copy ID from existing transaction (required for Update)
 		newTxn.ID = existingTxn.ID
+
+		// Issue #1163: Stamp merchant_id from the pre-computed map (best-effort)
+		if newTxn.MerchantName != nil && merchantIDs != nil {
+			if id, ok := merchantIDs[*newTxn.MerchantName]; ok {
+				newTxn.MerchantID = &id
+			}
+		}
 
 		// Update transaction with new data but preserved user_notes
 		if err := s.transactionRepo.Update(ctx, newTxn); err != nil {
