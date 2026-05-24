@@ -4,6 +4,12 @@ import (
 	"context"
 )
 
+// MerchantRepo defines the interface for merchant data access.
+// A minimal interface enables mocking in service tests.
+type MerchantRepo interface {
+	GetOrCreateMerchants(ctx context.Context, names []string) (map[string]string, error)
+}
+
 // MerchantRepository handles data access for merchants.
 type MerchantRepository struct {
 	db DB

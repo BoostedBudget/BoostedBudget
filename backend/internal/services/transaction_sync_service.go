@@ -63,6 +63,7 @@ type transactionSyncService struct {
 	accountRepo               repository.AccountRepository          // Issue #261: For account mapping (Plaid account_id -> internal UUID)
 	profileRepo               repository.ProfileRepository          // For fetching user subscription tier (historical depth)
 	balanceSnapshotRepo       repository.BalanceSnapshotRepository  // Issue #353: For storing balance snapshots
+	merchantRepo              repository.MerchantRepo               // Issue #1163: Batch-upsert merchants before CreateBatch
 	plaidService              PlaidService
 	subscriptionService       *SubscriptionService          // For tier-based historical depth limit
 	ruleApplicationService    RuleApplicationService        // Issue #346: Apply categorization rules to new transactions
@@ -83,6 +84,7 @@ func NewTransactionSyncService(
 	ruleApplicationService RuleApplicationService,
 	budgetSyncService BudgetSyncService,               // Issue #494: Sync budget amounts
 	transactionMonitorService TransactionMonitorService, // Issue #36: Auto-detect completed transfers
+	merchantRepo repository.MerchantRepo,              // Issue #1163: Merchant batch-upsert
 	logger *slog.Logger,
 ) TransactionSyncService {
 	if logger == nil {
@@ -96,6 +98,7 @@ func NewTransactionSyncService(
 		accountRepo:               accountRepo,
 		profileRepo:               profileRepo,
 		balanceSnapshotRepo:       balanceSnapshotRepo,
+		merchantRepo:              merchantRepo,
 		plaidService:              plaidService,
 		subscriptionService:       subscriptionService,
 		ruleApplicationService:    ruleApplicationService,
@@ -468,6 +471,35 @@ func (s *transactionSyncService) processAddedTransactions(
 		if err := s.ruleApplicationService.ApplyRulesToBatch(ctx, transactions, linkedItem.UserID); err != nil {
 			// Log but don't fail - rule application is non-critical
 			s.logger.Warn("failed to apply categorization rules", "error", err)
+		}
+	}
+
+	// Issue #1163: Batch-upsert merchants and stamp merchant_id (one DB round-trip, best-effort)
+	if s.merchantRepo != nil {
+		nameSet := make(map[string]struct{})
+		for _, txn := range transactions {
+			if txn.MerchantName != nil && *txn.MerchantName != "" {
+				nameSet[*txn.MerchantName] = struct{}{}
+			}
+		}
+		if len(nameSet) > 0 {
+			names := make([]string, 0, len(nameSet))
+			for name := range nameSet {
+				names = append(names, name)
+			}
+			merchantIDs, err := s.merchantRepo.GetOrCreateMerchants(ctx, names)
+			if err != nil {
+				// Non-blocking: merchant_id is best-effort, sync must not fail
+				s.logger.Warn("failed to upsert merchants, continuing without merchant_id", "err", err)
+			} else {
+				for i := range transactions {
+					if transactions[i].MerchantName != nil {
+						if id, ok := merchantIDs[*transactions[i].MerchantName]; ok {
+							transactions[i].MerchantID = &id
+						}
+					}
+				}
+			}
 		}
 	}
 
