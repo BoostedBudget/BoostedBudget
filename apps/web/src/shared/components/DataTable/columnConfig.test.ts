@@ -26,7 +26,7 @@ const CONSUMERS: Array<{ file: string; columnIds: string[] }> = [
   },
   {
     file: 'src/features/admin/components/DeadLetterPage.tsx',
-    columnIds: ['kind', 'queue', 'user_id', 'failed_at', 'status', 'notes'],
+    columnIds: ['kind', 'queue', 'user_id', 'failed_at', 'retried_at', 'notes'],
   },
   {
     file: 'src/features/admin/components/UsersPage.tsx',

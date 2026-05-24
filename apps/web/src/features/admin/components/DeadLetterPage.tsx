@@ -17,10 +17,8 @@ import { DeadLetterDetailModal } from './DeadLetterDetailModal'
 import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
 
-const PAGE_SIZE = 20
-
 // eslint-disable-next-line react-refresh/only-export-components
-export const ADMIN_DLQ_COLUMN_IDS = ['kind', 'queue', 'user_id', 'failed_at', 'status', 'notes'] as const
+export const ADMIN_DLQ_COLUMN_IDS = ['kind', 'queue', 'user_id', 'failed_at', 'retried_at', 'notes'] as const
 
 const inputClass = 'px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:border-primary'
 const selectInputClass = `${inputClass} cursor-pointer transition-colors`
@@ -47,19 +45,12 @@ export function DeadLetterPage() {
     setPage,
     hasActiveFilters,
     resetFilters,
+    sort,
+    setSort,
+    apiParams,
   } = useDeadLetterFilters()
 
-  const listParams = {
-    page: filters.page,
-    page_size: PAGE_SIZE,
-    ...(filters.kind && { kind: filters.kind }),
-    ...(filters.userId && { user_id: filters.userId }),
-    ...(filters.retried !== '' && { retried: filters.retried }),
-    ...(filters.startDate && { start_date: filters.startDate }),
-    ...(filters.endDate && { end_date: filters.endDate }),
-  }
-
-  const { data, isLoading, error } = useListAdminDeadLetterJobs(listParams, {
+  const { data, isLoading, error } = useListAdminDeadLetterJobs(apiParams, {
     query: { refetchInterval: autoRefresh ? 30000 : false },
   })
 
@@ -93,6 +84,7 @@ export function DeadLetterPage() {
       id: 'kind',
       header: 'Kind',
       resizable: true,
+      sortable: true,
       defaultSize: 180,
       minSize: 120,
       render: (job) => (
@@ -125,6 +117,7 @@ export function DeadLetterPage() {
     {
       id: 'failed_at',
       header: 'Failed At',
+      sortable: true,
       defaultSize: 180,
       minSize: 140,
       maxSize: 220,
@@ -135,8 +128,9 @@ export function DeadLetterPage() {
       ),
     },
     {
-      id: 'status',
+      id: 'retried_at',
       header: 'Status',
+      sortable: true,
       defaultSize: 120,
       minSize: 90,
       maxSize: 160,
@@ -378,8 +372,8 @@ export function DeadLetterPage() {
             data={jobs}
             columns={columns}
             rowKey={(job) => String(job.id)}
-            sort={null}
-            onSortChange={() => {}}
+            sort={sort}
+            onSortChange={setSort}
             filters={{}}
             onFiltersChange={() => {}}
             loading={isLoading}
