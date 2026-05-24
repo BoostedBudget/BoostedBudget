@@ -54,7 +54,7 @@ export function WebhooksPage() {
     trackEvent(ANALYTICS_EVENTS.ADMIN_PAGE_VIEWED, { page: 'webhooks' })
   }, [trackEvent])
 
-  const { filters, setEventType, setProcessed, setStartDate, setEndDate, setPage, hasActiveFilters, resetFilters, sort, setSort, apiParams } = useWebhookFilters()
+  const { filters, setEventType, setProcessed, setStartDate, setEndDate, setPage, hasActiveFilters, sort, setSort, apiParams } = useWebhookFilters()
 
   const { data, isLoading, error } = useListAdminPaddleWebhooks(apiParams, {
     query: {
@@ -273,7 +273,13 @@ export function WebhooksPage() {
           <button
             type="button"
             className="inline-flex items-center gap-1.5 px-3.5 py-2 border border-border rounded-md bg-background text-foreground text-sm font-medium cursor-pointer font-[inherit] transition-colors hover:bg-muted"
-            onClick={resetFilters}
+            onClick={() => {
+              setEventType('')
+              setProcessed('')
+              setStartDate('')
+              setEndDate('')
+              setPage(1)
+            }}
             aria-label="Reset filters"
           >
             Reset Filters
