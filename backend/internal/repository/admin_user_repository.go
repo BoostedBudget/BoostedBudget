@@ -305,7 +305,7 @@ func (r *adminUserRepository) buildFilterClause(filters domain.AdminUserFilters)
 			" AND EXISTS (SELECT 1 FROM user_email_prefix_indices p"+
 				" WHERE p.user_id = u.id AND p.prefix_blind_idx = $%d)", argIndex)
 		args = append(args, r.enc.BlindIndexWithLabel(appcrypto.LabelEmailPrefix,
-			appcrypto.NormalizeEmailForBlindIndex(filters.Search)))
+			appcrypto.NormalizeAndCapSearchPrefix(filters.Search)))
 		argIndex++
 	}
 

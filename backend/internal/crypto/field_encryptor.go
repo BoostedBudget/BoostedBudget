@@ -167,21 +167,35 @@ func NormalizeEmailForBlindIndex(email string) string {
 
 const (
 	minPrefixLen = 3
-	maxPrefixLen = 64
+	// MaxPrefixLen is the maximum rune-length prefix stored in user_email_prefix_indices.
+	// Exported so callers can truncate search strings to the same cap before hashing.
+	MaxPrefixLen = 64
 
 	// LabelEmailPrefix is the domain-separation label for all prefix blind indices.
 	// Use this constant everywhere prefix indices are read or written.
 	LabelEmailPrefix = "email_prefix"
 )
 
+// NormalizeAndCapSearchPrefix normalises an email search string (lower + trim)
+// and truncates it to MaxPrefixLen runes. Use this on the search side to ensure
+// the blind index matches what was stored for the MaxPrefixLen-rune prefix.
+func NormalizeAndCapSearchPrefix(search string) string {
+	normalised := NormalizeEmailForBlindIndex(search)
+	runes := []rune(normalised)
+	if len(runes) > MaxPrefixLen {
+		return string(runes[:MaxPrefixLen])
+	}
+	return normalised
+}
+
 // EmailPrefixBlindIndices generates domain-separated blind indices for all
-// rune-length prefixes in [minPrefixLen, maxPrefixLen] of the given email.
+// rune-length prefixes in [minPrefixLen, MaxPrefixLen] of the given email.
 // Rune-based slicing prevents splitting multi-byte UTF-8 characters.
 // Returns nil when the normalised email is shorter than minPrefixLen.
 func (fe *FieldEncryptor) EmailPrefixBlindIndices(email string) []string {
 	normalised := NormalizeEmailForBlindIndex(email)
 	runes := []rune(normalised)
-	end := min(len(runes), maxPrefixLen)
+	end := min(len(runes), MaxPrefixLen)
 	if end < minPrefixLen {
 		return nil
 	}

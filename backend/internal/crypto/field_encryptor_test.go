@@ -299,6 +299,38 @@ func TestEmailPrefixBlindIndices_NormalizesInput(t *testing.T) {
 	assert.Equal(t, lower, upper, "normalisation must produce identical indices regardless of input case")
 }
 
+// TestNormalizeAndCapSearchPrefix verifies normalisation and MaxPrefixLen cap.
+func TestNormalizeAndCapSearchPrefix(t *testing.T) {
+	// Short input: unchanged
+	assert.Equal(t, "abc", crypto.NormalizeAndCapSearchPrefix("abc"))
+
+	// Cased + whitespace: normalised
+	assert.Equal(t, "user@example.com", crypto.NormalizeAndCapSearchPrefix("  USER@EXAMPLE.COM  "))
+
+	// Exactly MaxPrefixLen runes: not truncated
+	exactly64 := strings.Repeat("a", 64)
+	assert.Equal(t, exactly64, crypto.NormalizeAndCapSearchPrefix(exactly64))
+
+	// Over MaxPrefixLen runes: truncated to MaxPrefixLen
+	over64 := strings.Repeat("a", 70)
+	assert.Equal(t, strings.Repeat("a", 64), crypto.NormalizeAndCapSearchPrefix(over64))
+}
+
+// TestNormalizeAndCapSearchPrefix_MatchesStoredIndex verifies that a 70-rune search
+// hashes to the same value as the 64-rune prefix that was stored.
+func TestNormalizeAndCapSearchPrefix_MatchesStoredIndex(t *testing.T) {
+	enc := newTestEncryptor(t)
+	// Email with 70 runes: stored indices cover rune-lengths 3..64
+	longEmail := strings.Repeat("a", 70) + "@x.com" // 76 runes total; prefix at 64 runes is stored
+	// What was stored for the 64-rune prefix:
+	stored := enc.BlindIndexWithLabel(crypto.LabelEmailPrefix, strings.Repeat("a", 64))
+	// Searching with the full 70-rune prefix should resolve to the same hash:
+	search70 := strings.Repeat("a", 70)
+	hashed := enc.BlindIndexWithLabel(crypto.LabelEmailPrefix, crypto.NormalizeAndCapSearchPrefix(search70))
+	assert.Equal(t, stored, hashed, "70-rune search should hash to the same value as the stored 64-rune prefix")
+	_ = longEmail // suppress unused variable
+}
+
 // TestEmailPrefixBlindIndices_RuneSafe verifies multi-byte (non-ASCII) chars are not split.
 func TestEmailPrefixBlindIndices_RuneSafe(t *testing.T) {
 	enc := newTestEncryptor(t)
