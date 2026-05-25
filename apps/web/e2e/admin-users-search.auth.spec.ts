@@ -129,10 +129,22 @@ test.describe('Admin email prefix search', () => {
     await page.goto('/admin/users')
     await page.waitForLoadState('networkidle')
 
+    // Register the request waiter BEFORE filling to avoid the race where the
+    // debounced call fires and resolves between fill() and waitForRequest().
+    const searchRequestPromise = page.waitForRequest(
+      (req) =>
+        req.method() === 'GET' &&
+        req.url().includes('/api/v1/admin/users') &&
+        req.url().includes('search='),
+      { timeout: 10000 }
+    )
+
     await page
       .getByPlaceholder('Search by email prefix (min. 3 chars)...')
       .fill('test@')
-    await page.waitForLoadState('networkidle')
+
+    // Wait for the debounced API call to actually fire (not just network-idle).
+    await searchRequestPromise
 
     expect(seen).toContain('test@')
   })
