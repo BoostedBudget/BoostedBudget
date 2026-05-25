@@ -36,27 +36,32 @@ const FIXTURE_MERCHANTS = {
 const FIXTURE_CATEGORY = {
   start_date: '2026-02-12',
   end_date: '2026-05-12',
+  total_spent: 950.5,
   categories: [
-    { category: 'FOOD_AND_DRINK', display: 'Food And Drink', total: 500.5, percentage: 40.0, transaction_count: 30 },
-    { category: 'SHOPPING', display: 'Shopping', total: 450.0, percentage: 35.0, transaction_count: 12 },
+    { category: 'FOOD_AND_DRINK', pfc_primary_display: 'Food And Drink', total: 500.5, percentage: 40.0, transaction_count: 30 },
+    { category: 'SHOPPING', pfc_primary_display: 'Shopping', total: 450.0, percentage: 35.0, transaction_count: 12 },
   ],
-  drilldown_category: null,
 }
 
 const FIXTURE_TRENDS = {
   start_date: '2026-02-12',
   end_date: '2026-05-12',
-  months: [
+  top_categories: ['FOOD_AND_DRINK'],
+  periods: [
     {
-      month: '2026-02',
+      period_start: '2026-02-01',
+      period_end: '2026-02-28',
+      total: 150.0,
       categories: [
-        { category: 'FOOD_AND_DRINK', display: 'Food And Drink', total: 150.0 },
+        { category: 'FOOD_AND_DRINK', pfc_primary_display: 'Food And Drink', total: 150.0 },
       ],
     },
     {
-      month: '2026-03',
+      period_start: '2026-03-01',
+      period_end: '2026-03-31',
+      total: 180.0,
       categories: [
-        { category: 'FOOD_AND_DRINK', display: 'Food And Drink', total: 180.0 },
+        { category: 'FOOD_AND_DRINK', pfc_primary_display: 'Food And Drink', total: 180.0 },
       ],
     },
   ],
@@ -117,6 +122,38 @@ test.describe('Spending Reports Page — Core Rendering', () => {
     await page.goto('/reports')
     await page.waitForLoadState('networkidle')
     await expect(page.getByRole('heading', { level: 1, name: /spending reports/i })).toBeVisible()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Chart Components
+// ---------------------------------------------------------------------------
+
+test.describe('Spending Reports Page — Chart Components', () => {
+  test.beforeEach(async ({ page }) => {
+    await acceptCookieConsent(page)
+  })
+
+  test('renders the category breakdown chart after data loads', async ({ page }) => {
+    await mockReportsDependencies(page)
+    await page.goto('/reports')
+    await page.waitForLoadState('networkidle')
+    const chart = page.getByTestId('category-chart')
+    await expect(chart).toBeVisible()
+    await expect(chart).not.toHaveAttribute('aria-busy', 'true')
+    // Confirm data state: the "Total:" summary line is only rendered when categories are present
+    await expect(chart).toContainText('Total:')
+  })
+
+  test('renders the spending trends chart after data loads', async ({ page }) => {
+    await mockReportsDependencies(page)
+    await page.goto('/reports')
+    await page.waitForLoadState('networkidle')
+    const chart = page.getByTestId('trends-chart')
+    await expect(chart).toBeVisible()
+    await expect(chart).not.toHaveAttribute('aria-busy', 'true')
+    // Confirm data state: empty state sets role="status"; its absence means data rendered
+    await expect(chart).not.toHaveAttribute('role', 'status')
   })
 })
 
