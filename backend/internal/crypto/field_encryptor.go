@@ -148,3 +148,45 @@ func (fe *FieldEncryptor) BlindIndexNullable(s *string) *string {
 func IsEncrypted(value string) bool {
 	return strings.HasPrefix(value, encryptedPrefix)
 }
+
+// BlindIndexWithLabel produces a domain-separated HMAC-SHA256 blind index.
+// The label prevents semantic overlap between exact-email and prefix blind indices.
+// Use label "email_prefix" for all prefix table reads and writes.
+func (fe *FieldEncryptor) BlindIndexWithLabel(label, plaintext string) string {
+	mac := hmac.New(sha256.New, fe.hmacKey)
+	mac.Write([]byte(label + ":" + plaintext))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// NormalizeEmailForBlindIndex matches the email normalisation used throughout
+// profile_repository.go and backfill.go (lower + trim, no NFC).
+// Must be identical everywhere: creation, update, backfill, and admin search.
+func NormalizeEmailForBlindIndex(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+const (
+	minPrefixLen = 3
+	maxPrefixLen = 64
+)
+
+// EmailPrefixBlindIndices generates domain-separated blind indices for all
+// rune-length prefixes in [minPrefixLen, maxPrefixLen] of the given email.
+// Rune-based slicing prevents splitting multi-byte UTF-8 characters.
+// Returns nil when the normalised email is shorter than minPrefixLen.
+func EmailPrefixBlindIndices(enc *FieldEncryptor, email string) []string {
+	normalised := NormalizeEmailForBlindIndex(email)
+	runes := []rune(normalised)
+	end := len(runes)
+	if end > maxPrefixLen {
+		end = maxPrefixLen
+	}
+	if end < minPrefixLen {
+		return nil
+	}
+	indices := make([]string, 0, end-minPrefixLen+1)
+	for i := minPrefixLen; i <= end; i++ {
+		indices = append(indices, enc.BlindIndexWithLabel("email_prefix", string(runes[:i])))
+	}
+	return indices
+}
