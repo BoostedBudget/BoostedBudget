@@ -22,6 +22,17 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
+// findUserInResults searches for a user by ID in the results list.
+// Returns true if found, false otherwise.
+func findUserInResults(users []domain.AdminUserListItem, userID string) bool {
+	for _, u := range users {
+		if u.ID == userID {
+			return true
+		}
+	}
+	return false
+}
+
 func TestListUsersSort_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -98,14 +109,7 @@ func TestListUsersPrefix_Integration(t *testing.T) {
 		filters := domain.AdminUserFilters{Search: search}
 		users, count, err := adminRepo.ListUsers(ctx, filters, 100, 0)
 		require.NoError(t, err)
-		found := false
-		for _, u := range users {
-			if u.ID == user.ID {
-				found = true
-				break
-			}
-		}
-		assert.True(t, found, "user should be found via prefix search")
+		assert.True(t, findUserInResults(users, user.ID), "user should be found via prefix search")
 		assert.GreaterOrEqual(t, count, 1)
 	})
 
@@ -123,14 +127,7 @@ func TestListUsersPrefix_Integration(t *testing.T) {
 		filters := domain.AdminUserFilters{Search: testEmail}
 		users, _, err := adminRepo.ListUsers(ctx, filters, 100, 0)
 		require.NoError(t, err)
-		found := false
-		for _, u := range users {
-			if u.ID == user.ID {
-				found = true
-				break
-			}
-		}
-		assert.True(t, found, "exact full-email search must match")
+		assert.True(t, findUserInResults(users, user.ID), "exact full-email search must match")
 	})
 
 	t.Run("tier and search combination filters correctly", func(t *testing.T) {
@@ -142,5 +139,36 @@ func TestListUsersPrefix_Integration(t *testing.T) {
 		for _, u := range users {
 			assert.NotEqual(t, user.ID, u.ID)
 		}
+	})
+
+	t.Run("positive compound filter: search + matching tier returns user", func(t *testing.T) {
+		// The test user is "premium" tier. Searching with the matching tier must return it.
+		prefix := "prefixtest-" + suffix[:6]
+		filters := domain.AdminUserFilters{Search: prefix, Tier: "premium"}
+		users, _, err := adminRepo.ListUsers(ctx, filters, 100, 0)
+		require.NoError(t, err)
+		assert.True(t, findUserInResults(users, user.ID), "user must be found when both search prefix and tier match")
+	})
+
+	t.Run("email update removes old prefix and adds new prefix for search", func(t *testing.T) {
+		newEmail := "updated-" + suffix + "@integration.example"
+		tx, err := pool.Begin(ctx)
+		require.NoError(t, err)
+		require.NoError(t, profileRepo.UpdateUserEmailTx(ctx, tx, user.ID, newEmail))
+		require.NoError(t, tx.Commit(ctx))
+
+		// Old prefix no longer matches via admin search
+		oldSearch := "prefixtest-" + suffix[:6]
+		users, _, err := adminRepo.ListUsers(ctx, domain.AdminUserFilters{Search: oldSearch}, 100, 0)
+		require.NoError(t, err)
+		for _, u := range users {
+			assert.NotEqual(t, user.ID, u.ID, "old email prefix must not match after update")
+		}
+
+		// New prefix matches via admin search
+		newSearch := "updated-" + suffix[:6]
+		users, _, err = adminRepo.ListUsers(ctx, domain.AdminUserFilters{Search: newSearch}, 100, 0)
+		require.NoError(t, err)
+		assert.True(t, findUserInResults(users, user.ID), "new email prefix must match after update")
 	})
 }
