@@ -268,7 +268,7 @@ func (r *profileRepository) GetUserByPaddleSubscriptionID(ctx context.Context, s
 // 2. By LOWER(email) plaintext (for unmigrated rows from before encryption)
 // This prevents duplicate accounts when encrypt-migrate hasn't been run yet (#1001).
 func (r *profileRepository) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
-	normalized := strings.ToLower(strings.TrimSpace(email))
+	normalized := appcrypto.NormalizeEmailForBlindIndex(email)
 	return r.queryUser(ctx,
 		userSelectQuery+" WHERE (email_blind_idx = $1 OR LOWER(email) = $2) AND is_deleted = FALSE",
 		r.enc.BlindIndex(normalized), normalized)
@@ -290,7 +290,7 @@ func (r *profileRepository) CreateUser(ctx context.Context, user *domain.User) e
 	if err != nil {
 		return fmt.Errorf("failed to encrypt email: %w", err)
 	}
-	emailBlindIdx := r.enc.BlindIndex(strings.ToLower(strings.TrimSpace(user.Email)))
+	emailBlindIdx := r.enc.BlindIndex(appcrypto.NormalizeEmailForBlindIndex(user.Email))
 
 	encryptedClerkUserID, err := r.enc.EncryptString(user.ClerkUserID)
 	if err != nil {
@@ -411,7 +411,7 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 	if err != nil {
 		return fmt.Errorf("failed to encrypt email: %w", err)
 	}
-	emailBlindIdx := r.enc.BlindIndex(strings.ToLower(strings.TrimSpace(user.Email)))
+	emailBlindIdx := r.enc.BlindIndex(appcrypto.NormalizeEmailForBlindIndex(user.Email))
 
 	encryptedClerkUserID, err := r.enc.EncryptString(user.ClerkUserID)
 	if err != nil {
@@ -477,7 +477,7 @@ func (r *profileRepository) UpdateUser(ctx context.Context, user *domain.User) e
 	if err != nil {
 		return fmt.Errorf("failed to encrypt email: %w", err)
 	}
-	emailBlindIdx := r.enc.BlindIndex(strings.ToLower(strings.TrimSpace(user.Email)))
+	emailBlindIdx := r.enc.BlindIndex(appcrypto.NormalizeEmailForBlindIndex(user.Email))
 
 	query := `
 		UPDATE users
@@ -510,7 +510,7 @@ func (r *profileRepository) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, us
 	if err != nil {
 		return fmt.Errorf("failed to encrypt email: %w", err)
 	}
-	emailBlindIdx := r.enc.BlindIndex(strings.ToLower(strings.TrimSpace(plainEmail)))
+	emailBlindIdx := r.enc.BlindIndex(appcrypto.NormalizeEmailForBlindIndex(plainEmail))
 	now := time.Now()
 
 	query := `
