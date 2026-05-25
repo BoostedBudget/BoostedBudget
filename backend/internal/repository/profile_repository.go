@@ -528,7 +528,17 @@ func (r *profileRepository) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, us
 	if ct.RowsAffected() == 0 {
 		return ErrUserNotFound
 	}
-	return nil
+
+	// Delete stale prefix rows, then insert rows for the new email.
+	// CRITICAL: This code appends AFTER the UPDATE users above, maintaining the
+	// lock-ordering invariant (users row locked first → prefix rows second),
+	// which prevents deadlocks with the startup backfill.
+	if _, err := tx.Exec(ctx,
+		"DELETE FROM user_email_prefix_indices WHERE user_id = $1", userID); err != nil {
+		return fmt.Errorf("delete old prefix indices: %w", err)
+	}
+	indices := r.enc.EmailPrefixBlindIndices(plainEmail)
+	return r.insertPrefixIndicesTx(ctx, tx, userID, indices)
 }
 
 // UpdateLastLogin updates the last_login_at timestamp for a user
