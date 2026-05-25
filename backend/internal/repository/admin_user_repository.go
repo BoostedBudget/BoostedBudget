@@ -301,8 +301,11 @@ func (r *adminUserRepository) buildFilterClause(filters domain.AdminUserFilters)
 	argIndex := 1
 
 	if filters.Search != "" {
-		clause += fmt.Sprintf(" AND u.email_blind_idx = $%d", argIndex)
-		args = append(args, r.enc.BlindIndex(strings.ToLower(strings.TrimSpace(filters.Search))))
+		clause += fmt.Sprintf(
+			" AND EXISTS (SELECT 1 FROM user_email_prefix_indices p"+
+				" WHERE p.user_id = u.id AND p.prefix_blind_idx = $%d)", argIndex)
+		args = append(args, r.enc.BlindIndexWithLabel(appcrypto.LabelEmailPrefix,
+			appcrypto.NormalizeEmailForBlindIndex(filters.Search)))
 		argIndex++
 	}
 
