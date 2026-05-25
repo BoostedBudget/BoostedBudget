@@ -871,8 +871,10 @@ func TestGetUserByEmail_NotFound(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestProfileRepository_UpdateUserEmailTx_Success verifies that UpdateUserEmailTx updates
-// the email, email_blind_idx, and resets email_verified to false within a transaction.
+// TestProfileRepository_UpdateUserEmailTx_Success verifies that UpdateUserEmailTx:
+//  1. Updates the email columns on the users row (existing behaviour)
+//  2. Deletes the old prefix rows for the user
+//  3. Inserts new prefix rows for the updated email
 func TestProfileRepository_UpdateUserEmailTx_Success(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -885,6 +887,7 @@ func TestProfileRepository_UpdateUserEmailTx_Success(t *testing.T) {
 	newEmail := "newemail@example.com"
 
 	mock.ExpectBegin()
+	// 1. UPDATE users (existing behaviour — must stay first for lock-ordering invariant)
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET email = $1, email_blind_idx = $2, email_verified = false, updated_at = $3 WHERE id = $4`)).
 		WithArgs(
 			pgxmock.AnyArg(), // email (encrypted)
@@ -893,6 +896,21 @@ func TestProfileRepository_UpdateUserEmailTx_Success(t *testing.T) {
 			userID,
 		).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// 2. DELETE old prefix rows
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM user_email_prefix_indices WHERE user_id = $1`)).
+		WithArgs(userID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	// 3. INSERT new prefix rows.
+	// "newemail@example.com" = 20 runes → 18 prefix indices (lengths 3..20) + 1 user_id arg = 19 args.
+	mock.ExpectExec(`INSERT INTO user_email_prefix_indices`).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	tx, err := mock.Begin(ctx)
 	require.NoError(t, err)
