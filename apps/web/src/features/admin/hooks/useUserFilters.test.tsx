@@ -304,6 +304,48 @@ describe('useUserFilters', () => {
     })
   })
 
+  describe('apiParams search gating', () => {
+    it('includes search in apiParams when search.length >= 3', () => {
+      window.history.replaceState({}, '', '/admin/users?search=abc')
+      const { result } = renderHook(() => useUserFilters(), {
+        wrapper: createWrapper(),
+      })
+      expect(result.current.apiParams.search).toBe('abc')
+    })
+
+    it('excludes search from apiParams when search.length === 2', () => {
+      window.history.replaceState({}, '', '/admin/users?search=ab')
+      const { result } = renderHook(() => useUserFilters(), {
+        wrapper: createWrapper(),
+      })
+      expect(result.current.apiParams.search).toBeUndefined()
+    })
+
+    it('excludes search from apiParams when search.length === 1', () => {
+      window.history.replaceState({}, '', '/admin/users?search=a')
+      const { result } = renderHook(() => useUserFilters(), {
+        wrapper: createWrapper(),
+      })
+      expect(result.current.apiParams.search).toBeUndefined()
+    })
+
+    it('excludes search from apiParams when search is empty', () => {
+      window.history.replaceState({}, '', '/admin/users')
+      const { result } = renderHook(() => useUserFilters(), {
+        wrapper: createWrapper(),
+      })
+      expect(result.current.apiParams.search).toBeUndefined()
+    })
+
+    it('includes search in apiParams when search.length === 3 exactly', () => {
+      window.history.replaceState({}, '', '/admin/users?search=xyz')
+      const { result } = renderHook(() => useUserFilters(), {
+        wrapper: createWrapper(),
+      })
+      expect(result.current.apiParams.search).toBe('xyz')
+    })
+  })
+
   describe('sort state', () => {
     it('parses sort from URL', () => {
       const { result } = renderHook(() => useUserFilters(), {
