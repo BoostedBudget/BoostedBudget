@@ -1019,3 +1019,52 @@ func TestProfileRepository_CreateUserTx_ShortEmail_NoPrefixInsert(t *testing.T) 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestProfileRepository_CreateUserTx_PrefixInsertError verifies that a database error
+// from insertPrefixIndicesTx is propagated by CreateUserTx rather than swallowed.
+func TestProfileRepository_CreateUserTx_PrefixInsertError(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+	ctx := context.Background()
+
+	user := &domain.User{
+		ClerkUserID:        "clerk_test_prefix_err",
+		Email:              "prefix@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+
+	dbErr := errors.New("connection reset by peer")
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO users (`)).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// "prefix@example.com" → 18 runes → 16 indices (3..18) + 1 user_id arg = 17 args total.
+	mock.ExpectExec(`INSERT INTO user_email_prefix_indices`).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+		).
+		WillReturnError(dbErr)
+
+	tx, err := mock.Begin(ctx)
+	require.NoError(t, err)
+
+	err = repo.CreateUserTx(ctx, tx, user)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, dbErr)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
