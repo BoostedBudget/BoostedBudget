@@ -134,6 +134,7 @@ type SpendingByCategoryResponse struct {
 // SpendingByMerchant represents spending totals for a single merchant
 type SpendingByMerchant struct {
 	MerchantName     string  `json:"merchant_name"`
+	MerchantID       *string `json:"merchant_id,omitempty"`
 	Total            float64 `json:"total"`
 	TransactionCount int     `json:"transaction_count"`
 	Percentage       float64 `json:"percentage"`

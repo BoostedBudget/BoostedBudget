@@ -12,6 +12,7 @@ export interface ReportsFilters {
 }
 
 export interface SpendingMerchant {
+  merchant_id?: string | null
   merchant_name: string
   total: number
   transaction_count: number

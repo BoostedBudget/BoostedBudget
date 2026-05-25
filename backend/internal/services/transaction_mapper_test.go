@@ -18,7 +18,7 @@ import (
 
 // TestMapPlaidTransaction_AllFields tests complete field mapping
 func TestMapPlaidTransaction_AllFields(t *testing.T) {
-	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
 	ctx := context.Background()
 
 	linkedItemID := "linked-item-123"
@@ -92,7 +92,7 @@ func TestMapPlaidTransaction_AllFields(t *testing.T) {
 
 // TestMapPlaidTransaction_MissingAccount tests error when account not in map
 func TestMapPlaidTransaction_MissingAccount(t *testing.T) {
-	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
 	ctx := context.Background()
 
 	accountMap := map[string]string{}
@@ -115,7 +115,7 @@ func TestMapPlaidTransaction_MissingAccount(t *testing.T) {
 
 // TestMapPlaidTransaction_MinimalFields tests with only required fields
 func TestMapPlaidTransaction_MinimalFields(t *testing.T) {
-	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
 	ctx := context.Background()
 
 	accountMap := map[string]string{
@@ -146,7 +146,7 @@ func TestMapPlaidTransaction_MinimalFields(t *testing.T) {
 
 // TestMapPlaidTransaction_InvalidDate tests date parsing error
 func TestMapPlaidTransaction_InvalidDate(t *testing.T) {
-	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
 	ctx := context.Background()
 
 	accountMap := map[string]string{
@@ -175,7 +175,7 @@ func TestMapPlaidTransaction_InvalidDate(t *testing.T) {
 // TestMapPlaidTransaction_PFCFallback_NoLegacyCategory verifies that when Plaid returns no legacy
 // category but does return personal_finance_category, the domain transaction stores PFCPrimary/PFCDetailed.
 func TestMapPlaidTransaction_PFCFallback_NoLegacyCategory(t *testing.T) {
-	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
 	ctx := context.Background()
 
 	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
@@ -209,7 +209,7 @@ func TestMapPlaidTransaction_PFCFallback_NoLegacyCategory(t *testing.T) {
 // TestMapPlaidTransaction_LegacyCategoryIgnored verifies that legacy category from Plaid
 // is not stored — only PFC v2 fields are persisted.
 func TestMapPlaidTransaction_LegacyCategoryIgnored(t *testing.T) {
-	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
 	ctx := context.Background()
 
 	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
@@ -241,7 +241,7 @@ func TestMapPlaidTransaction_LegacyCategoryIgnored(t *testing.T) {
 // TestMapPlaidTransaction_PartialPFC_EmptyPrimary verifies that PFC with an empty Primary
 // leaves PFCPrimary nil.
 func TestMapPlaidTransaction_PartialPFC_EmptyPrimary(t *testing.T) {
-	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
 	ctx := context.Background()
 
 	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
@@ -269,7 +269,7 @@ func TestMapPlaidTransaction_PartialPFC_EmptyPrimary(t *testing.T) {
 // TestMapPlaidTransaction_PFCOnly_NoDetailed verifies PFC with only primary (no detailed)
 // stores PFCPrimary but leaves PFCDetailed nil.
 func TestMapPlaidTransaction_PFCOnly_NoDetailed(t *testing.T) {
-	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
 	ctx := context.Background()
 
 	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
@@ -305,7 +305,7 @@ func TestMapPlaidTransaction_PFCOnly_NoDetailed(t *testing.T) {
 // TestMapPlaidTransaction_PFCFields_AnchorExpectations asserts the exact PFC field values
 // for the three PFC scenarios.
 func TestMapPlaidTransaction_PFCFields_AnchorExpectations(t *testing.T) {
-	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
+	service := NewTransactionSyncService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*transactionSyncService)
 	ctx := context.Background()
 	accountMap := map[string]string{"acc": "uuid"}
 

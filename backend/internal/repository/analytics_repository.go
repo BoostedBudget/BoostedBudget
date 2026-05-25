@@ -400,18 +400,20 @@ func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID 
 
 	query := fmt.Sprintf(`
 		SELECT
-			COALESCE(t.merchant_name, 'Unknown') as merchant_name,
-			COALESCE(SUM(ABS(t.amount)), 0) as total,
-			COUNT(*) as transaction_count
+			COALESCE(t.merchant_name, 'Unknown') AS merchant_name,
+			MAX(m.id)                             AS merchant_id,
+			COALESCE(SUM(ABS(t.amount)), 0)       AS total,
+			COUNT(*)                              AS transaction_count
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
+		LEFT JOIN merchants m ON t.merchant_id = m.id
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
 		  AND t.pending = false
 		%s
-		GROUP BY merchant_name
+		GROUP BY COALESCE(t.merchant_name, 'Unknown')
 		ORDER BY total DESC
 		LIMIT %s
 	`, extraClause, limitPlaceholder)
@@ -425,7 +427,7 @@ func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID 
 	var results []domain.SpendingByMerchant
 	for rows.Next() {
 		var row domain.SpendingByMerchant
-		if err := rows.Scan(&row.MerchantName, &row.Total, &row.TransactionCount); err != nil {
+		if err := rows.Scan(&row.MerchantName, &row.MerchantID, &row.Total, &row.TransactionCount); err != nil {
 			return nil, fmt.Errorf("failed to scan spending by merchant: %w", err)
 		}
 		results = append(results, row)

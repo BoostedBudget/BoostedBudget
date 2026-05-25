@@ -30,7 +30,7 @@ var (
 var transactionSelectColumns = []string{
 	"id", "user_id", "account_id", "linked_item_id",
 	"source", "external_transaction_id", "external_metadata",
-	"amount", "date", "authorized_date", "name", "merchant_name",
+	"amount", "date", "authorized_date", "name", "merchant_name", "merchant_id",
 	"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url",
 	"payment_channel", "pending", "user_notes", "created_at", "updated_at",
 	"tags", "tags_source",
@@ -294,7 +294,8 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 	// Build multi-row INSERT query
 	// Issue #171: Added user_account_id field; encryption adds external_transaction_id_blind_idx
 	// Issue #1123: Added effective_category_name (24 fields)
-	const numFields = 24
+	// Issue #1163: Added merchant_id (25 fields)
+	const numFields = 25
 	valueStrings := make([]string, 0, len(transactions))
 	valueArgs := make([]interface{}, 0, len(transactions)*numFields)
 
@@ -343,6 +344,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			transactions[i].AuthorizedDate,
 			transactions[i].Name,
 			transactions[i].MerchantName,
+			transactions[i].MerchantID,
 			transactions[i].PFCPrimary,
 			transactions[i].PFCDetailed,
 			transactions[i].PFCConfidenceLevel,
@@ -366,7 +368,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		INSERT INTO transactions
 		(id, user_id, account_id, linked_item_id, user_account_id,
 		 source, external_transaction_id, external_transaction_id_blind_idx, external_metadata,
-		 amount, date, authorized_date, name, merchant_name,
+		 amount, date, authorized_date, name, merchant_name, merchant_id,
 		 pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending, user_notes,
 		 created_at, updated_at, effective_category_name)
 		VALUES %s
@@ -381,6 +383,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			authorized_date = EXCLUDED.authorized_date,
 			name = EXCLUDED.name,
 			merchant_name = EXCLUDED.merchant_name,
+			merchant_id = EXCLUDED.merchant_id,
 			pfc_primary = EXCLUDED.pfc_primary,
 			pfc_detailed = EXCLUDED.pfc_detailed,
 			pfc_confidence_level = EXCLUDED.pfc_confidence_level,
@@ -417,16 +420,16 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 	query := `
 		UPDATE transactions
 		SET amount = $1, date = $2, authorized_date = $3, name = $4,
-		    merchant_name = $5, pfc_primary = $6, pfc_detailed = $7, pfc_confidence_level = $8,
-		    pfc_category_icon_url = $9, payment_channel = $10, pending = $11, external_metadata = $12,
-		    user_notes = $13, updated_at = $14,
+		    merchant_name = $5, merchant_id = $6, pfc_primary = $7, pfc_detailed = $8, pfc_confidence_level = $9,
+		    pfc_category_icon_url = $10, payment_channel = $11, pending = $12, external_metadata = $13,
+		    user_notes = $14, updated_at = $15,
 		    effective_category_name = CASE
 		        WHEN category_override_kind = 'custom' THEN
 		            (SELECT name FROM custom_categories WHERE id = transactions.custom_category_override_id AND user_id = transactions.user_id)
-		        WHEN category_override_kind = 'pfc' THEN COALESCE(NULLIF(pfc_primary_override, ''), $6)
-		        ELSE $6
+		        WHEN category_override_kind = 'pfc' THEN COALESCE(NULLIF(pfc_primary_override, ''), $7)
+		        ELSE $7
 		    END
-		WHERE id = $15 AND user_id = $16
+		WHERE id = $16 AND user_id = $17
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -435,6 +438,7 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 		transaction.AuthorizedDate,
 		transaction.Name,
 		transaction.MerchantName,
+		transaction.MerchantID,
 		transaction.PFCPrimary,
 		transaction.PFCDetailed,
 		transaction.PFCConfidenceLevel,
@@ -614,6 +618,7 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 		&tx.AuthorizedDate,
 		&tx.Name,
 		&tx.MerchantName,
+		&tx.MerchantID,
 		&tx.PFCPrimary,
 		&tx.PFCDetailed,
 		&tx.PFCConfidenceLevel,
@@ -841,6 +846,14 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		argIndex++
 	}
 
+	// Optional filter: merchant_id (Issue #1163)
+	// Filters by exact merchant UUID match
+	if filters.MerchantID != nil {
+		conditions = append(conditions, fmt.Sprintf("merchant_id = $%d", argIndex))
+		args = append(args, *filters.MerchantID)
+		argIndex++
+	}
+
 	// Combine all conditions with AND
 	whereClause := "WHERE " + strings.Join(conditions, " AND ")
 
@@ -872,6 +885,7 @@ func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transa
 			&tx.AuthorizedDate,
 			&tx.Name,
 			&tx.MerchantName,
+			&tx.MerchantID,
 			&tx.PFCPrimary,
 			&tx.PFCDetailed,
 			&tx.PFCConfidenceLevel,
@@ -963,6 +977,7 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 		&tx.AuthorizedDate,
 		&tx.Name,
 		&tx.MerchantName,
+		&tx.MerchantID,
 		&tx.PFCPrimary,
 		&tx.PFCDetailed,
 		&tx.PFCConfidenceLevel,
@@ -1443,13 +1458,13 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 // GetByUserAccountID retrieves all transactions for a specific user_account.
 // Issue #171: Provides stable queries across re-links since user_account_id survives re-links.
 //
-// NOTE: This SELECT includes user_account_id at position 5 (33 columns total).
-// Columns 1-4 and 6-33 must stay in sync with transactionSelectColumns.
+// NOTE: This SELECT includes user_account_id at position 5 (34 columns total).
+// Columns 1-4 and 6-34 must stay in sync with transactionSelectColumns.
 func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error) {
 	query := `
 		SELECT id, user_id, account_id, linked_item_id, user_account_id,
 			   source, external_transaction_id, external_metadata,
-			   amount, date, authorized_date, name, merchant_name,
+			   amount, date, authorized_date, name, merchant_name, merchant_id,
 			   pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending, user_notes,
 			   created_at, updated_at, tags, tags_source,
 			   category_override_kind, pfc_primary_override, pfc_detailed_override,
@@ -1490,6 +1505,7 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 			&tx.AuthorizedDate,
 			&tx.Name,
 			&tx.MerchantName,
+			&tx.MerchantID,
 			&tx.PFCPrimary,
 			&tx.PFCDetailed,
 			&tx.PFCConfidenceLevel,
