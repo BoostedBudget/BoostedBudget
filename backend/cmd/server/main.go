@@ -295,6 +295,13 @@ func main() {
 			os.Exit(1)
 		}
 
+		// #1178: Populate prefix blind indices for existing users at startup.
+		// Idempotent — skips users that already have rows. Fast no-op on restart.
+		if err := database.BackfillEmailPrefixIndices(context.Background(), db, fieldEncryptor); err != nil {
+			appLogger.Error("Email prefix index backfill failed — exiting", "error", err)
+			os.Exit(1)
+		}
+
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db, fieldEncryptor)
 		privacyRepo := repository.NewPrivacyRepository(db)
