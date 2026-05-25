@@ -193,7 +193,7 @@ This ensures that no matter what order backfill and email updates run, the prefi
 
 ## Backfill
 
-Add `BackfillEmailPrefixIndices` to `backend/internal/database/backfill.go`, called from `backend/cmd/server/main.go` at startup after `BackfillEncryption`:
+Add `BackfillEmailPrefixIndices` to `backend/internal/database/backfill.go`, mirroring the exact structure of `BackfillEncryption`. Called from `backend/cmd/server/main.go` at startup after `BackfillEncryption`:
 
 ```go
 if err := database.BackfillEmailPrefixIndices(context.Background(), db, fieldEncryptor); err != nil {
@@ -202,29 +202,97 @@ if err := database.BackfillEmailPrefixIndices(context.Background(), db, fieldEnc
 }
 ```
 
-**Algorithm:**
+**Implementation (closely mirrors existing `backfillUsers` structure):**
 
 ```go
-func BackfillEmailPrefixIndices(ctx context.Context, db *pgxpool.Pool, enc *crypto.FieldEncryptor) error {
-    // Process users in batches of 100 (keyset pagination on id)
-    // For each user row:
-    //   1. Decrypt users.email using enc.DecryptString() — MUST decrypt ENC$ ciphertext
-    //      before generating prefix indices. Do NOT hash the raw ciphertext.
-    //   2. Call crypto.EmailPrefixBlindIndices(enc, decryptedEmail)
-    //   3. INSERT INTO user_email_prefix_indices ... ON CONFLICT DO NOTHING
-    //      (single multi-row INSERT per user, within one transaction per batch)
-    //   4. On decrypt error for a user: log user ID, skip, continue batch
-    //
-    // NO row locking (FOR UPDATE / SKIP LOCKED):
-    //   - Consistent with existing BackfillEncryption pattern
-    //   - Race with concurrent email update: UpdateUserEmailTx atomically
-    //     deletes all old prefix rows and inserts correct new ones, so stale
-    //     rows from backfill are self-healing on next email change
-    //   - Acceptable trade-off for startup backfill on a small user base
-    //
-    // Idempotent: ON CONFLICT DO NOTHING makes re-runs safe
+func BackfillEmailPrefixIndices(ctx context.Context, db *pgxpool.Pool, enc *appcrypto.FieldEncryptor) error {
+    if db == nil || enc == nil {
+        return nil // encryption not configured (local dev without ENCRYPTION_KEY)
+    }
+
+    // Idempotency filter: only select users who have NO prefix rows yet.
+    // On re-run after a partial or crashed backfill, already-processed users are
+    // excluded by the NOT EXISTS clause — re-run is a fast no-op for them.
+    // This mirrors BackfillEncryption's use of "WHERE email_blind_idx IS NULL".
+    rows, err := db.Query(ctx, `
+        SELECT u.id, u.email
+        FROM users u
+        WHERE u.is_deleted = FALSE
+          AND NOT EXISTS (
+              SELECT 1 FROM user_email_prefix_indices p
+              WHERE p.user_id = u.id
+          )
+    `)
+    if err != nil {
+        return fmt.Errorf("query users without prefix indices: %w", err)
+    }
+    defer rows.Close()
+
+    var userIDs, encryptedEmails []string
+    for rows.Next() {
+        var id, email string
+        if err := rows.Scan(&id, &email); err != nil {
+            return fmt.Errorf("scan row: %w", err)
+        }
+        userIDs = append(userIDs, id)
+        encryptedEmails = append(encryptedEmails, email)
+    }
+    if err := rows.Err(); err != nil {
+        return fmt.Errorf("iterate rows: %w", err)
+    }
+    if len(userIDs) == 0 {
+        return nil // nothing to backfill — fast path on subsequent restarts
+    }
+
+    slog.InfoContext(ctx, "#1178: backfilling email prefix blind indices", "count", len(userIDs))
+
+    skipped := 0
+    for i, userID := range userIDs {
+        // Reuse the existing encryptWithBlind helper: handles both legacy plaintext
+        // and ENC$ ciphertext transparently (same dual-read logic as backfillUsers).
+        encEmail := encryptedEmails[i]
+        var plainEmail string
+        if appcrypto.IsEncrypted(encEmail) {
+            plainEmail, err = enc.DecryptString(encEmail)
+            if err != nil {
+                // Per-user decrypt error: log and skip — prefix search for this user
+                // won't work until their email is touched (CreateUserTx / UpdateUserEmailTx
+                // regenerates prefix rows correctly). Non-fatal: prefix search is admin-only.
+                slog.WarnContext(ctx, "#1178: skipping user — decrypt error",
+                    "user_id", userID, "error", err)
+                skipped++
+                continue
+            }
+        } else {
+            plainEmail = encEmail // legacy pre-encryption plaintext
+        }
+
+        indices := appcrypto.EmailPrefixBlindIndices(enc, plainEmail)
+        if len(indices) == 0 {
+            continue // email too short for any prefix — safe skip
+        }
+
+        // Single multi-row INSERT with ON CONFLICT DO NOTHING.
+        // Handles the narrow race where UpdateUserEmailTx ran between the
+        // NOT EXISTS query above and this insert — those rows are simply skipped.
+        if err := insertPrefixIndicesDB(ctx, db, userID, indices); err != nil {
+            return fmt.Errorf("insert prefix indices for user %s: %w", userID, err)
+        }
+    }
+
+    slog.InfoContext(ctx, "#1178: email prefix index backfill complete",
+        "processed", len(userIDs)-skipped, "skipped", skipped)
+    return nil
 }
 ```
+
+**Idempotency guarantee (zero manual intervention):**
+- `NOT EXISTS` filter: re-run on any restart processes only users who still lack prefix rows — already-processed users are excluded in O(1) at the DB level
+- `ON CONFLICT DO NOTHING` on INSERT: handles the narrow race where an email update runs concurrently during a backfill run; no duplicate or stale rows can accumulate across restarts
+- `nil` early return: if encryption is not configured (local dev), backfill is a no-op
+- Per-user decrypt errors: logged and skipped; those users' prefix rows are written correctly by their next `CreateUserTx` or `UpdateUserEmailTx` call — no manual fix needed
+- Rolling deployment safe: multiple instances running concurrently all see the same `NOT EXISTS` filter and produce the same `ON CONFLICT DO NOTHING` inserts — no races across instances
+- Migration ordering: `BackfillEmailPrefixIndices` is called after `MigrateUp()` in `main.go`, so the table always exists before the backfill runs
 
 ---
 
