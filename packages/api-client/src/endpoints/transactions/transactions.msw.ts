@@ -174,6 +174,10 @@ export const getGetTransactionsResponseMock = (
       ]),
       id: faker.string.alpha({ length: { min: 10, max: 20 } }),
       linked_item_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      merchant_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       merchant_name: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
@@ -389,6 +393,10 @@ export const getGetTransactionByIDResponseMock = (
   ]),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   linked_item_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  merchant_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   merchant_name: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -601,6 +609,10 @@ export const getUpdateTransactionCategoryResponseMock = (
   ]),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   linked_item_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  merchant_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   merchant_name: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -813,6 +825,10 @@ export const getUpdateTransactionTagsResponseMock = (
   ]),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   linked_item_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  merchant_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   merchant_name: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,

@@ -80,6 +80,7 @@ export interface TransactionFilters {
   min_amount?: number // Minimum absolute transaction amount
   max_amount?: number // Maximum absolute transaction amount
   amount_type?: 'income' | 'expense' | 'all' // Transaction type filter
+  merchant_id?: string // Filter by merchant UUID
 }
 
 /**

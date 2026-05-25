@@ -3302,6 +3302,8 @@ components:
     SpendingByMerchant:
       additionalProperties: false
       properties:
+        merchant_id:
+          type: string
         merchant_name:
           type: string
         percentage:
@@ -3677,6 +3679,8 @@ components:
         id:
           type: string
         linked_item_id:
+          type: string
+        merchant_id:
           type: string
         merchant_name:
           type: string
@@ -8336,6 +8340,15 @@ paths:
           name: user_account_id
           schema:
             description: Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members
+            type: string
+        - description: Filter transactions by merchant UUID
+          explode: false
+          in: query
+          name: merchant_id
+          schema:
+            description: Filter transactions by merchant UUID
+            examples:
+              - 550e8400-e29b-41d4-a716-446655440000
             type: string
         - description: Column to sort by
           explode: false

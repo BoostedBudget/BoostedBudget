@@ -2,10 +2,13 @@ import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import React from 'react'
 import { MemoryRouter } from 'react-router-dom'
-import { mockUseGetSpendingByCategory } from '@/test/mocks/analytics-api'
+import { mockUseGetSpendingByCategory, mockUseGetSpendingByMerchant } from '@/test/mocks/analytics-api'
+import { mockNavigate } from '@/test/mocks/react-router'
 import type { SpendingByCategoryResponse } from '@boostedbudget/api-client/models'
+import type { SpendingByMerchantResponse } from '@boostedbudget/api-client/models'
 
 import '@/test/mocks/shared-charts'
+import '@/test/mocks/react-router'
 
 // Mock toggle-group for DateRangePicker
 mock.module('@/components/ui/toggle-group', () => ({
@@ -114,5 +117,81 @@ describe('SpendingReportsPage drill-down guard', () => {
     // echarts-point-1 corresponds to customCategoryData.categories[1] = 'FOOD_AND_DRINK'
     fireEvent.click(screen.getByTestId('echarts-point-1'))
     expect(screen.getByText('Click a subcategory to view its transactions.')).toBeDefined()
+  })
+})
+
+describe('SpendingReportsPage merchant click navigation', () => {
+  const merchantWithId: SpendingByMerchantResponse = {
+    start_date: '2024-01-01',
+    end_date: '2024-01-31',
+    top_n: 10,
+    merchants: [
+      { merchant_id: 'uuid-merchant-123', merchant_name: 'Starbucks', total: 150, transaction_count: 5, percentage: 100 },
+    ],
+  }
+
+  const merchantWithoutId: SpendingByMerchantResponse = {
+    start_date: '2024-01-01',
+    end_date: '2024-01-31',
+    top_n: 10,
+    merchants: [
+      { merchant_name: 'Unknown Merchant', total: 50, transaction_count: 2, percentage: 100 },
+    ],
+  }
+
+  beforeEach(() => {
+    mockNavigate.mockClear()
+    // Ensure category and trends mocks return valid (non-null) values
+    mockUseGetSpendingByCategory.mockReturnValue({
+      data: null,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve({}),
+    })
+  })
+
+  afterEach(() => {
+    mockUseGetSpendingByMerchant.mockReset()
+    mockUseGetSpendingByCategory.mockReset()
+  })
+
+  it('navigates using merchant_id (not merchant name) when id is present', () => {
+    mockUseGetSpendingByMerchant.mockReturnValue({
+      data: merchantWithId,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve({}),
+    })
+
+    renderPage()
+
+    // Click the merchant row
+    fireEvent.click(screen.getByText('Starbucks'))
+
+    // Must navigate with merchant_id param, NOT merchant name
+    expect(mockNavigate).toHaveBeenCalledTimes(1)
+    const [url, opts] = mockNavigate.mock.calls[0] as [string, { state: { merchantName: string } }]
+    expect(url).toContain('merchant_id=uuid-merchant-123')
+    expect(url).not.toContain('search=')
+    expect(url).not.toContain('Starbucks')
+    // Merchant name goes in router state, not URL
+    expect(opts?.state?.merchantName).toBe('Starbucks')
+  })
+
+  it('skips navigation when merchant has no id', () => {
+    mockUseGetSpendingByMerchant.mockReturnValue({
+      data: merchantWithoutId,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve({}),
+    })
+
+    renderPage()
+
+    // Click the merchant row
+    fireEvent.click(screen.getByText('Unknown Merchant'))
+
+    // No navigation should happen when merchant_id is absent
+    expect(mockNavigate).not.toHaveBeenCalled()
   })
 })

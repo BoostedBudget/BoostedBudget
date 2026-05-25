@@ -24,7 +24,7 @@ func TestTransactionSelectColumns(t *testing.T) {
 	expectedColumns := []string{
 		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
+		"amount", "date", "authorized_date", "name", "merchant_name", "merchant_id",
 		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url",
 		"payment_channel", "pending", "user_notes", "created_at", "updated_at",
 		"tags", "tags_source",
@@ -143,10 +143,11 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with multiple value sets (24 fields per transaction * 2 transactions = 48 args)
+	// Expect batch INSERT with multiple value sets (25 fields per transaction * 2 transactions = 50 args)
 	// Issue #171: Added user_account_id as the 5th field; encryption adds external_transaction_id_blind_idx
 	// Issue #1123: Added effective_category_name as the 24th field
-	args := make([]interface{}, 48)
+	// Issue #1163: Added merchant_id as the 15th field
+	args := make([]interface{}, 50)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -184,7 +185,7 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 		Pending:               false,
 	}
 
-	// Expect UPDATE query
+	// Expect UPDATE query (17 args: merchant_id added at $6, shifts all subsequent params)
 	mock.ExpectExec("UPDATE transactions SET").
 		WithArgs(
 			transaction.Amount,
@@ -192,6 +193,7 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 			pgxmock.AnyArg(), // authorized_date
 			transaction.Name,
 			pgxmock.AnyArg(), // merchant_name
+			pgxmock.AnyArg(), // merchant_id
 			pgxmock.AnyArg(), // pfc_primary
 			pgxmock.AnyArg(), // pfc_detailed
 			pgxmock.AnyArg(), // pfc_confidence_level
@@ -202,7 +204,7 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 			pgxmock.AnyArg(), // user_notes
 			pgxmock.AnyArg(), // updated_at
 			transaction.ID,
-			transaction.UserID, // $16: user_id scope
+			transaction.UserID, // $17: user_id scope
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
@@ -260,7 +262,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID1, nil,
-			-50.00, now, nil, "Transaction 1", nil,
+			-50.00, now, nil, "Transaction 1", nil, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -270,7 +272,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 		AddRow(
 			"tx-2", userID, "account-2", "item-1",
 			"plaid", &extID2, nil,
-			-25.00, now, nil, "Transaction 2", nil,
+			-25.00, now, nil, "Transaction 2", nil, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -313,7 +315,7 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 		AddRow(
 			"tx-1", "user-1", accountID, "item-1",
 			"plaid", &extID, nil,
-			-50.00, now, nil, "Transaction 1", nil,
+			-50.00, now, nil, "Transaction 1", nil, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -355,7 +357,7 @@ func TestTransactionRepository_GetByAccountID_ChainAware(t *testing.T) {
 		AddRow(
 			"tx-chain-1", "user-1", replacedAccountID, "item-1",
 			"plaid", &extID, nil,
-			-99.00, now, nil, "Pre-Relink Transaction", nil,
+			-99.00, now, nil, "Pre-Relink Transaction", nil, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -398,7 +400,7 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
-			-50.00, now, nil, "Transaction 1", nil,
+			-50.00, now, nil, "Transaction 1", nil, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -443,7 +445,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
-			-50.00, now, nil, "Transaction 1", nil,
+			-50.00, now, nil, "Transaction 1", nil, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -493,7 +495,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
-			-50.00, txDate, nil, "Transaction 1", nil,
+			-50.00, txDate, nil, "Transaction 1", nil, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -541,7 +543,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 		AddRow(
 			"tx-1", userID, accountID, "item-1",
 			"plaid", &extID, nil,
-			-50.00, now, nil, "Transaction 1", nil,
+			-50.00, now, nil, "Transaction 1", nil, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -590,7 +592,7 @@ func TestTransactionRepository_ChainExpand_AccountID(t *testing.T) {
 		AddRow(
 			"tx-prerelink-1", userID, replacedAccountID, "item-1",
 			"plaid", &extID, nil,
-			-100.00, now, nil, "Pre-Relink Txn", nil,
+			-100.00, now, nil, "Pre-Relink Txn", nil, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -638,7 +640,7 @@ func TestTransactionRepository_ChainExpand_AccountIDs(t *testing.T) {
 		AddRow(
 			"tx-prerelink-2", userID, replacedAccountID, "item-1",
 			"plaid", &extID, nil,
-			-200.00, now, nil, "Pre-Relink Txn Multi", nil,
+			-200.00, now, nil, "Pre-Relink Txn Multi", nil, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -686,7 +688,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
-			-5.49, now, nil, "Starbucks", &merchantName,
+			-5.49, now, nil, "Starbucks", &merchantName, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -733,7 +735,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_PFCPrimaries(t *testing.T)
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
-			-25.00, now, nil, "Restaurant", nil,
+			-25.00, now, nil, "Restaurant", nil, nil,
 			&pfcPrimary, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -779,7 +781,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
-			-100.00, now, nil, "Pending Transaction", nil,
+			-100.00, now, nil, "Pending Transaction", nil, nil,
 			nil, nil, nil, nil,
 			nil, true, nil, now, now,
 			nil, nil,
@@ -832,7 +834,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 		AddRow(
 			"tx-1", userID, accountID, "item-1",
 			"plaid", &extID, nil,
-			-50.00, txDate, nil, "Transaction 1", nil,
+			-50.00, txDate, nil, "Transaction 1", nil, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -939,7 +941,7 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 		AddRow(
 			"tx-uuid-123", userID, "account-456", "item-789",
 			"plaid", &externalID, nil,
-			-25.50, now, nil, "Starbucks", &merchantName,
+			-25.50, now, nil, "Starbucks", &merchantName, nil,
 			&categoryJSON, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -1015,7 +1017,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
-			-50.00, now, nil, "Transaction 1", nil,
+			-50.00, now, nil, "Transaction 1", nil, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			[]byte(`["Food", "Shopping"]`), []byte(`[{"tag":"Food","source":"user"},{"tag":"Shopping","source":"user"}]`),
@@ -1065,7 +1067,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 		AddRow(
 			"tx-1", userID, "account-1", "item-1",
 			"plaid", &extID, nil,
-			-50.00, now, nil, "Transaction 1", nil,
+			-50.00, now, nil, "Transaction 1", nil, nil,
 			&pfcPrimary, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -1114,7 +1116,7 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 	rows := pgxmock.NewRows(transactionSelectColumns).
 		AddRow(
 			txID, "user-123", "account-1", "item-1", "plaid", &extID,
-			nil, -50.00, now, nil, "Transaction 1", nil,
+			nil, -50.00, now, nil, "Transaction 1", nil, nil,
 			&pfcPrimary, nil, nil, nil, nil, false, nil,
 			now, now, []byte(`["Food"]`), []byte(`[{"tag":"Food","source":"user"}]`),
 			&overrideKind, &pfcPrimaryOverride, nil,
@@ -2102,9 +2104,10 @@ func TestTransactionRepository_CreateBatch_WithUserAccountID(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with user_account_id and external_transaction_id_blind_idx (24 fields now)
+	// Expect batch INSERT with user_account_id and external_transaction_id_blind_idx (25 fields now)
 	// Issue #1123: Added effective_category_name as the 24th field
-	args := make([]interface{}, 24)
+	// Issue #1163: Added merchant_id as the 15th field
+	args := make([]interface{}, 25)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -2147,8 +2150,8 @@ func TestTransactionRepository_CreateBatch_DOUpdateBehavior(t *testing.T) {
 		},
 	}
 
-	// Build arguments for 24 fields per transaction (includes external_transaction_id_blind_idx, pfc_category_icon_url, effective_category_name)
-	args := make([]interface{}, 24)
+	// Build arguments for 25 fields per transaction (includes external_transaction_id_blind_idx, pfc_category_icon_url, effective_category_name, merchant_id)
+	args := make([]interface{}, 25)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -2188,7 +2191,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "linked_item_id", "user_account_id",
 		"source", "external_transaction_id", "external_metadata",
-		"amount", "date", "authorized_date", "name", "merchant_name",
+		"amount", "date", "authorized_date", "name", "merchant_name", "merchant_id",
 		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel", "pending", "user_notes",
 		"created_at", "updated_at", "tags", "tags_source",
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
@@ -2198,7 +2201,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 		AddRow(
 			"tx-uuid-1", userID, "account-old", "item-old", &userAccountID,
 			"plaid", &externalID1, nil,
-			-50.00, now, nil, "Starbucks", ptrStr("Starbucks Corp"),
+			-50.00, now, nil, "Starbucks", ptrStr("Starbucks Corp"), nil,
 			nil, nil, nil, nil, nil, false, nil,
 			now, now, []byte(`[]`), []byte(`[]`),
 			nil, nil, nil, nil, "plaid", nil,
@@ -2207,7 +2210,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 		AddRow(
 			"tx-uuid-2", userID, "account-new", "item-new", &userAccountID,
 			"plaid", &externalID2, nil,
-			-25.00, now, nil, "Coffee", nil,
+			-25.00, now, nil, "Coffee", nil, nil,
 			nil, nil, nil, nil, nil, false, nil,
 			now, now, []byte(`[]`), []byte(`[]`),
 			nil, nil, nil, nil, "plaid", nil,
@@ -2271,7 +2274,7 @@ func testTxRow(id, userID, accountID, itemID, name string, amount float64, now t
 	return []interface{}{
 		id, userID, accountID, itemID,
 		"plaid", nil, nil,
-		amount, now, nil, name, nil,
+		amount, now, nil, name, nil, nil,
 		nil, nil, nil, nil,
 		nil, false, nil, now, now,
 		nil, nil,
@@ -2633,7 +2636,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T
 		AddRow(
 			"tx-1", userID, "account-old-1", "item-1",
 			"plaid", &extID, nil,
-			-50.00, now, nil, "Transaction 1", nil,
+			-50.00, now, nil, "Transaction 1", nil, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -2643,7 +2646,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T
 		AddRow(
 			"tx-2", userID, "account-new-2", "item-1",
 			"plaid", &extID, nil,
-			-75.00, now, nil, "Transaction 2", nil,
+			-75.00, now, nil, "Transaction 2", nil, nil,
 			nil, nil, nil, nil,
 			nil, false, nil, now, now,
 			nil, nil,
@@ -2808,7 +2811,7 @@ func makeKeysetRow(id, userID string, amount float64, txDate time.Time, merchant
 	return []interface{}{
 		id, userID, "account-1", "item-1",
 		"plaid", nil, nil,
-		amount, txDate, nil, "Test Merchant", merchantName,
+		amount, txDate, nil, "Test Merchant", merchantName, nil,
 		nil, nil, nil, nil,
 		nil, false, nil, txDate, txDate,
 		nil, nil,
@@ -3114,4 +3117,71 @@ func TestGetByUserIDKeyset_MidSessionInsertExcluded(t *testing.T) {
 	// but the meaningful assertion is the WHERE predicate shape verified by pgxmock
 	// matching patternPage2 — if the cursor args are wrong, ExpectationsWereMet fails).
 	require.NoError(t, mock.ExpectationsWereMet(), "keyset predicate must use cursor (date, id) args that exclude mid-session inserts")
+}
+
+// TestBuildWhereClause_MerchantID verifies that a non-nil MerchantID filter produces
+// the correct SQL condition and argument in the WHERE clause.
+func TestBuildWhereClause_MerchantID(t *testing.T) {
+	merchantID := "123e4567-e89b-12d3-a456-426614174000"
+	userID := "user-abc"
+
+	filters := domain.TransactionFilters{
+		MerchantID: &merchantID,
+	}
+
+	whereClause, args := buildWhereClause(userID, filters)
+
+	// The WHERE clause must contain a merchant_id equality condition.
+	assert.Contains(t, whereClause, "merchant_id = $", "WHERE clause must include merchant_id condition")
+
+	// args: $1=userID, $2=merchantID
+	require.Len(t, args, 2, "expected exactly 2 args: user_id and merchant_id")
+	assert.Equal(t, userID, args[0])
+	assert.Equal(t, merchantID, args[1])
+}
+
+// TestTransactionRepository_GetByUserIDWithFilters_MerchantID verifies that the
+// MerchantID filter is applied correctly by GetByUserIDWithFilters (Issue #1163).
+func TestTransactionRepository_GetByUserIDWithFilters_MerchantID(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	merchantID := "123e4567-e89b-12d3-a456-426614174000"
+	limit := 10
+	offset := 0
+	filters := domain.TransactionFilters{
+		MerchantID: &merchantID,
+	}
+
+	extID := "plaid_tx_1"
+	now := time.Now()
+
+	rows := pgxmock.NewRows(transactionSelectColumns).
+		AddRow(
+			"tx-1", userID, "account-1", "item-1",
+			"plaid", &extID, nil,
+			-50.00, now, nil, "Transaction 1", nil, nil,
+			nil, nil, nil, nil,
+			nil, false, nil, now, now,
+			nil, nil,
+			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil,
+		)
+
+	// WHERE clause must include merchant_id filter.
+	mock.ExpectQuery(`SELECT (.+) FROM transactions WHERE user_id(.+)AND merchant_id`).
+		WithArgs(userID, merchantID, limit, offset).
+		WillReturnRows(rows)
+
+	transactions, err := repo.GetByUserIDWithFilters(ctx, userID, filters, limit, offset)
+	require.NoError(t, err)
+	assert.Len(t, transactions, 1)
+
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err)
 }

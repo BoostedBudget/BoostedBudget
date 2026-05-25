@@ -63,6 +63,7 @@ type transactionSyncService struct {
 	accountRepo               repository.AccountRepository          // Issue #261: For account mapping (Plaid account_id -> internal UUID)
 	profileRepo               repository.ProfileRepository          // For fetching user subscription tier (historical depth)
 	balanceSnapshotRepo       repository.BalanceSnapshotRepository  // Issue #353: For storing balance snapshots
+	merchantRepo              repository.MerchantRepo               // Issue #1163: Batch-upsert merchants before CreateBatch
 	plaidService              PlaidService
 	subscriptionService       *SubscriptionService          // For tier-based historical depth limit
 	ruleApplicationService    RuleApplicationService        // Issue #346: Apply categorization rules to new transactions
@@ -83,6 +84,7 @@ func NewTransactionSyncService(
 	ruleApplicationService RuleApplicationService,
 	budgetSyncService BudgetSyncService,               // Issue #494: Sync budget amounts
 	transactionMonitorService TransactionMonitorService, // Issue #36: Auto-detect completed transfers
+	merchantRepo repository.MerchantRepo,              // Issue #1163: Merchant batch-upsert
 	logger *slog.Logger,
 ) TransactionSyncService {
 	if logger == nil {
@@ -96,6 +98,7 @@ func NewTransactionSyncService(
 		accountRepo:               accountRepo,
 		profileRepo:               profileRepo,
 		balanceSnapshotRepo:       balanceSnapshotRepo,
+		merchantRepo:              merchantRepo,
 		plaidService:              plaidService,
 		subscriptionService:       subscriptionService,
 		ruleApplicationService:    ruleApplicationService,
@@ -471,6 +474,35 @@ func (s *transactionSyncService) processAddedTransactions(
 		}
 	}
 
+	// Issue #1163: Batch-upsert merchants and stamp merchant_id (one DB round-trip, best-effort)
+	if s.merchantRepo != nil {
+		nameSet := make(map[string]struct{})
+		for _, txn := range transactions {
+			if txn.MerchantName != nil && *txn.MerchantName != "" {
+				nameSet[*txn.MerchantName] = struct{}{}
+			}
+		}
+		if len(nameSet) > 0 {
+			names := make([]string, 0, len(nameSet))
+			for name := range nameSet {
+				names = append(names, name)
+			}
+			merchantIDs, err := s.merchantRepo.GetOrCreateMerchants(ctx, names)
+			if err != nil {
+				// Non-blocking: merchant_id is best-effort, sync must not fail
+				s.logger.Warn("failed to upsert merchants, continuing without merchant_id", "err", err)
+			} else {
+				for i := range transactions {
+					if transactions[i].MerchantName != nil {
+						if id, ok := merchantIDs[*transactions[i].MerchantName]; ok {
+							transactions[i].MerchantID = &id
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Store in database (ON CONFLICT DO NOTHING handles deduplication)
 	if err := s.transactionRepo.CreateBatch(ctx, transactions); err != nil {
 		return fmt.Errorf("failed to create batch of %d transactions: %w", len(transactions), err)
@@ -523,6 +555,31 @@ func (s *transactionSyncService) processModifiedTransactions(
 	successCount := 0
 	skippedCount := 0
 
+	// Issue #1163: Batch-upsert merchants and stamp merchant_id (one DB round-trip, best-effort)
+	// Mirrors processAddedTransactions. If upsert fails, Update proceeds with merchant_id = nil.
+	var merchantIDs map[string]string
+	if s.merchantRepo != nil {
+		nameSet := make(map[string]struct{})
+		for _, plaidTxn := range modified {
+			if mn := plaidTxn.MerchantName.Get(); mn != nil && *mn != "" {
+				nameSet[*mn] = struct{}{}
+			}
+		}
+		if len(nameSet) > 0 {
+			names := make([]string, 0, len(nameSet))
+			for name := range nameSet {
+				names = append(names, name)
+			}
+			ids, err := s.merchantRepo.GetOrCreateMerchants(ctx, names)
+			if err != nil {
+				// Non-blocking: merchant_id is best-effort, sync must not fail
+				s.logger.Warn("failed to upsert merchants, continuing without merchant_id", "err", err)
+			} else {
+				merchantIDs = ids
+			}
+		}
+	}
+
 	for _, plaidTxn := range modified {
 		// Map Plaid transaction to domain.Transaction (new data from Plaid)
 		newTxn, err := s.mapPlaidTransaction(ctx, plaidTxn, linkedItem.ID, linkedItem.UserID, accountMap, userAccountMap)
@@ -545,6 +602,13 @@ func (s *transactionSyncService) processModifiedTransactions(
 
 		// Copy ID from existing transaction (required for Update)
 		newTxn.ID = existingTxn.ID
+
+		// Issue #1163: Stamp merchant_id from the pre-computed map (best-effort)
+		if newTxn.MerchantName != nil && merchantIDs != nil {
+			if id, ok := merchantIDs[*newTxn.MerchantName]; ok {
+				newTxn.MerchantID = &id
+			}
+		}
 
 		// Update transaction with new data but preserved user_notes
 		if err := s.transactionRepo.Update(ctx, newTxn); err != nil {

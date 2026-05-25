@@ -36,6 +36,7 @@ function flattenFilters(filters: TransactionFiltersState): Record<string, string
     ...(filters.min_amount !== undefined && { min_amount: String(filters.min_amount) }),
     ...(filters.max_amount !== undefined && { max_amount: String(filters.max_amount) }),
     ...(filters.amount_type && filters.amount_type !== 'all' && { amount_type: filters.amount_type }),
+    ...(filters.merchant_id && { merchant_id: filters.merchant_id }),
   };
 }
 

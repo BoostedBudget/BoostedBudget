@@ -325,8 +325,9 @@ func main() {
 		creditLiabilityRepo := repository.NewCreditLiabilityRepository(db)            // Issue #910: Plaid Liabilities
 		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db, fieldEncryptor)       // Issue #910: Plaid Liabilities
 		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor) // Issue #910: Plaid Liabilities
+			merchantRepo := repository.NewMerchantRepository(db)                            // Issue #1163: Merchant batch-upsert
 
-		// Create mock audit logger (will be replaced with real implementation later)
+			// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
 
 		// Clerk Backend API service — used by deletion service and email propagation worker
@@ -676,6 +677,7 @@ func main() {
 					ruleApplicationService,
 					budgetSyncService,
 					transactionMonitorService,
+					merchantRepo,   // Issue #1163: Merchant batch-upsert
 					appLogger,
 				)
 

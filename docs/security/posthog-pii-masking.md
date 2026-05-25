@@ -115,7 +115,7 @@ Radix Dialog content renders in a portal but typically inherits `data-ph-mask` f
 ## Known limitations
 
 - **ECharts SVG tooltips** (`NetWorthHistoryChart`, `BalanceHistoryChart`, `CashFlowChartWidget`): ECharts renders tooltips as DOM nodes inside the SVG tree. The `<EChartsChart>` wrapper already applies `data-ph-mask` to its container div, which masks all descendant tooltip content from PostHog session replay. If you add a new chart that renders financial amounts in tooltips, verify the chart's ancestor carries `data-ph-mask`.
-- **`merchant_id` URL param** (`SpendingReportsPage`): The backend `/spending/by-merchant` endpoint accepts `search` but not `merchant_id`, so the merchant name is currently in the URL. Follow-up: backend API change to accept `merchant_id`.
+- ~~**`merchant_id` URL param** (`SpendingReportsPage`): The backend `/spending/by-merchant` endpoint accepts `search` but not `merchant_id`, so the merchant name is currently in the URL.~~ **Resolved** by issues #1163/#1165: a `merchants` table (migration 000075) gives every merchant a stable UUID; `GET /api/v1/analytics/spending-by-merchant` now returns `merchant_id`; `SpendingReportsPage` navigates to `/transactions?merchant_id=<uuid>` (never the name string); `GET /api/v1/transactions` accepts `merchant_id` as a filter.
 - **Shadow DOM**: `TreeWalker` does not cross Shadow DOM boundaries. The codebase uses light DOM only (Radix portals render to `document.body`). If Shadow DOM is ever adopted, this policy must be revisited.
 - **PostHog server-side**: `before_send` is client-side only. Consider a PostHog Cloud transformation pipeline as a defence-in-depth backstop.
 

@@ -246,6 +246,17 @@ describe('useTransactionFilters', () => {
 
       expect(result.current.activeFilterCount).toBe(0)
     })
+
+    it('should count merchant_id as active filter', () => {
+      window.history.replaceState({}, '', '/?merchant_id=uuid-merchant-abc')
+
+      const { result } = renderHook(() => useTransactionFilters(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.activeFilterCount).toBe(1)
+      expect(result.current.hasActiveFilters).toBe(true)
+    })
   })
 
   describe('Date Presets', () => {
@@ -495,6 +506,41 @@ describe('useTransactionFilters', () => {
       rerender()
 
       expect(result.current.filters.search).toBe('coffee')
+    })
+  })
+
+  describe('merchant_id filter', () => {
+    it('should parse merchant_id from URL params', () => {
+      window.history.replaceState({}, '', '/?merchant_id=uuid-merchant-abc')
+
+      const { result } = renderHook(() => useTransactionFilters(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.filters.merchant_id).toBe('uuid-merchant-abc')
+    })
+
+    it('should not set merchant_id when param is absent', () => {
+      window.history.replaceState({}, '', '/')
+
+      const { result } = renderHook(() => useTransactionFilters(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.filters.merchant_id).toBeUndefined()
+    })
+
+    it('should set merchant_id via setFilter and update URL', () => {
+      const { result } = renderHook(() => useTransactionFilters(), {
+        wrapper: createWrapper(),
+      })
+
+      act(() => {
+        result.current.setFilter('merchant_id', 'uuid-merchant-xyz')
+      })
+
+      expect(result.current.filters.merchant_id).toBe('uuid-merchant-xyz')
+      expect(window.location.search).toContain('merchant_id=uuid-merchant-xyz')
     })
   })
 

@@ -8,7 +8,7 @@ import type { SpendingMerchant } from '../types'
 interface TopMerchantsTableProps {
   data: SpendingByMerchantResponse | null
   loading: boolean
-  onMerchantClick?: (merchantName: string) => void
+  onMerchantClick?: (merchant: { id?: string | null; name: string }) => void
   className?: string
   sort: SortState
   onSortChange: (s: SortState) => void
@@ -109,7 +109,7 @@ export function TopMerchantsTable({
         loading={loading}
         skeletonRows={5}
         maskedColumnIds={['merchant_name', 'total']}
-        onRowClick={onMerchantClick ? (row) => onMerchantClick(row.merchant_name) : undefined}
+        onRowClick={onMerchantClick ? (row) => onMerchantClick({ id: row.merchant_id, name: row.merchant_name }) : undefined}
         columnSizing={sizing}
         onColumnSizingChange={onSizingChange}
         columnOrder={columnOrder}
