@@ -43,7 +43,7 @@ export type ListAdminUsersParams = {
    */
   page_size?: number;
   /**
-   * Search by email (partial match)
+   * Search by email prefix, starts-with match (min 3 chars)
    */
   search?: string;
   /**

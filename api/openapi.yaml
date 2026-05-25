@@ -5351,12 +5351,12 @@ paths:
             maximum: 100
             minimum: 1
             type: integer
-        - description: Search by email (partial match)
+        - description: Search by email prefix, starts-with match (min 3 chars)
           explode: false
           in: query
           name: search
           schema:
-            description: Search by email (partial match)
+            description: Search by email prefix, starts-with match (min 3 chars)
             type: string
         - description: Filter by subscription tier
           explode: false
