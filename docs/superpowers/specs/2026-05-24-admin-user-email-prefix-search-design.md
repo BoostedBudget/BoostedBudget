@@ -172,22 +172,33 @@ if err := r.insertPrefixIndicesTx(ctx, tx, user.ID, indices); err != nil {
 }
 ```
 
-**Hook into `UpdateUserEmailTx()`** — CRITICAL: within the same transaction as `UPDATE users` (atomically replace old prefix indices with new ones):
+**Hook into `UpdateUserEmailTx()`** — CRITICAL: append prefix row maintenance AFTER the existing `UPDATE users` statement, within the same transaction:
 
 ```go
-// Delete old prefix indices first
+// Existing code in UpdateUserEmailTx (already first — do not reorder):
+//   tx.Exec(ctx, "UPDATE users SET email=$1, email_blind_idx=$2 ... WHERE id=$3", ...)
+//
+// ADD AFTER the existing UPDATE — prefix rows come second, same as the backfill's
+// lock order (FOR UPDATE on users first, prefix rows second).
+// This consistent ordering prevents deadlocks between concurrent backfill and email updates.
+
+// Atomically replace prefix rows for the new email
 if _, err := tx.Exec(ctx,
     "DELETE FROM user_email_prefix_indices WHERE user_id = $1", userID); err != nil {
     return err
 }
-// Insert new prefix indices for the updated email
 indices := crypto.EmailPrefixBlindIndices(r.enc, plainEmail)
 if err := r.insertPrefixIndicesTx(ctx, tx, userID, indices); err != nil {
     return err
 }
 ```
 
-This ensures that no matter what order backfill and email updates run, the prefix rows always reflect the user's current email after any transaction commits.
+**Lock ordering invariant** (prevents deadlock with backfill):
+- Backfill: `SELECT users FOR UPDATE` → INSERT prefix rows
+- UpdateUserEmailTx: `UPDATE users` (implicit row lock) → DELETE/INSERT prefix rows
+- Both always acquire the `users` row lock before touching prefix rows — no cycle possible.
+
+This is structurally guaranteed because the existing `UPDATE users` statement is at the top of `UpdateUserEmailTx` and the new prefix-row code is appended at the end.
 
 ---
 
