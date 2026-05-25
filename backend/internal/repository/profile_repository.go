@@ -370,6 +370,33 @@ func (r *profileRepository) checkDuplicateError(err error) error {
 	return err
 }
 
+// insertPrefixIndicesTx inserts prefix blind indices for a user in a single multi-row statement.
+// ON CONFLICT DO NOTHING ensures idempotency — safe to call even if rows already exist.
+// Returns immediately (no-op) when blindIndices is empty.
+func (r *profileRepository) insertPrefixIndicesTx(
+	ctx context.Context, tx pgx.Tx, userID string, blindIndices []string,
+) error {
+	if len(blindIndices) == 0 {
+		return nil
+	}
+	// Single multi-row INSERT avoids per-row round trips and pgx.SendBatch footguns.
+	// Parameterised as: INSERT INTO ... VALUES ($1, $2), ($1, $3), ... ON CONFLICT DO NOTHING
+	// $1 is reused for user_id across all rows; $2..$N are the prefix blind indices.
+	args := make([]any, 0, 1+len(blindIndices))
+	args = append(args, userID)
+	placeholders := make([]string, 0, len(blindIndices))
+	for i, idx := range blindIndices {
+		args = append(args, idx)
+		placeholders = append(placeholders, fmt.Sprintf("($1, $%d)", i+2))
+	}
+	query := fmt.Sprintf(
+		"INSERT INTO user_email_prefix_indices (user_id, prefix_blind_idx) VALUES %s ON CONFLICT DO NOTHING",
+		strings.Join(placeholders, ", "),
+	)
+	_, err := tx.Exec(ctx, query, args...)
+	return err
+}
+
 // CreateUserTx creates a new user in the database within a transaction
 func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error {
 	if user.ID == "" {
@@ -431,7 +458,13 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 		user.CreatedAt, user.UpdatedAt, user.LastLoginAt,
 		emailBlindIdx, clerkUserIDBlindIdx, paddleSubscriptionIDBlindIdx,
 	)
-	return r.checkDuplicateError(err)
+	if err := r.checkDuplicateError(err); err != nil {
+		return err
+	}
+
+	// Insert prefix blind indices so admin starts-with search works (#1178)
+	indices := r.enc.EmailPrefixBlindIndices(user.Email)
+	return r.insertPrefixIndicesTx(ctx, tx, user.ID, indices)
 }
 
 // UpdateUser updates an existing user's information
