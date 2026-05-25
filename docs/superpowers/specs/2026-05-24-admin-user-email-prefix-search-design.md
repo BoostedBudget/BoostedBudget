@@ -1,28 +1,28 @@
 # Admin User Email Prefix Search — Design Spec
 **Issue:** #1178  
 **Date:** 2026-05-24  
-**Status:** Approved
+**Status:** Approved (revised after two Codex adversarial reviews)
 
 ---
 
 ## Problem
 
-`GET /api/v1/admin/users?search=` is documented as "Search by email (partial match)" but the repository performs an exact HMAC-SHA256 blind-index equality lookup (`WHERE email_blind_idx = $1`). Searching for `test@` silently returns no results instead of matching `test@example.com`. The mislabel appears in four places: the Go `doc:` tag, the domain `AdminUserFilters.Search` comment, the generated TypeScript type comment, and the frontend placeholder text.
+`GET /api/v1/admin/users?search=` is documented as "Search by email (partial match)" but the repository performs an exact HMAC-SHA256 blind-index equality lookup (`WHERE email_blind_idx = $1`). Searching for `test@` silently returns no results instead of matching `test@example.com`. The mislabel appears in four places: the Go `doc:` tag, the `AdminUserFilters.Search` domain comment, the generated TypeScript type comment, and the frontend placeholder text.
 
 ## Goal
 
-Support true starts-with prefix search on admin email lookup without storing plaintext or decrypting emails at query time. Minimum 3-char search, results capped at indexed prefixes ≤ 64 chars.
+Support true starts-with prefix search on admin email lookup without storing plaintext or decrypting emails at query time. Minimum 3-char search enforced at handler and frontend. Indexed prefixes capped at 64 chars.
 
 ---
 
 ## Chosen Approach: Prefix Blind Indices (separate table)
 
-Store HMAC-SHA256 blind indices for every email prefix of length 3..min(len(email), 64) in a dedicated `user_email_prefix_indices` table. Admin search JOINs against this table. New rows are generated at user creation and email-change time (within the existing transactions). A startup backfill populates existing users idempotently.
+Store HMAC-SHA256 blind indices for every email prefix of rune-length `[3, min(len(email), 64)]` in a dedicated `user_email_prefix_indices` table. Admin search uses an EXISTS subquery against this table. Prefix rows are generated at user creation and email-change time within the existing transactions. A startup backfill populates existing users idempotently.
 
 **Why not the alternatives:**
 - *Doc-only fix*: leaves admins unable to search by partial email — poor admin UX.
 - *Application-layer decrypt-and-filter*: O(n) decryption per search; doesn't scale.
-- *GIN array on users*: slower point-lookup than B-tree; bloats the users row; complicates key rotation.
+- *GIN array on users*: slower point-lookup; bloats users row; complicates future rotation.
 
 ---
 
@@ -35,11 +35,10 @@ Store HMAC-SHA256 blind indices for every email prefix of length 3..min(len(emai
 CREATE TABLE IF NOT EXISTS user_email_prefix_indices (
     user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     prefix_blind_idx TEXT NOT NULL,
-    key_version      TEXT NOT NULL DEFAULT 'v1',
     PRIMARY KEY (user_id, prefix_blind_idx)
 );
 
--- Covering index: satisfies EXISTS(... WHERE prefix_blind_idx = $1) with no heap access
+-- Covering index: answers EXISTS(WHERE prefix_blind_idx = $1) without heap access
 CREATE INDEX IF NOT EXISTS idx_uepi_prefix_blind_idx_user
     ON user_email_prefix_indices(prefix_blind_idx, user_id);
 ```
@@ -50,8 +49,9 @@ DROP TABLE IF EXISTS user_email_prefix_indices;
 ```
 
 **Design notes:**
+- No `key_version` column — existing `email_blind_idx` has no versioning; adding it only to prefix rows without rotation logic implies support that doesn't exist. Omit until key rotation is a first-class feature for all blind indices.
 - `PRIMARY KEY (user_id, prefix_blind_idx)` — free dedup + fast `DELETE WHERE user_id = $1`
-- `key_version = 'v1'` — enables future HMAC key rotation via dual-read/dual-write without full table rebuild; existing `email_blind_idx` lacks this, so this is an improvement over the legacy column
+- Covering index `(prefix_blind_idx, user_id)` — both columns needed by the EXISTS subquery; no heap access required
 - `ON DELETE CASCADE` — no orphan rows on user hard-delete
 
 ---
@@ -64,8 +64,9 @@ Add `BlindIndexWithLabel` to `backend/internal/crypto/field_encryptor.go`:
 
 ```go
 // BlindIndexWithLabel produces a domain-separated HMAC-SHA256 blind index.
-// The label prevents semantic overlap between exact and prefix blind indices,
-// which matters during key rotation (dual-read window).
+// Using a label prevents semantic overlap between exact-email and prefix blind indices,
+// which matters if the HMAC key is ever rotated (dual-read window).
+// Use label "email_prefix" for all prefix table reads/writes.
 func (fe *FieldEncryptor) BlindIndexWithLabel(label, plaintext string) string {
     mac := hmac.New(sha256.New, fe.hmacKey)
     mac.Write([]byte(label + ":" + plaintext))
@@ -73,22 +74,22 @@ func (fe *FieldEncryptor) BlindIndexWithLabel(label, plaintext string) string {
 }
 ```
 
-Use `BlindIndexWithLabel("email_prefix", prefix)` for all prefix table reads/writes.  
-The existing `BlindIndex()` method is unchanged; exact `email_blind_idx` lookups continue to use it.
+The existing `BlindIndex()` method is unchanged — exact `email_blind_idx` lookups continue to use it.
 
-### Centralized normalization
+### Normalization
 
-Add `NormalizeEmail` in `backend/internal/crypto/field_encryptor.go` (or a nearby `normalize.go`):
+**Do NOT introduce NFC normalization.** The existing email identity code (`profile_repository.go:387`, `backfill.go:154`) uses only `strings.ToLower(strings.TrimSpace(email))`. Prefix indices must use the same normalization to avoid prefix-search and exact-lookup disagreeing on the same email. Define a single helper that matches the existing convention:
 
 ```go
-import "golang.org/x/text/unicode/norm"
-
-// NormalizeEmail applies NFC Unicode normalization, lowercase, and trim.
-// MUST be called identically in user creation, email update, backfill, and admin search.
-func NormalizeEmail(email string) string {
-    return strings.ToLower(strings.TrimSpace(norm.NFC.String(email)))
+// NormalizeEmailForBlindIndex matches the existing email normalization used across
+// profile_repository.go and backfill.go. Must be identical on creation, update,
+// backfill, and admin search.
+func NormalizeEmailForBlindIndex(email string) string {
+    return strings.ToLower(strings.TrimSpace(email))
 }
 ```
+
+Place this in `backend/internal/crypto/field_encryptor.go` or a nearby `normalize.go` and use it everywhere that was previously inlining `strings.ToLower(strings.TrimSpace(...))`.
 
 ### Prefix generation
 
@@ -98,11 +99,13 @@ const (
     maxPrefixLen = 64
 )
 
-// EmailPrefixBlindIndices generates blind indices for all email prefixes
-// of rune-length [minPrefixLen, maxPrefixLen]. Rune-based slicing prevents
-// splitting multi-byte UTF-8 characters.
+// EmailPrefixBlindIndices generates domain-separated blind indices for all
+// email prefixes of rune-length [minPrefixLen, maxPrefixLen].
+// Rune-based slicing prevents splitting multi-byte UTF-8 characters.
+// Returns nil if email normalizes to fewer than minPrefixLen runes.
 func EmailPrefixBlindIndices(enc *FieldEncryptor, email string) []string {
-    runes := []rune(NormalizeEmail(email))
+    normalized := NormalizeEmailForBlindIndex(email)
+    runes := []rune(normalized)
     end := len(runes)
     if end > maxPrefixLen {
         end = maxPrefixLen
@@ -135,25 +138,32 @@ args = append(args, r.enc.BlindIndex(strings.ToLower(strings.TrimSpace(filters.S
 clause += fmt.Sprintf(
     " AND EXISTS (SELECT 1 FROM user_email_prefix_indices p"+
         " WHERE p.user_id = u.id AND p.prefix_blind_idx = $%d)", argIndex)
-args = append(args, r.enc.BlindIndexWithLabel("email_prefix", crypto.NormalizeEmail(filters.Search)))
+args = append(args, r.enc.BlindIndexWithLabel("email_prefix",
+    crypto.NormalizeEmailForBlindIndex(filters.Search)))
 ```
 
-The covering index `(prefix_blind_idx, user_id)` means the EXISTS subquery is answered from the index alone.
+Increment `argIndex` after appending the arg (already done in the existing clause-building loop — verify it's in the right place relative to other filters, LIMIT, and OFFSET).
+
+`EXISTS` is preferred over JOIN here to avoid potential duplicate rows and to match the existing filter-clause structure.
 
 ### `backend/internal/repository/profile_repository.go`
 
-Add private batch-insert helper:
+**Add private batch-insert helper** using a single multi-row INSERT (not `pgx.SendBatch` — the project doesn't use it and batch result-draining footguns are real):
 
 ```go
 func (r *profileRepository) insertPrefixIndicesTx(
     ctx context.Context, tx pgx.Tx, userID string, blindIndices []string,
 ) error {
-    // Build batch INSERT with ON CONFLICT DO NOTHING
-    // Use pgx.Batch for efficiency
+    if len(blindIndices) == 0 {
+        return nil
+    }
+    // Build: INSERT INTO user_email_prefix_indices (user_id, prefix_blind_idx)
+    //        VALUES ($1, $2), ($1, $3), ... ON CONFLICT DO NOTHING
+    // Single statement, no per-row round trips.
 }
 ```
 
-**Hook into `CreateUserTx()`** — after the `INSERT INTO users`, within the same transaction:
+**Hook into `CreateUserTx()`** — after `INSERT INTO users`, within the same transaction:
 
 ```go
 indices := crypto.EmailPrefixBlindIndices(r.enc, user.Email)
@@ -162,53 +172,57 @@ if err := r.insertPrefixIndicesTx(ctx, tx, user.ID, indices); err != nil {
 }
 ```
 
-**Hook into `UpdateUserEmailTx()`** — within the same transaction as the `UPDATE users`:
+**Hook into `UpdateUserEmailTx()`** — CRITICAL: within the same transaction as `UPDATE users` (atomically replace old prefix indices with new ones):
 
 ```go
-// Atomically replace old prefix indices with new ones
-if _, err := tx.Exec(ctx, "DELETE FROM user_email_prefix_indices WHERE user_id = $1", userID); err != nil {
+// Delete old prefix indices first
+if _, err := tx.Exec(ctx,
+    "DELETE FROM user_email_prefix_indices WHERE user_id = $1", userID); err != nil {
     return err
 }
+// Insert new prefix indices for the updated email
 indices := crypto.EmailPrefixBlindIndices(r.enc, plainEmail)
 if err := r.insertPrefixIndicesTx(ctx, tx, userID, indices); err != nil {
     return err
 }
 ```
 
+This ensures that no matter what order backfill and email updates run, the prefix rows always reflect the user's current email after any transaction commits.
+
 ---
 
 ## Backfill
 
-Add `BackfillEmailPrefixIndices` to `backend/internal/database/backfill.go` (alongside existing `BackfillEncryption`). Call it from `backend/cmd/server/main.go` at startup, after `BackfillEncryption`:
+Add `BackfillEmailPrefixIndices` to `backend/internal/database/backfill.go`, called from `backend/cmd/server/main.go` at startup after `BackfillEncryption`:
 
 ```go
 if err := database.BackfillEmailPrefixIndices(context.Background(), db, fieldEncryptor); err != nil {
-    appLogger.Error("Email prefix index backfill failed", "error", err)
+    appLogger.Error("Email prefix index backfill failed — exiting", "error", err)
     os.Exit(1)
 }
 ```
 
-**Backfill algorithm:**
+**Algorithm:**
 
 ```go
 func BackfillEmailPrefixIndices(ctx context.Context, db *pgxpool.Pool, enc *crypto.FieldEncryptor) error {
-    // Process users in batches of 100
-    // For each batch:
-    //   SELECT id, email FROM users
-    //   WHERE is_deleted = FALSE
-    //   ORDER BY id
-    //   OFFSET $cursor LIMIT 100
-    //   FOR UPDATE SKIP LOCKED   ← skips users locked by concurrent email updates
-    //
+    // Process users in batches of 100 (keyset pagination on id)
     // For each user row:
-    //   1. Decrypt email (skip on decrypt error, log user ID)
-    //   2. Generate EmailPrefixBlindIndices(enc, email)
+    //   1. Decrypt users.email using enc.DecryptString() — MUST decrypt ENC$ ciphertext
+    //      before generating prefix indices. Do NOT hash the raw ciphertext.
+    //   2. Call crypto.EmailPrefixBlindIndices(enc, decryptedEmail)
     //   3. INSERT INTO user_email_prefix_indices ... ON CONFLICT DO NOTHING
-    //   4. Commit per-user (or per-batch)
+    //      (single multi-row INSERT per user, within one transaction per batch)
+    //   4. On decrypt error for a user: log user ID, skip, continue batch
     //
-    // Idempotent: existing rows are silently skipped
-    // SKIP LOCKED: users being updated concurrently are skipped;
-    //   UpdateUserEmailTx will write correct rows for them
+    // NO row locking (FOR UPDATE / SKIP LOCKED):
+    //   - Consistent with existing BackfillEncryption pattern
+    //   - Race with concurrent email update: UpdateUserEmailTx atomically
+    //     deletes all old prefix rows and inserts correct new ones, so stale
+    //     rows from backfill are self-healing on next email change
+    //   - Acceptable trade-off for startup backfill on a small user base
+    //
+    // Idempotent: ON CONFLICT DO NOTHING makes re-runs safe
 }
 ```
 
@@ -231,12 +245,14 @@ type ListUsersInput struct {
 }
 ```
 
-Add guard in `ListUsers()` handler before building filters:
+Add validation guard at the top of `ListUsers()`, following the existing handler validation convention in `mapper.go` (use the same error type and pattern used elsewhere for semantic validation failures — check `mapper.go:145` for the project convention before choosing between 400 and 422):
 
 ```go
 search := strings.TrimSpace(input.Search)
 if search != "" && len([]rune(search)) < 3 {
     return nil, huma.Error422UnprocessableEntity("search must be at least 3 characters")
+    // Note: verify project convention in mapper.go — use 400 if that's what other
+    // handlers use for semantic validation errors
 }
 ```
 
@@ -253,12 +269,20 @@ Search string // Prefix email match (starts-with, min 3 chars, case-insensitive)
 
 ### `apps/web/src/features/admin/components/UsersPage.tsx`
 
+**REQUIRED (prevents 422 storm):** Suppress the API call when `search.length > 0 && search.length < 3`. The current code calls `useListAdminUsers(apiParams)` unconditionally — this must be guarded:
+
+```tsx
+// In useUserFilters.ts or UsersPage.tsx — suppress short searches at the filter level
+const apiSearch = search.length >= 3 ? search : undefined;
+// Pass apiSearch (not search) to the API hook params
+```
+
+Additional UI changes:
 - Placeholder: `"Search by email prefix (min. 3 chars)..."`
 - `minLength={3}` on the input element
-- Add descriptive hint below input: `"Searches emails that start with your query"`
-- Suppress search API call while `search.length > 0 && search.length < 3` (debounce guard already exists; add length check)
+- Hint text below input: `"Searches emails that start with your query"`
 
-Generated TypeScript type comments auto-update via `make generate-api-client`.
+Generated TypeScript type comments auto-update via `make generate-api-client` (the `doc:` tag change propagates through Orval).
 
 ---
 
@@ -266,31 +290,42 @@ Generated TypeScript type comments auto-update via `make generate-api-client`.
 
 ### Red-Green order
 
-1. **Repository integration tests** (write first, against real DB):
-   - `InsertPrefixIndicesTx` → correct row count for a known email
-   - `InsertPrefixIndicesTx` → idempotent on re-run (`ON CONFLICT DO NOTHING`)
+**1. Crypto unit tests** (write first):
+- `EmailPrefixBlindIndices("test@example.com")` → correct count (12 indices for 14-char email, min 3)
+- `EmailPrefixBlindIndices("ab")` → nil (below minimum)
+- `EmailPrefixBlindIndices("")` → nil (safe empty case)
+- `BlindIndexWithLabel("email_prefix", "x") != BlindIndex("x")` (domain separation)
+- Rune-safe: multi-byte email returns correct prefix count
+
+**2. Repository integration tests** (`admin_user_repository_integration_test.go` — NOT pgxmock):
+   Following the existing `//go:build integration` pattern. pgxmock cannot catch SQL planner errors, constraint violations, or aggregate issues.
    - `ListUsers(search="tes")` → returns user whose email starts with "tes"
    - `ListUsers(search="tes")` → does NOT return user whose email doesn't start with "tes"
-   - `ListUsers(search="@example")` → returns empty (not starts-with)
-   - `UpdateUserEmailTx` → old prefix no longer matches; new prefix matches
-   - Cascade: deleting user removes prefix rows
+   - `ListUsers(search="@example")` → empty (not starts-with, not contained)
+   - `ListUsers(search="tes", tier="premium")` → intersection filter works
+   - `ListUsers(search="tes")` with pagination → correct total count
+   - Email update → old prefix no longer matches; new prefix does
+   - Cascade: deleting user removes all prefix rows
 
-2. **Operation handler tests**:
-   - `search=""` → no filter applied (all users returned)
-   - `search="ab"` (2 chars) → 422
-   - `search="abc"` (3 chars) → 200 with prefix filter applied
-   - `search="  ab  "` (trimmed = 2 chars) → 422
+**3. Profile repository integration tests**:
+   - `CreateUserTx` → prefix rows exist after creation
+   - `insertPrefixIndicesTx` idempotent → re-run inserts 0 new rows
+   - `UpdateUserEmailTx` → old email's prefix rows gone; new email's prefix rows present; no mix
 
-3. **Backfill tests**:
-   - Backfill on fresh table with 3 users → all 3 have prefix rows
-   - Re-run backfill → no duplicates (idempotent)
-   - User with no email (if possible) → skipped without error
+**4. Backfill tests**:
+   - Fresh table with N users → all have prefix rows after backfill
+   - Re-run → no duplicates (ON CONFLICT DO NOTHING)
+   - User with decrypt error → skipped without aborting, other users processed
 
-4. **Frontend tests**:
-   - Input with 2 chars → no API call fired
-   - Input with 3 chars → API call fires with `search=abc`
-   - Hint text visible
-   - E2E: admin types "test@" → sees users whose emails start with "test@"
+**5. Handler tests** (unit, pgxmock OK for this layer):
+   - `search=""` → no search clause applied
+   - `search="ab"` → returns 422 (or 400 per convention)
+   - `search="  ab  "` (trimmed = 2 chars) → returns 422
+   - `search="abc"` → 200, passes filter to service
+
+**6. E2E** (Playwright):
+   - Admin types "test@" → sees users whose emails start with "test@"
+   - Admin types "te" → no API call fired (frontend suppression), hint visible
 
 ---
 
@@ -298,20 +333,21 @@ Generated TypeScript type comments auto-update via `make generate-api-client`.
 
 | File | Change |
 |------|--------|
-| `backend/migrations/000076_add_user_email_prefix_indices.up.sql` | New table + indexes |
+| `backend/migrations/000076_add_user_email_prefix_indices.up.sql` | New table + covering index |
 | `backend/migrations/000076_add_user_email_prefix_indices.down.sql` | Drop table |
-| `backend/internal/crypto/field_encryptor.go` | Add `BlindIndexWithLabel`, `NormalizeEmail`, `EmailPrefixBlindIndices` |
+| `backend/internal/crypto/field_encryptor.go` | Add `BlindIndexWithLabel`, `NormalizeEmailForBlindIndex`, `EmailPrefixBlindIndices` |
 | `backend/internal/repository/admin_user_repository.go` | Replace exact match with EXISTS prefix subquery |
 | `backend/internal/repository/profile_repository.go` | Add `insertPrefixIndicesTx`; hook into `CreateUserTx` + `UpdateUserEmailTx` |
 | `backend/internal/database/backfill.go` | Add `BackfillEmailPrefixIndices` |
-| `backend/cmd/server/main.go` | Call `BackfillEmailPrefixIndices` at startup |
-| `backend/internal/huma/operations/admin.go` | Update doc string; add 422 guard |
+| `backend/cmd/server/main.go` | Call `BackfillEmailPrefixIndices` at startup after `BackfillEncryption` |
+| `backend/internal/huma/operations/admin.go` | Update doc string; add min-length validation guard |
 | `backend/internal/domain/admin_user.go` | Update `Search` field comment |
-| `apps/web/src/features/admin/components/UsersPage.tsx` | Update placeholder, add minLength + hint |
+| `apps/web/src/features/admin/components/UsersPage.tsx` | Suppress short searches; update placeholder/hint |
+| `apps/web/src/features/admin/hooks/useUserFilters.ts` | Gate API search param on length ≥ 3 |
 
 **Run after backend changes:** `make generate-openapi && make generate-api-client`
 
-> **Dependency note:** `NormalizeEmail` uses `golang.org/x/text/unicode/norm`. Already present in `backend/go.mod` as an indirect dependency (v0.36.0) — no new dependency needed; just add the import.
+> **Dependency note:** `NormalizeEmailForBlindIndex` uses only stdlib (`strings`). No new imports needed.
 
 ---
 
@@ -319,10 +355,12 @@ Generated TypeScript type comments auto-update via `make generate-api-client`.
 
 | Risk | Mitigation |
 |------|-----------|
-| Backfill fails mid-run | Idempotent — safe to re-run on next restart; `SKIP LOCKED` avoids blocking email updates |
-| Email change races with backfill | `FOR UPDATE SKIP LOCKED` in backfill; `UpdateUserEmailTx` writes correct rows transactionally |
-| Long emails → many rows | Capped at 64-char prefix length |
-| Unicode splitting | Rune-based prefix generation |
-| Prefix table leaks email length | Accepted trade-off; admin-only, not user-facing; HMAC key still required to reverse |
-| Future HMAC key rotation | `key_version` column enables dual-read/dual-write rotation without full rebuild |
-| Search semantics confusion | UI says "starts with"; doc says "starts-with match"; 422 on <3 chars |
+| Backfill computes HMAC on ciphertext instead of email | Explicitly decrypt before generating indices; `enc.DecryptString(encryptedEmail)` |
+| Backfill race with concurrent email update | `UpdateUserEmailTx` atomically replaces all prefix rows; stale rows from backfill race self-heal |
+| Long emails → many rows | Capped at 64-char prefix; ~62 rows per user max |
+| UTF-8 prefix splitting | Rune-based slicing |
+| Frontend 422 storm on short input | Frontend suppresses API call when `0 < search.length < 3` |
+| pgxmock misses SQL bugs | Integration tests required for all repo changes |
+| Prefix table leaks email length | Accepted trade-off; admin-only, HMAC key required to reverse |
+| Search returns false positives for common prefixes | Acceptable for admin use; minimum 3 chars limits broadness |
+| Future key rotation | Schema is straightforward to extend; no `key_version` complexity until rotation is a full feature |
