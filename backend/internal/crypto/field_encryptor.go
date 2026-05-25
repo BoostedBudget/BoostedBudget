@@ -168,25 +168,26 @@ func NormalizeEmailForBlindIndex(email string) string {
 const (
 	minPrefixLen = 3
 	maxPrefixLen = 64
+
+	// LabelEmailPrefix is the domain-separation label for all prefix blind indices.
+	// Use this constant everywhere prefix indices are read or written.
+	LabelEmailPrefix = "email_prefix"
 )
 
 // EmailPrefixBlindIndices generates domain-separated blind indices for all
 // rune-length prefixes in [minPrefixLen, maxPrefixLen] of the given email.
 // Rune-based slicing prevents splitting multi-byte UTF-8 characters.
 // Returns nil when the normalised email is shorter than minPrefixLen.
-func EmailPrefixBlindIndices(enc *FieldEncryptor, email string) []string {
+func (fe *FieldEncryptor) EmailPrefixBlindIndices(email string) []string {
 	normalised := NormalizeEmailForBlindIndex(email)
 	runes := []rune(normalised)
-	end := len(runes)
-	if end > maxPrefixLen {
-		end = maxPrefixLen
-	}
+	end := min(len(runes), maxPrefixLen)
 	if end < minPrefixLen {
 		return nil
 	}
 	indices := make([]string, 0, end-minPrefixLen+1)
 	for i := minPrefixLen; i <= end; i++ {
-		indices = append(indices, enc.BlindIndexWithLabel("email_prefix", string(runes[:i])))
+		indices = append(indices, fe.BlindIndexWithLabel(LabelEmailPrefix, string(runes[:i])))
 	}
 	return indices
 }
