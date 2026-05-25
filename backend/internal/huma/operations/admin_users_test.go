@@ -378,3 +378,59 @@ func TestGetUserDetail_ServiceNotConfigured(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Admin user service not configured")
 }
+
+// TestListUsers_SearchTooShort_Returns400 verifies that a search term shorter
+// than 3 characters (after trimming) is rejected with 400 Bad Request.
+func TestListUsers_SearchTooShort_Returns400(t *testing.T) {
+	cfg := &config.Config{Environment: "qa"}
+	handler := NewAdminHandler(nil, nil, nil, nil, new(mockAdminUserService), nil, nil, cfg)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name   string
+		search string
+	}{
+		{"one char", "a"},
+		{"two chars", "ab"},
+		{"two chars with spaces that trim to two", "  ab  "},
+		{"one char unicode", "é"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := &ListUsersInput{
+				AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+					AuthenticatedInput: inputs.AuthenticatedInput{UserID: "admin-123"},
+					ClerkUserID:        "clerk_admin_123",
+				},
+				PagePaginationInput: inputs.PagePaginationInput{Page: 1, PageSize: 20},
+				Search:              tc.search,
+			}
+			_, err := handler.ListUsers(ctx, input)
+			require.Error(t, err)
+			// Project pattern: check err.Error() contains the expected message
+			assert.Contains(t, err.Error(), "search must be at least 3 characters")
+		})
+	}
+}
+
+// TestListUsers_SearchExactlyThreeChars_Succeeds verifies that exactly 3 characters passes.
+func TestListUsers_SearchExactlyThreeChars_Succeeds(t *testing.T) {
+	mockService := new(mockAdminUserService)
+	cfg := &config.Config{Environment: "qa"}
+	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+	ctx := context.Background()
+
+	mockService.On("ListUsers", ctx, domain.AdminUserFilters{Search: "abc"}, 1, 20).
+		Return(&domain.AdminUserListResponse{Users: []domain.AdminUserListItem{}, TotalCount: 0, Page: 1, PageSize: 20, TotalPages: 0}, nil)
+
+	input := &ListUsersInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "admin-123"},
+			ClerkUserID:        "clerk_admin_123",
+		},
+		PagePaginationInput: inputs.PagePaginationInput{Page: 1, PageSize: 20},
+		Search:              "abc",
+	}
+	_, err := handler.ListUsers(ctx, input)
+	require.NoError(t, err)
+	mockService.AssertExpectations(t)
+}
