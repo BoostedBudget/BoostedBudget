@@ -196,7 +196,7 @@ type CheckRoleResponseBody struct {
 type ListUsersInput struct {
 	inputs.AdminAuthenticatedInput
 	inputs.PagePaginationInput
-	Search  string `query:"search"   doc:"Search by email (partial match)"`
+	Search  string `query:"search"   doc:"Search by email prefix, starts-with match (min 3 chars)"`
 	Tier    string `query:"tier"     doc:"Filter by subscription tier"`
 	SortBy  string `query:"sort_by"  enum:"created_at,last_login_at,subscription_tier,subscription_status" default:"created_at"  doc:"Column to sort by"`
 	SortDir string `query:"sort_dir" enum:"asc,desc"                                                      default:"desc"         doc:"Sort direction"`
@@ -368,9 +368,16 @@ func (h *AdminHandler) ListUsers(ctx context.Context, input *ListUsersInput) (*L
 		return nil, huma.Error503ServiceUnavailable("Admin user service not configured")
 	}
 
+	// Validate search length: min 3 runes (matches prefix index minimum).
+	// Frontend suppresses API calls for search.length < 3, but defend server-side too.
+	search := strings.TrimSpace(input.Search)
+	if search != "" && len([]rune(search)) < 3 {
+		return nil, huma.Error400BadRequest("search must be at least 3 characters")
+	}
+
 	// Build filters from input
 	filters := domain.AdminUserFilters{
-		Search:  input.Search,
+		Search:  search,
 		Tier:    input.Tier,
 		SortBy:  input.SortBy,
 		SortDir: input.SortDir,
