@@ -196,7 +196,9 @@ test.describe('DataTable resize — Transactions', () => {
     await expect(firstVirtualRowAfterReload).toBeVisible()
     const merchantTdAfterReload = firstVirtualRowAfterReload.locator('td').nth(1)
     const tdWidthAfter = await merchantTdAfterReload.evaluate((el) => el.getBoundingClientRect().width)
-    expect(Math.abs(tdWidthAfter - widthAfterReload)).toBeLessThan(3)
+    // Tolerance: <th> BCR includes browser table-layout redistribution (~3px at CI viewport).
+    // Pre-fix diffs were 100-250px so 10px still catches regressions.
+    expect(Math.abs(tdWidthAfter - widthAfterReload)).toBeLessThan(10)
   })
 
   test('"Reset column widths" restores defaultSize', async ({ page }) => {
