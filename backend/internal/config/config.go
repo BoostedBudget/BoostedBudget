@@ -92,6 +92,9 @@ type Config struct {
 	// Paddle Reconciliation
 	PaddleReconciliationEnabled bool // from PADDLE_RECONCILIATION_ENABLED, default true
 	PaddleReconciliationAutoFix bool // from PADDLE_RECONCILIATION_AUTO_FIX, default false
+
+	// Cloudflare Origin Secret (CF_ORIGIN_SECRET) — required in prod/staging
+	CFOriginSecret string
 }
 
 // Load loads configuration from environment variables
@@ -179,6 +182,9 @@ func Load() (*Config, error) {
 		// Paddle Reconciliation
 		PaddleReconciliationEnabled: getEnvBool("PADDLE_RECONCILIATION_ENABLED", true),
 		PaddleReconciliationAutoFix: getEnvBool("PADDLE_RECONCILIATION_AUTO_FIX", false),
+
+		// Cloudflare Origin Secret
+		CFOriginSecret: getEnv("CF_ORIGIN_SECRET", ""),
 	}
 
 	// Validate required fields for production
@@ -223,6 +229,11 @@ func (c *Config) validate() error {
 	// Paddle (both required together)
 	if c.PaddleAPIKey == "" || c.PaddleWebhookSecret == "" {
 		errs = append(errs, fmt.Errorf("PADDLE_API_KEY and PADDLE_WEBHOOK_SECRET are both required"))
+	}
+
+	// Cloudflare Origin Secret (required so direct *.fly.dev access is blocked)
+	if c.CFOriginSecret == "" {
+		errs = append(errs, fmt.Errorf("CF_ORIGIN_SECRET is required — set it to the value in the Cloudflare Transform Rule (see docs/FLYIO_SETUP.md)"))
 	}
 
 	return errors.Join(errs...)
