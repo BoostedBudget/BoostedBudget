@@ -420,9 +420,130 @@ After deployment:
 4. Configure monitoring alerts
 5. Set up backup strategy for database
 
+---
+
+## Cloudflare API Protection (#657)
+
+The backend API is protected by `CloudflareOnly` middleware (`backend/internal/middleware/cloudflare.go`) which enforces two layers of verification on every non-exempted request in `staging`/`production`:
+
+1. **IP validation** — `Fly-Client-IP` (set by Fly.io's proxy edge, not forgeable by clients) must be within Cloudflare's published CIDR ranges
+2. **Shared origin secret** — `X-CF-Secret` header (injected by a Cloudflare Transform Rule) must match `CF_ORIGIN_SECRET` env var, validated with `subtle.ConstantTimeCompare`
+
+Exempted paths (not gated by Cloudflare — reached directly from Fly.io infrastructure): `/health`, `/metrics`.
+
+### Generate and Set the Origin Secret
+
+```bash
+# Generate a 256-bit secret (do this once per environment)
+openssl rand -hex 32
+# Example: a3f9e2c1b0d84726f5e3a1c0b9d87264e2a1c0b9d872645f3e2a1c0b9d87264
+
+# Set on Fly.io (staging and production can use the same or different values)
+fly secrets set CF_ORIGIN_SECRET=<64-char-hex> --app staging-boostedbudget-api
+fly secrets set CF_ORIGIN_SECRET=<64-char-hex> --app boostedbudget-api
+```
+
+> The server refuses to start in `staging`/`production` if `CF_ORIGIN_SECRET` is unset — this triggers Fly.io's automatic rollback before a bad deploy goes live.
+
+### Cloudflare Transform Rules (inject X-CF-Secret)
+
+In **Cloudflare dashboard → boostedbudget.com → Rules → Transform Rules → Request Header Modification**, create two rules:
+
+| Rule name | Filter expression | Header name | Header value |
+|-----------|------------------|-------------|--------------|
+| `Inject Origin Secret — Production API` | `(http.host eq "api.boostedbudget.com")` | `X-CF-Secret` | `<CF_ORIGIN_SECRET for boostedbudget-api>` |
+| `Inject Origin Secret — Staging API` | `(http.host eq "staging-api.boostedbudget.com")` | `X-CF-Secret` | `<CF_ORIGIN_SECRET for staging-boostedbudget-api>` |
+
+Click **Deploy** after each rule. The header value must exactly match the corresponding `CF_ORIGIN_SECRET` Fly.io secret.
+
+### WAF Managed Rules
+
+In **Cloudflare dashboard → Security → WAF → Managed rules**:
+
+> ⚠️ **Start in Log mode, not Block.** API JSON traffic (merchant names, transaction descriptions, user notes) can trigger OWASP false positives. Monitor for 1 week before switching to Block.
+
+For each API hostname (`api.boostedbudget.com` and `staging-api.boostedbudget.com`):
+
+1. **Deploy Cloudflare Managed Ruleset** → Deploy
+2. **Deploy Cloudflare OWASP Core Ruleset** (Pro+ plans) → Deploy with:
+   - Paranoia Level: **PL1** (reduces false positives on API JSON)
+   - Score threshold: **Medium (≥40)**
+   - Action: **Log** → change to **Block** after 1 week without false positives
+
+> ⚠️ Do **not** enable plain Bot Fight Mode for these hostnames. It can challenge legitimate mobile and API traffic and cannot be bypassed with WAF rules. If on Business/Enterprise and using Super Bot Fight Mode, create a skip rule for `/api/`, `/webhooks/`, `/health`, and `/metrics` paths.
+
+### Cloudflare Rate Limiting Rules
+
+In **Cloudflare dashboard → Security → WAF → Rate limiting rules** (create most-specific rules first):
+
+**Staging:**
+
+| Rule name | Expression | Rate | Block duration |
+|-----------|-----------|------|----------------|
+| `Staging API — General` | `(http.host eq "staging-api.boostedbudget.com") and starts_with(http.request.uri.path, "/api/")` | 100 req/min per IP | 1 min |
+
+**Production:**
+
+| Rule name | Expression | Rate | Block duration |
+|-----------|-----------|------|----------------|
+| `Prod API — Auth endpoints` | `(http.host eq "api.boostedbudget.com") and starts_with(http.request.uri.path, "/api/v1/auth/")` | 20 req/min per IP | 10 min |
+| `Prod API — Plaid endpoints` | `(http.host eq "api.boostedbudget.com") and starts_with(http.request.uri.path, "/api/v1/plaid/")` | 30 req/min per IP | 5 min |
+| `Prod API — General` | `(http.host eq "api.boostedbudget.com") and starts_with(http.request.uri.path, "/api/")` | 200 req/min per IP | 1 min |
+
+### Webhook Pre-Deploy Check
+
+Cloudflare protection blocks direct `*.fly.dev` access. Confirm all webhook providers send to the Cloudflare-proxied domains, not the Fly.io URLs directly:
+
+- **Plaid (Sandbox)**: `https://staging-api.boostedbudget.com/webhooks/plaid`
+- **Plaid (Production)**: `https://api.boostedbudget.com/webhooks/plaid`
+- **Paddle (Staging)**: `https://staging-api.boostedbudget.com/webhooks/paddle`
+- **Paddle (Production)**: `https://api.boostedbudget.com/webhooks/paddle`
+
+Also confirm both CNAME records in Cloudflare DNS are **Proxied (orange cloud ☁️)**, not DNS-only.
+
+### Post-Deploy Smoke Tests
+
+After setting Fly.io secrets and deploying Transform Rules, verify the protection is active:
+
+```bash
+# 1. Direct fly.dev access must return 403
+curl -s -o /dev/null -w "Status: %{http_code}\n" \
+  https://staging-boostedbudget-api.fly.dev/api/v1/profile
+# Expected: 403
+
+# 2. Via Cloudflare domain must return 401 (CF check passed, Clerk rejected)
+curl -s -o /dev/null -w "Status: %{http_code}\n" \
+  https://staging-api.boostedbudget.com/api/v1/profile
+# Expected: 401
+
+# 3. Health check via fly.dev must return 200 (exempted from Cloudflare check)
+curl -s -o /dev/null -w "Status: %{http_code}\n" \
+  https://staging-boostedbudget-api.fly.dev/health
+# Expected: 200
+
+# 4. Metrics via fly.dev must return 200 (exempted, scraped by Fly.io)
+curl -s -o /dev/null -w "Status: %{http_code}\n" \
+  https://staging-boostedbudget-api.fly.dev/metrics
+# Expected: 200
+
+# 5. Spoofed CF-Connecting-IP (original naive approach) must still return 403
+curl -s -o /dev/null -w "Status: %{http_code}\n" \
+  -H "CF-Connecting-IP: 1.2.3.4" \
+  https://staging-boostedbudget-api.fly.dev/api/v1/profile
+# Expected: 403 (proves the original header-only approach is insufficient)
+```
+
+Also add to the **Pre-deployment Checklist** above:
+- [ ] `CF_ORIGIN_SECRET` set via `fly secrets set` for each app
+- [ ] Cloudflare Transform Rules created (X-CF-Secret injection)
+- [ ] DNS records for `api.boostedbudget.com` and `staging-api.boostedbudget.com` are Proxied (orange cloud)
+
+---
+
 ## References
 
 - [Fly.io Documentation](https://fly.io/docs/)
 - [Fly.io Postgres](https://fly.io/docs/postgres/)
 - [Fly.io Custom Domains](https://fly.io/docs/app-guides/custom-domains-with-fly/)
 - [Porkbun DNS](https://kb.porkbun.com/category/3-dns)
+- [Cloudflare IP Ranges](https://www.cloudflare.com/ips/) — used by `CloudflareFallbackCIDRs()` in `backend/internal/middleware/cloudflare_ips.go`
