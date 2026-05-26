@@ -427,7 +427,7 @@ After deployment:
 The backend API is protected by `CloudflareOnly` middleware (`backend/internal/middleware/cloudflare.go`) which enforces two layers of verification on every non-exempted request in `staging`/`production`:
 
 1. **IP validation** — `Fly-Client-IP` (set by Fly.io's proxy edge, not forgeable by clients) must be within Cloudflare's published CIDR ranges
-2. **Shared origin secret** — `X-CF-Secret` header (injected by a Cloudflare Transform Rule) must match `CF_ORIGIN_SECRET` env var, validated with `subtle.ConstantTimeCompare`
+2. **Shared origin secret** — `X-Origin-Secret` header (injected by a Cloudflare Transform Rule) must match `CF_ORIGIN_SECRET` env var, validated with `subtle.ConstantTimeCompare`
 
 Exempted paths (not gated by Cloudflare — reached directly from Fly.io infrastructure): `/health`, `/metrics`.
 
@@ -445,14 +445,14 @@ fly secrets set CF_ORIGIN_SECRET=<64-char-hex> --app boostedbudget-api
 
 > The server refuses to start in `staging`/`production` if `CF_ORIGIN_SECRET` is unset — this triggers Fly.io's automatic rollback before a bad deploy goes live.
 
-### Cloudflare Transform Rules (inject X-CF-Secret)
+### Cloudflare Transform Rules (inject X-Origin-Secret)
 
 In **Cloudflare dashboard → boostedbudget.com → Rules → Transform Rules → Request Header Modification**, create two rules:
 
 | Rule name | Filter expression | Header name | Header value |
 |-----------|------------------|-------------|--------------|
-| `Inject Origin Secret — Production API` | `(http.host eq "api.boostedbudget.com")` | `X-CF-Secret` | `<CF_ORIGIN_SECRET for boostedbudget-api>` |
-| `Inject Origin Secret — Staging API` | `(http.host eq "staging-api.boostedbudget.com")` | `X-CF-Secret` | `<CF_ORIGIN_SECRET for staging-boostedbudget-api>` |
+| `Inject Origin Secret — Production API` | `(http.host eq "api.boostedbudget.com")` | `X-Origin-Secret` | `<CF_ORIGIN_SECRET for boostedbudget-api>` |
+| `Inject Origin Secret — Staging API` | `(http.host eq "staging-api.boostedbudget.com")` | `X-Origin-Secret` | `<CF_ORIGIN_SECRET for staging-boostedbudget-api>` |
 
 Click **Deploy** after each rule. The header value must exactly match the corresponding `CF_ORIGIN_SECRET` Fly.io secret.
 
@@ -535,7 +535,7 @@ curl -s -o /dev/null -w "Status: %{http_code}\n" \
 
 Also add to the **Pre-deployment Checklist** above:
 - [ ] `CF_ORIGIN_SECRET` set via `fly secrets set` for each app
-- [ ] Cloudflare Transform Rules created (X-CF-Secret injection)
+- [ ] Cloudflare Transform Rules created (X-Origin-Secret injection)
 - [ ] DNS records for `api.boostedbudget.com` and `staging-api.boostedbudget.com` are Proxied (orange cloud)
 
 ---

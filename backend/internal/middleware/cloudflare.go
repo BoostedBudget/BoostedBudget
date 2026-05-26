@@ -68,7 +68,7 @@ func StartCIDRRefresher(ctx context.Context, interval time.Duration, ref *atomic
 }
 
 // CloudflareOnly enforces dual-layer protection: (1) Fly-Client-IP must be in Cloudflare ranges,
-// (2) X-CF-Secret header must match originSecret (constant-time).
+// (2) X-Origin-Secret header must match originSecret (constant-time).
 // Bypassed in development/local/test and for /health, /metrics paths.
 func CloudflareOnly(ref *atomic.Pointer[[]netip.Prefix], originSecret string, env string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -113,17 +113,17 @@ func CloudflareOnly(ref *atomic.Pointer[[]netip.Prefix], originSecret string, en
 				return c.String(http.StatusForbidden, "Forbidden")
 			}
 
-			// Layer 2: Validate X-CF-Secret header (fail-safe if empty)
+			// Layer 2: Validate X-Origin-Secret header (fail-safe if empty)
 			if originSecret == "" {
 				slog.WarnContext(r.Context(), "cloudflare-only: blocked — CF_ORIGIN_SECRET not configured",
 					"path", r.URL.Path)
 				return c.String(http.StatusForbidden, "Forbidden")
 			}
 
-			// Reject if zero or multiple X-CF-Secret headers are present.
-			secretValues := r.Header["X-Cf-Secret"]
+			// Reject if zero or multiple X-Origin-Secret headers are present.
+			secretValues := r.Header["X-Origin-Secret"]
 			if len(secretValues) != 1 {
-				slog.WarnContext(r.Context(), "cloudflare-only: blocked — unexpected X-CF-Secret header count",
+				slog.WarnContext(r.Context(), "cloudflare-only: blocked — unexpected X-Origin-Secret header count",
 					"path", r.URL.Path,
 					"count", len(secretValues))
 				return c.String(http.StatusForbidden, "Forbidden")

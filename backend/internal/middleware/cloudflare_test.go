@@ -80,7 +80,7 @@ func TestCloudflareOnly_BlocksWhenNoFlyClientIP(t *testing.T) {
 	e := setupCloudflareEcho(testCIDRs, testSecret, "staging")
 	// No Fly-Client-IP header at all — must return 403.
 	code := doRequest(e, "/test", map[string]string{
-		"X-Cf-Secret": testSecret,
+		"X-Origin-Secret": testSecret,
 	})
 	assert.Equal(t, http.StatusForbidden, code)
 }
@@ -90,17 +90,17 @@ func TestCloudflareOnly_BlocksWhenIPNotInCFRanges(t *testing.T) {
 	// Fly-Client-IP is a real IP but NOT in Cloudflare's ranges.
 	code := doRequest(e, "/test", map[string]string{
 		"Fly-Client-Ip": nonCloudflareIP,
-		"X-Cf-Secret":   testSecret,
+		"X-Origin-Secret":   testSecret,
 	})
 	assert.Equal(t, http.StatusForbidden, code)
 }
 
 func TestCloudflareOnly_BlocksWhenSecretMissing(t *testing.T) {
 	e := setupCloudflareEcho(testCIDRs, testSecret, "staging")
-	// Valid Cloudflare IP, but no X-CF-Secret header.
+	// Valid Cloudflare IP, but no X-Origin-Secret header.
 	code := doRequest(e, "/test", map[string]string{
 		"Fly-Client-Ip": validCloudflareIPv4,
-		// X-Cf-Secret intentionally omitted
+		// X-Origin-Secret intentionally omitted
 	})
 	assert.Equal(t, http.StatusForbidden, code)
 }
@@ -109,20 +109,20 @@ func TestCloudflareOnly_BlocksWhenSecretWrong(t *testing.T) {
 	e := setupCloudflareEcho(testCIDRs, testSecret, "staging")
 	code := doRequest(e, "/test", map[string]string{
 		"Fly-Client-Ip": validCloudflareIPv4,
-		"X-Cf-Secret":   "wrong-secret-value",
+		"X-Origin-Secret":   "wrong-secret-value",
 	})
 	assert.Equal(t, http.StatusForbidden, code)
 }
 
 func TestCloudflareOnly_BlocksWhenMultipleSecretHeaders(t *testing.T) {
 	e := setupCloudflareEcho(testCIDRs, testSecret, "staging")
-	// Multiple X-CF-Secret headers: one correct, one attacker-injected.
+	// Multiple X-Origin-Secret headers: one correct, one attacker-injected.
 	// Must be rejected — never accept multi-value secret headers.
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	req.Header.Set("Fly-Client-Ip", validCloudflareIPv4)
-	req.Header.Add("X-Cf-Secret", testSecret) // correct
-	req.Header.Add("X-Cf-Secret", "injected") // attacker addition
+	req.Header.Add("X-Origin-Secret", testSecret) // correct
+	req.Header.Add("X-Origin-Secret", "injected") // attacker addition
 	e.ServeHTTP(rr, req)
 	assert.Equal(t, http.StatusForbidden, rr.Code)
 }
@@ -132,7 +132,7 @@ func TestCloudflareOnly_BlocksWhenEmptyFlyClientIP(t *testing.T) {
 	// Empty string Fly-Client-IP header — must reject.
 	code := doRequest(e, "/test", map[string]string{
 		"Fly-Client-Ip": "",
-		"X-Cf-Secret":   testSecret,
+		"X-Origin-Secret":   testSecret,
 	})
 	assert.Equal(t, http.StatusForbidden, code)
 }
@@ -141,7 +141,7 @@ func TestCloudflareOnly_BlocksWhenMalformedFlyClientIP(t *testing.T) {
 	e := setupCloudflareEcho(testCIDRs, testSecret, "staging")
 	code := doRequest(e, "/test", map[string]string{
 		"Fly-Client-Ip": "not-an-ip-address",
-		"X-Cf-Secret":   testSecret,
+		"X-Origin-Secret":   testSecret,
 	})
 	assert.Equal(t, http.StatusForbidden, code)
 }
@@ -154,7 +154,7 @@ func TestCloudflareOnly_AllowsValidIPAndSecret(t *testing.T) {
 	e := setupCloudflareEcho(testCIDRs, testSecret, "staging")
 	code := doRequest(e, "/test", map[string]string{
 		"Fly-Client-Ip": validCloudflareIPv4,
-		"X-Cf-Secret":   testSecret,
+		"X-Origin-Secret":   testSecret,
 	})
 	assert.Equal(t, http.StatusOK, code)
 }
@@ -163,7 +163,7 @@ func TestCloudflareOnly_AllowsValidIPAndSecretInProduction(t *testing.T) {
 	e := setupCloudflareEcho(testCIDRs, testSecret, "production")
 	code := doRequest(e, "/test", map[string]string{
 		"Fly-Client-Ip": validCloudflareIPv4,
-		"X-Cf-Secret":   testSecret,
+		"X-Origin-Secret":   testSecret,
 	})
 	assert.Equal(t, http.StatusOK, code)
 }
@@ -219,7 +219,7 @@ func TestCloudflareOnly_IPv4MappedIPv6Handled(t *testing.T) {
 	// ::ffff:173.245.48.1 must match the 173.245.48.0/20 IPv4 CIDR.
 	code := doRequest(e, "/test", map[string]string{
 		"Fly-Client-Ip": validCloudflareIPv4Mapped,
-		"X-Cf-Secret":   testSecret,
+		"X-Origin-Secret":   testSecret,
 	})
 	assert.Equal(t, http.StatusOK, code)
 }
@@ -345,7 +345,7 @@ func TestCloudflareOnly_RejectsEmptySecretEvenWithValidIP(t *testing.T) {
 	// Attacker sends valid CF IP + empty secret header — must block.
 	code := doRequest(e, "/test", map[string]string{
 		"Fly-Client-Ip": validCloudflareIPv4,
-		"X-Cf-Secret":   "",
+		"X-Origin-Secret":   "",
 	})
 	assert.Equal(t, http.StatusForbidden, code)
 }
@@ -355,7 +355,7 @@ func TestCloudflareOnly_RejectsDifferentLengthSecret(t *testing.T) {
 	e := setupCloudflareEcho(testCIDRs, testSecret, "staging")
 	code := doRequest(e, "/test", map[string]string{
 		"Fly-Client-Ip": validCloudflareIPv4,
-		"X-Cf-Secret":   "short",
+		"X-Origin-Secret":   "short",
 	})
 	assert.Equal(t, http.StatusForbidden, code)
 }
