@@ -27,11 +27,14 @@ var exemptedPaths = map[string]bool{
 	"/metrics": true,
 }
 
-// bypassEnvironments skip Cloudflare checks (development/local/test).
+// bypassEnvironments skip Cloudflare checks (development/local/test/qa).
+// "qa" is used by Playwright E2E tests (playwright.config.ts sets ENVIRONMENT=qa);
+// those requests are direct localhost calls with no Cloudflare headers.
 var bypassEnvironments = map[string]bool{
 	"development": true,
 	"local":       true,
 	"test":        true,
+	"qa":          true,
 }
 
 // LoadCloudflareCIDRs fetches Cloudflare IP ranges at startup, falling back to hardcoded list on error.

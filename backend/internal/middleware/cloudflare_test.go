@@ -191,6 +191,14 @@ func TestCloudflareOnly_SkipsCheckInTest(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code)
 }
 
+func TestCloudflareOnly_SkipsCheckInQA(t *testing.T) {
+	// QA environment is used by Playwright E2E tests (playwright.config.ts sets ENVIRONMENT=qa).
+	// Direct localhost requests have no Cloudflare headers, so the middleware must bypass in qa.
+	e := setupCloudflareEcho(testCIDRs, testSecret, "qa")
+	code := doRequest(e, "/test", nil)
+	assert.Equal(t, http.StatusOK, code)
+}
+
 // ---------------------------------------------------------------------------
 // CloudflareOnly — exempted paths
 // ---------------------------------------------------------------------------
