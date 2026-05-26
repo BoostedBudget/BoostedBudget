@@ -129,3 +129,21 @@ describe('TransactionDateFilter', () => {
     expect(screen.getByText('Date Range')).toBeInTheDocument()
   })
 })
+
+describe('TransactionDateFilter - Bug #1193 layout fix', () => {
+  const defaultProps = {
+    preset: 'all' as const,
+    onPresetChange: () => {},
+    onCustomRangeChange: () => {},
+  }
+
+  it('outer wrapper has min-w-0 to prevent flex overflow', () => {
+    const { container } = render(<TransactionDateFilter {...defaultProps} />)
+    expect((container.firstChild as HTMLElement).className).toContain('min-w-0')
+  })
+
+  it('DateRangePicker is wrapped in overflow-x-auto container', () => {
+    const { container } = render(<TransactionDateFilter {...defaultProps} />)
+    expect(container.querySelector('.overflow-x-auto')).not.toBeNull()
+  })
+})
