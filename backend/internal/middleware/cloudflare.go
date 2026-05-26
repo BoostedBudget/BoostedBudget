@@ -21,15 +21,17 @@ const (
 	cidrRefreshEvery  = 24 * time.Hour
 )
 
-// exemptedPaths bypass CloudflareOnly (/health for Fly.io health check, /metrics for Prometheus).
+// exemptedPaths bypass CloudflareOnly checks. Includes trailing-slash variants
+// because some health checkers and monitoring probes append a trailing slash.
 var exemptedPaths = map[string]bool{
-	"/health":  true,
-	"/metrics": true,
+	"/health":   true,
+	"/health/":  true,
+	"/metrics":  true,
+	"/metrics/": true,
 }
 
 // bypassEnvironments skip Cloudflare checks (development/local/test/qa).
-// "qa" is used by Playwright E2E tests (playwright.config.ts sets ENVIRONMENT=qa);
-// those requests are direct localhost calls with no Cloudflare headers.
+// qa is used by Playwright E2E tests which make direct localhost calls without Cloudflare headers.
 var bypassEnvironments = map[string]bool{
 	"development": true,
 	"local":       true,
@@ -54,8 +56,13 @@ func LoadCloudflareCIDRsFrom(ctx context.Context, ipv4URL, ipv6URL string) []net
 	return fetched
 }
 
-// StartCIDRRefresher periodically refreshes Cloudflare CIDR ranges until ctx is cancelled.
+// StartCIDRRefresher periodically refreshes Cloudflare CIDR ranges using official URLs.
 func StartCIDRRefresher(ctx context.Context, interval time.Duration, ref *atomic.Pointer[[]netip.Prefix]) {
+	StartCIDRRefresherFrom(ctx, interval, ref, cloudflareIPv4URL, cloudflareIPv6URL)
+}
+
+// StartCIDRRefresherFrom is like StartCIDRRefresher but accepts custom URLs (for test injection).
+func StartCIDRRefresherFrom(ctx context.Context, interval time.Duration, ref *atomic.Pointer[[]netip.Prefix], ipv4URL, ipv6URL string) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -63,7 +70,7 @@ func StartCIDRRefresher(ctx context.Context, interval time.Duration, ref *atomic
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			fresh := LoadCloudflareCIDRs(ctx)
+			fresh := LoadCloudflareCIDRsFrom(ctx, ipv4URL, ipv6URL)
 			ref.Store(&fresh)
 			slog.InfoContext(ctx, "refreshed Cloudflare IP ranges", "count", len(fresh))
 		}
