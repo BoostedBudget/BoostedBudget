@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"net/netip"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2/adapters/humaecho"
@@ -135,20 +137,28 @@ func main() {
 	// Register request validator (required for c.Validate() in handlers)
 	e.Validator = middleware.NewValidator()
 
+	// Load Cloudflare IP ranges (falls back to hardcoded list on error)
+	cfCIDRs := middleware.LoadCloudflareCIDRs(context.Background())
+	cfCIDRRef := new(atomic.Pointer[[]netip.Prefix])
+	cfCIDRRef.Store(&cfCIDRs)
+	cfCtx, cfCancel := context.WithCancel(context.Background())
+	go middleware.StartCIDRRefresher(cfCtx, 24*time.Hour, cfCIDRRef)
+
 	// Middleware (order matters!)
 	e.Use(middleware.RequestID())                                                          // 1. Generate request IDs first
 	e.Use(middleware.SecurityHeaders(cfg.Environment))                                    // 2. Security hardening headers
-	e.Use(middleware.IPRateLimiter(middleware.RateLimitConfig{                            // 3. Per-IP rate limiting
+	e.Use(middleware.CloudflareOnly(cfCIDRRef, cfg.CFOriginSecret, cfg.Environment))      // 3. Cloudflare-only enforcement: blocks direct *.fly.dev access
+	e.Use(middleware.IPRateLimiter(middleware.RateLimitConfig{                            // 4. Per-IP rate limiting
 		IPLimit:           cfg.RateLimitIP,
 		AuthEndpointLimit: cfg.RateLimitAuth,
 		WindowDuration:    time.Minute,
 	}))
-	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                            // 4. Panic recovery (formats RFC 9457 response)
-	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                               // 5. Sentry panic reporting
-	e.Use(otelecho.Middleware("boostedbudget-api"))                                        // 6. OTEL tracing
-	e.Use(middleware.StructuredLogging(appLogger))                                         // 7. slog-based HTTP logging
-	e.Use(middleware.MetricsMiddleware())                                                  // 8. Prometheus metrics
-	e.Use(echomiddleware.BodyLimit(cfg.MaxBodySize))                                       // 9. Request body size limit
+	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                            // 5. Panic recovery (formats RFC 9457 response)
+	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                               // 6. Sentry panic reporting
+	e.Use(otelecho.Middleware("boostedbudget-api"))                                        // 7. OTEL tracing
+	e.Use(middleware.StructuredLogging(appLogger))                                         // 8. slog-based HTTP logging
+	e.Use(middleware.MetricsMiddleware())                                                  // 9. Prometheus metrics
+	e.Use(echomiddleware.BodyLimit(cfg.MaxBodySize))                                       // 10. Request body size limit
 	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins))) // 10. CORS handling with configured origins
 
 	// Initialize Huma API wrapping Echo for OpenAPI generation
@@ -1381,6 +1391,9 @@ func main() {
 		stopCancel()
 		appLogger.Info("River queue runner stopped")
 	}
+
+	// Stop Cloudflare CIDR refresher goroutine
+	cfCancel()
 
 	// Stop background workers (if running)
 	if workerCancel != nil {
