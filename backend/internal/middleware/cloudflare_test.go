@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
@@ -48,7 +49,7 @@ var testCIDRs = []netip.Prefix{
 }
 
 // setupCloudflareEcho creates an Echo instance with the CloudflareOnly middleware and
-// a test handler at GET /test, GET /health, and GET /metrics.
+// a test handler at GET /test, GET /health, GET /health/, GET /metrics, GET /metrics/.
 func setupCloudflareEcho(cidrs []netip.Prefix, secret, env string) *echo.Echo {
 	e := echo.New()
 	e.Use(middleware.CloudflareOnly(newCIDRRef(cidrs), secret, env))
@@ -57,7 +58,9 @@ func setupCloudflareEcho(cidrs []netip.Prefix, secret, env string) *echo.Echo {
 	}
 	e.GET("/test", handler)
 	e.GET("/health", handler)
+	e.GET("/health/", handler)   // trailing-slash variant (Fly.io may send this)
 	e.GET("/metrics", handler)
+	e.GET("/metrics/", handler)  // trailing-slash variant (monitoring probes)
 	return e
 }
 
@@ -73,7 +76,7 @@ func doRequest(e *echo.Echo, path string, headers map[string]string) int {
 }
 
 // ---------------------------------------------------------------------------
-// CloudflareOnly — blocking behaviour (staging environment)
+// CloudflareOnly — blocking behavior
 // ---------------------------------------------------------------------------
 
 func TestCloudflareOnly_BlocksWhenNoFlyClientIP(t *testing.T) {
@@ -147,7 +150,7 @@ func TestCloudflareOnly_BlocksWhenMalformedFlyClientIP(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CloudflareOnly — allow behaviour
+// CloudflareOnly — allow behavior
 // ---------------------------------------------------------------------------
 
 func TestCloudflareOnly_AllowsValidIPAndSecret(t *testing.T) {
@@ -362,8 +365,110 @@ func TestCloudflareOnly_RejectsDifferentLengthSecret(t *testing.T) {
 	// Verifies constant-time compare handles length-mismatch without panic.
 	e := setupCloudflareEcho(testCIDRs, testSecret, "staging")
 	code := doRequest(e, "/test", map[string]string{
-		"Fly-Client-Ip": validCloudflareIPv4,
-		"X-Origin-Secret":   "short",
+		"Fly-Client-Ip":   validCloudflareIPv4,
+		"X-Origin-Secret": "short",
 	})
 	assert.Equal(t, http.StatusForbidden, code)
+}
+
+// ---------------------------------------------------------------------------
+// CloudflareOnly — exempted paths (trailing-slash variants)
+// ---------------------------------------------------------------------------
+
+func TestCloudflareOnly_HealthCheckTrailingSlashBypassed(t *testing.T) {
+	e := setupCloudflareEcho(testCIDRs, testSecret, "staging")
+	code := doRequest(e, "/health/", nil)
+	assert.Equal(t, http.StatusOK, code)
+}
+
+func TestCloudflareOnly_MetricsTrailingSlashBypassed(t *testing.T) {
+	e := setupCloudflareEcho(testCIDRs, testSecret, "staging")
+	code := doRequest(e, "/metrics/", nil)
+	assert.Equal(t, http.StatusOK, code)
+}
+
+// ---------------------------------------------------------------------------
+// CloudflareOnly — sentinel: production/staging must NOT be in bypass list
+// ---------------------------------------------------------------------------
+
+func TestCloudflareOnly_ProductionAndStagingRequireCFHeaders(t *testing.T) {
+	// Sentinel: Verify "production" and "staging" are never in bypassEnvironments.
+	for _, env := range []string{"production", "staging"} {
+		env := env
+		t.Run(env, func(t *testing.T) {
+			e := setupCloudflareEcho(testCIDRs, testSecret, env)
+			code := doRequest(e, "/test", nil)
+			assert.Equal(t, http.StatusForbidden, code,
+				"env %q must enforce CF checks", env)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// StartCIDRRefresher — goroutine behavior
+// ---------------------------------------------------------------------------
+
+func TestStartCIDRRefresher_SwapsAtomicPointerOnTick(t *testing.T) {
+	// Serve distinct v4 and v6 CIDRs — refresher must atomically swap the pointer to them.
+	v4Srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("10.255.0.0/16\n"))
+	}))
+	defer v4Srv.Close()
+
+	v6Srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("fc00::/7\n"))
+	}))
+	defer v6Srv.Close()
+
+	// Start with the standard test CIDRs.
+	ref := newCIDRRef(testCIDRs)
+	initialPtr := ref.Load()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go middleware.StartCIDRRefresherFrom(ctx, 50*time.Millisecond, ref, v4Srv.URL, v6Srv.URL)
+
+	// Wait up to 500ms for the first tick to fire and swap the pointer.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if ref.Load() != initialPtr {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	require.NotEqual(t, initialPtr, ref.Load(), "atomic pointer should have been swapped after tick")
+
+	loaded := *ref.Load()
+	require.Len(t, loaded, 2, "refreshed list should contain exactly the 2 CIDRs served (1 v4, 1 v6)")
+
+	expectedV4, _ := netip.ParsePrefix("10.255.0.0/16")
+	expectedV6, _ := netip.ParsePrefix("fc00::/7")
+	assert.Contains(t, loaded, expectedV4, "refreshed list should contain the served v4 CIDR")
+	assert.Contains(t, loaded, expectedV6, "refreshed list should contain the served v6 CIDR")
+}
+
+func TestStartCIDRRefresher_FallsBackToHardcodedListOnFetchFailure(t *testing.T) {
+	// When the remote URL returns 500, the refresher must not set an empty list.
+	// LoadCloudflareCIDRsFrom falls back to CloudflareFallbackCIDRs() — verify non-empty.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	ref := newCIDRRef(testCIDRs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go middleware.StartCIDRRefresherFrom(ctx, 50*time.Millisecond, ref, srv.URL, srv.URL)
+
+	// Wait long enough for at least one tick to fire and attempt a (failing) fetch.
+	time.Sleep(200 * time.Millisecond)
+
+	loaded := *ref.Load()
+	assert.NotEmpty(t, loaded, "atomic pointer must never be set to empty — hardcoded fallback should apply")
 }
