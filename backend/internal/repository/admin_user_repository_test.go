@@ -77,9 +77,9 @@ func TestListUsers_WithEmailSearch(t *testing.T) {
 	now := time.Now()
 	userID := uuid.New().String()
 
-	// Expect count query with search filter — now uses email_blind_idx exact match
+	// Expect count query with search filter — now uses EXISTS prefix subquery
 	countRows := pgxmock.NewRows([]string{"count"}).AddRow(1)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM users u WHERE u.is_deleted = FALSE AND u.email_blind_idx = $1`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM users u WHERE u.is_deleted = FALSE AND EXISTS (SELECT 1 FROM user_email_prefix_indices p WHERE p.user_id = u.id AND p.prefix_blind_idx = $1)`)).
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(countRows)
 
@@ -155,9 +155,9 @@ func TestListUsers_WithBothFilters(t *testing.T) {
 	now := time.Now()
 	userID := uuid.New().String()
 
-	// Expect count query with both filters — email uses blind index now
+	// Expect count query with both filters — email uses EXISTS prefix subquery
 	countRows := pgxmock.NewRows([]string{"count"}).AddRow(1)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM users u WHERE u.is_deleted = FALSE AND u.email_blind_idx = $1 AND u.subscription_tier = $2`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM users u WHERE u.is_deleted = FALSE AND EXISTS (SELECT 1 FROM user_email_prefix_indices p WHERE p.user_id = u.id AND p.prefix_blind_idx = $1) AND u.subscription_tier = $2`)).
 		WithArgs(pgxmock.AnyArg(), "premium").
 		WillReturnRows(countRows)
 
@@ -191,9 +191,9 @@ func TestListUsers_EmptyResult(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Expect count query returning 0 — now uses email_blind_idx exact match
+	// Expect count query returning 0 — now uses EXISTS prefix subquery
 	countRows := pgxmock.NewRows([]string{"count"}).AddRow(0)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM users u WHERE u.is_deleted = FALSE AND u.email_blind_idx = $1`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM users u WHERE u.is_deleted = FALSE AND EXISTS (SELECT 1 FROM user_email_prefix_indices p WHERE p.user_id = u.id AND p.prefix_blind_idx = $1)`)).
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(countRows)
 

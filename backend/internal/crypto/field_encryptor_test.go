@@ -230,3 +230,111 @@ func TestIsEncrypted(t *testing.T) {
 	assert.False(t, crypto.IsEncrypted(""))
 	assert.False(t, crypto.IsEncrypted("enc$lowercase"))
 }
+
+// TestBlindIndexWithLabel_DomainSeparation verifies it differs from BlindIndex.
+// NOTE: field_encryptor_test.go is package crypto_test — all exported symbols need crypto. prefix.
+func TestBlindIndexWithLabel_DomainSeparation(t *testing.T) {
+	enc := newTestEncryptor(t)
+	without := enc.BlindIndex("test@example.com")
+	withLabel := enc.BlindIndexWithLabel(crypto.LabelEmailPrefix, "test@example.com")
+	assert.NotEqual(t, without, withLabel,
+		"BlindIndexWithLabel must differ from BlindIndex for the same value")
+}
+
+// TestBlindIndexWithLabel_Deterministic verifies same label+value always gives same hash.
+func TestBlindIndexWithLabel_Deterministic(t *testing.T) {
+	enc := newTestEncryptor(t)
+	idx1 := enc.BlindIndexWithLabel(crypto.LabelEmailPrefix, "test@example.com")
+	idx2 := enc.BlindIndexWithLabel(crypto.LabelEmailPrefix, "test@example.com")
+	assert.Equal(t, idx1, idx2)
+}
+
+// TestNormalizeEmailForBlindIndex verifies lower+trim behaviour.
+// Package is crypto_test — must use crypto. prefix for package-level functions.
+func TestNormalizeEmailForBlindIndex(t *testing.T) {
+	assert.Equal(t, "user@example.com", crypto.NormalizeEmailForBlindIndex("  USER@EXAMPLE.COM  "))
+	assert.Equal(t, "user@example.com", crypto.NormalizeEmailForBlindIndex("user@example.com"))
+	assert.Equal(t, "", crypto.NormalizeEmailForBlindIndex("   "))
+}
+
+// TestEmailPrefixBlindIndices_Count verifies correct number of indices.
+func TestEmailPrefixBlindIndices_Count(t *testing.T) {
+	enc := newTestEncryptor(t)
+	// "test@example.com" = 16 runes → indices for lengths 3..16 = 14 indices
+	indices := enc.EmailPrefixBlindIndices("test@example.com")
+	assert.Len(t, indices, 14)
+}
+
+// TestEmailPrefixBlindIndices_TooShort returns nil when email has < 3 runes.
+func TestEmailPrefixBlindIndices_TooShort(t *testing.T) {
+	enc := newTestEncryptor(t)
+	assert.Nil(t, enc.EmailPrefixBlindIndices("ab"))
+	assert.Nil(t, enc.EmailPrefixBlindIndices(""))
+}
+
+// TestEmailPrefixBlindIndices_ExactlyMinLength verifies the minimum valid input returns 1 index.
+func TestEmailPrefixBlindIndices_ExactlyMinLength(t *testing.T) {
+	enc := newTestEncryptor(t)
+	// exactly 3 runes — minimum valid input, should produce 1 index, not nil
+	indices := enc.EmailPrefixBlindIndices("abc")
+	require.NotNil(t, indices)
+	assert.Len(t, indices, 1)
+}
+
+// TestEmailPrefixBlindIndices_CapsAt64 verifies prefix count is capped at 64.
+func TestEmailPrefixBlindIndices_CapsAt64(t *testing.T) {
+	enc := newTestEncryptor(t)
+	long := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@x.com" // 70+ runes
+	indices := enc.EmailPrefixBlindIndices(long)
+	assert.Len(t, indices, 64-3+1, "should produce indices for rune lengths 3..64")
+}
+
+// TestEmailPrefixBlindIndices_NormalizesInput verifies case/whitespace normalisation.
+func TestEmailPrefixBlindIndices_NormalizesInput(t *testing.T) {
+	enc := newTestEncryptor(t)
+	lower := enc.EmailPrefixBlindIndices("test@example.com")
+	upper := enc.EmailPrefixBlindIndices("TEST@EXAMPLE.COM")
+	require.NotNil(t, lower)
+	require.NotNil(t, upper)
+	assert.Equal(t, lower, upper, "normalisation must produce identical indices regardless of input case")
+}
+
+// TestNormalizeAndCapSearchPrefix verifies normalisation and MaxPrefixLen cap.
+func TestNormalizeAndCapSearchPrefix(t *testing.T) {
+	// Short input: unchanged
+	assert.Equal(t, "abc", crypto.NormalizeAndCapSearchPrefix("abc"))
+
+	// Cased + whitespace: normalised
+	assert.Equal(t, "user@example.com", crypto.NormalizeAndCapSearchPrefix("  USER@EXAMPLE.COM  "))
+
+	// Exactly MaxPrefixLen runes: not truncated
+	exactly64 := strings.Repeat("a", 64)
+	assert.Equal(t, exactly64, crypto.NormalizeAndCapSearchPrefix(exactly64))
+
+	// Over MaxPrefixLen runes: truncated to MaxPrefixLen
+	over64 := strings.Repeat("a", 70)
+	assert.Equal(t, strings.Repeat("a", 64), crypto.NormalizeAndCapSearchPrefix(over64))
+}
+
+// TestNormalizeAndCapSearchPrefix_MatchesStoredIndex verifies that a 70-rune search
+// hashes to the same value as the 64-rune prefix that was stored.
+func TestNormalizeAndCapSearchPrefix_MatchesStoredIndex(t *testing.T) {
+	enc := newTestEncryptor(t)
+	// Email with 70 runes: stored indices cover rune-lengths 3..64
+	longEmail := strings.Repeat("a", 70) + "@x.com" // 76 runes total; prefix at 64 runes is stored
+	// What was stored for the 64-rune prefix:
+	stored := enc.BlindIndexWithLabel(crypto.LabelEmailPrefix, strings.Repeat("a", 64))
+	// Searching with the full 70-rune prefix should resolve to the same hash:
+	search70 := strings.Repeat("a", 70)
+	hashed := enc.BlindIndexWithLabel(crypto.LabelEmailPrefix, crypto.NormalizeAndCapSearchPrefix(search70))
+	assert.Equal(t, stored, hashed, "70-rune search should hash to the same value as the stored 64-rune prefix")
+	_ = longEmail // suppress unused variable
+}
+
+// TestEmailPrefixBlindIndices_RuneSafe verifies multi-byte (non-ASCII) chars are not split.
+func TestEmailPrefixBlindIndices_RuneSafe(t *testing.T) {
+	enc := newTestEncryptor(t)
+	// "ñoño" = 4 runes but 6 bytes in UTF-8 — prefix for length 3 is "ñon" (3 runes, not 4 bytes)
+	indices := enc.EmailPrefixBlindIndices("ñoño@x.com") // "ñoño@x.com" = 10 runes
+	assert.Len(t, indices, 10-3+1, "must count runes, not bytes")
+}

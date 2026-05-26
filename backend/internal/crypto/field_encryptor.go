@@ -148,3 +148,60 @@ func (fe *FieldEncryptor) BlindIndexNullable(s *string) *string {
 func IsEncrypted(value string) bool {
 	return strings.HasPrefix(value, encryptedPrefix)
 }
+
+// BlindIndexWithLabel produces a domain-separated HMAC-SHA256 blind index.
+// The label prevents semantic overlap between exact-email and prefix blind indices.
+// Use label "email_prefix" for all prefix table reads and writes.
+func (fe *FieldEncryptor) BlindIndexWithLabel(label, plaintext string) string {
+	mac := hmac.New(sha256.New, fe.hmacKey)
+	mac.Write([]byte(label + ":" + plaintext))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// NormalizeEmailForBlindIndex matches the email normalisation used throughout
+// profile_repository.go and backfill.go (lower + trim, no NFC).
+// Must be identical everywhere: creation, update, backfill, and admin search.
+func NormalizeEmailForBlindIndex(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+const (
+	minPrefixLen = 3
+	// MaxPrefixLen is the maximum rune-length prefix stored in user_email_prefix_indices.
+	// Exported so callers can truncate search strings to the same cap before hashing.
+	MaxPrefixLen = 64
+
+	// LabelEmailPrefix is the domain-separation label for all prefix blind indices.
+	// Use this constant everywhere prefix indices are read or written.
+	LabelEmailPrefix = "email_prefix"
+)
+
+// NormalizeAndCapSearchPrefix normalises an email search string (lower + trim)
+// and truncates it to MaxPrefixLen runes. Use this on the search side to ensure
+// the blind index matches what was stored for the MaxPrefixLen-rune prefix.
+func NormalizeAndCapSearchPrefix(search string) string {
+	normalised := NormalizeEmailForBlindIndex(search)
+	runes := []rune(normalised)
+	if len(runes) > MaxPrefixLen {
+		return string(runes[:MaxPrefixLen])
+	}
+	return normalised
+}
+
+// EmailPrefixBlindIndices generates domain-separated blind indices for all
+// rune-length prefixes in [minPrefixLen, MaxPrefixLen] of the given email.
+// Rune-based slicing prevents splitting multi-byte UTF-8 characters.
+// Returns nil when the normalised email is shorter than minPrefixLen.
+func (fe *FieldEncryptor) EmailPrefixBlindIndices(email string) []string {
+	normalised := NormalizeEmailForBlindIndex(email)
+	runes := []rune(normalised)
+	end := min(len(runes), MaxPrefixLen)
+	if end < minPrefixLen {
+		return nil
+	}
+	indices := make([]string, 0, end-minPrefixLen+1)
+	for i := minPrefixLen; i <= end; i++ {
+		indices = append(indices, fe.BlindIndexWithLabel(LabelEmailPrefix, string(runes[:i])))
+	}
+	return indices
+}

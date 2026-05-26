@@ -212,8 +212,13 @@ export function useUserFilters(): UseUserFiltersResult {
       page_size: filters.pageSize,
     }
 
-    if (filters.search) {
-      params.search = filters.search
+    // Only pass search to the API when it meets the server's min-length requirement.
+    // Count Array.from() runes (not .length bytes) to match Go's len([]rune(search)) < 3 check.
+    // Trim whitespace so "  ab  " (2 meaningful chars) is not mistakenly sent to the API.
+    // Pass the trimmed value so the backend receives what it validated.
+    const trimmedSearch = filters.search.trim()
+    if (trimmedSearch && Array.from(trimmedSearch).length >= 3) {
+      params.search = trimmedSearch
     }
 
     if (filters.tier) {

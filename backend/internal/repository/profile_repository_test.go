@@ -871,8 +871,10 @@ func TestGetUserByEmail_NotFound(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestProfileRepository_UpdateUserEmailTx_Success verifies that UpdateUserEmailTx updates
-// the email, email_blind_idx, and resets email_verified to false within a transaction.
+// TestProfileRepository_UpdateUserEmailTx_Success verifies that UpdateUserEmailTx:
+//  1. Updates the email columns on the users row (existing behaviour)
+//  2. Deletes the old prefix rows for the user
+//  3. Inserts new prefix rows for the updated email
 func TestProfileRepository_UpdateUserEmailTx_Success(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -885,6 +887,7 @@ func TestProfileRepository_UpdateUserEmailTx_Success(t *testing.T) {
 	newEmail := "newemail@example.com"
 
 	mock.ExpectBegin()
+	// 1. UPDATE users (existing behaviour — must stay first for lock-ordering invariant)
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET email = $1, email_blind_idx = $2, email_verified = false, updated_at = $3 WHERE id = $4`)).
 		WithArgs(
 			pgxmock.AnyArg(), // email (encrypted)
@@ -893,6 +896,21 @@ func TestProfileRepository_UpdateUserEmailTx_Success(t *testing.T) {
 			userID,
 		).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// 2. DELETE old prefix rows
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM user_email_prefix_indices WHERE user_id = $1`)).
+		WithArgs(userID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	// 3. INSERT new prefix rows.
+	// "newemail@example.com" = 20 runes → 18 prefix indices (lengths 3..20) + 1 user_id arg = 19 args.
+	mock.ExpectExec(`INSERT INTO user_email_prefix_indices`).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	tx, err := mock.Begin(ctx)
 	require.NoError(t, err)
@@ -932,5 +950,139 @@ func TestProfileRepository_UpdateUserEmailTx_DuplicateEmail(t *testing.T) {
 	err = repo.UpdateUserEmailTx(ctx, tx, userID, existingEmail)
 
 	assert.ErrorIs(t, err, ErrDuplicateEmail)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestProfileRepository_CreateUserTx_InsertsEmailPrefixRows verifies that CreateUserTx
+// inserts prefix blind index rows after the user INSERT, within the same transaction.
+func TestProfileRepository_CreateUserTx_InsertsEmailPrefixRows(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+	ctx := context.Background()
+
+	user := &domain.User{
+		ClerkUserID:        "clerk_test_prefix",
+		Email:              "prefix@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+
+	mock.ExpectBegin()
+	// Expect the users INSERT (24 args match the CreateUserTx query)
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO users (`)).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// Expect the prefix indices INSERT.
+	// "prefix@example.com" → 18 runes → 16 indices (3..18) + 1 user_id arg = 17 args total.
+	mock.ExpectExec(`INSERT INTO user_email_prefix_indices`).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	tx, err := mock.Begin(ctx)
+	require.NoError(t, err)
+
+	err = repo.CreateUserTx(ctx, tx, user)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestProfileRepository_CreateUserTx_ShortEmail_NoPrefixInsert verifies that an email
+// too short to generate prefix rows (< 3 rune chars) does NOT issue a prefix INSERT.
+func TestProfileRepository_CreateUserTx_ShortEmail_NoPrefixInsert(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+	ctx := context.Background()
+
+	user := &domain.User{
+		ClerkUserID:        "clerk_test_short",
+		Email:              "ab", // only 2 chars — below minPrefixLen
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO users (`)).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// No ExpectExec for prefix indices — if the implementation incorrectly inserts, this will FAIL.
+
+	tx, err := mock.Begin(ctx)
+	require.NoError(t, err)
+
+	err = repo.CreateUserTx(ctx, tx, user)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestProfileRepository_CreateUserTx_PrefixInsertError verifies that a database error
+// from insertPrefixIndicesTx is propagated by CreateUserTx rather than swallowed.
+func TestProfileRepository_CreateUserTx_PrefixInsertError(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+	ctx := context.Background()
+
+	user := &domain.User{
+		ClerkUserID:        "clerk_test_prefix_err",
+		Email:              "prefix@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+
+	dbErr := errors.New("connection reset by peer")
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO users (`)).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// "prefix@example.com" → 18 runes → 16 indices (3..18) + 1 user_id arg = 17 args total.
+	mock.ExpectExec(`INSERT INTO user_email_prefix_indices`).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+		).
+		WillReturnError(dbErr)
+
+	tx, err := mock.Begin(ctx)
+	require.NoError(t, err)
+
+	err = repo.CreateUserTx(ctx, tx, user)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, dbErr)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
