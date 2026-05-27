@@ -1699,6 +1699,153 @@ describe('DataTable virtualization', () => {
     expect(tbody.style.position).not.toBe('relative')
   })
 
+  // Bug #1193: virtual row td width enforcement
+  // Virtual rows (position:absolute) are out of table flow, so widths must be enforced via inline styles.
+
+  const sizedColumns: ColumnDef<Row>[] = [
+    { id: 'name', header: 'Name', key: 'name', defaultSize: 200 },
+    { id: 'amount', header: 'Amount', key: 'amount', numeric: true, defaultSize: 120 },
+  ]
+
+  it('virtual rows: each td has inline width/minWidth/maxWidth matching defaultSize', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={manyRows}
+        columns={sizedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        virtualization={{
+          enabled: true,
+          estimateRowHeight: 56,
+          scrollContainerHeight: '400px',
+        }}
+      />
+    )
+    const virtualRows = Array.from(container.querySelectorAll('tbody tr')).filter(
+      (tr) => (tr as HTMLElement).style.position === 'absolute'
+    )
+    expect(virtualRows.length).toBeGreaterThan(0)
+
+    for (const tr of virtualRows) {
+      const tds = tr.querySelectorAll('td')
+      expect(tds.length).toBe(2) // name + amount
+
+      const nameTd = tds[0] as HTMLElement
+      expect(nameTd.style.width).toBe('200px')
+      expect(nameTd.style.minWidth).toBe('200px')
+      expect(nameTd.style.maxWidth).toBe('200px')
+
+      const amountTd = tds[1] as HTMLElement
+      expect(amountTd.style.width).toBe('120px')
+      expect(amountTd.style.minWidth).toBe('120px')
+      expect(amountTd.style.maxWidth).toBe('120px')
+    }
+  })
+
+  it('virtual rows with rowActions: actions td gets inline width 96px', () => {
+    const { container } = render(
+      <DataTable<Row>
+        data={manyRows}
+        columns={sizedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        rowActions={(_row) => <button type="button">Edit</button>}
+        virtualization={{
+          enabled: true,
+          estimateRowHeight: 56,
+          scrollContainerHeight: '400px',
+        }}
+      />
+    )
+    const virtualRows = Array.from(container.querySelectorAll('tbody tr')).filter(
+      (tr) => (tr as HTMLElement).style.position === 'absolute'
+    )
+    expect(virtualRows.length).toBeGreaterThan(0)
+
+    for (const tr of virtualRows) {
+      const tds = tr.querySelectorAll('td')
+      expect(tds.length).toBe(3) // name + amount + actions
+      const actionsTd = tds[2] as HTMLElement
+      expect(actionsTd.style.width).toBe('96px')
+      expect(actionsTd.style.minWidth).toBe('96px')
+      expect(actionsTd.style.maxWidth).toBe('96px')
+    }
+  })
+
+  it('non-virtual rows: td elements have no inline width styles', () => {
+    const { container } = renderTable({ columns: sizedColumns } as Parameters<typeof renderTable>[0])
+    const tds = container.querySelectorAll('tbody td')
+    expect(tds.length).toBeGreaterThan(0)
+    for (const td of tds) {
+      expect((td as HTMLElement).style.width).toBe('')
+      expect((td as HTMLElement).style.minWidth).toBe('')
+      expect((td as HTMLElement).style.maxWidth).toBe('')
+    }
+  })
+
+  it('virtual rows: td widths update when columnSizing changes (resize)', () => {
+    const { container, rerender } = render(
+      <DataTable<Row>
+        data={manyRows}
+        columns={sizedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnSizing={{}}
+        onColumnSizingChange={() => {}}
+        virtualization={{
+          enabled: true,
+          estimateRowHeight: 56,
+          scrollContainerHeight: '400px',
+        }}
+      />
+    )
+
+    // Initial: name column should be 200px (defaultSize)
+    const initialRows = Array.from(container.querySelectorAll('tbody tr')).filter(
+      (tr) => (tr as HTMLElement).style.position === 'absolute'
+    )
+    expect(initialRows.length).toBeGreaterThan(0)
+    const firstNameTd = initialRows[0].querySelectorAll('td')[0] as HTMLElement
+    expect(firstNameTd.style.width).toBe('200px')
+
+    // Simulate resize: name column resized to 350px
+    rerender(
+      <DataTable<Row>
+        data={manyRows}
+        columns={sizedColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        columnSizing={{ name: 350 }}
+        onColumnSizingChange={() => {}}
+        virtualization={{
+          enabled: true,
+          estimateRowHeight: 56,
+          scrollContainerHeight: '400px',
+        }}
+      />
+    )
+
+    const resizedRows = Array.from(container.querySelectorAll('tbody tr')).filter(
+      (tr) => (tr as HTMLElement).style.position === 'absolute'
+    )
+    const resizedNameTd = resizedRows[0].querySelectorAll('td')[0] as HTMLElement
+    expect(resizedNameTd.style.width).toBe('350px')
+    expect(resizedNameTd.style.minWidth).toBe('350px')
+    expect(resizedNameTd.style.maxWidth).toBe('350px')
+  })
+
   it('calls onScrollEnd when last virtual item is within prefetchRows of the end', () => {
     const onScrollEnd = mock(() => {})
     const tinyRows: Row[] = Array.from({ length: 5 }, (_, i) => ({

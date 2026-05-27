@@ -468,6 +468,14 @@ export function DataTable<T,>({
     </thead>
   )
 
+  // Virtual rows (position:absolute) are out of table flow, so colgroup widths don't apply.
+  // Apply widths via inline styles when virtualization is active.
+  const getColumnPx = (col: ColumnDef<T>): number =>
+    tanstackHeaderMap.get(col.id)?.getSize() ?? col.defaultSize ?? 150
+
+  const virtualCellStyle = (px: number): React.CSSProperties | undefined =>
+    isVirtualizationEnabled ? { width: `${px}px`, minWidth: `${px}px`, maxWidth: `${px}px`, boxSizing: 'border-box' } : undefined
+
   function renderRowCells(row: T) {
     return (
       <>
@@ -483,6 +491,7 @@ export function DataTable<T,>({
               col.defaultPinned === 'left' && 'sticky left-0 z-10 bg-card',
               col.defaultPinned === 'right' && 'sticky right-0 z-10 bg-card max-md:relative max-md:right-auto'
             )}
+            style={virtualCellStyle(getColumnPx(col))}
             {...(maskedColumnIds.includes(col.id) && { 'data-ph-mask': '' })}
             {...(col.defaultPinned && { 'data-pinned': col.defaultPinned })}
           >
@@ -492,6 +501,7 @@ export function DataTable<T,>({
         {rowActions && (
           <td
             className={bodyCellVariants({ align: 'right', density })}
+            style={virtualCellStyle(96)}
             onClick={(e) => e.stopPropagation()}
           >
             {rowActions(row)}
