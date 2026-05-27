@@ -64,6 +64,14 @@ const treeRowVariants = cva(
 
 type CheckState = 'checked' | 'unchecked' | 'indeterminate'
 
+// ─── FilteredCategory interface ─────────────────────────────────────────────
+
+interface FilteredCategory {
+  cat: PfcPrimaryOption
+  showAll: boolean
+  matchingDetaileds?: PfcDetailedOption[]
+}
+
 function getCheckState(
   primary: PfcPrimaryOption,
   selectedPrimaries: string[],
@@ -143,12 +151,6 @@ export function HierarchicalCategoryTreeSelect({
   // ─── Search filtering ────────────────────────────────────────────────────
 
   const q = searchQuery.toLowerCase()
-
-  interface FilteredCategory {
-    cat: PfcPrimaryOption
-    showAll: boolean
-    matchingDetaileds?: PfcDetailedOption[]
-  }
 
   const filteredCategories: FilteredCategory[] = categories.reduce<FilteredCategory[]>((acc, cat) => {
     if (!q) {
@@ -267,6 +269,8 @@ export function HierarchicalCategoryTreeSelect({
           <div className="flex items-center">
             <button
               type="button"
+              role="treeitem"
+              aria-expanded={isExpanded}
               className={cn(treeRowVariants({ level: 'primary', selected: isSelected }), 'flex-1')}
               data-testid={`primary-row-${cat.primary}`}
               onClick={() => handleSingleSelectPrimary(cat.primary)}
@@ -290,7 +294,11 @@ export function HierarchicalCategoryTreeSelect({
               )}
             </button>
           </div>
-          {isExpanded && renderDetailedRows(cat)}
+          {isExpanded && (
+            <div role="group">
+              {renderDetailedRows(cat)}
+            </div>
+          )}
         </div>
       )
     }
@@ -303,6 +311,8 @@ export function HierarchicalCategoryTreeSelect({
         <div className="flex items-center">
           <button
             type="button"
+            role="treeitem"
+            aria-expanded={isExpanded}
             className={cn(treeRowVariants({ level: 'primary' }), 'flex-1')}
             onClick={() => handlePrimaryCheckbox(cat.primary)}
           >
@@ -326,7 +336,11 @@ export function HierarchicalCategoryTreeSelect({
             )}
           </button>
         </div>
-        {isExpanded && renderDetailedRows(cat)}
+        {isExpanded && (
+          <div role="group">
+            {renderDetailedRows(cat)}
+          </div>
+        )}
       </div>
     )
   }
@@ -348,6 +362,7 @@ export function HierarchicalCategoryTreeSelect({
           <button
             key={d.value}
             type="button"
+            role="treeitem"
             className={cn(treeRowVariants({ level: 'detailed', selected: isSelected }))}
             data-testid={`detailed-row-${d.value}`}
             onClick={() => handleSingleSelectDetailed(cat.primary, d.value)}
@@ -366,6 +381,7 @@ export function HierarchicalCategoryTreeSelect({
         <button
           key={d.value}
           type="button"
+          role="treeitem"
           className={cn(treeRowVariants({ level: 'detailed' }))}
           onClick={() => handleDetailedCheckbox(d.value)}
           data-testid={`detailed-checkbox-${d.value}`}
@@ -383,121 +399,9 @@ export function HierarchicalCategoryTreeSelect({
 
   function renderRows() {
     if (!q) {
-      // No search: show all primaries
       return categories.map((cat) => renderPrimaryRow(cat))
     }
-
-    // With search: only show primaries that match (and their filtered children auto-expanded)
-    return filteredCategories.map(({ cat, showAll, matchingDetaileds }) => {
-      // Force expansion when search is active
-      const oldExpanded = expanded.has(cat.primary)
-      if (!oldExpanded) {
-        // We render as if expanded, without mutating state
-        const isExpandedBySearch = true
-
-        if (isSingleSelect) {
-          const isSelected =
-            singleSelectValue?.primary === cat.primary && !singleSelectValue.detailed
-
-          const detailedsToShow = showAll ? cat.detailed : (matchingDetaileds ?? [])
-
-          return (
-            <div key={cat.primary}>
-              <div className="flex items-center">
-                <button
-                  type="button"
-                  className={cn(treeRowVariants({ level: 'primary', selected: isSelected }), 'flex-1')}
-                  data-testid={`primary-row-${cat.primary}`}
-                  onClick={() => handleSingleSelectPrimary(cat.primary)}
-                >
-                  <span className="flex-1">{cat.primaryLabel}</span>
-                  {isSelected && (
-                    <Check className="w-3.5 h-3.5 text-primary shrink-0" aria-hidden="true" />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  className="p-1 hover:bg-accent rounded"
-                  data-testid={`expand-toggle-${cat.primary}`}
-                  onClick={() => handleExpandToggle(cat.primary)}
-                  aria-label={`${isExpandedBySearch ? 'Collapse' : 'Expand'} ${cat.primaryLabel}`}
-                >
-                  <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" />
-                </button>
-              </div>
-              {detailedsToShow.map((d) => {
-                const isDetailSelected =
-                  singleSelectValue?.primary === cat.primary &&
-                  singleSelectValue.detailed === d.value
-                return (
-                  <button
-                    key={d.value}
-                    type="button"
-                    className={cn(treeRowVariants({ level: 'detailed', selected: isDetailSelected }))}
-                    data-testid={`detailed-row-${d.value}`}
-                    onClick={() => handleSingleSelectDetailed(cat.primary, d.value)}
-                  >
-                    <span className="flex-1">{d.label}</span>
-                    {isDetailSelected && (
-                      <Check className="w-3.5 h-3.5 text-primary shrink-0" aria-hidden="true" />
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          )
-        }
-
-        // Multi-select in search mode
-        const checkState = getCheckState(cat, selectedPrimaries, selectedDetaileds)
-        const detailedsToShow = showAll ? cat.detailed : (matchingDetaileds ?? [])
-
-        return (
-          <div key={cat.primary}>
-            <div className="flex items-center">
-              <button
-                type="button"
-                className={cn(treeRowVariants({ level: 'primary' }), 'flex-1')}
-                onClick={() => handlePrimaryCheckbox(cat.primary)}
-              >
-                <CheckboxIcon
-                  state={checkState}
-                  data-testid={`primary-checkbox-${cat.primary}`}
-                />
-                <span className="flex-1">{cat.primaryLabel}</span>
-              </button>
-              <button
-                type="button"
-                className="p-1 hover:bg-accent rounded"
-                data-testid={`expand-toggle-${cat.primary}`}
-                onClick={() => handleExpandToggle(cat.primary)}
-                aria-label={`Collapse ${cat.primaryLabel}`}
-              >
-                <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" />
-              </button>
-            </div>
-            {detailedsToShow.map((d) => {
-              const isChecked = selectedDetaileds.includes(d.value)
-              return (
-                <button
-                  key={d.value}
-                  type="button"
-                  className={cn(treeRowVariants({ level: 'detailed' }))}
-                  onClick={() => handleDetailedCheckbox(d.value)}
-                  data-testid={`detailed-checkbox-${d.value}`}
-                >
-                  <CheckboxIcon state={isChecked ? 'checked' : 'unchecked'} />
-                  <span className="flex-1">{d.label}</span>
-                </button>
-              )
-            })}
-          </div>
-        )
-      }
-
-      // Primary is manually expanded: use normal render
-      return renderPrimaryRow(cat)
-    })
+    return filteredCategories.map(({ cat }) => renderPrimaryRow(cat))
   }
 
   // ─── JSX ─────────────────────────────────────────────────────────────────
@@ -510,9 +414,9 @@ export function HierarchicalCategoryTreeSelect({
             type="button"
             disabled={disabled}
             aria-label={ariaLabel}
-            aria-haspopup="listbox"
+            aria-haspopup="tree"
             className={cn(
-              'flex items-center justify-center w-6 h-6 p-1 border-none rounded cursor-pointer bg-transparent transition-colors duration-150',
+              'relative inline-flex items-center justify-center w-6 h-6 p-1 border-none rounded cursor-pointer bg-transparent transition-colors duration-150',
               'disabled:opacity-50 disabled:cursor-not-allowed',
               isActive
                 ? 'text-primary bg-primary/10 hover:bg-primary/20 hover:text-primary'
@@ -531,7 +435,7 @@ export function HierarchicalCategoryTreeSelect({
         </PopoverTrigger>
       </div>
       <PopoverContent
-        role="listbox"
+        role="tree"
         aria-multiselectable={!isSingleSelect}
         className="w-64 p-0"
         align="start"
@@ -558,7 +462,7 @@ export function HierarchicalCategoryTreeSelect({
 
         {/* Tree rows */}
         <div className="overflow-y-auto max-h-60 py-1">
-          {filteredCategories.length === 0 ? (
+          {q && filteredCategories.length === 0 ? (
             <div className="px-3 py-2 text-sm text-muted-foreground">
               No matching categories
             </div>
