@@ -18,9 +18,11 @@ interface TransactionDateFilterProps {
 
 export function TransactionDateFilter(props: TransactionDateFilterProps) {
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2 min-w-0">
       <label className="text-sm font-medium text-gray-700">Date Range</label>
-      <DateRangePicker {...props} />
+      <div className="overflow-x-auto pb-1">
+        <DateRangePicker {...props} />
+      </div>
     </div>
   )
 }

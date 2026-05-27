@@ -129,10 +129,7 @@ test.describe('DataTable resize — Transactions', () => {
     const handle = merchantTh.locator('[data-testid="resize-handle"]')
     await expect(handle).toBeVisible()
 
-    // Transactions table uses virtualization — <tr> rows are position:absolute so
-    // td.getBoundingClientRect().width reflects content width, not column width.
-    // Measure the <th> header cell instead: it's in normal table flow and its
-    // getBoundingClientRect().width tracks the TanStack column sizing state live.
+    // Fix #1193: Virtual <td> cells now have inline width styles from TanStack column sizing.
     const initialWidth = await merchantTh.evaluate((el) => el.getBoundingClientRect().width)
 
     const { midWidth, finalWidth } = await dragHandleInPhases(page, handle, {
@@ -142,6 +139,17 @@ test.describe('DataTable resize — Transactions', () => {
 
     expect(midWidth).toBeGreaterThan(initialWidth + 10)
     expect(finalWidth).toBeGreaterThan(initialWidth + 40)
+
+    // Fix #1193: virtual <td> width must match <th> (merchant is column index 1).
+    // Hard assertion — if no absolute rows exist, virtualization is broken (not a skip).
+    const firstVirtualRow = page.locator('tbody tr[style*="position: absolute"]').first()
+    await expect(firstVirtualRow).toBeVisible()
+    const merchantTd = firstVirtualRow.locator('td').nth(1)
+    const tdWidth = await merchantTd.evaluate((el) => el.getBoundingClientRect().width)
+    // Tolerance: <th> BCR includes browser table-layout redistribution of surplus space;
+    // <td> BCR = exact inline style value (getSize()). Redistribution is ~3px at CI viewport.
+    // Pre-fix diffs were 100-250px so 10px still catches regressions.
+    expect(Math.abs(tdWidth - finalWidth)).toBeLessThan(10)
   })
 
   test('resized column width persists across reload', async ({ page }) => {
@@ -162,9 +170,16 @@ test.describe('DataTable resize — Transactions', () => {
     await page.mouse.move(startX + 60, startY, { steps: 10 })
     await page.mouse.up()
 
-    // Measure the <th> width — in virtualized rows (position:absolute), body <td> cells
-    // show content width rather than column width; the <th> is in normal table flow.
+    // Fix #1193: Virtual <td> width must match <th> before and after reload.
+    // Hard assertions — if no absolute rows exist, virtualization is broken (not a skip).
     const widthAfterDrag = await merchantTh.evaluate((el) => el.getBoundingClientRect().width)
+    const firstVirtualRow = page.locator('tbody tr[style*="position: absolute"]').first()
+    await expect(firstVirtualRow).toBeVisible()
+    const merchantTdBeforeReload = firstVirtualRow.locator('td').nth(1)
+    const tdWidthBefore = await merchantTdBeforeReload.evaluate((el) => el.getBoundingClientRect().width)
+    // Tolerance: <th> BCR includes browser table-layout redistribution (~3px at CI viewport).
+    // Pre-fix diffs were 100-250px so 10px still catches regressions.
+    expect(Math.abs(tdWidthBefore - widthAfterDrag)).toBeLessThan(10)
 
     // Reload and re-mock
     await mockDependencies(page)
@@ -176,6 +191,14 @@ test.describe('DataTable resize — Transactions', () => {
       .evaluate((el) => el.getBoundingClientRect().width)
 
     expect(Math.abs(widthAfterReload - widthAfterDrag)).toBeLessThan(5)
+
+    const firstVirtualRowAfterReload = page.locator('tbody tr[style*="position: absolute"]').first()
+    await expect(firstVirtualRowAfterReload).toBeVisible()
+    const merchantTdAfterReload = firstVirtualRowAfterReload.locator('td').nth(1)
+    const tdWidthAfter = await merchantTdAfterReload.evaluate((el) => el.getBoundingClientRect().width)
+    // Tolerance: <th> BCR includes browser table-layout redistribution (~3px at CI viewport).
+    // Pre-fix diffs were 100-250px so 10px still catches regressions.
+    expect(Math.abs(tdWidthAfter - widthAfterReload)).toBeLessThan(10)
   })
 
   test('"Reset column widths" restores defaultSize', async ({ page }) => {
@@ -194,8 +217,7 @@ test.describe('DataTable resize — Transactions', () => {
     await page.mouse.move(startX + 60, startY, { steps: 10 })
     await page.mouse.up()
 
-    // Measure the <th> width — virtualized body cells (position:absolute) show content
-    // width, not column width. The <th> is in normal flow and reflects the column size.
+    // Fix #1193: Virtual <td> widths from column sizing state must persist
     const widthAfterDrag = await merchantTh.evaluate((el) => el.getBoundingClientRect().width)
 
     // Open Columns menu
@@ -208,6 +230,15 @@ test.describe('DataTable resize — Transactions', () => {
     await page.waitForTimeout(100)
     const widthAfterReset = await merchantTh.evaluate((el) => el.getBoundingClientRect().width)
     expect(widthAfterReset).toBeLessThan(widthAfterDrag - 40)
+
+    const firstVirtualRow = page.locator('tbody tr[style*="position: absolute"]').first()
+    await expect(firstVirtualRow).toBeVisible()
+    const merchantTd = firstVirtualRow.locator('td').nth(1)
+    const tdWidthAfterReset = await merchantTd.evaluate((el) => el.getBoundingClientRect().width)
+    // Tolerance: after reset all columns return to defaultSize; table surplus is larger so
+    // browser redistributes ~21px to each <th>. <td> BCR = exact inline style. 30px covers this.
+    // Pre-fix diffs were 100-250px so 30px still catches regressions.
+    expect(Math.abs(tdWidthAfterReset - widthAfterReset)).toBeLessThan(30)
   })
 
   test('amount columns show semantic red/green colors', async ({ page }) => {

@@ -75,19 +75,14 @@ function FilterPillsSection({
   )
 }
 
-// Custom hook for detecting mobile viewport
 function useIsMobile(breakpoint = 640) {
   const [isMobile, setIsMobile] = useState(
-    typeof window !== 'undefined' ? window.innerWidth < breakpoint : false
+    typeof window !== 'undefined' && window.innerWidth < breakpoint
   )
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-
-    const handleResize = () => {
-      setIsMobile(window.innerWidth < breakpoint)
-    }
-
+    const handleResize = () => setIsMobile(window.innerWidth < breakpoint)
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [breakpoint])
@@ -99,15 +94,10 @@ export function TransactionFilterPanel({
   filters,
   datePreset,
   statusFilter,
-  // These props are kept for API compatibility but no longer used
-  // since Account/Category/Amount filters moved inline to table headers
-  activeFilterCount: _activeFilterCount,
-  hasActiveFilters: _hasActiveFilters,
   pendingCount,
   onDatePresetChange,
   onCustomDateChange,
   onStatusFilterChange,
-  onClearAllFilters: _onClearAllFilters,
   disabled,
 }: TransactionFilterPanelProps) {
   const [isExpanded, setIsExpanded] = useState(false)
@@ -267,7 +257,7 @@ export function TransactionFilterPanel({
       {/* Expanded filter controls */}
       {isExpanded && (
         <div className="px-4 pb-4 border-t border-border/50">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
+          <div className="flex flex-col gap-4 pt-4 lg:flex-row lg:items-start">
             {/* Date Filter */}
             <TransactionDateFilter
               preset={datePreset}
