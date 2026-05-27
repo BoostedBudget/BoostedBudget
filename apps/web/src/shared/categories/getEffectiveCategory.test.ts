@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { getEffectiveCategory, getEffectiveCategoryLabel } from './getEffectiveCategory'
+import { getEffectiveCategory, getEffectiveCategoryLabel, getEffectiveDetailedCategory } from './getEffectiveCategory'
 import type { Transaction } from '@/features/transactions/types'
 
 const baseTransaction: Transaction = {
@@ -139,6 +139,63 @@ describe('getEffectiveCategory', () => {
       pfc_primary_display: undefined,
       pfc_detailed_display: undefined,
     })
+  })
+})
+
+describe('getEffectiveDetailedCategory', () => {
+  it('returns pfc_detailed_override when override_kind is pfc with pfc_detailed_override', () => {
+    const tx: Transaction = {
+      ...baseTransaction,
+      category_override_kind: 'pfc',
+      pfc_primary_override: 'FOOD_AND_DRINK',
+      pfc_detailed_override: 'FOOD_AND_DRINK_RESTAURANTS',
+    }
+    expect(getEffectiveDetailedCategory(tx)).toBe('FOOD_AND_DRINK_RESTAURANTS')
+  })
+
+  it('returns null when override_kind is pfc but pfc_detailed_override is absent', () => {
+    const tx: Transaction = {
+      ...baseTransaction,
+      category_override_kind: 'pfc',
+      pfc_primary_override: 'TRANSPORTATION',
+    }
+    expect(getEffectiveDetailedCategory(tx)).toBeNull()
+  })
+
+  it('falls through to pfc_detailed when override_kind is pfc but pfc_primary_override is absent', () => {
+    // Incomplete override (kind set but no primary override) — mirrors getEffectiveCategory fallthrough
+    const tx: Transaction = {
+      ...baseTransaction,
+      category_override_kind: 'pfc',
+      pfc_primary_override: null,
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: 'FOOD_AND_DRINK_GROCERIES',
+    }
+    expect(getEffectiveDetailedCategory(tx)).toBe('FOOD_AND_DRINK_GROCERIES')
+  })
+
+  it('returns pfc_detailed when pfc_primary is set and no override', () => {
+    const tx: Transaction = {
+      ...baseTransaction,
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: 'FOOD_AND_DRINK_GROCERIES',
+    }
+    expect(getEffectiveDetailedCategory(tx)).toBe('FOOD_AND_DRINK_GROCERIES')
+  })
+
+  it('returns null when custom category override is set', () => {
+    const tx: Transaction = {
+      ...baseTransaction,
+      category_override_kind: 'custom',
+      custom_category_override_id: 'custom-uuid',
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: 'FOOD_AND_DRINK_GROCERIES',
+    }
+    expect(getEffectiveDetailedCategory(tx)).toBeNull()
+  })
+
+  it('returns null when no category data present', () => {
+    expect(getEffectiveDetailedCategory(baseTransaction)).toBeNull()
   })
 })
 
