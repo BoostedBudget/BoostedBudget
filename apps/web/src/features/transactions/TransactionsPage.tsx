@@ -307,9 +307,17 @@ export function TransactionsPage() {
               accountFilter={filters.account_ids}
               onAccountFilterChange={handleAccountFilterChange}
               selectedPrimaries={filters.pfc_primaries}
-              onPrimariesChange={(v) => setFilter('pfc_primaries', v.length > 0 ? v : undefined)}
+              onPrimariesChange={(v) => {
+                const isApplied = v.length > 0
+                setFilter('pfc_primaries', isApplied ? v : undefined)
+                trackEvent(isApplied ? ANALYTICS_EVENTS.CATEGORY_FILTER_APPLIED : ANALYTICS_EVENTS.CATEGORY_FILTER_CLEARED)
+              }}
               selectedDetaileds={filters.pfc_detaileds}
-              onDetailedsChange={(v) => setFilter('pfc_detaileds', v.length > 0 ? v : undefined)}
+              onDetailedsChange={(v) => {
+                const isApplied = v.length > 0
+                setFilter('pfc_detaileds', isApplied ? v : undefined)
+                trackEvent(isApplied ? ANALYTICS_EVENTS.CATEGORY_FILTER_APPLIED : ANALYTICS_EVENTS.CATEGORY_FILTER_CLEARED)
+              }}
               amountRange={currentAmountRange}
               onAmountRangeChange={handleAmountRangeChange}
               onScrollEnd={fetchNextPage}
