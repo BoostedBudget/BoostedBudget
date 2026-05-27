@@ -2,6 +2,7 @@
  * BudgetCategoryForm
  * Issue #497: Budget Category Manager + Match Config UI
  * Issue #1073: Updated for PFC v2 canonical schema
+ * Issue #1200: Replace flat category select with hierarchical picker
  *
  * Modal dialog for creating and editing budget categories with match configuration.
  */
@@ -24,6 +25,8 @@ import type { UserTag } from '@/features/tags/types';
 import { CategoryMatchConfig } from './CategoryMatchConfig';
 import { usePreviewCategories } from '../../hooks/usePreviewCategories';
 import { formatPFCPrimary, isPFCPrimary } from '@/shared/categories/formatPfc';
+import { getDetailedLabel } from '@/shared/categories/pfcOptions';
+import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect';
 
 export interface BudgetCategoryFormProps {
   isOpen: boolean;
@@ -31,7 +34,9 @@ export interface BudgetCategoryFormProps {
   onSubmit: (data: CreateBudgetCategoryRequest | UpdateBudgetCategoryRequest) => Promise<void>;
   mode: 'create' | 'edit';
   initialData?: BudgetCategory;
-  /** Available Plaid categories for selection (string[][] for backward compat) */
+  /** Available categories for selection (string[][] for backward compat).
+   *  PFC entries (where isPFCPrimary(cat[0]) is true) are ignored — the tree
+   *  picker uses its own built-in data. Non-PFC entries appear in the custom select. */
   availableCategories: string[][];
   availableTags: UserTag[];
   existingCategories?: string[][];
@@ -85,6 +90,13 @@ export function BudgetCategoryForm({
   const [apiError, setApiError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Split availableCategories into PFC (ignored by the picker, but used for counting)
+  // and custom (shown in the flat select).
+  const customCategories = useMemo(
+    () => availableCategories.filter((cat) => !isPFCPrimary(cat[0])),
+    [availableCategories]
+  );
+
   useEffect(() => {
     if (isOpen) {
       if (mode === 'edit' && initialData) {
@@ -105,21 +117,19 @@ export function BudgetCategoryForm({
     }
   }, [isOpen, mode, initialData]);
 
-  // Build dropdown options from string[][] availableCategories.
-  // PFC primaries are returned as enum values (e.g. "FOOD_AND_DRINK") — format them
-  // for display. Custom category names are plain strings and pass through unchanged.
-  const categoryOptions = useMemo(() => {
-    const formatLabel = (s: string) => isPFCPrimary(s) ? formatPFCPrimary(s) : s
-    return availableCategories.map((cat) => {
-      const pfc_primary = cat[0] || '';
-      const pfc_detailed = cat[1] || '';
-      const primaryLabel = formatLabel(pfc_primary);
-      const detailedLabel = pfc_detailed ? formatLabel(pfc_detailed) : '';
+  // Build dropdown options for the custom category select.
+  const customCategoryOptions = useMemo(() => {
+    const formatLabel = (s: string) => isPFCPrimary(s) ? formatPFCPrimary(s) : s;
+    return customCategories.map((cat) => {
+      const primary = cat[0] || '';
+      const detailed = cat[1] || '';
+      const primaryLabel = formatLabel(primary);
+      const detailedLabel = detailed ? formatLabel(detailed) : '';
       const label = detailedLabel ? `${primaryLabel} > ${detailedLabel}` : primaryLabel;
-      const value = pfc_detailed ? `${pfc_primary}|${pfc_detailed}` : pfc_primary;
-      return { value, label, pfc_primary, pfc_detailed };
+      const value = detailed ? `${primary}|${detailed}` : primary;
+      return { value, label, primary, detailed };
     });
-  }, [availableCategories]);
+  }, [customCategories]);
 
   const showTagPicker = useMemo(() => {
     return formData.match_logic !== 'category_only';
@@ -160,20 +170,60 @@ export function BudgetCategoryForm({
     }).format(amount);
   };
 
-  const handleCategoryChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
-      const selectedValue = e.target.value;
-      const selectedOption = categoryOptions.find((opt) => opt.value === selectedValue);
+  const handleCategoryKindChange = useCallback(
+    (kind: 'pfc' | 'custom') => {
+      setFormData((prev) => {
+        if (kind === 'pfc') {
+          // Clear custom fields, keep pfc fields
+          return { ...prev, category_kind: kind, custom_category_id: '' };
+        } else {
+          // Clear pfc fields, keep custom fields
+          return { ...prev, category_kind: kind, pfc_primary: '', pfc_detailed: '' };
+        }
+      });
+      if (errors.category) {
+        setErrors((prev) => ({ ...prev, category: undefined }));
+      }
+    },
+    [errors.category]
+  );
+
+  // PFC single-select value for the tree picker
+  const pfcSingleSelectValue = useMemo(
+    () =>
+      formData.pfc_primary
+        ? { primary: formData.pfc_primary, detailed: formData.pfc_detailed || undefined }
+        : null,
+    [formData.pfc_primary, formData.pfc_detailed]
+  );
+
+  const handlePFCSingleSelectChange = useCallback(
+    (value: { primary: string; detailed?: string } | null) => {
       setFormData((prev) => ({
         ...prev,
-        pfc_primary: selectedOption ? selectedOption.pfc_primary : '',
-        pfc_detailed: selectedOption ? selectedOption.pfc_detailed : '',
+        pfc_primary: value?.primary ?? '',
+        pfc_detailed: value?.detailed ?? '',
       }));
       if (errors.category) {
         setErrors((prev) => ({ ...prev, category: undefined }));
       }
     },
-    [categoryOptions, errors.category]
+    [errors.category]
+  );
+
+  const handleCustomCategoryChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const selectedValue = e.target.value;
+      const selectedOption = customCategoryOptions.find((opt) => opt.value === selectedValue);
+      setFormData((prev) => ({
+        ...prev,
+        custom_category_id: selectedOption ? selectedOption.value : '',
+      }));
+      if (errors.category) {
+        setErrors((prev) => ({ ...prev, category: undefined }));
+      }
+    },
+    [customCategoryOptions, errors.category]
   );
 
   const handleAmountChange = useCallback(
@@ -286,10 +336,11 @@ export function BudgetCategoryForm({
     'w-full py-2.5 px-3 text-sm border border-input rounded-lg bg-card text-foreground transition-[border-color,box-shadow] duration-150 focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-ring/15 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed';
   const inputError = 'border-destructive focus:ring-destructive/15';
 
-  // Current selected value for the dropdown
-  const selectedCategoryValue = formData.pfc_detailed
-    ? `${formData.pfc_primary}|${formData.pfc_detailed}`
-    : formData.pfc_primary;
+  const isEditMode = mode === 'edit';
+
+  // PFC primary display label
+  const pfcPrimaryLabel = formData.pfc_primary ? formatPFCPrimary(formData.pfc_primary) : '';
+  const pfcDetailedLabel = formData.pfc_detailed ? (getDetailedLabel(formData.pfc_detailed) ?? formData.pfc_detailed) : '';
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -315,26 +366,84 @@ export function BudgetCategoryForm({
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Category Field */}
           <div>
-            <label
-              htmlFor="category"
-              className="block text-sm font-medium text-foreground"
-            >
+            <label className="block text-sm font-medium text-foreground mb-2">
               Category
             </label>
-            <select
-              id="category"
-              value={selectedCategoryValue}
-              onChange={handleCategoryChange}
-              disabled={mode === 'edit'}
-              className={cn(inputBase, errors.category && inputError)}
-            >
-              <option value="">Select a category...</option>
-              {categoryOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+
+            {/* Category kind toggle */}
+            <div className="flex rounded-md border border-border overflow-hidden mb-3">
+              <button
+                type="button"
+                onClick={() => handleCategoryKindChange('pfc')}
+                className={cn(
+                  'flex-1 px-3 py-1.5 text-sm font-medium transition-colors',
+                  formData.category_kind === 'pfc'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                )}
+                disabled={isEditMode}
+              >
+                Plaid Categories
+              </button>
+              {customCategories.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handleCategoryKindChange('custom')}
+                  className={cn(
+                    'flex-1 px-3 py-1.5 text-sm font-medium transition-colors border-l border-border',
+                    formData.category_kind === 'custom'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                  )}
+                  disabled={isEditMode}
+                >
+                  Custom Categories
+                </button>
+              )}
+            </div>
+
+            {/* PFC section: hierarchical tree picker */}
+            {formData.category_kind === 'pfc' && (
+              <div>
+                <HierarchicalCategoryTreeSelect
+                  singleSelectValue={pfcSingleSelectValue}
+                  onSingleSelectChange={handlePFCSingleSelectChange}
+                  disabled={isEditMode}
+                  aria-label="Select PFC category"
+                />
+                {pfcSingleSelectValue && (
+                  <div className="mt-1.5 flex items-center gap-1.5 text-sm text-foreground">
+                    <span>{pfcPrimaryLabel}</span>
+                    {pfcDetailedLabel && (
+                      <>
+                        <span className="text-muted-foreground">›</span>
+                        <span>{pfcDetailedLabel}</span>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Custom section: flat select */}
+            {formData.category_kind === 'custom' && (
+              <select
+                id="category"
+                value={formData.custom_category_id}
+                onChange={handleCustomCategoryChange}
+                disabled={isEditMode}
+                aria-label="Category"
+                className={cn(inputBase, errors.category && inputError)}
+              >
+                <option value="">Select a category...</option>
+                {customCategoryOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            )}
+
             {errors.category && (
               <p className="mt-1 text-sm text-destructive">
                 {errors.category}

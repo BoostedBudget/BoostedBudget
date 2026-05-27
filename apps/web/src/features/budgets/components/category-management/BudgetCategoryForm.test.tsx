@@ -20,11 +20,19 @@ describe('BudgetCategoryForm', () => {
   const mockOnClose = mock(() => {})
   const mockOnSubmit = mock(() => Promise.resolve())
 
+  // These are non-PFC-enum strings, so they all fall into "custom" category path
   const mockAvailableCategories: string[][] = [
     ['Food and Drink', 'Restaurants'],
     ['Food and Drink', 'Groceries'],
     ['Transportation', 'Gas'],
     ['Shopping', 'Clothing'],
+  ]
+
+  // PFC enum-style categories for testing the PFC path
+  const mockPFCAvailableCategories: string[][] = [
+    ['FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANT'],
+    ['FOOD_AND_DRINK', 'FOOD_AND_DRINK_GROCERIES'],
+    ['TRANSPORTATION', 'TRANSPORTATION_GAS'],
   ]
 
   const mockAvailableTags: UserTag[] = [
@@ -75,6 +83,12 @@ describe('BudgetCategoryForm', () => {
     })
   })
 
+  /** Helper: switch the kind toggle to 'custom' */
+  async function switchToCustom() {
+    const customBtn = screen.getByRole('button', { name: /custom categories/i })
+    fireEvent.click(customBtn)
+  }
+
   describe('Create Mode', () => {
     it('should render with empty fields in create mode', () => {
       render(
@@ -93,7 +107,7 @@ describe('BudgetCategoryForm', () => {
       expect(screen.getByText(/add.*category/i)).toBeInTheDocument()
     })
 
-    it('should show category selector enabled in create mode', () => {
+    it('should show category kind toggle buttons in create mode', () => {
       render(
         <BudgetCategoryForm
           isOpen={true}
@@ -105,11 +119,89 @@ describe('BudgetCategoryForm', () => {
         />
       )
 
+      expect(screen.getByRole('button', { name: /plaid categories/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /custom categories/i })).toBeInTheDocument()
+    })
+
+    it('should show HierarchicalCategoryTreeSelect when kind is pfc', () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      // The tree select trigger button is rendered (aria-label from the component)
+      expect(screen.getByRole('button', { name: /select pfc category/i })).toBeInTheDocument()
+      // The flat select should NOT be visible
+      expect(screen.queryByRole('combobox', { name: /^category$/i })).not.toBeInTheDocument()
+    })
+
+    it('should show flat select when kind is custom', async () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      await switchToCustom()
+
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
       expect(categorySelect).not.toBeDisabled()
     })
 
-    it('should require category selection before submit', async () => {
+    it('should NOT show Custom Categories button when no custom categories available', () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockPFCAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      expect(screen.queryByRole('button', { name: /custom categories/i })).not.toBeInTheDocument()
+    })
+
+    it('should clear pfc fields when switching to custom', async () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      // Switch to custom and select
+      await switchToCustom()
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+      fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
+
+      // Switch back to pfc - custom_category_id should be cleared
+      const pfcBtn = screen.getByRole('button', { name: /plaid categories/i })
+      fireEvent.click(pfcBtn)
+
+      // Tree select is shown again
+      expect(screen.getByRole('button', { name: /select pfc category/i })).toBeInTheDocument()
+      // Flat select is gone
+      expect(screen.queryByRole('combobox', { name: /^category$/i })).not.toBeInTheDocument()
+    })
+
+    it('should require category selection before submit (pfc mode)', async () => {
       render(
         <BudgetCategoryForm
           isOpen={true}
@@ -131,7 +223,7 @@ describe('BudgetCategoryForm', () => {
       expect(mockOnSubmit).not.toHaveBeenCalled()
     })
 
-    it('should call onSubmit with CreateBudgetCategoryRequest', async () => {
+    it('should require category selection before submit (custom mode)', async () => {
       render(
         <BudgetCategoryForm
           isOpen={true}
@@ -142,6 +234,32 @@ describe('BudgetCategoryForm', () => {
           availableTags={mockAvailableTags}
         />
       )
+
+      await switchToCustom()
+
+      const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
+      fireEvent.change(amountInput, { target: { value: '100' } })
+
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      expect(await screen.findByText(/category.*required/i)).toBeInTheDocument()
+      expect(mockOnSubmit).not.toHaveBeenCalled()
+    })
+
+    it('should call onSubmit with CreateBudgetCategoryRequest (custom mode)', async () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      await switchToCustom()
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
       fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
@@ -156,9 +274,7 @@ describe('BudgetCategoryForm', () => {
         expect(mockOnSubmit).toHaveBeenCalledTimes(1)
         expect(mockOnSubmit).toHaveBeenCalledWith(
           expect.objectContaining({
-            category_kind: 'pfc',
-            pfc_primary: 'Food and Drink',
-            pfc_detailed: 'Restaurants',
+            category_kind: 'custom',
             allocated_amount: 500,
             match_logic: 'category_only',
           })
@@ -188,8 +304,55 @@ describe('BudgetCategoryForm', () => {
       expect(amountInput).toHaveValue(500)
     })
 
-    it('should disable category selector in edit mode', () => {
+    it('should disable category kind toggle buttons in edit mode', () => {
       const category = createMockCategory()
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="edit"
+          initialData={category}
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      const pfcBtn = screen.getByRole('button', { name: /plaid categories/i })
+      expect(pfcBtn).toBeDisabled()
+
+      // Custom Categories button only shown when custom categories exist
+      const customBtn = screen.queryByRole('button', { name: /custom categories/i })
+      if (customBtn) {
+        expect(customBtn).toBeDisabled()
+      }
+    })
+
+    it('should show tree select disabled in edit mode when kind is pfc', () => {
+      const category = createMockCategory({ category_kind: 'pfc' })
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="edit"
+          initialData={category}
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      const treeSelectBtn = screen.getByRole('button', { name: /select pfc category/i })
+      expect(treeSelectBtn).toBeDisabled()
+    })
+
+    it('should show flat select disabled in edit mode when kind is custom', () => {
+      const category = createMockCategory({
+        category_kind: 'custom',
+        pfc_primary: '',
+        pfc_detailed: '',
+        custom_category_id: 'Food and Drink|Restaurants',
+      })
       render(
         <BudgetCategoryForm
           isOpen={true}
@@ -250,6 +413,8 @@ describe('BudgetCategoryForm', () => {
         />
       )
 
+      await switchToCustom()
+
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
       await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
 
@@ -302,6 +467,8 @@ describe('BudgetCategoryForm', () => {
         />
       )
 
+      await switchToCustom()
+
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
       fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
 
@@ -349,7 +516,8 @@ describe('BudgetCategoryForm', () => {
   })
 
   describe('Submit Behavior', () => {
-    const fillFormBasic = () => {
+    const fillFormBasic = async () => {
+      await switchToCustom()
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
       fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
 
@@ -377,7 +545,7 @@ describe('BudgetCategoryForm', () => {
         />
       )
 
-      fillFormBasic()
+      await fillFormBasic()
 
       const submitButton = screen.getByRole('button', { name: /save|add|create/i })
 
@@ -407,7 +575,7 @@ describe('BudgetCategoryForm', () => {
         />
       )
 
-      fillFormBasic()
+      await fillFormBasic()
 
       const form = document.querySelector('form')
       fireEvent.submit(form!)
@@ -467,6 +635,8 @@ describe('BudgetCategoryForm', () => {
         />
       )
 
+      await switchToCustom()
+
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
       fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
 
@@ -494,6 +664,8 @@ describe('BudgetCategoryForm', () => {
           totalAllocatedExcludingCurrent={900}
         />
       )
+
+      await switchToCustom()
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
       fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
@@ -528,6 +700,8 @@ describe('BudgetCategoryForm', () => {
         />
       )
 
+      await switchToCustom()
+
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
       await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
 
@@ -560,6 +734,8 @@ describe('BudgetCategoryForm', () => {
         />
       )
 
+      await switchToCustom()
+
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
       await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
 
@@ -588,6 +764,8 @@ describe('BudgetCategoryForm', () => {
           budgetEndDate="2024-01-31"
         />
       )
+
+      await switchToCustom()
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
       await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
@@ -639,6 +817,8 @@ describe('BudgetCategoryForm', () => {
         />
       )
 
+      await switchToCustom()
+
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
       await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
 
@@ -665,6 +845,8 @@ describe('BudgetCategoryForm', () => {
           budgetEndDate="2024-01-31"
         />
       )
+
+      await switchToCustom()
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
       await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
