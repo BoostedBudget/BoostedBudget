@@ -36,17 +36,22 @@ export type CustomCategoryMap = Map<string, { name: string; parent_pfc_primary?:
  * - Groups sorted by their first item's created_at ASC
  * - Standalone custom categories appended after PFC groups
  */
+const sortByCreatedAt = (a: BudgetCategory, b: BudgetCategory) =>
+  a.created_at.localeCompare(b.created_at)
+
+const getFirstItem = (group: BudgetCategoryGroup) =>
+  group.group ?? group.children[0]
+
 export function groupBudgetCategoriesByPrimary(
   categories: BudgetCategory[],
   customCategoryMap?: CustomCategoryMap
 ): BudgetCategoryGroup[] {
   if (categories.length === 0) return []
 
-  // Separate PFC and custom categories
   const pfcCategories = categories.filter(c => c.category_kind === 'pfc')
   const customCategories = categories.filter(c => c.category_kind !== 'pfc')
 
-  // Build map of pfc_primary → primary-only budget (the parent)
+  // Map pfc_primary → primary-only budget (parent)
   const primaryMap = new Map<string, BudgetCategory>()
   for (const cat of pfcCategories) {
     if (cat.pfc_primary && !cat.pfc_detailed) {
@@ -54,13 +59,12 @@ export function groupBudgetCategoriesByPrimary(
     }
   }
 
-  // Build map of pfc_primary → children (detailed budgets)
+  // Map pfc_primary → children, and collect orphans
   const childrenMap = new Map<string, BudgetCategory[]>()
   const orphans: BudgetCategory[] = []
 
   for (const cat of pfcCategories) {
     if (!cat.pfc_detailed) continue
-
     if (cat.pfc_primary && primaryMap.has(cat.pfc_primary)) {
       const children = childrenMap.get(cat.pfc_primary) ?? []
       children.push(cat)
@@ -71,39 +75,30 @@ export function groupBudgetCategoriesByPrimary(
   }
 
   // Build PFC groups
-  const pfcGroups: BudgetCategoryGroup[] = []
+  const pfcGroups: BudgetCategoryGroup[] = Array.from(primaryMap, ([primary, parent]) => ({
+    group: parent,
+    children: (childrenMap.get(primary) ?? []).sort(sortByCreatedAt),
+  }))
 
-  // Groups for primaries (with or without children)
-  for (const [primary, parent] of primaryMap) {
-    const children = (childrenMap.get(primary) ?? []).sort(
-      (a, b) => a.created_at.localeCompare(b.created_at)
-    )
-    pfcGroups.push({ group: parent, children })
-  }
-
-  // Orphan groups (detailed with no parent)
+  // Add orphan groups
   for (const orphan of orphans) {
     pfcGroups.push({ group: orphan, children: [] })
   }
 
-  // Sort PFC groups by their first item's created_at ASC
+  // Sort groups by first item's created_at
   pfcGroups.sort((a, b) => {
-    const aFirst = a.group ?? a.children[0]
-    const bFirst = b.group ?? b.children[0]
-    if (!aFirst || !bFirst) return 0
-    return aFirst.created_at.localeCompare(bFirst.created_at)
+    const aFirst = getFirstItem(a)
+    const bFirst = getFirstItem(b)
+    return aFirst && bFirst ? sortByCreatedAt(aFirst, bFirst) : 0
   })
 
-  // When customCategoryMap is provided, nest custom categories under their PFC parent group.
-  // Otherwise all custom categories are standalone.
-  const standaloneCustomCategories: BudgetCategory[] = []
-
+  // Nest custom categories under PFC parents when possible
+  const standaloneCustom: BudgetCategory[] = []
   for (const cat of customCategories) {
     let nested = false
     if (customCategoryMap && cat.custom_category_id) {
       const meta = customCategoryMap.get(cat.custom_category_id)
       if (meta?.parent_pfc_primary) {
-        // Find the PFC group for this primary
         const parentGroup = pfcGroups.find(g => g.group?.pfc_primary === meta.parent_pfc_primary)
         if (parentGroup) {
           parentGroup.children.push(cat)
@@ -112,20 +107,19 @@ export function groupBudgetCategoriesByPrimary(
       }
     }
     if (!nested) {
-      standaloneCustomCategories.push(cat)
+      standaloneCustom.push(cat)
     }
   }
 
-  // Sort children within each group by created_at ASC (re-sort after custom children may have been added)
+  // Re-sort children after adding custom categories
   for (const group of pfcGroups) {
-    group.children.sort((a, b) => a.created_at.localeCompare(b.created_at))
+    group.children.sort(sortByCreatedAt)
   }
 
-  // Standalone custom category groups, sorted by created_at ASC
-  const customGroups: BudgetCategoryGroup[] = standaloneCustomCategories
-    .sort((a, b) => a.created_at.localeCompare(b.created_at))
+  // Add standalone custom categories as groups
+  const customGroups = standaloneCustom
+    .sort(sortByCreatedAt)
     .map(cat => ({ group: cat, children: [] }))
 
-  // Custom categories appended after PFC groups
   return [...pfcGroups, ...customGroups]
 }
