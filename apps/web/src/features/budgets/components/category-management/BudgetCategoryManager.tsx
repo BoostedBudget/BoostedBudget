@@ -1,9 +1,11 @@
 /**
  * BudgetCategoryManager
  * Issue #497: Budget Category Manager + Match Config UI
+ * Issue #1200: Multi-level category hierarchy — grouped visual layout
  *
  * Container component for managing budget categories with CRUD operations.
  * Includes add/edit form dialog, delete confirmation, and allocation breakdown.
+ * Categories are rendered in a primary→children hierarchy using groupBudgetCategoriesByPrimary.
  */
 
 import { useState, useCallback, useMemo, useRef } from 'react';
@@ -19,6 +21,7 @@ import type { UserTag } from '@/features/tags/types';
 import { BudgetCategoryCard } from './BudgetCategoryCard';
 import { BudgetCategoryForm } from './BudgetCategoryForm';
 import { AllocationBreakdown } from './AllocationBreakdown';
+import { groupBudgetCategoriesByPrimary } from '../../utils/groupBudgetCategoriesByPrimary';
 
 export interface BudgetCategoryManagerProps {
   /** Budget ID for API calls */
@@ -75,7 +78,7 @@ export function BudgetCategoryManager({
 
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Refs for keyboard navigation (Phase 4 Accessibility)
+  // Refs for keyboard navigation — indexed by flat order position
   const categoryRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   // Calculate unallocated funds
@@ -91,6 +94,18 @@ export function BudgetCategoryManager({
       (cat) => !usedLabels.has(cat.join(' > '))
     );
   }, [availableCategories, categories]);
+
+  // Grouped hierarchy for visual layout
+  const groups = useMemo(
+    () => groupBudgetCategoriesByPrimary(categories),
+    [categories]
+  );
+
+  // Flat order of all categories in render order — for keyboard navigation
+  const flatOrder = useMemo(
+    () => groups.flatMap(({ group, children }) => (group ? [group, ...children] : children)),
+    [groups]
+  );
 
   // Handlers for form dialog
   const handleOpenAddForm = useCallback(() => {
@@ -156,13 +171,15 @@ export function BudgetCategoryManager({
     }
   }, [deleteDialog.category, onDeleteCategory, handleCloseDeleteDialog]);
 
-  // Keyboard navigation handler (Phase 4 Accessibility)
+  // Keyboard navigation handler — uses flat index into flatOrder
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent, index: number, category: BudgetCategory) => {
+    (e: React.KeyboardEvent, category: BudgetCategory) => {
+      const index = flatOrder.findIndex(c => c.id === category.id);
+      if (index === -1) return;
       switch (e.key) {
         case 'ArrowDown':
           e.preventDefault();
-          if (index < categories.length - 1) {
+          if (index < flatOrder.length - 1) {
             categoryRefs.current[index + 1]?.focus();
           }
           break;
@@ -183,7 +200,7 @@ export function BudgetCategoryManager({
           break;
       }
     },
-    [categories.length, handleOpenEditForm, handleOpenDeleteDialog]
+    [flatOrder, handleOpenEditForm, handleOpenDeleteDialog]
   );
 
   const hasCategories = categories.length > 0;
@@ -197,6 +214,36 @@ export function BudgetCategoryManager({
       .filter((c) => c.id !== formDialog.category!.id)
       .reduce((sum, c) => sum + c.allocated_amount, 0)
   }, [formDialog.mode, formDialog.category, categories])
+
+  /**
+   * Renders a single category listitem with keyboard navigation wired up.
+   * flatIndex is the position in flatOrder for ref assignment.
+   */
+  const renderCategoryItem = useCallback(
+    (category: BudgetCategory, variant: 'standalone' | 'parent' | 'child') => {
+      const flatIndex = flatOrder.findIndex(c => c.id === category.id);
+      return (
+        <div
+          key={category.id}
+          role="listitem"
+          tabIndex={0}
+          onKeyDown={(e) => handleKeyDown(e, category)}
+          ref={(el) => {
+            categoryRefs.current[flatIndex] = el;
+          }}
+        >
+          <BudgetCategoryCard
+            category={category}
+            variant={variant}
+            onEdit={() => handleOpenEditForm(category)}
+            onDelete={() => handleOpenDeleteDialog(category)}
+            disabled={disabled}
+          />
+        </div>
+      );
+    },
+    [flatOrder, handleKeyDown, handleOpenEditForm, handleOpenDeleteDialog, disabled]
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -225,25 +272,26 @@ export function BudgetCategoryManager({
 
       {/* Categories list or empty state */}
       {hasCategories ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3" role="list">
-          {categories.map((category, index) => (
-            <div
-              key={category.id}
-              role="listitem"
-              tabIndex={0}
-              onKeyDown={(e) => handleKeyDown(e, index, category)}
-              ref={(el) => {
-                categoryRefs.current[index] = el;
-              }}
-            >
-              <BudgetCategoryCard
-                category={category}
-                onEdit={() => handleOpenEditForm(category)}
-                onDelete={() => handleOpenDeleteDialog(category)}
-                disabled={disabled}
-              />
-            </div>
-          ))}
+        <div className="flex flex-col gap-4" role="list">
+          {groups.map(({ group, children }) => {
+            const hasChildren = children.length > 0;
+            const groupKey = group?.id ?? `orphan-${children[0]?.id}`;
+
+            if (!group) {
+              // Orphan detailed categories — render each as standalone
+              return children.map(child =>
+                renderCategoryItem(child, 'standalone')
+              );
+            }
+
+            const parentVariant = hasChildren ? 'parent' : 'standalone';
+            return (
+              <div key={groupKey}>
+                {renderCategoryItem(group, parentVariant)}
+                {children.map(child => renderCategoryItem(child, 'child'))}
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div className="p-8 text-center bg-muted border border-dashed border-border rounded-lg">

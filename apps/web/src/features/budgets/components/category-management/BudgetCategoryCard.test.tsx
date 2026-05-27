@@ -183,6 +183,91 @@ describe('BudgetCategoryCard', () => {
     })
   })
 
+  describe('Variant prop — visual hierarchy', () => {
+    it('defaults to standalone variant when no variant is provided', () => {
+      const category = createMockCategory()
+      render(<BudgetCategoryCard category={category} />)
+      const card = screen.getByRole('article')
+      // standalone: full rounded corners, no visual connection
+      expect(card.className).toContain('rounded-lg')
+      expect(card.className).not.toContain('rounded-b-none')
+      expect(card.className).not.toContain('rounded-t-none')
+    })
+
+    it('parent variant removes bottom rounding and bottom border to connect to children', () => {
+      const category = createMockCategory()
+      render(<BudgetCategoryCard category={category} variant="parent" />)
+      const card = screen.getByRole('article')
+      expect(card.className).toContain('rounded-b-none')
+      expect(card.className).toContain('border-b-0')
+    })
+
+    it('child variant applies left indent, top-none rounding, and left border accent', () => {
+      const category = createMockCategory({
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+        pfc_primary_display: 'Food & Drink',
+        pfc_detailed_display: 'Food & Drink › Restaurants',
+      })
+      render(<BudgetCategoryCard category={category} variant="child" />)
+      const card = screen.getByRole('article')
+      expect(card.className).toContain('ml-6')
+      expect(card.className).toContain('rounded-t-none')
+      expect(card.className).toContain('border-l-2')
+    })
+
+    it('child variant strips primary prefix from display label', () => {
+      const category = createMockCategory({
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+        pfc_primary_display: 'Food & Drink',
+        pfc_detailed_display: 'Food & Drink › Restaurants',
+      })
+      render(<BudgetCategoryCard category={category} variant="child" />)
+      // Should display only 'Restaurants', not 'Food & Drink › Restaurants'
+      expect(screen.getByRole('heading')).toHaveTextContent('Restaurants')
+      expect(screen.queryByText('Food & Drink › Restaurants')).not.toBeInTheDocument()
+    })
+
+    it('child variant strips primary prefix using › separator', () => {
+      const category = createMockCategory({
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD',
+        pfc_primary_display: 'Food & Drink',
+        pfc_detailed_display: 'Food & Drink › Fast Food',
+      })
+      render(<BudgetCategoryCard category={category} variant="child" />)
+      expect(screen.getByRole('heading')).toHaveTextContent('Fast Food')
+    })
+
+    it('child variant shows full label when label has no › separator', () => {
+      // Fallback: if formatBudgetCategoryLabel returns a flat string with no separator
+      const category = createMockCategory({
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+        // no display fields — falls back to formatPFCEnum which uses ›
+        pfc_primary_display: undefined,
+        pfc_detailed_display: undefined,
+      })
+      render(<BudgetCategoryCard category={category} variant="child" />)
+      // formatPFCEnum('FOOD_AND_DRINK_RESTAURANTS') → 'Food And Drink › Restaurants'
+      // After stripping: 'Restaurants'
+      expect(screen.getByRole('heading')).toHaveTextContent('Restaurants')
+    })
+
+    it('standalone variant renders normally (no strip)', () => {
+      const category = createMockCategory({
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+        pfc_primary_display: 'Food & Drink',
+        pfc_detailed_display: 'Food & Drink › Restaurants',
+      })
+      render(<BudgetCategoryCard category={category} variant="standalone" />)
+      // standalone should NOT strip the prefix
+      expect(screen.getByRole('heading')).toHaveTextContent('Food & Drink › Restaurants')
+    })
+  })
+
   describe('Collapsible Transactions', () => {
     it('should render View Transactions button when budgetId is provided', () => {
       const category = createMockCategory()
