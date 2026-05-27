@@ -40,6 +40,18 @@ export type ColumnDef<T> = {
   defaultPinned?: 'left' | 'right'
   /** Phase 3d: opt-in column visibility toggle. Column appears in ColumnVisibilityMenu when true. */
   hideable?: boolean
+  /**
+   * When set, renders this ReactNode in the column header instead of the built-in ColumnFilterDropdown.
+   * Use for custom filter UI (e.g., hierarchical category tree picker).
+   * The component is responsible for its own trigger/popover and active-state styling.
+   */
+  customFilter?: ReactNode
+  /**
+   * When true, marks this column's header as having an active filter (used alongside customFilter).
+   * The built-in filter UI manages its own active state; this prop is for custom filter components
+   * that manage active state externally.
+   */
+  isFilterActive?: boolean
 }
 
 export type DataTableVirtualizationOpts = {
