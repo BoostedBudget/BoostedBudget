@@ -77,7 +77,7 @@ export function NetWorthHistoryChart({ history }: NetWorthHistoryChartProps) {
   }
 
   return (
-    <div className="h-[300px] sm:h-[400px] lg:h-[500px]" data-testid="net-worth-history-chart">
+    <div className="h-[400px] sm:h-[500px] lg:h-[600px]" data-testid="net-worth-history-chart">
       <EChartsChart
         option={option}
         isDark={isDark}

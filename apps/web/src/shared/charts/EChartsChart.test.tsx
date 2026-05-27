@@ -88,6 +88,11 @@ describe('EChartsChart', () => {
     expect(wrapper.dataset.phMask).toBeDefined()
   })
 
+  it('lets percentage-height charts fill the accessible wrapper', () => {
+    render(<EChartsChart option={{ series: [] }} />)
+    expect(screen.getByRole('img')).toHaveClass('h-full', 'w-full')
+  })
+
   it('has role="img" on the container', () => {
     render(<EChartsChart option={{ series: [] }} />)
     expect(screen.getByRole('img')).toBeDefined()
