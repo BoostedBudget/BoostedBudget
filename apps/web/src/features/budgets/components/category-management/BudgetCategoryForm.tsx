@@ -24,9 +24,10 @@ import { DEFAULT_MATCH_LOGIC } from '@boostedbudget/shared-types/matching';
 import type { UserTag } from '@/features/tags/types';
 import { CategoryMatchConfig } from './CategoryMatchConfig';
 import { usePreviewCategories } from '../../hooks/usePreviewCategories';
-import { formatPFCPrimary, isPFCPrimary } from '@/shared/categories/formatPfc';
+import { formatPFCPrimary } from '@/shared/categories/formatPfc';
 import { getDetailedLabel } from '@/shared/categories/pfcOptions';
 import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect';
+import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 
 export interface BudgetCategoryFormProps {
   isOpen: boolean;
@@ -34,10 +35,11 @@ export interface BudgetCategoryFormProps {
   onSubmit: (data: CreateBudgetCategoryRequest | UpdateBudgetCategoryRequest) => Promise<void>;
   mode: 'create' | 'edit';
   initialData?: BudgetCategory;
-  /** Available categories for selection (string[][] for backward compat).
-   *  PFC entries (where isPFCPrimary(cat[0]) is true) are ignored — the tree
-   *  picker uses its own built-in data. Non-PFC entries appear in the custom select. */
-  availableCategories: string[][];
+  /**
+   * @deprecated No longer used — PFC picker fetches its own data; custom categories
+   * are fetched via useGetUserCategories(). Kept for backward compatibility with callers.
+   */
+  availableCategories?: string[][];
   availableTags: UserTag[];
   existingCategories?: string[][];
   budgetStartDate?: string;
@@ -78,7 +80,6 @@ export function BudgetCategoryForm({
   onSubmit,
   mode,
   initialData,
-  availableCategories,
   availableTags,
   budgetStartDate,
   budgetEndDate,
@@ -90,12 +91,8 @@ export function BudgetCategoryForm({
   const [apiError, setApiError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Split availableCategories into PFC (ignored by the picker, but used for counting)
-  // and custom (shown in the flat select).
-  const customCategories = useMemo(
-    () => availableCategories.filter((cat) => !isPFCPrimary(cat[0])),
-    [availableCategories]
-  );
+  // Fetch user's custom categories to get real UUIDs for the select
+  const { data: userCategories } = useGetUserCategories();
 
   useEffect(() => {
     if (isOpen) {
@@ -117,19 +114,18 @@ export function BudgetCategoryForm({
     }
   }, [isOpen, mode, initialData]);
 
-  // Build dropdown options for the custom category select.
-  const customCategoryOptions = useMemo(() => {
-    const formatLabel = (s: string) => isPFCPrimary(s) ? formatPFCPrimary(s) : s;
-    return customCategories.map((cat) => {
-      const primary = cat[0] || '';
-      const detailed = cat[1] || '';
-      const primaryLabel = formatLabel(primary);
-      const detailedLabel = detailed ? formatLabel(detailed) : '';
-      const label = detailedLabel ? `${primaryLabel} > ${detailedLabel}` : primaryLabel;
-      const value = detailed ? `${primary}|${detailed}` : primary;
-      return { value, label, primary, detailed };
-    });
-  }, [customCategories]);
+  // Build dropdown options for the custom category select, keyed by real UUID.
+  // Groups by parent_pfc_primary for <optgroup> display.
+  const customCategoryOptionGroups = useMemo(() => {
+    const cats = userCategories ?? [];
+    const groups: Record<string, { id: string; label: string }[]> = {};
+    for (const cat of cats) {
+      const groupKey = cat.parent_pfc_primary ?? '__none__';
+      if (!groups[groupKey]) groups[groupKey] = [];
+      groups[groupKey].push({ id: cat.id, label: cat.name });
+    }
+    return groups;
+  }, [userCategories]);
 
   const showTagPicker = formData.match_logic !== 'category_only';
 
@@ -210,17 +206,12 @@ export function BudgetCategoryForm({
 
   const handleCustomCategoryChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
-      const selectedValue = e.target.value;
-      const selectedOption = customCategoryOptions.find((opt) => opt.value === selectedValue);
-      setFormData((prev) => ({
-        ...prev,
-        custom_category_id: selectedOption ? selectedOption.value : '',
-      }));
+      setFormData((prev) => ({ ...prev, custom_category_id: e.target.value }));
       if (errors.category) {
         setErrors((prev) => ({ ...prev, category: undefined }));
       }
     },
-    [customCategoryOptions, errors.category]
+    [errors.category]
   );
 
   const handleAmountChange = useCallback(
@@ -380,7 +371,7 @@ export function BudgetCategoryForm({
               >
                 Plaid Categories
               </button>
-              {customCategories.length > 0 && (
+              {(userCategories?.length ?? 0) > 0 && (
                 <button
                   type="button"
                   onClick={() => handleCategoryKindChange('custom')}
@@ -420,7 +411,7 @@ export function BudgetCategoryForm({
               </div>
             )}
 
-            {/* Custom section: flat select */}
+            {/* Custom section: select grouped by parent_pfc_primary */}
             {formData.category_kind === 'custom' && (
               <select
                 id="category"
@@ -431,10 +422,17 @@ export function BudgetCategoryForm({
                 className={cn(inputBase, errors.category && inputError)}
               >
                 <option value="">Select a category...</option>
-                {customCategoryOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
+                {Object.entries(customCategoryOptionGroups).map(([groupKey, opts]) => (
+                  <optgroup
+                    key={groupKey}
+                    label={groupKey === '__none__' ? 'Custom (no parent)' : formatPFCPrimary(groupKey)}
+                  >
+                    {opts.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             )}

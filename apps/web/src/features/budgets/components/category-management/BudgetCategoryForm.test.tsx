@@ -1,6 +1,7 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import type { BudgetCategory } from '../../types'
 import type { UserTag } from '@/features/tags/types'
+import type { CustomCategory } from '@boostedbudget/api-client/models'
 
 const mockUsePreviewCategories = mock(() => ({
   preview: null,
@@ -12,20 +13,54 @@ mock.module('../../hooks/usePreviewCategories', () => ({
   usePreviewCategories: mockUsePreviewCategories,
 }))
 
+const mockUseGetUserCategories = mock(() => ({
+  data: [] as CustomCategory[],
+  isLoading: false,
+  error: null,
+}))
+
+mock.module('@boostedbudget/api-client/endpoints/categories/categories', () => ({
+  useGetUserCategories: mockUseGetUserCategories,
+}))
+
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BudgetCategoryForm } from './BudgetCategoryForm'
+
+// Minimal CustomCategory factory
+const makeCustomCategory = (
+  id: string,
+  name: string,
+  parent_pfc_primary?: string
+): CustomCategory => ({
+  id,
+  user_id: 'user-1',
+  name,
+  parent_pfc_primary: parent_pfc_primary ?? undefined,
+  color: undefined,
+  icon: undefined,
+  usage_count: 0,
+  created_at: '2024-01-01T00:00:00Z',
+  updated_at: '2024-01-01T00:00:00Z',
+})
+
+// Default mock user categories (used across most tests)
+const defaultUserCategories: CustomCategory[] = [
+  makeCustomCategory('cat-uuid-1', 'Restaurants', 'FOOD_AND_DRINK'),
+  makeCustomCategory('cat-uuid-2', 'Groceries'),
+  makeCustomCategory('cat-uuid-3', 'Gas', 'TRANSPORTATION'),
+  makeCustomCategory('cat-uuid-4', 'Clothing'),
+]
 
 describe('BudgetCategoryForm', () => {
   const mockOnClose = mock(() => {})
   const mockOnSubmit = mock(() => Promise.resolve())
 
-  // These are non-PFC-enum strings, so they all fall into "custom" category path
+  // PFC enum-style categories (used only for the PFC tree picker path)
   const mockAvailableCategories: string[][] = [
-    ['Food and Drink', 'Restaurants'],
-    ['Food and Drink', 'Groceries'],
-    ['Transportation', 'Gas'],
-    ['Shopping', 'Clothing'],
+    ['FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANT'],
+    ['FOOD_AND_DRINK', 'FOOD_AND_DRINK_GROCERIES'],
+    ['TRANSPORTATION', 'TRANSPORTATION_GAS'],
   ]
 
   // PFC enum-style categories for testing the PFC path
@@ -79,6 +114,12 @@ describe('BudgetCategoryForm', () => {
     mockUsePreviewCategories.mockReturnValue({
       preview: null,
       loading: false,
+      error: null,
+    })
+    mockUseGetUserCategories.mockClear()
+    mockUseGetUserCategories.mockReturnValue({
+      data: defaultUserCategories,
+      isLoading: false,
       error: null,
     })
   })
@@ -159,7 +200,12 @@ describe('BudgetCategoryForm', () => {
       expect(categorySelect).not.toBeDisabled()
     })
 
-    it('should NOT show Custom Categories button when no custom categories available', () => {
+    it('should NOT show Custom Categories button when useGetUserCategories returns empty', () => {
+      mockUseGetUserCategories.mockReturnValue({
+        data: [],
+        isLoading: false,
+        error: null,
+      })
       render(
         <BudgetCategoryForm
           isOpen={true}
@@ -189,7 +235,7 @@ describe('BudgetCategoryForm', () => {
       // Switch to custom and select
       await switchToCustom()
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
+      fireEvent.change(categorySelect, { target: { value: 'cat-uuid-1' } })
 
       // Switch back to pfc - custom_category_id should be cleared
       const pfcBtn = screen.getByRole('button', { name: /plaid categories/i })
@@ -262,7 +308,7 @@ describe('BudgetCategoryForm', () => {
       await switchToCustom()
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
+      fireEvent.change(categorySelect, { target: { value: 'cat-uuid-1' } })
 
       const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
       fireEvent.change(amountInput, { target: { value: '500' } })
@@ -275,6 +321,7 @@ describe('BudgetCategoryForm', () => {
         expect(mockOnSubmit).toHaveBeenCalledWith(
           expect.objectContaining({
             category_kind: 'custom',
+            custom_category_id: 'cat-uuid-1',
             allocated_amount: 500,
             match_logic: 'category_only',
           })
@@ -351,7 +398,7 @@ describe('BudgetCategoryForm', () => {
         category_kind: 'custom',
         pfc_primary: '',
         pfc_detailed: '',
-        custom_category_id: 'Food and Drink|Restaurants',
+        custom_category_id: 'cat-uuid-1',
       })
       render(
         <BudgetCategoryForm
@@ -416,7 +463,7 @@ describe('BudgetCategoryForm', () => {
       await switchToCustom()
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
+      await user.selectOptions(categorySelect, ['Restaurants'])
 
       const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
       await user.clear(amountInput)
@@ -470,7 +517,7 @@ describe('BudgetCategoryForm', () => {
       await switchToCustom()
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
+      fireEvent.change(categorySelect, { target: { value: 'cat-uuid-1' } })
 
       const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
       fireEvent.change(amountInput, { target: { value: '100' } })
@@ -519,7 +566,7 @@ describe('BudgetCategoryForm', () => {
     const fillFormBasic = async () => {
       await switchToCustom()
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
+      fireEvent.change(categorySelect, { target: { value: 'cat-uuid-1' } })
 
       const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
       fireEvent.change(amountInput, { target: { value: '100' } })
@@ -638,7 +685,7 @@ describe('BudgetCategoryForm', () => {
       await switchToCustom()
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
+      fireEvent.change(categorySelect, { target: { value: 'cat-uuid-1' } })
 
       const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
       fireEvent.change(amountInput, { target: { value: '200' } })
@@ -668,13 +715,122 @@ describe('BudgetCategoryForm', () => {
       await switchToCustom()
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      fireEvent.change(categorySelect, { target: { value: 'Food and Drink|Restaurants' } })
+      fireEvent.change(categorySelect, { target: { value: 'cat-uuid-1' } })
 
       const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
       fireEvent.change(amountInput, { target: { value: '50' } })
 
       // No warning (900 + 50 = 950 <= 1000)
       expect(screen.queryByText(/exceed/i)).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Custom Category UUID fix (Gap 1)', () => {
+    it('submits real UUID as custom_category_id when a custom category is selected', async () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      await switchToCustom()
+
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+      fireEvent.change(categorySelect, { target: { value: 'cat-uuid-2' } })
+
+      const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
+      fireEvent.change(amountInput, { target: { value: '300' } })
+
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      await waitFor(() => {
+        expect(mockOnSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            category_kind: 'custom',
+            custom_category_id: 'cat-uuid-2',
+          })
+        )
+        // Must NOT be a name string — verify it's a UUID-shaped value
+        const call = mockOnSubmit.mock.calls[0][0] as { custom_category_id?: string }
+        expect(call.custom_category_id).toBe('cat-uuid-2')
+        expect(call.custom_category_id).not.toContain('|')
+        expect(call.custom_category_id).not.toContain('Food')
+      })
+    })
+
+    it('shows Custom Categories button when useGetUserCategories returns categories', () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={[]}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      // Button visible because mockUseGetUserCategories returns 4 categories by default
+      expect(screen.getByRole('button', { name: /custom categories/i })).toBeInTheDocument()
+    })
+
+    it('groups custom categories with parent_pfc_primary into optgroups', async () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      await switchToCustom()
+
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+
+      // "Restaurants" (FOOD_AND_DRINK parent) and "Gas" (TRANSPORTATION parent)
+      // should be rendered as options inside optgroups
+      expect(categorySelect.querySelector('option[value="cat-uuid-1"]')).not.toBeNull()
+      expect(categorySelect.querySelector('option[value="cat-uuid-3"]')).not.toBeNull()
+
+      // Check optgroup elements exist (at least one group with parent label)
+      const optgroups = categorySelect.querySelectorAll('optgroup')
+      expect(optgroups.length).toBeGreaterThan(0)
+
+      // "Groceries" and "Clothing" have no parent — should be in a "no parent" group
+      expect(categorySelect.querySelector('option[value="cat-uuid-2"]')).not.toBeNull()
+      expect(categorySelect.querySelector('option[value="cat-uuid-4"]')).not.toBeNull()
+    })
+
+    it('pre-fills select with existing UUID in edit mode', () => {
+      const category = createMockCategory({
+        category_kind: 'custom',
+        pfc_primary: undefined,
+        pfc_detailed: undefined,
+        custom_category_id: 'cat-uuid-3',
+      })
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="edit"
+          initialData={category}
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+      expect((categorySelect as HTMLSelectElement).value).toBe('cat-uuid-3')
     })
   })
 
@@ -703,7 +859,7 @@ describe('BudgetCategoryForm', () => {
       await switchToCustom()
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
+      await user.selectOptions(categorySelect, ['Restaurants'])
 
       await waitFor(() => {
         expect(screen.getByTestId('category-preview')).toBeInTheDocument()
@@ -737,7 +893,7 @@ describe('BudgetCategoryForm', () => {
       await switchToCustom()
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
+      await user.selectOptions(categorySelect, ['Restaurants'])
 
       await waitFor(() => {
         expect(screen.getByText(/calculating/i)).toBeInTheDocument()
@@ -768,7 +924,7 @@ describe('BudgetCategoryForm', () => {
       await switchToCustom()
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
+      await user.selectOptions(categorySelect, ['Restaurants'])
 
       await waitFor(() => {
         expect(screen.getByText(/unable to load preview/i)).toBeInTheDocument()
@@ -820,7 +976,7 @@ describe('BudgetCategoryForm', () => {
       await switchToCustom()
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
+      await user.selectOptions(categorySelect, ['Restaurants'])
 
       expect(screen.queryByTestId('category-preview')).not.toBeInTheDocument()
     })
@@ -849,7 +1005,7 @@ describe('BudgetCategoryForm', () => {
       await switchToCustom()
 
       const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
-      await user.selectOptions(categorySelect, ['Food and Drink|Restaurants'])
+      await user.selectOptions(categorySelect, ['Restaurants'])
 
       await waitFor(() => {
         const preview = screen.getByTestId('category-preview')
