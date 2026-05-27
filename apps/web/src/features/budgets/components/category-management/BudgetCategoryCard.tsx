@@ -2,6 +2,7 @@
  * BudgetCategoryCard
  * Issue #497: Budget Category Manager + Match Config UI
  * Issue #499: Transaction-Budget Linking UI - Collapsible transactions
+ * Issue #1200: Multi-level category hierarchy — variant prop for visual grouping
  *
  * Displays a single budget category with its allocation, spending, and match configuration.
  * Supports edit and delete actions.
@@ -10,6 +11,7 @@
 
 import { useState, useMemo } from 'react';
 import { PencilIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
+import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 import type { BudgetCategory } from '../../types';
 import { formatBudgetCategoryLabel } from '../../types';
@@ -17,7 +19,27 @@ import { MATCH_LOGIC_LABELS } from '@boostedbudget/shared-types/matching';
 import { BudgetProgressBar } from '../BudgetProgressBar';
 import { BudgetTransactionList } from '../transaction-link/BudgetTransactionList';
 
-export interface BudgetCategoryCardProps {
+/**
+ * CVA variants for the card wrapper — controls visual hierarchy:
+ * - standalone: default full card (custom categories, primary-only with no children)
+ * - parent: primary-only PFC with children below (removes bottom rounding/border to connect)
+ * - child: indented sub-budget (left indent, top-none rounding, left accent border)
+ */
+const budgetCategoryCardVariants = cva(
+  'bg-card border border-border transition-shadow duration-200 hover:shadow-sm',
+  {
+    variants: {
+      variant: {
+        standalone: 'rounded-lg p-4',
+        parent: 'rounded-lg rounded-b-none border-b-0 p-4',
+        child: 'rounded-lg rounded-t-none border-t-border/50 border-l-2 border-l-primary/20 ml-6 pl-4 pr-4 pt-3 pb-3',
+      },
+    },
+    defaultVariants: { variant: 'standalone' },
+  }
+);
+
+export interface BudgetCategoryCardProps extends VariantProps<typeof budgetCategoryCardVariants> {
   /** The budget category to display */
   category: BudgetCategory;
   /** Budget ID for fetching transactions (enables collapsible transactions when provided) */
@@ -28,6 +50,13 @@ export interface BudgetCategoryCardProps {
   onDelete?: () => void;
   /** Whether actions are disabled */
   disabled?: boolean;
+  /**
+   * Visual hierarchy variant:
+   * - 'standalone': default full card (custom categories, primary-only with no children)
+   * - 'parent': primary-only PFC with children below (connects visually to children)
+   * - 'child': indented sub-budget (left accent border, strips primary prefix from label)
+   */
+  variant?: 'standalone' | 'parent' | 'child';
 }
 
 /**
@@ -40,18 +69,44 @@ function formatCurrency(amount: number): string {
   }).format(amount);
 }
 
+/**
+ * For child variant: strips the primary category prefix from the display label.
+ * E.g. "Food & Drink › Restaurants" → "Restaurants"
+ * Uses › or > separators. Falls back to full label if no separator found.
+ */
+function stripPrimaryPrefix(label: string): string {
+  // Try › (actual separator used by formatBudgetCategoryLabel / PFC display values)
+  const guillemet = label.indexOf(' › ');
+  if (guillemet !== -1) {
+    return label.slice(guillemet + 3);
+  }
+  // Fallback: > (legacy separator)
+  const arrow = label.indexOf(' > ');
+  if (arrow !== -1) {
+    return label.slice(arrow + 3);
+  }
+  return label;
+}
+
 export function BudgetCategoryCard({
   category,
   budgetId,
   onEdit,
   onDelete,
   disabled = false,
+  variant = 'standalone',
 }: BudgetCategoryCardProps) {
   const [isTransactionsExpanded, setIsTransactionsExpanded] = useState(false);
 
-  const categoryPath = useMemo(
+  const fullLabel = useMemo(
     () => formatBudgetCategoryLabel(category),
     [category]
+  );
+
+  // For child variant: strip primary prefix for a cleaner hierarchical display
+  const categoryPath = useMemo(
+    () => variant === 'child' ? stripPrimaryPrefix(fullLabel) : fullLabel,
+    [variant, fullLabel]
   );
 
   const isOverBudget = category.spent_amount > category.allocated_amount;
@@ -63,7 +118,7 @@ export function BudgetCategoryCard({
     <article
       className={cn(
         'budget-category-card',
-        'bg-card border border-border rounded-lg p-4 transition-shadow duration-200 hover:shadow-sm',
+        budgetCategoryCardVariants({ variant }),
         isOverBudget && 'budget-category-card--over-budget border-destructive bg-destructive/[0.02]'
       )}
     >
