@@ -7,6 +7,7 @@
 
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 
 // Mock useCuratedPfcDetailed with a small, controlled fixture
 // NOTE: mock.module() is process-global per CLAUDE.md feedback; this module is
@@ -405,5 +406,44 @@ describe('HierarchicalCategoryTreeSelect', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
     expect(screen.queryByText('Food & Drink')).not.toBeInTheDocument()
+  })
+
+  // ─── Multi-select: primary clears detailed children ──────────────────────
+
+  it('selecting a primary clears its already-selected detailed children', async () => {
+    const onPrimariesChange = mock(() => {})
+    const onDetailedsChange = mock(() => {})
+    render(
+      <HierarchicalCategoryTreeSelect
+        selectedPrimaries={[]}
+        onPrimariesChange={onPrimariesChange}
+        selectedDetaileds={['FOOD_AND_DRINK_GROCERIES', 'FOOD_AND_DRINK_COFFEE']}
+        onDetailedsChange={onDetailedsChange}
+      />
+    )
+    // open popover
+    await userEvent.click(screen.getByRole('button', { name: /category filter/i }))
+    // click primary checkbox for Food & Drink
+    await userEvent.click(screen.getByTestId('primary-checkbox-FOOD_AND_DRINK'))
+    // should call onDetailedsChange with the children removed
+    expect(onDetailedsChange).toHaveBeenCalledWith([])
+  })
+
+  // ─── Single-select: detailed toggle-off ──────────────────────────────────
+
+  it('clicking an already-selected detailed row calls onSingleSelectChange(null)', async () => {
+    const onSingleSelectChange = mock(() => {})
+    render(
+      <HierarchicalCategoryTreeSelect
+        singleSelectValue={{ primary: 'FOOD_AND_DRINK', detailed: 'FOOD_AND_DRINK_COFFEE' }}
+        onSingleSelectChange={onSingleSelectChange}
+      />
+    )
+    await userEvent.click(screen.getByRole('button', { name: /category filter/i }))
+    // expand Food & Drink
+    await userEvent.click(screen.getByTestId('expand-toggle-FOOD_AND_DRINK'))
+    // click the already-selected detailed row
+    await userEvent.click(screen.getByTestId('detailed-row-FOOD_AND_DRINK_COFFEE'))
+    expect(onSingleSelectChange).toHaveBeenCalledWith(null)
   })
 })
