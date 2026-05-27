@@ -647,16 +647,35 @@ func (r *budgetRepository) GetCategoriesMatchingTransaction(ctx context.Context,
 
 	switch effective.Kind {
 	case domain.EffectiveCategoryKindPFC:
-		query = `
-			SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed,
-				bc.custom_category_id, bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
-				bc.tags, bc.match_logic
-			FROM budget_categories bc
-			JOIN budgets b ON bc.budget_id = b.id
-			WHERE b.user_id = $1 AND b.is_active = true
-			  AND bc.category_kind = 'pfc' AND bc.pfc_primary = $2
-		`
-		args = []interface{}{userID, effective.PFCPrimary}
+		if effective.PFCDetailed == nil || *effective.PFCDetailed == "" {
+			// Transaction has no detailed sub-category: only match primary-only budget categories
+			// (i.e. bc.pfc_detailed IS NULL). Detailed-specific budgets must not fire.
+			query = `
+				SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed,
+					bc.custom_category_id, bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
+					bc.tags, bc.match_logic
+				FROM budget_categories bc
+				JOIN budgets b ON bc.budget_id = b.id
+				WHERE b.user_id = $1 AND b.is_active = true
+				  AND bc.category_kind = 'pfc' AND bc.pfc_primary = $2
+				  AND bc.pfc_detailed IS NULL
+			`
+			args = []interface{}{userID, effective.PFCPrimary}
+		} else {
+			// Transaction has a detailed sub-category: match the primary-only rollup budget
+			// (bc.pfc_detailed IS NULL) AND the exact detailed budget — but NOT siblings.
+			query = `
+				SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed,
+					bc.custom_category_id, bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
+					bc.tags, bc.match_logic
+				FROM budget_categories bc
+				JOIN budgets b ON bc.budget_id = b.id
+				WHERE b.user_id = $1 AND b.is_active = true
+				  AND bc.category_kind = 'pfc' AND bc.pfc_primary = $2
+				  AND (bc.pfc_detailed IS NULL OR bc.pfc_detailed = $3)
+			`
+			args = []interface{}{userID, effective.PFCPrimary, effective.PFCDetailed}
+		}
 	case domain.EffectiveCategoryKindCustom:
 		query = `
 			SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed,
