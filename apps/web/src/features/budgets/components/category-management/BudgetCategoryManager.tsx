@@ -125,11 +125,7 @@ export function BudgetCategoryManager({
   }, []);
 
   const handleCloseForm = useCallback(() => {
-    setFormDialog({
-      isOpen: false,
-      mode: 'create',
-      category: null,
-    });
+    setFormDialog({ isOpen: false, mode: 'create', category: null });
   }, []);
 
   const handleFormSubmit = useCallback(
@@ -153,10 +149,7 @@ export function BudgetCategoryManager({
   }, []);
 
   const handleCloseDeleteDialog = useCallback(() => {
-    setDeleteDialog({
-      isOpen: false,
-      category: null,
-    });
+    setDeleteDialog({ isOpen: false, category: null });
   }, []);
 
   const handleConfirmDelete = useCallback(async () => {
@@ -205,44 +198,36 @@ export function BudgetCategoryManager({
 
   const hasCategories = categories.length > 0;
 
-  // Calculate total allocated excluding current category for edit mode
   const totalAllocatedExcludingCurrent = useMemo(() => {
     if (formDialog.mode === 'create' || !formDialog.category) {
-      return categories.reduce((sum, c) => sum + c.allocated_amount, 0)
+      return categories.reduce((sum, c) => sum + c.allocated_amount, 0);
     }
     return categories
       .filter((c) => c.id !== formDialog.category!.id)
-      .reduce((sum, c) => sum + c.allocated_amount, 0)
+      .reduce((sum, c) => sum + c.allocated_amount, 0);
   }, [formDialog.mode, formDialog.category, categories])
 
-  /**
-   * Renders a single category listitem with keyboard navigation wired up.
-   * flatIndex is the position in flatOrder for ref assignment.
-   */
   const renderCategoryItem = useCallback(
-    (category: BudgetCategory, variant: 'standalone' | 'parent' | 'child') => {
-      const flatIndex = flatOrder.findIndex(c => c.id === category.id);
-      return (
-        <div
-          key={category.id}
-          role="listitem"
-          tabIndex={0}
-          onKeyDown={(e) => handleKeyDown(e, category)}
-          ref={(el) => {
-            categoryRefs.current[flatIndex] = el;
-          }}
-        >
-          <BudgetCategoryCard
-            category={category}
-            variant={variant}
-            onEdit={() => handleOpenEditForm(category)}
-            onDelete={() => handleOpenDeleteDialog(category)}
-            disabled={disabled}
-          />
-        </div>
-      );
-    },
-    [flatOrder, handleKeyDown, handleOpenEditForm, handleOpenDeleteDialog, disabled]
+    (category: BudgetCategory, variant: 'standalone' | 'parent' | 'child', flatIndex: number) => (
+      <div
+        key={category.id}
+        role="listitem"
+        tabIndex={0}
+        onKeyDown={(e) => handleKeyDown(e, category)}
+        ref={(el) => {
+          categoryRefs.current[flatIndex] = el;
+        }}
+      >
+        <BudgetCategoryCard
+          category={category}
+          variant={variant}
+          onEdit={() => handleOpenEditForm(category)}
+          onDelete={() => handleOpenDeleteDialog(category)}
+          disabled={disabled}
+        />
+      </div>
+    ),
+    [handleKeyDown, handleOpenEditForm, handleOpenDeleteDialog, disabled]
   );
 
   return (
@@ -278,17 +263,20 @@ export function BudgetCategoryManager({
             const groupKey = group?.id ?? `orphan-${children[0]?.id}`;
 
             if (!group) {
-              // Orphan detailed categories — render each as standalone
-              return children.map(child =>
-                renderCategoryItem(child, 'standalone')
+              return children.map((child) =>
+                renderCategoryItem(child, 'standalone', flatOrder.findIndex(c => c.id === child.id))
               );
             }
 
             const parentVariant = hasChildren ? 'parent' : 'standalone';
+            const parentIdx = flatOrder.findIndex(c => c.id === group.id);
             return (
               <div key={groupKey}>
-                {renderCategoryItem(group, parentVariant)}
-                {children.map(child => renderCategoryItem(child, 'child'))}
+                {renderCategoryItem(group, parentVariant, parentIdx)}
+                {children.map((child) => {
+                  const childIdx = flatOrder.findIndex(c => c.id === child.id);
+                  return renderCategoryItem(child, 'child', childIdx);
+                })}
               </div>
             );
           })}

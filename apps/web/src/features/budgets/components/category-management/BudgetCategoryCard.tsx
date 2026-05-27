@@ -103,16 +103,11 @@ export function BudgetCategoryCard({
     [category]
   );
 
-  // For child variant: strip primary prefix for a cleaner hierarchical display
-  const categoryPath = useMemo(
-    () => variant === 'child' ? stripPrimaryPrefix(fullLabel) : fullLabel,
-    [variant, fullLabel]
-  );
+  const categoryPath = variant === 'child' ? stripPrimaryPrefix(fullLabel) : fullLabel;
 
   const isOverBudget = category.spent_amount > category.allocated_amount;
   const hasTags = category.tags && category.tags.length > 0;
   const matchLogicLabel = MATCH_LOGIC_LABELS[category.match_logic];
-  const showTransactionsToggle = !!budgetId;
 
   return (
     <article
@@ -182,7 +177,7 @@ export function BudgetCategoryCard({
       )}
 
       {/* Actions */}
-      {(onEdit || onDelete || showTransactionsToggle) && (
+      {(onEdit || onDelete || !!budgetId) && (
         <div className="budget-category-card__actions flex gap-2 pt-3 border-t border-border">
           {onEdit && (
             <button
@@ -208,7 +203,7 @@ export function BudgetCategoryCard({
               Delete
             </button>
           )}
-          {showTransactionsToggle && (
+          {budgetId && (
             <button
               type="button"
               className="budget-category-card__action-btn budget-category-card__action-btn--transactions ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground bg-transparent border border-border rounded-md cursor-pointer transition-all duration-150 hover:enabled:bg-primary/5 hover:enabled:border-primary hover:enabled:text-primary disabled:opacity-50 disabled:cursor-not-allowed"
@@ -233,7 +228,7 @@ export function BudgetCategoryCard({
       )}
 
       {/* Collapsible Transactions List */}
-      {showTransactionsToggle && isTransactionsExpanded && budgetId && (
+      {budgetId && isTransactionsExpanded && (
         <div className="budget-category-card__transactions mt-3 pt-3 border-t border-border">
           <BudgetTransactionList budgetId={budgetId} categoryId={category.id} />
         </div>
