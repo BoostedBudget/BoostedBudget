@@ -55,11 +55,12 @@ jobs:
     permissions:
       contents: read
     outputs:
-      deploy_sha:         ${{ steps.resolve-sha.outputs.deploy_sha }}
-      backend_changed:    ${{ steps.compute.outputs.backend_changed }}
-      frontend_changed:   ${{ steps.compute.outputs.frontend_changed }}
-      backend_prior_sha:  ${{ steps.resolve-tags.outputs.backend_prior_sha }}
-      frontend_prior_sha: ${{ steps.resolve-tags.outputs.frontend_prior_sha }}
+      deploy_sha:           ${{ steps.resolve-sha.outputs.deploy_sha }}
+      backend_changed:      ${{ steps.compute.outputs.backend_changed }}
+      fly_config_changed:   ${{ steps.compute.outputs.fly_config_changed }}
+      frontend_changed:     ${{ steps.compute.outputs.frontend_changed }}
+      backend_prior_sha:    ${{ steps.resolve-tags.outputs.backend_prior_sha }}
+      frontend_prior_sha:   ${{ steps.resolve-tags.outputs.frontend_prior_sha }}
 
     steps:
       - uses: actions/checkout@v6
@@ -154,26 +155,63 @@ jobs:
             api:      ['api/**', 'api/openapi.yaml']
             workflow: ['.github/workflows/**']
 
+      - id: filter-fly-config
+        if: steps.resolve-tags.outputs.bootstrap_backend == 'false'
+        env:
+          PRIOR: ${{ steps.resolve-tags.outputs.backend_prior_sha }}
+          DEPLOY: ${{ steps.resolve-sha.outputs.deploy_sha }}
+        run: |
+          set -euo pipefail
+
+          # Did either fly config file change? (Neither affects the Docker image.)
+          fly_count=$(git diff --name-only "${PRIOR}" "${DEPLOY}" \
+            -- 'backend/fly.staging.toml' 'backend/fly.toml' \
+            | wc -l | tr -d ' ')
+          echo "fly_config=$([ "$fly_count" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+          # Did any image-affecting file change, excluding both fly config files?
+          # Covers: backend/ code, config/ (copied into image by Dockerfile), .dockerignore.
+          # Uses grep -Fxv (fixed-string exact-line) to avoid regex issues with dots in filenames.
+          # { grep ... || true; } prevents set -e from aborting when grep returns 1 (no matches).
+          code_count=$(git diff --name-only "${PRIOR}" "${DEPLOY}" \
+            -- 'backend/' 'config/' '.dockerignore' 'go.mod' 'go.sum' \
+            | { grep -Fxv "backend/fly.staging.toml" || true; } \
+            | { grep -Fxv "backend/fly.toml" || true; } \
+            | wc -l | tr -d ' ')
+          echo "backend_code=$([ "$code_count" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
       - id: compute
         env:
-          FORCE_REBUILD: ${{ inputs.force_rebuild }}
-          BOOT_BE: ${{ steps.resolve-tags.outputs.bootstrap_backend }}
-          BOOT_FE: ${{ steps.resolve-tags.outputs.bootstrap_frontend }}
-          BE_BACKEND: ${{ steps.filter-backend.outputs.backend }}
-          BE_API: ${{ steps.filter-backend.outputs.api }}
-          BE_WORKFLOW: ${{ steps.filter-backend.outputs.workflow }}
-          FE_FRONTEND: ${{ steps.filter-frontend.outputs.frontend }}
-          FE_API: ${{ steps.filter-frontend.outputs.api }}
-          FE_WORKFLOW: ${{ steps.filter-frontend.outputs.workflow }}
+          FORCE_REBUILD:    ${{ inputs.force_rebuild }}
+          BOOT_BE:          ${{ steps.resolve-tags.outputs.bootstrap_backend }}
+          BOOT_FE:          ${{ steps.resolve-tags.outputs.bootstrap_frontend }}
+          BE_BACKEND_CODE:  ${{ steps.filter-fly-config.outputs.backend_code }}
+          BE_FLY_CONFIG:    ${{ steps.filter-fly-config.outputs.fly_config }}
+          BE_API:           ${{ steps.filter-backend.outputs.api }}
+          BE_WORKFLOW:      ${{ steps.filter-backend.outputs.workflow }}
+          FE_FRONTEND:      ${{ steps.filter-frontend.outputs.frontend }}
+          FE_API:           ${{ steps.filter-frontend.outputs.api }}
+          FE_WORKFLOW:      ${{ steps.filter-frontend.outputs.workflow }}
         run: |
           set -euo pipefail
           # On push events, force_rebuild is not available as an input — default to false.
           FORCE="${FORCE_REBUILD:-false}"
 
+          # backend_changed: triggers Docker image rebuild + push.
+          # Uses BE_BACKEND_CODE (excludes both fly configs) instead of dorny's BE_BACKEND.
+          # During bootstrap (BOOT_BE=true), filter-fly-config is skipped, so
+          # BE_BACKEND_CODE is empty — BOOT_BE=true handles that case.
           backend_changed=false
           if [ "$FORCE" = "true" ] || [ "$BOOT_BE" = "true" ] || \
-             [ "$BE_BACKEND" = "true" ] || [ "$BE_API" = "true" ] || [ "$BE_WORKFLOW" = "true" ]; then
+             [ "${BE_BACKEND_CODE:-}" = "true" ] || [ "$BE_API" = "true" ] || [ "$BE_WORKFLOW" = "true" ]; then
             backend_changed=true
+          fi
+
+          # fly_config_changed: either fly config file changed; no image rebuild needed.
+          # deploy-to-fly always runs and picks up new config from repo checkout at deploy_sha.
+          fly_config_changed=false
+          if [ "${BE_FLY_CONFIG:-}" = "true" ]; then
+            fly_config_changed=true
           fi
 
           frontend_changed=false
@@ -182,9 +220,10 @@ jobs:
             frontend_changed=true
           fi
 
-          echo "backend_changed=${backend_changed}"   >> "$GITHUB_OUTPUT"
-          echo "frontend_changed=${frontend_changed}" >> "$GITHUB_OUTPUT"
-          echo "Backend changed: ${backend_changed}, Frontend changed: ${frontend_changed}"
+          echo "backend_changed=${backend_changed}"       >> "$GITHUB_OUTPUT"
+          echo "fly_config_changed=${fly_config_changed}" >> "$GITHUB_OUTPUT"
+          echo "frontend_changed=${frontend_changed}"     >> "$GITHUB_OUTPUT"
+          echo "Backend changed: ${backend_changed}, Fly config changed: ${fly_config_changed}, Frontend changed: ${frontend_changed}"
 
   # =============================================================================
   # Build and Push Backend Image to GHCR
@@ -489,6 +528,7 @@ jobs:
           IMAGE_TAG: ${{ steps.image-select.outputs.image_tag }}
           DEPLOY_SHA: ${{ needs.detect-changes.outputs.deploy_sha }}
           BACKEND_CHANGED: ${{ needs.detect-changes.outputs.backend_changed }}
+          FLY_CONFIG_CHANGED: ${{ needs.detect-changes.outputs.fly_config_changed }}
         run: |
           DIGEST=$(flyctl status --app boostedbudget-api --json 2>/dev/null | \
             jq -r '.ImageDetails.Digest // "unknown"' 2>/dev/null || echo "unknown")
@@ -498,6 +538,7 @@ jobs:
           echo "**Digest:** \`${DIGEST}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Deploy SHA:** \`${DEPLOY_SHA}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Backend rebuilt:** ${BACKEND_CHANGED}" >> $GITHUB_STEP_SUMMARY
+          echo "**Fly config changed:** ${FLY_CONFIG_CHANGED}" >> $GITHUB_STEP_SUMMARY
           echo "**URL:** https://api.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
           echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
 
