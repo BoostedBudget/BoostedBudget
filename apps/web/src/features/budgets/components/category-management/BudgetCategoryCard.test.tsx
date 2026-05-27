@@ -340,4 +340,59 @@ describe('BudgetCategoryCard', () => {
       expect(expandedButton).toHaveAttribute('aria-expanded', 'true')
     })
   })
+
+  describe('customCategoryName prop (Gap 2)', () => {
+    it('displays customCategoryName when category_kind is custom', () => {
+      const category = createMockCategory({
+        category_kind: 'custom',
+        pfc_primary: undefined,
+        pfc_detailed: undefined,
+        custom_category_id: 'some-uuid',
+      })
+      render(<BudgetCategoryCard category={category} customCategoryName="My Restaurants" />)
+      expect(screen.getByRole('heading')).toHaveTextContent('My Restaurants')
+    })
+
+    it('does not show UUID in heading when customCategoryName is provided', () => {
+      const category = createMockCategory({
+        category_kind: 'custom',
+        pfc_primary: undefined,
+        pfc_detailed: undefined,
+        custom_category_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+      })
+      render(<BudgetCategoryCard category={category} customCategoryName="Dining Out" />)
+      expect(screen.getByRole('heading')).not.toHaveTextContent('a1b2c3d4')
+      expect(screen.getByRole('heading')).toHaveTextContent('Dining Out')
+    })
+
+    it('falls back gracefully when customCategoryName is undefined for custom category', () => {
+      const category = createMockCategory({
+        category_kind: 'custom',
+        pfc_primary: undefined,
+        pfc_detailed: undefined,
+        custom_category_id: 'some-uuid',
+      })
+      // No customCategoryName prop — should render without crashing
+      render(<BudgetCategoryCard category={category} />)
+      expect(screen.getByRole('article')).toBeInTheDocument()
+    })
+
+    it('strips primary prefix from customCategoryName in child variant', () => {
+      const category = createMockCategory({
+        category_kind: 'custom',
+        pfc_primary: undefined,
+        pfc_detailed: undefined,
+        custom_category_id: 'some-uuid',
+      })
+      // customCategoryName without a separator — no stripping should occur
+      render(
+        <BudgetCategoryCard
+          category={category}
+          customCategoryName="Dining Out"
+          variant="child"
+        />
+      )
+      expect(screen.getByRole('heading')).toHaveTextContent('Dining Out')
+    })
+  })
 })

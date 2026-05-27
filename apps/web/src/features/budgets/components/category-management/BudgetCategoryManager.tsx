@@ -22,6 +22,8 @@ import { BudgetCategoryCard } from './BudgetCategoryCard';
 import { BudgetCategoryForm } from './BudgetCategoryForm';
 import { AllocationBreakdown } from './AllocationBreakdown';
 import { groupBudgetCategoriesByPrimary } from '../../utils/groupBudgetCategoriesByPrimary';
+import type { CustomCategoryMap } from '../../utils/groupBudgetCategoriesByPrimary';
+import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 
 export interface BudgetCategoryManagerProps {
   /** Budget ID for API calls */
@@ -36,8 +38,11 @@ export interface BudgetCategoryManagerProps {
   onUpdateCategory: (id: string, req: UpdateBudgetCategoryRequest) => Promise<BudgetCategory>;
   /** Callback when a category is deleted */
   onDeleteCategory: (id: string) => Promise<void>;
-  /** Available Plaid categories for selection */
-  availableCategories: string[][];
+  /**
+   * @deprecated No longer used — BudgetCategoryForm fetches custom categories internally
+   * via useGetUserCategories. Kept for backward compatibility; will be removed in a future cleanup.
+   */
+  availableCategories?: string[][];
   /** Available user tags for selection */
   availableTags: UserTag[];
   /** Whether all interactions are disabled */
@@ -61,7 +66,6 @@ export function BudgetCategoryManager({
   onAddCategory,
   onUpdateCategory,
   onDeleteCategory,
-  availableCategories,
   availableTags,
   disabled = false,
 }: BudgetCategoryManagerProps) {
@@ -81,24 +85,29 @@ export function BudgetCategoryManager({
   // Refs for keyboard navigation — indexed by flat order position
   const categoryRefs = useRef<(HTMLDivElement | null)[]>([]);
 
+  // Fetch user custom categories for display name resolution and parent nesting
+  const { data: userCategories } = useGetUserCategories();
+
+  const customCategoryMap = useMemo<CustomCategoryMap>(
+    () => new Map(
+      (userCategories ?? []).map(cat => [
+        cat.id,
+        { name: cat.name, parent_pfc_primary: cat.parent_pfc_primary ?? null },
+      ])
+    ),
+    [userCategories]
+  );
+
   // Calculate unallocated funds
   const unallocatedFunds = useMemo(() => {
     const totalAllocated = categories.reduce((sum, cat) => sum + cat.allocated_amount, 0);
     return totalIncome - totalAllocated;
   }, [categories, totalIncome]);
 
-  // Filter out already-used categories for the form dropdown
-  const filteredAvailableCategories = useMemo(() => {
-    const usedLabels = new Set(categories.map(formatBudgetCategoryLabel));
-    return availableCategories.filter(
-      (cat) => !usedLabels.has(cat.join(' > '))
-    );
-  }, [availableCategories, categories]);
-
-  // Grouped hierarchy for visual layout
+  // Grouped hierarchy for visual layout (custom categories nest under PFC parents when possible)
   const groups = useMemo(
-    () => groupBudgetCategoriesByPrimary(categories),
-    [categories]
+    () => groupBudgetCategoriesByPrimary(categories, customCategoryMap),
+    [categories, customCategoryMap]
   );
 
   // Flat order of all categories in render order — for keyboard navigation
@@ -208,26 +217,33 @@ export function BudgetCategoryManager({
   }, [formDialog.mode, formDialog.category, categories])
 
   const renderCategoryItem = useCallback(
-    (category: BudgetCategory, variant: 'standalone' | 'parent' | 'child', flatIndex: number) => (
-      <div
-        key={category.id}
-        role="listitem"
-        tabIndex={0}
-        onKeyDown={(e) => handleKeyDown(e, category)}
-        ref={(el) => {
-          categoryRefs.current[flatIndex] = el;
-        }}
-      >
-        <BudgetCategoryCard
-          category={category}
-          variant={variant}
-          onEdit={() => handleOpenEditForm(category)}
-          onDelete={() => handleOpenDeleteDialog(category)}
-          disabled={disabled}
-        />
-      </div>
-    ),
-    [handleKeyDown, handleOpenEditForm, handleOpenDeleteDialog, disabled]
+    (category: BudgetCategory, variant: 'standalone' | 'parent' | 'child', flatIndex: number) => {
+      const customCategoryName =
+        category.category_kind === 'custom' && category.custom_category_id
+          ? customCategoryMap.get(category.custom_category_id)?.name
+          : undefined;
+      return (
+        <div
+          key={category.id}
+          role="listitem"
+          tabIndex={0}
+          onKeyDown={(e) => handleKeyDown(e, category)}
+          ref={(el) => {
+            categoryRefs.current[flatIndex] = el;
+          }}
+        >
+          <BudgetCategoryCard
+            category={category}
+            variant={variant}
+            customCategoryName={customCategoryName}
+            onEdit={() => handleOpenEditForm(category)}
+            onDelete={() => handleOpenDeleteDialog(category)}
+            disabled={disabled}
+          />
+        </div>
+      );
+    },
+    [handleKeyDown, handleOpenEditForm, handleOpenDeleteDialog, disabled, customCategoryMap]
   );
 
   return (
@@ -296,9 +312,6 @@ export function BudgetCategoryManager({
         onSubmit={handleFormSubmit}
         mode={formDialog.mode}
         initialData={formDialog.category || undefined}
-        availableCategories={
-          formDialog.mode === 'edit' ? availableCategories : filteredAvailableCategories
-        }
         availableTags={availableTags}
         expectedIncome={totalIncome}
         totalAllocatedExcludingCurrent={totalAllocatedExcludingCurrent}

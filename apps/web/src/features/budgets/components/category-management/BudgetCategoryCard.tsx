@@ -57,6 +57,11 @@ export interface BudgetCategoryCardProps extends VariantProps<typeof budgetCateg
    * - 'child': indented sub-budget (left accent border, strips primary prefix from label)
    */
   variant?: 'standalone' | 'parent' | 'child';
+  /**
+   * Human-readable name for custom categories (resolved from useGetUserCategories by the parent).
+   * Required for category_kind='custom' to avoid showing a raw UUID as the label.
+   */
+  customCategoryName?: string;
 }
 
 /**
@@ -95,13 +100,16 @@ export function BudgetCategoryCard({
   onDelete,
   disabled = false,
   variant = 'standalone',
+  customCategoryName,
 }: BudgetCategoryCardProps) {
   const [isTransactionsExpanded, setIsTransactionsExpanded] = useState(false);
 
-  const fullLabel = useMemo(
-    () => formatBudgetCategoryLabel(category),
-    [category]
-  );
+  const fullLabel = useMemo(() => {
+    if (category.category_kind === 'custom' && customCategoryName) {
+      return customCategoryName;
+    }
+    return formatBudgetCategoryLabel(category);
+  }, [category, customCategoryName]);
 
   const categoryPath = variant === 'child' ? stripPrimaryPrefix(fullLabel) : fullLabel;
 
