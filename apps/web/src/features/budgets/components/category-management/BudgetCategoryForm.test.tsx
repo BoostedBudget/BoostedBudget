@@ -834,6 +834,141 @@ describe('BudgetCategoryForm', () => {
     })
   })
 
+  describe('Category form submission — PFC and Custom paths', () => {
+    it('submits pfc_primary with pfc_detailed undefined when only primary selected', async () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      // Open the PFC tree picker and select only a primary category
+      const treeSelectBtn = screen.getByRole('button', { name: /select pfc category/i })
+      fireEvent.click(treeSelectBtn)
+
+      // Click on the FOOD_AND_DRINK primary row (no detailed)
+      const primaryRow = screen.getByTestId('primary-row-FOOD_AND_DRINK')
+      fireEvent.click(primaryRow)
+
+      // Fill in the amount
+      const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
+      fireEvent.change(amountInput, { target: { value: '150' } })
+
+      // Submit
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      await waitFor(() => {
+        expect(mockOnSubmit).toHaveBeenCalledTimes(1)
+        expect(mockOnSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            category_kind: 'pfc',
+            pfc_primary: 'FOOD_AND_DRINK',
+            pfc_detailed: undefined,
+            allocated_amount: 150,
+          })
+        )
+      })
+    })
+
+    it('submits both pfc_primary and pfc_detailed when both are selected', async () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      // Open the PFC tree picker
+      const treeSelectBtn = screen.getByRole('button', { name: /select pfc category/i })
+      fireEvent.click(treeSelectBtn)
+
+      // Expand FOOD_AND_DRINK to see detailed options
+      fireEvent.click(screen.getByTestId('expand-toggle-FOOD_AND_DRINK'))
+
+      // Select a detailed sub-category
+      fireEvent.click(screen.getByTestId('detailed-row-FOOD_AND_DRINK_RESTAURANT'))
+
+      // Fill in the amount
+      const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
+      fireEvent.change(amountInput, { target: { value: '200' } })
+
+      // Submit
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      await waitFor(() => {
+        expect(mockOnSubmit).toHaveBeenCalledTimes(1)
+        expect(mockOnSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            category_kind: 'pfc',
+            pfc_primary: 'FOOD_AND_DRINK',
+            pfc_detailed: 'FOOD_AND_DRINK_RESTAURANT',
+            allocated_amount: 200,
+          })
+        )
+      })
+    })
+
+    it('submits real UUID as custom_category_id when a custom category is selected', async () => {
+      const realUUID = 'f47ac10b-58cc-4372-a567-0e02b2c3d479'
+      mockUseGetUserCategories.mockReturnValue({
+        data: [makeCustomCategory(realUUID, 'Restaurants', 'FOOD_AND_DRINK')],
+        isLoading: false,
+        error: null,
+      })
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      await switchToCustom()
+
+      // Select a custom category by its real UUID (not its display name)
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+      fireEvent.change(categorySelect, { target: { value: realUUID } })
+
+      const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
+      fireEvent.change(amountInput, { target: { value: '75' } })
+
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      await waitFor(() => {
+        expect(mockOnSubmit).toHaveBeenCalledTimes(1)
+        expect(mockOnSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            category_kind: 'custom',
+            custom_category_id: realUUID,
+            allocated_amount: 75,
+          })
+        )
+        // Ensure it's the UUID, not the category name or any concatenated string
+        const call = mockOnSubmit.mock.calls[0][0] as { custom_category_id?: string }
+        expect(call.custom_category_id).toBe('f47ac10b-58cc-4372-a567-0e02b2c3d479')
+        expect(call.custom_category_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+        expect(call.custom_category_id).not.toContain('Restaurants')
+        expect(call.custom_category_id).not.toContain('|')
+      })
+    })
+  })
+
   describe('Category Preview', () => {
     it('should show preview when category selected and budget dates provided', async () => {
       const user = userEvent.setup({ delay: null })
