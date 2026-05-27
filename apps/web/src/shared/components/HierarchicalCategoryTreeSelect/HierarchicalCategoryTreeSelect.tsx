@@ -5,12 +5,16 @@
  * Two-mode tree picker for Plaid PFC categories:
  *   - Multi-select (transaction filters): independent primary + detailed checkboxes
  *   - Single-select (budget form): one selection at a time
+ *
+ * Uses Radix Popover so the panel portals to document.body, escaping
+ * the sticky thead CSS stacking context (same approach as ColumnFilterDropdown).
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { ChevronRight, ChevronDown, Filter, Check } from 'lucide-react'
 import { cva } from 'class-variance-authority'
 import { cn } from '@/lib/utils'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { useCuratedPfcDetailed } from '@/shared/categories/pfcOptions'
 import type { PfcPrimaryOption, PfcDetailedOption } from '@/shared/categories/pfcOptions'
 
@@ -118,43 +122,23 @@ export function HierarchicalCategoryTreeSelect({
   const isSingleSelect =
     singleSelectValue !== undefined || onSingleSelectChange !== undefined
 
-  const [isOpen, setIsOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const containerRef = useRef<HTMLDivElement>(null)
 
   const { data: categories } = useCuratedPfcDetailed()
-
-  // Close on outside click
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(event.target as Node)
-      ) {
-        setIsOpen(false)
-      }
-    }
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
-      return () => document.removeEventListener('mousedown', handleClickOutside)
-    }
-  }, [isOpen])
-
-  // Close on Escape
-  useEffect(() => {
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === 'Escape') setIsOpen(false)
-    }
-    if (isOpen) {
-      document.addEventListener('keydown', handleEscape)
-      return () => document.removeEventListener('keydown', handleEscape)
-    }
-  }, [isOpen])
 
   const isActive = isSingleSelect
     ? singleSelectValue != null
     : selectedPrimaries.length > 0 || selectedDetaileds.length > 0
+
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      if (disabled && open) return
+      // Reset search whenever the popover opens or closes
+      if (!open) setSearchQuery('')
+    },
+    [disabled]
+  )
 
   // ─── Search filtering ────────────────────────────────────────────────────
 
@@ -519,93 +503,87 @@ export function HierarchicalCategoryTreeSelect({
   // ─── JSX ─────────────────────────────────────────────────────────────────
 
   return (
-    <div ref={containerRef} className={cn('relative inline-block', className)}>
-      {/* Trigger button */}
-      <button
-        type="button"
-        onClick={() => {
-          if (!disabled) {
-            setIsOpen((prev) => !prev)
-            setSearchQuery('')
-          }
-        }}
-        disabled={disabled}
-        aria-label={ariaLabel}
-        aria-expanded={isOpen}
-        aria-haspopup="listbox"
-        className={cn(
-          'relative inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5',
-          'text-sm rounded-md border border-border bg-background',
-          'hover:bg-accent hover:text-accent-foreground transition-colors',
-          'disabled:opacity-50 disabled:pointer-events-none',
-          isActive && 'border-primary text-primary'
-        )}
-      >
-        <Filter className="w-4 h-4" aria-hidden="true" />
-        {isActive && (
-          <span
-            data-testid="active-dot"
-            className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-primary"
-            aria-hidden="true"
-          />
-        )}
-      </button>
-
-      {/* Dropdown */}
-      {isOpen && (
-        <div
-          className={cn(
-            'absolute z-50 mt-1 w-64 rounded-md border border-border bg-card shadow-lg',
-            'flex flex-col overflow-hidden'
-          )}
-          role="listbox"
-          aria-multiselectable={!isSingleSelect}
-        >
-          {/* Search input */}
-          <div className="p-2 border-b border-border">
-            <input
-              type="text"
-              placeholder="Search categories..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className={cn(
-                'w-full px-2.5 py-1 text-sm rounded-md border border-border bg-background',
-                'placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary'
-              )}
-              aria-label="Search categories"
-              autoFocus
-            />
-          </div>
-
-          {/* Tree rows */}
-          <div className="overflow-y-auto max-h-60 py-1">
-            {filteredCategories.length === 0 ? (
-              <div className="px-3 py-2 text-sm text-muted-foreground">
-                No matching categories
-              </div>
-            ) : (
-              renderRows()
+    <Popover onOpenChange={handleOpenChange}>
+      <div className={cn('relative inline-block', className)}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            disabled={disabled}
+            aria-label={ariaLabel}
+            aria-haspopup="listbox"
+            className={cn(
+              'flex items-center justify-center w-6 h-6 p-1 border-none rounded cursor-pointer bg-transparent transition-colors duration-150',
+              'disabled:opacity-50 disabled:cursor-not-allowed',
+              isActive
+                ? 'text-primary bg-primary/10 hover:bg-primary/20 hover:text-primary'
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
             )}
-          </div>
+          >
+            <Filter className="w-4 h-4" aria-hidden="true" />
+            {isActive && (
+              <span
+                data-testid="active-dot"
+                className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-primary"
+                aria-hidden="true"
+              />
+            )}
+          </button>
+        </PopoverTrigger>
+      </div>
+      <PopoverContent
+        role="listbox"
+        aria-multiselectable={!isSingleSelect}
+        className="w-64 p-0"
+        align="start"
+        onOpenAutoFocus={(e) => {
+          // Let autoFocus on the search input handle focus; prevent Radix stealing it
+          e.preventDefault()
+        }}
+      >
+        {/* Search input */}
+        <div className="p-2 border-b border-border">
+          <input
+            type="text"
+            placeholder="Search categories..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className={cn(
+              'w-full px-2.5 py-1 text-sm rounded-md border border-border bg-background',
+              'placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary'
+            )}
+            aria-label="Search categories"
+            autoFocus
+          />
+        </div>
 
-          {/* Footer: Clear (multi-select only) */}
-          {!isSingleSelect && (
-            <div className="p-2 border-t border-border flex justify-end">
-              <button
-                type="button"
-                onClick={handleClear}
-                className={cn(
-                  'px-3 py-1 text-sm rounded-md',
-                  'text-muted-foreground hover:text-foreground hover:bg-accent transition-colors'
-                )}
-                aria-label="Clear category filter"
-              >
-                Clear
-              </button>
+        {/* Tree rows */}
+        <div className="overflow-y-auto max-h-60 py-1">
+          {filteredCategories.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-muted-foreground">
+              No matching categories
             </div>
+          ) : (
+            renderRows()
           )}
         </div>
-      )}
-    </div>
+
+        {/* Footer: Clear (multi-select only) */}
+        {!isSingleSelect && (
+          <div className="p-2 border-t border-border flex justify-end">
+            <button
+              type="button"
+              onClick={handleClear}
+              className={cn(
+                'px-3 py-1 text-sm rounded-md',
+                'text-muted-foreground hover:text-foreground hover:bg-accent transition-colors'
+              )}
+              aria-label="Clear category filter"
+            >
+              Clear
+            </button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
   )
 }
