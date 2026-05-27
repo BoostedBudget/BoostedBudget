@@ -233,7 +233,7 @@ export function TransactionTable({
           </span>
         )
       },
-      customFilter: (selectedPrimaries !== undefined || selectedDetaileds !== undefined) ? (
+      customFilter: onPrimariesChange ? (
         <HierarchicalCategoryTreeSelect
           selectedPrimaries={selectedPrimaries ?? []}
           onPrimariesChange={onPrimariesChange}
