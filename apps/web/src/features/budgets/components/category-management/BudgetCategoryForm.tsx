@@ -131,9 +131,7 @@ export function BudgetCategoryForm({
     });
   }, [customCategories]);
 
-  const showTagPicker = useMemo(() => {
-    return formData.match_logic !== 'category_only';
-  }, [formData.match_logic]);
+  const showTagPicker = formData.match_logic !== 'category_only';
 
   const hasCategory = formData.category_kind === 'pfc'
     ? !!formData.pfc_primary
@@ -163,12 +161,11 @@ export function BudgetCategoryForm({
     return projected > expectedIncome ? projected - expectedIncome : null;
   }, [expectedIncome, totalAllocatedExcludingCurrent, formData.allocated_amount]);
 
-  const formatCurrency = (amount: number): string => {
-    return new Intl.NumberFormat('en-US', {
+  const formatCurrency = (amount: number): string =>
+    new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
     }).format(amount);
-  };
 
   const handleCategoryKindChange = useCallback(
     (kind: 'pfc' | 'custom') => {
@@ -329,14 +326,12 @@ export function BudgetCategoryForm({
     [formData, mode, validate, onSubmit, onClose]
   );
 
-  const dialogTitle = mode === 'create' ? 'Add Category' : 'Edit Category';
-  const submitButtonText = mode === 'create' ? 'Add' : 'Save';
-
-  const inputBase =
-    'w-full py-2.5 px-3 text-sm border border-input rounded-lg bg-card text-foreground transition-[border-color,box-shadow] duration-150 focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-ring/15 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed';
-  const inputError = 'border-destructive focus:ring-destructive/15';
-
   const isEditMode = mode === 'edit';
+  const dialogTitle = isEditMode ? 'Edit Category' : 'Add Category';
+  const submitButtonText = isEditMode ? 'Save' : 'Add';
+
+  const inputBase = 'w-full py-2.5 px-3 text-sm border border-input rounded-lg bg-card text-foreground transition-[border-color,box-shadow] duration-150 focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-ring/15 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed';
+  const inputError = 'border-destructive focus:ring-destructive/15';
 
   // PFC primary display label
   const pfcPrimaryLabel = formData.pfc_primary ? formatPFCPrimary(formData.pfc_primary) : '';
