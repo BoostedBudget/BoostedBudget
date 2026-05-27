@@ -5,13 +5,15 @@ import { ReadOnlyGuard } from '@/auth'
 import type { Transaction } from '../types'
 import type { Account } from '../../accounts/types'
 import { getCategoryColor } from '@/lib/category-colors'
-import { getEffectiveCategory, getEffectiveCategoryLabel } from '@/shared/categories/getEffectiveCategory'
+import { getEffectiveCategory, getEffectiveCategoryLabel, getEffectiveDetailedCategory } from '@/shared/categories/getEffectiveCategory'
+import { getDetailedLabel } from '@/shared/categories/pfcOptions'
+import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect'
 import { formatTransactionAmount, isOutflow } from '@/shared/transactions/amount'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 
-const TRANSACTION_COLUMN_IDS = ['date', 'merchant', 'account', 'category', 'amount'] as const
+const TRANSACTION_COLUMN_IDS = ['date', 'merchant', 'account', 'category', 'sub_category', 'amount'] as const
 
 export type TransactionSortColumn = 'date' | 'merchant' | 'amount' | 'category'
 export type SortDirection = 'asc' | 'desc'
@@ -39,11 +41,14 @@ export interface TransactionTableProps {
   accountOptions?: FilterOption[]
   accountFilter?: string[]
   onAccountFilterChange?: (value: string[]) => void
-  categoryOptions?: FilterOption[]
-  categoryFilter?: string[]
-  onCategoryFilterChange?: (value: string[]) => void
   amountRange?: RangeValue | null
   onAmountRangeChange?: (value: RangeValue | null) => void
+  /** Selected PFC primary enum values (hierarchical category filter) */
+  selectedPrimaries?: string[]
+  onPrimariesChange?: (values: string[]) => void
+  /** Selected PFC detailed sub-category enum values (hierarchical category filter) */
+  selectedDetaileds?: string[]
+  onDetailedsChange?: (values: string[]) => void
   /** Infinite scroll: called when user scrolls near the bottom */
   onScrollEnd?: () => void
   /** Infinite scroll: whether more pages exist */
@@ -82,11 +87,12 @@ export function TransactionTable({
   accountOptions,
   accountFilter,
   onAccountFilterChange,
-  categoryOptions,
-  categoryFilter,
-  onCategoryFilterChange,
   amountRange,
   onAmountRangeChange,
+  selectedPrimaries,
+  onPrimariesChange,
+  selectedDetaileds,
+  onDetailedsChange,
   onScrollEnd,
   hasMore,
   isFetchingMore,
@@ -119,17 +125,15 @@ export function TransactionTable({
 
   const filters: FilterState = {
     account: accountFilter ?? [],
-    category: categoryFilter ?? [],
     amount: amountRange ?? null,
   }
 
   const handleFiltersChange = useCallback(
     (newFilters: FilterState) => {
       if (newFilters.account !== filters.account) onAccountFilterChange?.(newFilters.account as string[])
-      if (newFilters.category !== filters.category) onCategoryFilterChange?.(newFilters.category as string[])
       if (newFilters.amount !== filters.amount) onAmountRangeChange?.(newFilters.amount as RangeValue | null)
     },
-    [filters.account, filters.category, filters.amount, onAccountFilterChange, onCategoryFilterChange, onAmountRangeChange]
+    [filters.account, filters.amount, onAccountFilterChange, onAmountRangeChange]
   )
 
   const columns: ColumnDef<Transaction>[] = [
@@ -229,10 +233,33 @@ export function TransactionTable({
           </span>
         )
       },
-      filter:
-        categoryOptions && onCategoryFilterChange
-          ? { type: 'select', options: categoryOptions, multiSelect: true, searchable: true }
-          : undefined,
+      customFilter: (selectedPrimaries !== undefined || selectedDetaileds !== undefined) ? (
+        <HierarchicalCategoryTreeSelect
+          selectedPrimaries={selectedPrimaries ?? []}
+          onPrimariesChange={onPrimariesChange}
+          selectedDetaileds={selectedDetaileds ?? []}
+          onDetailedsChange={onDetailedsChange}
+          aria-label="Filter by category"
+        />
+      ) : undefined,
+      isFilterActive: (selectedPrimaries?.length ?? 0) + (selectedDetaileds?.length ?? 0) > 0,
+    },
+    {
+      id: 'sub_category',
+      header: 'Sub-category',
+      resizable: true,
+      reorderable: true,
+      hideable: true,
+      defaultSize: 180,
+      minSize: 120,
+      maxSize: 260,
+      render: (row) => {
+        const detailed = getEffectiveDetailedCategory(row)
+        if (!detailed) return <span className="text-sm text-muted-foreground/40">—</span>
+        const label = getDetailedLabel(detailed) ?? detailed
+        return <span className="text-sm text-muted-foreground">{label}</span>
+      },
+      // No masking: PFC taxonomy labels are not user PII
     },
     {
       id: 'amount',

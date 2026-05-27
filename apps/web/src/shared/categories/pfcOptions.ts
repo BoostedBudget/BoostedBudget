@@ -216,3 +216,16 @@ const PFC_HIERARCHY: PfcPrimaryOption[] = [
 export function useCuratedPfcDetailed(): { data: PfcPrimaryOption[] } {
   return { data: PFC_HIERARCHY }
 }
+
+/**
+ * Returns the display label for a PFC detailed enum value, or null if not found.
+ * Searches the static PFC_HIERARCHY; no hook required.
+ */
+export function getDetailedLabel(value: string): string | null {
+  for (const primary of PFC_HIERARCHY) {
+    for (const d of primary.detailed) {
+      if (d.value === value) return d.label
+    }
+  }
+  return null
+}

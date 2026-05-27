@@ -22,7 +22,6 @@ import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
-import { formatPFCPrimary } from '@/shared/categories/formatPfc'
 
 export function TransactionsPage() {
   const {
@@ -91,13 +90,6 @@ export function TransactionsPage() {
     [setFilter]
   )
 
-  const handleCategoryFilterChange = useCallback(
-    (value: string[]) => {
-      setFilter('pfc_primaries', value.length > 0 ? value : undefined)
-    },
-    [setFilter]
-  )
-
   const handleAmountRangeChange = useCallback(
     (value: RangeValue | null) => {
       if (value && (value.min !== undefined || value.max !== undefined)) {
@@ -157,26 +149,6 @@ export function TransactionsPage() {
       })
     }
   }, [isError, fetchNextPage])
-
-  const categoryOptions = useMemo<FilterOption[]>(() => {
-    const enumToDisplay = new Map<string, string>()
-
-    // Seed with curated PFC primaries (enum → display)
-    plaidPrimaries.forEach(p => enumToDisplay.set(p.enum, p.display))
-
-    // Add any observed effective primaries not already in the curated list
-    const txns = infiniteTransactions
-    txns.forEach((t) => {
-      const effectivePrimary = t.pfc_primary_override ?? t.pfc_primary
-      if (effectivePrimary && !enumToDisplay.has(effectivePrimary)) {
-        enumToDisplay.set(effectivePrimary, formatPFCPrimary(effectivePrimary))
-      }
-    })
-
-    return Array.from(enumToDisplay.entries())
-      .sort(([, a], [, b]) => a.localeCompare(b))
-      .map(([value, label]) => ({ value, label }))
-  }, [infiniteTransactions, plaidPrimaries])
 
   const handleEditTransaction = (transaction: Transaction) => {
     setSelectedTransaction(transaction)
@@ -334,9 +306,10 @@ export function TransactionsPage() {
               accountOptions={accountOptions}
               accountFilter={filters.account_ids}
               onAccountFilterChange={handleAccountFilterChange}
-              categoryOptions={categoryOptions}
-              categoryFilter={filters.pfc_primaries}
-              onCategoryFilterChange={handleCategoryFilterChange}
+              selectedPrimaries={filters.pfc_primaries}
+              onPrimariesChange={(v) => setFilter('pfc_primaries', v.length > 0 ? v : undefined)}
+              selectedDetaileds={filters.pfc_detaileds}
+              onDetailedsChange={(v) => setFilter('pfc_detaileds', v.length > 0 ? v : undefined)}
               amountRange={currentAmountRange}
               onAmountRangeChange={handleAmountRangeChange}
               onScrollEnd={fetchNextPage}
