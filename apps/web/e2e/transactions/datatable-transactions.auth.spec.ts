@@ -140,16 +140,16 @@ test.describe('DataTable resize — Transactions', () => {
     expect(midWidth).toBeGreaterThan(initialWidth + 10)
     expect(finalWidth).toBeGreaterThan(initialWidth + 40)
 
-    // Fix #1193: virtual <td> width must match <th> (merchant is column index 1).
+    // Fix #1193 (part 2): <th> BCR must exactly match <td> BCR (merchant is column index 1).
+    // Both now carry the same inline width from getSize(): <th> via virtualStyle prop,
+    // <td> via virtualCellStyle. Table width = totalVirtualTableWidth eliminates surplus redistribution.
     // Hard assertion — if no absolute rows exist, virtualization is broken (not a skip).
     const firstVirtualRow = page.locator('tbody tr[style*="position: absolute"]').first()
     await expect(firstVirtualRow).toBeVisible()
     const merchantTd = firstVirtualRow.locator('td').nth(1)
     const tdWidth = await merchantTd.evaluate((el) => el.getBoundingClientRect().width)
-    // Tolerance: <th> BCR includes browser table-layout redistribution of surplus space;
-    // <td> BCR = exact inline style value (getSize()). Redistribution is ~3px at CI viewport.
-    // Pre-fix diffs were 100-250px so 10px still catches regressions.
-    expect(Math.abs(tdWidth - finalWidth)).toBeLessThan(10)
+    // Tolerance ≤ 2px: sub-pixel rounding only. Pre-fix diffs were 31–165px.
+    expect(Math.abs(tdWidth - finalWidth)).toBeLessThan(2)
   })
 
   test('resized column width persists across reload', async ({ page }) => {
@@ -170,16 +170,15 @@ test.describe('DataTable resize — Transactions', () => {
     await page.mouse.move(startX + 60, startY, { steps: 10 })
     await page.mouse.up()
 
-    // Fix #1193: Virtual <td> width must match <th> before and after reload.
+    // Fix #1193 (part 2): <th> BCR must exactly match <td> BCR before and after reload.
     // Hard assertions — if no absolute rows exist, virtualization is broken (not a skip).
     const widthAfterDrag = await merchantTh.evaluate((el) => el.getBoundingClientRect().width)
     const firstVirtualRow = page.locator('tbody tr[style*="position: absolute"]').first()
     await expect(firstVirtualRow).toBeVisible()
     const merchantTdBeforeReload = firstVirtualRow.locator('td').nth(1)
     const tdWidthBefore = await merchantTdBeforeReload.evaluate((el) => el.getBoundingClientRect().width)
-    // Tolerance: <th> BCR includes browser table-layout redistribution (~3px at CI viewport).
-    // Pre-fix diffs were 100-250px so 10px still catches regressions.
-    expect(Math.abs(tdWidthBefore - widthAfterDrag)).toBeLessThan(10)
+    // Tolerance ≤ 2px: sub-pixel rounding only. Pre-fix diffs were ~31px+.
+    expect(Math.abs(tdWidthBefore - widthAfterDrag)).toBeLessThan(2)
 
     // Reload and re-mock
     await mockDependencies(page)
@@ -196,9 +195,8 @@ test.describe('DataTable resize — Transactions', () => {
     await expect(firstVirtualRowAfterReload).toBeVisible()
     const merchantTdAfterReload = firstVirtualRowAfterReload.locator('td').nth(1)
     const tdWidthAfter = await merchantTdAfterReload.evaluate((el) => el.getBoundingClientRect().width)
-    // Tolerance: <th> BCR includes browser table-layout redistribution (~3px at CI viewport).
-    // Pre-fix diffs were 100-250px so 10px still catches regressions.
-    expect(Math.abs(tdWidthAfter - widthAfterReload)).toBeLessThan(10)
+    // Tolerance ≤ 2px: sub-pixel rounding only. Pre-fix diffs were ~31px+.
+    expect(Math.abs(tdWidthAfter - widthAfterReload)).toBeLessThan(2)
   })
 
   test('"Reset column widths" restores defaultSize', async ({ page }) => {
@@ -235,10 +233,9 @@ test.describe('DataTable resize — Transactions', () => {
     await expect(firstVirtualRow).toBeVisible()
     const merchantTd = firstVirtualRow.locator('td').nth(1)
     const tdWidthAfterReset = await merchantTd.evaluate((el) => el.getBoundingClientRect().width)
-    // Tolerance: after reset all columns return to defaultSize; table surplus is larger so
-    // browser redistributes ~21px to each <th>. <td> BCR = exact inline style. 30px covers this.
-    // Pre-fix diffs were 100-250px so 30px still catches regressions.
-    expect(Math.abs(tdWidthAfterReset - widthAfterReset)).toBeLessThan(30)
+    // Tolerance ≤ 2px: sub-pixel rounding only. Pre-fix diffs were ~21px (table-layout redistribution
+    // after reset). Now eliminated: table width = sum of defaultSizes = no surplus to redistribute.
+    expect(Math.abs(tdWidthAfterReset - widthAfterReset)).toBeLessThan(2)
   })
 
   test('amount columns show semantic red/green colors', async ({ page }) => {

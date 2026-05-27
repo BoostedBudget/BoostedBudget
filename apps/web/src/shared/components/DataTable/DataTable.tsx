@@ -158,6 +158,8 @@ interface SortableColHeaderProps {
   onDragHandleKeyDown: (colId: string, e: React.KeyboardEvent) => void
   headerContent: React.ReactNode
   resizeHandle: React.ReactNode
+  /** When virtualization is active, pin th to the exact same pixel width as its td counterpart. */
+  virtualStyle?: React.CSSProperties
 }
 
 function SortableColHeader({
@@ -168,6 +170,7 @@ function SortableColHeader({
   onDragHandleKeyDown,
   headerContent,
   resizeHandle,
+  virtualStyle,
 }: SortableColHeaderProps) {
   const { setNodeRef, transform, transition, isDragging: isDndDragging, listeners } = useSortable({ id: col.id })
 
@@ -187,7 +190,8 @@ function SortableColHeader({
         transform: CSS.Transform.toString(transform),
         transition: transition ?? undefined,
         zIndex: isDndDragging ? 40 : undefined,
-      } : undefined}
+        ...(virtualStyle ?? {}),
+      } : virtualStyle}
       aria-sort={sortAriaVal}
       {...(col.defaultPinned ? { 'data-pinned': col.defaultPinned } : {})}
     >
@@ -421,6 +425,27 @@ export function DataTable<T,>({
     return map
   }, [table, columnSizing]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Virtual rows (position:absolute) are out of table flow, so colgroup widths don't apply.
+  // Apply widths via inline styles when virtualization is active.
+  const getColumnPx = (col: ColumnDef<T>): number =>
+    tanstackHeaderMap.get(col.id)?.getSize() ?? col.defaultSize ?? 150
+
+  const virtualCellStyle = (px: number): React.CSSProperties | undefined =>
+    isVirtualizationEnabled ? { width: `${px}px`, minWidth: `${px}px`, maxWidth: `${px}px`, boxSizing: 'border-box' } : undefined
+
+  // When virtualization is active the table must be exactly as wide as the sum of column sizes.
+  // width:100% lets the browser distribute any surplus space across <th> elements (table-layout
+  // redistribution), misaligning them with the absolutely-positioned <td> cells that hold exact
+  // inline widths. Setting the table to totalVirtualTableWidth eliminates the surplus entirely.
+  const totalVirtualTableWidth = useMemo(
+    () =>
+      visibleColumns.reduce((sum, col) => sum + getColumnPx(col), 0) +
+      (rowActions ? 96 : 0),
+    // tanstackHeaderMap is the real dep that makes getColumnPx() return fresh values on resize
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [visibleColumns, tanstackHeaderMap, rowActions]
+  )
+
   // Shared thead renderer (used by both virtualized and non-virtualized paths)
   const theadEl = (
     <thead
@@ -453,12 +478,14 @@ export function DataTable<T,>({
                   />
                 )
               })() : null}
+              virtualStyle={virtualCellStyle(getColumnPx(col))}
             />
           ))}
           {rowActions && (
             <th
               scope="col"
               className={headerCellVariants({ align: 'right', action: true })}
+              style={virtualCellStyle(96)}
             >
               Actions
             </th>
@@ -467,14 +494,6 @@ export function DataTable<T,>({
       </SortableContext>
     </thead>
   )
-
-  // Virtual rows (position:absolute) are out of table flow, so colgroup widths don't apply.
-  // Apply widths via inline styles when virtualization is active.
-  const getColumnPx = (col: ColumnDef<T>): number =>
-    tanstackHeaderMap.get(col.id)?.getSize() ?? col.defaultSize ?? 150
-
-  const virtualCellStyle = (px: number): React.CSSProperties | undefined =>
-    isVirtualizationEnabled ? { width: `${px}px`, minWidth: `${px}px`, maxWidth: `${px}px`, boxSizing: 'border-box' } : undefined
 
   function renderRowCells(row: T) {
     return (
@@ -596,7 +615,7 @@ export function DataTable<T,>({
             <table
               className={cn(tableVariants({ loading: loading && !showSkeleton }), className)}
               aria-busy={loading ? true : undefined}
-              style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}
+              style={{ width: `${totalVirtualTableWidth}px`, borderCollapse: 'collapse', tableLayout: 'fixed' }}
             >
               {caption && (
                 <caption className="caption-top text-left text-sm font-semibold text-foreground mb-2">
