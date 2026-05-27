@@ -22,6 +22,11 @@ describe('getBaseOption', () => {
     expect(opt.grid).toMatchObject({ top: 10, right: 10, bottom: 40, left: 60 })
   })
 
+  it('keeps axis labels inside the chart bounds', () => {
+    const opt = getBaseOption(false)
+    expect(opt.grid).toMatchObject({ containLabel: true })
+  })
+
   it('light mode xAxis uses correct grid color', () => {
     const opt = getBaseOption(false)
     expect(opt.xAxis).toBeDefined()
