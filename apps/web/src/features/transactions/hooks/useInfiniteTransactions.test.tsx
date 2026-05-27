@@ -197,7 +197,7 @@ describe('useInfiniteTransactions', () => {
       mockGetTransactions.mockResolvedValue(page1Response)
 
       const filtersWithPfcDetaileds = {
-        pfc_detaileds: ['FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANTS'],
+        pfc_detaileds: ['FOOD_AND_DRINK_COFFEE', 'FOOD_AND_DRINK_RESTAURANT'],
       }
 
       const { result } = renderHook(
@@ -217,7 +217,7 @@ describe('useInfiniteTransactions', () => {
       // joined as a comma-separated string
       expect(mockGetTransactions).toHaveBeenCalled()
       const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
-      expect(callParams.pfc_detaileds).toBe('FOOD_AND_DRINK,FOOD_AND_DRINK_RESTAURANTS')
+      expect(callParams.pfc_detaileds).toBe('FOOD_AND_DRINK_COFFEE,FOOD_AND_DRINK_RESTAURANT')
     })
   })
 

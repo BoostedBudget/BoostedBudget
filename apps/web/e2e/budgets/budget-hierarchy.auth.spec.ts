@@ -160,7 +160,7 @@ test.describe('Budget category hierarchy (#1200)', () => {
 
     // Both parent and child categories must be visible
     await expect(page.getByText('Food & Drink')).toBeVisible()
-    await expect(page.getByText('Restaurant')).toBeVisible()
+    await expect(page.getByText('Restaurant', { exact: true })).toBeVisible()
 
     // Verify structural hierarchy: parent appears before child in the DOM
     const allCards = page.locator('article.budget-category-card')
