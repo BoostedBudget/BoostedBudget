@@ -48,15 +48,13 @@ export function groupBudgetCategoriesByPrimary(categories: BudgetCategory[]): Bu
   const orphans: BudgetCategory[] = []
 
   for (const cat of pfcCategories) {
-    if (!cat.pfc_detailed) continue // skip primaries, handled above
+    if (!cat.pfc_detailed) continue
 
     if (cat.pfc_primary && primaryMap.has(cat.pfc_primary)) {
-      // Has a parent primary budget
-      const existing = childrenMap.get(cat.pfc_primary) ?? []
-      existing.push(cat)
-      childrenMap.set(cat.pfc_primary, existing)
+      const children = childrenMap.get(cat.pfc_primary) ?? []
+      children.push(cat)
+      childrenMap.set(cat.pfc_primary, children)
     } else {
-      // Orphan — no parent budget exists
       orphans.push(cat)
     }
   }
