@@ -15,12 +15,20 @@ export interface BudgetCategoryGroup {
 }
 
 /**
+ * Optional map from custom_category_id (UUID) → { name, parent_pfc_primary }.
+ * When provided, custom categories with a parent_pfc_primary matching an existing
+ * PFC parent group are nested as children of that group instead of being standalone.
+ */
+export type CustomCategoryMap = Map<string, { name: string; parent_pfc_primary?: string | null }>
+
+/**
  * Groups budget categories into primary→children hierarchy.
  *
  * Rules:
  * - PFC category with pfc_primary + NO pfc_detailed → parent
  * - PFC category with pfc_primary + pfc_detailed → child of matching parent
- * - Custom categories → always standalone ({ group: customCat, children: [] })
+ * - Custom categories → standalone by default; nested under PFC parent group when
+ *   customCategoryMap resolves a matching parent_pfc_primary
  * - Orphan detailed (no parent exists) → standalone ({ group: orphan, children: [] })
  *
  * Sort order:
@@ -28,7 +36,10 @@ export interface BudgetCategoryGroup {
  * - Groups sorted by their first item's created_at ASC
  * - Standalone custom categories appended after PFC groups
  */
-export function groupBudgetCategoriesByPrimary(categories: BudgetCategory[]): BudgetCategoryGroup[] {
+export function groupBudgetCategoriesByPrimary(
+  categories: BudgetCategory[],
+  customCategoryMap?: CustomCategoryMap
+): BudgetCategoryGroup[] {
   if (categories.length === 0) return []
 
   // Separate PFC and custom categories
@@ -83,8 +94,35 @@ export function groupBudgetCategoriesByPrimary(categories: BudgetCategory[]): Bu
     return aFirst.created_at.localeCompare(bFirst.created_at)
   })
 
-  // Custom category standalone groups, sorted by created_at ASC
-  const customGroups: BudgetCategoryGroup[] = customCategories
+  // When customCategoryMap is provided, nest custom categories under their PFC parent group.
+  // Otherwise all custom categories are standalone.
+  const standaloneCustomCategories: BudgetCategory[] = []
+
+  for (const cat of customCategories) {
+    let nested = false
+    if (customCategoryMap && cat.custom_category_id) {
+      const meta = customCategoryMap.get(cat.custom_category_id)
+      if (meta?.parent_pfc_primary) {
+        // Find the PFC group for this primary
+        const parentGroup = pfcGroups.find(g => g.group?.pfc_primary === meta.parent_pfc_primary)
+        if (parentGroup) {
+          parentGroup.children.push(cat)
+          nested = true
+        }
+      }
+    }
+    if (!nested) {
+      standaloneCustomCategories.push(cat)
+    }
+  }
+
+  // Sort children within each group by created_at ASC (re-sort after custom children may have been added)
+  for (const group of pfcGroups) {
+    group.children.sort((a, b) => a.created_at.localeCompare(b.created_at))
+  }
+
+  // Standalone custom category groups, sorted by created_at ASC
+  const customGroups: BudgetCategoryGroup[] = standaloneCustomCategories
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
     .map(cat => ({ group: cat, children: [] }))
 

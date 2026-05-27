@@ -206,3 +206,90 @@ describe('groupBudgetCategoriesByPrimary', () => {
     expect(result[1].group!.id).toBe('custom-early')
   })
 })
+
+describe('groupBudgetCategoriesByPrimary — with customCategoryMap (Gap 3)', () => {
+  // Test: custom category with parent_pfc_primary nests under matching PFC parent group
+  it('nests custom category under its PFC parent group when parent budget exists', () => {
+    const pfcParent = makePfcPrimary('pfc-food', 'FOOD_AND_DRINK', '2024-01-01T00:00:00Z')
+    const custom = makeCustom('custom-1', 'custom-uuid-a', '2024-01-02T00:00:00Z')
+    const customMap = new Map([
+      ['custom-uuid-a', { name: 'My Restaurants', parent_pfc_primary: 'FOOD_AND_DRINK' }],
+    ])
+
+    const result = groupBudgetCategoriesByPrimary([pfcParent, custom], customMap)
+
+    // 1 group: pfc parent with the custom as a child
+    expect(result).toHaveLength(1)
+    expect(result[0].group!.id).toBe('pfc-food')
+    expect(result[0].children).toHaveLength(1)
+    expect(result[0].children[0].id).toBe('custom-1')
+  })
+
+  // Test: custom category without parent stays standalone
+  it('keeps custom category as standalone when customCategoryMap has no parent_pfc_primary', () => {
+    const pfcParent = makePfcPrimary('pfc-food', 'FOOD_AND_DRINK', '2024-01-01T00:00:00Z')
+    const custom = makeCustom('custom-1', 'custom-uuid-b', '2024-01-02T00:00:00Z')
+    const customMap = new Map([
+      ['custom-uuid-b', { name: 'No Parent Category', parent_pfc_primary: null }],
+    ])
+
+    const result = groupBudgetCategoriesByPrimary([pfcParent, custom], customMap)
+
+    // 2 groups: pfc parent alone, custom standalone
+    expect(result).toHaveLength(2)
+    expect(result[0].group!.id).toBe('pfc-food')
+    expect(result[0].children).toHaveLength(0)
+    expect(result[1].group!.id).toBe('custom-1')
+    expect(result[1].children).toHaveLength(0)
+  })
+
+  // Test: custom category with parent_pfc_primary but no matching PFC parent budget → standalone
+  it('renders custom category as standalone when no matching PFC parent budget exists', () => {
+    const custom = makeCustom('custom-1', 'custom-uuid-c', '2024-01-01T00:00:00Z')
+    const customMap = new Map([
+      ['custom-uuid-c', { name: 'Orphan Custom', parent_pfc_primary: 'FOOD_AND_DRINK' }],
+    ])
+
+    // No PFC parent budget for FOOD_AND_DRINK in the categories list
+    const result = groupBudgetCategoriesByPrimary([custom], customMap)
+
+    expect(result).toHaveLength(1)
+    expect(result[0].group!.id).toBe('custom-1')
+    expect(result[0].children).toHaveLength(0)
+  })
+
+  // Test: backward compat — no customCategoryMap → custom always standalone
+  it('renders custom categories as standalone when customCategoryMap not provided (backward compat)', () => {
+    const pfcParent = makePfcPrimary('pfc-food', 'FOOD_AND_DRINK', '2024-01-01T00:00:00Z')
+    const custom = makeCustom('custom-1', 'custom-uuid-d', '2024-01-02T00:00:00Z')
+
+    const result = groupBudgetCategoriesByPrimary([pfcParent, custom])
+
+    expect(result).toHaveLength(2)
+    expect(result[0].group!.id).toBe('pfc-food')
+    expect(result[1].group!.id).toBe('custom-1')
+    expect(result[1].children).toHaveLength(0)
+  })
+
+  // Test: multiple customs, some with parent, some without
+  it('nests only customs with matching PFC parent; leaves others standalone', () => {
+    const pfcFood = makePfcPrimary('pfc-food', 'FOOD_AND_DRINK', '2024-01-01T00:00:00Z')
+    const customWithParent = makeCustom('custom-with-parent', 'uuid-with', '2024-01-02T00:00:00Z')
+    const customNoParent = makeCustom('custom-no-parent', 'uuid-without', '2024-01-03T00:00:00Z')
+    const customMap = new Map([
+      ['uuid-with', { name: 'Has Parent', parent_pfc_primary: 'FOOD_AND_DRINK' }],
+      ['uuid-without', { name: 'No Parent', parent_pfc_primary: null }],
+    ])
+
+    const result = groupBudgetCategoriesByPrimary([pfcFood, customWithParent, customNoParent], customMap)
+
+    // 2 groups: [pfc-food with customWithParent as child], [customNoParent standalone]
+    expect(result).toHaveLength(2)
+    const foodGroup = result.find(g => g.group?.id === 'pfc-food')
+    expect(foodGroup!.children).toHaveLength(1)
+    expect(foodGroup!.children[0].id).toBe('custom-with-parent')
+
+    const noParentGroup = result.find(g => g.group?.id === 'custom-no-parent')
+    expect(noParentGroup!.children).toHaveLength(0)
+  })
+})
