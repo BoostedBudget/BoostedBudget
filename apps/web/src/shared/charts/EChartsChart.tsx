@@ -23,7 +23,7 @@ export interface EChartsChartProps {
 export const EChartsChart = forwardRef<ReactEChartsCore, EChartsChartProps>(
   ({ option, style, className, isDark, ariaLabel, onEvents, notMerge = false, lazyUpdate = true }, ref) => (
     // data-ph-mask: masks all descendant financial data from PostHog session replay.
-    <div role="img" aria-label={ariaLabel ?? 'Financial chart'} data-ph-mask>
+    <div role="img" aria-label={ariaLabel ?? 'Financial chart'} className="h-full w-full" data-ph-mask>
       <ReactEChartsCore
         key={isDark ? 'dark' : 'light'}
         ref={ref}
