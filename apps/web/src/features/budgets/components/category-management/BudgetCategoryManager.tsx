@@ -218,9 +218,10 @@ export function BudgetCategoryManager({
 
   const renderCategoryItem = useCallback(
     (category: BudgetCategory, variant: 'standalone' | 'parent' | 'child', flatIndex: number) => {
+      // Provide "Custom category" placeholder during loading/error so the raw UUID is never shown
       const customCategoryName =
         category.category_kind === 'custom' && category.custom_category_id
-          ? customCategoryMap.get(category.custom_category_id)?.name
+          ? (customCategoryMap.get(category.custom_category_id)?.name ?? 'Custom category')
           : undefined;
       return (
         <div
@@ -268,6 +269,7 @@ export function BudgetCategoryManager({
           categories={categories}
           totalIncome={totalIncome}
           unallocated={unallocatedFunds}
+          customCategoryMap={customCategoryMap}
         />
       )}
 
@@ -323,7 +325,11 @@ export function BudgetCategoryManager({
         onOpenChange={(open) => !open && handleCloseDeleteDialog()}
         onConfirm={handleConfirmDelete}
         title="Delete Category"
-        description={deleteDialog.category ? `Are you sure you want to delete the category "${formatBudgetCategoryLabel(deleteDialog.category)}"? This action cannot be undone.` : ''}
+        description={deleteDialog.category ? `Are you sure you want to delete the category "${
+          deleteDialog.category.category_kind === 'custom' && deleteDialog.category.custom_category_id
+            ? (customCategoryMap.get(deleteDialog.category.custom_category_id)?.name ?? 'Custom category')
+            : formatBudgetCategoryLabel(deleteDialog.category)
+        }"? This action cannot be undone.` : ''}
         variant="destructive"
         loading={isDeleting}
       />

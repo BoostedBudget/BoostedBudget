@@ -2,6 +2,7 @@ import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { AllocationBreakdown } from './AllocationBreakdown'
 import type { BudgetCategory } from '../../types'
+import type { CustomCategoryMap } from '../../utils/groupBudgetCategoriesByPrimary'
 
 describe('AllocationBreakdown', () => {
   const createMockCategory = (overrides?: Partial<BudgetCategory>): BudgetCategory => ({
@@ -420,5 +421,75 @@ describe('AllocationBreakdown', () => {
       const overElements = screen.getAllByText(/over-allocated.*\$200/i);
       expect(overElements.length).toBeGreaterThanOrEqual(1);
     });
+  });
+
+  describe('Custom category label resolution (Codex gap fix)', () => {
+    const makeCustomCategory = (id: string, customCategoryId: string): BudgetCategory => ({
+      id,
+      budget_id: 'budget-1',
+      category_kind: 'custom',
+      custom_category_id: customCategoryId,
+      allocated_amount: 400,
+      spent_amount: 0,
+      tags: [],
+      match_logic: 'category_only',
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    })
+
+    it('shows resolved name in legend when customCategoryMap is provided', () => {
+      const cat = makeCustomCategory('cat-custom', 'uuid-abc')
+      const customCategoryMap: CustomCategoryMap = new Map([
+        ['uuid-abc', { name: 'My Dining', parent_pfc_primary: null }],
+      ])
+
+      render(
+        <AllocationBreakdown
+          categories={[cat]}
+          totalIncome={1000}
+          unallocated={600}
+          customCategoryMap={customCategoryMap}
+        />
+      )
+
+      expect(screen.getByText('My Dining')).toBeInTheDocument()
+      expect(screen.queryByText('uuid-abc')).not.toBeInTheDocument()
+    })
+
+    it('falls back to "Custom category" in legend when name not in map', () => {
+      const cat = makeCustomCategory('cat-custom', 'unknown-uuid')
+      const customCategoryMap: CustomCategoryMap = new Map()
+
+      render(
+        <AllocationBreakdown
+          categories={[cat]}
+          totalIncome={1000}
+          unallocated={600}
+          customCategoryMap={customCategoryMap}
+        />
+      )
+
+      expect(screen.queryByText('unknown-uuid')).not.toBeInTheDocument()
+      expect(screen.getByText('Custom category')).toBeInTheDocument()
+    })
+
+    it('falls back to formatBudgetCategoryLabel when no customCategoryMap prop (backward compat)', () => {
+      // Without customCategoryMap, PFC categories still display normally
+      const pfcCat = createMockCategory({
+        id: 'pfc-cat',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: undefined,
+      })
+
+      render(
+        <AllocationBreakdown
+          categories={[pfcCat]}
+          totalIncome={1000}
+          unallocated={500}
+        />
+      )
+
+      expect(screen.getByText('Food And Drink')).toBeInTheDocument()
+    })
   });
 });
