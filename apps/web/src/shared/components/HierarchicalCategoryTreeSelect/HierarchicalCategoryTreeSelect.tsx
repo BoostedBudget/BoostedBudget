@@ -435,8 +435,6 @@ export function HierarchicalCategoryTreeSelect({
         </PopoverTrigger>
       </div>
       <PopoverContent
-        role="tree"
-        aria-multiselectable={!isSingleSelect}
         className="w-64 p-0"
         align="start"
         onOpenAutoFocus={(e) => {
@@ -461,7 +459,11 @@ export function HierarchicalCategoryTreeSelect({
         </div>
 
         {/* Tree rows */}
-        <div className="overflow-y-auto max-h-60 py-1">
+        <div
+          role="tree"
+          aria-multiselectable={!isSingleSelect}
+          className="overflow-y-auto max-h-60 py-1"
+        >
           {q && filteredCategories.length === 0 ? (
             <div className="px-3 py-2 text-sm text-muted-foreground">
               No matching categories

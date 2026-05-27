@@ -429,6 +429,141 @@ describe('HierarchicalCategoryTreeSelect', () => {
     expect(onDetailedsChange).toHaveBeenCalledWith([])
   })
 
+  // ─── ARIA structure ────────────────────────────────────────────────────────
+
+  describe('ARIA structure', () => {
+    it('places role="tree" on the scrollable rows container, not the popover root', () => {
+      render(
+        <HierarchicalCategoryTreeSelect
+          selectedPrimaries={[]}
+          onPrimariesChange={() => {}}
+          selectedDetaileds={[]}
+          onDetailedsChange={() => {}}
+        />
+      )
+      fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+
+      const tree = screen.getByRole('tree')
+      expect(tree).toBeInTheDocument()
+
+      // The search input must NOT be inside the tree element
+      const searchInput = screen.getByPlaceholderText('Search categories...')
+      expect(tree).not.toContainElement(searchInput)
+    })
+
+    it('does not set role="tree" on the popover content root', () => {
+      render(
+        <HierarchicalCategoryTreeSelect
+          selectedPrimaries={[]}
+          onPrimariesChange={() => {}}
+          selectedDetaileds={[]}
+          onDetailedsChange={() => {}}
+        />
+      )
+      fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+
+      const tree = screen.getByRole('tree')
+      // The popover content root has class "w-64"; the tree element must be a
+      // descendant of it, not the root itself.
+      const popoverRoot = document.querySelector('.w-64')
+      expect(popoverRoot).not.toBeNull()
+      expect(popoverRoot).not.toBe(tree)
+      expect(popoverRoot).toContainElement(tree)
+    })
+  })
+
+  // ─── Keyboard navigation ─────────────────────────────────────────────────
+  //
+  // The component uses plain <button> elements with no custom onKeyDown handlers.
+  // Keyboard behaviors available are therefore:
+  //   • Enter / Space on trigger button → opens popover (native button + Radix PopoverTrigger)
+  //   • Enter / Space on tree-row buttons → fires onClick (native button behavior)
+  //   • Enter / Space on expand-toggle buttons → fires onClick (native button behavior)
+  //   • Escape → closes popover (Radix Popover built-in)
+  //
+  // NOT implemented (no custom handlers): ArrowUp/Down focus movement,
+  //   ArrowRight/Left expand-collapse. Tests for those are intentionally omitted.
+
+  describe('keyboard navigation', () => {
+    it('opens the popover when Enter is pressed on the trigger button', () => {
+      render(
+        <HierarchicalCategoryTreeSelect
+          selectedPrimaries={[]}
+          onPrimariesChange={() => {}}
+          selectedDetaileds={[]}
+          onDetailedsChange={() => {}}
+        />
+      )
+      const trigger = screen.getByRole('button', { name: /category filter/i })
+      expect(screen.queryByText('Food & Drink')).not.toBeInTheDocument()
+
+      fireEvent.keyDown(trigger, { key: 'Enter' })
+      fireEvent.click(trigger) // Radix opens on click; Enter on a button fires click natively
+
+      expect(screen.getByText('Food & Drink')).toBeInTheDocument()
+    })
+
+    it('fires primary row onClick when Enter is pressed on a primary row button', () => {
+      const onPrimariesChange = mock(() => {})
+      render(
+        <HierarchicalCategoryTreeSelect
+          selectedPrimaries={[]}
+          onPrimariesChange={onPrimariesChange}
+          selectedDetaileds={[]}
+          onDetailedsChange={() => {}}
+        />
+      )
+      // Open popover first
+      fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+
+      const primaryBtn = screen.getByTestId('primary-checkbox-FOOD_AND_DRINK').closest('button')!
+      fireEvent.keyDown(primaryBtn, { key: 'Enter' })
+      fireEvent.click(primaryBtn) // simulate the native click-from-Enter
+
+      expect(onPrimariesChange).toHaveBeenCalledWith(['FOOD_AND_DRINK'])
+    })
+
+    it('fires expand toggle onClick when Enter is pressed on the expand toggle', () => {
+      render(
+        <HierarchicalCategoryTreeSelect
+          selectedPrimaries={[]}
+          onPrimariesChange={() => {}}
+          selectedDetaileds={[]}
+          onDetailedsChange={() => {}}
+        />
+      )
+      fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+
+      expect(screen.queryByText('Coffee')).not.toBeInTheDocument()
+
+      const expandToggle = screen.getByTestId('expand-toggle-FOOD_AND_DRINK')
+      fireEvent.keyDown(expandToggle, { key: 'Enter' })
+      fireEvent.click(expandToggle) // simulate native click-from-Enter
+
+      expect(screen.getByText('Coffee')).toBeInTheDocument()
+    })
+
+    it('fires detailed row onClick when Enter is pressed on a detailed row button', () => {
+      const onDetailedsChange = mock(() => {})
+      render(
+        <HierarchicalCategoryTreeSelect
+          selectedPrimaries={[]}
+          onPrimariesChange={() => {}}
+          selectedDetaileds={[]}
+          onDetailedsChange={onDetailedsChange}
+        />
+      )
+      fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+      fireEvent.click(screen.getByTestId('expand-toggle-FOOD_AND_DRINK'))
+
+      const detailedBtn = screen.getByTestId('detailed-checkbox-FOOD_AND_DRINK_COFFEE')
+      fireEvent.keyDown(detailedBtn, { key: 'Enter' })
+      fireEvent.click(detailedBtn) // simulate native click-from-Enter
+
+      expect(onDetailedsChange).toHaveBeenCalledWith(['FOOD_AND_DRINK_COFFEE'])
+    })
+  })
+
   // ─── Single-select: detailed toggle-off ──────────────────────────────────
 
   it('clicking an already-selected detailed row calls onSingleSelectChange(null)', async () => {
