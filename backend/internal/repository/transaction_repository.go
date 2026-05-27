@@ -765,20 +765,29 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		argIndex++
 	}
 
-	// Optional filter: pfc_primaries (multi-value) — matches effective PFC primary
-	// Effective PFC primary = pfc_primary_override if kind='pfc', else pfc_primary
-	if len(filters.PFCPrimaries) > 0 {
-		placeholders := make([]string, len(filters.PFCPrimaries))
-		for i, p := range filters.PFCPrimaries {
-			placeholders[i] = fmt.Sprintf("$%d", argIndex)
-			args = append(args, p)
-			argIndex++
+	// pfc_primaries and pfc_detaileds use OR logic between them
+	// (a transaction matches if its primary is in primaries OR its detailed is in detaileds)
+	if len(filters.PFCPrimaries) > 0 || len(filters.PFCDetaileds) > 0 {
+		var orParts []string
+		if len(filters.PFCPrimaries) > 0 {
+			placeholders := make([]string, len(filters.PFCPrimaries))
+			for i, p := range filters.PFCPrimaries {
+				placeholders[i] = fmt.Sprintf("$%d", argIndex)
+				args = append(args, p)
+				argIndex++
+			}
+			orParts = append(orParts, "effective_pfc_primary IN ("+strings.Join(placeholders, ", ")+")")
 		}
-		inClause := strings.Join(placeholders, ", ")
-		conditions = append(conditions, fmt.Sprintf(
-			"effective_pfc_primary IN (%s)",
-			inClause,
-		))
+		if len(filters.PFCDetaileds) > 0 {
+			placeholders := make([]string, len(filters.PFCDetaileds))
+			for i, d := range filters.PFCDetaileds {
+				placeholders[i] = fmt.Sprintf("$%d", argIndex)
+				args = append(args, d)
+				argIndex++
+			}
+			orParts = append(orParts, "effective_pfc_detailed IN ("+strings.Join(placeholders, ", ")+")")
+		}
+		conditions = append(conditions, "("+strings.Join(orParts, " OR ")+")")
 	}
 
 	// Optional filter: custom_category_ids (multi-value) — matches effective custom category

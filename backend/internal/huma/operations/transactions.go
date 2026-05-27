@@ -38,6 +38,7 @@ type GetTransactionsInput struct {
 	StartDate         string `query:"start_date" doc:"Filter transactions on or after this date (YYYY-MM-DD)"`
 	EndDate           string `query:"end_date" doc:"Filter transactions on or before this date (YYYY-MM-DD)"`
 	PFCPrimaries      string `query:"pfc_primaries" doc:"Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)"`
+	PFCDetaileds      string `query:"pfc_detaileds" doc:"Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). Combined with pfc_primaries using OR logic."`
 	CustomCategoryIDs string `query:"custom_category_ids" doc:"Filter by custom category UUIDs (comma-separated)"`
 	Search            string `query:"search" doc:"Search in merchant name or transaction name"`
 	Pending           string `query:"pending" doc:"Filter by pending status (true/false)"`
@@ -182,6 +183,14 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 		primaries := parseCommaSeparated(input.PFCPrimaries)
 		if len(primaries) > 0 {
 			filters.PFCPrimaries = primaries
+		}
+	}
+
+	// PFC detailed sub-category filter (comma-separated enum values)
+	if input.PFCDetaileds != "" {
+		detaileds := parseCommaSeparated(input.PFCDetaileds)
+		if len(detaileds) > 0 {
+			filters.PFCDetaileds = detaileds
 		}
 	}
 
