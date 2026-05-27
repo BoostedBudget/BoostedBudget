@@ -70,6 +70,15 @@ describe('NetWorthHistoryChart', () => {
     expect(screen.getByTestId('net-worth-history-chart')).toBeInTheDocument()
   })
 
+  it('uses a full-section chart height across breakpoints', () => {
+    render(<NetWorthHistoryChart history={historyWithData} />)
+    expect(screen.getByTestId('net-worth-history-chart')).toHaveClass(
+      'h-[400px]',
+      'sm:h-[500px]',
+      'lg:h-[600px]',
+    )
+  })
+
   it('tooltip formatter escapes malicious series names (XSS regression — #1169)', () => {
     render(<NetWorthHistoryChart history={historyWithData} />)
     const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {

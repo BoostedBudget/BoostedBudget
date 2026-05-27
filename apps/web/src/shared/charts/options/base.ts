@@ -17,7 +17,7 @@ export function getBaseOption(isDark: boolean): EChartsOption {
     animation: true,
     animationDuration: 400,
     animationEasing: 'cubicInOut',
-    grid: { top: 10, right: 10, bottom: 40, left: 60, containLabel: false },
+    grid: { top: 10, right: 10, bottom: 40, left: 60, containLabel: true },
     tooltip: { trigger: 'item' },
     legend: { orient: 'horizontal', bottom: 0, left: 'center', textStyle: { color: text } },
     xAxis: { type: 'category', ...axisStyle },
