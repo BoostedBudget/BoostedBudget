@@ -165,15 +165,13 @@ export function BudgetCategoryForm({
 
   const handleCategoryKindChange = useCallback(
     (kind: 'pfc' | 'custom') => {
-      setFormData((prev) => {
-        if (kind === 'pfc') {
-          // Clear custom fields, keep pfc fields
-          return { ...prev, category_kind: kind, custom_category_id: '' };
-        } else {
-          // Clear pfc fields, keep custom fields
-          return { ...prev, category_kind: kind, pfc_primary: '', pfc_detailed: '' };
-        }
-      });
+      setFormData((prev) => ({
+        ...prev,
+        category_kind: kind,
+        ...(kind === 'pfc'
+          ? { custom_category_id: '' }
+          : { pfc_primary: '', pfc_detailed: '' }),
+      }));
       if (errors.category) {
         setErrors((prev) => ({ ...prev, category: undefined }));
       }
