@@ -158,9 +158,11 @@ test.describe('Budget category hierarchy (#1200)', () => {
     await page.goto(`/budgets/${BUDGET_ID}`)
     await page.waitForLoadState('domcontentloaded')
 
-    // Both parent and child categories must be visible
-    await expect(page.getByText('Food & Drink')).toBeVisible()
-    await expect(page.getByText('Restaurant', { exact: true })).toBeVisible()
+    // Both parent and child categories must be visible.
+    // Use .first() — 'Food & Drink' and 'Restaurant' each appear in both the category card
+    // and the AllocationBreakdown legend (both correct); strict mode needs disambiguation.
+    await expect(page.getByText('Food & Drink').first()).toBeVisible()
+    await expect(page.getByText('Restaurant', { exact: true }).first()).toBeVisible()
 
     // Verify structural hierarchy: parent appears before child in the DOM
     const allCards = page.locator('article.budget-category-card')
