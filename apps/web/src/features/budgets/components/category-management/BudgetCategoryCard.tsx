@@ -2,6 +2,7 @@
  * BudgetCategoryCard
  * Issue #497: Budget Category Manager + Match Config UI
  * Issue #499: Transaction-Budget Linking UI - Collapsible transactions
+ * Issue #1200: Multi-level category hierarchy — variant prop for visual grouping
  *
  * Displays a single budget category with its allocation, spending, and match configuration.
  * Supports edit and delete actions.
@@ -10,6 +11,7 @@
 
 import { useState, useMemo } from 'react';
 import { PencilIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
+import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 import type { BudgetCategory } from '../../types';
 import { formatBudgetCategoryLabel } from '../../types';
@@ -17,7 +19,27 @@ import { MATCH_LOGIC_LABELS } from '@boostedbudget/shared-types/matching';
 import { BudgetProgressBar } from '../BudgetProgressBar';
 import { BudgetTransactionList } from '../transaction-link/BudgetTransactionList';
 
-export interface BudgetCategoryCardProps {
+/**
+ * CVA variants for the card wrapper — controls visual hierarchy:
+ * - standalone: default full card (custom categories, primary-only with no children)
+ * - parent: primary-only PFC with children below (removes bottom rounding/border to connect)
+ * - child: indented sub-budget (left indent, top-none rounding, left accent border)
+ */
+const budgetCategoryCardVariants = cva(
+  'bg-card border border-border transition-shadow duration-200 hover:shadow-sm',
+  {
+    variants: {
+      variant: {
+        standalone: 'rounded-lg p-4',
+        parent: 'rounded-lg rounded-b-none border-b-0 p-4',
+        child: 'rounded-lg rounded-t-none border-t-border/50 border-l-2 border-l-primary/20 ml-6 pl-4 pr-4 pt-3 pb-3',
+      },
+    },
+    defaultVariants: { variant: 'standalone' },
+  }
+);
+
+export interface BudgetCategoryCardProps extends VariantProps<typeof budgetCategoryCardVariants> {
   /** The budget category to display */
   category: BudgetCategory;
   /** Budget ID for fetching transactions (enables collapsible transactions when provided) */
@@ -28,6 +50,18 @@ export interface BudgetCategoryCardProps {
   onDelete?: () => void;
   /** Whether actions are disabled */
   disabled?: boolean;
+  /**
+   * Visual hierarchy variant:
+   * - 'standalone': default full card (custom categories, primary-only with no children)
+   * - 'parent': primary-only PFC with children below (connects visually to children)
+   * - 'child': indented sub-budget (left accent border, strips primary prefix from label)
+   */
+  variant?: 'standalone' | 'parent' | 'child';
+  /**
+   * Human-readable name for custom categories (resolved from useGetUserCategories by the parent).
+   * Required for category_kind='custom' to avoid showing a raw UUID as the label.
+   */
+  customCategoryName?: string;
 }
 
 /**
@@ -40,30 +74,54 @@ function formatCurrency(amount: number): string {
   }).format(amount);
 }
 
+/**
+ * For child variant: strips the primary category prefix from the display label.
+ * E.g. "Food & Drink › Restaurants" → "Restaurants"
+ * Uses › or > separators. Falls back to full label if no separator found.
+ */
+function stripPrimaryPrefix(label: string): string {
+  // Try › (actual separator used by formatBudgetCategoryLabel / PFC display values)
+  const guillemet = label.indexOf(' › ');
+  if (guillemet !== -1) {
+    return label.slice(guillemet + 3);
+  }
+  // Fallback: > (legacy separator)
+  const arrow = label.indexOf(' > ');
+  if (arrow !== -1) {
+    return label.slice(arrow + 3);
+  }
+  return label;
+}
+
 export function BudgetCategoryCard({
   category,
   budgetId,
   onEdit,
   onDelete,
   disabled = false,
+  variant = 'standalone',
+  customCategoryName,
 }: BudgetCategoryCardProps) {
   const [isTransactionsExpanded, setIsTransactionsExpanded] = useState(false);
 
-  const categoryPath = useMemo(
-    () => formatBudgetCategoryLabel(category),
-    [category]
-  );
+  const fullLabel = useMemo(() => {
+    if (category.category_kind === 'custom' && customCategoryName) {
+      return customCategoryName;
+    }
+    return formatBudgetCategoryLabel(category);
+  }, [category, customCategoryName]);
+
+  const categoryPath = variant === 'child' ? stripPrimaryPrefix(fullLabel) : fullLabel;
 
   const isOverBudget = category.spent_amount > category.allocated_amount;
   const hasTags = category.tags && category.tags.length > 0;
   const matchLogicLabel = MATCH_LOGIC_LABELS[category.match_logic];
-  const showTransactionsToggle = !!budgetId;
 
   return (
     <article
       className={cn(
         'budget-category-card',
-        'bg-card border border-border rounded-lg p-4 transition-shadow duration-200 hover:shadow-sm',
+        budgetCategoryCardVariants({ variant }),
         isOverBudget && 'budget-category-card--over-budget border-destructive bg-destructive/[0.02]'
       )}
     >
@@ -127,7 +185,7 @@ export function BudgetCategoryCard({
       )}
 
       {/* Actions */}
-      {(onEdit || onDelete || showTransactionsToggle) && (
+      {(onEdit || onDelete || !!budgetId) && (
         <div className="budget-category-card__actions flex gap-2 pt-3 border-t border-border">
           {onEdit && (
             <button
@@ -153,7 +211,7 @@ export function BudgetCategoryCard({
               Delete
             </button>
           )}
-          {showTransactionsToggle && (
+          {budgetId && (
             <button
               type="button"
               className="budget-category-card__action-btn budget-category-card__action-btn--transactions ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground bg-transparent border border-border rounded-md cursor-pointer transition-all duration-150 hover:enabled:bg-primary/5 hover:enabled:border-primary hover:enabled:text-primary disabled:opacity-50 disabled:cursor-not-allowed"
@@ -178,7 +236,7 @@ export function BudgetCategoryCard({
       )}
 
       {/* Collapsible Transactions List */}
-      {showTransactionsToggle && isTransactionsExpanded && budgetId && (
+      {budgetId && isTransactionsExpanded && (
         <div className="budget-category-card__transactions mt-3 pt-3 border-t border-border">
           <BudgetTransactionList budgetId={budgetId} categoryId={category.id} />
         </div>

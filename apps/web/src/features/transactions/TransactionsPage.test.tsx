@@ -574,6 +574,7 @@ describe('TransactionsPage', () => {
       expect(mockUseGetPlaidPrimaryCategories).toHaveBeenCalled()
     })
   })
+
   describe('Infinite Scroll Integration (#1128)', () => {
     function configureInfiniteQueries(overrides?: {
       transactions?: Transaction[]

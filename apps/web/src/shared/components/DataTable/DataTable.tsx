@@ -101,6 +101,22 @@ function renderHeaderContent<T>(
   handleSort: (colId: string, _: SortDirection) => void,
   handleFilterChange: (colId: string, value: string[] | RangeValue | null) => void
 ) {
+  if (col.customFilter !== undefined && typeof col.header === 'string') {
+    return (
+      <TableHeaderCell
+        label={col.header}
+        className={col.align === 'right' ? 'w-full justify-end' : undefined}
+        sortable={col.sortable}
+        sortColumn={col.id}
+        currentSortColumn={sort?.columnId}
+        currentSortDirection={sort?.direction ?? 'asc'}
+        onSort={handleSort}
+        customFilter={col.customFilter}
+        isFilterActive={col.isFilterActive}
+      />
+    )
+  }
+
   if (typeof col.header !== 'string') {
     // sortable/filter props are silently ignored for ReactNode headers — warn in dev
     if (import.meta.env.DEV && (col.sortable || col.filter)) {

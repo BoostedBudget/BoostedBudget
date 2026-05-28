@@ -2,6 +2,7 @@
  * BudgetCategoryForm
  * Issue #497: Budget Category Manager + Match Config UI
  * Issue #1073: Updated for PFC v2 canonical schema
+ * Issue #1200: Replace flat category select with hierarchical picker
  *
  * Modal dialog for creating and editing budget categories with match configuration.
  */
@@ -23,7 +24,10 @@ import { DEFAULT_MATCH_LOGIC } from '@boostedbudget/shared-types/matching';
 import type { UserTag } from '@/features/tags/types';
 import { CategoryMatchConfig } from './CategoryMatchConfig';
 import { usePreviewCategories } from '../../hooks/usePreviewCategories';
-import { formatPFCPrimary, isPFCPrimary } from '@/shared/categories/formatPfc';
+import { formatPFCPrimary } from '@/shared/categories/formatPfc';
+import { getDetailedLabel, getPrimaryLabel } from '@/shared/categories/pfcOptions';
+import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect';
+import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 
 export interface BudgetCategoryFormProps {
   isOpen: boolean;
@@ -31,8 +35,11 @@ export interface BudgetCategoryFormProps {
   onSubmit: (data: CreateBudgetCategoryRequest | UpdateBudgetCategoryRequest) => Promise<void>;
   mode: 'create' | 'edit';
   initialData?: BudgetCategory;
-  /** Available Plaid categories for selection (string[][] for backward compat) */
-  availableCategories: string[][];
+  /**
+   * @deprecated No longer used — PFC picker fetches its own data; custom categories
+   * are fetched via useGetUserCategories(). Kept for backward compatibility with callers.
+   */
+  availableCategories?: string[][];
   availableTags: UserTag[];
   existingCategories?: string[][];
   budgetStartDate?: string;
@@ -73,7 +80,6 @@ export function BudgetCategoryForm({
   onSubmit,
   mode,
   initialData,
-  availableCategories,
   availableTags,
   budgetStartDate,
   budgetEndDate,
@@ -84,6 +90,9 @@ export function BudgetCategoryForm({
   const [errors, setErrors] = useState<FormErrors>({});
   const [apiError, setApiError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Fetch user's custom categories to get real UUIDs for the select
+  const { data: userCategories } = useGetUserCategories();
 
   useEffect(() => {
     if (isOpen) {
@@ -105,25 +114,20 @@ export function BudgetCategoryForm({
     }
   }, [isOpen, mode, initialData]);
 
-  // Build dropdown options from string[][] availableCategories.
-  // PFC primaries are returned as enum values (e.g. "FOOD_AND_DRINK") — format them
-  // for display. Custom category names are plain strings and pass through unchanged.
-  const categoryOptions = useMemo(() => {
-    const formatLabel = (s: string) => isPFCPrimary(s) ? formatPFCPrimary(s) : s
-    return availableCategories.map((cat) => {
-      const pfc_primary = cat[0] || '';
-      const pfc_detailed = cat[1] || '';
-      const primaryLabel = formatLabel(pfc_primary);
-      const detailedLabel = pfc_detailed ? formatLabel(pfc_detailed) : '';
-      const label = detailedLabel ? `${primaryLabel} > ${detailedLabel}` : primaryLabel;
-      const value = pfc_detailed ? `${pfc_primary}|${pfc_detailed}` : pfc_primary;
-      return { value, label, pfc_primary, pfc_detailed };
-    });
-  }, [availableCategories]);
+  // Build dropdown options for the custom category select, keyed by real UUID.
+  // Groups by parent_pfc_primary for <optgroup> display.
+  const customCategoryOptionGroups = useMemo(() => {
+    const cats = userCategories ?? [];
+    const groups: Record<string, { id: string; label: string }[]> = {};
+    for (const cat of cats) {
+      const groupKey = cat.parent_pfc_primary ?? '__none__';
+      if (!groups[groupKey]) groups[groupKey] = [];
+      groups[groupKey].push({ id: cat.id, label: cat.name });
+    }
+    return groups;
+  }, [userCategories]);
 
-  const showTagPicker = useMemo(() => {
-    return formData.match_logic !== 'category_only';
-  }, [formData.match_logic]);
+  const showTagPicker = formData.match_logic !== 'category_only';
 
   const hasCategory = formData.category_kind === 'pfc'
     ? !!formData.pfc_primary
@@ -153,27 +157,59 @@ export function BudgetCategoryForm({
     return projected > expectedIncome ? projected - expectedIncome : null;
   }, [expectedIncome, totalAllocatedExcludingCurrent, formData.allocated_amount]);
 
-  const formatCurrency = (amount: number): string => {
-    return new Intl.NumberFormat('en-US', {
+  const formatCurrency = (amount: number): string =>
+    new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
     }).format(amount);
-  };
 
-  const handleCategoryChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
-      const selectedValue = e.target.value;
-      const selectedOption = categoryOptions.find((opt) => opt.value === selectedValue);
+  const handleCategoryKindChange = useCallback(
+    (kind: 'pfc' | 'custom') => {
       setFormData((prev) => ({
         ...prev,
-        pfc_primary: selectedOption ? selectedOption.pfc_primary : '',
-        pfc_detailed: selectedOption ? selectedOption.pfc_detailed : '',
+        category_kind: kind,
+        ...(kind === 'pfc'
+          ? { custom_category_id: '' }
+          : { pfc_primary: '', pfc_detailed: '' }),
       }));
       if (errors.category) {
         setErrors((prev) => ({ ...prev, category: undefined }));
       }
     },
-    [categoryOptions, errors.category]
+    [errors.category]
+  );
+
+  // PFC single-select value for the tree picker
+  const pfcSingleSelectValue = useMemo(
+    () =>
+      formData.pfc_primary
+        ? { primary: formData.pfc_primary, detailed: formData.pfc_detailed || undefined }
+        : null,
+    [formData.pfc_primary, formData.pfc_detailed]
+  );
+
+  const handlePFCSingleSelectChange = useCallback(
+    (value: { primary: string; detailed?: string } | null) => {
+      setFormData((prev) => ({
+        ...prev,
+        pfc_primary: value?.primary ?? '',
+        pfc_detailed: value?.detailed ?? '',
+      }));
+      if (errors.category) {
+        setErrors((prev) => ({ ...prev, category: undefined }));
+      }
+    },
+    [errors.category]
+  );
+
+  const handleCustomCategoryChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      setFormData((prev) => ({ ...prev, custom_category_id: e.target.value }));
+      if (errors.category) {
+        setErrors((prev) => ({ ...prev, category: undefined }));
+      }
+    },
+    [errors.category]
   );
 
   const handleAmountChange = useCallback(
@@ -279,17 +315,16 @@ export function BudgetCategoryForm({
     [formData, mode, validate, onSubmit, onClose]
   );
 
-  const dialogTitle = mode === 'create' ? 'Add Category' : 'Edit Category';
-  const submitButtonText = mode === 'create' ? 'Add' : 'Save';
+  const isEditMode = mode === 'edit';
+  const dialogTitle = isEditMode ? 'Edit Category' : 'Add Category';
+  const submitButtonText = isEditMode ? 'Save' : 'Add';
 
-  const inputBase =
-    'w-full py-2.5 px-3 text-sm border border-input rounded-lg bg-card text-foreground transition-[border-color,box-shadow] duration-150 focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-ring/15 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed';
+  const inputBase = 'w-full py-2.5 px-3 text-sm border border-input rounded-lg bg-card text-foreground transition-[border-color,box-shadow] duration-150 focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-ring/15 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed';
   const inputError = 'border-destructive focus:ring-destructive/15';
 
-  // Current selected value for the dropdown
-  const selectedCategoryValue = formData.pfc_detailed
-    ? `${formData.pfc_primary}|${formData.pfc_detailed}`
-    : formData.pfc_primary;
+  // PFC primary and detailed display labels
+  const pfcPrimaryLabel = formData.pfc_primary && formatPFCPrimary(formData.pfc_primary);
+  const pfcDetailedLabel = formData.pfc_detailed && (getDetailedLabel(formData.pfc_detailed) ?? formData.pfc_detailed);
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -315,26 +350,91 @@ export function BudgetCategoryForm({
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Category Field */}
           <div>
-            <label
-              htmlFor="category"
-              className="block text-sm font-medium text-foreground"
-            >
+            <label className="block text-sm font-medium text-foreground mb-2">
               Category
             </label>
-            <select
-              id="category"
-              value={selectedCategoryValue}
-              onChange={handleCategoryChange}
-              disabled={mode === 'edit'}
-              className={cn(inputBase, errors.category && inputError)}
-            >
-              <option value="">Select a category...</option>
-              {categoryOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+
+            {/* Category kind toggle */}
+            <div className="flex rounded-md border border-border overflow-hidden mb-3">
+              <button
+                type="button"
+                onClick={() => handleCategoryKindChange('pfc')}
+                className={cn(
+                  'flex-1 px-3 py-1.5 text-sm font-medium transition-colors',
+                  formData.category_kind === 'pfc'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                )}
+                disabled={isEditMode}
+              >
+                Plaid Categories
+              </button>
+              {(userCategories?.length ?? 0) > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handleCategoryKindChange('custom')}
+                  className={cn(
+                    'flex-1 px-3 py-1.5 text-sm font-medium transition-colors border-l border-border',
+                    formData.category_kind === 'custom'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                  )}
+                  disabled={isEditMode}
+                >
+                  Custom Categories
+                </button>
+              )}
+            </div>
+
+            {/* PFC section: hierarchical tree picker */}
+            {formData.category_kind === 'pfc' && (
+              <div>
+                <HierarchicalCategoryTreeSelect
+                  singleSelectValue={pfcSingleSelectValue}
+                  onSingleSelectChange={handlePFCSingleSelectChange}
+                  disabled={isEditMode}
+                  aria-label="Select PFC category"
+                />
+                {pfcSingleSelectValue && (
+                  <div className="mt-1.5 flex items-center gap-1.5 text-sm text-foreground">
+                    <span>{pfcPrimaryLabel}</span>
+                    {pfcDetailedLabel && (
+                      <>
+                        <span className="text-muted-foreground">›</span>
+                        <span>{pfcDetailedLabel}</span>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Custom section: select grouped by parent_pfc_primary */}
+            {formData.category_kind === 'custom' && (
+              <select
+                id="category"
+                value={formData.custom_category_id}
+                onChange={handleCustomCategoryChange}
+                disabled={isEditMode}
+                aria-label="Category"
+                className={cn(inputBase, errors.category && inputError)}
+              >
+                <option value="">Select a category...</option>
+                {Object.entries(customCategoryOptionGroups).map(([groupKey, opts]) => (
+                  <optgroup
+                    key={groupKey}
+                    label={groupKey === '__none__' ? 'Custom (no parent)' : (getPrimaryLabel(groupKey) ?? formatPFCPrimary(groupKey))}
+                  >
+                    {opts.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            )}
+
             {errors.category && (
               <p className="mt-1 text-sm text-destructive">
                 {errors.category}

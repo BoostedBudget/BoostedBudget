@@ -56,8 +56,8 @@ export function BudgetDetailPage() {
   const { tags: availableTags } = useTags();
 
   useEffect(() => {
-    trackEvent(ANALYTICS_EVENTS.BUDGET_DETAIL_VIEWED)
-  }, [trackEvent])
+    trackEvent(ANALYTICS_EVENTS.BUDGET_DETAIL_VIEWED);
+  }, [trackEvent]);
 
   const addCategoryMutation = useAddBudgetCategory();
   const updateCategoryMutation = useUpdateBudgetCategory();
@@ -97,9 +97,10 @@ export function BudgetDetailPage() {
         data: req,
       });
       await refetch();
+      trackEvent(ANALYTICS_EVENTS.BUDGET_CATEGORY_ADDED);
       return result as BudgetCategory;
     },
-    [budgetId, refetch, addCategoryMutation]
+    [budgetId, refetch, trackEvent, addCategoryMutation]
   );
 
   const handleUpdateCategory = useCallback(
@@ -109,7 +110,7 @@ export function BudgetDetailPage() {
         categoryId,
         data: req,
       });
-      trackEvent(ANALYTICS_EVENTS.BUDGET_EDITED)
+      trackEvent(ANALYTICS_EVENTS.BUDGET_CATEGORY_UPDATED);
       await refetch();
       return result as BudgetCategory;
     },
@@ -123,8 +124,9 @@ export function BudgetDetailPage() {
         categoryId,
       });
       await refetch();
+      trackEvent(ANALYTICS_EVENTS.BUDGET_CATEGORY_DELETED);
     },
-    [budgetId, refetch, deleteCategoryMutation]
+    [budgetId, refetch, trackEvent, deleteCategoryMutation]
   );
 
   if (loading) {

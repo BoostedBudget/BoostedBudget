@@ -175,6 +175,32 @@ func TestGetTransactions_WithFilters(t *testing.T) {
 	require.NotNil(t, output)
 }
 
+// TestGetTransactions_PFCDetailedsParsing verifies that the pfc_detaileds query
+// parameter is parsed into the correct slice on capturedFilters.PFCDetaileds.
+func TestGetTransactions_PFCDetailedsParsing(t *testing.T) {
+	userID := "user-123"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.Transaction{},
+			Limit:        50,
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		PFCDetaileds:          "FOOD_AND_DRINK_RESTAURANTS,TRANSPORTATION_GAS",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, []string{"FOOD_AND_DRINK_RESTAURANTS", "TRANSPORTATION_GAS"}, mockService.capturedFilters.PFCDetaileds)
+}
+
 // TestGetTransactions_InvalidDateFormat tests error for invalid date format.
 func TestGetTransactions_InvalidDateFormat(t *testing.T) {
 	userID := "user-123"

@@ -32,6 +32,9 @@ export const ANALYTICS_EVENTS = {
   BUDGET_EDITED: 'budget_edited',
   BUDGET_DELETED: 'budget_deleted',
   BUDGET_DETAIL_VIEWED: 'budget_detail_viewed',
+  BUDGET_CATEGORY_ADDED: 'budget_category_added',
+  BUDGET_CATEGORY_UPDATED: 'budget_category_updated',
+  BUDGET_CATEGORY_DELETED: 'budget_category_deleted',
 
   // Rules
   RULE_CREATED: 'rule_created',
@@ -99,6 +102,10 @@ export const ANALYTICS_EVENTS = {
 
   // Transactions infinite scroll (#1128)
   TRANSACTIONS_PAGE_LOADED_MORE: 'transactions_page_loaded_more',
+
+  // Transactions category filter (#1200)
+  CATEGORY_FILTER_APPLIED: 'category_filter_applied',
+  CATEGORY_FILTER_CLEARED: 'category_filter_cleared',
 } as const
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[keyof typeof ANALYTICS_EVENTS]

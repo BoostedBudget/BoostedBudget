@@ -3185,3 +3185,71 @@ func TestTransactionRepository_GetByUserIDWithFilters_MerchantID(t *testing.T) {
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
 }
+
+// TestBuildWhereClause_PFCDetailedsOnly verifies that a PFCDetaileds-only filter
+// produces effective_pfc_detailed IN (...) in the WHERE clause.
+func TestBuildWhereClause_PFCDetailedsOnly(t *testing.T) {
+	userID := "user-abc"
+	filters := domain.TransactionFilters{
+		PFCDetaileds: []string{"FOOD_AND_DRINK_FAST_FOOD"},
+	}
+
+	whereClause, args := buildWhereClause(userID, filters)
+
+	// Must contain effective_pfc_detailed IN condition.
+	assert.Contains(t, whereClause, "effective_pfc_detailed IN (", "WHERE clause must include effective_pfc_detailed condition")
+
+	// Must NOT contain effective_pfc_primary IN when no primaries set.
+	assert.NotContains(t, whereClause, "effective_pfc_primary IN (", "WHERE clause must not include primary condition when only detaileds set")
+
+	// args: $1=userID, $2=detailed value
+	require.Len(t, args, 2, "expected exactly 2 args: user_id and the detailed value")
+	assert.Equal(t, userID, args[0])
+	assert.Equal(t, "FOOD_AND_DRINK_FAST_FOOD", args[1])
+}
+
+// TestBuildWhereClause_PFCPrimariesAndDetailedsCombined verifies that when both
+// PFCPrimaries and PFCDetaileds are set, the WHERE clause uses combined OR logic.
+func TestBuildWhereClause_PFCPrimariesAndDetailedsCombined(t *testing.T) {
+	userID := "user-abc"
+	filters := domain.TransactionFilters{
+		PFCPrimaries: []string{"FOOD_AND_DRINK"},
+		PFCDetaileds: []string{"TRANSPORTATION_RIDE_SHARE"},
+	}
+
+	whereClause, args := buildWhereClause(userID, filters)
+
+	// Must contain both column conditions joined by OR inside parentheses.
+	assert.Contains(t, whereClause, "effective_pfc_primary IN (", "WHERE clause must include primary condition")
+	assert.Contains(t, whereClause, "effective_pfc_detailed IN (", "WHERE clause must include detailed condition")
+	assert.Contains(t, whereClause, " OR ", "WHERE clause must use OR logic between primary and detailed")
+
+	// args: $1=userID, $2=primary value, $3=detailed value
+	require.Len(t, args, 3, "expected exactly 3 args: user_id, primary value, detailed value")
+	assert.Equal(t, userID, args[0])
+	assert.Equal(t, "FOOD_AND_DRINK", args[1])
+	assert.Equal(t, "TRANSPORTATION_RIDE_SHARE", args[2])
+}
+
+// TestBuildWhereClause_PFCPrimariesOnly_Unchanged is a regression test verifying that
+// providing only PFCPrimaries (no detaileds) still produces effective_pfc_primary IN (...)
+// without any effective_pfc_detailed condition.
+func TestBuildWhereClause_PFCPrimariesOnly_Unchanged(t *testing.T) {
+	userID := "user-abc"
+	filters := domain.TransactionFilters{
+		PFCPrimaries: []string{"FOOD_AND_DRINK"},
+	}
+
+	whereClause, args := buildWhereClause(userID, filters)
+
+	// Must contain primary condition.
+	assert.Contains(t, whereClause, "effective_pfc_primary IN (", "WHERE clause must include primary condition")
+
+	// Must NOT contain detailed condition.
+	assert.NotContains(t, whereClause, "effective_pfc_detailed IN (", "WHERE clause must not include detailed condition when only primaries set")
+
+	// args: $1=userID, $2=primary value
+	require.Len(t, args, 2, "expected exactly 2 args: user_id and the primary value")
+	assert.Equal(t, userID, args[0])
+	assert.Equal(t, "FOOD_AND_DRINK", args[1])
+}

@@ -1,9 +1,11 @@
 /**
  * BudgetCategoryManager
  * Issue #497: Budget Category Manager + Match Config UI
+ * Issue #1200: Multi-level category hierarchy — grouped visual layout
  *
  * Container component for managing budget categories with CRUD operations.
  * Includes add/edit form dialog, delete confirmation, and allocation breakdown.
+ * Categories are rendered in a primary→children hierarchy using groupBudgetCategoriesByPrimary.
  */
 
 import { useState, useCallback, useMemo, useRef } from 'react';
@@ -19,6 +21,9 @@ import type { UserTag } from '@/features/tags/types';
 import { BudgetCategoryCard } from './BudgetCategoryCard';
 import { BudgetCategoryForm } from './BudgetCategoryForm';
 import { AllocationBreakdown } from './AllocationBreakdown';
+import { groupBudgetCategoriesByPrimary } from '../../utils/groupBudgetCategoriesByPrimary';
+import type { CustomCategoryMap } from '../../utils/groupBudgetCategoriesByPrimary';
+import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 
 export interface BudgetCategoryManagerProps {
   /** Budget ID for API calls */
@@ -33,8 +38,11 @@ export interface BudgetCategoryManagerProps {
   onUpdateCategory: (id: string, req: UpdateBudgetCategoryRequest) => Promise<BudgetCategory>;
   /** Callback when a category is deleted */
   onDeleteCategory: (id: string) => Promise<void>;
-  /** Available Plaid categories for selection */
-  availableCategories: string[][];
+  /**
+   * @deprecated No longer used — BudgetCategoryForm fetches custom categories internally
+   * via useGetUserCategories. Kept for backward compatibility; will be removed in a future cleanup.
+   */
+  availableCategories?: string[][];
   /** Available user tags for selection */
   availableTags: UserTag[];
   /** Whether all interactions are disabled */
@@ -58,7 +66,6 @@ export function BudgetCategoryManager({
   onAddCategory,
   onUpdateCategory,
   onDeleteCategory,
-  availableCategories,
   availableTags,
   disabled = false,
 }: BudgetCategoryManagerProps) {
@@ -75,8 +82,21 @@ export function BudgetCategoryManager({
 
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Refs for keyboard navigation (Phase 4 Accessibility)
+  // Refs for keyboard navigation — indexed by flat order position
   const categoryRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  // Fetch user custom categories for display name resolution and parent nesting
+  const { data: userCategories } = useGetUserCategories();
+
+  const customCategoryMap = useMemo<CustomCategoryMap>(
+    () => new Map(
+      (userCategories ?? []).map(cat => [
+        cat.id,
+        { name: cat.name, parent_pfc_primary: cat.parent_pfc_primary ?? null },
+      ])
+    ),
+    [userCategories]
+  );
 
   // Calculate unallocated funds
   const unallocatedFunds = useMemo(() => {
@@ -84,13 +104,17 @@ export function BudgetCategoryManager({
     return totalIncome - totalAllocated;
   }, [categories, totalIncome]);
 
-  // Filter out already-used categories for the form dropdown
-  const filteredAvailableCategories = useMemo(() => {
-    const usedLabels = new Set(categories.map(formatBudgetCategoryLabel));
-    return availableCategories.filter(
-      (cat) => !usedLabels.has(cat.join(' > '))
-    );
-  }, [availableCategories, categories]);
+  // Grouped hierarchy for visual layout (custom categories nest under PFC parents when possible)
+  const groups = useMemo(
+    () => groupBudgetCategoriesByPrimary(categories, customCategoryMap),
+    [categories, customCategoryMap]
+  );
+
+  // Flat order of all categories in render order — for keyboard navigation
+  const flatOrder = useMemo(
+    () => groups.flatMap(({ group, children }) => (group ? [group, ...children] : children)),
+    [groups]
+  );
 
   // Handlers for form dialog
   const handleOpenAddForm = useCallback(() => {
@@ -110,11 +134,7 @@ export function BudgetCategoryManager({
   }, []);
 
   const handleCloseForm = useCallback(() => {
-    setFormDialog({
-      isOpen: false,
-      mode: 'create',
-      category: null,
-    });
+    setFormDialog({ isOpen: false, mode: 'create', category: null });
   }, []);
 
   const handleFormSubmit = useCallback(
@@ -138,10 +158,7 @@ export function BudgetCategoryManager({
   }, []);
 
   const handleCloseDeleteDialog = useCallback(() => {
-    setDeleteDialog({
-      isOpen: false,
-      category: null,
-    });
+    setDeleteDialog({ isOpen: false, category: null });
   }, []);
 
   const handleConfirmDelete = useCallback(async () => {
@@ -156,13 +173,15 @@ export function BudgetCategoryManager({
     }
   }, [deleteDialog.category, onDeleteCategory, handleCloseDeleteDialog]);
 
-  // Keyboard navigation handler (Phase 4 Accessibility)
+  // Keyboard navigation handler — uses flat index into flatOrder
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent, index: number, category: BudgetCategory) => {
+    (e: React.KeyboardEvent, category: BudgetCategory) => {
+      const index = flatOrder.findIndex(c => c.id === category.id);
+      if (index === -1) return;
       switch (e.key) {
         case 'ArrowDown':
           e.preventDefault();
-          if (index < categories.length - 1) {
+          if (index < flatOrder.length - 1) {
             categoryRefs.current[index + 1]?.focus();
           }
           break;
@@ -183,20 +202,50 @@ export function BudgetCategoryManager({
           break;
       }
     },
-    [categories.length, handleOpenEditForm, handleOpenDeleteDialog]
+    [flatOrder, handleOpenEditForm, handleOpenDeleteDialog]
   );
 
   const hasCategories = categories.length > 0;
 
-  // Calculate total allocated excluding current category for edit mode
   const totalAllocatedExcludingCurrent = useMemo(() => {
     if (formDialog.mode === 'create' || !formDialog.category) {
-      return categories.reduce((sum, c) => sum + c.allocated_amount, 0)
+      return categories.reduce((sum, c) => sum + c.allocated_amount, 0);
     }
     return categories
       .filter((c) => c.id !== formDialog.category!.id)
-      .reduce((sum, c) => sum + c.allocated_amount, 0)
+      .reduce((sum, c) => sum + c.allocated_amount, 0);
   }, [formDialog.mode, formDialog.category, categories])
+
+  const renderCategoryItem = useCallback(
+    (category: BudgetCategory, variant: 'standalone' | 'parent' | 'child', flatIndex: number) => {
+      // Provide "Custom category" placeholder during loading/error so the raw UUID is never shown
+      const customCategoryName =
+        category.category_kind === 'custom' && category.custom_category_id
+          ? (customCategoryMap.get(category.custom_category_id)?.name ?? 'Custom category')
+          : undefined;
+      return (
+        <div
+          key={category.id}
+          role="listitem"
+          tabIndex={0}
+          onKeyDown={(e) => handleKeyDown(e, category)}
+          ref={(el) => {
+            categoryRefs.current[flatIndex] = el;
+          }}
+        >
+          <BudgetCategoryCard
+            category={category}
+            variant={variant}
+            customCategoryName={customCategoryName}
+            onEdit={() => handleOpenEditForm(category)}
+            onDelete={() => handleOpenDeleteDialog(category)}
+            disabled={disabled}
+          />
+        </div>
+      );
+    },
+    [handleKeyDown, handleOpenEditForm, handleOpenDeleteDialog, disabled, customCategoryMap]
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -220,30 +269,35 @@ export function BudgetCategoryManager({
           categories={categories}
           totalIncome={totalIncome}
           unallocated={unallocatedFunds}
+          customCategoryMap={customCategoryMap}
         />
       )}
 
       {/* Categories list or empty state */}
       {hasCategories ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3" role="list">
-          {categories.map((category, index) => (
-            <div
-              key={category.id}
-              role="listitem"
-              tabIndex={0}
-              onKeyDown={(e) => handleKeyDown(e, index, category)}
-              ref={(el) => {
-                categoryRefs.current[index] = el;
-              }}
-            >
-              <BudgetCategoryCard
-                category={category}
-                onEdit={() => handleOpenEditForm(category)}
-                onDelete={() => handleOpenDeleteDialog(category)}
-                disabled={disabled}
-              />
-            </div>
-          ))}
+        <div className="flex flex-col gap-4" role="list">
+          {groups.map(({ group, children }) => {
+            const hasChildren = children.length > 0;
+            const groupKey = group?.id ?? `orphan-${children[0]?.id}`;
+
+            if (!group) {
+              return children.map((child) =>
+                renderCategoryItem(child, 'standalone', flatOrder.findIndex(c => c.id === child.id))
+              );
+            }
+
+            const parentVariant = hasChildren ? 'parent' : 'standalone';
+            const parentIdx = flatOrder.findIndex(c => c.id === group.id);
+            return (
+              <div key={groupKey}>
+                {renderCategoryItem(group, parentVariant, parentIdx)}
+                {children.map((child) => {
+                  const childIdx = flatOrder.findIndex(c => c.id === child.id);
+                  return renderCategoryItem(child, 'child', childIdx);
+                })}
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div className="p-8 text-center bg-muted border border-dashed border-border rounded-lg">
@@ -260,9 +314,6 @@ export function BudgetCategoryManager({
         onSubmit={handleFormSubmit}
         mode={formDialog.mode}
         initialData={formDialog.category || undefined}
-        availableCategories={
-          formDialog.mode === 'edit' ? availableCategories : filteredAvailableCategories
-        }
         availableTags={availableTags}
         expectedIncome={totalIncome}
         totalAllocatedExcludingCurrent={totalAllocatedExcludingCurrent}
@@ -274,7 +325,11 @@ export function BudgetCategoryManager({
         onOpenChange={(open) => !open && handleCloseDeleteDialog()}
         onConfirm={handleConfirmDelete}
         title="Delete Category"
-        description={deleteDialog.category ? `Are you sure you want to delete the category "${formatBudgetCategoryLabel(deleteDialog.category)}"? This action cannot be undone.` : ''}
+        description={deleteDialog.category ? `Are you sure you want to delete the category "${
+          deleteDialog.category.category_kind === 'custom' && deleteDialog.category.custom_category_id
+            ? (customCategoryMap.get(deleteDialog.category.custom_category_id)?.name ?? 'Custom category')
+            : formatBudgetCategoryLabel(deleteDialog.category)
+        }"? This action cannot be undone.` : ''}
         variant="destructive"
         loading={isDeleting}
       />

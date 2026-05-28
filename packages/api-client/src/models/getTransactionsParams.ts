@@ -63,6 +63,10 @@ export type GetTransactionsParams = {
    */
   pfc_primaries?: string;
   /**
+   * Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). Combined with pfc_primaries using OR logic.
+   */
+  pfc_detaileds?: string;
+  /**
    * Filter by custom category UUIDs (comma-separated)
    */
   custom_category_ids?: string;

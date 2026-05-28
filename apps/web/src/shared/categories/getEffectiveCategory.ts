@@ -51,6 +51,27 @@ export function getEffectiveCategory(transaction: Transaction): EffectiveCategor
 }
 
 /**
+ * Returns the effective detailed PFC sub-category enum for a transaction, or null.
+ *
+ * Priority (mirrors getEffectiveCategory):
+ *   1. pfc override (kind='pfc') → pfc_detailed_override
+ *   2. Plaid-assigned → pfc_detailed
+ *   3. null (custom category, uncategorized, or no detailed sub-category)
+ */
+export function getEffectiveDetailedCategory(transaction: Transaction): string | null {
+  // Mirror getEffectiveCategory: only consume the pfc override when pfc_primary_override is present.
+  // Without pfc_primary_override the override is considered incomplete and we fall through to the
+  // Plaid-assigned pfc_detailed (same priority logic as getEffectiveCategory).
+  if (transaction.category_override_kind === 'pfc' && transaction.pfc_primary_override) {
+    return transaction.pfc_detailed_override ?? null
+  }
+  if (transaction.category_override_kind !== 'custom' && transaction.pfc_primary) {
+    return transaction.pfc_detailed ?? null
+  }
+  return null
+}
+
+/**
  * Returns the display label for an effective category.
  * Prefers server-supplied display fields, falls back to formatPFCEnum.
  */
