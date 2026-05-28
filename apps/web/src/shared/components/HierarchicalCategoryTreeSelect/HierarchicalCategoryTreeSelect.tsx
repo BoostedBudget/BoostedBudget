@@ -271,6 +271,7 @@ export function HierarchicalCategoryTreeSelect({
               type="button"
               role="treeitem"
               aria-expanded={isExpanded}
+              aria-selected={isSelected}
               className={cn(treeRowVariants({ level: 'primary', selected: isSelected }), 'flex-1')}
               data-testid={`primary-row-${cat.primary}`}
               onClick={() => handleSingleSelectPrimary(cat.primary)}
@@ -313,6 +314,7 @@ export function HierarchicalCategoryTreeSelect({
             type="button"
             role="treeitem"
             aria-expanded={isExpanded}
+            aria-selected={checkState !== 'unchecked'}
             className={cn(treeRowVariants({ level: 'primary' }), 'flex-1')}
             onClick={() => handlePrimaryCheckbox(cat.primary)}
           >
@@ -363,6 +365,7 @@ export function HierarchicalCategoryTreeSelect({
             key={d.value}
             type="button"
             role="treeitem"
+            aria-selected={isSelected}
             className={cn(treeRowVariants({ level: 'detailed', selected: isSelected }))}
             data-testid={`detailed-row-${d.value}`}
             onClick={() => handleSingleSelectDetailed(cat.primary, d.value)}
@@ -382,6 +385,7 @@ export function HierarchicalCategoryTreeSelect({
           key={d.value}
           type="button"
           role="treeitem"
+          aria-selected={isChecked}
           className={cn(treeRowVariants({ level: 'detailed' }))}
           onClick={() => handleDetailedCheckbox(d.value)}
           data-testid={`detailed-checkbox-${d.value}`}
@@ -461,6 +465,7 @@ export function HierarchicalCategoryTreeSelect({
         {/* Tree rows */}
         <div
           role="tree"
+          aria-label={ariaLabel}
           aria-multiselectable={!isSingleSelect}
           className="overflow-y-auto max-h-60 py-1"
         >

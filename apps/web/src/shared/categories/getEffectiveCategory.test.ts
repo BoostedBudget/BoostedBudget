@@ -162,6 +162,16 @@ describe('getEffectiveDetailedCategory', () => {
     expect(getEffectiveDetailedCategory(tx)).toBeNull()
   })
 
+  it('returns null when pfc_detailed_override is explicitly null (DB null) with valid pfc_primary_override', () => {
+    const tx: Transaction = {
+      ...baseTransaction,
+      category_override_kind: 'pfc',
+      pfc_primary_override: 'FOOD_AND_DRINK',
+      pfc_detailed_override: null,
+    }
+    expect(getEffectiveDetailedCategory(tx)).toBeNull()
+  })
+
   it('falls through to pfc_detailed when override_kind is pfc but pfc_primary_override is absent', () => {
     // Incomplete override (kind set but no primary override) — mirrors getEffectiveCategory fallthrough
     const tx: Transaction = {
