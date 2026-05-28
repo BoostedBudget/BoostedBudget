@@ -33,6 +33,7 @@ function flattenFilters(filters: TransactionFiltersState): Record<string, string
     ...(filters.pending !== undefined && { pending: String(filters.pending) }),
     ...(filters.account_ids?.length && { account_ids: filters.account_ids.join(',') }),
     ...(filters.pfc_primaries?.length && { pfc_primaries: filters.pfc_primaries.join(',') }),
+    ...(filters.pfc_detaileds?.length && { pfc_detaileds: filters.pfc_detaileds.join(',') }),
     ...(filters.min_amount !== undefined && { min_amount: String(filters.min_amount) }),
     ...(filters.max_amount !== undefined && { max_amount: String(filters.max_amount) }),
     ...(filters.amount_type && filters.amount_type !== 'all' && { amount_type: filters.amount_type }),

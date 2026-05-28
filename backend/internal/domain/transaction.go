@@ -284,6 +284,11 @@ type TransactionFilters struct {
 	// Matches the effective category: override if set, else source pfc_primary.
 	PFCPrimaries []string
 
+	// PFCDetaileds filters by effective PFC detailed sub-category enum(s) (OR logic within).
+	// Combined with PFCPrimaries using OR: a transaction matches if its primary is in PFCPrimaries
+	// OR its detailed is in PFCDetaileds.
+	PFCDetaileds []string
+
 	// CustomCategoryIDs filters by effective custom category override ID(s) (OR logic within).
 	CustomCategoryIDs []string
 

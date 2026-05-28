@@ -7,6 +7,7 @@
  */
 
 import { useCallback } from 'react'
+import type { ReactNode } from 'react'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import {
   ColumnFilterDropdown,
@@ -51,6 +52,16 @@ export interface TableHeaderCellProps {
   onFilterChange?: (value: string[] | RangeValue | null) => void
   /** Custom aria-label for filter button */
   filterAriaLabel?: string
+  /**
+   * When set, renders this ReactNode instead of the built-in ColumnFilterDropdown.
+   * The component is responsible for its own trigger/popover and active-state styling.
+   */
+  customFilter?: ReactNode
+  /**
+   * When true, marks this column's header as having an active filter (used alongside customFilter).
+   * Accepted for type compatibility; visual treatment is managed by the custom filter component.
+   */
+  isFilterActive?: boolean
 }
 
 export function TableHeaderCell({
@@ -71,6 +82,8 @@ export function TableHeaderCell({
   searchable = false,
   onFilterChange,
   filterAriaLabel,
+  customFilter,
+  isFilterActive: _isFilterActive,
 }: TableHeaderCellProps) {
   const isActiveSortColumn = sortColumn === currentSortColumn
 
@@ -120,7 +133,7 @@ export function TableHeaderCell({
         <span className="font-semibold text-muted-foreground">{label}</span>
       )}
 
-      {filterable && onFilterChange && (
+      {customFilter || (filterable && onFilterChange && (
         <ColumnFilterDropdown
           type={filterType}
           options={filterOptions}
@@ -132,7 +145,7 @@ export function TableHeaderCell({
           ariaLabel={filterAriaLabel || `Filter by ${label.toLowerCase()}`}
           className="shrink-0 ml-1"
         />
-      )}
+      ))}
     </div>
   )
 }

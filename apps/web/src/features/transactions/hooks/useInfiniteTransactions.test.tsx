@@ -191,6 +191,63 @@ describe('useInfiniteTransactions', () => {
       expect(result.current.transactions[0].id).toBe('txn-1')
     })
   })
+
+  describe('Filter forwarding', () => {
+    it('forwards pfc_detaileds filter to getTransactions API call', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const filtersWithPfcDetaileds = {
+        pfc_detaileds: ['FOOD_AND_DRINK_COFFEE', 'FOOD_AND_DRINK_RESTAURANT'],
+      }
+
+      const { result } = renderHook(
+        () =>
+          useInfiniteTransactions({
+            ...defaultOpts,
+            filters: filtersWithPfcDetaileds,
+          }),
+        {
+          wrapper: createWrapper(),
+        },
+      )
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      // Verify that getTransactions was called with the pfc_detaileds filter
+      // joined as a comma-separated string
+      expect(mockGetTransactions).toHaveBeenCalled()
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.pfc_detaileds).toBe('FOOD_AND_DRINK_COFFEE,FOOD_AND_DRINK_RESTAURANT')
+    })
+
+    it('forwards pfc_primaries filter to getTransactions API call', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const filtersWithPfcPrimaries = {
+        pfc_primaries: ['FOOD_AND_DRINK', 'TRANSPORTATION'],
+      }
+
+      const { result } = renderHook(
+        () =>
+          useInfiniteTransactions({
+            ...defaultOpts,
+            filters: filtersWithPfcPrimaries,
+          }),
+        {
+          wrapper: createWrapper(),
+        },
+      )
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      // Verify that getTransactions was called with the pfc_primaries filter
+      // joined as a comma-separated string
+      expect(mockGetTransactions).toHaveBeenCalled()
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.pfc_primaries).toBe('FOOD_AND_DRINK,TRANSPORTATION')
+    })
+  })
+
   describe('updateTransaction cache surgery', () => {
     it('calls cancelQueries before setQueryData and updates the transaction in place', async () => {
       // Load two pages, then update txn-2 (from page 1) in the cache.

@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import type { BudgetCategory } from '../../types';
 import { Alert } from '@/components/ui/alert';
 import { formatBudgetCategoryLabel } from '../../types';
+import type { CustomCategoryMap } from '../../utils/groupBudgetCategoriesByPrimary';
 
 export interface AllocationBreakdownProps {
   /** Budget categories with their allocations */
@@ -18,6 +19,24 @@ export interface AllocationBreakdownProps {
   totalIncome: number;
   /** Unallocated funds (totalIncome - sum of allocations) */
   unallocated: number;
+  /**
+   * Optional map from custom_category_id → { name } for resolving human-readable
+   * names on custom budget categories. Without it, formatBudgetCategoryLabel is used
+   * (which returns the raw UUID for custom categories).
+   */
+  customCategoryMap?: CustomCategoryMap;
+}
+
+/**
+ * Resolves a human-readable label for a budget category.
+ * For custom categories, uses customCategoryMap to avoid showing raw UUIDs.
+ */
+function resolveCategoryLabel(cat: BudgetCategory, customCategoryMap?: CustomCategoryMap): string {
+  if (cat.category_kind === 'custom' && cat.custom_category_id) {
+    const resolved = customCategoryMap?.get(cat.custom_category_id)?.name;
+    return resolved ?? 'Custom category';
+  }
+  return formatBudgetCategoryLabel(cat);
 }
 
 /**
@@ -51,6 +70,7 @@ export function AllocationBreakdown({
   categories,
   totalIncome,
   unallocated,
+  customCategoryMap,
 }: AllocationBreakdownProps) {
   // Calculate totals
   const { totalAllocated, percentAllocated, isOverAllocated } = useMemo(() => {
@@ -81,7 +101,7 @@ export function AllocationBreakdown({
       const percent = (cat.allocated_amount / totalIncome) * 100;
       result.push({
         id: cat.id,
-        name: formatBudgetCategoryLabel(cat),
+        name: resolveCategoryLabel(cat, customCategoryMap),
         amount: cat.allocated_amount,
         percent: Math.min(percent, 100), // Cap at 100%
         color: getCategoryColor(index),
@@ -102,7 +122,7 @@ export function AllocationBreakdown({
     }
 
     return result;
-  }, [categories, totalIncome, unallocated, isOverAllocated]);
+  }, [categories, totalIncome, unallocated, isOverAllocated, customCategoryMap]);
 
   return (
     <div className="bg-muted border border-border rounded-lg p-4 flex flex-col gap-3">
@@ -176,7 +196,7 @@ export function AllocationBreakdown({
               style={{ backgroundColor: getCategoryColor(index) }}
             />
             <span className="text-foreground whitespace-nowrap overflow-hidden text-ellipsis max-w-[150px]" data-ph-mask>
-              {formatBudgetCategoryLabel(cat)}
+              {resolveCategoryLabel(cat, customCategoryMap)}
             </span>
             <span className="text-muted-foreground font-medium whitespace-nowrap" data-ph-mask>
               {formatCurrency(cat.allocated_amount)}

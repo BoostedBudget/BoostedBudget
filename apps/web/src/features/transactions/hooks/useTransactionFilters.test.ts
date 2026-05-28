@@ -544,6 +544,50 @@ describe('useTransactionFilters', () => {
     })
   })
 
+  describe('pfc_detaileds filter', () => {
+    it('round-trips pfc_detaileds to/from URL params', () => {
+      // Read direction: pre-populate URL and verify parsed on mount
+      window.history.replaceState({}, '', '/?pfc_detaileds=FOOD_AND_DRINK_RESTAURANTS%2CTRANSPORTATION_GAS')
+      const { result: prePopResult, unmount } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      expect(prePopResult.current.filters.pfc_detaileds).toEqual(['FOOD_AND_DRINK_RESTAURANTS', 'TRANSPORTATION_GAS'])
+      unmount()
+      window.history.replaceState({}, '', '/') // reset for write-direction assertions below
+
+      const { result } = renderHook(() => useTransactionFilters(), {
+        wrapper: createWrapper(),
+      })
+
+      act(() => {
+        result.current.setFilter('pfc_detaileds', ['Food_Groceries', 'Food_Restaurants'])
+      })
+
+      expect(result.current.filters.pfc_detaileds).toEqual(['Food_Groceries', 'Food_Restaurants'])
+      expect(window.location.search).toContain('pfc_detaileds=Food_Groceries%2CFood_Restaurants')
+      expect(result.current.activeFilterCount).toBeGreaterThanOrEqual(1)
+    })
+
+    it('combines pfc_primaries and pfc_detaileds into separate URL params', () => {
+      const { result } = renderHook(() => useTransactionFilters(), {
+        wrapper: createWrapper(),
+      })
+
+      act(() => {
+        result.current.setFilter('pfc_primaries', ['Food', 'Travel'])
+      })
+
+      act(() => {
+        result.current.setFilter('pfc_detaileds', ['Food_Groceries', 'Travel_Air'])
+      })
+
+      expect(result.current.filters.pfc_primaries).toEqual(['Food', 'Travel'])
+      expect(result.current.filters.pfc_detaileds).toEqual(['Food_Groceries', 'Travel_Air'])
+
+      const urlParams = new URLSearchParams(window.location.search)
+      expect(urlParams.get('pfc_primaries')).toBe('Food,Travel')
+      expect(urlParams.get('pfc_detaileds')).toBe('Food_Groceries,Travel_Air')
+    })
+  })
+
   describe('Sort (URL-persisted)', () => {
     it('returns default sort date:desc when no URL param', () => {
       window.history.replaceState({}, '', '/')

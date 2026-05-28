@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_transactions_user_effective_pfc_detailed;

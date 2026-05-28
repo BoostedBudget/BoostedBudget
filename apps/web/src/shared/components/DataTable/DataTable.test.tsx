@@ -2456,3 +2456,58 @@ describe('column sizing', () => {
     expect(widths).toContain('48px')  // select column uses its defaultSize
   })
 })
+
+describe('customFilter prop', () => {
+  it('renders customFilter slot content in column header when provided', () => {
+    const columns: ColumnDef<Row>[] = [
+      {
+        id: 'name',
+        header: 'Name',
+        key: 'name',
+        customFilter: <div data-testid="custom-filter-slot">custom</div>,
+      },
+      { id: 'amount', header: 'Amount', key: 'amount' },
+    ]
+
+    renderTable({ columns })
+
+    expect(screen.getByTestId('custom-filter-slot')).toBeInTheDocument()
+    expect(screen.getByTestId('custom-filter-slot')).toHaveTextContent('custom')
+  })
+
+  it('renders customFilter content alongside isFilterActive=true on the column', () => {
+    const columns: ColumnDef<Row>[] = [
+      {
+        id: 'name',
+        header: 'Name',
+        key: 'name',
+        customFilter: <div data-testid="filter-status">active</div>,
+        isFilterActive: true,
+      },
+      { id: 'amount', header: 'Amount', key: 'amount' },
+    ]
+
+    renderTable({ columns })
+
+    expect(screen.getByTestId('filter-status')).toBeInTheDocument()
+    expect(screen.getByTestId('filter-status')).toHaveTextContent('active')
+  })
+
+  it('renders customFilter content when isFilterActive is false or not set', () => {
+    const columns: ColumnDef<Row>[] = [
+      {
+        id: 'name',
+        header: 'Name',
+        key: 'name',
+        customFilter: <div data-testid="filter-status">inactive</div>,
+        isFilterActive: false,
+      },
+      { id: 'amount', header: 'Amount', key: 'amount' },
+    ]
+
+    renderTable({ columns })
+
+    expect(screen.getByTestId('filter-status')).toBeInTheDocument()
+    expect(screen.getByTestId('filter-status')).toHaveTextContent('inactive')
+  })
+})
