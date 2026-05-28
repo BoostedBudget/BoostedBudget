@@ -470,6 +470,71 @@ describe('HierarchicalCategoryTreeSelect', () => {
       expect(popoverRoot).not.toBe(tree)
       expect(popoverRoot).toContainElement(tree)
     })
+
+    it('tree widget has an accessible name matching the ariaLabel prop', () => {
+      render(
+        <HierarchicalCategoryTreeSelect
+          selectedPrimaries={[]}
+          onPrimariesChange={() => {}}
+          selectedDetaileds={[]}
+          onDetailedsChange={() => {}}
+        />
+      )
+      // Open the popover
+      fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+      // The tree element should be findable by its accessible name (default ariaLabel)
+      expect(screen.getByRole('tree', { name: /category filter/i })).toBeInTheDocument()
+    })
+  })
+
+  // ─── aria-selected ────────────────────────────────────────────────────────
+
+  describe('aria-selected', () => {
+    it('multi-select primary treeitem has aria-selected=true when checked', () => {
+      render(
+        <HierarchicalCategoryTreeSelect
+          selectedPrimaries={['FOOD_AND_DRINK']}
+          onPrimariesChange={() => {}}
+          selectedDetaileds={[]}
+          onDetailedsChange={() => {}}
+        />
+      )
+      fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+
+      const primaryBtn = screen.getByTestId('primary-checkbox-FOOD_AND_DRINK').closest('[role="treeitem"]')!
+      expect(primaryBtn).toHaveAttribute('aria-selected', 'true')
+    })
+
+    it('multi-select primary treeitem has aria-selected=false when unchecked', () => {
+      render(
+        <HierarchicalCategoryTreeSelect
+          selectedPrimaries={[]}
+          onPrimariesChange={() => {}}
+          selectedDetaileds={[]}
+          onDetailedsChange={() => {}}
+        />
+      )
+      fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+
+      const primaryBtn = screen.getByTestId('primary-checkbox-FOOD_AND_DRINK').closest('[role="treeitem"]')!
+      expect(primaryBtn).toHaveAttribute('aria-selected', 'false')
+    })
+
+    it('single-select treeitem has aria-selected=true on the selected item and false on others', () => {
+      render(
+        <HierarchicalCategoryTreeSelect
+          singleSelectValue={{ primary: 'FOOD_AND_DRINK' }}
+          onSingleSelectChange={() => {}}
+        />
+      )
+      fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+
+      const selectedBtn = screen.getByTestId('primary-row-FOOD_AND_DRINK')
+      expect(selectedBtn).toHaveAttribute('aria-selected', 'true')
+
+      const otherBtn = screen.getByTestId('primary-row-TRANSPORTATION')
+      expect(otherBtn).toHaveAttribute('aria-selected', 'false')
+    })
   })
 
   // ─── Keyboard navigation ─────────────────────────────────────────────────
