@@ -25,7 +25,7 @@ import type { UserTag } from '@/features/tags/types';
 import { CategoryMatchConfig } from './CategoryMatchConfig';
 import { usePreviewCategories } from '../../hooks/usePreviewCategories';
 import { formatPFCPrimary } from '@/shared/categories/formatPfc';
-import { getDetailedLabel } from '@/shared/categories/pfcOptions';
+import { getDetailedLabel, getPrimaryLabel } from '@/shared/categories/pfcOptions';
 import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect';
 import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 
@@ -322,9 +322,9 @@ export function BudgetCategoryForm({
   const inputBase = 'w-full py-2.5 px-3 text-sm border border-input rounded-lg bg-card text-foreground transition-[border-color,box-shadow] duration-150 focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-ring/15 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed';
   const inputError = 'border-destructive focus:ring-destructive/15';
 
-  // PFC primary display label
-  const pfcPrimaryLabel = formData.pfc_primary ? formatPFCPrimary(formData.pfc_primary) : '';
-  const pfcDetailedLabel = formData.pfc_detailed ? (getDetailedLabel(formData.pfc_detailed) ?? formData.pfc_detailed) : '';
+  // PFC primary and detailed display labels
+  const pfcPrimaryLabel = formData.pfc_primary && formatPFCPrimary(formData.pfc_primary);
+  const pfcDetailedLabel = formData.pfc_detailed && (getDetailedLabel(formData.pfc_detailed) ?? formData.pfc_detailed);
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -423,7 +423,7 @@ export function BudgetCategoryForm({
                 {Object.entries(customCategoryOptionGroups).map(([groupKey, opts]) => (
                   <optgroup
                     key={groupKey}
-                    label={groupKey === '__none__' ? 'Custom (no parent)' : formatPFCPrimary(groupKey)}
+                    label={groupKey === '__none__' ? 'Custom (no parent)' : (getPrimaryLabel(groupKey) ?? formatPFCPrimary(groupKey))}
                   >
                     {opts.map((opt) => (
                       <option key={opt.id} value={opt.id}>

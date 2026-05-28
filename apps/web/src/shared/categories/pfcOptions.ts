@@ -229,3 +229,18 @@ export function getDetailedLabel(value: string): string | null {
   }
   return null
 }
+
+/**
+ * Returns the curated display label for a PFC primary enum value, or null if not found.
+ * Searches the static PFC_HIERARCHY; no hook required.
+ *
+ * Use this instead of formatPFCPrimary() when displaying primary labels to users —
+ * the curated labels use "&" (e.g. "Food & Drink") rather than the generic title-cased
+ * "And" produced by the generic formatter.
+ */
+export function getPrimaryLabel(primary: string): string | null {
+  for (const p of PFC_HIERARCHY) {
+    if (p.primary === primary) return p.primaryLabel
+  }
+  return null
+}
