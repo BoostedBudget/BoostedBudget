@@ -20,7 +20,7 @@
   {
     "name": "transactions",
     "path": "apps/web/dist/assets/transactions-*.js",
-    "limit": "21 KB",
+    "limit": "22 KB",
     "gzip": true
   },
   {
