@@ -8,6 +8,7 @@ import { getCategoryColor } from '@/lib/category-colors'
 import { getEffectiveCategory, getEffectiveCategoryLabel, getEffectiveDetailedCategory } from '@/shared/categories/getEffectiveCategory'
 import { getDetailedLabel, getPfcDetailedFilterOptions } from '@/shared/categories/pfcOptions'
 import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect'
+import type { CustomCategoryOption } from '@/shared/components/HierarchicalCategoryTreeSelect/HierarchicalCategoryTreeSelect'
 import { formatTransactionAmount, isOutflow } from '@/shared/transactions/amount'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
@@ -47,6 +48,10 @@ export interface TransactionTableProps {
   /** Selected PFC detailed sub-category enum values (hierarchical category filter) */
   selectedDetaileds?: string[]
   onDetailedsChange?: (values: string[]) => void
+  /** Custom categories + selection for the hierarchical category filter (#1203) */
+  customCategories?: CustomCategoryOption[]
+  selectedCustomIds?: string[]
+  onCustomIdsChange?: (ids: string[]) => void
   /** Infinite scroll: called when user scrolls near the bottom */
   onScrollEnd?: () => void
   /** Infinite scroll: whether more pages exist */
@@ -89,6 +94,9 @@ export function TransactionTable({
   onPrimariesChange,
   selectedDetaileds,
   onDetailedsChange,
+  customCategories,
+  selectedCustomIds,
+  onCustomIdsChange,
   onScrollEnd,
   hasMore,
   isFetchingMore,
@@ -224,10 +232,17 @@ export function TransactionTable({
           onPrimariesChange={onPrimariesChange}
           selectedDetaileds={selectedDetaileds ?? []}
           onDetailedsChange={onDetailedsChange}
+          customCategories={customCategories}
+          selectedCustomIds={selectedCustomIds ?? []}
+          onCustomIdsChange={onCustomIdsChange}
           aria-label="Filter by category"
         />
       ) : undefined,
-      isFilterActive: (selectedPrimaries?.length ?? 0) + (selectedDetaileds?.length ?? 0) > 0,
+      isFilterActive:
+        (selectedPrimaries?.length ?? 0) +
+          (selectedDetaileds?.length ?? 0) +
+          (selectedCustomIds?.length ?? 0) >
+        0,
     },
     {
       id: 'sub_category',

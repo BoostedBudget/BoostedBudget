@@ -78,6 +78,7 @@ export interface TransactionFilters {
   account_ids?: string[] // Multiple account IDs
   pfc_primaries?: string[] // PFC primary enum values
   pfc_detaileds?: string[] // PFC detailed enum values (OR with pfc_primaries)
+  custom_category_ids?: string[] // Custom category UUIDs (#1203); parents roll up children
   min_amount?: number // Minimum absolute transaction amount
   max_amount?: number // Maximum absolute transaction amount
   amount_type?: 'income' | 'expense' | 'all' // Transaction type filter

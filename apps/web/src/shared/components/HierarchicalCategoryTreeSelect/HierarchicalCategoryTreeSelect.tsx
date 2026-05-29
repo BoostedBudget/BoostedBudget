@@ -17,6 +17,18 @@ import { cn } from '@/lib/utils'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { useCuratedPfcDetailed } from '@/shared/categories/pfcOptions'
 import type { PfcPrimaryOption, PfcDetailedOption } from '@/shared/categories/pfcOptions'
+import { CategoryIcon } from '@/shared/components/IconPicker'
+
+// ─── Custom category option ──────────────────────────────────────────────────
+// Minimal shape (decoupled from the categories feature) for rendering user-defined
+// custom categories alongside the curated PFC tree (Issue #1203).
+export interface CustomCategoryOption {
+  id: string
+  name: string
+  color?: string | null
+  icon?: string | null
+  parent_id?: string | null
+}
 
 // ─── Props ─────────────────────────────────────────────────────────────────
 
@@ -32,10 +44,51 @@ export interface HierarchicalCategoryTreeSelectProps {
   singleSelectValue?: { primary: string; detailed?: string } | null
   onSingleSelectChange?: (value: { primary: string; detailed?: string } | null) => void
 
+  // Custom categories (Issue #1203) — additive. When omitted, behavior is unchanged.
+  customCategories?: CustomCategoryOption[]
+  // Multi-select custom selection
+  selectedCustomIds?: string[]
+  onCustomIdsChange?: (ids: string[]) => void
+  // Single-select custom selection (mutually exclusive with singleSelectValue)
+  singleSelectCustomId?: string | null
+  onSingleSelectCustomChange?: (id: string | null) => void
+
   // Common
   className?: string
   disabled?: boolean
   'aria-label'?: string
+}
+
+// Orders custom categories as top-level parents each followed by their children
+// (depth 1), alphabetical within each level.
+function orderCustomCategories(
+  cats: CustomCategoryOption[]
+): { cat: CustomCategoryOption; depth: number }[] {
+  const childrenByParent = new Map<string, CustomCategoryOption[]>()
+  const topLevel: CustomCategoryOption[] = []
+  for (const c of cats) {
+    if (c.parent_id) {
+      const arr = childrenByParent.get(c.parent_id) ?? []
+      arr.push(c)
+      childrenByParent.set(c.parent_id, arr)
+    } else {
+      topLevel.push(c)
+    }
+  }
+  const byName = (a: CustomCategoryOption, b: CustomCategoryOption) => a.name.localeCompare(b.name)
+  const out: { cat: CustomCategoryOption; depth: number }[] = []
+  for (const parent of topLevel.slice().sort(byName)) {
+    out.push({ cat: parent, depth: 0 })
+    for (const child of (childrenByParent.get(parent.id) ?? []).slice().sort(byName)) {
+      out.push({ cat: child, depth: 1 })
+    }
+  }
+  // Any children whose parent isn't in the list (e.g. PFC-nested) appear at depth 0.
+  const placed = new Set(out.map((o) => o.cat.id))
+  for (const c of cats.slice().sort(byName)) {
+    if (!placed.has(c.id)) out.push({ cat: c, depth: 0 })
+  }
+  return out
 }
 
 // ─── CVA variants ──────────────────────────────────────────────────────────
@@ -123,12 +176,20 @@ export function HierarchicalCategoryTreeSelect({
   onDetailedsChange,
   singleSelectValue,
   onSingleSelectChange,
+  customCategories = [],
+  selectedCustomIds = [],
+  onCustomIdsChange,
+  singleSelectCustomId,
+  onSingleSelectCustomChange,
   className,
   disabled = false,
   'aria-label': ariaLabel = 'Category filter',
 }: HierarchicalCategoryTreeSelectProps) {
   const isSingleSelect =
-    singleSelectValue !== undefined || onSingleSelectChange !== undefined
+    singleSelectValue !== undefined ||
+    onSingleSelectChange !== undefined ||
+    singleSelectCustomId !== undefined ||
+    onSingleSelectCustomChange !== undefined
 
   const [searchQuery, setSearchQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -136,8 +197,8 @@ export function HierarchicalCategoryTreeSelect({
   const { data: categories } = useCuratedPfcDetailed()
 
   const isActive = isSingleSelect
-    ? singleSelectValue != null
-    : selectedPrimaries.length > 0 || selectedDetaileds.length > 0
+    ? singleSelectValue != null || singleSelectCustomId != null
+    : selectedPrimaries.length > 0 || selectedDetaileds.length > 0 || selectedCustomIds.length > 0
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
@@ -221,7 +282,36 @@ export function HierarchicalCategoryTreeSelect({
   const handleClear = useCallback(() => {
     onPrimariesChange?.([])
     onDetailedsChange?.([])
-  }, [onPrimariesChange, onDetailedsChange])
+    onCustomIdsChange?.([])
+  }, [onPrimariesChange, onDetailedsChange, onCustomIdsChange])
+
+  // ─── Custom category handlers (#1203) ──────────────────────────────────────
+
+  const handleCustomCheckbox = useCallback(
+    (id: string) => {
+      if (!onCustomIdsChange) return
+      if (selectedCustomIds.includes(id)) {
+        onCustomIdsChange(selectedCustomIds.filter((c) => c !== id))
+      } else {
+        onCustomIdsChange([...selectedCustomIds, id])
+      }
+    },
+    [selectedCustomIds, onCustomIdsChange]
+  )
+
+  const handleSingleSelectCustom = useCallback(
+    (id: string) => {
+      if (!onSingleSelectCustomChange) return
+      if (singleSelectCustomId === id) {
+        onSingleSelectCustomChange(null)
+      } else {
+        onSingleSelectCustomChange(id)
+        // Selecting a custom category clears any PFC single-selection (mutually exclusive).
+        onSingleSelectChange?.(null)
+      }
+    },
+    [singleSelectCustomId, onSingleSelectCustomChange, onSingleSelectChange]
+  )
 
   // ─── Single-select handlers ──────────────────────────────────────────────
 
@@ -399,13 +489,92 @@ export function HierarchicalCategoryTreeSelect({
     })
   }
 
+  // ─── Custom category section (#1203) ──────────────────────────────────────
+
+  function renderCustomSection() {
+    if (customCategories.length === 0) return null
+
+    const ordered = orderCustomCategories(customCategories).filter(
+      ({ cat }) => !q || cat.name.toLowerCase().includes(q)
+    )
+    if (ordered.length === 0) return null
+
+    return (
+      <div role="group" aria-label="Custom categories" data-testid="custom-section">
+        <div className="px-3 pt-2 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          Custom
+        </div>
+        {ordered.map(({ cat, depth }) => {
+          const swatch = (
+            <span
+              className="inline-flex h-4 w-4 items-center justify-center rounded-full shrink-0"
+              style={{ backgroundColor: cat.color ?? '#6B7280', color: '#fff' }}
+              aria-hidden
+            >
+              <CategoryIcon name={cat.icon} className="h-2.5 w-2.5" />
+            </span>
+          )
+
+          if (isSingleSelect) {
+            const isSelected = singleSelectCustomId === cat.id
+            return (
+              <button
+                key={cat.id}
+                type="button"
+                role="treeitem"
+                aria-selected={isSelected}
+                data-custom="true"
+                data-testid={`custom-row-${cat.id}`}
+                className={cn(
+                  treeRowVariants({ level: depth > 0 ? 'detailed' : 'primary', selected: isSelected })
+                )}
+                onClick={() => handleSingleSelectCustom(cat.id)}
+              >
+                {swatch}
+                <span className="flex-1" data-ph-mask>
+                  {cat.name}
+                </span>
+                {isSelected && <Check className="w-3.5 h-3.5 text-primary shrink-0" aria-hidden="true" />}
+              </button>
+            )
+          }
+
+          const isChecked = selectedCustomIds.includes(cat.id)
+          return (
+            <button
+              key={cat.id}
+              type="button"
+              role="treeitem"
+              aria-selected={isChecked}
+              data-custom="true"
+              data-testid={`custom-row-${cat.id}`}
+              className={cn(treeRowVariants({ level: depth > 0 ? 'detailed' : 'primary' }))}
+              onClick={() => handleCustomCheckbox(cat.id)}
+            >
+              <CheckboxIcon state={isChecked ? 'checked' : 'unchecked'} data-testid={`custom-checkbox-${cat.id}`} />
+              {swatch}
+              <span className="flex-1" data-ph-mask>
+                {cat.name}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    )
+  }
+
   // ─── Determine which rows to show in the dropdown ─────────────────────────
 
   function renderRows() {
-    if (!q) {
-      return categories.map((cat) => renderPrimaryRow(cat))
-    }
-    return filteredCategories.map(({ cat }) => renderPrimaryRow(cat))
+    const pfcRows = !q
+      ? categories.map((cat) => renderPrimaryRow(cat))
+      : filteredCategories.map(({ cat }) => renderPrimaryRow(cat))
+    return (
+      <>
+        {pfcRows}
+        {renderCustomSection()}
+      </>
+    )
   }
 
   // ─── JSX ─────────────────────────────────────────────────────────────────
@@ -469,7 +638,9 @@ export function HierarchicalCategoryTreeSelect({
           aria-multiselectable={!isSingleSelect}
           className="overflow-y-auto max-h-60 py-1"
         >
-          {q && filteredCategories.length === 0 ? (
+          {q &&
+          filteredCategories.length === 0 &&
+          !customCategories.some((c) => c.name.toLowerCase().includes(q)) ? (
             <div className="px-3 py-2 text-sm text-muted-foreground">
               No matching categories
             </div>

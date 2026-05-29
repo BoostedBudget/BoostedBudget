@@ -30,9 +30,10 @@ export interface UseTransactionFiltersResult {
 }
 
 const SPEC = {
-  account_ids:   { kind: 'multi-select' },
-  pfc_primaries: { kind: 'multi-select' },
-  pfc_detaileds: { kind: 'multi-select' },
+  account_ids:        { kind: 'multi-select' },
+  pfc_primaries:      { kind: 'multi-select' },
+  pfc_detaileds:      { kind: 'multi-select' },
+  custom_category_ids: { kind: 'multi-select' },
   min_amount:    { kind: 'scalar', codec: 'number' as const },
   max_amount:    { kind: 'scalar', codec: 'number' as const },
   start_date:    { kind: 'scalar', codec: 'string' as const },
@@ -84,6 +85,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
       account_ids:   state.filters.account_ids.length > 0 ? state.filters.account_ids : undefined,
       pfc_primaries: state.filters.pfc_primaries.length > 0 ? state.filters.pfc_primaries : undefined,
       pfc_detaileds: state.filters.pfc_detaileds.length > 0 ? state.filters.pfc_detaileds : undefined,
+      custom_category_ids: state.filters.custom_category_ids.length > 0 ? state.filters.custom_category_ids : undefined,
       start_date:    state.filters.start_date,
       end_date:      state.filters.end_date,
       search:        state.filters.search,
@@ -101,6 +103,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
     if (filters.account_ids && filters.account_ids.length > 0) count++
     if (state.filters.pfc_primaries.length > 0) count++
     if (state.filters.pfc_detaileds.length > 0) count++
+    if (state.filters.custom_category_ids.length > 0) count++
     if (filters.start_date || filters.end_date) count++
     if (filters.search) count++
     if (filters.pending !== undefined) count++
@@ -108,7 +111,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
     if (filters.amount_type && filters.amount_type !== 'all') count++
     if (filters.merchant_id) count++
     return count
-  }, [filters, state.filters.pfc_primaries, state.filters.pfc_detaileds])
+  }, [filters, state.filters.pfc_primaries, state.filters.pfc_detaileds, state.filters.custom_category_ids])
 
   const datePreset = useMemo<DatePreset>(
     () => inferPreset(state.filters.start_date, state.filters.end_date),
