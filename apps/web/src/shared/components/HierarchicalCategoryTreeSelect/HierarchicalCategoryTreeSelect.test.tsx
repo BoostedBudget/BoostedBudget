@@ -646,4 +646,77 @@ describe('HierarchicalCategoryTreeSelect', () => {
     await userEvent.click(screen.getByTestId('detailed-row-FOOD_AND_DRINK_COFFEE'))
     expect(onSingleSelectChange).toHaveBeenCalledWith(null)
   })
+
+  // ─── Custom categories (#1203) ──────────────────────────────────────────────
+
+  const customCats = [
+    { id: 'cust-1', name: 'Coffee Budget', color: '#FF0000', icon: 'coffee', parent_id: null },
+    { id: 'cust-2', name: 'Side Hustle', color: '#00FF00', icon: 'briefcase', parent_id: null },
+  ]
+
+  it('renders no custom section when customCategories is omitted', () => {
+    render(
+      <HierarchicalCategoryTreeSelect
+        selectedPrimaries={[]}
+        onPrimariesChange={() => {}}
+        selectedDetaileds={[]}
+        onDetailedsChange={() => {}}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+    expect(screen.queryByTestId('custom-section')).toBeNull()
+  })
+
+  it('multi-select: renders custom rows and toggles via onCustomIdsChange', () => {
+    const onCustomIdsChange = mock(() => {})
+    render(
+      <HierarchicalCategoryTreeSelect
+        selectedPrimaries={[]}
+        onPrimariesChange={() => {}}
+        selectedDetaileds={[]}
+        onDetailedsChange={() => {}}
+        customCategories={customCats}
+        selectedCustomIds={[]}
+        onCustomIdsChange={onCustomIdsChange}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+    const row = screen.getByTestId('custom-row-cust-1')
+    expect(row.getAttribute('data-custom')).toBe('true')
+    fireEvent.click(row)
+    expect(onCustomIdsChange).toHaveBeenCalledWith(['cust-1'])
+  })
+
+  it('multi-select: shows active dot when a custom id is selected', () => {
+    render(
+      <HierarchicalCategoryTreeSelect
+        selectedPrimaries={[]}
+        onPrimariesChange={() => {}}
+        selectedDetaileds={[]}
+        onDetailedsChange={() => {}}
+        customCategories={customCats}
+        selectedCustomIds={['cust-1']}
+        onCustomIdsChange={() => {}}
+      />
+    )
+    expect(screen.getByTestId('active-dot')).toBeInTheDocument()
+  })
+
+  it('single-select: selecting a custom row emits its id and clears the PFC selection', () => {
+    const onSingleSelectChange = mock(() => {})
+    const onSingleSelectCustomChange = mock(() => {})
+    render(
+      <HierarchicalCategoryTreeSelect
+        singleSelectValue={null}
+        onSingleSelectChange={onSingleSelectChange}
+        customCategories={customCats}
+        singleSelectCustomId={null}
+        onSingleSelectCustomChange={onSingleSelectCustomChange}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+    fireEvent.click(screen.getByTestId('custom-row-cust-2'))
+    expect(onSingleSelectCustomChange).toHaveBeenCalledWith('cust-2')
+    expect(onSingleSelectChange).toHaveBeenCalledWith(null)
+  })
 })

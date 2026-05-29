@@ -310,6 +310,13 @@ export function TransactionsPage() {
                 setFilter('pfc_detaileds', isApplied ? v : undefined)
                 trackEvent(isApplied ? ANALYTICS_EVENTS.CATEGORY_FILTER_APPLIED : ANALYTICS_EVENTS.CATEGORY_FILTER_CLEARED)
               }}
+              customCategories={categoriesData ?? undefined}
+              selectedCustomIds={filters.custom_category_ids}
+              onCustomIdsChange={(v) => {
+                const isApplied = v.length > 0
+                setFilter('custom_category_ids', isApplied ? v : undefined)
+                trackEvent(isApplied ? ANALYTICS_EVENTS.CATEGORY_FILTER_APPLIED : ANALYTICS_EVENTS.CATEGORY_FILTER_CLEARED)
+              }}
               amountRange={currentAmountRange}
               onAmountRangeChange={handleAmountRangeChange}
               onScrollEnd={fetchNextPage}
