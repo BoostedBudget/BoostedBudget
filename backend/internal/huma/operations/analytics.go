@@ -105,11 +105,13 @@ func parseCashFlowFilters(startDateStr, endDateStr, accountTypes, includeTransfe
 // GetSpendingByCategoryInput represents the input for the spending-by-category endpoint.
 type GetSpendingByCategoryInput struct {
 	inputs.AuthenticatedInput
-	StartDate        string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
-	EndDate          string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
-	AccountTypes     string `query:"account_types" doc:"Comma-separated account types to filter"`
-	IncludeTransfers string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
-	Category         string `query:"category" doc:"Primary category to drill into subcategories"`
+	StartDate         string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
+	EndDate           string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
+	AccountTypes      string `query:"account_types" doc:"Comma-separated account types to filter"`
+	IncludeTransfers  string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
+	Category          string `query:"category" doc:"Primary category to drill into subcategories"`
+	CustomCategoryIDs string `query:"custom_category_ids" doc:"Comma-separated custom category UUIDs to scope the report (Issue #1203)"`
+	RollUp            string `query:"roll_up" doc:"When true, a parent custom category also includes its children (default true)"`
 }
 
 // GetSpendingByCategoryOutput represents the response for spending-by-category.
@@ -223,6 +225,17 @@ func (h *AnalyticsHandler) GetSpendingByCategory(ctx context.Context, input *Get
 		return nil, err
 	}
 	filters.Category = input.Category
+
+	// Issue #1203: optional custom-category scoping. Roll-up defaults to true so a
+	// parent custom category includes its children unless roll_up=false.
+	if input.CustomCategoryIDs != "" {
+		for _, p := range strings.Split(input.CustomCategoryIDs, ",") {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				filters.CustomCategoryIDs = append(filters.CustomCategoryIDs, trimmed)
+			}
+		}
+	}
+	filters.RollUpChildren = input.RollUp != "false"
 
 	response, err := h.service.GetSpendingByCategory(ctx, input.UserID, *filters)
 	if err != nil {
