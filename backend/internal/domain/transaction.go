@@ -306,6 +306,10 @@ type TransactionFilters struct {
 	// True = only pending, False = only settled, nil = both
 	Pending *bool
 
+	// Reviewed filters by review state (Issue #1203).
+	// True = only reviewed, False = only unreviewed (inbox), nil = both
+	Reviewed *bool
+
 	// MinAmount filters transactions with absolute amount >= this value
 	// Issue #529: Amount range filter support
 	MinAmount *float64

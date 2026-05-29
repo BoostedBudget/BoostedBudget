@@ -31,6 +31,7 @@ func TestTransactionSelectColumns(t *testing.T) {
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
 		"custom_category_override_id", "category_source", "category_override_date",
 		"effective_pfc_primary", "effective_pfc_detailed", "effective_category_name",
+		"reviewed", "reviewed_at",
 	}
 
 	t.Run("exact order and count match scanTransactions destinations", func(t *testing.T) {
@@ -268,6 +269,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		).
 		AddRow(
 			"tx-2", userID, "account-2", "item-1",
@@ -278,6 +280,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// Expect SELECT query
@@ -321,6 +324,7 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// Expect chain-aware SELECT query (subquery expands via user_account_id)
@@ -363,6 +367,7 @@ func TestTransactionRepository_GetByAccountID_ChainAware(t *testing.T) {
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// Chain subquery includes replaced account in result
@@ -406,6 +411,7 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// Expect SELECT query (source is passed as string, not domain type)
@@ -451,6 +457,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// Expect SELECT query with only user_id filter
@@ -501,6 +508,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// Expect SELECT query with date range filter
@@ -549,6 +557,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// Chain-expanded WHERE clause (account_id appears twice for subquery)
@@ -598,6 +607,7 @@ func TestTransactionRepository_ChainExpand_AccountID(t *testing.T) {
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// Chain-expanded WHERE clause with activeAccountID twice (subquery + fallback)
@@ -646,6 +656,7 @@ func TestTransactionRepository_ChainExpand_AccountIDs(t *testing.T) {
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// Chain-expanded WHERE with IN subquery (args appear twice)
@@ -694,6 +705,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// Expect SELECT query with ILIKE search (case-insensitive)
@@ -741,6 +753,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_PFCPrimaries(t *testing.T)
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
@@ -787,6 +800,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// Expect SELECT query with pending filter
@@ -840,6 +854,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// Issue #1109: chain-expanded account_id filter uses subquery; accountID appears twice.
@@ -947,6 +962,7 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// Expect SELECT query with WHERE source = $1 AND external_transaction_id_blind_idx = $2 AND user_id = $3
@@ -1023,6 +1039,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 			[]byte(`["Food", "Shopping"]`), []byte(`[{"tag":"Food","source":"user"},{"tag":"Shopping","source":"user"}]`),
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
@@ -1074,6 +1091,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 			&overrideKind, &pfcPrimaryOverride, nil,
 			nil, "manual", &overrideDate,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
@@ -1122,6 +1140,7 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 			&overrideKind, &pfcPrimaryOverride, nil,
 			nil, "manual", &overrideDate,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE id").
@@ -1178,6 +1197,61 @@ func TestTransactionRepository_UpdateCategory_PFCOverride(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_SetReviewed marks transactions reviewed, user-scoped (Issue #1203).
+func TestTransactionRepository_SetReviewed(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+	userID := "user-123"
+	ids := []string{"tx-1", "tx-2"}
+
+	mock.ExpectExec("UPDATE transactions").
+		WithArgs(true, pgxmock.AnyArg(), userID, ids).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+
+	n, err := repo.SetReviewed(ctx, userID, ids, true)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestTransactionRepository_SetReviewed_Unreview clears review state (reviewed_at -> NULL).
+func TestTransactionRepository_SetReviewed_Unreview(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+	userID := "user-123"
+	ids := []string{"tx-1"}
+
+	mock.ExpectExec("UPDATE transactions").
+		WithArgs(false, (*time.Time)(nil), userID, ids).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	n, err := repo.SetReviewed(ctx, userID, ids, false)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestTransactionRepository_SetReviewed_EmptyIDs is a no-op without hitting the DB.
+func TestTransactionRepository_SetReviewed_EmptyIDs(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	n, err := repo.SetReviewed(context.Background(), "user-123", nil, true)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // TestTransactionRepository_UpdateCategory_ClearOverride tests that passing nil kind clears overrides.
@@ -2197,6 +2271,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
 		"custom_category_override_id", "category_source", "category_override_date",
 		"effective_pfc_primary", "effective_pfc_detailed", "effective_category_name",
+		"reviewed", "reviewed_at",
 	}).
 		AddRow(
 			"tx-uuid-1", userID, "account-old", "item-old", &userAccountID,
@@ -2206,6 +2281,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 			now, now, []byte(`[]`), []byte(`[]`),
 			nil, nil, nil, nil, "plaid", nil,
 			nil, nil, nil,
+			false, nil,
 		).
 		AddRow(
 			"tx-uuid-2", userID, "account-new", "item-new", &userAccountID,
@@ -2215,6 +2291,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 			now, now, []byte(`[]`), []byte(`[]`),
 			nil, nil, nil, nil, "plaid", nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	mock.ExpectQuery("SELECT.*FROM transactions.*WHERE user_id.*AND user_account_id").
@@ -2280,6 +2357,7 @@ func testTxRow(id, userID, accountID, itemID, name string, amount float64, now t
 		nil, nil,
 		nil, nil, nil, nil, nil, nil,
 		nil, nil, nil,
+		false, nil, // reviewed, reviewed_at
 	}
 }
 
@@ -2642,6 +2720,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		).
 		AddRow(
 			"tx-2", userID, "account-new-2", "item-1",
@@ -2652,6 +2731,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// The WHERE clause must contain user_account_id filter.
@@ -2817,6 +2897,7 @@ func makeKeysetRow(id, userID string, amount float64, txDate time.Time, merchant
 		nil, nil,
 		nil, nil, nil, nil, nil, nil,
 		nil, nil, nil,
+		false, nil, // reviewed, reviewed_at
 	}
 }
 
@@ -3171,6 +3252,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_MerchantID(t *testing.T) {
 			nil, nil,
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
+			false, nil,
 		)
 
 	// WHERE clause must include merchant_id filter.
