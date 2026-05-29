@@ -67,6 +67,22 @@ describe('useSpendingByCategory', () => {
     expect(result.current.error).toBeNull()
   })
 
+  it('passes custom_category_ids when provided (#1203)', () => {
+    renderHook(() =>
+      useSpendingByCategory({
+        filters: {
+          startDate: '2024-01-01',
+          endDate: '2024-01-31',
+          customCategoryIds: ['id1', 'id2'],
+        },
+      })
+    )
+    const params = mockUseGetSpendingByCategory.mock.calls.at(-1)?.[0] as
+      | Record<string, unknown>
+      | undefined
+    expect(params?.custom_category_ids).toBe('id1,id2')
+  })
+
   it('returns error string when API call fails', () => {
     mockUseGetSpendingByCategory.mockImplementation(() => ({
       data: null,
