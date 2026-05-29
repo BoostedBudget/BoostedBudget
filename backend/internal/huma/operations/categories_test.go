@@ -25,6 +25,8 @@ type mockCustomCategoryService struct {
 	deleteErr        error
 	getOrCreateCat   *domain.CustomCategory
 	getOrCreateErr   error
+	usage            *domain.CategoryUsage
+	usageErr         error
 }
 
 func (m *mockCustomCategoryService) GetUserCategories(ctx context.Context, userID string) ([]*domain.CustomCategory, error) {
@@ -57,6 +59,16 @@ func (m *mockCustomCategoryService) UpdateCategory(ctx context.Context, userID, 
 
 func (m *mockCustomCategoryService) DeleteCategory(ctx context.Context, userID, categoryID string) error {
 	return m.deleteErr
+}
+
+func (m *mockCustomCategoryService) GetCategoryUsage(ctx context.Context, userID, categoryID string) (*domain.CategoryUsage, error) {
+	if m.usageErr != nil {
+		return nil, m.usageErr
+	}
+	if m.usage != nil {
+		return m.usage, nil
+	}
+	return &domain.CategoryUsage{}, nil
 }
 
 func (m *mockCustomCategoryService) GetOrCreateCategory(ctx context.Context, userID, categoryName string) (*domain.CustomCategory, error) {

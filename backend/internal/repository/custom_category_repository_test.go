@@ -537,6 +537,84 @@ func TestCustomCategoryRepository_HasChildren(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestCustomCategoryRepository_GetCategoryUsage returns live reference counts (Issue #1203).
+func TestCustomCategoryRepository_GetCategoryUsage(t *testing.T) {
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	categoryID := uuid.New().String()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM transactions WHERE user_id = $1 AND custom_category_override_id = $2`)).
+		WithArgs(userID, categoryID).WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(5))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM budget_categories bc`).
+		WithArgs(userID, categoryID).WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM categorization_rules WHERE user_id = $1 AND target_custom_category_id = $2`)).
+		WithArgs(userID, categoryID).WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM custom_categories WHERE user_id = $1 AND parent_id = $2`)).
+		WithArgs(userID, categoryID).WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3))
+
+	usage, err := repo.GetCategoryUsage(ctx, userID, categoryID)
+	require.NoError(t, err)
+	assert.Equal(t, 5, usage.TransactionCount)
+	assert.Equal(t, 2, usage.BudgetCount)
+	assert.Equal(t, 1, usage.RuleCount)
+	assert.Equal(t, 3, usage.ChildCount)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCustomCategoryRepository_DeleteWithReassignment runs the transactional delete:
+// revert transactions, clean rules, reparent children, delete (Issue #1203).
+func TestCustomCategoryRepository_DeleteWithReassignment(t *testing.T) {
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	categoryID := uuid.New().String()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE transactions[\s\S]*category_source = 'plaid'[\s\S]*reviewed = false`).
+		WithArgs(userID, categoryID).WillReturnResult(pgxmock.NewResult("UPDATE", 4))
+	mock.ExpectExec(`DELETE FROM categorization_rules`).
+		WithArgs(userID, categoryID).WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectExec(`UPDATE categorization_rules`).
+		WithArgs(userID, categoryID).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec(`UPDATE custom_categories SET parent_id = NULL`).
+		WithArgs(categoryID).WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+	mock.ExpectExec(`DELETE FROM custom_categories WHERE id = \$1 AND user_id = \$2`).
+		WithArgs(categoryID, userID).WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectCommit()
+
+	err := repo.DeleteWithReassignment(ctx, userID, categoryID)
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCustomCategoryRepository_DeleteWithReassignment_NotFound rolls back when the category is absent.
+func TestCustomCategoryRepository_DeleteWithReassignment_NotFound(t *testing.T) {
+	mock, repo := setupCategoryMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	categoryID := uuid.New().String()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE transactions`).WithArgs(userID, categoryID).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectExec(`DELETE FROM categorization_rules`).WithArgs(userID, categoryID).WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectExec(`UPDATE categorization_rules`).WithArgs(userID, categoryID).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectExec(`UPDATE custom_categories SET parent_id = NULL`).WithArgs(categoryID).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectExec(`DELETE FROM custom_categories WHERE id = \$1 AND user_id = \$2`).
+		WithArgs(categoryID, userID).WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectRollback()
+
+	err := repo.DeleteWithReassignment(ctx, userID, categoryID)
+	assert.ErrorIs(t, err, domain.ErrCategoryNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestCustomCategoryRepository_ClearParentForChildren tests reparenting children to top-level (Issue #1203)
 func TestCustomCategoryRepository_ClearParentForChildren(t *testing.T) {
 	mock, repo := setupCategoryMockDB(t)
