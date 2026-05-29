@@ -301,7 +301,9 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 	// Issue #171: Added user_account_id field; encryption adds external_transaction_id_blind_idx
 	// Issue #1123: Added effective_category_name (24 fields)
 	// Issue #1163: Added merchant_id (25 fields)
-	const numFields = 25
+	// Issue #1203: persist category override + category_source + review state on
+	// initial insert (was the documented #TODO-createbatch-overrides bug). 32 fields.
+	const numFields = 32
 	valueStrings := make([]string, 0, len(transactions))
 	valueArgs := make([]interface{}, 0, len(transactions)*numFields)
 
@@ -329,10 +331,28 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		}
 		valueStrings = append(valueStrings, fmt.Sprintf("(%s)", strings.Join(placeholders, ", ")))
 
-		// Compute effective_category_name from in-memory values.
-		// CreateBatch is Plaid-only and override columns are not written here (existing
-		// bug documented in #TODO-createbatch-overrides), so effective_category_name = pfc_primary.
-		effectiveCategoryName := transactions[i].PFCPrimary
+		// Compute effective_category_name from in-memory override values (Issue #1203).
+		// For a rule-applied custom override the name is filled in by the async
+		// effective_category_refresh job if not already populated in memory.
+		effectiveCategoryName := transactions[i].EffectiveCategoryName
+		switch {
+		case transactions[i].CategoryOverrideKind != nil && *transactions[i].CategoryOverrideKind == "pfc":
+			if transactions[i].PFCPrimaryOverride != nil && *transactions[i].PFCPrimaryOverride != "" {
+				effectiveCategoryName = transactions[i].PFCPrimaryOverride
+			} else {
+				effectiveCategoryName = transactions[i].PFCPrimary
+			}
+		case transactions[i].CategoryOverrideKind != nil && *transactions[i].CategoryOverrideKind == "custom":
+			// leave as in-memory EffectiveCategoryName (may be nil; async refresh fills it)
+		default:
+			effectiveCategoryName = transactions[i].PFCPrimary
+		}
+
+		// category_source defaults to 'plaid' when unset to satisfy the CHECK constraint.
+		categorySource := string(transactions[i].CategorySourceField)
+		if categorySource == "" {
+			categorySource = string(domain.CategorySourcePlaid)
+		}
 
 		// Add values (including user_account_id and external_transaction_id_blind_idx)
 		valueArgs = append(valueArgs,
@@ -361,6 +381,14 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			transactions[i].CreatedAt,
 			transactions[i].UpdatedAt,
 			effectiveCategoryName,
+			// Issue #1203: category override discriminated union + review state
+			transactions[i].CategoryOverrideKind,
+			transactions[i].PFCPrimaryOverride,
+			transactions[i].PFCDetailedOverride,
+			transactions[i].CustomCategoryOverrideID,
+			categorySource,
+			transactions[i].Reviewed,
+			transactions[i].ReviewedAt,
 		)
 	}
 
@@ -376,7 +404,9 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		 source, external_transaction_id, external_transaction_id_blind_idx, external_metadata,
 		 amount, date, authorized_date, name, merchant_name, merchant_id,
 		 pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending, user_notes,
-		 created_at, updated_at, effective_category_name)
+		 created_at, updated_at, effective_category_name,
+		 category_override_kind, pfc_primary_override, pfc_detailed_override, custom_category_override_id,
+		 category_source, reviewed, reviewed_at)
 		VALUES %s
 		ON CONFLICT (source, external_transaction_id_blind_idx, user_id) DO UPDATE SET
 			account_id = EXCLUDED.account_id,

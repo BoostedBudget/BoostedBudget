@@ -144,11 +144,10 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with multiple value sets (25 fields per transaction * 2 transactions = 50 args)
-	// Issue #171: Added user_account_id as the 5th field; encryption adds external_transaction_id_blind_idx
-	// Issue #1123: Added effective_category_name as the 24th field
-	// Issue #1163: Added merchant_id as the 15th field
-	args := make([]interface{}, 50)
+	// Expect batch INSERT with multiple value sets (32 fields per transaction * 2 transactions = 64 args)
+	// Issue #171: user_account_id; Issue #1123: effective_category_name; Issue #1163: merchant_id
+	// Issue #1203: category override columns (4) + category_source + reviewed + reviewed_at
+	args := make([]interface{}, 64)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -2178,10 +2177,8 @@ func TestTransactionRepository_CreateBatch_WithUserAccountID(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with user_account_id and external_transaction_id_blind_idx (25 fields now)
-	// Issue #1123: Added effective_category_name as the 24th field
-	// Issue #1163: Added merchant_id as the 15th field
-	args := make([]interface{}, 25)
+	// Expect batch INSERT (32 fields per transaction; Issue #1203 added override columns + review state)
+	args := make([]interface{}, 32)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -2224,8 +2221,8 @@ func TestTransactionRepository_CreateBatch_DOUpdateBehavior(t *testing.T) {
 		},
 	}
 
-	// Build arguments for 25 fields per transaction (includes external_transaction_id_blind_idx, pfc_category_icon_url, effective_category_name, merchant_id)
-	args := make([]interface{}, 25)
+	// Build arguments for 32 fields per transaction (Issue #1203 added override columns + review state)
+	args := make([]interface{}, 32)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -2241,6 +2238,52 @@ func TestTransactionRepository_CreateBatch_DOUpdateBehavior(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
+}
+
+// TestTransactionRepository_CreateBatch_PersistsOverrideAndReview verifies that a
+// rule-applied override + review state is written on initial insert (Issue #1203,
+// the former #TODO-createbatch-overrides bug).
+func TestTransactionRepository_CreateBatch_PersistsOverrideAndReview(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	externalID := "plaid_tx_rule_1"
+	kind := "pfc"
+	primaryOverride := "FOOD_AND_DRINK"
+	reviewedAt := time.Now()
+	transactions := []domain.Transaction{
+		{
+			UserID:                "user-123",
+			AccountID:             "account-123",
+			LinkedItemID:          "item-123",
+			Source:                domain.SourcePlaid,
+			ExternalTransactionID: &externalID,
+			Amount:                -12.00,
+			Date:                  time.Now(),
+			Name:                  "Coffee",
+			CategoryOverrideKind:  &kind,
+			PFCPrimaryOverride:    &primaryOverride,
+			CategorySourceField:   domain.CategorySourceRule,
+			Reviewed:              true,
+			ReviewedAt:            &reviewedAt,
+		},
+	}
+
+	// The INSERT must include the new override + review columns.
+	args := make([]interface{}, 32)
+	for i := range args {
+		args[i] = pgxmock.AnyArg()
+	}
+	mock.ExpectExec("category_override_kind, pfc_primary_override, pfc_detailed_override, custom_category_override_id,[\\s]+category_source, reviewed, reviewed_at").
+		WithArgs(args...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	require.NoError(t, repo.CreateBatch(ctx, transactions))
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // TestTransactionRepository_GetByUserAccountID tests retrieval by stable user_account_id
@@ -2685,7 +2728,6 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_UnsupportedMatch
 	assert.Equal(t, 0.0, totalAmount)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
-
 
 // TestTransactionRepository_GetByUserIDWithFilters_UserAccountID verifies that
 // providing UserAccountID in TransactionFilters generates a WHERE clause that
