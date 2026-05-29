@@ -3,12 +3,13 @@
  * Issue #575: Migrated to bun:test with centralized Clerk mocks
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Header } from './Header'
 import { mockUseAuth, mockUseUser, mockUseClerk } from '@/test/mocks/clerk'
+import { mockUseFeatureFlagEnabled } from '@/test/mocks/posthog'
 
 const mockClerkUser = {
   id: 'user_123',
@@ -166,6 +167,34 @@ describe('Header', () => {
       setupUnauthenticatedMocks()
       renderHeader({ className: 'custom-class' })
       expect(screen.getByRole('banner')).toHaveClass('custom-class')
+    })
+  })
+
+  describe('when login is disabled', () => {
+    beforeEach(() => {
+      setupUnauthenticatedMocks()
+      window.ENV = { POSTHOG_KEY: 'test-key' }
+      mockUseFeatureFlagEnabled.mockReturnValue(false)
+    })
+
+    afterEach(() => {
+      window.ENV = undefined
+      mockUseFeatureFlagEnabled.mockReturnValue(undefined)
+    })
+
+    it('does not render login button when login is disabled', () => {
+      renderHeader()
+      expect(screen.queryByRole('button', { name: /log in/i })).not.toBeInTheDocument()
+    })
+
+    it('still renders logo when login is disabled', () => {
+      renderHeader()
+      expect(screen.getByText(/boostedbudget/i)).toBeInTheDocument()
+    })
+
+    it('still renders mobile nav trigger when login is disabled', () => {
+      renderHeader()
+      expect(screen.getByRole('button', { name: /open menu/i })).toBeInTheDocument()
     })
   })
 })

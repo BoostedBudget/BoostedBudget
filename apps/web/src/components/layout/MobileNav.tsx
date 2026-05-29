@@ -22,6 +22,7 @@ interface MobileNavProps {
   } | null
   onLogout: () => void
   onLogin: () => void
+  loginEnabled?: boolean
   className?: string
 }
 
@@ -30,6 +31,7 @@ export function MobileNav({
   user,
   onLogout,
   onLogin,
+  loginEnabled = true,
   className,
 }: MobileNavProps) {
   const [open, setOpen] = useState(false)
@@ -118,7 +120,7 @@ export function MobileNav({
             </>
           )}
 
-          {!isAuthenticated && (
+          {!isAuthenticated && loginEnabled && (
             <Button
               onClick={() => {
                 onLogin()
