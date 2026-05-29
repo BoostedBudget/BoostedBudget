@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
@@ -49,8 +50,10 @@ func (s *ruleApplicationService) SetAnalytics(analytics phclient.Analytics) {
 
 // ApplyRulesToTransaction applies all enabled rules to a single transaction.
 func (s *ruleApplicationService) ApplyRulesToTransaction(ctx context.Context, tx *domain.Transaction) error {
-	// Skip if transaction already has a manual category override
-	if tx.CategorySourceField == domain.CategorySourceManual {
+	// Skip if the transaction has a manual category override or has already been
+	// reviewed — reviewed transactions are protected from auto-recategorization
+	// (Issue #1203).
+	if tx.CategorySourceField == domain.CategorySourceManual || tx.Reviewed {
 		return nil
 	}
 
@@ -96,6 +99,14 @@ func (s *ruleApplicationService) ApplyRulesToTransaction(ctx context.Context, tx
 			tx.CustomCategoryOverrideID = nil
 		}
 		tx.CategorySourceField = domain.CategorySourceRule
+
+		// A rule applying a category action counts as an automated review
+		// (Issue #1203). Tag-only matches do NOT mark the transaction reviewed.
+		if !tx.Reviewed {
+			tx.Reviewed = true
+			now := time.Now()
+			tx.ReviewedAt = &now
+		}
 
 		if s.analytics != nil && len(result.MatchedRuleIDs) > 0 {
 			s.analytics.Capture(tx.UserID, phclient.EventAutoCategorizationExecuted, map[string]interface{}{

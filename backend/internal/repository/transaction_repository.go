@@ -1090,6 +1090,8 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 		    custom_category_override_id = $4,
 		    category_source = $5,
 		    category_override_date = $6,
+		    reviewed = true,
+		    reviewed_at = $6,
 		    effective_category_name = CASE
 		        WHEN $1 = 'custom' THEN
 		            (SELECT name FROM custom_categories WHERE id = $4::uuid AND user_id = transactions.user_id)

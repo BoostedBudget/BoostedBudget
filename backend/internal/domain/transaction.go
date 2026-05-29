@@ -87,7 +87,7 @@ type Transaction struct {
 	ExternalMetadata *string `json:"external_metadata,omitempty" db:"external_metadata"`
 
 	// Core transaction fields (standardized across all providers)
-	Amount         float64    `json:"amount" db:"amount"`                                    // Positive=outflow, Negative=inflow (Plaid PFCv2)
+	Amount         float64    `json:"amount" db:"amount"` // Positive=outflow, Negative=inflow (Plaid PFCv2)
 	Date           time.Time  `json:"date" db:"date"`
 	AuthorizedDate *time.Time `json:"authorized_date,omitempty" db:"authorized_date"`
 	Name           string     `json:"name" db:"name"`
@@ -95,10 +95,10 @@ type Transaction struct {
 	MerchantID     *string    `json:"merchant_id,omitempty" db:"merchant_id"`
 
 	// PFCv2 source columns (from Plaid)
-	PFCPrimary           *string `json:"pfc_primary,omitempty" db:"pfc_primary"`
-	PFCDetailed          *string `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
-	PFCConfidenceLevel   *string `json:"pfc_confidence_level,omitempty" db:"pfc_confidence_level"`
-	PFCCategoryIconURL   *string `json:"pfc_category_icon_url,omitempty" db:"pfc_category_icon_url"`
+	PFCPrimary         *string `json:"pfc_primary,omitempty" db:"pfc_primary"`
+	PFCDetailed        *string `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
+	PFCConfidenceLevel *string `json:"pfc_confidence_level,omitempty" db:"pfc_confidence_level"`
+	PFCCategoryIconURL *string `json:"pfc_category_icon_url,omitempty" db:"pfc_category_icon_url"`
 
 	// PFC display names (not stored in DB)
 	PFCPrimaryDisplay          *string `json:"pfc_primary_display,omitempty" db:"-"`
@@ -117,12 +117,18 @@ type Transaction struct {
 	UserNotes *string `json:"user_notes,omitempty" db:"user_notes"`
 
 	// Category override — discriminated union (category_override_kind determines which branch is active)
-	CategoryOverrideKind       *string        `json:"category_override_kind,omitempty" db:"category_override_kind"`
-	PFCPrimaryOverride         *string        `json:"pfc_primary_override,omitempty" db:"pfc_primary_override"`
-	PFCDetailedOverride        *string        `json:"pfc_detailed_override,omitempty" db:"pfc_detailed_override"`
-	CustomCategoryOverrideID   *string        `json:"custom_category_override_id,omitempty" db:"custom_category_override_id"`
-	CategorySourceField        CategorySource `json:"category_source" db:"category_source"`
-	CategoryOverrideDate       *time.Time     `json:"category_override_date,omitempty" db:"category_override_date"`
+	CategoryOverrideKind     *string        `json:"category_override_kind,omitempty" db:"category_override_kind"`
+	PFCPrimaryOverride       *string        `json:"pfc_primary_override,omitempty" db:"pfc_primary_override"`
+	PFCDetailedOverride      *string        `json:"pfc_detailed_override,omitempty" db:"pfc_detailed_override"`
+	CustomCategoryOverrideID *string        `json:"custom_category_override_id,omitempty" db:"custom_category_override_id"`
+	CategorySourceField      CategorySource `json:"category_source" db:"category_source"`
+	CategoryOverrideDate     *time.Time     `json:"category_override_date,omitempty" db:"category_override_date"`
+
+	// Review state (Issue #1203): new Plaid transactions arrive unreviewed and
+	// become reviewed when a rule applies a category, the user categorizes them,
+	// or the user explicitly toggles review.
+	Reviewed   bool       `json:"reviewed" db:"reviewed"`
+	ReviewedAt *time.Time `json:"reviewed_at,omitempty" db:"reviewed_at"`
 
 	// Effective category columns (denormalized, generated or app-maintained)
 	EffectivePFCPrimary   *string `json:"effective_pfc_primary,omitempty" db:"effective_pfc_primary"`
