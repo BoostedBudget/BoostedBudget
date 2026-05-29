@@ -127,7 +127,8 @@ test.describe('Transaction hierarchical category filter', () => {
     await subCatFilterBtn.click()
 
     // Dropdown shows a searchable flat list of PFC detailed options
-    await expect(page.getByPlaceholder(/search/i)).toBeVisible({ timeout: 3000 })
+    // Use exact placeholder 'Search...' to avoid matching the main page search bar
+    await expect(page.getByPlaceholder('Search...')).toBeVisible({ timeout: 3000 })
 
     // Select "Coffee" from the dropdown
     const coffeeCheckbox = page.getByRole('checkbox', { name: /^Coffee$/i })
