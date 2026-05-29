@@ -38,10 +38,8 @@ export interface RuleTableProps {
   onTest?: (rule: AutomationRule) => void
   onRowClick?: (rule: AutomationRule) => void
   loading?: boolean
-  sortable?: boolean
-  sortColumn?: SortColumn
-  sortDirection?: SortDirection
-  onSort?: (state: SortState | null) => void
+  sort?: SortState
+  onSortChange?: (sort: SortState) => void
   selectable?: boolean
   selectedIds?: string[]
   onSelectionChange?: (selectedIds: string[]) => void
@@ -56,10 +54,8 @@ export function RuleTable({
   onTest,
   onRowClick,
   loading = false,
-  sortable = false,
-  sortColumn,
-  sortDirection = 'asc',
-  onSort,
+  sort = null,
+  onSortChange,
   selectable = false,
   selectedIds = [],
   onSelectionChange,
@@ -105,15 +101,6 @@ export function RuleTable({
     [onToggle, loading]
   )
 
-  const handleSortChange = useCallback(
-    (newSort: SortState) => {
-      if (!onSort || !sortable) return
-      onSort(newSort)
-    },
-    [onSort, sortable]
-  )
-
-  const sort: SortState | null = sortColumn && sortable ? { columnId: sortColumn, direction: sortDirection } : null
 
   const columns: ColumnDef<AutomationRule>[] = [
     ...(selectable
@@ -152,7 +139,7 @@ export function RuleTable({
     {
       id: 'name',
       header: 'Name',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultSize: 240,
@@ -169,7 +156,7 @@ export function RuleTable({
     {
       id: 'type',
       header: 'Type',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultSize: 140,
@@ -183,7 +170,7 @@ export function RuleTable({
     {
       id: 'status',
       header: 'Status',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultPinned: 'left' as const,
@@ -206,7 +193,7 @@ export function RuleTable({
     {
       id: 'trigger',
       header: 'Trigger',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultSize: 200,
@@ -234,7 +221,7 @@ export function RuleTable({
     {
       id: 'lastRun',
       header: 'Last Run',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       hideable: true,
@@ -253,7 +240,7 @@ export function RuleTable({
     {
       id: 'priority',
       header: 'Priority',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       hideable: true,
@@ -283,7 +270,7 @@ export function RuleTable({
       columns={columns}
       rowKey={(row) => row.id}
       sort={sort}
-      onSortChange={handleSortChange}
+      onSortChange={onSortChange!}
       filters={{}}
       onFiltersChange={() => {}}
       loading={loading}
