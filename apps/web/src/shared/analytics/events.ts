@@ -106,6 +106,15 @@ export const ANALYTICS_EVENTS = {
   // Transactions category filter (#1200)
   CATEGORY_FILTER_APPLIED: 'category_filter_applied',
   CATEGORY_FILTER_CLEARED: 'category_filter_cleared',
+
+  // Custom category management (#1203)
+  CUSTOM_CATEGORY_CREATED: 'custom_category_created',
+  CUSTOM_CATEGORY_UPDATED: 'custom_category_updated',
+  CUSTOM_CATEGORY_DELETED: 'custom_category_deleted',
+  CUSTOM_CATEGORY_MANAGER_OPENED: 'custom_category_manager_opened',
+  BUDGET_SUB_ALLOCATION_ADDED: 'budget_sub_allocation_added',
+  REPORT_CUSTOM_CATEGORY_FILTERED: 'report_custom_category_filtered',
+  TRANSACTION_REVIEWED: 'transaction_reviewed',
 } as const
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[keyof typeof ANALYTICS_EVENTS]
