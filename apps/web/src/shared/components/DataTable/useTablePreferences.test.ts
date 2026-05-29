@@ -15,7 +15,7 @@ const DEFAULT_PREFS = {
   columnVisibility: {},
 }
 
-const SIZING_VERSION = 'v2-fixed-layout'
+const SIZING_VERSION = 'v3-compact'
 
 function makeStoredPrefs(overrides?: object) {
   return JSON.stringify({

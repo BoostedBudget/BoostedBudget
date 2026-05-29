@@ -126,6 +126,34 @@ describe('TableHeaderCell', () => {
       const button = screen.getByRole('button', { name: /date/i })
       expect(button).not.toHaveAttribute('aria-sort')
     })
+
+    it('shows a sort affordance icon when sortable but not the active sort column', () => {
+      render(
+        <TableHeaderCell
+          label="Amount"
+          sortable
+          sortColumn="amount"
+          currentSortColumn="date"
+          currentSortDirection="asc"
+          onSort={() => {}}
+        />
+      )
+      const btn = screen.getByRole('button', { name: /amount/i })
+      expect(btn.querySelector('svg')).not.toBeNull()
+    })
+
+    it('shows no icon in the sort button when no sort column is active', () => {
+      render(
+        <TableHeaderCell
+          label="Amount"
+          sortable
+          sortColumn="amount"
+          onSort={() => {}}
+        />
+      )
+      const btn = screen.getByRole('button', { name: /amount/i })
+      expect(btn.querySelector('svg')).not.toBeNull()
+    })
   })
 
   describe('Filtering', () => {

@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useMemo } from 'react'
 import { Edit, Tag, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ReadOnlyGuard } from '@/auth'
@@ -6,7 +6,7 @@ import type { Transaction } from '../types'
 import type { Account } from '../../accounts/types'
 import { getCategoryColor } from '@/lib/category-colors'
 import { getEffectiveCategory, getEffectiveCategoryLabel, getEffectiveDetailedCategory } from '@/shared/categories/getEffectiveCategory'
-import { getDetailedLabel } from '@/shared/categories/pfcOptions'
+import { getDetailedLabel, getPfcDetailedFilterOptions } from '@/shared/categories/pfcOptions'
 import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect'
 import { formatTransactionAmount, isOutflow } from '@/shared/transactions/amount'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
@@ -33,10 +33,8 @@ export interface TransactionTableProps {
   onCategorize?: (transaction: Transaction) => void
   onRowClick?: (transaction: Transaction) => void
   loading?: boolean
-  sortable?: boolean
-  sortColumn?: TransactionSortColumn
-  sortDirection?: SortDirection
-  onSort?: (column: TransactionSortColumn, direction: SortDirection) => void
+  sort?: SortState
+  onSortChange?: (sort: SortState) => void
   className?: string
   accountOptions?: FilterOption[]
   accountFilter?: string[]
@@ -79,10 +77,8 @@ export function TransactionTable({
   onCategorize,
   onRowClick,
   loading = false,
-  sortable = false,
-  sortColumn,
-  sortDirection = 'asc',
-  onSort,
+  sort = null,
+  onSortChange,
   className = '',
   accountOptions,
   accountFilter,
@@ -108,39 +104,28 @@ export function TransactionTable({
     onColumnVisibilityChange,
   } = useTablePreferences('transactions', [...TRANSACTION_COLUMN_IDS])
 
-  const handleSortChange = useCallback(
-    (newSort: SortState) => {
-      if (!onSort || !sortable) return
-      if (newSort) {
-        onSort(newSort.columnId as TransactionSortColumn, newSort.direction)
-      } else if (sortColumn) {
-        onSort(sortColumn, sortDirection === 'asc' ? 'desc' : 'asc')
-      }
-    },
-    [onSort, sortable, sortColumn, sortDirection]
-  )
-
-  const sort: SortState =
-    sortColumn && sortable ? { columnId: sortColumn, direction: sortDirection } : null
+  const pfcDetailedOptions = useMemo(() => getPfcDetailedFilterOptions(), [])
 
   const filters: FilterState = {
     account: accountFilter ?? [],
     amount: amountRange ?? null,
+    sub_category: selectedDetaileds ?? [],
   }
 
   const handleFiltersChange = useCallback(
     (newFilters: FilterState) => {
       if (newFilters.account !== filters.account) onAccountFilterChange?.(newFilters.account as string[])
       if (newFilters.amount !== filters.amount) onAmountRangeChange?.(newFilters.amount as RangeValue | null)
+      if (newFilters.sub_category !== filters.sub_category) onDetailedsChange?.(newFilters.sub_category as string[])
     },
-    [filters.account, filters.amount, onAccountFilterChange, onAmountRangeChange]
+    [filters.account, filters.amount, filters.sub_category, onAccountFilterChange, onAmountRangeChange, onDetailedsChange]
   )
 
   const columns: ColumnDef<Transaction>[] = [
     {
       id: 'date',
       header: 'Date',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultSize: 110,
@@ -155,11 +140,11 @@ export function TransactionTable({
     {
       id: 'merchant',
       header: 'Description',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
-      defaultSize: 320,
-      minSize: 200,
+      defaultSize: 240,
+      minSize: 160,
       render: (row) => (
         <div>
           <div className="font-medium text-foreground">
@@ -186,8 +171,8 @@ export function TransactionTable({
       resizable: true,
       reorderable: true,
       hideable: true,
-      defaultSize: 200,
-      minSize: 140,
+      defaultSize: 160,
+      minSize: 120,
       maxSize: 280,
       render: (row) => {
         const account = accountsMap[row.account_id]
@@ -214,12 +199,12 @@ export function TransactionTable({
     {
       id: 'category',
       header: 'Category',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       hideable: true,
-      defaultSize: 200,
-      minSize: 140,
+      defaultSize: 160,
+      minSize: 120,
       maxSize: 280,
       render: (row) => {
         const categoryLabel = getEffectiveCategoryLabel(getEffectiveCategory(row))
@@ -250,8 +235,8 @@ export function TransactionTable({
       resizable: true,
       reorderable: true,
       hideable: true,
-      defaultSize: 180,
-      minSize: 120,
+      defaultSize: 140,
+      minSize: 100,
       maxSize: 260,
       render: (row) => {
         const detailed = getEffectiveDetailedCategory(row)
@@ -259,12 +244,14 @@ export function TransactionTable({
         const label = getDetailedLabel(detailed) ?? detailed
         return <span className="text-sm text-muted-foreground">{label}</span>
       },
-      // No masking: PFC taxonomy labels are not user PII
+      filter: onDetailedsChange
+        ? { type: 'select', options: pfcDetailedOptions, multiSelect: true, searchable: true }
+        : undefined,
     },
     {
       id: 'amount',
       header: 'Amount',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultPinned: 'right',
@@ -305,7 +292,7 @@ export function TransactionTable({
       columns={columns}
       rowKey={(row) => row.id}
       sort={sort}
-      onSortChange={handleSortChange}
+      onSortChange={onSortChange!}
       filters={filters}
       onFiltersChange={handleFiltersChange}
       loading={loading}

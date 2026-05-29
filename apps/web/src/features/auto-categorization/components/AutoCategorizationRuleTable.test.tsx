@@ -288,58 +288,58 @@ describe('AutoCategorizationRuleTable', () => {
   })
 
   describe('Sorting', () => {
-    it('should make name column sortable', () => {
-      render(<AutoCategorizationRuleTable rules={mockRules} sortable />)
+    it('makes name column sortable when onSortChange is provided', () => {
+      render(<AutoCategorizationRuleTable rules={mockRules} onSortChange={mock(() => {})} />)
 
       const nameHeader = screen.getByText('Name')
       expect(nameHeader.closest('button')).toBeInTheDocument()
     })
 
-    it('should call onSort when clicking sortable header', () => {
-      const onSort = mock(() => {})
-      render(
-        <AutoCategorizationRuleTable
-          rules={mockRules}
-          sortable
-          onSort={onSort}
-        />
-      )
+    it('calls onSortChange with asc on first click', () => {
+      const onSortChange = mock(() => {})
+      render(<AutoCategorizationRuleTable rules={mockRules} onSortChange={onSortChange} />)
 
-      const nameHeader = screen.getByText('Name').closest('button')!
-      fireEvent.click(nameHeader)
-
-      expect(onSort).toHaveBeenCalledWith('name', 'asc')
+      fireEvent.click(screen.getByText('Name').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith({ columnId: 'name', direction: 'asc' })
     })
 
-    it('should toggle sort direction on second click', () => {
-      const onSort = mock(() => {})
+    it('calls onSortChange with desc when sorted asc and clicked', () => {
+      const onSortChange = mock(() => {})
       render(
         <AutoCategorizationRuleTable
           rules={mockRules}
-          sortable
-          onSort={onSort}
-          sortColumn="name"
-          sortDirection="asc"
+          onSortChange={onSortChange}
+          sort={{ columnId: 'name', direction: 'asc' }}
         />
       )
 
-      const nameHeader = screen.getByText('Name').closest('button')!
-      fireEvent.click(nameHeader)
-
-      expect(onSort).toHaveBeenCalledWith('name', 'desc')
+      fireEvent.click(screen.getByText('Name').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith({ columnId: 'name', direction: 'desc' })
     })
 
-    it('should show sort indicator on sorted column', () => {
+    it('calls onSortChange(null) on third click — clears sort', () => {
+      const onSortChange = mock(() => {})
       render(
         <AutoCategorizationRuleTable
           rules={mockRules}
-          sortable
-          sortColumn="name"
-          sortDirection="asc"
+          onSortChange={onSortChange}
+          sort={{ columnId: 'name', direction: 'desc' }}
         />
       )
 
-      // WCAG 2.1: aria-sort belongs on the <th> (columnheader), not the sort button
+      fireEvent.click(screen.getByText('Name').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith(null)
+    })
+
+    it('shows sort indicator on sorted column', () => {
+      render(
+        <AutoCategorizationRuleTable
+          rules={mockRules}
+          onSortChange={mock(() => {})}
+          sort={{ columnId: 'name', direction: 'asc' }}
+        />
+      )
+
       const columnHeaders = screen.getAllByRole('columnheader')
       const nameHeader = columnHeaders.find((h) => h.textContent?.includes('Name'))!
       expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
@@ -503,38 +503,18 @@ describe('AutoCategorizationRuleTable', () => {
   })
 
   describe('Sorting — tri-state clear', () => {
-    it('should NOT call onSort on third click (clear) when column is already desc', () => {
-      const onSort = mock(() => {})
-      const { rerender } = render(
+    it('calls onSortChange(null) on third click (clear) when column is already desc', () => {
+      const onSortChange = mock(() => {})
+      render(
         <AutoCategorizationRuleTable
           rules={mockRules}
-          sortable
-          onSort={onSort}
-          sortColumn="name"
-          sortDirection="desc"
+          onSortChange={onSortChange}
+          sort={{ columnId: 'name', direction: 'desc' }}
         />
       )
 
-      const nameHeader = screen.getByText('Name').closest('button')!
-      // This is the "third" click in the tri-state lifecycle (asc→desc→clear).
-      // After migrating to DataTable, sort clears to null and onSort is NOT called
-      // (DataTable emits null via onSortChange; handleSortChange silently ignores null).
-      fireEvent.click(nameHeader)
-
-      // onSort should NOT be called because DataTable emits null (clear) which has no
-      // equivalent in the frozen AutoCategorizationRuleTableProps API.
-      expect(onSort).not.toHaveBeenCalled()
-
-      // rerender is available if needed for follow-up checks
-      rerender(
-        <AutoCategorizationRuleTable
-          rules={mockRules}
-          sortable
-          onSort={onSort}
-          sortColumn={undefined}
-          sortDirection="asc"
-        />
-      )
+      fireEvent.click(screen.getByText('Name').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith(null)
     })
   })
 
