@@ -275,10 +275,8 @@ export function RulesPage() {
             onToggle={handleToggleRule}
             onTest={handleTestRule}
             loading={isLoading || toggleMutation.isPending || deleteMutation.isPending || testMutation.isPending}
-            sortable
-            sortColumn={sortColumn}
-            sortDirection={sortDirection}
-            onSort={setSort}
+            sort={sort}
+            onSortChange={setSort}
           />
         )}
       </div>

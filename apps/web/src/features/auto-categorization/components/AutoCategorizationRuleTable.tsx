@@ -48,14 +48,10 @@ export interface AutoCategorizationRuleTableProps {
   onRowClick?: (rule: CategorizationRule) => void
   /** Show loading state */
   loading?: boolean
-  /** Enable sorting */
-  sortable?: boolean
-  /** Currently sorted column */
-  sortColumn?: SortColumn
-  /** Current sort direction */
-  sortDirection?: SortDirection
-  /** Called when sort changes */
-  onSort?: (column: SortColumn, direction: SortDirection) => void
+  /** Current sort state */
+  sort?: SortState
+  /** Called when sort changes (receives null to clear) */
+  onSortChange?: (sort: SortState) => void
   /** Additional CSS class */
   className?: string
 
@@ -134,10 +130,8 @@ export function AutoCategorizationRuleTable({
   onToggle,
   onRowClick,
   loading = false,
-  sortable = false,
-  sortColumn,
-  sortDirection = 'asc',
-  onSort,
+  sort = null,
+  onSortChange,
   className = '',
   statusOptions,
   statusFilter,
@@ -163,19 +157,6 @@ export function AutoCategorizationRuleTable({
     (statusFilter?.length ?? 0) > 0 ||
     (categoryFilter?.length ?? 0) > 0 ||
     priorityRange != null
-
-  // Translate external sort props → DataTable SortState
-  const sort: SortState = sortColumn
-    ? { columnId: sortColumn, direction: sortDirection }
-    : null
-
-  const handleSortChange = useCallback(
-    (s: SortState) => {
-      // null (clear) is silently ignored — consumer has no clear API
-      if (s && onSort) onSort(s.columnId as SortColumn, s.direction)
-    },
-    [onSort]
-  )
 
   // Translate external filter props → DataTable FilterState
   const filters: FilterState = useMemo(() => {
@@ -217,7 +198,7 @@ export function AutoCategorizationRuleTable({
     {
       id: 'name',
       header: 'Name',
-      sortable: sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       sortAccessor: (r) => r.name,
@@ -241,7 +222,7 @@ export function AutoCategorizationRuleTable({
     {
       id: 'status',
       header: 'Status',
-      sortable: sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultPinned: 'left' as const,
@@ -266,7 +247,7 @@ export function AutoCategorizationRuleTable({
     {
       id: 'priority',
       header: 'Priority',
-      sortable: sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       hideable: true,
@@ -292,7 +273,7 @@ export function AutoCategorizationRuleTable({
     {
       id: 'category',
       header: 'Category',
-      sortable: sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       sortAccessor: (r) => getCategoryLabel(r),
@@ -322,7 +303,7 @@ export function AutoCategorizationRuleTable({
       header: 'Matches',
       align: 'right' as const,
       numeric: true,
-      sortable: sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       hideable: true,
@@ -332,7 +313,7 @@ export function AutoCategorizationRuleTable({
       maxSize: 140,
       key: 'match_count' as keyof CategorizationRule,
     },
-  ], [sortable, statusOptions, categoryOptions, onPriorityRangeChange])
+  ], [onSortChange, statusOptions, categoryOptions, onPriorityRangeChange])
 
   // Pre-filters empty state: no data and no active filters → return external div
   if (rules.length === 0 && !hasActiveFilters) {
@@ -352,7 +333,7 @@ export function AutoCategorizationRuleTable({
       columns={columns}
       rowKey={(r) => r.id}
       sort={sort}
-      onSortChange={handleSortChange}
+      onSortChange={onSortChange!}
       filters={filters}
       onFiltersChange={handleFiltersChange}
       loading={loading}

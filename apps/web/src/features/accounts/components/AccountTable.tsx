@@ -26,10 +26,8 @@ export interface AccountTableProps {
   onDelete?: (account: Account) => void
   onRowClick?: (account: Account) => void
   loading?: boolean
-  sortable?: boolean
-  sortColumn?: SortColumn
-  sortDirection?: SortDirection
-  onSort?: (column: SortColumn, direction: SortDirection) => void
+  sort?: SortState
+  onSortChange?: (sort: SortState) => void
   className?: string
   institutionOptions?: FilterOption[]
   institutionFilter?: string[]
@@ -88,10 +86,8 @@ export function AccountTable({
   onDelete,
   onRowClick,
   loading = false,
-  sortable = false,
-  sortColumn,
-  sortDirection = 'asc',
-  onSort,
+  sort = null,
+  onSortChange,
   className = '',
   institutionOptions,
   institutionFilter,
@@ -110,21 +106,6 @@ export function AccountTable({
 
   const { sizing, onSizingChange, columnOrder, onColumnOrderChange, columnVisibility, onColumnVisibilityChange } =
     useTablePreferences('accounts', [...ACCOUNT_COLUMN_IDS])
-
-  const handleSortChange = useCallback(
-    (newSort: SortState) => {
-      if (!onSort || !sortable) return
-      if (newSort) {
-        onSort(newSort.columnId as SortColumn, newSort.direction)
-      } else if (sortColumn) {
-        onSort(sortColumn, sortDirection === 'asc' ? 'desc' : 'asc')
-      }
-    },
-    [onSort, sortable, sortColumn, sortDirection]
-  )
-
-  const sort: SortState =
-    sortColumn && sortable ? { columnId: sortColumn, direction: sortDirection } : null
 
   const filters: FilterState = {
     institution: institutionFilter ?? [],
@@ -151,7 +132,7 @@ export function AccountTable({
     {
       id: 'institution',
       header: 'Institution',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultSize: 180,
@@ -170,7 +151,7 @@ export function AccountTable({
     {
       id: 'name',
       header: 'Account',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultSize: 220,
@@ -209,7 +190,7 @@ export function AccountTable({
     {
       id: 'type',
       header: 'Type',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultSize: 140,
@@ -236,7 +217,7 @@ export function AccountTable({
     {
       id: 'balance',
       header: 'Balance',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultPinned: 'right' as const,
@@ -283,7 +264,7 @@ export function AccountTable({
       columns={columns}
       rowKey={(row) => row.id}
       sort={sort}
-      onSortChange={handleSortChange}
+      onSortChange={onSortChange!}
       filters={filters}
       onFiltersChange={handleFiltersChange}
       loading={loading}
