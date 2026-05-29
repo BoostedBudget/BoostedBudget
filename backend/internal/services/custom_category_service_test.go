@@ -78,6 +78,24 @@ func (m *MockCustomCategoryRepository) GetNamesByIDs(ctx context.Context, userID
 	return args.Get(0).(map[string]string), args.Error(1)
 }
 
+func (m *MockCustomCategoryRepository) GetChildren(ctx context.Context, parentID string) ([]*domain.CustomCategory, error) {
+	args := m.Called(ctx, parentID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.CustomCategory), args.Error(1)
+}
+
+func (m *MockCustomCategoryRepository) HasChildren(ctx context.Context, id string) (bool, error) {
+	args := m.Called(ctx, id)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockCustomCategoryRepository) ClearParentForChildren(ctx context.Context, parentID string) error {
+	args := m.Called(ctx, parentID)
+	return args.Error(0)
+}
+
 // TestCustomCategoryService_CreateCategory tests successful category creation
 func TestCustomCategoryService_CreateCategory(t *testing.T) {
 	mockCategoryRepo := new(MockCustomCategoryRepository)
@@ -103,6 +121,102 @@ func TestCustomCategoryService_CreateCategory(t *testing.T) {
 	assert.Equal(t, "Groceries", category.Name)
 	assert.Equal(t, userID, category.UserID)
 	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestCustomCategoryService_CreateCategory_WithCustomParent tests nesting under a
+// valid, owned, top-level custom parent (Issue #1203).
+func TestCustomCategoryService_CreateCategory_WithCustomParent(t *testing.T) {
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCustomCategoryService(mockCategoryRepo)
+
+	ctx := context.Background()
+	userID := "user-123"
+	parentID := "11111111-1111-1111-1111-111111111111"
+
+	req := &domain.CreateCustomCategoryRequest{Name: "Fast Food", ParentID: &parentID}
+
+	parent := &domain.CustomCategory{ID: parentID, UserID: userID, Name: "Food"}
+	mockCategoryRepo.On("GetByID", ctx, parentID).Return(parent, nil)
+	mockCategoryRepo.On("Create", ctx, mock.AnythingOfType("*domain.CustomCategory")).Return(nil)
+
+	category, err := service.CreateCategory(ctx, userID, req)
+
+	assert.NoError(t, err)
+	require.NotNil(t, category)
+	require.NotNil(t, category.ParentID)
+	assert.Equal(t, parentID, *category.ParentID)
+	require.NotNil(t, category.ParentName)
+	assert.Equal(t, "Food", *category.ParentName)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestCustomCategoryService_CreateCategory_RejectsParentWithParent enforces the
+// 2-level limit: a parent cannot itself have a parent (Issue #1203).
+func TestCustomCategoryService_CreateCategory_RejectsParentWithParent(t *testing.T) {
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCustomCategoryService(mockCategoryRepo)
+
+	ctx := context.Background()
+	userID := "user-123"
+	parentID := "11111111-1111-1111-1111-111111111111"
+	grandparentID := "22222222-2222-2222-2222-222222222222"
+
+	req := &domain.CreateCustomCategoryRequest{Name: "Espresso", ParentID: &parentID}
+
+	parentThatHasParent := &domain.CustomCategory{ID: parentID, UserID: userID, Name: "Fast Food", ParentID: &grandparentID}
+	mockCategoryRepo.On("GetByID", ctx, parentID).Return(parentThatHasParent, nil)
+
+	category, err := service.CreateCategory(ctx, userID, req)
+
+	assert.ErrorIs(t, err, domain.ErrCategoryParentHasParent)
+	assert.Nil(t, category)
+	mockCategoryRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestCustomCategoryService_CreateCategory_RejectsParentNotOwned prevents nesting
+// under another user's category (Issue #1203).
+func TestCustomCategoryService_CreateCategory_RejectsParentNotOwned(t *testing.T) {
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCustomCategoryService(mockCategoryRepo)
+
+	ctx := context.Background()
+	userID := "user-123"
+	parentID := "11111111-1111-1111-1111-111111111111"
+
+	req := &domain.CreateCustomCategoryRequest{Name: "Coffee", ParentID: &parentID}
+
+	otherUsersParent := &domain.CustomCategory{ID: parentID, UserID: "other-user", Name: "Food"}
+	mockCategoryRepo.On("GetByID", ctx, parentID).Return(otherUsersParent, nil)
+
+	category, err := service.CreateCategory(ctx, userID, req)
+
+	assert.ErrorIs(t, err, domain.ErrCategoryInvalidParent)
+	assert.Nil(t, category)
+	mockCategoryRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+}
+
+// TestCustomCategoryService_UpdateCategory_RejectsNestingWhenHasChildren prevents
+// nesting a category that itself has children (2-level limit, Issue #1203).
+func TestCustomCategoryService_UpdateCategory_RejectsNestingWhenHasChildren(t *testing.T) {
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCustomCategoryService(mockCategoryRepo)
+
+	ctx := context.Background()
+	userID := "user-123"
+	categoryID := "33333333-3333-3333-3333-333333333333"
+	parentID := "11111111-1111-1111-1111-111111111111"
+
+	existing := &domain.CustomCategory{ID: categoryID, UserID: userID, Name: "Food"}
+	mockCategoryRepo.On("GetByID", ctx, categoryID).Return(existing, nil)
+	mockCategoryRepo.On("HasChildren", ctx, categoryID).Return(true, nil)
+
+	req := &domain.UpdateCustomCategoryRequest{ParentID: &parentID}
+	category, err := service.UpdateCategory(ctx, userID, categoryID, req)
+
+	assert.ErrorIs(t, err, domain.ErrCategoryHasChildren)
+	assert.Nil(t, category)
+	mockCategoryRepo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
 }
 
 // TestCustomCategoryService_CreateCategory_ManyCategories tests creating categories with many existing (unlimited)

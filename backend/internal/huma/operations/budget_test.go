@@ -198,6 +198,15 @@ func (m *mockCustomCategoryRepoForBudget) DecrementUsageCount(ctx context.Contex
 func (m *mockCustomCategoryRepoForBudget) GetNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error) {
 	return map[string]string{}, nil
 }
+func (m *mockCustomCategoryRepoForBudget) GetChildren(ctx context.Context, parentID string) ([]*domain.CustomCategory, error) {
+	return nil, nil
+}
+func (m *mockCustomCategoryRepoForBudget) HasChildren(ctx context.Context, id string) (bool, error) {
+	return false, nil
+}
+func (m *mockCustomCategoryRepoForBudget) ClearParentForChildren(ctx context.Context, parentID string) error {
+	return nil
+}
 
 // Helper function to create test budget
 func createTestBudget() *domain.Budget {

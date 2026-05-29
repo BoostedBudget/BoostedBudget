@@ -61,6 +61,7 @@ func (s *customCategoryService) CreateCategory(ctx context.Context, userID strin
 		UserID:           userID,
 		Name:             req.Name,
 		ParentPFCPrimary: req.ParentPFCPrimary,
+		ParentID:         normalizeParentID(req.ParentID),
 		Icon:             req.Icon,
 		Color:            req.Color,
 		UsageCount:       0,
@@ -70,12 +71,57 @@ func (s *customCategoryService) CreateCategory(ctx context.Context, userID strin
 		return nil, err
 	}
 
+	parent, err := s.validateParent(ctx, userID, "", category.ParentID)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := s.categoryRepo.Create(ctx, category); err != nil {
 		return nil, err
 	}
 
 	category.PopulatePFCDisplay()
+	if parent != nil {
+		category.ParentName = &parent.Name
+	}
 	return category, nil
+}
+
+// normalizeParentID converts an empty-string parent id pointer to nil so callers
+// can clear a parent by sending "" (Issue #1203).
+func normalizeParentID(id *string) *string {
+	if id == nil || *id == "" {
+		return nil
+	}
+	return id
+}
+
+// validateParent verifies a proposed custom parent exists, is owned by the same
+// user, and is itself top-level (2-level limit). selfID is the id of the category
+// being mutated (empty on create) and is rejected as its own parent. Returns the
+// fetched parent (nil when parentID is nil) so callers can reuse its name.
+func (s *customCategoryService) validateParent(ctx context.Context, userID, selfID string, parentID *string) (*domain.CustomCategory, error) {
+	if parentID == nil {
+		return nil, nil
+	}
+	if selfID != "" && *parentID == selfID {
+		return nil, domain.ErrCategoryInvalidParent
+	}
+	parent, err := s.categoryRepo.GetByID(ctx, *parentID)
+	if err != nil {
+		if err == domain.ErrCategoryNotFound {
+			return nil, domain.ErrCategoryInvalidParent
+		}
+		return nil, err
+	}
+	if parent.UserID != userID {
+		// Don't leak existence of another user's category.
+		return nil, domain.ErrCategoryInvalidParent
+	}
+	if parent.ParentID != nil {
+		return nil, domain.ErrCategoryParentHasParent
+	}
+	return parent, nil
 }
 
 func (s *customCategoryService) GetUserCategories(ctx context.Context, userID string) ([]*domain.CustomCategory, error) {
@@ -115,6 +161,14 @@ func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, cate
 	if req.ParentPFCPrimary != nil {
 		category.ParentPFCPrimary = req.ParentPFCPrimary
 	}
+	if req.ParentID != nil {
+		category.ParentID = normalizeParentID(req.ParentID)
+		// Setting a PFC parent and a custom parent is mutually exclusive; if a
+		// custom parent is being set, clear any stale PFC parent.
+		if category.ParentID != nil {
+			category.ParentPFCPrimary = nil
+		}
+	}
 	if req.Icon != nil {
 		category.Icon = req.Icon
 	}
@@ -124,6 +178,23 @@ func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, cate
 
 	if err := category.Validate(); err != nil {
 		return nil, err
+	}
+
+	// When nesting this category under a custom parent, validate the parent and
+	// ensure this category is not itself a parent (2-level limit).
+	var parent *domain.CustomCategory
+	if category.ParentID != nil {
+		hasChildren, err := s.categoryRepo.HasChildren(ctx, categoryID)
+		if err != nil {
+			return nil, err
+		}
+		if hasChildren {
+			return nil, domain.ErrCategoryHasChildren
+		}
+		parent, err = s.validateParent(ctx, userID, categoryID, category.ParentID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if err := s.categoryRepo.Update(ctx, category); err != nil {
@@ -146,6 +217,9 @@ func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, cate
 	}
 
 	category.PopulatePFCDisplay()
+	if parent != nil {
+		category.ParentName = &parent.Name
+	}
 	return category, nil
 }
 
