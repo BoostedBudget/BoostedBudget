@@ -215,6 +215,30 @@ describe('Category filter analytics', () => {
     })
   })
 
+  it('fires CATEGORY_FILTER_APPLIED when sub-category column filter is applied (distinct from category tree path)', async () => {
+    const user = userEvent.setup()
+    const Wrapper = createWrapper()
+    render(<TransactionsPage />, { wrapper: Wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByText(/transactions loaded/i)).toBeInTheDocument()
+    })
+
+    // Click the Sub-category column's filter button (new in #1204 — separate from category tree)
+    const subCatFilter = screen.getByRole('button', { name: /filter by sub-category/i })
+    await user.click(subCatFilter)
+
+    // The flat PFC detailed dropdown opens — select Coffee
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox', { name: /^Coffee$/i })).toBeInTheDocument()
+    })
+    await user.click(screen.getByRole('checkbox', { name: /^Coffee$/i }))
+
+    await waitFor(() => {
+      expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.CATEGORY_FILTER_APPLIED)
+    })
+  })
+
   it('fires CATEGORY_FILTER_CLEARED when category filter is cleared', async () => {
     const user = userEvent.setup()
     const Wrapper = createWrapper()
