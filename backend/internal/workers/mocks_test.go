@@ -243,6 +243,11 @@ func (m *MockTransactionRepository) UpdateCategory(ctx context.Context, id strin
 	return args.Error(0)
 }
 
+func (m *MockTransactionRepository) SetReviewed(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error) {
+	args := m.Called(ctx, userID, transactionIDs, reviewed)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 func (m *MockTransactionRepository) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {

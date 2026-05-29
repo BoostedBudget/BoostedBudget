@@ -76,6 +76,10 @@ type TransactionService interface {
 
 	// ListByBudgetCategory returns transactions matching a budget category with PFC display enrichment.
 	ListByBudgetCategory(ctx context.Context, userID string, budgetCategory *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error)
+
+	// SetReviewed marks the given transactions reviewed/unreviewed for the user
+	// (Issue #1203). Returns the number of transactions updated.
+	SetReviewed(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error)
 }
 
 // TransactionListResponse contains paginated transaction results with metadata.
@@ -92,14 +96,14 @@ type TransactionListResponse struct {
 
 // transactionService implements TransactionService
 type transactionService struct {
-	repo             repository.TransactionRepository
+	repo               repository.TransactionRepository
 	customCategoryRepo repository.CustomCategoryRepository
 }
 
 // NewTransactionService creates a new TransactionService instance
 func NewTransactionService(repo repository.TransactionRepository, customCategoryRepo repository.CustomCategoryRepository) TransactionService {
 	return &transactionService{
-		repo:             repo,
+		repo:               repo,
 		customCategoryRepo: customCategoryRepo,
 	}
 }
@@ -269,12 +273,12 @@ func (s *transactionService) ListTransactionsByCursor(
 // This prevents SQL injection and other malicious input
 //
 // Strategy:
-// - Remove SQL comment markers (-- and /* */)
-// - Remove semicolons (statement terminators)
-// - Remove dangerous SQL keywords (DROP, DELETE, INSERT, UPDATE, UNION, etc.)
-// - Trim whitespace
-// - PostgreSQL parameterized queries already handle single quotes safely,
-//   but we still sanitize for defense in depth
+//   - Remove SQL comment markers (-- and /* */)
+//   - Remove semicolons (statement terminators)
+//   - Remove dangerous SQL keywords (DROP, DELETE, INSERT, UPDATE, UNION, etc.)
+//   - Trim whitespace
+//   - PostgreSQL parameterized queries already handle single quotes safely,
+//     but we still sanitize for defense in depth
 func sanitizeSearchInput(input string) string {
 	// Remove SQL comment markers
 	sanitized := strings.ReplaceAll(input, "--", "")
@@ -384,6 +388,14 @@ func (s *transactionService) UpdateTransactionCategory(ctx context.Context, user
 	}
 
 	return s.GetTransactionByID(ctx, userID, transactionID)
+}
+
+// SetReviewed marks the given transactions reviewed/unreviewed for the user (Issue #1203).
+func (s *transactionService) SetReviewed(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error) {
+	if len(transactionIDs) == 0 {
+		return 0, nil
+	}
+	return s.repo.SetReviewed(ctx, userID, transactionIDs, reviewed)
 }
 
 // enrichCustomCategoryDisplay fetches custom-category names in one batched query and sets

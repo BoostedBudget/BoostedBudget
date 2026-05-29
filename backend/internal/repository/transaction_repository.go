@@ -37,6 +37,7 @@ var transactionSelectColumns = []string{
 	"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
 	"custom_category_override_id", "category_source", "category_override_date",
 	"effective_pfc_primary", "effective_pfc_detailed", "effective_category_name",
+	"reviewed", "reviewed_at",
 }
 
 var transactionSelectExpr = strings.Join(transactionSelectColumns, ", ")
@@ -93,6 +94,11 @@ type TransactionRepository interface {
 	// UpdateCategory updates the category override for a transaction using the PFC v2 discriminated union.
 	// Pass overrideKind=nil to clear all overrides (kind=clear semantics).
 	UpdateCategory(ctx context.Context, id string, userID string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) error
+
+	// SetReviewed sets the review flag for the given transactions owned by userID
+	// (Issue #1203). Returns the number of rows updated; IDs not owned by the user
+	// are ignored. reviewed_at is set to now when reviewed=true, cleared when false.
+	SetReviewed(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error)
 
 	// GetDistinctPlaidCategories returns distinct Plaid category names for a user's transactions
 	// Prefers secondary category (index 1) when available for better granularity
@@ -639,6 +645,8 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 		&tx.EffectivePFCPrimary,
 		&tx.EffectivePFCDetailed,
 		&tx.EffectiveCategoryName,
+		&tx.Reviewed,
+		&tx.ReviewedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -820,6 +828,13 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		argIndex++
 	}
 
+	// Optional filter: review state (Issue #1203)
+	if filters.Reviewed != nil {
+		conditions = append(conditions, fmt.Sprintf("reviewed = $%d", argIndex))
+		args = append(args, *filters.Reviewed)
+		argIndex++
+	}
+
 	// Optional filter: min_amount (Issue #529)
 	// Filters by absolute amount (users see positive amounts in UI)
 	if filters.MinAmount != nil {
@@ -843,7 +858,7 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 			conditions = append(conditions, "amount < 0")
 		case "expense":
 			conditions = append(conditions, "amount > 0")
-		// "all" means no filter - handled in handler by not setting AmountType
+			// "all" means no filter - handled in handler by not setting AmountType
 		}
 	}
 
@@ -915,6 +930,8 @@ func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transa
 			&tx.EffectivePFCPrimary,
 			&tx.EffectivePFCDetailed,
 			&tx.EffectiveCategoryName,
+			&tx.Reviewed,
+			&tx.ReviewedAt,
 		)
 
 		if err != nil {
@@ -1007,6 +1024,8 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 		&tx.EffectivePFCPrimary,
 		&tx.EffectivePFCDetailed,
 		&tx.EffectiveCategoryName,
+		&tx.Reviewed,
+		&tx.ReviewedAt,
 	)
 
 	if err != nil {
@@ -1112,6 +1131,31 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 	}
 
 	return nil
+}
+
+// SetReviewed sets the review flag for the given transactions owned by userID.
+func (r *transactionRepository) SetReviewed(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error) {
+	if len(transactionIDs) == 0 {
+		return 0, nil
+	}
+
+	var reviewedAt *time.Time
+	if reviewed {
+		now := time.Now()
+		reviewedAt = &now
+	}
+
+	query := `
+		UPDATE transactions
+		SET reviewed = $1, reviewed_at = $2, updated_at = NOW()
+		WHERE user_id = $3 AND id = ANY($4::uuid[])
+	`
+
+	ct, err := r.db.Exec(ctx, query, reviewed, reviewedAt, userID, transactionIDs)
+	if err != nil {
+		return 0, fmt.Errorf("failed to set reviewed: %w", err)
+	}
+	return ct.RowsAffected(), nil
 }
 
 // GetDistinctPlaidCategories returns distinct Plaid category names for a user's transactions
@@ -1480,7 +1524,8 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 			   created_at, updated_at, tags, tags_source,
 			   category_override_kind, pfc_primary_override, pfc_detailed_override,
 			   custom_category_override_id, category_source, category_override_date,
-			   effective_pfc_primary, effective_pfc_detailed, effective_category_name
+			   effective_pfc_primary, effective_pfc_detailed, effective_category_name,
+			   reviewed, reviewed_at
 		FROM transactions
 		WHERE user_id = $1 AND user_account_id = $2
 		ORDER BY date DESC, created_at DESC
@@ -1537,6 +1582,8 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 			&tx.EffectivePFCPrimary,
 			&tx.EffectivePFCDetailed,
 			&tx.EffectiveCategoryName,
+			&tx.Reviewed,
+			&tx.ReviewedAt,
 		)
 
 		if err != nil {

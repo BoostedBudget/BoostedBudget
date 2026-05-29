@@ -42,6 +42,7 @@ type GetTransactionsInput struct {
 	CustomCategoryIDs string `query:"custom_category_ids" doc:"Filter by custom category UUIDs (comma-separated)"`
 	Search            string `query:"search" doc:"Search in merchant name or transaction name"`
 	Pending           string `query:"pending" doc:"Filter by pending status (true/false)"`
+	Reviewed          string `query:"reviewed" doc:"Filter by review state: true (reviewed), false (unreviewed inbox), omit for both"`
 	MinAmount         string `query:"min_amount" doc:"Filter by minimum absolute amount"`
 	MaxAmount         string `query:"max_amount" doc:"Filter by maximum absolute amount"`
 	AmountType        string `query:"amount_type" enum:"income,expense,all" doc:"Filter by transaction type"`
@@ -76,7 +77,7 @@ type GetTransactionByIDOutput struct {
 // UpdateTransactionTagsInput represents the input for updating transaction tags.
 type UpdateTransactionTagsInput struct {
 	inputs.AuthenticatedInput
-	ID   string                     `path:"id" doc:"Transaction UUID"`
+	ID   string                    `path:"id" doc:"Transaction UUID"`
 	Body UpdateTransactionTagsBody `json:"body"`
 }
 
@@ -93,7 +94,7 @@ type UpdateTransactionTagsOutput struct {
 // UpdateTransactionCategoryInput represents the input for updating transaction category.
 type UpdateTransactionCategoryInput struct {
 	inputs.AuthenticatedInput
-	ID   string                          `path:"id" doc:"Transaction UUID"`
+	ID   string                        `path:"id" doc:"Transaction UUID"`
 	Body UpdateTransactionCategoryBody `json:"body"`
 }
 
@@ -112,6 +113,31 @@ type UpdateTransactionCategoryBody struct {
 // UpdateTransactionCategoryOutput represents the response for updating category.
 type UpdateTransactionCategoryOutput struct {
 	Body *domain.Transaction
+}
+
+// SetTransactionReviewedInput updates the review state of a single transaction (Issue #1203).
+type SetTransactionReviewedInput struct {
+	inputs.AuthenticatedInput
+	ID   string `path:"id" doc:"Transaction UUID"`
+	Body struct {
+		Reviewed bool `json:"reviewed" doc:"true to mark reviewed, false to move back to the unreviewed inbox"`
+	} `json:"body"`
+}
+
+// BulkSetTransactionReviewedInput updates the review state of many transactions (Issue #1203).
+type BulkSetTransactionReviewedInput struct {
+	inputs.AuthenticatedInput
+	Body struct {
+		TransactionIDs []string `json:"transaction_ids" doc:"Transaction UUIDs to update (owned by the caller)"`
+		Reviewed       bool     `json:"reviewed" doc:"true to mark reviewed, false to move back to the unreviewed inbox"`
+	} `json:"body"`
+}
+
+// SetTransactionReviewedOutput reports how many transactions were updated.
+type SetTransactionReviewedOutput struct {
+	Body struct {
+		Updated int64 `json:"updated" doc:"Number of transactions whose review state changed"`
+	}
 }
 
 // GetPlaidCategoriesInput represents the input for getting Plaid categories.
@@ -216,6 +242,15 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 		filters.Pending = &pending
 	}
 
+	// Reviewed filter (Issue #1203)
+	if input.Reviewed != "" {
+		reviewed, err := strconv.ParseBool(input.Reviewed)
+		if err != nil {
+			return nil, huma.Error400BadRequest("Invalid reviewed parameter (expected true or false)")
+		}
+		filters.Reviewed = &reviewed
+	}
+
 	// Min amount filter
 	if input.MinAmount != "" {
 		minAmount, err := parseFloat64(input.MinAmount)
@@ -312,6 +347,31 @@ func (h *TransactionHandler) UpdateTransactionCategory(ctx context.Context, inpu
 	return &UpdateTransactionCategoryOutput{Body: tx}, nil
 }
 
+// SetTransactionReviewed handles PATCH /api/v1/transactions/{id}/review (Issue #1203).
+func (h *TransactionHandler) SetTransactionReviewed(ctx context.Context, input *SetTransactionReviewedInput) (*SetTransactionReviewedOutput, error) {
+	n, err := h.service.SetReviewed(ctx, input.UserID, []string{input.ID}, input.Body.Reviewed)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	out := &SetTransactionReviewedOutput{}
+	out.Body.Updated = n
+	return out, nil
+}
+
+// BulkSetTransactionReviewed handles PATCH /api/v1/transactions/review (Issue #1203).
+func (h *TransactionHandler) BulkSetTransactionReviewed(ctx context.Context, input *BulkSetTransactionReviewedInput) (*SetTransactionReviewedOutput, error) {
+	if len(input.Body.TransactionIDs) == 0 {
+		return nil, huma.Error400BadRequest("transaction_ids must not be empty")
+	}
+	n, err := h.service.SetReviewed(ctx, input.UserID, input.Body.TransactionIDs, input.Body.Reviewed)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	out := &SetTransactionReviewedOutput{}
+	out.Body.Updated = n
+	return out, nil
+}
+
 // GetPlaidCategories handles GET /api/v1/categories/plaid requests.
 // Returns distinct Plaid category names from the user's transactions.
 func (h *TransactionHandler) GetPlaidCategories(ctx context.Context, input *GetPlaidCategoriesInput) (*GetPlaidCategoriesOutput, error) {
@@ -394,6 +454,29 @@ func RegisterTransactionRoutes(api huma.API, handler *TransactionHandler) {
 		Tags:        []string{"Transactions"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateTransactionCategory)
+
+	// PATCH /api/v1/transactions/review - Bulk set review state (Issue #1203).
+	// Registered before the {id} variant so "review" is not captured as an {id}.
+	huma.Register(api, huma.Operation{
+		OperationID: "bulkSetTransactionReviewed",
+		Method:      http.MethodPatch,
+		Path:        "/api/v1/transactions/review",
+		Summary:     "Bulk update transaction review state",
+		Description: "Marks multiple transactions reviewed or unreviewed for the authenticated user.",
+		Tags:        []string{"Transactions"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.BulkSetTransactionReviewed)
+
+	// PATCH /api/v1/transactions/{id}/review - Set review state for one transaction (Issue #1203).
+	huma.Register(api, huma.Operation{
+		OperationID: "setTransactionReviewed",
+		Method:      http.MethodPatch,
+		Path:        "/api/v1/transactions/{id}/review",
+		Summary:     "Update transaction review state",
+		Description: "Marks a transaction reviewed or unreviewed (moves it out of / into the unreviewed inbox).",
+		Tags:        []string{"Transactions"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.SetTransactionReviewed)
 
 	// GET /api/v1/categories/plaid - Get distinct Plaid categories
 	huma.Register(api, huma.Operation{

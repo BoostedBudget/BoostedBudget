@@ -31,6 +31,7 @@ type mockTransactionService struct {
 	capturedFilters   domain.TransactionFilters
 	capturedCursor    *domain.TransactionCursor
 	capturedLimit     int
+	setReviewedFn     func(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error)
 }
 
 func (m *mockTransactionService) ListTransactions(
@@ -82,6 +83,13 @@ func (m *mockTransactionService) GetDistinctPlaidCategories(ctx context.Context,
 
 func (m *mockTransactionService) ListByBudgetCategory(ctx context.Context, userID string, budgetCategory *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
 	return nil, 0, 0, nil
+}
+
+func (m *mockTransactionService) SetReviewed(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error) {
+	if m.setReviewedFn != nil {
+		return m.setReviewedFn(ctx, userID, transactionIDs, reviewed)
+	}
+	return int64(len(transactionIDs)), nil
 }
 
 func (m *mockTransactionService) ListTransactionsByCursor(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) (*services.TransactionListResponse, error) {
