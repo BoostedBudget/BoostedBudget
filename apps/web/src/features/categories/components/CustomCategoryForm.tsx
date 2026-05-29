@@ -43,9 +43,9 @@ export function CustomCategoryForm({
   const { data: pfcOptions } = useCuratedPfcDetailed()
   const pfcPrimaries = useMemo(() => {
     const seen = new Map<string, string>()
-    for (const opt of pfcOptions ?? []) {
+    pfcOptions?.forEach((opt) => {
       if (!seen.has(opt.primary)) seen.set(opt.primary, opt.primaryLabel)
-    }
+    })
     return Array.from(seen.entries()).sort((a, b) => a[1].localeCompare(b[1]))
   }, [pfcOptions])
 

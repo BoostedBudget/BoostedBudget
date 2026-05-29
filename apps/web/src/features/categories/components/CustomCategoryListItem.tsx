@@ -1,7 +1,6 @@
 // A single row in the custom category manager (Issue #1203).
 import { cva } from 'class-variance-authority'
 import { Pencil, Trash2 } from 'lucide-react'
-import { cn } from '@/lib/utils'
 import { CategoryIcon } from '@/shared/components/IconPicker'
 import type { CustomCategory } from '../types'
 
@@ -52,7 +51,7 @@ export function CustomCategoryListItem({
         type="button"
         onClick={() => onDelete(category)}
         aria-label={`Delete ${category.name}`}
-        className={cn('rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive')}
+        className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
       >
         <Trash2 className="h-4 w-4" aria-hidden />
       </button>
