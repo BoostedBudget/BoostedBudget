@@ -4,11 +4,7 @@
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
-mock.module('@/shared/categories/pfcOptions', () => ({
-  useCuratedPfcDetailed: () => ({ data: [{ primary: 'FOOD_AND_DRINK', primaryLabel: 'Food & Drink' }] }),
-  getPrimaryLabel: (p: string) => p,
-}))
-
+// pfcOptions reads static data — no mock needed (mocking it pollutes the global suite).
 import { CustomCategoryForm } from './CustomCategoryForm'
 import type { CustomCategory } from '../types'
 
