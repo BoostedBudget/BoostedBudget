@@ -5974,6 +5974,20 @@ paths:
           schema:
             description: Primary category to drill into subcategories
             type: string
+        - description: "Comma-separated custom category UUIDs to scope the report (Issue #1203)"
+          explode: false
+          in: query
+          name: custom_category_ids
+          schema:
+            description: "Comma-separated custom category UUIDs to scope the report (Issue #1203)"
+            type: string
+        - description: When true, a parent custom category also includes its children (default true)
+          explode: false
+          in: query
+          name: roll_up
+          schema:
+            description: When true, a parent custom category also includes its children (default true)
+            type: string
       responses:
         "200":
           content:
