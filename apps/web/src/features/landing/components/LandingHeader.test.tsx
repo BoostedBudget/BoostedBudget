@@ -5,7 +5,7 @@
  * Issue #1184: Coming Soon state when login is disabled
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import { LandingHeader } from './LandingHeader'
@@ -57,6 +57,11 @@ describe('LandingHeader', () => {
       ;(window as Window & { ENV?: Record<string, string> }).ENV = { POSTHOG_KEY: 'test-key' }
       // Feature flag returns false → login disabled
       mockUseFeatureFlagEnabled.mockReturnValue(false)
+    })
+
+    afterEach(() => {
+      delete (window as Window & { ENV?: Record<string, string> }).ENV
+      mockUseFeatureFlagEnabled.mockReturnValue(undefined)
     })
 
     it('renders Coming Soon badge when login is disabled (desktop)', () => {
