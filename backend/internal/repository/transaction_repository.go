@@ -828,7 +828,10 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		conditions = append(conditions, "("+strings.Join(orParts, " OR ")+")")
 	}
 
-	// Optional filter: custom_category_ids (multi-value) — matches effective custom category
+	// Optional filter: custom_category_ids (multi-value) — matches the effective custom
+	// category. Issue #1203: rolls up children — selecting a parent custom category also
+	// matches transactions assigned to its children (parent_id). Leaf categories match
+	// only themselves, so this is a no-op for non-parent selections.
 	if len(filters.CustomCategoryIDs) > 0 {
 		placeholders := make([]string, len(filters.CustomCategoryIDs))
 		for i, id := range filters.CustomCategoryIDs {
@@ -836,9 +839,11 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 			args = append(args, id)
 			argIndex++
 		}
+		idList := strings.Join(placeholders, ", ")
 		conditions = append(conditions, fmt.Sprintf(
-			"(category_override_kind = 'custom' AND custom_category_override_id::text IN (%s))",
-			strings.Join(placeholders, ", "),
+			"(category_override_kind = 'custom' AND custom_category_override_id IN ("+
+				"SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text IN (%s) OR parent_id::text IN (%s))))",
+			idList, idList,
 		))
 	}
 
@@ -1280,23 +1285,33 @@ func (r *transactionRepository) GetIncomeSumByTag(ctx context.Context, userID st
 // argStart is the starting positional parameter number (e.g. 4 when $1-$3 are already used).
 // Returns (clause string, args []interface{}).
 func buildCategoryClause(categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, argStart int) (string, []interface{}) {
+	// Issue #1203: roll-up is intrinsic. Targeting a parent category sums the
+	// parent plus its children, applied consistently here so every caller
+	// (spent sum, preview stats, transaction listing) agrees. The subqueries are
+	// no-ops for leaf categories, so existing single-category budgets are unaffected.
+	// user_id is always $1 in the budget-matching queries that call this helper.
 	switch categoryKind {
 	case "pfc":
 		if pfcPrimary == nil {
 			return "1=0", nil
 		}
-		clause := fmt.Sprintf(`effective_pfc_primary = $%d`, argStart)
-		args := []interface{}{*pfcPrimary}
 		if pfcDetailed != nil {
-			clause += fmt.Sprintf(` AND effective_pfc_detailed = $%d`, argStart+1)
-			args = append(args, *pfcDetailed)
+			// A PFC detailed is a leaf — exact match, never rolls up.
+			return fmt.Sprintf(`(effective_pfc_primary = $%d AND effective_pfc_detailed = $%d)`, argStart, argStart+1),
+				[]interface{}{*pfcPrimary, *pfcDetailed}
 		}
-		return clause, args
+		// A PFC primary rolls up its detaileds (via effective_pfc_primary) AND any
+		// custom categories the user nested under it (parent_pfc_primary).
+		clause := fmt.Sprintf(`(effective_pfc_primary = $%d OR (category_override_kind = 'custom' AND custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1 AND parent_pfc_primary = $%d)))`, argStart, argStart)
+		return clause, []interface{}{*pfcPrimary}
 	case "custom":
 		if customCategoryID == nil {
 			return "1=0", nil
 		}
-		return fmt.Sprintf(`(category_override_kind = 'custom' AND custom_category_override_id::text = $%d)`, argStart), []interface{}{*customCategoryID}
+		// A custom category rolls up its custom children (parent_id). A leaf
+		// custom category's subquery resolves to just itself.
+		clause := fmt.Sprintf(`(category_override_kind = 'custom' AND custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text = $%d OR parent_id::text = $%d)))`, argStart, argStart)
+		return clause, []interface{}{*customCategoryID}
 	default:
 		return "1=0", nil
 	}

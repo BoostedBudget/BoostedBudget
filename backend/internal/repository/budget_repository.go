@@ -490,13 +490,17 @@ func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.
 
 // GetCategoriesByBudgetID retrieves all categories for a budget.
 func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
+	// Issue #1203: join the referenced custom category to surface its parent linkage
+	// (parent_id / parent_pfc_primary) so budget totals can exclude sub-allocations.
 	query := `
-		SELECT id, budget_id, category_kind, pfc_primary, pfc_detailed, custom_category_id,
-			allocated_amount, spent_amount, created_at, updated_at,
-			tags, match_logic
-		FROM budget_categories
-		WHERE budget_id = $1
-		ORDER BY created_at ASC
+		SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed, bc.custom_category_id,
+			bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
+			bc.tags, bc.match_logic,
+			cc.parent_id, cc.parent_pfc_primary
+		FROM budget_categories bc
+		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
+		WHERE bc.budget_id = $1
+		ORDER BY bc.created_at ASC
 	`
 
 	rows, err := r.db.Query(ctx, query, budgetID)
@@ -523,6 +527,8 @@ func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID
 			&bc.UpdatedAt,
 			&tagsJSON,
 			&bc.MatchLogic,
+			&bc.CustomParentID,
+			&bc.CustomParentPFCPrimary,
 		)
 		if err != nil {
 			return nil, err

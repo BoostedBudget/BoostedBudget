@@ -1968,7 +1968,7 @@ func TestTransactionRepository_GetMatchingTransactionStats_CustomCategory(t *tes
 
 	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\).+custom_category_override_id::text = \$4`).
+	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\).+custom_category_override_id IN \(SELECT id FROM custom_categories WHERE user_id = \$1 AND \(id::text = \$4 OR parent_id::text = \$4\)\)`).
 		WithArgs(userID, startDate, endDate, customCategoryID).
 		WillReturnRows(rows)
 
@@ -2544,8 +2544,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_Cus
 
 	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
 		mock,
-		`SELECT COUNT\(\*\).+custom_category_override_id::text = \$4`,
-		`SELECT (.+) FROM transactions WHERE.+custom_category_override_id::text = \$4.+LIMIT \$5 OFFSET \$6`,
+		`SELECT COUNT\(\*\).+custom_category_override_id IN \(SELECT id FROM custom_categories WHERE user_id = \$1 AND \(id::text = \$4 OR parent_id::text = \$4\)\)`,
+		`SELECT (.+) FROM transactions WHERE.+custom_category_override_id IN \(SELECT id FROM custom_categories WHERE user_id = \$1 AND \(id::text = \$4 OR parent_id::text = \$4\)\).+LIMIT \$5 OFFSET \$6`,
 		[]interface{}{userID, startDate, endDate, customCategoryID},
 		[]interface{}{userID, startDate, endDate, customCategoryID, limit, offset},
 	)
@@ -2664,8 +2664,8 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_Or_PFC(t *testin
 
 	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
 		mock,
-		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4\) OR tags \?\| \$5\)`,
-		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4\) OR tags \?\| \$5\).+LIMIT \$6 OFFSET \$7`,
+		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4.+ OR tags \?\| \$5\)`,
+		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4.+ OR tags \?\| \$5\).+LIMIT \$6 OFFSET \$7`,
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg()},
 		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg(), limit, offset},
 	)
