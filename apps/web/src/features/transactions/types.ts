@@ -58,6 +58,9 @@ export interface Transaction {
   custom_category_override_display?: string | null
   category_source?: CategorySource
   category_override_date?: string | null // ISO 8601 date-time
+  // Review state (#1203)
+  reviewed?: boolean
+  reviewed_at?: string | null // ISO 8601 date-time
   // Tags
   tags?: string[] // Array of tag names
   tags_source?: TagSource[] // Source tracking for each tag
@@ -75,6 +78,7 @@ export interface TransactionFilters {
   end_date?: string // ISO 8601 date (YYYY-MM-DD)
   search?: string // Search in name or merchant_name, case-insensitive
   pending?: boolean // Filter by pending status
+  reviewed?: boolean // Filter by review state (#1203): true=reviewed, false=unreviewed inbox
   account_ids?: string[] // Multiple account IDs
   pfc_primaries?: string[] // PFC primary enum values
   pfc_detaileds?: string[] // PFC detailed enum values (OR with pfc_primaries)

@@ -41,6 +41,7 @@ const SPEC = {
   search:        { kind: 'scalar', codec: 'string' as const },
   amount_type:   { kind: 'scalar', codec: 'string' as const, defaultValue: 'all', activeWhen: (v: unknown) => v !== undefined && v !== 'all' },
   pending:       { kind: 'scalar', codec: 'boolean' as const },
+  reviewed:      { kind: 'scalar', codec: 'boolean' as const },
   merchant_id:   { kind: 'scalar', codec: 'string' as const },
 } as const satisfies FilterSpec
 
@@ -90,6 +91,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
       end_date:      state.filters.end_date,
       search:        state.filters.search,
       pending:       state.filters.pending,
+      reviewed:      state.filters.reviewed,
       min_amount:    state.filters.min_amount,
       max_amount:    state.filters.max_amount,
       amount_type:   state.filters.amount_type as TransactionFilters['amount_type'],
@@ -107,6 +109,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
     if (filters.start_date || filters.end_date) count++
     if (filters.search) count++
     if (filters.pending !== undefined) count++
+    if (filters.reviewed !== undefined) count++
     if (filters.min_amount !== undefined || filters.max_amount !== undefined) count++
     if (filters.amount_type && filters.amount_type !== 'all') count++
     if (filters.merchant_id) count++

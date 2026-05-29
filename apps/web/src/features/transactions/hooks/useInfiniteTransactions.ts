@@ -31,6 +31,7 @@ function flattenFilters(filters: TransactionFiltersState): Record<string, string
     ...(filters.end_date && { end_date: filters.end_date }),
     ...(filters.search && { search: filters.search }),
     ...(filters.pending !== undefined && { pending: String(filters.pending) }),
+    ...(filters.reviewed !== undefined && { reviewed: String(filters.reviewed) }),
     ...(filters.account_ids?.length && { account_ids: filters.account_ids.join(',') }),
     ...(filters.pfc_primaries?.length && { pfc_primaries: filters.pfc_primaries.join(',') }),
     ...(filters.pfc_detaileds?.length && { pfc_detaileds: filters.pfc_detaileds.join(',') }),

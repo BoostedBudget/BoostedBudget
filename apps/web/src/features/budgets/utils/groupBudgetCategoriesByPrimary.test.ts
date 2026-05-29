@@ -292,4 +292,31 @@ describe('groupBudgetCategoriesByPrimary — with customCategoryMap (Gap 3)', ()
     const noParentGroup = result.find(g => g.group?.id === 'custom-no-parent')
     expect(noParentGroup!.children).toHaveLength(0)
   })
+
+  it('nests a custom sub-allocation under its budgeted custom parent (#1203)', () => {
+    const base = {
+      budget_id: 'budget-1',
+      category_kind: 'custom' as const,
+      allocated_amount: 100,
+      spent_amount: 50,
+      tags: [],
+      match_logic: 'category_only' as const,
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    }
+    const parent: BudgetCategory = { ...base, id: 'p', custom_category_id: 'cust-parent' }
+    const child: BudgetCategory = {
+      ...base,
+      id: 'c',
+      custom_category_id: 'cust-child',
+      custom_parent_id: 'cust-parent',
+      created_at: '2024-01-02T00:00:00Z',
+    }
+    const result = groupBudgetCategoriesByPrimary([parent, child])
+    const parentGroup = result.find(g => g.group?.id === 'p')
+    expect(parentGroup).toBeDefined()
+    expect(parentGroup!.children.map(c => c.id)).toEqual(['c'])
+    // The child is not also a standalone group.
+    expect(result.find(g => g.group?.id === 'c')).toBeUndefined()
+  })
 })

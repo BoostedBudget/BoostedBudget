@@ -9,6 +9,7 @@ import { getEffectiveCategory, getEffectiveCategoryLabel, getEffectiveDetailedCa
 import { getDetailedLabel, getPfcDetailedFilterOptions } from '@/shared/categories/pfcOptions'
 import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect'
 import type { CustomCategoryOption } from '@/shared/components/HierarchicalCategoryTreeSelect/HierarchicalCategoryTreeSelect'
+import { CategoryIcon } from '@/shared/components/IconPicker'
 import { formatTransactionAmount, isOutflow } from '@/shared/transactions/amount'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
@@ -215,7 +216,29 @@ export function TransactionTable({
       minSize: 120,
       maxSize: 280,
       render: (row) => {
-        const categoryLabel = getEffectiveCategoryLabel(getEffectiveCategory(row))
+        const eff = getEffectiveCategory(row)
+        const categoryLabel = getEffectiveCategoryLabel(eff)
+        // For a custom category, show its icon + color (Issue #1203) when we can
+        // resolve it from the loaded custom categories; otherwise fall back to the
+        // generic color dot.
+        const customMatch =
+          eff?.kind === 'custom'
+            ? customCategories?.find((c) => c.id === eff.custom_category_id)
+            : undefined
+        if (customMatch) {
+          return (
+            <span className="inline-flex items-center gap-1.5">
+              <span
+                className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full"
+                style={{ backgroundColor: customMatch.color ?? '#6B7280', color: '#fff' }}
+                aria-hidden
+              >
+                <CategoryIcon name={customMatch.icon} className="h-2.5 w-2.5" />
+              </span>
+              {categoryLabel}
+            </span>
+          )
+        }
         return (
           <span className="inline-flex items-center gap-1.5">
             <span

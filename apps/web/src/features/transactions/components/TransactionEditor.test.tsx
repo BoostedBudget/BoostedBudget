@@ -5,7 +5,10 @@ import type { ReactNode } from 'react'
 import { ReadOnlyProvider } from '@/auth/ReadOnlyContext'
 import { TransactionEditor } from './TransactionEditor'
 import type { Transaction } from '../types'
-import { mockUpdateTransactionCategoryMutateAsync } from '@/test/mocks/transactions-api'
+import {
+  mockUpdateTransactionCategoryMutateAsync,
+  mockSetTransactionReviewedMutateAsync,
+} from '@/test/mocks/transactions-api'
 
 function createWrapper() {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -32,17 +35,20 @@ const baseTransaction: Transaction = {
 }
 
 function renderEditor(transaction: Transaction) {
+  const Wrapper = createWrapper()
   return render(
-    <ReadOnlyProvider isReadOnly={false}>
-      <TransactionEditor
-        transaction={transaction}
-        availableTags={[]}
-        availableCategories={[]}
-        isOpen={true}
-        onClose={() => {}}
-        onSave={() => {}}
-      />
-    </ReadOnlyProvider>
+    <Wrapper>
+      <ReadOnlyProvider isReadOnly={false}>
+        <TransactionEditor
+          transaction={transaction}
+          availableTags={[]}
+          availableCategories={[]}
+          isOpen={true}
+          onClose={() => {}}
+          onSave={() => {}}
+        />
+      </ReadOnlyProvider>
+    </Wrapper>
   )
 }
 
@@ -150,6 +156,38 @@ describe('TransactionEditor', () => {
           data: { kind: 'pfc', pfc_primary: 'TRANSPORTATION', pfc_detailed: undefined },
         })
       })
+    })
+  })
+
+  // Review toggle (#1203)
+  describe('review state', () => {
+    beforeEach(() => {
+      mockSetTransactionReviewedMutateAsync.mockClear()
+      mockSetTransactionReviewedMutateAsync.mockResolvedValue({})
+    })
+
+    it('shows Unreviewed and marks reviewed', async () => {
+      renderEditor({ ...baseTransaction, reviewed: false })
+      expect(screen.getByTestId('review-status-badge').textContent).toContain('Unreviewed')
+      fireEvent.click(screen.getByRole('button', { name: /mark reviewed/i }))
+      await waitFor(() =>
+        expect(mockSetTransactionReviewedMutateAsync).toHaveBeenCalledWith({
+          id: 'txn-1',
+          data: { reviewed: true },
+        })
+      )
+    })
+
+    it('shows Reviewed and marks unreviewed', async () => {
+      renderEditor({ ...baseTransaction, reviewed: true })
+      expect(screen.getByTestId('review-status-badge').textContent).toContain('Reviewed')
+      fireEvent.click(screen.getByRole('button', { name: /mark unreviewed/i }))
+      await waitFor(() =>
+        expect(mockSetTransactionReviewedMutateAsync).toHaveBeenCalledWith({
+          id: 'txn-1',
+          data: { reviewed: false },
+        })
+      )
     })
   })
 })
