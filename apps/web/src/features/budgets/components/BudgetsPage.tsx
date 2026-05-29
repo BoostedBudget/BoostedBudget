@@ -93,9 +93,6 @@ export function BudgetsPage() {
     }
   }, [deletingBudget, deleteBudget, trackEvent, closeDialog, refetchBudgets]);
 
-  const handleSort = useCallback((column: BudgetSortColumn, direction: SortDirection) => {
-    setSort({ columnId: column, direction })
-  }, [setSort])
 
   const handleOpenBudget = useCallback((budget: BudgetWithMetrics) => {
     navigate(getBudgetDetailPath(budget.id))
@@ -229,10 +226,8 @@ export function BudgetsPage() {
             onDelete={handleDeleteBudgetClick}
             onRowClick={handleOpenBudget}
             loading={budgetsLoading}
-            sortable
-            sortColumn={sortColumn}
-            sortDirection={sortDirection}
-            onSort={handleSort}
+            sort={sort}
+            onSortChange={setSort}
             periodOptions={periodOptions}
             periodFilter={periodFilter}
             onPeriodFilterChange={setPeriodFilter}
@@ -266,10 +261,8 @@ export function BudgetsPage() {
               onManage={handleOpenBudget}
               onDelete={handleDeleteBudgetClick}
               onRowClick={handleOpenBudget}
-              sortable
-              sortColumn={sortColumn}
-              sortDirection={sortDirection}
-              onSort={handleSort}
+              sort={sort}
+              onSortChange={setSort}
               periodOptions={periodOptions}
               periodFilter={periodFilter}
               onPeriodFilterChange={setPeriodFilter}

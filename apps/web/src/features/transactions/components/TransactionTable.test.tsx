@@ -304,43 +304,53 @@ describe('TransactionTable', () => {
   })
 
   describe('Sorting', () => {
-    it('should make date column sortable', () => {
-      renderTable({ sortable: true })
+    it('should make date column sortable when onSortChange is provided', () => {
+      renderTable({ onSortChange: mock(() => {}) })
 
       const dateHeader = screen.getByText('Date')
       expect(dateHeader.closest('button')).toBeInTheDocument()
     })
 
-    it('should call onSort when clicking sortable header', () => {
-      const onSort = mock(() => {})
-      renderTable({ sortable: true, onSort })
+    it('calls onSortChange with asc on first click of an unsorted column', () => {
+      const onSortChange = mock(() => {})
+      renderTable({ onSortChange })
 
       const dateHeader = screen.getByText('Date').closest('button')!
       fireEvent.click(dateHeader)
 
-      expect(onSort).toHaveBeenCalledWith('date', 'asc')
+      expect(onSortChange).toHaveBeenCalledWith({ columnId: 'date', direction: 'asc' })
     })
 
-    it('should toggle sort direction on second click', () => {
-      const onSort = mock(() => {})
+    it('calls onSortChange with desc on second click (currently sorted asc)', () => {
+      const onSortChange = mock(() => {})
       renderTable({
-        sortable: true,
-        onSort,
-        sortColumn: 'date',
-        sortDirection: 'asc',
+        onSortChange,
+        sort: { columnId: 'date', direction: 'asc' },
       })
 
       const dateHeader = screen.getByText('Date').closest('button')!
       fireEvent.click(dateHeader)
 
-      expect(onSort).toHaveBeenCalledWith('date', 'desc')
+      expect(onSortChange).toHaveBeenCalledWith({ columnId: 'date', direction: 'desc' })
+    })
+
+    it('calls onSortChange(null) on third click (currently sorted desc) — clears sort', () => {
+      const onSortChange = mock(() => {})
+      renderTable({
+        onSortChange,
+        sort: { columnId: 'date', direction: 'desc' },
+      })
+
+      const dateHeader = screen.getByText('Date').closest('button')!
+      fireEvent.click(dateHeader)
+
+      expect(onSortChange).toHaveBeenCalledWith(null)
     })
 
     it('should show sort indicator on sorted column', () => {
       renderTable({
-        sortable: true,
-        sortColumn: 'date',
-        sortDirection: 'asc',
+        onSortChange: mock(() => {}),
+        sort: { columnId: 'date', direction: 'asc' },
       })
 
       // aria-sort lives on <th> (correct HTML semantics), not the sort button
@@ -494,6 +504,35 @@ describe('TransactionTable', () => {
 
       expect(screen.queryByRole('button', { name: /filter by account/i })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /filter by amount/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /filter by sub-category/i })).not.toBeInTheDocument()
+    })
+
+    it('renders sub-category filter button when onDetailedsChange is provided', () => {
+      renderTable({ selectedDetaileds: [], onDetailedsChange: mock(() => {}) })
+
+      expect(screen.getByRole('button', { name: /filter by sub-category/i })).toBeInTheDocument()
+    })
+
+    it('calls onDetailedsChange when a sub-category filter option is selected', async () => {
+      const onDetailedsChange = mock(() => {})
+      const userEvent = await import('@testing-library/user-event')
+      const user = userEvent.default.setup()
+
+      renderTable({ selectedDetaileds: [], onDetailedsChange })
+
+      await user.click(screen.getByRole('button', { name: /filter by sub-category/i }))
+      await user.click(screen.getByText('Coffee'))
+      expect(onDetailedsChange).toHaveBeenCalledWith(['FOOD_AND_DRINK_COFFEE'])
+    })
+
+    it('shows sub-category filter button as active when selectedDetaileds is non-empty', () => {
+      renderTable({
+        selectedDetaileds: ['FOOD_AND_DRINK_COFFEE'],
+        onDetailedsChange: mock(() => {}),
+      })
+
+      const btn = screen.getByRole('button', { name: /filter by sub-category/i })
+      expect(btn).toHaveClass('column-filter__trigger--active')
     })
   })
 

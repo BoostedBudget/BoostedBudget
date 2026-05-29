@@ -41,10 +41,11 @@ export function NetWorthPage() {
     balanceRange,
     sortColumn,
     sortDirection,
+    sort,
+    setSort,
     setInstitutionFilter,
     setTypeFilter,
     setBalanceRange,
-    setSortColumn,
     hasActiveFilters,
     clearAllFilters,
   } = useNetWorthBreakdownFilters()
@@ -184,9 +185,8 @@ export function NetWorthPage() {
             liabilitiesTotal={liabilitiesTotal}
             loading={accountsLoading}
             error={accountsError}
-            sortColumn={sortColumn}
-            sortDirection={sortDirection}
-            onSort={setSortColumn}
+            sort={sort}
+            onSortChange={setSort}
             institutionOptions={institutionOptions}
             typeOptions={typeOptions}
             institutionFilter={institutionFilter}
