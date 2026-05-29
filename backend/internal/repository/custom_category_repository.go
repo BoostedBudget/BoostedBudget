@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -54,6 +55,16 @@ type CustomCategoryRepository interface {
 	// ClearParentForChildren reparents all direct children of parentID to top-level
 	// (sets their parent_id to NULL). Used before deleting a parent category.
 	ClearParentForChildren(ctx context.Context, parentID string) error
+
+	// GetCategoryUsage returns live counts of transactions, budget categories,
+	// rules, and child categories referencing the given category (Issue #1203).
+	GetCategoryUsage(ctx context.Context, userID, categoryID string) (*domain.CategoryUsage, error)
+
+	// DeleteWithReassignment deletes a custom category in a single transaction,
+	// first reverting referencing transactions to their Plaid PFC + unreviewed,
+	// clearing/deleting referencing rules, and reparenting children to top-level
+	// (Issue #1203). Budget categories are removed via the ON DELETE CASCADE FK.
+	DeleteWithReassignment(ctx context.Context, userID, categoryID string) error
 }
 
 // customCategoryRepository implements CustomCategoryRepository using PostgreSQL
@@ -436,4 +447,112 @@ func (r *customCategoryRepository) ClearParentForChildren(ctx context.Context, p
 	query := `UPDATE custom_categories SET parent_id = NULL, updated_at = $1 WHERE parent_id = $2`
 	_, err := r.db.Exec(ctx, query, time.Now(), parentID)
 	return err
+}
+
+// GetCategoryUsage returns live reference counts for a custom category.
+func (r *customCategoryRepository) GetCategoryUsage(ctx context.Context, userID, categoryID string) (*domain.CategoryUsage, error) {
+	usage := &domain.CategoryUsage{}
+
+	if err := r.db.QueryRow(ctx,
+		`SELECT COUNT(*) FROM transactions WHERE user_id = $1 AND custom_category_override_id = $2`,
+		userID, categoryID,
+	).Scan(&usage.TransactionCount); err != nil {
+		return nil, err
+	}
+
+	if err := r.db.QueryRow(ctx,
+		`SELECT COUNT(*) FROM budget_categories bc
+		 JOIN budgets b ON b.id = bc.budget_id
+		 WHERE b.user_id = $1 AND bc.custom_category_id = $2`,
+		userID, categoryID,
+	).Scan(&usage.BudgetCount); err != nil {
+		return nil, err
+	}
+
+	if err := r.db.QueryRow(ctx,
+		`SELECT COUNT(*) FROM categorization_rules WHERE user_id = $1 AND target_custom_category_id = $2`,
+		userID, categoryID,
+	).Scan(&usage.RuleCount); err != nil {
+		return nil, err
+	}
+
+	if err := r.db.QueryRow(ctx,
+		`SELECT COUNT(*) FROM custom_categories WHERE user_id = $1 AND parent_id = $2`,
+		userID, categoryID,
+	).Scan(&usage.ChildCount); err != nil {
+		return nil, err
+	}
+
+	return usage, nil
+}
+
+// DeleteWithReassignment deletes a custom category and reassigns its references in
+// one transaction (Issue #1203).
+func (r *customCategoryRepository) DeleteWithReassignment(ctx context.Context, userID, categoryID string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// 1. Revert transactions to their Plaid PFC category and back to unreviewed.
+	if _, err := tx.Exec(ctx, `
+		UPDATE transactions
+		SET category_override_kind = NULL,
+		    custom_category_override_id = NULL,
+		    pfc_primary_override = NULL,
+		    pfc_detailed_override = NULL,
+		    category_source = 'plaid',
+		    reviewed = false,
+		    reviewed_at = NULL,
+		    effective_category_name = pfc_primary,
+		    updated_at = NOW()
+		WHERE user_id = $1 AND custom_category_override_id = $2
+	`, userID, categoryID); err != nil {
+		return fmt.Errorf("failed to revert transactions: %w", err)
+	}
+
+	// 2. Delete rules whose ONLY action was this category (no tags remain).
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM categorization_rules
+		WHERE user_id = $1 AND target_custom_category_id = $2
+		  AND (target_tags IS NULL OR jsonb_array_length(target_tags) = 0)
+	`, userID, categoryID); err != nil {
+		return fmt.Errorf("failed to delete category-only rules: %w", err)
+	}
+
+	// 3. Clear the category target on remaining (tag-bearing) rules so they stay valid.
+	if _, err := tx.Exec(ctx, `
+		UPDATE categorization_rules
+		SET target_kind = NULL,
+		    target_pfc_primary = NULL,
+		    target_pfc_detailed = NULL,
+		    target_custom_category_id = NULL,
+		    updated_at = NOW()
+		WHERE user_id = $1 AND target_custom_category_id = $2
+	`, userID, categoryID); err != nil {
+		return fmt.Errorf("failed to clear rule category targets: %w", err)
+	}
+
+	// 4. Reparent children to top-level (lifts the self-FK RESTRICT).
+	if _, err := tx.Exec(ctx,
+		`UPDATE custom_categories SET parent_id = NULL, updated_at = NOW() WHERE parent_id = $1`,
+		categoryID,
+	); err != nil {
+		return fmt.Errorf("failed to reparent children: %w", err)
+	}
+
+	// 5. Delete the category (budget_categories rows cascade via FK).
+	ct, err := tx.Exec(ctx,
+		`DELETE FROM custom_categories WHERE id = $1 AND user_id = $2`,
+		categoryID, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete category: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return domain.ErrCategoryNotFound
+	}
+
+	return tx.Commit(ctx)
 }

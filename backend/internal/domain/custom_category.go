@@ -80,6 +80,15 @@ type UpdateCustomCategoryRequest struct {
 	Color            *string `json:"color,omitempty" validate:"omitempty,hexcolor"`
 }
 
+// CategoryUsage reports how many records reference a custom category, computed live
+// (not from the cached usage_count). Used to warn the user before deletion (Issue #1203).
+type CategoryUsage struct {
+	TransactionCount int `json:"transaction_count" db:"-"`
+	BudgetCount      int `json:"budget_count" db:"-"`
+	RuleCount        int `json:"rule_count" db:"-"`
+	ChildCount       int `json:"child_count" db:"-"`
+}
+
 // MergeCategoriesRequest represents the request to merge two categories.
 type MergeCategoriesRequest struct {
 	FromCategoryID string `json:"from_category_id" validate:"required,uuid"`

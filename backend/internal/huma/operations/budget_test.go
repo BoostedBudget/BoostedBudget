@@ -208,6 +208,12 @@ func (m *mockCustomCategoryRepoForBudget) HasChildren(ctx context.Context, id st
 func (m *mockCustomCategoryRepoForBudget) ClearParentForChildren(ctx context.Context, parentID string) error {
 	return nil
 }
+func (m *mockCustomCategoryRepoForBudget) GetCategoryUsage(ctx context.Context, userID, categoryID string) (*domain.CategoryUsage, error) {
+	return &domain.CategoryUsage{}, nil
+}
+func (m *mockCustomCategoryRepoForBudget) DeleteWithReassignment(ctx context.Context, userID, categoryID string) error {
+	return nil
+}
 
 // Helper function to create test budget
 func createTestBudget() *domain.Budget {

@@ -49,6 +49,12 @@ func MapError(err error) error {
 		return huma.Error404NotFound("Tag not found")
 	case errors.Is(err, domain.ErrCategoryNotFound):
 		return huma.Error404NotFound("Category not found")
+	case errors.Is(err, domain.ErrCategoryHasChildren):
+		return huma.Error409Conflict("Category has subcategories; remove or reparent them first")
+	case errors.Is(err, domain.ErrCategoryParentHasParent):
+		return huma.Error400BadRequest("Parent category must be top-level (categories support only two levels)")
+	case errors.Is(err, domain.ErrCategoryInvalidParent):
+		return huma.Error400BadRequest("Invalid parent category")
 	case errors.Is(err, domain.ErrRuleNotFound):
 		return huma.Error404NotFound("Categorization rule not found")
 	case errors.Is(err, domain.ErrSavingsGoalNotFound):

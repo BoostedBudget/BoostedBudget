@@ -96,6 +96,19 @@ func (m *MockCustomCategoryRepository) ClearParentForChildren(ctx context.Contex
 	return args.Error(0)
 }
 
+func (m *MockCustomCategoryRepository) GetCategoryUsage(ctx context.Context, userID, categoryID string) (*domain.CategoryUsage, error) {
+	args := m.Called(ctx, userID, categoryID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.CategoryUsage), args.Error(1)
+}
+
+func (m *MockCustomCategoryRepository) DeleteWithReassignment(ctx context.Context, userID, categoryID string) error {
+	args := m.Called(ctx, userID, categoryID)
+	return args.Error(0)
+}
+
 // TestCustomCategoryService_CreateCategory tests successful category creation
 func TestCustomCategoryService_CreateCategory(t *testing.T) {
 	mockCategoryRepo := new(MockCustomCategoryRepository)
@@ -356,7 +369,7 @@ func TestCustomCategoryService_DeleteCategory(t *testing.T) {
 	}
 
 	mockCategoryRepo.On("GetByID", ctx, categoryID).Return(existingCategory, nil)
-	mockCategoryRepo.On("Delete", ctx, categoryID).Return(nil)
+	mockCategoryRepo.On("DeleteWithReassignment", ctx, userID, categoryID).Return(nil)
 
 	// Execute
 	err := service.DeleteCategory(ctx, userID, categoryID)
@@ -364,6 +377,46 @@ func TestCustomCategoryService_DeleteCategory(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestCustomCategoryService_GetCategoryUsage verifies ownership check + live counts (Issue #1203).
+func TestCustomCategoryService_GetCategoryUsage(t *testing.T) {
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCustomCategoryService(mockCategoryRepo)
+
+	ctx := context.Background()
+	userID := "user-123"
+	categoryID := "cat-456"
+
+	mockCategoryRepo.On("GetByID", ctx, categoryID).
+		Return(&domain.CustomCategory{ID: categoryID, UserID: userID, Name: "Food"}, nil)
+	mockCategoryRepo.On("GetCategoryUsage", ctx, userID, categoryID).
+		Return(&domain.CategoryUsage{TransactionCount: 3, BudgetCount: 1, RuleCount: 2, ChildCount: 1}, nil)
+
+	usage, err := service.GetCategoryUsage(ctx, userID, categoryID)
+
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, 3, usage.TransactionCount)
+	assert.Equal(t, 1, usage.ChildCount)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestCustomCategoryService_GetCategoryUsage_NotOwned hides another user's category.
+func TestCustomCategoryService_GetCategoryUsage_NotOwned(t *testing.T) {
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCustomCategoryService(mockCategoryRepo)
+
+	ctx := context.Background()
+	categoryID := "cat-456"
+	mockCategoryRepo.On("GetByID", ctx, categoryID).
+		Return(&domain.CustomCategory{ID: categoryID, UserID: "other-user", Name: "Food"}, nil)
+
+	usage, err := service.GetCategoryUsage(ctx, "user-123", categoryID)
+
+	assert.ErrorIs(t, err, domain.ErrCategoryNotFound)
+	assert.Nil(t, usage)
+	mockCategoryRepo.AssertNotCalled(t, "GetCategoryUsage", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestCustomCategoryService_GetUserCategories_PopulatesPFCDisplay asserts that GetUserCategories

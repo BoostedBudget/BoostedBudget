@@ -28,6 +28,10 @@ type CustomCategoryService interface {
 
 	DeleteCategory(ctx context.Context, userID, categoryID string) error
 
+	// GetCategoryUsage returns live reference counts for a category (Issue #1203),
+	// used to warn the user before deletion.
+	GetCategoryUsage(ctx context.Context, userID, categoryID string) (*domain.CategoryUsage, error)
+
 	GetOrCreateCategory(ctx context.Context, userID, categoryName string) (*domain.CustomCategory, error)
 
 	// SetJobQueue injects the job queue for async effective_category_name refreshes.
@@ -233,7 +237,22 @@ func (s *customCategoryService) DeleteCategory(ctx context.Context, userID, cate
 		return domain.ErrCategoryNotFound
 	}
 
-	return s.categoryRepo.Delete(ctx, categoryID)
+	// Reverts referencing transactions to Plaid PFC + unreviewed, cleans up rules,
+	// reparents children, and deletes — all in one transaction (Issue #1203).
+	return s.categoryRepo.DeleteWithReassignment(ctx, userID, categoryID)
+}
+
+// GetCategoryUsage returns live reference counts for a category (Issue #1203).
+func (s *customCategoryService) GetCategoryUsage(ctx context.Context, userID, categoryID string) (*domain.CategoryUsage, error) {
+	// Verify ownership first so we don't leak counts for another user's category.
+	category, err := s.categoryRepo.GetByID(ctx, categoryID)
+	if err != nil {
+		return nil, err
+	}
+	if category.UserID != userID {
+		return nil, domain.ErrCategoryNotFound
+	}
+	return s.categoryRepo.GetCategoryUsage(ctx, userID, categoryID)
 }
 
 func (s *customCategoryService) GetOrCreateCategory(ctx context.Context, userID, categoryName string) (*domain.CustomCategory, error) {
