@@ -32,7 +32,12 @@ import { faker } from "@faker-js/faker";
 import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
-import type { CustomCategory, Detailed, Primary } from "../../models";
+import type {
+  CategoryUsage,
+  CustomCategory,
+  Detailed,
+  Primary,
+} from "../../models";
 
 export const getGetUserCategoriesResponseMock = (): CustomCategory[] | null =>
   Array.from(
@@ -51,6 +56,14 @@ export const getGetUserCategoriesResponseMock = (): CustomCategory[] | null =>
     ]),
     id: faker.string.alpha({ length: { min: 10, max: 20 } }),
     name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    parent_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    parent_name: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
     parent_pfc_primary: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
@@ -79,6 +92,14 @@ export const getCreateCategoryResponseMock = (
   ]),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  parent_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  parent_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   parent_pfc_primary: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -136,6 +157,14 @@ export const getGetCategoryByIDResponseMock = (
   ]),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  parent_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  parent_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   parent_pfc_primary: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -165,6 +194,14 @@ export const getUpdateCategoryResponseMock = (
   ]),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  parent_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  parent_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   parent_pfc_primary: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -176,6 +213,17 @@ export const getUpdateCategoryResponseMock = (
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   usage_count: faker.number.int(),
   user_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
+export const getGetCategoryUsageResponseMock = (
+  overrideResponse: Partial<Extract<CategoryUsage, object>> = {},
+): CategoryUsage => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  budget_count: faker.number.int(),
+  child_count: faker.number.int(),
+  rule_count: faker.number.int(),
+  transaction_count: faker.number.int(),
   ...overrideResponse,
 });
 
@@ -386,6 +434,32 @@ export const getUpdateCategoryMockHandler = (
     options,
   );
 };
+
+export const getGetCategoryUsageMockHandler = (
+  overrideResponse?:
+    | CategoryUsage
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<CategoryUsage> | CategoryUsage),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/categories/:id/usage",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetCategoryUsageResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 export const getCategoriesMock = () => [
   getGetUserCategoriesMockHandler(),
   getCreateCategoryMockHandler(),
@@ -395,4 +469,5 @@ export const getCategoriesMock = () => [
   getDeleteCategoryMockHandler(),
   getGetCategoryByIDMockHandler(),
   getUpdateCategoryMockHandler(),
+  getGetCategoryUsageMockHandler(),
 ];

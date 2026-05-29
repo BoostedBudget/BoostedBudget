@@ -32,7 +32,11 @@ import { faker } from "@faker-js/faker";
 import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
-import type { GetTransactionsOutputBody, Transaction } from "../../models";
+import type {
+  GetTransactionsOutputBody,
+  SetTransactionReviewedOutputBody,
+  Transaction,
+} from "../../models";
 
 export const getGetTransactionsResponseMock = (
   overrideResponse: Partial<Extract<GetTransactionsOutputBody, object>> = {},
@@ -228,6 +232,11 @@ export const getGetTransactionsResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      reviewed: faker.datatype.boolean(),
+      reviewed_at: faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        undefined,
+      ]),
       source: faker.string.alpha({ length: { min: 10, max: 20 } }),
       tags: faker.helpers.arrayElement([
         Array.from(
@@ -263,6 +272,16 @@ export const getGetTransactionsResponseMock = (
     })),
     null,
   ]),
+  ...overrideResponse,
+});
+
+export const getBulkSetTransactionReviewedResponseMock = (
+  overrideResponse: Partial<
+    Extract<SetTransactionReviewedOutputBody, object>
+  > = {},
+): SetTransactionReviewedOutputBody => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  updated: faker.number.int(),
   ...overrideResponse,
 });
 
@@ -445,6 +464,11 @@ export const getGetTransactionByIDResponseMock = (
   ]),
   pfc_primary_override_display: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  reviewed: faker.datatype.boolean(),
+  reviewed_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -663,6 +687,11 @@ export const getUpdateTransactionCategoryResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  reviewed: faker.datatype.boolean(),
+  reviewed_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   tags: faker.helpers.arrayElement([
     Array.from(
@@ -695,6 +724,16 @@ export const getUpdateTransactionCategoryResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  ...overrideResponse,
+});
+
+export const getSetTransactionReviewedResponseMock = (
+  overrideResponse: Partial<
+    Extract<SetTransactionReviewedOutputBody, object>
+  > = {},
+): SetTransactionReviewedOutputBody => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  updated: faker.number.int(),
   ...overrideResponse,
 });
 
@@ -879,6 +918,11 @@ export const getUpdateTransactionTagsResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  reviewed: faker.datatype.boolean(),
+  reviewed_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
   source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   tags: faker.helpers.arrayElement([
     Array.from(
@@ -940,6 +984,34 @@ export const getGetTransactionsMockHandler = (
   );
 };
 
+export const getBulkSetTransactionReviewedMockHandler = (
+  overrideResponse?:
+    | SetTransactionReviewedOutputBody
+    | ((
+        info: Parameters<Parameters<typeof http.patch>[1]>[0],
+      ) =>
+        | Promise<SetTransactionReviewedOutputBody>
+        | SetTransactionReviewedOutputBody),
+  options?: RequestHandlerOptions,
+) => {
+  return http.patch(
+    "*/api/v1/transactions/review",
+    async (info: Parameters<Parameters<typeof http.patch>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getBulkSetTransactionReviewedResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetTransactionByIDMockHandler = (
   overrideResponse?:
     | Transaction
@@ -992,6 +1064,34 @@ export const getUpdateTransactionCategoryMockHandler = (
   );
 };
 
+export const getSetTransactionReviewedMockHandler = (
+  overrideResponse?:
+    | SetTransactionReviewedOutputBody
+    | ((
+        info: Parameters<Parameters<typeof http.patch>[1]>[0],
+      ) =>
+        | Promise<SetTransactionReviewedOutputBody>
+        | SetTransactionReviewedOutputBody),
+  options?: RequestHandlerOptions,
+) => {
+  return http.patch(
+    "*/api/v1/transactions/:id/review",
+    async (info: Parameters<Parameters<typeof http.patch>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetTransactionReviewedResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getUpdateTransactionTagsMockHandler = (
   overrideResponse?:
     | Transaction
@@ -1019,7 +1119,9 @@ export const getUpdateTransactionTagsMockHandler = (
 };
 export const getTransactionsMock = () => [
   getGetTransactionsMockHandler(),
+  getBulkSetTransactionReviewedMockHandler(),
   getGetTransactionByIDMockHandler(),
   getUpdateTransactionCategoryMockHandler(),
+  getSetTransactionReviewedMockHandler(),
   getUpdateTransactionTagsMockHandler(),
 ];

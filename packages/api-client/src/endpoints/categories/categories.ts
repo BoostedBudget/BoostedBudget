@@ -44,6 +44,7 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  CategoryUsage,
   CreateCustomCategoryRequest,
   CustomCategory,
   Detailed,
@@ -1138,3 +1139,168 @@ export const useUpdateCategory = <
 > => {
   return useMutation(getUpdateCategoryMutationOptions(options), queryClient);
 };
+/**
+ * Returns counts of transactions, budgets, rules, and child categories referencing the category (for delete-impact warnings).
+ * @summary Get category usage counts
+ */
+export const getCategoryUsage = (
+  id: string,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<CategoryUsage>(
+    { url: `/api/v1/categories/${id}/usage`, method: "GET", signal },
+    options,
+  );
+};
+
+export const getGetCategoryUsageQueryKey = (id: string) => {
+  return [`/api/v1/categories/${id}/usage`] as const;
+};
+
+export const getGetCategoryUsageQueryOptions = <
+  TData = Awaited<ReturnType<typeof getCategoryUsage>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCategoryUsage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetCategoryUsageQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getCategoryUsage>>
+  > = ({ signal }) => getCategoryUsage(id, requestOptions, signal);
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getCategoryUsage>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetCategoryUsageQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getCategoryUsage>>
+>;
+export type GetCategoryUsageQueryError = ErrorType<ErrorModel>;
+
+export function useGetCategoryUsage<
+  TData = Awaited<ReturnType<typeof getCategoryUsage>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCategoryUsage>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCategoryUsage>>,
+          TError,
+          Awaited<ReturnType<typeof getCategoryUsage>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetCategoryUsage<
+  TData = Awaited<ReturnType<typeof getCategoryUsage>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCategoryUsage>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCategoryUsage>>,
+          TError,
+          Awaited<ReturnType<typeof getCategoryUsage>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetCategoryUsage<
+  TData = Awaited<ReturnType<typeof getCategoryUsage>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCategoryUsage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get category usage counts
+ */
+
+export function useGetCategoryUsage<
+  TData = Awaited<ReturnType<typeof getCategoryUsage>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCategoryUsage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetCategoryUsageQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
