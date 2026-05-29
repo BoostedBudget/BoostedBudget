@@ -100,5 +100,11 @@
     "path": "apps/web/dist/assets/tanstack-*.js",
     "limit": "35 KB",
     "gzip": true
+  },
+  {
+    "name": "custom-category-manager",
+    "path": "apps/web/dist/assets/CustomCategoryManager-*.js",
+    "limit": "7 KB",
+    "gzip": true
   }
 ]

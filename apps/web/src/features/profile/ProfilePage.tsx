@@ -2,9 +2,17 @@ import { Mail, CheckCircle2, Globe, Shield, Copy } from 'lucide-react'
 import { SubscriptionCard } from './components/SubscriptionCard'
 import { ThemeSelector } from './components/ThemeSelector'
 import { ProfileForm } from './ProfileForm'
+import { lazy, Suspense } from 'react'
 import { PrivacySettings } from './PrivacySettings'
-import { CustomCategoryManager } from '@/features/categories/components/CustomCategoryManager'
 import { useProfile } from './hooks/useProfile'
+
+// Lazy-loaded: keeps the category manager (and its icon set) out of the profile
+// route bundle — it's only needed when the Categories tab is opened (#1203).
+const CustomCategoryManager = lazy(() =>
+  import('@/features/categories/components/CustomCategoryManager').then((m) => ({
+    default: m.CustomCategoryManager,
+  }))
+)
 import { useIsAdmin, useAdminMode, AdminSettingsSection } from '@/features/admin'
 import { useRegions } from '../../shared/hooks/useRegions'
 import { useTabState, useCopyToClipboard } from '../../shared/hooks'
@@ -196,7 +204,9 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
 
       {activeTab === 'categories' && (
         <section className="bg-card border border-border rounded-lg p-6">
-          <CustomCategoryManager />
+          <Suspense fallback={<p className="text-sm text-muted-foreground">Loading categories…</p>}>
+            <CustomCategoryManager />
+          </Suspense>
         </section>
       )}
     </div>
