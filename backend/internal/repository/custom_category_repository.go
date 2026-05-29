@@ -44,6 +44,16 @@ type CustomCategoryRepository interface {
 	// IDs not owned by userID or not found are omitted from the result.
 	// Returns an empty map (not an error) when ids is empty.
 	GetNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error)
+
+	// GetChildren returns the direct children of the given parent category (Issue #1203).
+	GetChildren(ctx context.Context, parentID string) ([]*domain.CustomCategory, error)
+
+	// HasChildren reports whether the given category has any direct children.
+	HasChildren(ctx context.Context, id string) (bool, error)
+
+	// ClearParentForChildren reparents all direct children of parentID to top-level
+	// (sets their parent_id to NULL). Used before deleting a parent category.
+	ClearParentForChildren(ctx context.Context, parentID string) error
 }
 
 // customCategoryRepository implements CustomCategoryRepository using PostgreSQL
@@ -69,8 +79,8 @@ func (r *customCategoryRepository) Create(ctx context.Context, category *domain.
 	category.UpdatedAt = now
 
 	query := `
-		INSERT INTO custom_categories (id, user_id, name, parent_pfc_primary, icon, color, usage_count, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO custom_categories (id, user_id, name, parent_pfc_primary, parent_id, icon, color, usage_count, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
 
 	_, err := r.db.Exec(ctx, query,
@@ -78,6 +88,7 @@ func (r *customCategoryRepository) Create(ctx context.Context, category *domain.
 		category.UserID,
 		category.Name,
 		category.ParentPFCPrimary,
+		category.ParentID,
 		category.Icon,
 		category.Color,
 		category.UsageCount,
@@ -86,21 +97,36 @@ func (r *customCategoryRepository) Create(ctx context.Context, category *domain.
 	)
 
 	if err != nil {
-		// Check for unique constraint violations
-		if strings.Contains(err.Error(), "unique_user_category_name") ||
-			strings.Contains(err.Error(), "duplicate key") {
-			return domain.ErrCategoryAlreadyExists
-		}
-		return err
+		return mapCategoryWriteError(err)
 	}
 
 	return nil
 }
 
+// mapCategoryWriteError translates DB constraint/trigger violations on
+// custom_categories writes into domain errors (Issue #1203).
+func mapCategoryWriteError(err error) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "unique_user_category_name") || strings.Contains(msg, "duplicate key"):
+		return domain.ErrCategoryAlreadyExists
+	case strings.Contains(msg, "no grandchildren"):
+		return domain.ErrCategoryParentHasParent
+	case strings.Contains(msg, "cannot be nested"):
+		return domain.ErrCategoryHasChildren
+	case strings.Contains(msg, "same user") ||
+		strings.Contains(msg, "custom_category_single_parent") ||
+		strings.Contains(msg, "custom_category_no_self_parent"):
+		return domain.ErrCategoryInvalidParent
+	default:
+		return err
+	}
+}
+
 // GetByID retrieves a category by its ID
 func (r *customCategoryRepository) GetByID(ctx context.Context, id string) (*domain.CustomCategory, error) {
 	query := `
-		SELECT id, user_id, name, parent_pfc_primary, icon, color, usage_count, created_at, updated_at
+		SELECT id, user_id, name, parent_pfc_primary, parent_id, icon, color, usage_count, created_at, updated_at
 		FROM custom_categories
 		WHERE id = $1
 	`
@@ -111,6 +137,7 @@ func (r *customCategoryRepository) GetByID(ctx context.Context, id string) (*dom
 		&category.UserID,
 		&category.Name,
 		&category.ParentPFCPrimary,
+		&category.ParentID,
 		&category.Icon,
 		&category.Color,
 		&category.UsageCount,
@@ -131,7 +158,7 @@ func (r *customCategoryRepository) GetByID(ctx context.Context, id string) (*dom
 // GetByUserID retrieves all categories for a specific user
 func (r *customCategoryRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.CustomCategory, error) {
 	query := `
-		SELECT id, user_id, name, parent_pfc_primary, icon, color, usage_count, created_at, updated_at
+		SELECT id, user_id, name, parent_pfc_primary, parent_id, icon, color, usage_count, created_at, updated_at
 		FROM custom_categories
 		WHERE user_id = $1
 		ORDER BY name ASC
@@ -151,6 +178,7 @@ func (r *customCategoryRepository) GetByUserID(ctx context.Context, userID strin
 			&category.UserID,
 			&category.Name,
 			&category.ParentPFCPrimary,
+			&category.ParentID,
 			&category.Icon,
 			&category.Color,
 			&category.UsageCount,
@@ -173,7 +201,7 @@ func (r *customCategoryRepository) GetByUserID(ctx context.Context, userID strin
 // GetByName retrieves a category by user ID and name
 func (r *customCategoryRepository) GetByName(ctx context.Context, userID, name string) (*domain.CustomCategory, error) {
 	query := `
-		SELECT id, user_id, name, parent_pfc_primary, icon, color, usage_count, created_at, updated_at
+		SELECT id, user_id, name, parent_pfc_primary, parent_id, icon, color, usage_count, created_at, updated_at
 		FROM custom_categories
 		WHERE user_id = $1 AND name = $2
 	`
@@ -184,6 +212,7 @@ func (r *customCategoryRepository) GetByName(ctx context.Context, userID, name s
 		&category.UserID,
 		&category.Name,
 		&category.ParentPFCPrimary,
+		&category.ParentID,
 		&category.Icon,
 		&category.Color,
 		&category.UsageCount,
@@ -207,13 +236,14 @@ func (r *customCategoryRepository) Update(ctx context.Context, category *domain.
 
 	query := `
 		UPDATE custom_categories
-		SET name = $1, parent_pfc_primary = $2, icon = $3, color = $4, usage_count = $5, updated_at = $6
-		WHERE id = $7
+		SET name = $1, parent_pfc_primary = $2, parent_id = $3, icon = $4, color = $5, usage_count = $6, updated_at = $7
+		WHERE id = $8
 	`
 
 	ct, err := r.db.Exec(ctx, query,
 		category.Name,
 		category.ParentPFCPrimary,
+		category.ParentID,
 		category.Icon,
 		category.Color,
 		category.UsageCount,
@@ -221,12 +251,7 @@ func (r *customCategoryRepository) Update(ctx context.Context, category *domain.
 		category.ID,
 	)
 	if err != nil {
-		// Check for unique constraint violations
-		if strings.Contains(err.Error(), "unique_user_category_name") ||
-			strings.Contains(err.Error(), "duplicate key") {
-			return domain.ErrCategoryAlreadyExists
-		}
-		return err
+		return mapCategoryWriteError(err)
 	}
 
 	if ct.RowsAffected() == 0 {
@@ -350,4 +375,65 @@ func (r *customCategoryRepository) GetNamesByIDs(ctx context.Context, userID str
 	}
 
 	return result, nil
+}
+
+// GetChildren returns the direct children of the given parent category.
+func (r *customCategoryRepository) GetChildren(ctx context.Context, parentID string) ([]*domain.CustomCategory, error) {
+	query := `
+		SELECT id, user_id, name, parent_pfc_primary, parent_id, icon, color, usage_count, created_at, updated_at
+		FROM custom_categories
+		WHERE parent_id = $1
+		ORDER BY name ASC
+	`
+
+	rows, err := r.db.Query(ctx, query, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var categories []*domain.CustomCategory
+	for rows.Next() {
+		category := &domain.CustomCategory{}
+		err := rows.Scan(
+			&category.ID,
+			&category.UserID,
+			&category.Name,
+			&category.ParentPFCPrimary,
+			&category.ParentID,
+			&category.Icon,
+			&category.Color,
+			&category.UsageCount,
+			&category.CreatedAt,
+			&category.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		categories = append(categories, category)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return categories, nil
+}
+
+// HasChildren reports whether the given category has any direct children.
+func (r *customCategoryRepository) HasChildren(ctx context.Context, id string) (bool, error) {
+	query := `SELECT EXISTS(SELECT 1 FROM custom_categories WHERE parent_id = $1)`
+
+	var exists bool
+	if err := r.db.QueryRow(ctx, query, id).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// ClearParentForChildren reparents all direct children of parentID to top-level.
+func (r *customCategoryRepository) ClearParentForChildren(ctx context.Context, parentID string) error {
+	query := `UPDATE custom_categories SET parent_id = NULL, updated_at = $1 WHERE parent_id = $2`
+	_, err := r.db.Exec(ctx, query, time.Now(), parentID)
+	return err
 }
