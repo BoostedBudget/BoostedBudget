@@ -48,15 +48,15 @@ describe('NotFoundPage', () => {
     expect(screen.getByText(/the page you.re looking for/i)).toBeInTheDocument()
   })
 
-  it('renders "Go to Dashboard" link with href="/dashboard"', () => {
+  it('renders "Go Home" link with href="/"', () => {
     render(
       <MemoryRouter>
         <NotFoundPage />
       </MemoryRouter>
     )
-    const link = screen.getByRole('link', { name: /go to dashboard/i })
+    const link = screen.getByRole('link', { name: /go home/i })
     expect(link).toBeInTheDocument()
-    expect(link).toHaveAttribute('href', '/dashboard')
+    expect(link).toHaveAttribute('href', '/')
   })
 
   it('renders "Contact Support" link with mailto href', () => {
