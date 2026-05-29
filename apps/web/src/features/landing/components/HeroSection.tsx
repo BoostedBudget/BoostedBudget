@@ -94,7 +94,7 @@ export function HeroSection({ onScrollToHowItWorks }: HeroSectionProps) {
               <Button
                 disabled
                 size="lg"
-                className="w-full cursor-not-allowed bg-blue-600/60 px-10 py-6 text-lg font-semibold opacity-60 sm:w-auto"
+                className="w-full bg-blue-600/60 px-10 py-6 text-lg font-semibold opacity-60 sm:w-auto"
               >
                 Coming Soon
               </Button>
