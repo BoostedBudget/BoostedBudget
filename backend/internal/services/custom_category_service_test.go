@@ -163,6 +163,39 @@ func TestCustomCategoryService_CreateCategory_WithCustomParent(t *testing.T) {
 	mockCategoryRepo.AssertExpectations(t)
 }
 
+// TestCustomCategoryService_CreateCategory_NormalizesEmptyPfcParent verifies that an
+// empty-string parent_pfc_primary (sent by the form when nesting under a custom parent)
+// is normalized to nil so it doesn't violate the mutual-exclusivity CHECK (Issue #1203).
+func TestCustomCategoryService_CreateCategory_NormalizesEmptyPfcParent(t *testing.T) {
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCustomCategoryService(mockCategoryRepo)
+
+	ctx := context.Background()
+	userID := "user-123"
+	parentID := "11111111-1111-1111-1111-111111111111"
+	emptyPfc := ""
+
+	req := &domain.CreateCustomCategoryRequest{
+		Name:             "Fast Food",
+		ParentID:         &parentID,
+		ParentPFCPrimary: &emptyPfc, // form sends "" for the unused dimension
+	}
+
+	mockCategoryRepo.On("GetByID", ctx, parentID).
+		Return(&domain.CustomCategory{ID: parentID, UserID: userID, Name: "Food"}, nil)
+	mockCategoryRepo.On("Create", ctx, mock.MatchedBy(func(c *domain.CustomCategory) bool {
+		// parent_pfc_primary must be nil (not an empty string) so the CHECK passes.
+		return c.ParentPFCPrimary == nil && c.ParentID != nil && *c.ParentID == parentID
+	})).Return(nil)
+
+	category, err := service.CreateCategory(ctx, userID, req)
+
+	require.NoError(t, err)
+	require.NotNil(t, category)
+	assert.Nil(t, category.ParentPFCPrimary)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
 // TestCustomCategoryService_CreateCategory_RejectsParentWithParent enforces the
 // 2-level limit: a parent cannot itself have a parent (Issue #1203).
 func TestCustomCategoryService_CreateCategory_RejectsParentWithParent(t *testing.T) {

@@ -289,6 +289,54 @@ func TestRuleApplicationService_ApplyRulesToBatch(t *testing.T) {
 	assert.Equal(t, domain.CategorySource(""), txns[1].CategorySourceField)
 }
 
+// TestRuleApplicationService_ApplyRulesToBatch_MarksReviewed verifies that a batch
+// (sync-path) category match marks the transaction reviewed (Issue #1203).
+func TestRuleApplicationService_ApplyRulesToBatch_MarksReviewed(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	service := NewRuleApplicationService(mockRepo)
+	ctx := context.Background()
+	userID := "user-123"
+
+	rules := []*domain.CategorizationRule{{
+		ID: "rule-1", UserID: userID, Name: "Coffee", Enabled: true, Priority: 10,
+		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
+		ConditionLogic: "AND", TargetKind: strPtr("pfc"), TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+		TagBehavior: "add", Source: "manual",
+	}}
+	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
+	mockRepo.On("IncrementMatchCount", ctx, "rule-1").Return(nil)
+
+	merchant := "Blue Bottle Coffee"
+	txns := []domain.Transaction{{ID: "tx-1", UserID: userID, MerchantName: &merchant}}
+
+	require.NoError(t, service.ApplyRulesToBatch(ctx, txns, userID))
+	assert.True(t, txns[0].Reviewed, "batch category match should mark reviewed")
+	require.NotNil(t, txns[0].ReviewedAt)
+}
+
+// TestRuleApplicationService_ApplyRulesToBatch_SkipsReviewed verifies reviewed rows
+// are not recategorized by the batch path (Issue #1203).
+func TestRuleApplicationService_ApplyRulesToBatch_SkipsReviewed(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	service := NewRuleApplicationService(mockRepo)
+	ctx := context.Background()
+	userID := "user-123"
+
+	rules := []*domain.CategorizationRule{{
+		ID: "rule-1", UserID: userID, Name: "Coffee", Enabled: true, Priority: 10,
+		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
+		ConditionLogic: "AND", TargetKind: strPtr("pfc"), TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+		TagBehavior: "add", Source: "manual",
+	}}
+	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
+
+	merchant := "Blue Bottle Coffee"
+	txns := []domain.Transaction{{ID: "tx-1", UserID: userID, MerchantName: &merchant, Reviewed: true}}
+
+	require.NoError(t, service.ApplyRulesToBatch(ctx, txns, userID))
+	assert.Nil(t, txns[0].CategoryOverrideKind, "reviewed transaction must not be recategorized in batch")
+}
+
 // TestRuleApplicationService_NoRules tests graceful handling when user has no rules
 func TestRuleApplicationService_NoRules(t *testing.T) {
 	mockRepo := new(mockRuleApplicationRepository)

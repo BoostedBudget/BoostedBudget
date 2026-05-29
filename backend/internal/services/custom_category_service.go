@@ -64,8 +64,8 @@ func (s *customCategoryService) CreateCategory(ctx context.Context, userID strin
 	category := &domain.CustomCategory{
 		UserID:           userID,
 		Name:             req.Name,
-		ParentPFCPrimary: req.ParentPFCPrimary,
-		ParentID:         normalizeParentID(req.ParentID),
+		ParentPFCPrimary: emptyStringToNil(req.ParentPFCPrimary),
+		ParentID:         emptyStringToNil(req.ParentID),
 		Icon:             req.Icon,
 		Color:            req.Color,
 		UsageCount:       0,
@@ -91,9 +91,10 @@ func (s *customCategoryService) CreateCategory(ctx context.Context, userID strin
 	return category, nil
 }
 
-// normalizeParentID converts an empty-string parent id pointer to nil so callers
-// can clear a parent by sending "" (Issue #1203).
-func normalizeParentID(id *string) *string {
+// emptyStringToNil converts an empty-string pointer to nil so callers can clear a
+// parent (parent_id or parent_pfc_primary) by sending "". This is essential for the
+// mutual-exclusivity CHECK: an empty string is NOT NULL and would violate it (#1203).
+func emptyStringToNil(id *string) *string {
 	if id == nil || *id == "" {
 		return nil
 	}
@@ -163,10 +164,10 @@ func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, cate
 		category.Name = *req.Name
 	}
 	if req.ParentPFCPrimary != nil {
-		category.ParentPFCPrimary = req.ParentPFCPrimary
+		category.ParentPFCPrimary = emptyStringToNil(req.ParentPFCPrimary)
 	}
 	if req.ParentID != nil {
-		category.ParentID = normalizeParentID(req.ParentID)
+		category.ParentID = emptyStringToNil(req.ParentID)
 		// Setting a PFC parent and a custom parent is mutually exclusive; if a
 		// custom parent is being set, clear any stale PFC parent.
 		if category.ParentID != nil {

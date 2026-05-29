@@ -200,8 +200,9 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 	for i := range txns {
 		tx := &txns[i]
 
-		// Skip if transaction already has a manual category override
-		if tx.CategorySourceField == domain.CategorySourceManual {
+		// Skip if the transaction has a manual override or has already been reviewed
+		// (reviewed rows are protected from auto-recategorization, Issue #1203).
+		if tx.CategorySourceField == domain.CategorySourceManual || tx.Reviewed {
 			continue
 		}
 
@@ -237,6 +238,14 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 				tx.CustomCategoryOverrideID = nil
 			}
 			tx.CategorySourceField = domain.CategorySourceRule
+
+			// A rule applying a category counts as an automated review (Issue #1203),
+			// mirroring ApplyRulesToTransaction. Tag-only matches do not mark reviewed.
+			if !tx.Reviewed {
+				tx.Reviewed = true
+				now := time.Now()
+				tx.ReviewedAt = &now
+			}
 
 			if s.analytics != nil && len(result.MatchedRuleIDs) > 0 {
 				s.analytics.Capture(userID, phclient.EventAutoCategorizationExecuted, map[string]interface{}{
