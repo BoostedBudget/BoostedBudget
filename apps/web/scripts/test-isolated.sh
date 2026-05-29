@@ -50,6 +50,8 @@ TEST_FILES=(
     "src/features/pricing/hooks/usePricingContext.test.tsx"
     # usePostSignInCheckoutIntent: mockUseCreatePaddleCheckout state leaks from prior tests (#1038)
     "src/features/pricing/hooks/usePostSignInCheckoutIntent.test.tsx"
+    # CustomCategoryManager: shared useGetUserCategories mock clobbered in full suite (#1203)
+    "src/features/categories/components/CustomCategoryManager.test.tsx"
 )
 
 # Build test command

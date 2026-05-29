@@ -56,6 +56,9 @@ EXCLUDE_PATTERNS=(
     "src/features/pricing/hooks/usePricingContext.test.tsx"
     # usePostSignInCheckoutIntent: mockUseCreatePaddleCheckout state leaks from prior tests (#1038)
     "src/features/pricing/hooks/usePostSignInCheckoutIntent.test.tsx"
+    # CustomCategoryManager: relies on the shared useGetUserCategories mock state, which
+    # other test files clobber via global mock.module() in the full suite (#1203)
+    "src/features/categories/components/CustomCategoryManager.test.tsx"
 )
 
 echo "Running regular tests (excluding real-implementation tests)..."
