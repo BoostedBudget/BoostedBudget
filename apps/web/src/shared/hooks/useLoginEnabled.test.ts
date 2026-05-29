@@ -1,13 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { renderHook } from '@testing-library/react'
+import { mockUseFeatureFlagEnabled } from '@/test/mocks/posthog'
 
-// Must mock before dynamic import
-const mockUseFeatureFlagEnabled = mock(() => undefined as boolean | undefined)
-
-mock.module('posthog-js/react', () => ({
-  PostHogProvider: ({ children }: { children: unknown }) => children,
-  useFeatureFlagEnabled: mockUseFeatureFlagEnabled,
-}))
+// Note: the VITE_POSTHOG_KEY path in isPostHogConfigured is a build-time constant and
+// cannot be mutated in tests. It is covered by the posthog.ts lib tests. Here we exercise
+// the window.ENV.POSTHOG_KEY path to control configured vs. non-configured states.
 
 const { useLoginEnabled } = await import('./useLoginEnabled')
 
@@ -23,7 +20,7 @@ describe('useLoginEnabled', () => {
   })
 
   it('returns { enabled: true, loading: false } when PostHog is NOT configured', () => {
-    mockUseFeatureFlagEnabled.mockImplementation(() => undefined)
+    mockUseFeatureFlagEnabled.mockReturnValue(undefined)
     ;(window as { ENV?: { POSTHOG_KEY?: string } }).ENV = {}
 
     const { result } = renderHook(() => useLoginEnabled())
@@ -33,7 +30,7 @@ describe('useLoginEnabled', () => {
 
   it('returns { enabled: false, loading: true } when PostHog is configured and flag is undefined (loading)', () => {
     ;(window as { ENV?: { POSTHOG_KEY?: string } }).ENV = { POSTHOG_KEY: 'test-key' }
-    mockUseFeatureFlagEnabled.mockImplementation(() => undefined)
+    mockUseFeatureFlagEnabled.mockReturnValue(undefined)
 
     const { result } = renderHook(() => useLoginEnabled())
 
@@ -42,7 +39,7 @@ describe('useLoginEnabled', () => {
 
   it('returns { enabled: true, loading: false } when PostHog is configured and flag is true', () => {
     ;(window as { ENV?: { POSTHOG_KEY?: string } }).ENV = { POSTHOG_KEY: 'test-key' }
-    mockUseFeatureFlagEnabled.mockImplementation(() => true)
+    mockUseFeatureFlagEnabled.mockReturnValue(true)
 
     const { result } = renderHook(() => useLoginEnabled())
 
@@ -51,7 +48,7 @@ describe('useLoginEnabled', () => {
 
   it('returns { enabled: false, loading: false } when PostHog is configured and flag is false', () => {
     ;(window as { ENV?: { POSTHOG_KEY?: string } }).ENV = { POSTHOG_KEY: 'test-key' }
-    mockUseFeatureFlagEnabled.mockImplementation(() => false)
+    mockUseFeatureFlagEnabled.mockReturnValue(false)
 
     const { result } = renderHook(() => useLoginEnabled())
 

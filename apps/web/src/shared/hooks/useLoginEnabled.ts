@@ -1,8 +1,5 @@
 import { useFeatureFlagEnabled } from 'posthog-js/react'
-
-function isPostHogConfigured(): boolean {
-  return !!((window as { ENV?: { POSTHOG_KEY?: string } }).ENV?.POSTHOG_KEY || import.meta.env.VITE_POSTHOG_KEY)
-}
+import { isPostHogConfigured } from '../lib/posthog'
 
 export function useLoginEnabled(): { enabled: boolean; loading: boolean } {
   const flagValue = useFeatureFlagEnabled('login_enabled')
