@@ -275,16 +275,13 @@ test.describe('Transaction Sort', () => {
     await sortBtn.click()
     await req2
 
-    // 3rd click → sort cleared; snaps back to default date:desc
-    const req3 = page.waitForRequest(
-      (req) => req.url().includes('/api/v1/transactions') && req.url().includes('sort_by=date') && req.url().includes('sort_dir=desc') && req.method() === 'GET',
-      { timeout: 5_000 },
-    )
+    // 3rd click → sort cleared; reverts to default (date:desc).
+    // React Query serves the cached default-sort response — no new request fires.
+    // Verify via UI: Amount loses aria-sort, Date column gains aria-sort="descending".
     await sortBtn.click()
-    await req3
-
-    // Amount column should no longer have an active sort indicator
-    await expect(amountHeader).not.toHaveAttribute('aria-sort')
+    await expect(amountHeader).not.toHaveAttribute('aria-sort', { timeout: 5_000 })
+    const dateHeader = page.getByRole('columnheader', { name: /^Date$/i })
+    await expect(dateHeader).toHaveAttribute('aria-sort', 'descending', { timeout: 5_000 })
   })
 
   test('transactions table fits viewport without horizontal scroll at default column widths', async ({ page }) => {
