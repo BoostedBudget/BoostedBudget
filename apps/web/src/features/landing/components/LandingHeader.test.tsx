@@ -86,9 +86,21 @@ describe('LandingHeader', () => {
       const menuButton = screen.getByRole('button', { name: /open menu/i })
       fireEvent.click(menuButton)
 
-      // There should now be at least one Coming Soon badge (mobile menu renders its own)
+      // Coming Soon badge is present in mobile menu
       const badges = screen.getAllByText(/coming soon/i)
       expect(badges.length).toBeGreaterThanOrEqual(1)
+    })
+
+    it('does not render Log In or Start Free buttons in mobile menu when login is disabled', () => {
+      renderLandingHeader()
+
+      // Open the mobile menu
+      const menuButton = screen.getByRole('button', { name: /open menu/i })
+      fireEvent.click(menuButton)
+
+      // Auth buttons must be absent — Coming Soon replaces them
+      expect(screen.queryAllByRole('button', { name: /log in/i })).toHaveLength(0)
+      expect(screen.queryAllByRole('button', { name: /start free/i })).toHaveLength(0)
     })
   })
 })
