@@ -29,3 +29,11 @@ mock.module('../../shared/lib/posthog', () => ({
   initPostHog: mock(() => {}),
   posthog: mockPosthogInstance,
 }))
+
+export const mockUseFeatureFlagEnabled = mock(() => undefined as boolean | undefined)
+
+// Mock posthog-js/react for feature flag hooks
+mock.module('posthog-js/react', () => ({
+  PostHogProvider: ({ children }: { children: React.ReactNode }) => children,
+  useFeatureFlagEnabled: mockUseFeatureFlagEnabled,
+}))
