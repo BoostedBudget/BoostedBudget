@@ -1,4 +1,5 @@
 // A single row in the custom category manager (Issue #1203).
+import type { KeyboardEvent } from 'react'
 import { cva } from 'class-variance-authority'
 import { Pencil, Trash2 } from 'lucide-react'
 import { CategoryIcon } from '@/shared/components/IconPicker'
@@ -19,6 +20,9 @@ interface CustomCategoryListItemProps {
   variant?: 'primary' | 'child'
   onEdit: (category: CustomCategory) => void
   onDelete: (category: CustomCategory) => void
+  /** Roving keyboard navigation (Issue #1203). */
+  onKeyDown?: (e: KeyboardEvent, category: CustomCategory) => void
+  itemRef?: (el: HTMLDivElement | null) => void
 }
 
 export function CustomCategoryListItem({
@@ -26,9 +30,26 @@ export function CustomCategoryListItem({
   variant = 'primary',
   onEdit,
   onDelete,
+  onKeyDown,
+  itemRef,
 }: CustomCategoryListItemProps) {
   return (
-    <div className={itemVariants({ variant })} role="listitem">
+    <div
+      className={itemVariants({ variant })}
+      role="listitem"
+      tabIndex={0}
+      ref={itemRef}
+      onKeyDown={
+        onKeyDown
+          ? (e) => {
+              // Only handle keys on the row itself — ignore events bubbling up from the
+              // nested edit/delete buttons so Enter/Delete there don't also fire row actions.
+              if (e.target !== e.currentTarget) return
+              onKeyDown(e, category)
+            }
+          : undefined
+      }
+    >
       <span
         className="inline-flex h-7 w-7 items-center justify-center rounded-full"
         style={{ backgroundColor: category.color ?? '#6B7280', color: '#fff' }}

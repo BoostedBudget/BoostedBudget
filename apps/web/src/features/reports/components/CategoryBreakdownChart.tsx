@@ -3,11 +3,12 @@ import type { EChartsOption } from 'echarts'
 import {
   EChartsChart,
   useDarkMode,
-  CATEGORY_COLORS,
   formatCurrencyFull,
   escapeHtml,
 } from '@/shared/charts'
 import type { SpendingByCategoryResponse } from '@boostedbudget/api-client/models'
+import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
+import { buildBreakdownSlices } from './buildBreakdownSlices'
 
 interface CategoryBreakdownChartProps {
   data: SpendingByCategoryResponse | null
@@ -24,6 +25,16 @@ export function CategoryBreakdownChart({
 }: CategoryBreakdownChartProps) {
   const isDark = useDarkMode()
   const categories = data?.categories ?? []
+
+  const userCategoriesData = useGetUserCategories()?.data
+  const customById = useMemo(() => {
+    const map = new Map<string, { name?: string | null; color?: string | null }>()
+    // Defensive guard: data may be a non-array value under a mocked/errored query.
+    if (Array.isArray(userCategoriesData)) {
+      for (const { id, name, color } of userCategoriesData) map.set(id, { name, color })
+    }
+    return map
+  }, [userCategoriesData])
 
   const option = useMemo((): EChartsOption => {
     if (categories.length === 0) return {};
@@ -47,15 +58,11 @@ export function CategoryBreakdownChart({
         radius: ['40%', '70%'],
         avoidLabelOverlap: false,
         label: { show: true, position: 'inside', formatter: '{d}%' },
-        data: categories.map((c, i) => ({
-          name: c.pfc_primary_display,
-          value: c.total,
-          itemStyle: { color: CATEGORY_COLORS[i % CATEGORY_COLORS.length] },
-        })),
+        data: buildBreakdownSlices(categories, customById),
       }],
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data]);
+  }, [data, customById]);
 
   if (loading) {
     return (

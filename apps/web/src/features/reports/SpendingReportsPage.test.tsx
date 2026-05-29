@@ -3,9 +3,11 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import React from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { mockUseGetSpendingByCategory, mockUseGetSpendingByMerchant } from '@/test/mocks/analytics-api'
+import { mockUseGetUserCategories } from '@/test/mocks/categories-api'
 import { mockNavigate } from '@/test/mocks/react-router'
 import type { SpendingByCategoryResponse } from '@boostedbudget/api-client/models'
 import type { SpendingByMerchantResponse } from '@boostedbudget/api-client/models'
+import type { CustomCategory } from '@boostedbudget/api-client/models'
 
 import '@/test/mocks/shared-charts'
 import '@/test/mocks/react-router'
@@ -193,5 +195,51 @@ describe('SpendingReportsPage merchant click navigation', () => {
 
     // No navigation should happen when merchant_id is absent
     expect(mockNavigate).not.toHaveBeenCalled()
+  })
+})
+
+describe('SpendingReportsPage custom category filter', () => {
+  const customCats = [
+    { id: 'cc-1', user_id: 'u1', name: 'Travel', usage_count: 0, created_at: '', updated_at: '' },
+    { id: 'cc-2', user_id: 'u1', name: 'Pets', usage_count: 0, created_at: '', updated_at: '' },
+  ] as CustomCategory[]
+
+  beforeEach(() => {
+    mockUseGetUserCategories.mockReturnValue({
+      data: customCats,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    })
+    mockUseGetSpendingByCategory.mockReturnValue({
+      data: null,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve({}),
+    })
+    // The merchant block's afterEach resets this mock to return undefined; restore a safe
+    // value so the full page renders (it always calls the merchant hook).
+    mockUseGetSpendingByMerchant.mockReturnValue({
+      data: null,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve({}),
+    })
+  })
+
+  afterEach(() => {
+    mockUseGetUserCategories.mockClear()
+    mockUseGetSpendingByCategory.mockReset()
+    mockUseGetSpendingByMerchant.mockReset()
+  })
+
+  it('passes custom_category_ids to the spending query when a custom category is selected', () => {
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: /Travel/i }))
+
+    const calls = mockUseGetSpendingByCategory.mock.calls as unknown as Array<[{ custom_category_ids?: string } | undefined]>
+    const lastParams = calls[calls.length - 1]?.[0]
+    expect(lastParams?.custom_category_ids).toBe('cc-1')
   })
 })

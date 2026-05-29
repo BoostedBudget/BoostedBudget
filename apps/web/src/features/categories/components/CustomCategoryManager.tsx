@@ -1,6 +1,7 @@
 // Custom Category Manager — full CRUD over custom categories (Issue #1203).
 // Rendered inline in the Settings "Categories" tab and (via a Dialog) from budgets.
-import { useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
+import type { KeyboardEvent } from 'react'
 import { Plus } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { getPrimaryLabel } from '@/shared/categories/pfcOptions'
@@ -44,6 +45,51 @@ export function CustomCategoryManager() {
     setDeleting(null)
   }
 
+  // Flattened visible order (parents → their children → PFC-nested), matching the DOM,
+  // so arrow keys move focus row-to-row with a roving tabindex (Issue #1203).
+  const flatOrder = useMemo<CustomCategory[]>(() => {
+    const out: CustomCategory[] = []
+    for (const group of hierarchy.topLevel) {
+      out.push(group.parent)
+      out.push(...group.children)
+    }
+    for (const group of hierarchy.pfcGroups) {
+      out.push(...group.categories)
+    }
+    return out
+  }, [hierarchy])
+
+  const rowRefs = useRef<(HTMLDivElement | null)[]>([])
+
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent, category: CustomCategory) => {
+      const index = flatOrder.findIndex((c) => c.id === category.id)
+      if (index === -1) return
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault()
+          if (index < flatOrder.length - 1) rowRefs.current[index + 1]?.focus()
+          break
+        case 'ArrowUp':
+          e.preventDefault()
+          if (index > 0) rowRefs.current[index - 1]?.focus()
+          break
+        case 'Enter':
+        case ' ':
+          e.preventDefault()
+          openEdit(category)
+          break
+        case 'Delete':
+          e.preventDefault()
+          setDeleting(category)
+          break
+      }
+    },
+    [flatOrder]
+  )
+
+  const rowIndex = (id: string) => flatOrder.findIndex((c) => c.id === id)
+
   const isEmpty = !isLoading && categories.length === 0
 
   return (
@@ -72,7 +118,15 @@ export function CustomCategoryManager() {
         <div className="space-y-1" role="list" aria-label="Top-level custom categories">
           {hierarchy.topLevel.map((group) => (
             <div key={group.parent.id} className="space-y-1">
-              <CustomCategoryListItem category={group.parent} onEdit={openEdit} onDelete={setDeleting} />
+              <CustomCategoryListItem
+                category={group.parent}
+                onEdit={openEdit}
+                onDelete={setDeleting}
+                onKeyDown={handleKeyDown}
+                itemRef={(el) => {
+                  rowRefs.current[rowIndex(group.parent.id)] = el
+                }}
+              />
               {group.children.map((child) => (
                 <CustomCategoryListItem
                   key={child.id}
@@ -80,6 +134,10 @@ export function CustomCategoryManager() {
                   variant="child"
                   onEdit={openEdit}
                   onDelete={setDeleting}
+                  onKeyDown={handleKeyDown}
+                  itemRef={(el) => {
+                    rowRefs.current[rowIndex(child.id)] = el
+                  }}
                 />
               ))}
             </div>
@@ -95,7 +153,16 @@ export function CustomCategoryManager() {
           </h3>
           <div role="list" aria-label={`Custom categories under ${group.pfcPrimary}`} className="space-y-1">
             {group.categories.map((c) => (
-              <CustomCategoryListItem key={c.id} category={c} onEdit={openEdit} onDelete={setDeleting} />
+              <CustomCategoryListItem
+                key={c.id}
+                category={c}
+                onEdit={openEdit}
+                onDelete={setDeleting}
+                onKeyDown={handleKeyDown}
+                itemRef={(el) => {
+                  rowRefs.current[rowIndex(c.id)] = el
+                }}
+              />
             ))}
           </div>
         </div>

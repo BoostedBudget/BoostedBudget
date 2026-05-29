@@ -957,3 +957,34 @@ func TestListByBudgetCategory_PopulatesCustomCategoryDisplay(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 	mockCategoryRepo.AssertExpectations(t)
 }
+
+// TestTransactionService_SetReviewed_DelegatesToRepo verifies the service forwards the
+// review request to the repository and returns its updated count (Issue #1203).
+func TestTransactionService_SetReviewed_DelegatesToRepo(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+	ctx := context.Background()
+
+	ids := []string{"tx-1", "tx-2"}
+	mockRepo.On("SetReviewed", ctx, "user-1", ids, true).Return(int64(2), nil)
+
+	n, err := service.SetReviewed(ctx, "user-1", ids, true)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestTransactionService_SetReviewed_EmptyIDs verifies the service short-circuits on an
+// empty id slice and never touches the repository (Issue #1203).
+func TestTransactionService_SetReviewed_EmptyIDs(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+	ctx := context.Background()
+
+	n, err := service.SetReviewed(ctx, "user-1", []string{}, true)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+	mockRepo.AssertNotCalled(t, "SetReviewed", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}

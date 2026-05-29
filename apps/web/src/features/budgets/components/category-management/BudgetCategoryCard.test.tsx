@@ -85,6 +85,27 @@ describe('BudgetCategoryCard', () => {
       expect(screen.getByText(MATCH_LOGIC_LABELS.tag_only)).toBeInTheDocument()
     })
 
+    it('shows an "Earmarked" indicator for the child (sub-allocation) variant (#1203)', () => {
+      render(<BudgetCategoryCard category={createMockCategory()} variant="child" />)
+      expect(screen.getByText(/earmarked/i)).toBeInTheDocument()
+    })
+
+    it('includes the parent name in the earmark label when provided (#1203)', () => {
+      render(
+        <BudgetCategoryCard category={createMockCategory()} variant="child" parentLabel="Food" />
+      )
+      expect(screen.getByText(/earmarked from food/i)).toBeInTheDocument()
+    })
+
+    it('does not show an earmark indicator for standalone or parent variants', () => {
+      const { rerender } = render(
+        <BudgetCategoryCard category={createMockCategory()} variant="standalone" />
+      )
+      expect(screen.queryByText(/earmarked/i)).toBeNull()
+      rerender(<BudgetCategoryCard category={createMockCategory()} variant="parent" />)
+      expect(screen.queryByText(/earmarked/i)).toBeNull()
+    })
+
     it('should render tags list when tags are present', () => {
       const category = createMockCategory({ tags: ['groceries', 'essential'] })
       render(<BudgetCategoryCard category={category} />)

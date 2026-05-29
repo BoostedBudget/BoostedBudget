@@ -683,6 +683,9 @@ func (r *budgetRepository) GetCategoriesMatchingTransaction(ctx context.Context,
 			args = []interface{}{userID, effective.PFCPrimary, effective.PFCDetailed}
 		}
 	case domain.EffectiveCategoryKindCustom:
+		// Match the exact custom category AND its custom parent so a child transaction
+		// rolls up into a parent-category budget — mirroring the PFC detailed→primary
+		// rollup above and the full-resync rollup in buildCategoryClause (#1203).
 		query = `
 			SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed,
 				bc.custom_category_id, bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
@@ -690,7 +693,9 @@ func (r *budgetRepository) GetCategoriesMatchingTransaction(ctx context.Context,
 			FROM budget_categories bc
 			JOIN budgets b ON bc.budget_id = b.id
 			WHERE b.user_id = $1 AND b.is_active = true
-			  AND bc.category_kind = 'custom' AND bc.custom_category_id::text = $2
+			  AND bc.category_kind = 'custom'
+			  AND (bc.custom_category_id::text = $2
+			       OR bc.custom_category_id = (SELECT parent_id FROM custom_categories WHERE id = $2::uuid AND user_id = $1))
 		`
 		args = []interface{}{userID, effective.CustomCategoryID}
 	default:

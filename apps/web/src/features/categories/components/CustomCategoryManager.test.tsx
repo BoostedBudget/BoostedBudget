@@ -72,4 +72,32 @@ describe('CustomCategoryManager', () => {
     expect(screen.getByRole('button', { name: /delete food$/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /delete fast food$/i })).toBeTruthy()
   })
+
+  it('supports arrow-key roving navigation between category rows', () => {
+    render(<CustomCategoryManager />, { wrapper: wrapper() })
+    const rows = screen.getAllByRole('listitem')
+    // DOM order: Food (parent), Fast Food (child), Meal Prep (PFC group)
+    rows[0].focus()
+    expect(document.activeElement).toBe(rows[0])
+    fireEvent.keyDown(rows[0], { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(rows[1])
+    fireEvent.keyDown(rows[1], { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(rows[0])
+  })
+
+  it('opens the edit form when Enter is pressed on a focused row', async () => {
+    render(<CustomCategoryManager />, { wrapper: wrapper() })
+    const rows = screen.getAllByRole('listitem')
+    rows[0].focus()
+    fireEvent.keyDown(rows[0], { key: 'Enter' })
+    await waitFor(() => expect(screen.getByText('Edit category')).toBeTruthy())
+  })
+
+  it('opens the delete dialog when Delete is pressed on a focused row', async () => {
+    render(<CustomCategoryManager />, { wrapper: wrapper() })
+    const rows = screen.getAllByRole('listitem')
+    rows[0].focus()
+    fireEvent.keyDown(rows[0], { key: 'Delete' })
+    await waitFor(() => expect(screen.getByRole('alertdialog')).toBeTruthy())
+  })
 })
