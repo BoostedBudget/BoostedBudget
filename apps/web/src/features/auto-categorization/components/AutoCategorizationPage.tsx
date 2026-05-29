@@ -128,9 +128,6 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
     setView(newView)
   }, [])
 
-  const handleSort = useCallback((column: RuleSortColumn, direction: SortDirection) => {
-    setSort({ columnId: column, direction })
-  }, [setSort])
 
   const statusOptions = useMemo<FilterOption[]>(() => [
     { value: 'enabled', label: 'Enabled' },
@@ -348,10 +345,8 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
             onEdit={handleEditClick}
             onDelete={(rule) => setTableDeleteTarget(rule)}
             loading={loading}
-            sortable
-            sortColumn={sortColumn}
-            sortDirection={sortDirection}
-            onSort={handleSort}
+            sort={sort}
+            onSortChange={setSort}
             statusOptions={statusOptions}
             statusFilter={statusFilter}
             onStatusFilterChange={setStatusFilter}

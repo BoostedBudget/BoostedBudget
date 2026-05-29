@@ -5,7 +5,6 @@ import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import type { AccountBreakdownRow } from '../types'
-import type { SortColumn, SortDirection } from '../hooks/useNetWorthBreakdownFilters'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const NET_WORTH_BREAKDOWN_COLUMN_IDS = ['institution', 'name', 'type', 'balance', 'percent'] as const
@@ -26,9 +25,8 @@ interface AccountBreakdownTableProps {
   liabilitiesTotal: number
   loading: boolean
   error: Error | null
-  sortColumn: SortColumn | null
-  sortDirection: SortDirection
-  onSort: (column: SortColumn) => void
+  sort?: SortState
+  onSortChange?: (sort: SortState) => void
   institutionOptions?: FilterOption[]
   typeOptions?: FilterOption[]
   institutionFilter?: string[]
@@ -51,9 +49,8 @@ function formatCurrency(value: number, currencyCode = 'USD'): string {
 interface AccountSectionProps extends Pick<
   AccountBreakdownTableProps,
   | 'loading'
-  | 'sortColumn'
-  | 'sortDirection'
-  | 'onSort'
+  | 'sort'
+  | 'onSortChange'
   | 'institutionOptions'
   | 'typeOptions'
   | 'institutionFilter'
@@ -77,9 +74,8 @@ function AccountSection({
   percentLabel,
   tableId,
   loading,
-  sortColumn,
-  sortDirection,
-  onSort,
+  sort = null,
+  onSortChange,
   institutionOptions,
   typeOptions,
   institutionFilter,
@@ -100,28 +96,11 @@ function AccountSection({
 
   const emptyLabel = title === 'Assets' ? 'asset' : 'liability'
 
-  const sort: SortState = sortColumn
-    ? { columnId: sortColumn, direction: sortDirection }
-    : null
-
   const filters: FilterState = {
     institution: institutionFilter ?? [],
     type: typeFilter ?? [],
     balance: balanceRange ?? null,
   }
-
-  const handleSortChange = useCallback(
-    (newState: SortState) => {
-      if (newState === null) {
-        // DataTable 3-state cycle reached null — fall back to cycling via onSort
-        // (hook toggles desc→asc, preserving 2-state behavior)
-        if (sortColumn) onSort(sortColumn)
-      } else {
-        onSort(newState.columnId as SortColumn)
-      }
-    },
-    [sortColumn, onSort]
-  )
 
   const handleFiltersChange = useCallback(
     (newFilters: FilterState) => {
@@ -151,7 +130,7 @@ function AccountSection({
     {
       id: 'institution',
       header: 'Institution',
-      sortable: true,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultSize: 220,
@@ -170,7 +149,7 @@ function AccountSection({
     {
       id: 'name',
       header: 'Account',
-      sortable: true,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultSize: 240,
@@ -180,7 +159,7 @@ function AccountSection({
     {
       id: 'type',
       header: 'Type',
-      sortable: true,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       hideable: true,
@@ -198,7 +177,7 @@ function AccountSection({
     {
       id: 'balance',
       header: 'Balance',
-      sortable: true,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       align: 'right',
@@ -212,7 +191,7 @@ function AccountSection({
     {
       id: 'percent',
       header: percentLabel,
-      sortable: true,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       align: 'right',
@@ -237,7 +216,7 @@ function AccountSection({
       columns={columns}
       rowKey={(row) => row.id}
       sort={sort}
-      onSortChange={handleSortChange}
+      onSortChange={onSortChange!}
       filters={filters}
       onFiltersChange={handleFiltersChange}
       loading={loading}
@@ -267,9 +246,8 @@ export function AccountBreakdownTable({
   liabilitiesTotal,
   loading,
   error,
-  sortColumn,
-  sortDirection,
-  onSort,
+  sort = null,
+  onSortChange,
   institutionOptions,
   typeOptions,
   institutionFilter,
@@ -295,9 +273,8 @@ export function AccountBreakdownTable({
 
   const sectionProps = {
     loading,
-    sortColumn,
-    sortDirection,
-    onSort,
+    sort,
+    onSortChange,
     institutionOptions,
     typeOptions,
     institutionFilter,

@@ -8,7 +8,7 @@
 
 import { useCallback } from 'react'
 import type { ReactNode } from 'react'
-import { ChevronUp, ChevronDown } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import {
   ColumnFilterDropdown,
   type FilterOption,
@@ -113,7 +113,7 @@ export function TableHeaderCell({
           type="button"
           onClick={handleSort}
           className={[
-            'inline-flex items-center gap-1 p-0 border-none bg-transparent font-[inherit] font-semibold cursor-pointer transition-colors duration-150',
+            'group inline-flex items-center gap-1 p-0 border-none bg-transparent font-[inherit] font-semibold cursor-pointer transition-colors duration-150',
             isActiveSortColumn
               ? 'text-primary'
               : 'text-muted-foreground hover:text-foreground',
@@ -126,6 +126,9 @@ export function TableHeaderCell({
             )}
             {isActiveSortColumn && currentSortDirection === 'desc' && (
               <ChevronDown aria-hidden="true" />
+            )}
+            {!isActiveSortColumn && (
+              <ChevronsUpDown aria-hidden="true" className="text-muted-foreground/30 group-hover:text-muted-foreground/70 transition-colors" />
             )}
           </span>
         </button>

@@ -136,9 +136,6 @@ export function AccountsPage() {
     setIsModalOpen(true)
   }, [])
 
-  const handleSort = useCallback((column: AccountSortColumn, direction: SortDirection) => {
-    setSort({ columnId: column, direction })
-  }, [setSort])
 
   const institutionOptions = useMemo<FilterOption[]>(() => {
     const accs = accountsData?.accounts ?? []
@@ -374,10 +371,8 @@ export function AccountsPage() {
               loading={loading || tiersLoading}
               onEdit={handleEditAccount}
               onDelete={(account) => setAccountToDelete(account)}
-              sortable
-              sortColumn={sortColumn}
-              sortDirection={sortDirection}
-              onSort={handleSort}
+              sort={sort}
+              onSortChange={setSort}
               institutionOptions={institutionOptions}
               institutionFilter={institutionFilter}
               onInstitutionFilterChange={setInstitutionFilter}

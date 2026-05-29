@@ -29,10 +29,8 @@ export interface BudgetTableProps {
   onDelete?: (budgetId: string) => void
   onRowClick?: (budget: BudgetWithMetrics) => void
   loading?: boolean
-  sortable?: boolean
-  sortColumn?: SortColumn
-  sortDirection?: SortDirection
-  onSort?: (column: SortColumn, direction: SortDirection) => void
+  sort?: SortState
+  onSortChange?: (sort: SortState) => void
   className?: string
   periodOptions?: FilterOption[]
   periodFilter?: string[]
@@ -69,10 +67,8 @@ export function BudgetTable({
   onDelete,
   onRowClick,
   loading = false,
-  sortable = false,
-  sortColumn,
-  sortDirection = 'asc',
-  onSort,
+  sort = null,
+  onSortChange,
   className = '',
   periodOptions,
   periodFilter,
@@ -85,22 +81,6 @@ export function BudgetTable({
 
   const { sizing, onSizingChange, columnOrder, onColumnOrderChange, columnVisibility, onColumnVisibilityChange } =
     useTablePreferences('budgets', [...BUDGET_COLUMN_IDS])
-
-  // Bridge DataTable 3-state sort → BudgetTable (column, direction) callback
-  const handleSortChange = useCallback(
-    (newSort: SortState) => {
-      if (!onSort || !sortable) return
-      if (newSort) {
-        onSort(newSort.columnId as SortColumn, newSort.direction)
-      } else if (sortColumn) {
-        onSort(sortColumn, sortDirection === 'asc' ? 'desc' : 'asc')
-      }
-    },
-    [onSort, sortable, sortColumn, sortDirection]
-  )
-
-  const sort: SortState =
-    sortColumn && sortable ? { columnId: sortColumn, direction: sortDirection } : null
 
   const filters: FilterState = {
     period: periodFilter ?? [],
@@ -123,7 +103,7 @@ export function BudgetTable({
     {
       id: 'name',
       header: 'Name',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultSize: 240,
@@ -142,7 +122,7 @@ export function BudgetTable({
     {
       id: 'period',
       header: 'Period',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultSize: 120,
@@ -157,7 +137,7 @@ export function BudgetTable({
     {
       id: 'amount',
       header: 'Amount',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       align: 'right',
@@ -190,7 +170,7 @@ export function BudgetTable({
     {
       id: 'progress',
       header: 'Progress',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       defaultPinned: 'left' as const,
@@ -233,7 +213,7 @@ export function BudgetTable({
     {
       id: 'remaining',
       header: 'Remaining',
-      sortable,
+      sortable: !!onSortChange,
       resizable: true,
       reorderable: true,
       align: 'right',
@@ -286,7 +266,7 @@ export function BudgetTable({
       columns={columns}
       rowKey={(row) => row.id}
       sort={sort}
-      onSortChange={handleSortChange}
+      onSortChange={onSortChange!}
       filters={filters}
       onFiltersChange={handleFiltersChange}
       loading={loading}

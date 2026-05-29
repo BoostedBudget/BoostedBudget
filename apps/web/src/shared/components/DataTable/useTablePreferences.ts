@@ -18,7 +18,7 @@ import type { ColumnSizingState } from '@/shared/lib/tanstack'
  * it as the old shape — `version` maps to `schemaVersion`, and `sizingVersion` is missing
  * (triggers a one-time sizing reset only; preserves order and visibility).
  */
-const SIZING_VERSION = 'v2-fixed-layout'
+const SIZING_VERSION = 'v3-compact'
 
 interface TablePrefs {
   schemaVersion: string
