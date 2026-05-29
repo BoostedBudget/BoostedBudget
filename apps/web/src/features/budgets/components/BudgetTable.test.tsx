@@ -309,36 +309,46 @@ describe('BudgetTable', () => {
   })
 
   describe('Sorting', () => {
-    it('should make headers clickable and handle sort callbacks', () => {
-      const onSort = mock(() => {})
-      render(<BudgetTable budgets={mockBudgets} sortable onSort={onSort} />)
+    it('makes name header clickable and calls onSortChange with asc on first click', () => {
+      const onSortChange = mock(() => {})
+      render(<BudgetTable budgets={mockBudgets} onSortChange={onSortChange} />)
 
       const nameHeader = screen.getByText('Name').closest('button')!
       expect(nameHeader).toBeInTheDocument()
 
       fireEvent.click(nameHeader)
-      expect(onSort).toHaveBeenCalledWith('name', 'asc')
+      expect(onSortChange).toHaveBeenCalledWith({ columnId: 'name', direction: 'asc' })
     })
 
-    it('should toggle sort direction and show aria-sort indicator', () => {
-      const onSort = mock(() => {})
+    it('calls onSortChange with desc and shows aria-sort when sorted asc', () => {
+      const onSortChange = mock(() => {})
       render(
         <BudgetTable
           budgets={mockBudgets}
-          sortable
-          onSort={onSort}
-          sortColumn="name"
-          sortDirection="asc"
+          onSortChange={onSortChange}
+          sort={{ columnId: 'name', direction: 'asc' }}
         />
       )
 
-      // aria-sort lives on <th>, not the sort button
       const nameTh = screen.getByRole('columnheader', { name: /name/i })
       expect(nameTh).toHaveAttribute('aria-sort', 'ascending')
 
-      const nameButton = screen.getByText('Name').closest('button')!
-      fireEvent.click(nameButton)
-      expect(onSort).toHaveBeenCalledWith('name', 'desc')
+      fireEvent.click(screen.getByText('Name').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith({ columnId: 'name', direction: 'desc' })
+    })
+
+    it('calls onSortChange(null) on third click — clears sort', () => {
+      const onSortChange = mock(() => {})
+      render(
+        <BudgetTable
+          budgets={mockBudgets}
+          onSortChange={onSortChange}
+          sort={{ columnId: 'name', direction: 'desc' }}
+        />
+      )
+
+      fireEvent.click(screen.getByText('Name').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith(null)
     })
   })
 

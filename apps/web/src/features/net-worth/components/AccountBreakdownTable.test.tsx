@@ -2,7 +2,7 @@ import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { AccountBreakdownTable } from './AccountBreakdownTable'
 import type { AccountBreakdownRow } from '../types'
-import type { SortColumn, SortDirection } from '../hooks/useNetWorthBreakdownFilters'
+import type { SortState } from '@/shared/components/DataTable'
 
 const asset: AccountBreakdownRow = {
   id: 'acc-1',
@@ -38,9 +38,8 @@ const liability: AccountBreakdownRow = {
 }
 
 const defaultSortState = {
-  sortColumn: null as SortColumn | null,
-  sortDirection: 'asc' as SortDirection,
-  onSort: mock(() => {}),
+  sort: null as SortState,
+  onSortChange: mock(() => {}),
 }
 
 describe('AccountBreakdownTable', () => {
@@ -218,8 +217,8 @@ describe('AccountBreakdownTable', () => {
     expect(buttons.length).toBeGreaterThanOrEqual(4) // at least Institution, Account, Balance, %
   })
 
-  it('calls onSort when a sortable header is clicked', () => {
-    const onSort = mock(() => {})
+  it('calls onSortChange with asc when a sortable header is clicked (no active sort)', () => {
+    const onSortChange = mock(() => {})
     render(
       <AccountBreakdownTable
         assets={[asset]}
@@ -228,17 +227,36 @@ describe('AccountBreakdownTable', () => {
         liabilitiesTotal={0}
         loading={false}
         error={null}
-        sortColumn={null}
-        sortDirection="asc"
-        onSort={onSort}
+        sort={null}
+        onSortChange={onSortChange}
       />
     )
-    // Click the Institution sort button (not the drag handle)
     const institutionBtn = screen.getAllByRole('button').find(
       (b) => b.textContent?.includes('Institution')
     )
     if (institutionBtn) fireEvent.click(institutionBtn)
-    expect(onSort).toHaveBeenCalled()
+    expect(onSortChange).toHaveBeenCalledWith({ columnId: 'institution', direction: 'asc' })
+  })
+
+  it('calls onSortChange(null) on third click — clears sort', () => {
+    const onSortChange = mock(() => {})
+    render(
+      <AccountBreakdownTable
+        assets={[asset]}
+        liabilities={[]}
+        assetsTotal={5000}
+        liabilitiesTotal={0}
+        loading={false}
+        error={null}
+        sort={{ columnId: 'balance', direction: 'desc' }}
+        onSortChange={onSortChange}
+      />
+    )
+    const balanceBtn = screen.getAllByRole('button').find(
+      (b) => b.textContent?.includes('Balance')
+    )
+    if (balanceBtn) fireEvent.click(balanceBtn)
+    expect(onSortChange).toHaveBeenCalledWith(null)
   })
 
   it('applies data-ph-mask to balance cells but NOT percent cells', () => {
@@ -352,9 +370,8 @@ describe('AccountBreakdownTable', () => {
         liabilitiesTotal={0}
         loading={false}
         error={null}
-        sortColumn="balance"
-        sortDirection="asc"
-        onSort={mock(() => {})}
+        sort={{ columnId: 'balance', direction: 'asc' }}
+        onSortChange={mock(() => {})}
       />
     )
     const sortedTh = container.querySelector('th[aria-sort="ascending"]')

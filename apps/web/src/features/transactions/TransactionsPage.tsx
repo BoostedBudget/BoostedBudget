@@ -198,12 +198,6 @@ export function TransactionsPage() {
 
   const pendingCount = infiniteTransactions.filter((t) => t.pending).length
 
-  const handleSort = useCallback(
-    (column: TransactionSortColumn, direction: SortDirection) => {
-      setSort({ columnId: column, direction })
-    },
-    [setSort],
-  )
 
   if (isError && !infiniteTransactions.length) {
     return (
@@ -299,10 +293,8 @@ export function TransactionsPage() {
               onEdit={handleEditTransaction}
               onCategorize={handleCategorizeTransaction}
               loading={isLoading}
-              sortable
-              sortColumn={sortColumn}
-              sortDirection={sortDirection}
-              onSort={handleSort}
+              sort={sort}
+              onSortChange={setSort}
               accountOptions={accountOptions}
               accountFilter={filters.account_ids}
               onAccountFilterChange={handleAccountFilterChange}

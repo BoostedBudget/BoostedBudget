@@ -244,3 +244,7 @@ export function getPrimaryLabel(primary: string): string | null {
   }
   return null
 }
+
+export function getPfcDetailedFilterOptions(): { value: string; label: string }[] {
+  return PFC_HIERARCHY.flatMap(p => p.detailed.map(d => ({ value: d.value, label: d.label })))
+}
