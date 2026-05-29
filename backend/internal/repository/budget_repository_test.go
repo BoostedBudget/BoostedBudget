@@ -161,6 +161,7 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 	categoryColumns := []string{
 		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed", "custom_category_id",
 		"allocated_amount", "spent_amount", "created_at", "updated_at", "tags", "match_logic",
+		"parent_id", "parent_pfc_primary",
 	}
 
 	pfcPrimary := "FOOD_AND_DRINK"
@@ -179,6 +180,8 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 			now,
 			`[]`,            // tags
 			"category_only", // match_logic
+			nil,             // parent_id (custom join)
+			nil,             // parent_pfc_primary (custom join)
 		))
 
 	budget, err := repo.GetByID(ctx, budgetID)
@@ -495,9 +498,11 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
 		"custom_category_id", "allocated_amount", "spent_amount",
 		"created_at", "updated_at", "tags", "match_logic",
+		"parent_id", "parent_pfc_primary",
 	}
 
 	pfcPrimary := "FOOD_AND_DRINK"
+	pfcDetailed := "FOOD_AND_DRINK_COFFEE"
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(budgetID).
 		WillReturnRows(pgxmock.NewRows(columns).
@@ -514,13 +519,15 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 				now,
 				`[]`,
 				"category_only",
+				nil, // parent_id
+				nil, // parent_pfc_primary
 			).
 			AddRow(
 				uuid.New().String(),
 				budgetID,
 				"pfc",
 				&pfcPrimary,
-				nil,
+				&pfcDetailed,
 				nil,
 				50.00,
 				25.00,
@@ -528,6 +535,8 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 				now,
 				`[]`,
 				"category_only",
+				nil, // parent_id
+				nil, // parent_pfc_primary
 			))
 
 	categories, err := repo.GetCategoriesByBudgetID(ctx, budgetID)

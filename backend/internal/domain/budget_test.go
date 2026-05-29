@@ -307,6 +307,64 @@ func TestBudget_TotalSpent(t *testing.T) {
 	}
 }
 
+// TestBudget_Totals_NoDoubleCountSubAllocations verifies that a parent's totals are
+// not double-counted with their sub-allocations (Issue #1203).
+func TestBudget_Totals_NoDoubleCountSubAllocations(t *testing.T) {
+	food := "FOOD_AND_DRINK"
+	fastFood := "FOOD_AND_DRINK_FAST_FOOD"
+	customParentID := "11111111-1111-1111-1111-111111111111"
+	customChildID := "22222222-2222-2222-2222-222222222222"
+
+	t.Run("PFC primary + detailed: detailed is within the primary", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300, SpentAmount: 150},                       // parent
+			{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, AllocatedAmount: 50, SpentAmount: 20}, // child
+		}}
+		// Only the parent counts (the $50/$20 is within the $300/$150).
+		if got := b.TotalAllocated(); got != 300 {
+			t.Errorf("TotalAllocated() = %v, want 300", got)
+		}
+		if got := b.TotalSpent(); got != 150 {
+			t.Errorf("TotalSpent() = %v, want 150", got)
+		}
+	})
+
+	t.Run("PFC detailed without its primary budgeted counts standalone", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, AllocatedAmount: 50, SpentAmount: 20},
+		}}
+		if got := b.TotalAllocated(); got != 50 {
+			t.Errorf("TotalAllocated() = %v, want 50", got)
+		}
+	})
+
+	t.Run("custom child nested under budgeted custom parent", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "custom", CustomCategoryID: &customParentID, AllocatedAmount: 300, SpentAmount: 150},
+			{CategoryKind: "custom", CustomCategoryID: &customChildID, CustomParentID: &customParentID, AllocatedAmount: 50, SpentAmount: 20},
+		}}
+		if got := b.TotalAllocated(); got != 300 {
+			t.Errorf("TotalAllocated() = %v, want 300", got)
+		}
+		if got := b.TotalSpent(); got != 150 {
+			t.Errorf("TotalSpent() = %v, want 150", got)
+		}
+	})
+
+	t.Run("custom child nested under budgeted PFC primary", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300, SpentAmount: 150},
+			{CategoryKind: "custom", CustomCategoryID: &customChildID, CustomParentPFCPrimary: &food, AllocatedAmount: 50, SpentAmount: 20},
+		}}
+		if got := b.TotalAllocated(); got != 300 {
+			t.Errorf("TotalAllocated() = %v, want 300", got)
+		}
+		if got := b.TotalSpent(); got != 150 {
+			t.Errorf("TotalSpent() = %v, want 150", got)
+		}
+	})
+}
+
 // TestBudget_TotalAllocated tests the TotalAllocated calculation
 func TestBudget_TotalAllocated(t *testing.T) {
 	tests := []struct {

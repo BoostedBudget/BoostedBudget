@@ -744,6 +744,10 @@ components:
           type: string
         custom_category_id:
           type: string
+        custom_parent_id:
+          type: string
+        custom_parent_pfc_primary:
+          type: string
         id:
           type: string
         match_logic:
