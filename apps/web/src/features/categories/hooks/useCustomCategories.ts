@@ -14,6 +14,7 @@ export interface UseCustomCategoriesResult {
 
 export function useCustomCategories(): UseCustomCategoriesResult {
   const { data, isLoading, error, refetch } = useGetUserCategories()
+  // Memoize so the array identity is stable for the hierarchy useMemo below.
   const categories = useMemo(() => (data ?? []) as CustomCategory[], [data])
   const hierarchy = useMemo(() => buildCategoryHierarchy(categories), [categories])
 

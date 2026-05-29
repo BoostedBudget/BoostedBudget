@@ -74,7 +74,7 @@ export const CATEGORY_ICONS: Record<string, LucideIcon> = {
 /** Fallback icon key used when a category has no icon or an unknown key. */
 export const DEFAULT_ICON_KEY = 'tag'
 
-/** Ordered list of selectable icon keys (excludes the fallback-only "tag"? no — tag is selectable too). */
+/** Ordered list of selectable icon keys. */
 export const CATEGORY_ICON_KEYS: string[] = Object.keys(CATEGORY_ICONS)
 
 /** Resolve a string key to a lucide component, falling back to Tag. */

@@ -64,8 +64,11 @@ export interface HierarchicalCategoryTreeSelectProps {
 function orderCustomCategories(
   cats: CustomCategoryOption[]
 ): { cat: CustomCategoryOption; depth: number }[] {
+  const byName = (a: CustomCategoryOption, b: CustomCategoryOption) => a.name.localeCompare(b.name)
   const childrenByParent = new Map<string, CustomCategoryOption[]>()
   const topLevel: CustomCategoryOption[] = []
+  const placed = new Set<string>()
+
   for (const c of cats) {
     if (c.parent_id) {
       const arr = childrenByParent.get(c.parent_id) ?? []
@@ -73,21 +76,26 @@ function orderCustomCategories(
       childrenByParent.set(c.parent_id, arr)
     } else {
       topLevel.push(c)
+      placed.add(c.id)
     }
   }
-  const byName = (a: CustomCategoryOption, b: CustomCategoryOption) => a.name.localeCompare(b.name)
+
   const out: { cat: CustomCategoryOption; depth: number }[] = []
   for (const parent of topLevel.slice().sort(byName)) {
     out.push({ cat: parent, depth: 0 })
     for (const child of (childrenByParent.get(parent.id) ?? []).slice().sort(byName)) {
       out.push({ cat: child, depth: 1 })
+      placed.add(child.id)
     }
   }
+
   // Any children whose parent isn't in the list (e.g. PFC-nested) appear at depth 0.
-  const placed = new Set(out.map((o) => o.cat.id))
-  for (const c of cats.slice().sort(byName)) {
-    if (!placed.has(c.id)) out.push({ cat: c, depth: 0 })
+  for (const c of cats) {
+    if (!placed.has(c.id)) {
+      out.push({ cat: c, depth: 0 })
+    }
   }
+
   return out
 }
 
