@@ -115,6 +115,32 @@ test.describe('Transaction hierarchical category filter', () => {
     await expect(page.getByText('Coffee', { exact: true })).toBeVisible({ timeout: 5000 })
   })
 
+  test('sub-category column filter writes pfc_detaileds to URL via column dropdown', async ({ page }) => {
+    await mockTransactionAPIs(page)
+    await page.goto('/transactions')
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByText('Starbucks Coffee')).toBeVisible({ timeout: 10000 })
+
+    // The Sub-category column header has a filter icon button (added in #1204)
+    const subCatFilterBtn = page.getByRole('button', { name: /filter by sub-category/i })
+    await expect(subCatFilterBtn).toBeVisible({ timeout: 5000 })
+    await subCatFilterBtn.click()
+
+    // Dropdown shows a searchable flat list of PFC detailed options
+    await expect(page.getByPlaceholder(/search/i)).toBeVisible({ timeout: 3000 })
+
+    // Select "Coffee" from the dropdown
+    const coffeeCheckbox = page.getByRole('checkbox', { name: /^Coffee$/i })
+    await expect(coffeeCheckbox).toBeVisible({ timeout: 3000 })
+    await coffeeCheckbox.click()
+
+    // URL should now contain pfc_detaileds=FOOD_AND_DRINK_COFFEE
+    await expect(page).toHaveURL(/pfc_detaileds=FOOD_AND_DRINK_COFFEE/, { timeout: 5000 })
+
+    // Sub-category filter button shows active styling
+    await expect(subCatFilterBtn).toHaveClass(/column-filter__trigger--active/, { timeout: 3000 })
+  })
+
   test('hierarchical category filter applies pfc_detaileds to transaction list', async ({ page }) => {
     await mockTransactionAPIs(page)
     await page.goto('/transactions')

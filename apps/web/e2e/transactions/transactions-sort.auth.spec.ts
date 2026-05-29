@@ -248,4 +248,58 @@ test.describe('Transaction Sort', () => {
     expect(sortUrl).toBeTruthy()
     expect(new URL(sortUrl!).searchParams.has('cursor')).toBe(false)
   })
+
+  test('third click on a sorted column clears sort and resets to default date:desc', async ({ page }) => {
+    await setupTransactionsMock(page)
+    await page.goto('/transactions')
+    await acceptCookieConsent(page)
+
+    await expect(page.getByRole('table')).toBeVisible({ timeout: 10_000 })
+
+    const amountHeader = page.getByRole('columnheader', { name: /amount/i })
+    const sortBtn = amountHeader.getByRole('button', { name: /^Amount$/i })
+
+    // 1st click → sort_by=amount, sort_dir=asc
+    const req1 = page.waitForRequest(
+      (req) => req.url().includes('/api/v1/transactions') && req.url().includes('sort_by=amount') && req.url().includes('sort_dir=asc') && req.method() === 'GET',
+      { timeout: 5_000 },
+    )
+    await sortBtn.click()
+    await req1
+
+    // 2nd click → sort_by=amount, sort_dir=desc
+    const req2 = page.waitForRequest(
+      (req) => req.url().includes('/api/v1/transactions') && req.url().includes('sort_by=amount') && req.url().includes('sort_dir=desc') && req.method() === 'GET',
+      { timeout: 5_000 },
+    )
+    await sortBtn.click()
+    await req2
+
+    // 3rd click → sort cleared; snaps back to default date:desc
+    const req3 = page.waitForRequest(
+      (req) => req.url().includes('/api/v1/transactions') && req.url().includes('sort_by=date') && req.url().includes('sort_dir=desc') && req.method() === 'GET',
+      { timeout: 5_000 },
+    )
+    await sortBtn.click()
+    await req3
+
+    // Amount column should no longer have an active sort indicator
+    await expect(amountHeader).not.toHaveAttribute('aria-sort')
+  })
+
+  test('transactions table fits viewport without horizontal scroll at default column widths', async ({ page }) => {
+    await setupTransactionsMock(page)
+    await page.goto('/transactions')
+    await acceptCookieConsent(page)
+
+    await expect(page.getByRole('table')).toBeVisible({ timeout: 10_000 })
+
+    // The table is wrapped in an overflow-x-auto container. With default column widths
+    // (~950px total) the content should not overflow a standard 1280px viewport.
+    const scrollContainer = page.locator('div.overflow-x-auto').first()
+    const overflowing = await scrollContainer.evaluate(
+      (el) => el.scrollWidth > el.clientWidth,
+    )
+    expect(overflowing).toBe(false)
+  })
 })
