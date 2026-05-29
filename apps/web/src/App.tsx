@@ -26,6 +26,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { useTheme } from './shared/theme'
 import { posthog } from './shared/lib/posthog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
+import { useLoginEnabled } from './shared/hooks'
 import { PageSkeleton } from './shared/components/PageSkeleton'
 
 const ProfilePage = lazy(() =>
@@ -119,7 +120,10 @@ function App() {
   // Use generated mutation hook for privacy settings
   const updatePrivacyMutation = useUpdatePrivacySettings()
 
-  const isLandingPage = location.pathname === '/' && !isAuthenticated
+  const { enabled: loginEnabled } = useLoginEnabled()
+  // When lockdown is active (!loginEnabled), show landing page even for authenticated users
+  // to prevent a redirect loop: ProtectedRoute → / → /dashboard → ProtectedRoute → ...
+  const isLandingPage = location.pathname === '/' && (!isAuthenticated || !loginEnabled)
 
   // Initialize Paddle.js SDK
   useEffect(() => {
