@@ -30,6 +30,7 @@ afterEach(() => {
   // Reset window.ENV so PostHog configured state doesn't leak between tests
   delete (window as unknown as { ENV?: unknown }).ENV
   mockUseFeatureFlagEnabled.mockReset()
+  mockUseAuth.mockReset()
 })
 
 describe('ProtectedRoute', () => {
@@ -110,8 +111,8 @@ describe('ProtectedRoute', () => {
 
   describe('while Clerk is loading (isLoaded=false)', () => {
     it('shows skeleton while Clerk auth is still loading', () => {
-      // No PostHog key → login is immediately enabled, no flag loading
-      mockUseFeatureFlagEnabled.mockReturnValue(undefined)
+      // No PostHog key → isPostHogConfigured()=false → login immediately enabled; flag value is irrelevant
+      mockUseFeatureFlagEnabled.mockReturnValue(true)
       mockUseAuth.mockReturnValue({ isSignedIn: false, isLoaded: false } as ReturnType<typeof mockUseAuth>)
 
       renderProtectedRoute()
