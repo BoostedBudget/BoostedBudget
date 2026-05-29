@@ -5,7 +5,7 @@
  * Issue #699: Create Marketing Landing Page for First-Time Visitors
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -18,6 +18,7 @@ import {
   mockRefetchSubscriptionTiers,
 } from '@/test/mocks/subscription-api'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
+import { mockUseFeatureFlagEnabled } from '@/test/mocks/posthog'
 
 function renderWithProviders(ui: React.ReactElement) {
   return render(
@@ -320,6 +321,36 @@ describe('LandingPage', () => {
 
       const faqContainer = faqSection?.querySelector('.mx-auto')
       expect(faqContainer).not.toBeNull()
+    })
+  })
+
+  describe('when login is disabled (lockdown active)', () => {
+    beforeEach(() => {
+      window.ENV = { POSTHOG_KEY: 'test-key' }
+      mockUseFeatureFlagEnabled.mockReturnValue(false)
+      mockUseUser.mockReturnValue({ user: undefined, isSignedIn: false, isLoaded: true })
+      mockUseClerk.mockReturnValue({ openSignIn: () => {}, openSignUp: () => {} })
+      mockUseGetSubscriptionTiers.mockReturnValue({
+        data: mockSubscriptionTiersResponse,
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchSubscriptionTiers,
+      })
+    })
+
+    afterEach(() => {
+      delete (window as Window & { ENV?: unknown }).ENV
+      mockUseFeatureFlagEnabled.mockReturnValue(undefined)
+    })
+
+    it('does not render Start Free Today CTA buttons', () => {
+      renderWithProviders(<LandingPage />)
+      expect(screen.queryByRole('button', { name: /start free today/i })).not.toBeInTheDocument()
+    })
+
+    it('renders Coming Soon state instead of auth CTAs', () => {
+      renderWithProviders(<LandingPage />)
+      expect(screen.getAllByText(/coming soon/i).length).toBeGreaterThanOrEqual(1)
     })
   })
 })
