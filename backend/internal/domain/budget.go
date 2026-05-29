@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -235,6 +236,63 @@ func (b *Budget) TotalSpent() float64 {
 		total += b.Categories[i].SpentAmount
 	}
 	return total
+}
+
+// ChildrenAllocatedByParent maps each budgeted parent category's ID to the sum of
+// its budgeted children's allocations (sub-allocations), Issue #1203.
+func (b *Budget) ChildrenAllocatedByParent() map[string]float64 {
+	pfcPrimaryToID := make(map[string]string)
+	customIDToCatID := make(map[string]string)
+	for i := range b.Categories {
+		c := &b.Categories[i]
+		if c.CategoryKind == "pfc" && c.PFCPrimary != nil && c.PFCDetailed == nil {
+			pfcPrimaryToID[*c.PFCPrimary] = c.ID
+		}
+		if c.CategoryKind == "custom" && c.CustomCategoryID != nil {
+			customIDToCatID[*c.CustomCategoryID] = c.ID
+		}
+	}
+
+	sums := make(map[string]float64)
+	for i := range b.Categories {
+		c := &b.Categories[i]
+		var parentID string
+		switch c.CategoryKind {
+		case "pfc":
+			if c.PFCDetailed != nil && c.PFCPrimary != nil {
+				parentID = pfcPrimaryToID[*c.PFCPrimary]
+			}
+		case "custom":
+			if c.CustomParentID != nil {
+				parentID = customIDToCatID[*c.CustomParentID]
+			} else if c.CustomParentPFCPrimary != nil {
+				parentID = pfcPrimaryToID[*c.CustomParentPFCPrimary]
+			}
+		}
+		if parentID != "" {
+			sums[parentID] += c.AllocatedAmount
+		}
+	}
+	return sums
+}
+
+// OverEarmarkedParentIDs returns the IDs of budgeted parent categories whose child
+// sub-allocations exceed the parent's own allocation. Informational only — the app
+// permits over-earmarking (mirrors ExceedsExpectedIncome), Issue #1203.
+func (b *Budget) OverEarmarkedParentIDs() []string {
+	childSums := b.ChildrenAllocatedByParent()
+	byID := make(map[string]float64, len(b.Categories))
+	for i := range b.Categories {
+		byID[b.Categories[i].ID] = b.Categories[i].AllocatedAmount
+	}
+	var over []string
+	for parentID, childSum := range childSums {
+		if allocated, ok := byID[parentID]; ok && childSum > allocated {
+			over = append(over, parentID)
+		}
+	}
+	sort.Strings(over)
+	return over
 }
 
 // RemainingAmount returns the budget amount minus total spent.
