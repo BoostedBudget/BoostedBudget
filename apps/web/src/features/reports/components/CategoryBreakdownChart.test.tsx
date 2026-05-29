@@ -5,7 +5,35 @@ import React from 'react'
 import '@/test/mocks/shared-charts'
 import { mockUseDarkMode, MockEChartsChart } from '@/test/mocks/shared-charts'
 import { CategoryBreakdownChart } from './CategoryBreakdownChart'
+import { buildBreakdownSlices } from './buildBreakdownSlices'
 import type { SpendingByCategoryResponse } from '@boostedbudget/api-client/models'
+
+describe('buildBreakdownSlices', () => {
+  it('colors a custom category slice with its resolved custom-category color (#1203)', () => {
+    const customById = new Map([['uuid-1', { name: 'Travel', color: '#abcdef' }]])
+    const slices = buildBreakdownSlices(
+      [
+        { category: 'custom:uuid-1', pfc_primary_display: 'Travel', total: 100 },
+        { category: 'FOOD_AND_DRINK', pfc_primary_display: 'Food And Drink', total: 50 },
+      ],
+      customById
+    )
+
+    expect(slices[0].name).toBe('Travel')
+    expect(slices[0].itemStyle.color).toBe('#abcdef')
+    // PFC slice keeps a palette color (not the custom color)
+    expect(slices[1].itemStyle.color).not.toBe('#abcdef')
+  })
+
+  it('falls back to a palette color when a custom category has no color set', () => {
+    const slices = buildBreakdownSlices(
+      [{ category: 'custom:uuid-2', pfc_primary_display: 'Pets', total: 30 }],
+      new Map([['uuid-2', { name: 'Pets', color: null }]])
+    )
+    expect(slices[0].itemStyle.color).toBeTruthy()
+    expect(slices[0].name).toBe('Pets')
+  })
+})
 
 const mockData: SpendingByCategoryResponse = {
   start_date: '2024-01-01',

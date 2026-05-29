@@ -28,6 +28,7 @@ import { formatPFCPrimary } from '@/shared/categories/formatPfc';
 import { getDetailedLabel, getPrimaryLabel } from '@/shared/categories/pfcOptions';
 import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect';
 import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
+import { buildCategoryHierarchy } from '@/features/categories/utils/buildCategoryHierarchy';
 
 export interface BudgetCategoryFormProps {
   isOpen: boolean;
@@ -114,16 +115,42 @@ export function BudgetCategoryForm({
     }
   }, [isOpen, mode, initialData]);
 
-  // Build dropdown options for the custom category select, keyed by real UUID.
-  // Groups by parent_pfc_primary for <optgroup> display.
+  // Build <optgroup> sections for the custom category select, reflecting the full custom
+  // hierarchy (#1203): childless top-level customs, custom parents with their custom
+  // children nested under the parent's name, then customs nested under a PFC primary.
   const customCategoryOptionGroups = useMemo(() => {
-    const cats = userCategories ?? [];
-    const groups: Record<string, { id: string; label: string }[]> = {};
-    for (const cat of cats) {
-      const groupKey = cat.parent_pfc_primary ?? '__none__';
-      if (!groups[groupKey]) groups[groupKey] = [];
-      groups[groupKey].push({ id: cat.id, label: cat.name });
+    const cats = (Array.isArray(userCategories) ? userCategories : []) as Parameters<typeof buildCategoryHierarchy>[0];
+    const { topLevel, pfcGroups } = buildCategoryHierarchy(cats);
+    const groups: { key: string; label: string; options: { id: string; label: string }[] }[] = [];
+
+    const childless = topLevel.filter((g) => g.children.length === 0).map((g) => g.parent);
+    if (childless.length > 0) {
+      groups.push({
+        key: '__none__',
+        label: 'Custom (no parent)',
+        options: childless.map((c) => ({ id: c.id, label: c.name })),
+      });
     }
+
+    for (const g of topLevel.filter((g) => g.children.length > 0)) {
+      groups.push({
+        key: g.parent.id,
+        label: g.parent.name,
+        options: [
+          { id: g.parent.id, label: g.parent.name },
+          ...g.children.map((c) => ({ id: c.id, label: `— ${c.name}` })),
+        ],
+      });
+    }
+
+    for (const pg of pfcGroups) {
+      groups.push({
+        key: `pfc:${pg.pfcPrimary}`,
+        label: getPrimaryLabel(pg.pfcPrimary) ?? formatPFCPrimary(pg.pfcPrimary),
+        options: pg.categories.map((c) => ({ id: c.id, label: c.name })),
+      });
+    }
+
     return groups;
   }, [userCategories]);
 
@@ -163,6 +190,12 @@ export function BudgetCategoryForm({
       currency: 'USD',
     }).format(amount);
 
+  // Clear error on category change (category_kind, PFC, or custom selection)
+  const clearCategoryError = useCallback(
+    () => errors.category && setErrors((prev) => ({ ...prev, category: undefined })),
+    [errors.category]
+  );
+
   const handleCategoryKindChange = useCallback(
     (kind: 'pfc' | 'custom') => {
       setFormData((prev) => ({
@@ -172,11 +205,9 @@ export function BudgetCategoryForm({
           ? { custom_category_id: '' }
           : { pfc_primary: '', pfc_detailed: '' }),
       }));
-      if (errors.category) {
-        setErrors((prev) => ({ ...prev, category: undefined }));
-      }
+      clearCategoryError();
     },
-    [errors.category]
+    [clearCategoryError]
   );
 
   // PFC single-select value for the tree picker
@@ -195,21 +226,17 @@ export function BudgetCategoryForm({
         pfc_primary: value?.primary ?? '',
         pfc_detailed: value?.detailed ?? '',
       }));
-      if (errors.category) {
-        setErrors((prev) => ({ ...prev, category: undefined }));
-      }
+      clearCategoryError();
     },
-    [errors.category]
+    [clearCategoryError]
   );
 
   const handleCustomCategoryChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
       setFormData((prev) => ({ ...prev, custom_category_id: e.target.value }));
-      if (errors.category) {
-        setErrors((prev) => ({ ...prev, category: undefined }));
-      }
+      clearCategoryError();
     },
-    [errors.category]
+    [clearCategoryError]
   );
 
   const handleAmountChange = useCallback(
@@ -420,12 +447,9 @@ export function BudgetCategoryForm({
                 className={cn(inputBase, errors.category && inputError)}
               >
                 <option value="">Select a category...</option>
-                {Object.entries(customCategoryOptionGroups).map(([groupKey, opts]) => (
-                  <optgroup
-                    key={groupKey}
-                    label={groupKey === '__none__' ? 'Custom (no parent)' : (getPrimaryLabel(groupKey) ?? formatPFCPrimary(groupKey))}
-                  >
-                    {opts.map((opt) => (
+                {customCategoryOptionGroups.map((grp) => (
+                  <optgroup key={grp.key} label={grp.label}>
+                    {grp.options.map((opt) => (
                       <option key={opt.id} value={opt.id}>
                         {opt.label}
                       </option>

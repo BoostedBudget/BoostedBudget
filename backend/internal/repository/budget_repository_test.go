@@ -927,6 +927,70 @@ func TestBudgetRepository_GetCategoriesMatchingTransaction_NilDetailed_MatchesPr
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestBudgetRepository_GetCategoriesMatchingTransaction_Custom_RollsUpToParent tests that a
+// transaction on a custom CHILD category matches a budget allocated on its custom PARENT, in
+// addition to any exact-child budget. This gives the incremental recalc path the same
+// child→parent rollup the full resync already does (#1203). The expectation matches on the
+// parent-lookup SQL fragment, so it fails until the rollup clause is added (RED).
+func TestBudgetRepository_GetCategoriesMatchingTransaction_Custom_RollsUpToParent(t *testing.T) {
+	mock, repo := setupBudgetMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	childID := uuid.New().String()
+	parentCatID := uuid.New().String()
+	effective := &domain.EffectiveCategory{
+		Kind:             domain.EffectiveCategoryKindCustom,
+		CustomCategoryID: &childID,
+	}
+	now := time.Now()
+
+	columns := []string{
+		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
+		"custom_category_id", "allocated_amount", "spent_amount",
+		"created_at", "updated_at", "tags", "match_logic",
+	}
+
+	mock.ExpectQuery(`parent_id FROM custom_categories`).
+		WithArgs(userID, &childID).
+		WillReturnRows(pgxmock.NewRows(columns).
+			AddRow(
+				uuid.New().String(),
+				uuid.New().String(),
+				"custom",
+				nil,
+				nil,
+				&parentCatID, // budget allocated on the custom PARENT
+				300.00,
+				100.00,
+				now,
+				now,
+				`[]`,
+				"category_only",
+			).
+			AddRow(
+				uuid.New().String(),
+				uuid.New().String(),
+				"custom",
+				nil,
+				nil,
+				&childID, // exact-child budget
+				50.00,
+				20.00,
+				now,
+				now,
+				`[]`,
+				"category_only",
+			))
+
+	categories, err := repo.GetCategoriesMatchingTransaction(ctx, userID, effective)
+
+	assert.NoError(t, err)
+	assert.Len(t, categories, 2)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // =============================================================================
 // AdjustCategoryAllocatedAmount Tests (Issue #36: Rule Executors - Envelope Rollover)
 // =============================================================================

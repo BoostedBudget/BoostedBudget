@@ -363,6 +363,56 @@ func TestDeleteCategory_NotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
+// TestGetCategoryUsage_Success tests that the handler returns the service's usage counts.
+func TestGetCategoryUsage_Success(t *testing.T) {
+	mockService := &mockCustomCategoryService{
+		usage: &domain.CategoryUsage{
+			TransactionCount: 7,
+			BudgetCount:      2,
+			RuleCount:        1,
+			ChildCount:       3,
+		},
+	}
+
+	handler := NewCategoryHandler(mockService)
+
+	input := &GetCategoryUsageInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "cat-123",
+	}
+
+	output, err := handler.GetCategoryUsage(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.Body)
+	assert.Equal(t, 7, output.Body.TransactionCount)
+	assert.Equal(t, 2, output.Body.BudgetCount)
+	assert.Equal(t, 1, output.Body.RuleCount)
+	assert.Equal(t, 3, output.Body.ChildCount)
+}
+
+// TestGetCategoryUsage_NotFound tests 404 mapping when the service rejects the category
+// (e.g. wrong owner or missing) — the handler must not leak counts.
+func TestGetCategoryUsage_NotFound(t *testing.T) {
+	mockService := &mockCustomCategoryService{
+		usageErr: domain.ErrCategoryNotFound,
+	}
+
+	handler := NewCategoryHandler(mockService)
+
+	input := &GetCategoryUsageInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "nonexistent-cat",
+	}
+
+	output, err := handler.GetCategoryUsage(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
 // TestCategoryRouteRegistration tests that routes are properly registered.
 func TestCategoryRouteRegistration(t *testing.T) {
 	mockService := &mockCustomCategoryService{

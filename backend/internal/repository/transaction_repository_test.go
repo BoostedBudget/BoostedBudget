@@ -1769,6 +1769,79 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_Or(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestTransactionRepository_GetSpentSumForBudgetCategory_CustomTagOnly tests that a
+// custom-category budget with tag_only match logic matches purely by tag existence —
+// the custom category id must NOT appear in the query (Issue #1203, Codex R16).
+func TestTransactionRepository_GetSpentSumForBudgetCategory_CustomTagOnly(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	customID := "11111111-1111-1111-1111-111111111111"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind:     "custom",
+		CustomCategoryID: &customID,
+		Tags:             []string{"vacation"},
+		MatchLogic:       domain.MatchLogicTagOnly,
+	}
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedSum := 60.00
+
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+
+	// tag_only ignores the category entirely: args are user/start/end + tags only,
+	// and the custom category id is never bound.
+	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+tags \?\| \$4`).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+		WillReturnRows(rows)
+
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedSum, sum)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestTransactionRepository_GetSpentSumForBudgetCategory_CustomAnd tests that a
+// custom-category budget with AND match logic combines the custom-category rollup clause
+// (id or parent_id) with the tag clause (Issue #1203, Codex R16).
+func TestTransactionRepository_GetSpentSumForBudgetCategory_CustomAnd(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	customID := "22222222-2222-2222-2222-222222222222"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind:     "custom",
+		CustomCategoryID: &customID,
+		Tags:             []string{"dining"},
+		MatchLogic:       domain.MatchLogicAnd,
+	}
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedSum := 45.00
+
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+
+	// custom clause binds the id at $4 (id::text = $4 OR parent_id::text = $4) and tags at $5.
+	mock.ExpectQuery(`custom_category_override_id IN .+parent_id::text = \$4.+tags \?\| \$5`).
+		WithArgs(userID, startDate, endDate, customID, pgxmock.AnyArg()).
+		WillReturnRows(rows)
+
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedSum, sum)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestTransactionRepository_GetSpentSumForBudgetCategory_EmptyMatchLogic tests
 // that empty match_logic defaults to category_only behavior
 func TestTransactionRepository_GetSpentSumForBudgetCategory_EmptyMatchLogic(t *testing.T) {
