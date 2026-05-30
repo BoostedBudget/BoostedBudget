@@ -11,11 +11,13 @@ import (
 
 // mockAnalyticsRepository is a mock implementation for testing
 type mockAnalyticsRepository struct {
-	getCashFlowAggregationFn func(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error)
-	getCashFlowGroupedFn     func(ctx context.Context, userID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error)
-	getSpendingByCategoryFn  func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error)
-	getSpendingByMerchantFn  func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error)
-	getSpendingTrendsFn      func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error)
+	getCashFlowAggregationFn      func(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error)
+	getCashFlowGroupedFn          func(ctx context.Context, userID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error)
+	getSpendingByCategoryFn       func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error)
+	getSpendingByMerchantFn       func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error)
+	getSpendingTrendsFn           func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error)
+	getCategoryTotalForPeriodFn   func(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalRow, error)
+	getTopExpenseFn               func(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.TopExpenseRow, error)
 }
 
 func (m *mockAnalyticsRepository) GetCashFlowAggregation(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
@@ -49,6 +51,20 @@ func (m *mockAnalyticsRepository) GetSpendingByMerchant(ctx context.Context, use
 func (m *mockAnalyticsRepository) GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error) {
 	if m.getSpendingTrendsFn != nil {
 		return m.getSpendingTrendsFn(ctx, userID, filters)
+	}
+	return nil, nil
+}
+
+func (m *mockAnalyticsRepository) GetCategoryTotalForPeriod(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalRow, error) {
+	if m.getCategoryTotalForPeriodFn != nil {
+		return m.getCategoryTotalForPeriodFn(ctx, userID, category, startDate, endDate)
+	}
+	return &domain.CategoryTotalRow{}, nil
+}
+
+func (m *mockAnalyticsRepository) GetTopExpense(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.TopExpenseRow, error) {
+	if m.getTopExpenseFn != nil {
+		return m.getTopExpenseFn(ctx, userID, startDate, endDate)
 	}
 	return nil, nil
 }

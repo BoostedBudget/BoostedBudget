@@ -31,6 +31,14 @@ type AnalyticsService interface {
 
 	// GetSpendingTrends returns monthly category spending trends for stacked charts
 	GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.SpendingTrendsResponse, error)
+
+	// GetCategoryTotalForPeriod returns the total spend for a specific category in a date range.
+	// Single DB round-trip; token-efficient; reusable by MCP and React frontend (Issue #1087).
+	GetCategoryTotalForPeriod(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalResponse, error)
+
+	// GetTopExpense returns the single largest expense transaction in a date range.
+	// Returns nil response when no expense transactions exist in the period (Issue #1087).
+	GetTopExpense(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.TopExpenseResponse, error)
 }
 
 type analyticsService struct {
@@ -412,4 +420,47 @@ func absFloat(v float64) float64 {
 		return -v
 	}
 	return v
+}
+
+// GetCategoryTotalForPeriod returns the total spend for a specific category in a date range.
+func (s *analyticsService) GetCategoryTotalForPeriod(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalResponse, error) {
+	if endDate.Before(startDate) {
+		return nil, fmt.Errorf("end_date cannot be before start_date")
+	}
+
+	row, err := s.analyticsRepo.GetCategoryTotalForPeriod(ctx, userID, category, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get category total: %w", err)
+	}
+
+	return &domain.CategoryTotalResponse{
+		Category:          category,
+		PFCPrimaryDisplay: PFCPrimaryDisplayName(category),
+		Total:             row.Total,
+		TransactionCount:  row.TransactionCount,
+		StartDate:         startDate.Format("2006-01-02"),
+		EndDate:           endDate.Format("2006-01-02"),
+	}, nil
+}
+
+// GetTopExpense returns the single largest expense transaction in a date range.
+func (s *analyticsService) GetTopExpense(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.TopExpenseResponse, error) {
+	row, err := s.analyticsRepo.GetTopExpense(ctx, userID, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get top expense: %w", err)
+	}
+	if row == nil {
+		return nil, nil
+	}
+
+	return &domain.TopExpenseResponse{
+		TransactionID:     row.TransactionID,
+		MerchantName:      row.MerchantName,
+		Amount:            row.Amount,
+		Category:          row.Category,
+		PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+		Date:              row.Date.Format("2006-01-02"),
+		StartDate:         startDate.Format("2006-01-02"),
+		EndDate:           endDate.Format("2006-01-02"),
+	}, nil
 }

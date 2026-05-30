@@ -35,6 +35,10 @@ export function createApiClient(mutator: FetchMutator) {
       getCashFlowSummary(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/cash-flow-summary', method: 'GET', params, signal })
       },
+      /** GET /api/v1/analytics/category-total */
+      getCategoryTotalForPeriod(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/analytics/category-total', method: 'GET', params, signal })
+      },
       /** GET /api/v1/analytics/spending-by-category */
       getSpendingByCategory(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/spending-by-category', method: 'GET', params, signal })
@@ -46,6 +50,10 @@ export function createApiClient(mutator: FetchMutator) {
       /** GET /api/v1/analytics/spending-trends */
       getSpendingTrends(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/spending-trends', method: 'GET', params, signal })
+      },
+      /** GET /api/v1/analytics/top-expense */
+      getTopExpense(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/analytics/top-expense', method: 'GET', params, signal })
       },
     } as const,
     autoCategorization: {

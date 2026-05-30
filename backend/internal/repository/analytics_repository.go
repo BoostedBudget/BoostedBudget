@@ -28,6 +28,16 @@ type AnalyticsRepository interface {
 
 	// GetSpendingTrends returns monthly expense totals per category for trend analysis.
 	GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error)
+
+	// GetCategoryTotalForPeriod returns the total expense amount for a specific category in a date range.
+	// Returns zero Total and TransactionCount when no matching transactions exist.
+	// AI-tool-callable: one DB round-trip, token-efficient summary (Issue #1087)
+	GetCategoryTotalForPeriod(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalRow, error)
+
+	// GetTopExpense returns the single largest expense transaction in a date range.
+	// Returns nil when no expense transactions exist in the period.
+	// AI-tool-callable: one DB round-trip, returns structured summary (Issue #1087)
+	GetTopExpense(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.TopExpenseRow, error)
 }
 
 // analyticsRepository implements AnalyticsRepository using PostgreSQL
@@ -512,4 +522,78 @@ func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID stri
 	}
 
 	return results, nil
+}
+
+// GetCategoryTotalForPeriod returns the total expense amount for a specific effective category.
+// Matches both PFC primary categories (e.g. "FOOD_AND_DRINK") and custom categories ("custom:<uuid>").
+// Expenses are amount > 0 (PFCv2 convention). Returns zero row when no matching transactions exist.
+func (r *analyticsRepository) GetCategoryTotalForPeriod(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalRow, error) {
+	catExpr := effectiveCategoryExpr(false)
+
+	query := fmt.Sprintf(`
+		SELECT
+			COALESCE(SUM(t.amount), 0) as total,
+			COUNT(*)                   as transaction_count
+		FROM transactions t
+		WHERE t.user_id = $1
+		  AND t.date >= $2
+		  AND t.date <= $3
+		  AND t.amount > 0
+		  AND t.pending = false
+		  AND (%s) = $4
+	`, catExpr)
+
+	var row domain.CategoryTotalRow
+	err := r.db.QueryRow(ctx, query, userID, startDate, endDate, category).Scan(
+		&row.Total,
+		&row.TransactionCount,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get category total for period: %w", err)
+	}
+	return &row, nil
+}
+
+// GetTopExpense returns the single largest expense transaction (by amount) in a date range.
+// Returns nil when no expense transactions exist in the period.
+func (r *analyticsRepository) GetTopExpense(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.TopExpenseRow, error) {
+	catExpr := effectiveCategoryExpr(false)
+
+	query := fmt.Sprintf(`
+		SELECT
+			t.id,
+			COALESCE(t.merchant_name, '') as merchant_name,
+			t.amount,
+			(%s)                          as category,
+			t.date
+		FROM transactions t
+		WHERE t.user_id = $1
+		  AND t.date >= $2
+		  AND t.date <= $3
+		  AND t.amount > 0
+		  AND t.pending = false
+		ORDER BY t.amount DESC
+		LIMIT 1
+	`, catExpr)
+
+	var row domain.TopExpenseRow
+	err := r.db.QueryRow(ctx, query, userID, startDate, endDate).Scan(
+		&row.TransactionID,
+		&row.MerchantName,
+		&row.Amount,
+		&row.Category,
+		&row.Date,
+	)
+	if err != nil {
+		if isNotFoundError(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get top expense: %w", err)
+	}
+	return &row, nil
+}
+
+// isNotFoundError returns true for pgx "no rows" sentinel errors
+func isNotFoundError(err error) bool {
+	return err != nil && err.Error() == "no rows in result set"
 }

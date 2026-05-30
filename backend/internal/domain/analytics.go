@@ -183,3 +183,43 @@ type SpendingTrendRow struct {
 	CategoryDisplay string // resolved display name for custom categories; empty for PFC rows (service computes display)
 	Total           float64
 }
+
+// ─── MCP analytics helpers (Issue #1087) ──────────────────────────────────────
+
+// CategoryTotalRow is a raw database row for GetCategoryTotalForPeriod
+type CategoryTotalRow struct {
+	Total            float64
+	TransactionCount int
+}
+
+// CategoryTotalResponse is the response for GET /analytics/category-total (AI-tool-callable)
+type CategoryTotalResponse struct {
+	Category         string  `json:"category"`
+	PFCPrimaryDisplay string `json:"pfc_primary_display"`
+	Total            float64 `json:"total"`
+	TransactionCount int     `json:"transaction_count"`
+	StartDate        string  `json:"start_date"`
+	EndDate          string  `json:"end_date"`
+}
+
+// TopExpenseRow is a raw database row for GetTopExpense
+type TopExpenseRow struct {
+	TransactionID string
+	MerchantName  string
+	Amount        float64
+	Category      string
+	Date          time.Time
+}
+
+// TopExpenseResponse is the response for GET /analytics/top-expense (AI-tool-callable)
+// Returns the single largest expense transaction in a date range (nil if no expenses).
+type TopExpenseResponse struct {
+	TransactionID     string  `json:"transaction_id"`
+	MerchantName      string  `json:"merchant_name"`
+	Amount            float64 `json:"amount"`
+	Category          string  `json:"category"`
+	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
+	Date              string  `json:"date"`
+	StartDate         string  `json:"start_date"`
+	EndDate           string  `json:"end_date"`
+}

@@ -42,4 +42,12 @@ const (
 
 	// Job events
 	EventDeadLetterCreated = "dead_letter_created"
+
+	// MCP server events (Issue #1087)
+	// System/operational events — not consent-gated
+	EventMCPOAuthAuthorized = "mcp_oauth_authorized"
+	EventMCPToolCalled      = "mcp_tool_called"
+	EventMCPCodeExecuted    = "mcp_code_executed"
+	EventMCPExecuteFailed   = "mcp_execute_failed"
+	EventMCPSessionRevoked  = "mcp_session_revoked"
 )
