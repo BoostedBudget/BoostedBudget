@@ -75,6 +75,14 @@ const REASON_QA = 'QA/testing endpoint, not for production MCP use'
 // ── Manifest ───────────────────────────────────────────────────────────────
 
 const MANIFEST_ENTRIES: CapabilityEntry[] = [
+  // ── MCP Recipes (read/write allowed; recipes exposed as MCP tools) ────────
+  read('listMCPRecipes'),
+  read('getMCPRecipe'),
+  write('createMCPRecipe', { idempotent: false }),
+  write('updateMCPRecipe', { idempotent: true }),
+  write('deleteMCPRecipe', { destructive: true }),
+  write('runMCPRecipe'),
+
   // ── Analytics (all read) ────────────────────────────────────────────────
   read('getCashFlowHistory'),
   read('getCashFlowSummary'),

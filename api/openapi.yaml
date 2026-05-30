@@ -1539,6 +1539,32 @@ components:
       required:
         - name
       type: object
+    CreateMCPRecipeRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CreateMCPRecipeRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        description:
+          type: string
+        name:
+          type: string
+        schedule:
+          type: string
+        spec:
+          items:
+            $ref: "#/components/schemas/MCPRecipeCall"
+          type:
+            - array
+            - "null"
+      required:
+        - name
+        - spec
+      type: object
     CreateSavingsGoalRequest:
       additionalProperties: false
       properties:
@@ -2354,6 +2380,92 @@ components:
         - link_token
         - expiration
         - request_id
+      type: object
+    MCPRecipe:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/MCPRecipe.json
+          format: uri
+          readOnly: true
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+        id:
+          type: string
+        name:
+          type: string
+        schedule:
+          type: string
+        spec:
+          items:
+            $ref: "#/components/schemas/MCPRecipeCall"
+          type:
+            - array
+            - "null"
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - user_id
+        - name
+        - spec
+        - enabled
+        - created_at
+        - updated_at
+      type: object
+    MCPRecipeCall:
+      additionalProperties: false
+      properties:
+        body:
+          additionalProperties: {}
+          type: object
+        operation_id:
+          type: string
+        params:
+          additionalProperties: {}
+          type: object
+        path_params:
+          additionalProperties:
+            type: string
+          type: object
+      required:
+        - operation_id
+      type: object
+    MCPRecipeRunResult:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/MCPRecipeRunResult.json
+          format: uri
+          readOnly: true
+          type: string
+        calls:
+          items:
+            $ref: "#/components/schemas/MCPRecipeCall"
+          type:
+            - array
+            - "null"
+        name:
+          type: string
+        recipe_id:
+          type: string
+      required:
+        - recipe_id
+        - name
+        - calls
       type: object
     MarkAllNotificationsReadOutputBody:
       additionalProperties: false
@@ -4210,6 +4322,31 @@ components:
           type: string
         parent_pfc_primary:
           type: string
+      type: object
+    UpdateMCPRecipeRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateMCPRecipeRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+        name:
+          type: string
+        schedule:
+          type: string
+        spec:
+          items:
+            $ref: "#/components/schemas/MCPRecipeCall"
+          type:
+            - array
+            - "null"
       type: object
     UpdatePrivacySettingsRequest:
       additionalProperties: false
@@ -7459,6 +7596,176 @@ paths:
       summary: Disconnect institution
       tags:
         - Accounts
+  /api/v1/mcp/recipes:
+    get:
+      description: List all saved MCP workflow recipes for the authenticated user.
+      operationId: listMCPRecipes
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/MCPRecipe"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List recipes
+      tags:
+        - MCP Recipes
+    post:
+      description: Create a saved MCP workflow recipe (read-only compositions only in v1).
+      operationId: createMCPRecipe
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMCPRecipeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPRecipe"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Create a recipe
+      tags:
+        - MCP Recipes
+  /api/v1/mcp/recipes/{id}:
+    delete:
+      operationId: deleteMCPRecipe
+      parameters:
+        - description: Recipe ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Recipe ID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Delete a recipe
+      tags:
+        - MCP Recipes
+    get:
+      operationId: getMCPRecipe
+      parameters:
+        - description: Recipe ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Recipe ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPRecipe"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get a recipe
+      tags:
+        - MCP Recipes
+    put:
+      operationId: updateMCPRecipe
+      parameters:
+        - description: Recipe ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Recipe ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMCPRecipeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPRecipe"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Update a recipe
+      tags:
+        - MCP Recipes
+  /api/v1/mcp/recipes/{id}/run:
+    post:
+      description: Resolve a recipe's spec for execution. Returns the ordered list of API calls to chain through execute().
+      operationId: runMCPRecipe
+      parameters:
+        - description: Recipe ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Recipe ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPRecipeRunResult"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Run a recipe
+      tags:
+        - MCP Recipes
   /api/v1/notifications:
     get:
       description: Retrieves notifications for the authenticated user, ordered by created_at DESC.

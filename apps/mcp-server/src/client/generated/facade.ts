@@ -208,6 +208,32 @@ export function createApiClient(mutator: FetchMutator) {
         return mutator({ url: '/api/v1/dashboard/widget-types', method: 'GET', signal })
       },
     } as const,
+    mcpRecipes: {
+      /** GET /api/v1/mcp/recipes */
+      listMCPRecipes(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/mcp/recipes', method: 'GET', signal })
+      },
+      /** POST /api/v1/mcp/recipes */
+      createMCPRecipe(data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/mcp/recipes', method: 'POST', data, signal })
+      },
+      /** GET /api/v1/mcp/recipes/{id} */
+      getMCPRecipe(id: string, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/mcp/recipes/${id}`, method: 'GET', signal })
+      },
+      /** PUT /api/v1/mcp/recipes/{id} */
+      updateMCPRecipe(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/mcp/recipes/${id}`, method: 'PUT', data, signal })
+      },
+      /** DELETE /api/v1/mcp/recipes/{id} */
+      deleteMCPRecipe(id: string, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/mcp/recipes/${id}`, method: 'DELETE', signal })
+      },
+      /** POST /api/v1/mcp/recipes/{id}/run */
+      runMCPRecipe(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/mcp/recipes/${id}/run`, method: 'POST', data, signal })
+      },
+    } as const,
     notifications: {
       /** GET /api/v1/notifications */
       getNotifications(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
