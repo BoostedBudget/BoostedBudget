@@ -12,23 +12,32 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
 // RecipeHandler handles MCP recipe HTTP requests.
 type RecipeHandler struct {
-	service services.RecipeService
+	service         services.RecipeService
+	idempotencyRepo repository.IdempotencyRepository // optional; nil disables dedup
 }
 
 // NewRecipeHandler creates a new RecipeHandler.
-func NewRecipeHandler(service services.RecipeService) *RecipeHandler {
-	return &RecipeHandler{service: service}
+// idempotencyRepo is optional (pass nil for spec-gen nil-stubs); when non-nil,
+// createMCPRecipe requests with an Idempotency-Key header are deduplicated.
+func NewRecipeHandler(service services.RecipeService, idempotencyRepo ...repository.IdempotencyRepository) *RecipeHandler {
+	h := &RecipeHandler{service: service}
+	if len(idempotencyRepo) > 0 {
+		h.idempotencyRepo = idempotencyRepo[0]
+	}
+	return h
 }
 
 // --- Input / Output types ---
 
 type CreateRecipeInput struct {
 	inputs.AuthenticatedInput
+	inputs.IdempotencyInput // reads Idempotency-Key header; empty = no deduplication
 	Body domain.CreateMCPRecipeRequest
 }
 type CreateRecipeOutput struct{ Body *domain.MCPRecipe }
@@ -66,6 +75,19 @@ type RunRecipeOutput struct{ Body *domain.MCPRecipeRunResult }
 // --- Handlers ---
 
 func (h *RecipeHandler) CreateRecipe(ctx context.Context, input *CreateRecipeInput) (*CreateRecipeOutput, error) {
+	// Idempotency: if the Worker sent an Idempotency-Key header, deduplicate the create.
+	if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+		var recipe *domain.MCPRecipe
+		err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createMCPRecipe",
+			func() (interface{}, error) {
+				return h.service.Create(ctx, input.UserID, input.Body)
+			}, &recipe)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		return &CreateRecipeOutput{Body: recipe}, nil
+	}
+
 	recipe, err := h.service.Create(ctx, input.UserID, input.Body)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)

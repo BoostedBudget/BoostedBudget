@@ -1155,9 +1155,10 @@ func main() {
 		appLogger.Info("Huma analytics routes registered")
 
 		// Register MCP recipe routes (Issue #1087: MCP server)
+		humaIdempotencyRepo := repository.NewIdempotencyRepository(db)
 		humaRecipeRepo := repository.NewRecipeRepository(db)
 		humaRecipeService := services.NewRecipeService(humaRecipeRepo)
-		humaRecipeHandler := operations.NewRecipeHandler(humaRecipeService)
+		humaRecipeHandler := operations.NewRecipeHandler(humaRecipeService, humaIdempotencyRepo)
 		operations.RegisterRecipeRoutes(humaAPI, humaRecipeHandler)
 		appLogger.Info("MCP recipe routes registered")
 
