@@ -21,6 +21,7 @@ import { createHostProxy } from '../sandbox/host-proxy'
 import { createFetchMutator } from '../client/fetch-mutator'
 import { createRateLimiter } from '../limits/rate-limit'
 import { createPosthogClient, MCP_EVENTS } from '../analytics/posthog-client'
+import { createAuditClient } from '../audit/audit-client'
 import { extractMcpHeaders, buildPropsFromHeaders } from './agent-auth'
 import type { SpecIndex } from '../spec/search-runtime'
 import type { Env } from '../env'
@@ -104,6 +105,9 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
     // PostHog analytics client (no-op if POSTHOG_API_KEY is unset)
     const posthog = createPosthogClient((env as Record<string, unknown>)['POSTHOG_API_KEY'] as string ?? '')
 
+    // Audit client — posts read/protocol events to POST /api/v1/mcp/audit (fire-and-forget)
+    const audit = createAuditClient(env)
+
     // ── search tool ──────────────────────────────────────────────────────────
     this.server.registerTool(
       'search',
@@ -121,7 +125,10 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       },
       async (input) => {
         posthog.capture(props.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'search' })
-        return handleSearch(input, specIndex)
+        const result = handleSearch(input, specIndex)
+        void audit.record({ actorUserId: props.clerkUserId, grantId: props.grantId ?? 'unknown',
+          operationClass: 'read', operationId: 'search', result: 'success' })
+        return result
       },
     )
 
@@ -151,9 +158,10 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       async (input) => {
         posthog.capture(props.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'execute' })
         const result = await executeHandler(input)
-        posthog.capture(props.clerkUserId, MCP_EVENTS.CODE_EXECUTED, {
-          callCount: input.calls?.length ?? 0,
-        })
+        const callCount = input.calls?.length ?? 0
+        posthog.capture(props.clerkUserId, MCP_EVENTS.CODE_EXECUTED, { callCount })
+        void audit.record({ actorUserId: props.clerkUserId, grantId: props.grantId ?? 'unknown',
+          operationClass: 'read', operationId: 'execute', result: 'success' })
         return result
       },
     )
