@@ -20,6 +20,7 @@ import { buildRecipeTools } from './tools/recipes'
 import { createHostProxy } from '../sandbox/host-proxy'
 import { createFetchMutator } from '../client/fetch-mutator'
 import { createPosthogClient, MCP_EVENTS } from '../analytics/posthog-client'
+import { extractMcpHeaders, buildPropsFromHeaders } from './agent-auth'
 import type { SpecIndex } from '../spec/search-runtime'
 import type { Env } from '../env'
 
@@ -59,26 +60,24 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
   })
 
   /**
-   * Override onStart to extract the raw OAuth access token from the trusted
-   * X-MCP-Access-Token header (injected by index.ts after JWKS verification).
-   * Stores it in props so init() can use it as the bearer token for Go API calls.
+   * Override the DurableObject fetch() — the ONLY lifecycle hook that receives
+   * the actual HTTP request with our trusted X-MCP-* headers.
+   *
+   * The agents SDK onStart(props) does NOT receive the request — it takes props.
+   * We extract the Clerk OAuth access token here (before MCP protocol handling)
+   * and store it via updateProps() so init() can use it as the bearer token.
+   *
+   * Headers injected by index.ts after JWKS verification (delete-then-set,
+   * injection-safe). The DO is not directly accessible; index.ts is the only entry.
    */
-  override async onStart(): Promise<void> {
-    // Extract headers from initial request (X-MCP-* headers set by index.ts after JWKS verification)
-    const request = (this as unknown as { request?: Request }).request
-    if (request) {
-      const accessToken = request.headers.get('X-MCP-Access-Token')
-      const clerkUserId = request.headers.get('X-MCP-Clerk-User-Id')
-      const grantId = request.headers.get('X-MCP-Grant-Id')
-      if (accessToken && clerkUserId) {
-        await this.updateProps({
-          clerkUserId,
-          grantId: grantId ?? 'unknown',
-          accessToken,
-        })
+  override async fetch(request: Request): Promise<Response> {
+    if (!this.props?.accessToken) {
+      const headers = extractMcpHeaders(request)
+      if (headers) {
+        await this.updateProps(buildPropsFromHeaders(headers))
       }
     }
-    await super.onStart()
+    return super.fetch(request)
   }
 
   async init(): Promise<void> {
