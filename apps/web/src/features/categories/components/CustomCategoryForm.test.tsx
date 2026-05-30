@@ -56,6 +56,26 @@ describe('CustomCategoryForm', () => {
     expect(req.parent_pfc_primary).toBe('')
   })
 
+  it('includes the chosen color and icon in the submit payload', async () => {
+    const onSubmit = mock(() => Promise.resolve())
+    render(<CustomCategoryForm allCategories={[]} onSubmit={onSubmit} onCancel={() => {}} />)
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Coffee' } })
+    fireEvent.change(screen.getByLabelText('Category color'), { target: { value: '#ff8800' } })
+
+    // Open the icon picker and choose the first icon.
+    fireEvent.click(screen.getByRole('button', { name: /choose an icon/i }))
+    fireEvent.click(screen.getAllByRole('gridcell')[0])
+
+    fireEvent.click(screen.getByRole('button', { name: /create category/i }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    const req = (onSubmit.mock.calls[0] as unknown[])[0] as Record<string, unknown>
+    expect(req.color).toBe('#ff8800')
+    expect(typeof req.icon).toBe('string')
+    expect((req.icon as string).length).toBeGreaterThan(0)
+  })
+
   it('requires a name', async () => {
     const onSubmit = mock(() => Promise.resolve())
     render(<CustomCategoryForm allCategories={[]} onSubmit={onSubmit} onCancel={() => {}} />)

@@ -67,6 +67,12 @@ type CustomCategoryRepository interface {
 	DeleteWithReassignment(ctx context.Context, userID, categoryID string) error
 }
 
+// lockHierarchySQL takes a per-user transaction-scoped advisory lock so concurrent
+// hierarchy mutations (create/reparent) serialize and cannot race past the 2-level
+// trigger into a cycle or 3-level tree (Issue #1203). hashtextextended returns a bigint,
+// matching pg_advisory_xact_lock(bigint).
+const lockHierarchySQL = `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`
+
 // customCategoryRepository implements CustomCategoryRepository using PostgreSQL
 type customCategoryRepository struct {
 	db DB
@@ -89,12 +95,23 @@ func (r *customCategoryRepository) Create(ctx context.Context, category *domain.
 	category.CreatedAt = now
 	category.UpdatedAt = now
 
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Serialize hierarchy mutations per user before writing (Issue #1203).
+	if _, err := tx.Exec(ctx, lockHierarchySQL, category.UserID); err != nil {
+		return err
+	}
+
 	query := `
 		INSERT INTO custom_categories (id, user_id, name, parent_pfc_primary, parent_id, icon, color, usage_count, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
 
-	_, err := r.db.Exec(ctx, query,
+	if _, err := tx.Exec(ctx, query,
 		category.ID,
 		category.UserID,
 		category.Name,
@@ -105,13 +122,11 @@ func (r *customCategoryRepository) Create(ctx context.Context, category *domain.
 		category.UsageCount,
 		category.CreatedAt,
 		category.UpdatedAt,
-	)
-
-	if err != nil {
+	); err != nil {
 		return mapCategoryWriteError(err)
 	}
 
-	return nil
+	return tx.Commit(ctx)
 }
 
 // mapCategoryWriteError translates DB constraint/trigger violations on
@@ -245,13 +260,24 @@ func (r *customCategoryRepository) GetByName(ctx context.Context, userID, name s
 func (r *customCategoryRepository) Update(ctx context.Context, category *domain.CustomCategory) error {
 	category.UpdatedAt = time.Now()
 
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Serialize hierarchy mutations per user before reparenting (Issue #1203).
+	if _, err := tx.Exec(ctx, lockHierarchySQL, category.UserID); err != nil {
+		return err
+	}
+
 	query := `
 		UPDATE custom_categories
 		SET name = $1, parent_pfc_primary = $2, parent_id = $3, icon = $4, color = $5, usage_count = $6, updated_at = $7
 		WHERE id = $8
 	`
 
-	ct, err := r.db.Exec(ctx, query,
+	ct, err := tx.Exec(ctx, query,
 		category.Name,
 		category.ParentPFCPrimary,
 		category.ParentID,
@@ -269,7 +295,7 @@ func (r *customCategoryRepository) Update(ctx context.Context, category *domain.
 		return domain.ErrCategoryNotFound
 	}
 
-	return nil
+	return tx.Commit(ctx)
 }
 
 // Delete removes a category from the database

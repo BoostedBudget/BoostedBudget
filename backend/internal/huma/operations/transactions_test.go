@@ -565,6 +565,63 @@ func TestUpdateTransactionCategory_Success(t *testing.T) {
 	require.NotNil(t, output)
 }
 
+// TestUpdateTransactionCategory_CustomMissingID asserts a 400 (not a DB 500) when
+// kind=custom is sent without a custom_category_id (#1203 discriminated-union validation).
+func TestUpdateTransactionCategory_CustomMissingID(t *testing.T) {
+	handler := NewTransactionHandler(&mockTransactionService{})
+	input := &UpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "tx-123",
+		Body:               UpdateTransactionCategoryBody{Kind: "custom"},
+	}
+
+	output, err := handler.UpdateTransactionCategory(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "custom_category_id is required")
+}
+
+// TestUpdateTransactionCategory_PFCMissingPrimary asserts a 400 when kind=pfc is sent
+// without a pfc_primary.
+func TestUpdateTransactionCategory_PFCMissingPrimary(t *testing.T) {
+	handler := NewTransactionHandler(&mockTransactionService{})
+	input := &UpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "tx-123",
+		Body:               UpdateTransactionCategoryBody{Kind: "pfc"},
+	}
+
+	output, err := handler.UpdateTransactionCategory(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pfc_primary is required")
+}
+
+// TestUpdateTransactionCategory_MismatchedFields asserts a 400 when fields don't match the
+// kind (e.g. kind=pfc with a custom_category_id), instead of falling through to a DB 500.
+func TestUpdateTransactionCategory_MismatchedFields(t *testing.T) {
+	handler := NewTransactionHandler(&mockTransactionService{})
+	pfcPrimary := "FOOD_AND_DRINK"
+	customID := "cat-1"
+	input := &UpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "tx-123",
+		Body: UpdateTransactionCategoryBody{
+			Kind:             "pfc",
+			PFCPrimary:       &pfcPrimary,
+			CustomCategoryID: &customID,
+		},
+	}
+
+	output, err := handler.UpdateTransactionCategory(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "custom_category_id must be omitted")
+}
+
 // TestUpdateTransactionCategory_NotFound tests 404 for non-existent transaction.
 func TestUpdateTransactionCategory_NotFound(t *testing.T) {
 	mockService := &mockTransactionService{

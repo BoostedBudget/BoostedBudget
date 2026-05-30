@@ -377,6 +377,19 @@ func (s *transactionService) UpdateTransactionCategory(ctx context.Context, user
 		return nil, err
 	}
 
+	// Validate custom-category ownership so a transaction can't reference another user's
+	// category — a cross-user reference would block that user's deletion via the
+	// custom_category_override_id ON DELETE RESTRICT foreign key (Issue #1203).
+	if overrideKind == "custom" && customCategoryID != nil {
+		cat, err := s.customCategoryRepo.GetByID(ctx, *customCategoryID)
+		if err != nil {
+			return nil, err
+		}
+		if cat.UserID != userID {
+			return nil, domain.ErrCategoryNotFound
+		}
+	}
+
 	// Map kind to nullable for clear semantics
 	var kindPtr *string
 	if overrideKind != "clear" {

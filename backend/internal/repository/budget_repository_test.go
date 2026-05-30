@@ -991,6 +991,56 @@ func TestBudgetRepository_GetCategoriesMatchingTransaction_Custom_RollsUpToParen
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestBudgetRepository_GetCategoriesMatchingTransaction_Custom_RollsUpToPFCPrimary tests that a
+// transaction on a custom category nested under a PFC primary (parent_pfc_primary) also matches
+// the PFC primary-only budget — giving the incremental recalc path the same custom-under-PFC
+// rollup the full resync already does (#1203). The expectation matches on the PFC-parent lookup
+// SQL fragment, so it fails until that clause is added (RED).
+func TestBudgetRepository_GetCategoriesMatchingTransaction_Custom_RollsUpToPFCPrimary(t *testing.T) {
+	mock, repo := setupBudgetMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	customID := uuid.New().String()
+	pfcPrimary := "FOOD_AND_DRINK"
+	effective := &domain.EffectiveCategory{
+		Kind:             domain.EffectiveCategoryKindCustom,
+		CustomCategoryID: &customID,
+	}
+	now := time.Now()
+
+	columns := []string{
+		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
+		"custom_category_id", "allocated_amount", "spent_amount",
+		"created_at", "updated_at", "tags", "match_logic",
+	}
+
+	mock.ExpectQuery(`parent_pfc_primary FROM custom_categories`).
+		WithArgs(userID, &customID).
+		WillReturnRows(pgxmock.NewRows(columns).AddRow(
+			uuid.New().String(),
+			uuid.New().String(),
+			"pfc",
+			&pfcPrimary,
+			nil, // primary-only rollup budget the custom category nests under
+			nil,
+			200.00,
+			80.00,
+			now,
+			now,
+			`[]`,
+			"category_only",
+		))
+
+	categories, err := repo.GetCategoriesMatchingTransaction(ctx, userID, effective)
+
+	assert.NoError(t, err)
+	assert.Len(t, categories, 1)
+	assert.Equal(t, "pfc", categories[0].CategoryKind)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // =============================================================================
 // AdjustCategoryAllocatedAmount Tests (Issue #36: Rule Executors - Envelope Rollover)
 // =============================================================================

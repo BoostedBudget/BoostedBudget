@@ -10,7 +10,8 @@
  * the sticky thead CSS stacking context (same approach as ColumnFilterDropdown).
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { ChevronRight, ChevronDown, Filter, Check } from 'lucide-react'
 import { cva } from 'class-variance-authority'
 import { cn } from '@/lib/utils'
@@ -216,6 +217,37 @@ export function HierarchicalCategoryTreeSelect({
     },
     [disabled]
   )
+
+  // Roving keyboard navigation across the visible treeitem rows (#1203 a11y). Rows are
+  // focusable <button role="treeitem"> elements; we resolve them from the DOM on each
+  // keypress so newly expanded/collapsed/filtered rows are always included in order.
+  const treeRef = useRef<HTMLDivElement>(null)
+  const handleTreeKeyDown = useCallback((e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') {
+      return
+    }
+    const root = treeRef.current
+    if (!root) return
+    const items = Array.from(root.querySelectorAll<HTMLElement>('[role="treeitem"]'))
+    if (items.length === 0) return
+    e.preventDefault()
+    const current = items.indexOf(document.activeElement as HTMLElement)
+    let next: number
+    switch (e.key) {
+      case 'ArrowDown':
+        next = current < 0 ? 0 : Math.min(current + 1, items.length - 1)
+        break
+      case 'ArrowUp':
+        next = current < 0 ? items.length - 1 : Math.max(current - 1, 0)
+        break
+      case 'Home':
+        next = 0
+        break
+      default: // 'End'
+        next = items.length - 1
+    }
+    items[next]?.focus()
+  }, [])
 
   // ─── Search filtering ────────────────────────────────────────────────────
 
@@ -641,10 +673,12 @@ export function HierarchicalCategoryTreeSelect({
 
         {/* Tree rows */}
         <div
+          ref={treeRef}
           role="tree"
           aria-label={ariaLabel}
           aria-multiselectable={!isSingleSelect}
           className="overflow-y-auto max-h-60 py-1"
+          onKeyDown={handleTreeKeyDown}
         >
           {q &&
           filteredCategories.length === 0 &&

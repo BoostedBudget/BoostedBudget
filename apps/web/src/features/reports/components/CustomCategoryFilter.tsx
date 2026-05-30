@@ -56,7 +56,7 @@ export function CustomCategoryFilter({ selectedIds, onChange, className }: Custo
             )}
           >
             <CategoryIcon name={cat.icon ?? ''} className="h-3.5 w-3.5" />
-            {cat.name}
+            <span data-ph-mask>{cat.name}</span>
           </button>
         )
       })}

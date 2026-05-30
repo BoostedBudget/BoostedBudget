@@ -1661,6 +1661,41 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly(t *test
 	assert.NoError(t, err)
 }
 
+// TestTransactionRepository_GetSpentSumForBudgetCategory_PFCPrimaryRollsUpCustomChildren tests
+// that a PFC-primary budget rolls up custom categories nested under it (parent_pfc_primary) —
+// the query must reference the custom-children lookup subquery (#1203).
+func TestTransactionRepository_GetSpentSumForBudgetCategory_PFCPrimaryRollsUpCustomChildren(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	pfcPrimary := "FOOD_AND_DRINK"
+	budgetCat := &domain.BudgetCategory{
+		CategoryKind: "pfc",
+		PFCPrimary:   &pfcPrimary,
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+	}
+	userID := "user-123"
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
+	expectedSum := 320.00
+
+	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+
+	// The PFC-primary clause must OR in custom categories whose parent_pfc_primary = $4.
+	mock.ExpectQuery(`custom_category_override_id IN \(SELECT id FROM custom_categories WHERE user_id = \$1 AND parent_pfc_primary = \$4\)`).
+		WithArgs(userID, startDate, endDate, pfcPrimary).
+		WillReturnRows(rows)
+
+	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedSum, sum)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestTransactionRepository_GetSpentSumForBudgetCategory_TagOnly tests
 // tag_only match logic - matches transactions by tag existence regardless of category
 func TestTransactionRepository_GetSpentSumForBudgetCategory_TagOnly(t *testing.T) {

@@ -915,6 +915,9 @@ func TestUpdateTransactionCategory_PopulatesCustomCategoryDisplay(t *testing.T) 
 
 	// GetTransactionByID is called twice: once for ownership check, once to return result.
 	mockRepo.On("GetByID", ctx, "txn-cat").Return(txn, nil).Times(2)
+	// Custom-category ownership validation (#1203): category is owned by the same user.
+	mockCategoryRepo.On("GetByID", ctx, catID).
+		Return(&domain.CustomCategory{ID: catID, UserID: "user-1"}, nil)
 	mockRepo.On("UpdateCategory", ctx, "txn-cat", "user-1",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockCategoryRepo.On("GetNamesByIDs", ctx, "user-1", []string{catID}).
@@ -926,6 +929,29 @@ func TestUpdateTransactionCategory_PopulatesCustomCategoryDisplay(t *testing.T) 
 	assert.Equal(t, "Household", *result.CustomCategoryOverrideDisplay)
 	mockRepo.AssertExpectations(t)
 	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestUpdateTransactionCategory_RejectsForeignCustomCategory asserts a transaction cannot be
+// assigned a custom category owned by another user (#1203 security): the service rejects it and
+// never calls the repo update.
+func TestUpdateTransactionCategory_RejectsForeignCustomCategory(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewTransactionService(mockRepo, mockCategoryRepo)
+
+	catID := "cat-foreign"
+	txn := &domain.Transaction{ID: "txn-x", UserID: "user-1"}
+	mockRepo.On("GetByID", ctx, "txn-x").Return(txn, nil)
+	mockCategoryRepo.On("GetByID", ctx, catID).
+		Return(&domain.CustomCategory{ID: catID, UserID: "other-user"}, nil)
+
+	_, err := service.UpdateTransactionCategory(ctx, "user-1", "txn-x", "custom", nil, nil, &catID)
+
+	require.Error(t, err)
+	mockRepo.AssertNotCalled(t, "UpdateCategory",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestListByBudgetCategory_PopulatesCustomCategoryDisplay asserts enrichment via budget category path.

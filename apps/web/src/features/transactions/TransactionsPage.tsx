@@ -310,7 +310,7 @@ export function TransactionsPage() {
                 setFilter('pfc_detaileds', isApplied ? v : undefined)
                 trackEvent(isApplied ? ANALYTICS_EVENTS.CATEGORY_FILTER_APPLIED : ANALYTICS_EVENTS.CATEGORY_FILTER_CLEARED)
               }}
-              customCategories={categoriesData ?? undefined}
+              customCategories={Array.isArray(categoriesData) ? categoriesData : undefined}
               selectedCustomIds={filters.custom_category_ids}
               onCustomIdsChange={(v) => {
                 const isApplied = v.length > 0
