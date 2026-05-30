@@ -42,6 +42,11 @@ describe('parseEnv', () => {
     expect(() => parseEnv(rest)).toThrow()
   })
 
+  it('R6-T2: throws on missing MCP_WORKER_SECRET (fail-closed — would silently 403 all MCP audit calls)', () => {
+    const { MCP_WORKER_SECRET: _, ...rest } = validEnv
+    expect(() => parseEnv(rest)).toThrow()
+  })
+
   it('throws on missing BOOSTEDBUDGET_API_URL', () => {
     const { BOOSTEDBUDGET_API_URL: _, ...rest } = validEnv
     expect(() => parseEnv(rest)).toThrow()

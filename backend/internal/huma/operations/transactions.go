@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -384,9 +385,12 @@ func (h *TransactionHandler) UpdateTransactionCategory(ctx context.Context, inpu
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
-	// MCP audit (fire-and-forget)
+	// MCP audit (fire-and-forget; entity update is value-idempotent so retries are safe,
+	// but each retry still writes an audit row since no idempotency key is available on PATCH).
 	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.mcpAuditRepo != nil {
-		_ = recordMCPWriteAudit(ctx, h.mcpAuditRepo, input.UserID, input.MCPGrantID, "updateTransactionCategory", "")
+		if auditErr := recordMCPWriteAudit(ctx, h.mcpAuditRepo, input.UserID, input.MCPGrantID, "updateTransactionCategory", ""); auditErr != nil {
+			slog.WarnContext(ctx, "MCP audit write failed (non-atomic post-write)", "operation", "updateTransactionCategory", "error", auditErr)
+		}
 	}
 	return &UpdateTransactionCategoryOutput{Body: tx}, nil
 }

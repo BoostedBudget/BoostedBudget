@@ -116,13 +116,36 @@ type DeleteSavingsGoalInput struct {
 // CreateGoal handles POST /api/v1/savings-goals requests.
 // Creates a new savings goal for the authenticated user.
 func (h *SavingsGoalHandler) CreateGoal(ctx context.Context, input *CreateSavingsGoalInput) (*CreateSavingsGoalOutput, error) {
-	// MCP origin: use transactional audit
+	// MCP origin: use transactional audit with atomic idempotency (R6-SG: mirror tags/categories).
 	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.db != nil && h.mcpAuditRepo != nil && h.accountGetter != nil {
 		tx, err := h.db.Begin(ctx)
 		if err != nil {
 			return nil, humaerrors.LoggingMapError(ctx, err)
 		}
 		defer rollbackMCPAuditTx(ctx, tx)
+
+		if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+			var goal *domain.SavingsGoal
+			cacheHit, err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, input.IdempotencyKey, input.UserID, "createSavingsGoal",
+				func() (interface{}, error) {
+					txGoalRepo := repository.NewSavingsGoalRepository(tx)
+					txGoalService := services.NewSavingsGoalService(txGoalRepo, h.accountGetter, slog.Default())
+					return txGoalService.CreateGoal(ctx, input.UserID, &input.Body)
+				}, &goal)
+			if err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if cacheHit {
+				return &CreateSavingsGoalOutput{Body: goal}, nil
+			}
+			if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createSavingsGoal", input.IdempotencyKey); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			return &CreateSavingsGoalOutput{Body: goal}, nil
+		}
 
 		txGoalRepo := repository.NewSavingsGoalRepository(tx)
 		txGoalService := services.NewSavingsGoalService(txGoalRepo, h.accountGetter, slog.Default())

@@ -419,17 +419,17 @@ func (m *mockTagIdempotencyRepository) GetOrCreateInTx(
 	key, _, _ string,
 	fn func() (interface{}, error),
 	result interface{},
-) error {
+) (bool, error) {
 	m.inTxCalls++
 	if existing, ok := m.cached[key]; ok {
 		// Cache hit — return stored result; fn NOT called.
 		*(result.(**domain.UserTag)) = existing
-		return nil
+		return true, nil
 	}
 	// Cache miss — call fn and store.
 	res, err := fn()
 	if err != nil {
-		return err
+		return false, err
 	}
 	tag := res.(*domain.UserTag)
 	if m.cached == nil {
@@ -437,7 +437,7 @@ func (m *mockTagIdempotencyRepository) GetOrCreateInTx(
 	}
 	m.cached[key] = tag
 	*(result.(**domain.UserTag)) = tag
-	return nil
+	return false, nil
 }
 
 func (m *mockTagIdempotencyRepository) DeleteExpired(_ context.Context) (int64, error) {
@@ -542,7 +542,7 @@ func TestCreateTag_MCPOrigin_IdempotencyDedup(t *testing.T) {
 	input := &CreateTagInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
 		IdempotencyInput:   inputs.IdempotencyInput{IdempotencyKey: idempotencyKey},
-		MCPContextInput:    inputs.MCPContextInput{MCPOrigin: "1", MCPGrantID: "grant-1", MCPWorkerSecret: workerSecret},
+		MCPContextInput:    inputs.MCPContextInput{MCPGrantID: "grant-1", MCPWorkerSecret: workerSecret},
 		Body: domain.CreateUserTagRequest{
 			Name:  "MCP Tag",
 			Color: strPtr("#112233"),
@@ -589,7 +589,7 @@ func TestCreateTag_MCPOrigin_AuditFailureRollsBack(t *testing.T) {
 	input := &CreateTagInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
 		IdempotencyInput:   inputs.IdempotencyInput{IdempotencyKey: ""},
-		MCPContextInput:    inputs.MCPContextInput{MCPOrigin: "1", MCPGrantID: "grant-r5-17", MCPWorkerSecret: workerSecret},
+		MCPContextInput:    inputs.MCPContextInput{MCPGrantID: "grant-r5-17", MCPWorkerSecret: workerSecret},
 		Body:               domain.CreateUserTagRequest{Name: "Fail Audit", Color: strPtr("#000000")},
 	}
 

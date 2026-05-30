@@ -177,13 +177,17 @@ func (h *CategoryHandler) CreateCategory(ctx context.Context, input *CreateCateg
 		// with the entity write and the audit insert.
 		if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
 			var category *domain.CustomCategory
-			if err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, input.IdempotencyKey, input.UserID, "createCategory",
+			cacheHit, err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, input.IdempotencyKey, input.UserID, "createCategory",
 				func() (interface{}, error) {
 					txCategoryRepo := repository.NewCustomCategoryRepository(tx)
 					txCategoryService := services.NewCustomCategoryService(txCategoryRepo)
 					return txCategoryService.CreateCategory(ctx, input.UserID, &input.Body)
-				}, &category); err != nil {
+				}, &category)
+			if err != nil {
 				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if cacheHit {
+				return &CreateCategoryOutput{Body: category}, nil
 			}
 			if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createCategory", input.IdempotencyKey); err != nil {
 				return nil, humaerrors.LoggingMapError(ctx, err)

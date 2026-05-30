@@ -6692,17 +6692,17 @@ paths:
           schema:
             description: Idempotency key for MCP write operations (optional)
             type: string
-        - description: Set by MCP Worker to enable transactional audit
-          in: header
-          name: X-MCP-Origin
-          schema:
-            description: Set by MCP Worker to enable transactional audit
-            type: string
-        - description: OAuth grant ID from the MCP Worker auth context
+        - description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
           in: header
           name: X-MCP-Grant-Id
           schema:
-            description: OAuth grant ID from the MCP Worker auth context
+            description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+            type: string
+        - description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+          in: header
+          name: X-MCP-Worker-Secret
+          schema:
+            description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
             type: string
       requestBody:
         content:
@@ -7129,17 +7129,17 @@ paths:
           schema:
             description: Idempotency key for MCP write operations (optional)
             type: string
-        - description: Set by MCP Worker to enable transactional audit
-          in: header
-          name: X-MCP-Origin
-          schema:
-            description: Set by MCP Worker to enable transactional audit
-            type: string
-        - description: OAuth grant ID from the MCP Worker auth context
+        - description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
           in: header
           name: X-MCP-Grant-Id
           schema:
-            description: OAuth grant ID from the MCP Worker auth context
+            description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+            type: string
+        - description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+          in: header
+          name: X-MCP-Worker-Secret
+          schema:
+            description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
             type: string
       requestBody:
         content:
@@ -8514,17 +8514,17 @@ paths:
           schema:
             description: Idempotency key for MCP write operations (optional)
             type: string
-        - description: Set by MCP Worker to enable transactional audit
-          in: header
-          name: X-MCP-Origin
-          schema:
-            description: Set by MCP Worker to enable transactional audit
-            type: string
-        - description: OAuth grant ID from the MCP Worker auth context
+        - description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
           in: header
           name: X-MCP-Grant-Id
           schema:
-            description: OAuth grant ID from the MCP Worker auth context
+            description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+            type: string
+        - description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+          in: header
+          name: X-MCP-Worker-Secret
+          schema:
+            description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
             type: string
       requestBody:
         content:
@@ -8882,17 +8882,17 @@ paths:
           schema:
             description: Idempotency key for MCP write operations (optional)
             type: string
-        - description: Set by MCP Worker to enable transactional audit
-          in: header
-          name: X-MCP-Origin
-          schema:
-            description: Set by MCP Worker to enable transactional audit
-            type: string
-        - description: OAuth grant ID from the MCP Worker auth context
+        - description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
           in: header
           name: X-MCP-Grant-Id
           schema:
-            description: OAuth grant ID from the MCP Worker auth context
+            description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+            type: string
+        - description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+          in: header
+          name: X-MCP-Worker-Secret
+          schema:
+            description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
             type: string
       requestBody:
         content:
@@ -9247,17 +9247,17 @@ paths:
       description: Updates the category override on a specific transaction.
       operationId: updateTransactionCategory
       parameters:
-        - description: Set by MCP Worker to enable transactional audit
-          in: header
-          name: X-MCP-Origin
-          schema:
-            description: Set by MCP Worker to enable transactional audit
-            type: string
-        - description: OAuth grant ID from the MCP Worker auth context
+        - description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
           in: header
           name: X-MCP-Grant-Id
           schema:
-            description: OAuth grant ID from the MCP Worker auth context
+            description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+            type: string
+        - description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+          in: header
+          name: X-MCP-Worker-Secret
+          schema:
+            description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
             type: string
         - description: Transaction UUID
           in: path
