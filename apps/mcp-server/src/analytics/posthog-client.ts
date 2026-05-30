@@ -40,25 +40,16 @@ export interface McpPosthogClient {
   ): Promise<void>
 }
 
-/**
- * Create a PostHog client for the MCP Worker.
- * Returns a no-op client when the write key is empty.
- *
- * Properties must never include financial data or PII —
- * only operational metadata (tool name, operationId, duration, counts).
- */
+/** Create a PostHog client; no-op when writeKey is empty */
 export function createPosthogClient(
   writeKey: string,
   opts: PosthogClientOptions = {},
 ): McpPosthogClient {
   if (!writeKey) {
-    return {
-      capture: () => Promise.resolve(),
-    }
+    return { capture: () => Promise.resolve() }
   }
 
   const capture: CaptureOverride = opts.captureOverride ?? (async (distinctId, event, properties) => {
-    // PostHog Batch Capture API — works in Cloudflare Workers (no Node.js deps)
     await fetch('https://app.posthog.com/capture/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -66,18 +57,12 @@ export function createPosthogClient(
         api_key: writeKey,
         event,
         distinct_id: distinctId,
-        properties: {
-          ...properties,
-          $lib: 'mcp-server-worker',
-        },
+        properties: { ...properties, $lib: 'mcp-server-worker' },
       }),
     }).catch(() => {
       // Fire-and-forget: analytics failures must never break MCP operations
     })
   })
 
-  return {
-    capture: (distinctId, event, properties = {}) =>
-      capture(distinctId, event, properties),
-  }
+  return { capture: (distinctId, event, properties = {}) => capture(distinctId, event, properties) }
 }

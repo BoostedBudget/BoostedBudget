@@ -64,10 +64,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
    * Stores it in props so init() can use it as the bearer token for Go API calls.
    */
   override async onStart(): Promise<void> {
-    // The agents SDK exposes the initial request via the Durable Object fetch context.
-    // We use updateProps to store the access token for use in init().
-    // The X-MCP-Access-Token header is set by index.ts after JWKS verification —
-    // it is never from an external client (the DO is not publicly reachable).
+    // Extract headers from initial request (X-MCP-* headers set by index.ts after JWKS verification)
     const request = (this as unknown as { request?: Request }).request
     if (request) {
       const accessToken = request.headers.get('X-MCP-Access-Token')
@@ -90,11 +87,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
 
     const props = this.props as McpAgentProps
 
-    // Build the host-proxy with credential injection from Worker secrets.
-    // props.accessToken is the raw Clerk OAuth JWT injected by index.ts.
-    // This token is what the Go backend's Clerk middleware validates.
-    // Fall back to a sentinel string (which will fail auth) if not present,
-    // ensuring the deployment fails closed rather than silently passing empty auth.
+    // Inject access token into credentials; fall back to sentinel string to fail closed
     const accessToken = props.accessToken ?? 'MISSING_ACCESS_TOKEN'
     const mutator = createFetchMutator({
       baseUrl: env.BOOSTEDBUDGET_API_URL,
@@ -124,7 +117,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
         },
       },
       async (input) => {
-        void posthog.capture(props.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'search' })
+        posthog.capture(props.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'search' })
         return handleSearch(input, specIndex)
       },
     )
@@ -153,9 +146,9 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
         },
       },
       async (input) => {
-        void posthog.capture(props.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'execute' })
+        posthog.capture(props.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'execute' })
         const result = await executeHandler(input)
-        void posthog.capture(props.clerkUserId, MCP_EVENTS.CODE_EXECUTED, {
+        posthog.capture(props.clerkUserId, MCP_EVENTS.CODE_EXECUTED, {
           callCount: input.calls?.length ?? 0,
         })
         return result
