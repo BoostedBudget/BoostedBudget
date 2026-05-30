@@ -8,6 +8,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
@@ -17,15 +18,32 @@ type BudgetHandler struct {
 	service            services.BudgetService
 	syncService        services.BudgetSyncService
 	transactionService services.TransactionService
+	idempotencyRepo    repository.IdempotencyRepository // optional; nil disables dedup
+	db                 repository.DB
+	mcpAuditRepo       repository.MCPAuditRepository
+}
+
+type BudgetHandlerDeps struct {
+	IdempotencyRepo repository.IdempotencyRepository
+	DB              repository.DB
+	MCPAuditRepo    repository.MCPAuditRepository
 }
 
 // NewBudgetHandler creates a new BudgetHandler instance.
-func NewBudgetHandler(service services.BudgetService, syncService services.BudgetSyncService, transactionService services.TransactionService) *BudgetHandler {
-	return &BudgetHandler{
+// deps are optional (pass nil/omit for spec-gen nil-stubs); when non-nil,
+// createBudget requests with an Idempotency-Key header are deduplicated.
+func NewBudgetHandler(service services.BudgetService, syncService services.BudgetSyncService, transactionService services.TransactionService, deps ...BudgetHandlerDeps) *BudgetHandler {
+	h := &BudgetHandler{
 		service:            service,
 		syncService:        syncService,
 		transactionService: transactionService,
 	}
+	if len(deps) > 0 {
+		h.idempotencyRepo = deps[0].IdempotencyRepo
+		h.db = deps[0].DB
+		h.mcpAuditRepo = deps[0].MCPAuditRepo
+	}
+	return h
 }
 
 // --- Input/Output Types ---
@@ -33,6 +51,8 @@ func NewBudgetHandler(service services.BudgetService, syncService services.Budge
 // CreateBudgetInput represents the input for creating a budget.
 type CreateBudgetInput struct {
 	inputs.AuthenticatedInput
+	inputs.IdempotencyInput // reads Idempotency-Key header; empty = no deduplication
+	inputs.MCPContextInput
 	Body domain.CreateBudgetRequest
 }
 
@@ -162,11 +182,32 @@ type GetCategoryTransactionsOutput struct {
 // CreateBudget handles POST /api/v1/budgets requests.
 // Creates a new budget for the authenticated user.
 func (h *BudgetHandler) CreateBudget(ctx context.Context, input *CreateBudgetInput) (*CreateBudgetOutput, error) {
+	// Idempotency dedup
+	if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+		var budget *domain.Budget
+		err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createBudget",
+			func() (interface{}, error) {
+				return h.service.CreateBudget(ctx, input.UserID, &input.Body)
+			}, &budget)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		// MCP audit (fire-and-forget)
+		if input.IsMCPOrigin() && h.mcpAuditRepo != nil {
+			_ = recordMCPWriteAudit(ctx, h.mcpAuditRepo, input.UserID, input.MCPGrantID, "createBudget", input.IdempotencyKey)
+		}
+		return &CreateBudgetOutput{Body: budget}, nil
+	}
+
+	// No dedup
 	budget, err := h.service.CreateBudget(ctx, input.UserID, &input.Body)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
-
+	// MCP audit (fire-and-forget)
+	if input.IsMCPOrigin() && h.mcpAuditRepo != nil {
+		_ = recordMCPWriteAudit(ctx, h.mcpAuditRepo, input.UserID, input.MCPGrantID, "createBudget", input.IdempotencyKey)
+	}
 	return &CreateBudgetOutput{Body: budget}, nil
 }
 

@@ -6685,6 +6685,25 @@ paths:
     post:
       description: Creates a new budget for the authenticated user.
       operationId: createBudget
+      parameters:
+        - description: Idempotency key for MCP write operations (optional)
+          in: header
+          name: Idempotency-Key
+          schema:
+            description: Idempotency key for MCP write operations (optional)
+            type: string
+        - description: Set by MCP Worker to enable transactional audit
+          in: header
+          name: X-MCP-Origin
+          schema:
+            description: Set by MCP Worker to enable transactional audit
+            type: string
+        - description: OAuth grant ID from the MCP Worker auth context
+          in: header
+          name: X-MCP-Grant-Id
+          schema:
+            description: OAuth grant ID from the MCP Worker auth context
+            type: string
       requestBody:
         content:
           application/json:
@@ -7103,6 +7122,25 @@ paths:
     post:
       description: Creates a new custom category for the authenticated user.
       operationId: createCategory
+      parameters:
+        - description: Idempotency key for MCP write operations (optional)
+          in: header
+          name: Idempotency-Key
+          schema:
+            description: Idempotency key for MCP write operations (optional)
+            type: string
+        - description: Set by MCP Worker to enable transactional audit
+          in: header
+          name: X-MCP-Origin
+          schema:
+            description: Set by MCP Worker to enable transactional audit
+            type: string
+        - description: OAuth grant ID from the MCP Worker auth context
+          in: header
+          name: X-MCP-Grant-Id
+          schema:
+            description: OAuth grant ID from the MCP Worker auth context
+            type: string
       requestBody:
         content:
           application/json:
@@ -7711,6 +7749,13 @@ paths:
     post:
       description: Create a saved MCP workflow recipe (read-only compositions only in v1).
       operationId: createMCPRecipe
+      parameters:
+        - description: Idempotency key for MCP write operations (optional)
+          in: header
+          name: Idempotency-Key
+          schema:
+            description: Idempotency key for MCP write operations (optional)
+            type: string
       requestBody:
         content:
           application/json:
@@ -8462,6 +8507,25 @@ paths:
     post:
       description: Creates a new savings goal for the authenticated user.
       operationId: createSavingsGoal
+      parameters:
+        - description: Idempotency key for MCP write operations (optional)
+          in: header
+          name: Idempotency-Key
+          schema:
+            description: Idempotency key for MCP write operations (optional)
+            type: string
+        - description: Set by MCP Worker to enable transactional audit
+          in: header
+          name: X-MCP-Origin
+          schema:
+            description: Set by MCP Worker to enable transactional audit
+            type: string
+        - description: OAuth grant ID from the MCP Worker auth context
+          in: header
+          name: X-MCP-Grant-Id
+          schema:
+            description: OAuth grant ID from the MCP Worker auth context
+            type: string
       requestBody:
         content:
           application/json:
@@ -8811,6 +8875,25 @@ paths:
     post:
       description: Creates a new tag for the authenticated user.
       operationId: createTag
+      parameters:
+        - description: Idempotency key for MCP write operations (optional)
+          in: header
+          name: Idempotency-Key
+          schema:
+            description: Idempotency key for MCP write operations (optional)
+            type: string
+        - description: Set by MCP Worker to enable transactional audit
+          in: header
+          name: X-MCP-Origin
+          schema:
+            description: Set by MCP Worker to enable transactional audit
+            type: string
+        - description: OAuth grant ID from the MCP Worker auth context
+          in: header
+          name: X-MCP-Grant-Id
+          schema:
+            description: OAuth grant ID from the MCP Worker auth context
+            type: string
       requestBody:
         content:
           application/json:
@@ -9164,6 +9247,18 @@ paths:
       description: Updates the category override on a specific transaction.
       operationId: updateTransactionCategory
       parameters:
+        - description: Set by MCP Worker to enable transactional audit
+          in: header
+          name: X-MCP-Origin
+          schema:
+            description: Set by MCP Worker to enable transactional audit
+            type: string
+        - description: OAuth grant ID from the MCP Worker auth context
+          in: header
+          name: X-MCP-Grant-Id
+          schema:
+            description: OAuth grant ID from the MCP Worker auth context
+            type: string
         - description: Transaction UUID
           in: path
           name: id

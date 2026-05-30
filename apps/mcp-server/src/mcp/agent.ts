@@ -105,6 +105,9 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
     const proxy = createHostProxy({
       mutator,
       userId: (this.props as McpAgentProps).clerkUserId,
+      // Pass grantId so confirmation tokens are bound to this OAuth grant.
+      // Cross-grant replay (e.g. after re-authorizing) is rejected by host-proxy.
+      grantId: (this.props as McpAgentProps).grantId ?? 'unknown',
       rateLimiter,
     })
 
@@ -165,17 +168,22 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       async (input) => {
         const p = this.props as McpAgentProps
         posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'execute' })
-        const result = await executeHandler(input)
+        // ExecuteResult includes per-call audit events with the correct operationClass/result.
+        // Previously this hardcoded operationClass:'read'/'execute' for all calls — fixed here.
+        const { toolResult, auditEvents } = await executeHandler(input)
         const callCount = input.calls?.length ?? 0
         posthog.capture(p.clerkUserId, MCP_EVENTS.CODE_EXECUTED, { callCount })
-        void audit.record({
-          actorUserId: p.clerkUserId,
-          grantId: p.grantId ?? 'unknown',
-          operationClass: 'read',
-          operationId: 'execute',
-          result: 'success',
-        })
-        return result
+        // Record one audit entry per executed call with the real class and result.
+        for (const event of auditEvents) {
+          void audit.record({
+            actorUserId: p.clerkUserId,
+            grantId: p.grantId ?? 'unknown',
+            ...event,
+            confirmationPresented: event.result === 'confirmation_required',
+            confirmationConfirmed: event.operationClass === 'write' && event.result === 'success',
+          })
+        }
+        return toolResult
       },
     )
 
@@ -196,7 +204,10 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       {
         description:
           'Save a named workflow recipe (read-only compositions only in v1). ' +
-          'Recipes can be scheduled or run on-demand via recipe.run().',
+          'Recipes can be run on-demand via recipe.run().',
+        // NOTE: the `schedule` cron field is intentionally absent from the v1 schema.
+        // The backend scheduler is not yet built; it will be added in a follow-up issue.
+        // The `schedule` column is preserved in the DB for future use.
         inputSchema: {
           name: z.string().describe('Recipe name'),
           description: z.string().optional().describe('Optional description'),
@@ -206,7 +217,6 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
             body: z.record(z.unknown()).optional(),
             pathParams: z.record(z.string()).optional(),
           })).describe('Ordered read-only API calls'),
-          schedule: z.string().optional().describe('Cron schedule (e.g. "0 9 * * 1" for weekly)'),
           confirmationToken: z.string().optional(),
         },
       },

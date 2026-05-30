@@ -17,6 +17,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIdempotencyRepository_DeleteExpired(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("R4-7: deletes rows past expires_at and returns count", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+
+		mock.ExpectExec("DELETE FROM idempotency_keys").
+			WillReturnResult(pgxmock.NewResult("DELETE", 3))
+
+		repo := repository.NewIdempotencyRepository(mock)
+		deleted, err := repo.DeleteExpired(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), deleted)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
 func TestIdempotencyRepository_GetOrCreate(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-123"

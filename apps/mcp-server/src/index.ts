@@ -83,13 +83,14 @@ export default {
     // The DO is only reachable through this Worker (never directly exposed).
     const forwardHeaders = new Headers(request.headers)
     // Clear any existing MCP headers
-    for (const key of ['X-MCP-Clerk-User-Id', 'X-MCP-Grant-Id', 'X-MCP-Access-Token']) {
+    for (const key of ['X-MCP-Clerk-User-Id', 'X-MCP-Grant-Id', 'X-MCP-Access-Token', 'X-MCP-Origin']) {
       forwardHeaders.delete(key)
     }
     // Set trusted headers from verified auth context
     forwardHeaders.set('X-MCP-Clerk-User-Id', authCtx.clerkUserId)
     forwardHeaders.set('X-MCP-Grant-Id', authCtx.grantId)
     forwardHeaders.set('X-MCP-Access-Token', rawAccessToken!)
+    forwardHeaders.set('X-MCP-Origin', '1')
     const authedRequest = new Request(request, { headers: forwardHeaders })
 
     // ── MCP Streamable HTTP transport (primary) ────────────────────────────

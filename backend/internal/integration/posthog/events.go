@@ -44,10 +44,13 @@ const (
 	EventDeadLetterCreated = "dead_letter_created"
 
 	// MCP server events (Issue #1087)
-	// System/operational events — not consent-gated
-	EventMCPOAuthAuthorized = "mcp_oauth_authorized"
-	EventMCPToolCalled      = "mcp_tool_called"
-	EventMCPCodeExecuted    = "mcp_code_executed"
-	EventMCPExecuteFailed   = "mcp_execute_failed"
-	EventMCPSessionRevoked  = "mcp_session_revoked"
+	// NOTE: MCP analytics are fired exclusively by the Cloudflare Worker (apps/mcp-server/src/analytics/)
+	// which has direct access to the MCP session context. The backend does not receive the PostHog
+	// analytics client in its MCP-facing handlers (recipes, audit) due to the setter-injection pattern.
+	// If backend-side MCP analytics are added in a follow-up, restore these constants.
+	// EventMCPOAuthAuthorized = "mcp_oauth_authorized"  -- deferred: fired by Worker on Clerk token validation
+	// EventMCPToolCalled      = "mcp_tool_called"       -- deferred: fired by Worker per tool invocation
+	// EventMCPCodeExecuted    = "mcp_code_executed"     -- deferred: fired by Worker on execute()
+	// EventMCPExecuteFailed   = "mcp_execute_failed"    -- deferred: fired by Worker on tool error
+	// EventMCPSessionRevoked  = "mcp_session_revoked"   -- deferred: no revocation hook exists yet
 )

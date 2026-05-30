@@ -68,6 +68,11 @@ func (s *recipeService) Create(ctx context.Context, userID string, req domain.Cr
 		return nil, fmt.Errorf("invalid recipe spec: %w", err)
 	}
 
+	// R4-4: reject schedule field (v1 constraint; column preserved for future use)
+	if req.Schedule != nil && *req.Schedule != "" {
+		return nil, fmt.Errorf("scheduled recipes are not available in v1; omit the schedule field")
+	}
+
 	recipe := &domain.MCPRecipe{
 		UserID:      userID,
 		Name:        req.Name,
@@ -119,8 +124,9 @@ func (s *recipeService) Update(ctx context.Context, id string, userID string, re
 		}
 		recipe.Spec = req.Spec
 	}
-	if req.Schedule != nil {
-		recipe.Schedule = req.Schedule
+	if req.Schedule != nil && *req.Schedule != "" {
+		// R4-4: reject schedule updates (v1 constraint)
+		return nil, fmt.Errorf("scheduled recipes are not available in v1; omit the schedule field")
 	}
 	if req.Enabled != nil {
 		recipe.Enabled = *req.Enabled

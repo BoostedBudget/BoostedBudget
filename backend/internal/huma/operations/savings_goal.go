@@ -2,24 +2,46 @@ package operations
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
 // SavingsGoalHandler handles savings goal-related HTTP requests.
 // Issue #28: Savings goals
 type SavingsGoalHandler struct {
-	service services.SavingsGoalService
+	service         services.SavingsGoalService
+	idempotencyRepo repository.IdempotencyRepository // optional; nil disables dedup
+	db              repository.DB
+	mcpAuditRepo    repository.MCPAuditRepository
+	accountGetter   services.AccountGetter
+}
+
+type SavingsGoalHandlerDeps struct {
+	IdempotencyRepo repository.IdempotencyRepository
+	DB              repository.DB
+	MCPAuditRepo    repository.MCPAuditRepository
+	AccountGetter   services.AccountGetter
 }
 
 // NewSavingsGoalHandler creates a new SavingsGoalHandler instance.
-func NewSavingsGoalHandler(service services.SavingsGoalService) *SavingsGoalHandler {
-	return &SavingsGoalHandler{service: service}
+// deps are optional (pass nil/omit for spec-gen nil-stubs); when non-nil,
+// createSavingsGoal requests with an Idempotency-Key header are deduplicated.
+func NewSavingsGoalHandler(service services.SavingsGoalService, deps ...SavingsGoalHandlerDeps) *SavingsGoalHandler {
+	h := &SavingsGoalHandler{service: service}
+	if len(deps) > 0 {
+		h.idempotencyRepo = deps[0].IdempotencyRepo
+		h.db = deps[0].DB
+		h.mcpAuditRepo = deps[0].MCPAuditRepo
+		h.accountGetter = deps[0].AccountGetter
+	}
+	return h
 }
 
 // --- Input/Output Types ---
@@ -27,6 +49,8 @@ func NewSavingsGoalHandler(service services.SavingsGoalService) *SavingsGoalHand
 // CreateSavingsGoalInput represents the input for creating a savings goal.
 type CreateSavingsGoalInput struct {
 	inputs.AuthenticatedInput
+	inputs.IdempotencyInput // reads Idempotency-Key header; empty = no deduplication
+	inputs.MCPContextInput
 	Body domain.CreateSavingsGoalRequest
 }
 
@@ -89,11 +113,48 @@ type DeleteSavingsGoalInput struct {
 // CreateGoal handles POST /api/v1/savings-goals requests.
 // Creates a new savings goal for the authenticated user.
 func (h *SavingsGoalHandler) CreateGoal(ctx context.Context, input *CreateSavingsGoalInput) (*CreateSavingsGoalOutput, error) {
+	// MCP origin: use transactional audit
+	if input.IsMCPOrigin() && h.db != nil && h.mcpAuditRepo != nil && h.accountGetter != nil {
+		tx, err := h.db.Begin(ctx)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		defer rollbackMCPAuditTx(ctx, tx)
+
+		txGoalRepo := repository.NewSavingsGoalRepository(tx)
+		txGoalService := services.NewSavingsGoalService(txGoalRepo, h.accountGetter, slog.Default())
+		goal, err := txGoalService.CreateGoal(ctx, input.UserID, &input.Body)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+
+		if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createSavingsGoal", input.IdempotencyKey); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		return &CreateSavingsGoalOutput{Body: goal}, nil
+	}
+
+	// Idempotency dedup without MCP audit
+	if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+		var goal *domain.SavingsGoal
+		err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createSavingsGoal",
+			func() (interface{}, error) {
+				return h.service.CreateGoal(ctx, input.UserID, &input.Body)
+			}, &goal)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		return &CreateSavingsGoalOutput{Body: goal}, nil
+	}
+
+	// No dedup
 	goal, err := h.service.CreateGoal(ctx, input.UserID, &input.Body)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
-
 	return &CreateSavingsGoalOutput{Body: goal}, nil
 }
 

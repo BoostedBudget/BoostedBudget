@@ -44,6 +44,10 @@ func (m *mockIdempotencyRepository) GetOrCreate(
 	return nil
 }
 
+func (m *mockIdempotencyRepository) DeleteExpired(_ context.Context) (int64, error) {
+	return 0, nil
+}
+
 // mockRecipeService implements services.RecipeService for operations tests
 type mockRecipeService struct {
 	createFn func(ctx context.Context, userID string, req domain.CreateMCPRecipeRequest) (*domain.MCPRecipe, error)

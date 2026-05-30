@@ -34,6 +34,32 @@ describe('redactError', () => {
     expect(result.message).toBe('An unexpected error occurred')
   })
 
+  it('R4-15: redacts Bearer token strings', () => {
+    const result = redactError({ message: 'Invalid token: Bearer eyJhbGci.abc.def' })
+    expect(result.message).not.toContain('eyJhbGci.abc.def')
+    expect(result.message).toContain('[REDACTED]')
+  })
+
+  it('R4-15: redacts access_token key-value pairs', () => {
+    const result = redactError({ message: 'Token access_token=sk-abc123xyz expired' })
+    expect(result.message).not.toContain('sk-abc123xyz')
+    expect(result.message).toContain('[REDACTED]')
+  })
+
+  it('R4-15: nested data fields are dropped not leaked — regression guard', () => {
+    // redactError only outputs message/status/code — data is structurally excluded.
+    // This test locks in that data fields (which may contain PII) never appear in output,
+    // even if redactString is not applied to them directly.
+    const result = redactError({
+      message: 'Server error',
+      data: { accountBalance: 99999.99, userId: 'user_secret_123' },
+    } as unknown)
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain('99999')
+    expect(serialized).not.toContain('user_secret_123')
+    expect(serialized).not.toContain('accountBalance')
+  })
+
   it('never includes raw financial data in output', () => {
     const sensitiveError = {
       message: 'Transaction amount 9999.99 exceeded limit',
