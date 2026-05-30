@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generatedAt": "2026-05-30T02:08:25.131Z",
+  "generatedAt": "2026-05-30T03:45:53.731Z",
   "entries": [
     {
       "operationId": "getAccounts",
@@ -790,6 +790,17 @@
       "summary": "Disconnect institution",
       "tags": [
         "Accounts"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "recordMCPAuditEntry",
+      "method": "POST",
+      "path": "/api/v1/mcp/audit",
+      "summary": "Record MCP audit entry",
+      "tags": [
+        "MCP Audit"
       ],
       "manifestClass": "read",
       "excluded": true

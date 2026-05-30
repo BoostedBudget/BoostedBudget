@@ -3063,6 +3063,70 @@ components:
         - failed
         - completed_last_hour
       type: object
+    RecordMCPAuditBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RecordMCPAuditBody.json
+          format: uri
+          readOnly: true
+          type: string
+        actor_user_id:
+          description: Internal user UUID
+          type: string
+        confirmation_confirmed:
+          description: Whether confirmation was provided and valid
+          type: boolean
+        confirmation_presented:
+          description: Whether confirmation was required
+          type: boolean
+        grant_id:
+          description: OAuth grant ID from the Clerk token
+          type: string
+        idempotency_key:
+          description: Idempotency key if provided
+          type: string
+        operation_class:
+          description: "Operation class: read or write"
+          enum:
+            - read
+            - write
+          type: string
+        operation_id:
+          description: OpenAPI operationId
+          type: string
+        request_id:
+          description: Trace request ID
+          type: string
+        result:
+          description: Outcome
+          enum:
+            - success
+            - denied
+            - error
+            - confirmation_required
+          type: string
+        revocation_state:
+          description: Revocation check outcome
+          type: string
+        scopes:
+          description: OAuth scopes granted
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - actor_user_id
+        - grant_id
+        - operation_class
+        - operation_id
+        - confirmation_presented
+        - confirmation_confirmed
+        - result
+      type: object
     RegionResponse:
       additionalProperties: false
       properties:
@@ -7596,6 +7660,28 @@ paths:
       summary: Disconnect institution
       tags:
         - Accounts
+  /api/v1/mcp/audit:
+    post:
+      description: Records a security audit entry for an MCP operation. Called by the trusted MCP Worker; authenticated by CloudflareOnly middleware (X-Origin-Secret), not end-user Clerk JWT.
+      operationId: recordMCPAuditEntry
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordMCPAuditBody"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Record MCP audit entry
+      tags:
+        - MCP Audit
   /api/v1/mcp/recipes:
     get:
       description: List all saved MCP workflow recipes for the authenticated user.

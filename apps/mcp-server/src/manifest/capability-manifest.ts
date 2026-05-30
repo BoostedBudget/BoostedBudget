@@ -75,6 +75,10 @@ const REASON_QA = 'QA/testing endpoint, not for production MCP use'
 // ── Manifest ───────────────────────────────────────────────────────────────
 
 const MANIFEST_ENTRIES: CapabilityEntry[] = [
+  // ── MCP Audit (service-auth via X-Origin-Secret, not end-user Clerk JWT) ──
+  // The audit endpoint is excluded from MCP tool calls; only the Worker service calls it directly.
+  excluded('recordMCPAuditEntry', 'Internal service endpoint; called by Worker service auth, not end-user MCP tools'),
+
   // ── MCP Recipes (read/write allowed; recipes exposed as MCP tools) ────────
   read('listMCPRecipes'),
   read('getMCPRecipe'),

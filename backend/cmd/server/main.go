@@ -1161,6 +1161,13 @@ func main() {
 		operations.RegisterRecipeRoutes(humaAPI, humaRecipeHandler)
 		appLogger.Info("MCP recipe routes registered")
 
+		// Register MCP audit log route (Issue #1087: MCP server, GAP-2)
+		// Service-auth via CloudflareOnly middleware (X-Origin-Secret, not end-user Clerk JWT)
+		humaMCPAuditRepo := repository.NewMCPAuditRepository(db)
+		humaMCPAuditHandler := operations.NewMCPAuditHandler(humaMCPAuditRepo)
+		operations.RegisterMCPAuditRoutes(humaAPI, humaMCPAuditHandler)
+		appLogger.Info("MCP audit log route registered")
+
 		// Register Huma dashboard preferences routes (Issue #559: Huma migration)
 		humaDashboardPrefsHandler := operations.NewDashboardPreferencesHandler(dashboardPrefsService)
 		operations.RegisterDashboardPreferencesRoutes(humaAPI, humaDashboardPrefsHandler)
