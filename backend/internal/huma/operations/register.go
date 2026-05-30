@@ -69,6 +69,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Issue #1087: MCP saved recipes
 	recipeHandler := &RecipeHandler{}
 
+	// Issue #1087: MCP audit log
+	mcpAuditHandler := &MCPAuditHandler{}
+
 	// Register all routes
 	RegisterHealthRoutes(api, healthHandler)
 	RegisterMetricsRoutes(api, metricsHandler)
@@ -112,4 +115,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #1087: MCP saved recipes
 	RegisterRecipeRoutes(api, recipeHandler)
+
+	// Issue #1087: MCP audit log
+	RegisterMCPAuditRoutes(api, mcpAuditHandler)
 }
