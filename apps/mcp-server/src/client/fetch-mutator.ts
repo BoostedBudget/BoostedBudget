@@ -34,6 +34,8 @@ export interface Credentials {
   originSecret: string
   /** Value for the X-MCP-Worker-Secret header (proves request originated from the MCP Worker) */
   mcpWorkerSecret: string
+  /** OAuth grant ID — forwarded as X-MCP-Grant-Id so backend audit records have correct attribution */
+  grantId: string
 }
 
 export type CredentialProvider = () => Promise<Credentials>
@@ -87,6 +89,7 @@ export function createFetchMutator(config: FetchMutatorConfig): FetchMutator {
       Authorization: creds.authorization,
       'X-Origin-Secret': creds.originSecret,
       'X-MCP-Worker-Secret': creds.mcpWorkerSecret,
+      'X-MCP-Grant-Id': creds.grantId,
       ...reqHeaders,
       ...opts.headers,
     }

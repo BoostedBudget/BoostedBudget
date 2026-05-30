@@ -26,10 +26,14 @@ type IdempotencyRepository interface {
 	// GetOrCreateInTx is like GetOrCreate but performs the SELECT and INSERT within the
 	// supplied transaction. This makes the idempotency reservation atomic with the entity
 	// write and audit insert that the caller executes in the same tx.
-	// On a cache hit, fn is NOT called; the caller should rollback the transaction (no-op is
-	// safe because nothing was written on this attempt).
-	// On a cache miss, fn() is called within the tx and the result is stored.
-	GetOrCreateInTx(ctx context.Context, tx pgx.Tx, key, userID, operationID string, fn func() (interface{}, error), result interface{}) error
+	//
+	// Returns (cacheHit bool, err error):
+	//   cacheHit=true  → fn was NOT called; caller should rollback (nothing written).
+	//   cacheHit=false → fn was called; caller should commit.
+	//
+	// On a cache hit, the caller MUST NOT write an audit row or commit — the result was
+	// already recorded on the original request.
+	GetOrCreateInTx(ctx context.Context, tx pgx.Tx, key, userID, operationID string, fn func() (interface{}, error), result interface{}) (cacheHit bool, err error)
 
 	// DeleteExpired removes all rows past their expires_at timestamp.
 	// Called by the idempotency cleanup periodic job (R4-7, migration 000086/000087).
@@ -100,7 +104,7 @@ func (r *idempotencyRepository) GetOrCreateInTx(
 	key, userID, operationID string,
 	fn func() (interface{}, error),
 	result interface{},
-) error {
+) (bool, error) {
 	// Check for existing key inside the transaction so the reservation is
 	// atomic with any entity write and audit insert the caller issues in the same tx.
 	var cachedJSON []byte
@@ -111,24 +115,24 @@ func (r *idempotencyRepository) GetOrCreateInTx(
 
 	if err == nil {
 		// Cache hit — return cached response without calling fn.
-		// The caller is responsible for rolling back the open transaction.
-		return json.Unmarshal(cachedJSON, result)
+		// Return cacheHit=true so the caller knows to rollback (nothing was written on this attempt).
+		return true, json.Unmarshal(cachedJSON, result)
 	}
 
 	if !isNotFoundError(err) {
-		return fmt.Errorf("idempotency key lookup failed: %w", err)
+		return false, fmt.Errorf("idempotency key lookup failed: %w", err)
 	}
 
 	// Cache miss — call fn (which should write the entity inside this same tx).
 	fnResult, fnErr := fn()
 	if fnErr != nil {
-		return fnErr
+		return false, fnErr
 	}
 
 	// Serialize the result for storage.
 	resultJSON, err := json.Marshal(fnResult)
 	if err != nil {
-		return fmt.Errorf("failed to serialize idempotency result: %w", err)
+		return false, fmt.Errorf("failed to serialize idempotency result: %w", err)
 	}
 
 	// Store inside the tx so the reservation commits atomically with the entity write.
@@ -142,7 +146,7 @@ func (r *idempotencyRepository) GetOrCreateInTx(
 	// Best-effort; if store fails the operation still succeeded.
 	_ = storeErr
 
-	return json.Unmarshal(resultJSON, result)
+	return false, json.Unmarshal(resultJSON, result)
 }
 
 func (r *idempotencyRepository) DeleteExpired(ctx context.Context) (int64, error) {

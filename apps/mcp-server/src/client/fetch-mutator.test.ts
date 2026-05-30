@@ -1,7 +1,12 @@
 import { describe, expect, it, mock, beforeEach } from 'bun:test'
 import { createFetchMutator, ApiError } from './fetch-mutator'
 
-const CREDS = { authorization: 'Bearer test-token', originSecret: 'origin-secret-value' }
+const CREDS = {
+  authorization: 'Bearer test-token',
+  originSecret: 'origin-secret-value',
+  mcpWorkerSecret: 'worker-secret-value',
+  grantId: 'grant-abc-123',
+}
 const BASE_URL = 'https://api.boostedbudget.com'
 
 function makeSuccessResponse(body: unknown, status = 200) {
@@ -44,6 +49,20 @@ describe('createFetchMutator', () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     const headers = init.headers as Record<string, string>
     expect(headers['X-Origin-Secret']).toBe('origin-secret-value')
+  })
+
+  it('R6-T1: injects X-MCP-Worker-Secret and X-MCP-Grant-Id from credential provider (security headers)', async () => {
+    const mutator = createFetchMutator({
+      baseUrl: BASE_URL,
+      getCredentials: () => Promise.resolve(CREDS),
+    })
+
+    await mutator({ url: '/api/v1/budgets', method: 'GET' })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const headers = init.headers as Record<string, string>
+    expect(headers['X-MCP-Worker-Secret']).toBe('worker-secret-value')
+    expect(headers['X-MCP-Grant-Id']).toBe('grant-abc-123')
   })
 
   it('appends query params to URL', async () => {

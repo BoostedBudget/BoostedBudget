@@ -3,24 +3,28 @@ package inputs
 import "crypto/subtle"
 
 // MCPContextInput reads MCP-origin headers injected by the MCP Cloudflare Worker.
-// Only present when the request originated from the Worker (X-MCP-Origin: 1).
 //
-// Security: X-MCP-Origin alone is not sufficient — any authenticated client can set it.
-// IsMCPOrigin() performs a constant-time comparison of X-MCP-Worker-Secret against the
-// configured backend secret to verify the request genuinely came from the Worker.
+// Architecture note: the Worker (index.ts) forwards X-MCP-Origin/X-MCP-Grant-Id/
+// X-MCP-Access-Token to the Durable Object for DO-internal routing. Backend API calls
+// from the DO go through fetch-mutator.ts which ONLY injects X-MCP-Worker-Secret and
+// X-MCP-Grant-Id — NOT X-MCP-Origin. Therefore IsMCPOrigin() must NOT check X-MCP-Origin;
+// X-MCP-Worker-Secret IS the sole proof of Worker identity (second independent secret,
+// separate from X-Origin-Secret which gates all CF traffic).
+//
+// IMPORTANT: Adding or removing fields here requires running `make generate-openapi`
+// to keep api/openapi.yaml in sync with the Huma-generated spec.
 type MCPContextInput struct {
-	MCPOrigin       string `header:"X-MCP-Origin" doc:"Set by MCP Worker to enable transactional audit"`
-	MCPGrantID      string `header:"X-MCP-Grant-Id" doc:"OAuth grant ID from the MCP Worker auth context"`
-	MCPWorkerSecret string `header:"X-MCP-Worker-Secret" doc:"Worker-only shared secret; validated backend-side to prevent X-MCP-Origin spoofing"`
+	MCPGrantID      string `header:"X-MCP-Grant-Id" doc:"OAuth grant ID forwarded by the MCP Worker from the verified auth context"`
+	MCPWorkerSecret string `header:"X-MCP-Worker-Secret" doc:"Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client"`
 }
 
-// IsMCPOrigin returns true only when X-MCP-Origin is "1" AND X-MCP-Worker-Secret matches
-// expectedSecret in constant time (prevents timing attacks).
+// IsMCPOrigin returns true when X-MCP-Worker-Secret matches expectedSecret in constant
+// time (prevents timing attacks). The Worker is the sole injector of X-MCP-Worker-Secret;
+// it does not send X-MCP-Origin in backend API calls, so we check only the secret.
 // If expectedSecret is empty (misconfigured backend), returns false — fail closed.
 func (m *MCPContextInput) IsMCPOrigin(expectedSecret string) bool {
 	if expectedSecret == "" {
 		return false
 	}
-	return m.MCPOrigin == "1" &&
-		subtle.ConstantTimeCompare([]byte(m.MCPWorkerSecret), []byte(expectedSecret)) == 1
+	return subtle.ConstantTimeCompare([]byte(m.MCPWorkerSecret), []byte(expectedSecret)) == 1
 }

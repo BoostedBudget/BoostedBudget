@@ -51,8 +51,9 @@ func (m *mockIdempotencyRepository) GetOrCreateInTx(
 	key, userID, operationID string,
 	fn func() (interface{}, error),
 	result interface{},
-) error {
-	return m.GetOrCreate(ctx, key, userID, operationID, fn, result)
+) (bool, error) {
+	err := m.GetOrCreate(ctx, key, userID, operationID, fn, result)
+	return false, err
 }
 
 func (m *mockIdempotencyRepository) DeleteExpired(_ context.Context) (int64, error) {

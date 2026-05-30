@@ -11,7 +11,8 @@ import { ApiError } from '../client/fetch-mutator'
 import type { FetchMutator, Credentials } from '../client/fetch-mutator'
 import { createRateLimiter, RateLimitError } from '../limits/rate-limit'
 import type { RateLimiter } from '../limits/rate-limit'
-import crypto from 'node:crypto'
+// `crypto` is the Workers-global Web Crypto API (from @cloudflare/workers-types).
+// Do NOT import from 'node:crypto' — the tsconfig types allowlist excludes @types/node.
 
 export type HostProxyErrorCode =
   | 'denied'
@@ -215,7 +216,7 @@ export function createHostProxy(config: HostProxyConfig) {
 
       try {
         const credentials = getCredentials ? await getCredentials() : undefined
-        const requestConfig = args as Parameters<FetchMutator>[0]
+        const requestConfig = args as unknown as Parameters<FetchMutator>[0]
         // Use idempotency key from confirmed write (stable, minted at challenge time) if available,
         // otherwise fall back to caller-provided key.
         const effectiveIdempotencyKey = confirmedIdempotencyKey ?? opts.idempotencyKey

@@ -145,16 +145,20 @@ func (h *TagHandler) CreateTag(ctx context.Context, input *CreateTagInput) (*Cre
 		// with the entity write and the audit insert.
 		if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
 			var tag *domain.UserTag
-			if err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, input.IdempotencyKey, input.UserID, "createUserTag",
+			cacheHit, err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, input.IdempotencyKey, input.UserID, "createUserTag",
 				func() (interface{}, error) {
 					txTagRepo := repository.NewUserTagRepository(tx)
 					txTagService := services.NewUserTagService(txTagRepo)
 					return txTagService.CreateTag(ctx, input.UserID, &input.Body)
-				}, &tag); err != nil {
+				}, &tag)
+			if err != nil {
 				return nil, humaerrors.LoggingMapError(ctx, err)
 			}
-			// On a cache hit fn() was not called; on a cache miss fn() ran inside the tx.
-			// Either way, record the audit and commit — the audit row signals this attempt.
+			if cacheHit {
+				// Deduplicated retry: no entity was written; rollback (no audit row for a no-op).
+				return &CreateTagOutput{Body: tag}, nil
+			}
+			// First create: record audit and commit atomically.
 			if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createUserTag", input.IdempotencyKey); err != nil {
 				return nil, humaerrors.LoggingMapError(ctx, err)
 			}

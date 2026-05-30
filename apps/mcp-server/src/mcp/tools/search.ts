@@ -38,8 +38,12 @@ export interface McpContent {
   text: string
 }
 
-export interface McpToolResult {
+// Type alias (vs interface) to satisfy SDK's CallToolResult index signature.
+// MCP SDK types CallToolResult with [key: string]: unknown; only a type alias
+// with explicit index sig is assignable to that shape.
+export type McpToolResult = {
   content: McpContent[]
+  [key: string]: unknown
 }
 
 /**

@@ -40,18 +40,17 @@ async function getSpecIndex(): Promise<SpecIndex> {
   return cachedSpecIndex
 }
 
-export interface McpAgentProps {
+// Type alias (vs interface) to satisfy SDK's `Props extends Record<string, unknown>`
+// generic constraint. Closed interfaces lack implicit index signatures (TS2344).
+export type McpAgentProps = {
   /** Clerk user ID extracted from the validated OAuth token */
   clerkUserId: string
   /** Clerk grant ID from the OAuth token */
   grantId: string
   /**
-   * The raw Clerk OAuth access token — used as the bearer token when
-   * calling the Go backend. Injected by index.ts via X-MCP-Access-Token header
-   * and stored here so it is available in init().
-   *
-   * IMPORTANT: This is the ACTUAL Clerk JWT (not the user ID).
-   * The Go backend's Clerk middleware validates this token.
+   * Raw Clerk OAuth access token (actual JWT, not user ID).
+   * Used as bearer token when calling the Go backend.
+   * Injected by index.ts via X-MCP-Access-Token, available in init().
    */
   accessToken?: string
 }
@@ -94,15 +93,17 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
     // Keyed on props.clerkUserId so each user gets an independent bucket.
     const rateLimiter = createRateLimiter({ maxPerMinute: 60, maxConcurrent: 5 })
 
-    // Read credentials from this.props live (not a captured snapshot) so that a refreshed
-    // Clerk access token from a later request is picked up by subsequent backend calls.
     const mutator = createFetchMutator({
       baseUrl: env.BOOSTEDBUDGET_API_URL,
-      getCredentials: async () => ({
-        authorization: `Bearer ${(this.props as McpAgentProps).accessToken}`,
-        originSecret: env.BOOSTEDBUDGET_ORIGIN_SECRET,
-        mcpWorkerSecret: env.MCP_WORKER_SECRET,
-      }),
+      getCredentials: async () => {
+        const props = this.props as McpAgentProps
+        return {
+          authorization: `Bearer ${props.accessToken}`,
+          originSecret: env.BOOSTEDBUDGET_ORIGIN_SECRET,
+          mcpWorkerSecret: env.MCP_WORKER_SECRET,
+          grantId: props.grantId ?? 'unknown',
+        }
+      },
     })
     const proxy = createHostProxy({
       mutator,
