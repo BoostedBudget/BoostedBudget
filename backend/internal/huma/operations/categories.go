@@ -74,6 +74,17 @@ type DeleteCategoryInput struct {
 	ID string `path:"id" doc:"Category UUID"`
 }
 
+// GetCategoryUsageInput represents the input for fetching a category's usage counts.
+type GetCategoryUsageInput struct {
+	inputs.AuthenticatedInput
+	ID string `path:"id" doc:"Category UUID"`
+}
+
+// GetCategoryUsageOutput represents the response for a category's usage counts.
+type GetCategoryUsageOutput struct {
+	Body *domain.CategoryUsage
+}
+
 // GetPlaidPrimaryCategoriesInput represents the input for listing curated PFC primaries.
 type GetPlaidPrimaryCategoriesInput struct {
 	inputs.AuthenticatedInput
@@ -161,6 +172,17 @@ func (h *CategoryHandler) DeleteCategory(ctx context.Context, input *DeleteCateg
 	return nil, nil
 }
 
+// GetCategoryUsage handles GET /api/v1/categories/{id}/usage requests.
+// Returns live counts of transactions/budgets/rules/children referencing the category,
+// so the UI can warn the user before deletion (Issue #1203).
+func (h *CategoryHandler) GetCategoryUsage(ctx context.Context, input *GetCategoryUsageInput) (*GetCategoryUsageOutput, error) {
+	usage, err := h.service.GetCategoryUsage(ctx, input.UserID, input.ID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	return &GetCategoryUsageOutput{Body: usage}, nil
+}
+
 // GetPlaidPrimaryCategories handles GET /api/v1/categories/plaid-primaries requests.
 // Returns all 18 PFCv2 curated primary categories, sorted alphabetically by display name.
 // The handler reads the static pfc.AllPrimaries() registry directly — no DB, no service call.
@@ -234,6 +256,17 @@ func RegisterCategoryRoutes(api huma.API, handler *CategoryHandler) {
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteCategory)
+
+	// GET /api/v1/categories/{id}/usage - Live reference counts for delete-impact warning
+	huma.Register(api, huma.Operation{
+		OperationID: "getCategoryUsage",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/categories/{id}/usage",
+		Summary:     "Get category usage counts",
+		Description: "Returns counts of transactions, budgets, rules, and child categories referencing the category (for delete-impact warnings).",
+		Tags:        []string{"Categories"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetCategoryUsage)
 
 	// GET /api/v1/categories/plaid-primaries - List curated PFCv2 primary categories
 	huma.Register(api, huma.Operation{

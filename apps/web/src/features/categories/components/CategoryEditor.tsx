@@ -54,7 +54,9 @@ export function CategoryEditor({
 
   const currentCategory = selectedCategory[0] || null
   const currentCategoryObj = mergedCategories.find(
-    (cat) => cat.key === `pfc:${currentCategory}` || cat.name === currentCategory
+    // Match a custom override that arrives as a raw id (cat.key) as well as a PFC enum or
+    // a category name, so existing custom overrides resolve to their label + color (#1203).
+    (cat) => cat.key === currentCategory || cat.key === `pfc:${currentCategory}` || cat.name === currentCategory
   )
   const currentLabel = currentCategoryObj?.name || (currentCategory ? formatPFCEnum(currentCategory) : null)
 

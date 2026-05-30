@@ -62,6 +62,12 @@ export interface BudgetCategoryCardProps extends VariantProps<typeof budgetCateg
    * Required for category_kind='custom' to avoid showing a raw UUID as the label.
    */
   customCategoryName?: string;
+  /**
+   * For the 'child' variant: the parent category's display name. When provided, the
+   * earmark indicator reads "Earmarked from {parentLabel}" so users can see the
+   * sub-allocation belongs to its parent (#1203).
+   */
+  parentLabel?: string;
 }
 
 /**
@@ -101,6 +107,7 @@ export function BudgetCategoryCard({
   disabled = false,
   variant = 'standalone',
   customCategoryName,
+  parentLabel,
 }: BudgetCategoryCardProps) {
   const [isTransactionsExpanded, setIsTransactionsExpanded] = useState(false);
 
@@ -129,6 +136,11 @@ export function BudgetCategoryCard({
       <div className="budget-category-card__header flex justify-between items-start gap-2 mb-3">
         <h3 className="budget-category-card__title text-[0.9375rem] font-semibold text-foreground m-0 leading-snug">
           <span data-ph-mask>{categoryPath}</span>
+          {variant === 'child' && (
+            <span className="budget-category-card__earmark mt-1 block text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
+              {parentLabel ? `Earmarked from ${parentLabel}` : 'Earmarked'}
+            </span>
+          )}
         </h3>
         <span className="budget-category-card__badge text-[0.6875rem] font-medium text-primary bg-primary/10 py-0.5 px-2 rounded-full whitespace-nowrap shrink-0">
           {matchLogicLabel}

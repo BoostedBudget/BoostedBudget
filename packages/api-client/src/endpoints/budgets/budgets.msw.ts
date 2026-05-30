@@ -59,6 +59,14 @@ export const getGetBudgetsResponseMock = (): Budget[] | null =>
           faker.string.alpha({ length: { min: 10, max: 20 } }),
           undefined,
         ]),
+        custom_parent_id: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        custom_parent_pfc_primary: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
         id: faker.string.alpha({ length: { min: 10, max: 20 } }),
         match_logic: faker.string.alpha({ length: { min: 10, max: 20 } }),
         pfc_detailed: faker.helpers.arrayElement([
@@ -144,6 +152,14 @@ export const getCreateBudgetResponseMock = (
       category_kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
       created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
       custom_category_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      custom_parent_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      custom_parent_pfc_primary: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
@@ -242,6 +258,14 @@ export const getGetCurrentBudgetResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      custom_parent_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      custom_parent_pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       id: faker.string.alpha({ length: { min: 10, max: 20 } }),
       match_logic: faker.string.alpha({ length: { min: 10, max: 20 } }),
       pfc_detailed: faker.helpers.arrayElement([
@@ -328,6 +352,14 @@ export const getGetBudgetResponseMock = (
       category_kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
       created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
       custom_category_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      custom_parent_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      custom_parent_pfc_primary: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
@@ -420,6 +452,14 @@ export const getUpdateBudgetResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      custom_parent_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      custom_parent_pfc_primary: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
       id: faker.string.alpha({ length: { min: 10, max: 20 } }),
       match_logic: faker.string.alpha({ length: { min: 10, max: 20 } }),
       pfc_detailed: faker.helpers.arrayElement([
@@ -502,6 +542,14 @@ export const getAddBudgetCategoryResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  custom_parent_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  custom_parent_pfc_primary: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   match_logic: faker.string.alpha({ length: { min: 10, max: 20 } }),
   pfc_detailed: faker.helpers.arrayElement([
@@ -541,6 +589,14 @@ export const getUpdateBudgetCategoryResponseMock = (
   category_kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   custom_category_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  custom_parent_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  custom_parent_pfc_primary: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
@@ -766,6 +822,11 @@ export const getGetCategoryTransactionsResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      reviewed: faker.datatype.boolean(),
+      reviewed_at: faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        undefined,
+      ]),
       source: faker.string.alpha({ length: { min: 10, max: 20 } }),
       tags: faker.helpers.arrayElement([
         Array.from(
@@ -820,6 +881,14 @@ export const getSyncBudgetResponseMock = (
       category_kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
       created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
       custom_category_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      custom_parent_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      custom_parent_pfc_primary: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),

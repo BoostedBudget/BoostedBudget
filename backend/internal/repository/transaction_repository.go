@@ -37,6 +37,7 @@ var transactionSelectColumns = []string{
 	"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
 	"custom_category_override_id", "category_source", "category_override_date",
 	"effective_pfc_primary", "effective_pfc_detailed", "effective_category_name",
+	"reviewed", "reviewed_at",
 }
 
 var transactionSelectExpr = strings.Join(transactionSelectColumns, ", ")
@@ -93,6 +94,11 @@ type TransactionRepository interface {
 	// UpdateCategory updates the category override for a transaction using the PFC v2 discriminated union.
 	// Pass overrideKind=nil to clear all overrides (kind=clear semantics).
 	UpdateCategory(ctx context.Context, id string, userID string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) error
+
+	// SetReviewed sets the review flag for the given transactions owned by userID
+	// (Issue #1203). Returns the number of rows updated; IDs not owned by the user
+	// are ignored. reviewed_at is set to now when reviewed=true, cleared when false.
+	SetReviewed(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error)
 
 	// GetDistinctPlaidCategories returns distinct Plaid category names for a user's transactions
 	// Prefers secondary category (index 1) when available for better granularity
@@ -295,7 +301,9 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 	// Issue #171: Added user_account_id field; encryption adds external_transaction_id_blind_idx
 	// Issue #1123: Added effective_category_name (24 fields)
 	// Issue #1163: Added merchant_id (25 fields)
-	const numFields = 25
+	// Issue #1203: persist category override + category_source + review state on
+	// initial insert (was the documented #TODO-createbatch-overrides bug). 32 fields.
+	const numFields = 32
 	valueStrings := make([]string, 0, len(transactions))
 	valueArgs := make([]interface{}, 0, len(transactions)*numFields)
 
@@ -323,10 +331,28 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		}
 		valueStrings = append(valueStrings, fmt.Sprintf("(%s)", strings.Join(placeholders, ", ")))
 
-		// Compute effective_category_name from in-memory values.
-		// CreateBatch is Plaid-only and override columns are not written here (existing
-		// bug documented in #TODO-createbatch-overrides), so effective_category_name = pfc_primary.
-		effectiveCategoryName := transactions[i].PFCPrimary
+		// Compute effective_category_name from in-memory override values (Issue #1203).
+		// For a rule-applied custom override the name is filled in by the async
+		// effective_category_refresh job if not already populated in memory.
+		effectiveCategoryName := transactions[i].EffectiveCategoryName
+		switch {
+		case transactions[i].CategoryOverrideKind != nil && *transactions[i].CategoryOverrideKind == "pfc":
+			if transactions[i].PFCPrimaryOverride != nil && *transactions[i].PFCPrimaryOverride != "" {
+				effectiveCategoryName = transactions[i].PFCPrimaryOverride
+			} else {
+				effectiveCategoryName = transactions[i].PFCPrimary
+			}
+		case transactions[i].CategoryOverrideKind != nil && *transactions[i].CategoryOverrideKind == "custom":
+			// leave as in-memory EffectiveCategoryName (may be nil; async refresh fills it)
+		default:
+			effectiveCategoryName = transactions[i].PFCPrimary
+		}
+
+		// category_source defaults to 'plaid' when unset to satisfy the CHECK constraint.
+		categorySource := string(transactions[i].CategorySourceField)
+		if categorySource == "" {
+			categorySource = string(domain.CategorySourcePlaid)
+		}
 
 		// Add values (including user_account_id and external_transaction_id_blind_idx)
 		valueArgs = append(valueArgs,
@@ -355,6 +381,14 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			transactions[i].CreatedAt,
 			transactions[i].UpdatedAt,
 			effectiveCategoryName,
+			// Issue #1203: category override discriminated union + review state
+			transactions[i].CategoryOverrideKind,
+			transactions[i].PFCPrimaryOverride,
+			transactions[i].PFCDetailedOverride,
+			transactions[i].CustomCategoryOverrideID,
+			categorySource,
+			transactions[i].Reviewed,
+			transactions[i].ReviewedAt,
 		)
 	}
 
@@ -370,7 +404,9 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		 source, external_transaction_id, external_transaction_id_blind_idx, external_metadata,
 		 amount, date, authorized_date, name, merchant_name, merchant_id,
 		 pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending, user_notes,
-		 created_at, updated_at, effective_category_name)
+		 created_at, updated_at, effective_category_name,
+		 category_override_kind, pfc_primary_override, pfc_detailed_override, custom_category_override_id,
+		 category_source, reviewed, reviewed_at)
 		VALUES %s
 		ON CONFLICT (source, external_transaction_id_blind_idx, user_id) DO UPDATE SET
 			account_id = EXCLUDED.account_id,
@@ -639,6 +675,8 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 		&tx.EffectivePFCPrimary,
 		&tx.EffectivePFCDetailed,
 		&tx.EffectiveCategoryName,
+		&tx.Reviewed,
+		&tx.ReviewedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -790,7 +828,10 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		conditions = append(conditions, "("+strings.Join(orParts, " OR ")+")")
 	}
 
-	// Optional filter: custom_category_ids (multi-value) — matches effective custom category
+	// Optional filter: custom_category_ids (multi-value) — matches the effective custom
+	// category. Issue #1203: rolls up children — selecting a parent custom category also
+	// matches transactions assigned to its children (parent_id). Leaf categories match
+	// only themselves, so this is a no-op for non-parent selections.
 	if len(filters.CustomCategoryIDs) > 0 {
 		placeholders := make([]string, len(filters.CustomCategoryIDs))
 		for i, id := range filters.CustomCategoryIDs {
@@ -798,9 +839,11 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 			args = append(args, id)
 			argIndex++
 		}
+		idList := strings.Join(placeholders, ", ")
 		conditions = append(conditions, fmt.Sprintf(
-			"(category_override_kind = 'custom' AND custom_category_override_id::text IN (%s))",
-			strings.Join(placeholders, ", "),
+			"(category_override_kind = 'custom' AND custom_category_override_id IN ("+
+				"SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text IN (%s) OR parent_id::text IN (%s))))",
+			idList, idList,
 		))
 	}
 
@@ -817,6 +860,13 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 	if filters.Pending != nil {
 		conditions = append(conditions, fmt.Sprintf("pending = $%d", argIndex))
 		args = append(args, *filters.Pending)
+		argIndex++
+	}
+
+	// Optional filter: review state (Issue #1203)
+	if filters.Reviewed != nil {
+		conditions = append(conditions, fmt.Sprintf("reviewed = $%d", argIndex))
+		args = append(args, *filters.Reviewed)
 		argIndex++
 	}
 
@@ -843,7 +893,7 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 			conditions = append(conditions, "amount < 0")
 		case "expense":
 			conditions = append(conditions, "amount > 0")
-		// "all" means no filter - handled in handler by not setting AmountType
+			// "all" means no filter - handled in handler by not setting AmountType
 		}
 	}
 
@@ -915,6 +965,8 @@ func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transa
 			&tx.EffectivePFCPrimary,
 			&tx.EffectivePFCDetailed,
 			&tx.EffectiveCategoryName,
+			&tx.Reviewed,
+			&tx.ReviewedAt,
 		)
 
 		if err != nil {
@@ -1007,6 +1059,8 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 		&tx.EffectivePFCPrimary,
 		&tx.EffectivePFCDetailed,
 		&tx.EffectiveCategoryName,
+		&tx.Reviewed,
+		&tx.ReviewedAt,
 	)
 
 	if err != nil {
@@ -1090,6 +1144,8 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 		    custom_category_override_id = $4,
 		    category_source = $5,
 		    category_override_date = $6,
+		    reviewed = true,
+		    reviewed_at = $6,
 		    effective_category_name = CASE
 		        WHEN $1 = 'custom' THEN
 		            (SELECT name FROM custom_categories WHERE id = $4::uuid AND user_id = transactions.user_id)
@@ -1110,6 +1166,31 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 	}
 
 	return nil
+}
+
+// SetReviewed sets the review flag for the given transactions owned by userID.
+func (r *transactionRepository) SetReviewed(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error) {
+	if len(transactionIDs) == 0 {
+		return 0, nil
+	}
+
+	var reviewedAt *time.Time
+	if reviewed {
+		now := time.Now()
+		reviewedAt = &now
+	}
+
+	query := `
+		UPDATE transactions
+		SET reviewed = $1, reviewed_at = $2, updated_at = NOW()
+		WHERE user_id = $3 AND id = ANY($4::uuid[])
+	`
+
+	ct, err := r.db.Exec(ctx, query, reviewed, reviewedAt, userID, transactionIDs)
+	if err != nil {
+		return 0, fmt.Errorf("failed to set reviewed: %w", err)
+	}
+	return ct.RowsAffected(), nil
 }
 
 // GetDistinctPlaidCategories returns distinct Plaid category names for a user's transactions
@@ -1204,23 +1285,33 @@ func (r *transactionRepository) GetIncomeSumByTag(ctx context.Context, userID st
 // argStart is the starting positional parameter number (e.g. 4 when $1-$3 are already used).
 // Returns (clause string, args []interface{}).
 func buildCategoryClause(categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, argStart int) (string, []interface{}) {
+	// Issue #1203: roll-up is intrinsic. Targeting a parent category sums the
+	// parent plus its children, applied consistently here so every caller
+	// (spent sum, preview stats, transaction listing) agrees. The subqueries are
+	// no-ops for leaf categories, so existing single-category budgets are unaffected.
+	// user_id is always $1 in the budget-matching queries that call this helper.
 	switch categoryKind {
 	case "pfc":
 		if pfcPrimary == nil {
 			return "1=0", nil
 		}
-		clause := fmt.Sprintf(`effective_pfc_primary = $%d`, argStart)
-		args := []interface{}{*pfcPrimary}
 		if pfcDetailed != nil {
-			clause += fmt.Sprintf(` AND effective_pfc_detailed = $%d`, argStart+1)
-			args = append(args, *pfcDetailed)
+			// A PFC detailed is a leaf — exact match, never rolls up.
+			return fmt.Sprintf(`(effective_pfc_primary = $%d AND effective_pfc_detailed = $%d)`, argStart, argStart+1),
+				[]interface{}{*pfcPrimary, *pfcDetailed}
 		}
-		return clause, args
+		// A PFC primary rolls up its detaileds (via effective_pfc_primary) AND any
+		// custom categories the user nested under it (parent_pfc_primary).
+		clause := fmt.Sprintf(`(effective_pfc_primary = $%d OR (category_override_kind = 'custom' AND custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1 AND parent_pfc_primary = $%d)))`, argStart, argStart)
+		return clause, []interface{}{*pfcPrimary}
 	case "custom":
 		if customCategoryID == nil {
 			return "1=0", nil
 		}
-		return fmt.Sprintf(`(category_override_kind = 'custom' AND custom_category_override_id::text = $%d)`, argStart), []interface{}{*customCategoryID}
+		// A custom category rolls up its custom children (parent_id). A leaf
+		// custom category's subquery resolves to just itself.
+		clause := fmt.Sprintf(`(category_override_kind = 'custom' AND custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text = $%d OR parent_id::text = $%d)))`, argStart, argStart)
+		return clause, []interface{}{*customCategoryID}
 	default:
 		return "1=0", nil
 	}
@@ -1478,7 +1569,8 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 			   created_at, updated_at, tags, tags_source,
 			   category_override_kind, pfc_primary_override, pfc_detailed_override,
 			   custom_category_override_id, category_source, category_override_date,
-			   effective_pfc_primary, effective_pfc_detailed, effective_category_name
+			   effective_pfc_primary, effective_pfc_detailed, effective_category_name,
+			   reviewed, reviewed_at
 		FROM transactions
 		WHERE user_id = $1 AND user_account_id = $2
 		ORDER BY date DESC, created_at DESC
@@ -1535,6 +1627,8 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 			&tx.EffectivePFCPrimary,
 			&tx.EffectivePFCDetailed,
 			&tx.EffectiveCategoryName,
+			&tx.Reviewed,
+			&tx.ReviewedAt,
 		)
 
 		if err != nil {

@@ -42,13 +42,13 @@ func (f *CashFlowFilters) Validate() error {
 // CashFlowSummaryResponse represents the response for GET /api/v1/analytics/cash-flow-summary
 // Provides aggregated income, expenses, and net cash flow for a date range.
 type CashFlowSummaryResponse struct {
-	StartDate        time.Time                `json:"start_date"`
-	EndDate          time.Time                `json:"end_date"`
-	Income           float64                  `json:"income"`
-	Expenses         float64                  `json:"expenses"`
-	NetCashFlow      float64                  `json:"net_cash_flow"`
-	IncomeCount      int                      `json:"income_count"`
-	ExpenseCount     int                      `json:"expense_count"`
+	StartDate        time.Time                 `json:"start_date"`
+	EndDate          time.Time                 `json:"end_date"`
+	Income           float64                   `json:"income"`
+	Expenses         float64                   `json:"expenses"`
+	NetCashFlow      float64                   `json:"net_cash_flow"`
+	IncomeCount      int                       `json:"income_count"`
+	ExpenseCount     int                       `json:"expense_count"`
 	PeriodComparison *CashFlowPeriodComparison `json:"period_comparison,omitempty"`
 }
 
@@ -68,10 +68,10 @@ type CashFlowPeriodComparison struct {
 // CashFlowHistoryResponse represents the response for GET /api/v1/analytics/cash-flow-history
 // Provides time series cash flow data for charts with period grouping.
 type CashFlowHistoryResponse struct {
-	StartDate time.Time             `json:"start_date"`
-	EndDate   time.Time             `json:"end_date"`
-	Grouping  string                `json:"grouping"` // "daily", "weekly", "monthly"
-	Periods   []CashFlowPeriodData  `json:"periods"`
+	StartDate time.Time            `json:"start_date"`
+	EndDate   time.Time            `json:"end_date"`
+	Grouping  string               `json:"grouping"` // "daily", "weekly", "monthly"
+	Periods   []CashFlowPeriodData `json:"periods"`
 }
 
 // CashFlowPeriodData represents a single period in the cash flow history timeline
@@ -112,15 +112,20 @@ type SpendingFilters struct {
 	AccountTypes     []string
 	IncludeTransfers bool
 	Category         string // Optional: filter by primary category for subcategory drill-down
+
+	// CustomCategoryIDs scopes the report to specific custom categories (Issue #1203).
+	// When RollUpChildren is true, a parent custom id also matches its children.
+	CustomCategoryIDs []string
+	RollUpChildren    bool
 }
 
 // SpendingByCategory represents spending totals for a single category
 type SpendingByCategory struct {
-	Category         string  `json:"category"`
+	Category          string  `json:"category"`
 	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
-	Total            float64 `json:"total"`
-	Percentage       float64 `json:"percentage"`
-	TransactionCount int     `json:"transaction_count"`
+	Total             float64 `json:"total"`
+	Percentage        float64 `json:"percentage"`
+	TransactionCount  int     `json:"transaction_count"`
 }
 
 // SpendingByCategoryResponse is the response for GET /analytics/spending-by-category
@@ -150,9 +155,9 @@ type SpendingByMerchantResponse struct {
 
 // CategorySpending represents spending for a single category within a trend period
 type CategorySpending struct {
-	Category         string  `json:"category"`
+	Category          string  `json:"category"`
 	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
-	Total            float64 `json:"total"`
+	Total             float64 `json:"total"`
 }
 
 // SpendingTrendPeriod represents one month's spending breakdown in a trends response

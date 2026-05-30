@@ -116,10 +116,35 @@ export function groupBudgetCategoriesByPrimary(
     group.children.sort(sortByCreatedAt)
   }
 
-  // Add standalone custom categories as groups
-  const customGroups = standaloneCustom
-    .sort(sortByCreatedAt)
-    .map(cat => ({ group: cat, children: [] }))
+  // Build custom groups, nesting custom sub-allocations under their budgeted custom
+  // parent (custom_parent_id → a budgeted custom category's custom_category_id), #1203.
+  const customById = new Map<string, BudgetCategory>()
+  for (const cat of standaloneCustom) {
+    if (cat.custom_category_id) customById.set(cat.custom_category_id, cat)
+  }
+  const customGroupMap = new Map<string, BudgetCategoryGroup>()
+  const customChildren: BudgetCategory[] = []
+  for (const cat of standaloneCustom) {
+    if (cat.custom_parent_id && customById.has(cat.custom_parent_id)) {
+      customChildren.push(cat)
+    } else {
+      customGroupMap.set(cat.custom_category_id ?? cat.id, { group: cat, children: [] })
+    }
+  }
+  for (const child of customChildren) {
+    const parentGroup = child.custom_parent_id ? customGroupMap.get(child.custom_parent_id) : undefined
+    if (parentGroup) {
+      parentGroup.children.push(child)
+    } else {
+      // Parent not budgeted as a top-level group (shouldn't happen) — show standalone.
+      customGroupMap.set(child.custom_category_id ?? child.id, { group: child, children: [] })
+    }
+  }
+  const customGroups = Array.from(customGroupMap.values())
+    .sort((a, b) => sortByCreatedAt(a.group as BudgetCategory, b.group as BudgetCategory))
+  for (const group of customGroups) {
+    group.children.sort(sortByCreatedAt)
+  }
 
   return [...pfcGroups, ...customGroups]
 }

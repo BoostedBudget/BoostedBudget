@@ -350,3 +350,42 @@ func TestEffectiveTransferExpr_UsesEffectivePfcPrimaryColumn(t *testing.T) {
 		t.Errorf("transfer expr must NOT branch on category_override_kind (column is pre-computed), got: %s", expr)
 	}
 }
+
+// TestBuildSpendingFilter_CustomCategoryRollup verifies the custom-category scope
+// clause and roll-up behavior (Issue #1203).
+func TestBuildSpendingFilter_CustomCategoryRollup(t *testing.T) {
+	base := []interface{}{"user-1", time.Now(), time.Now()}
+
+	t.Run("rollup includes children via parent_id", func(t *testing.T) {
+		filters := domain.SpendingFilters{
+			IncludeTransfers:  true, // suppress the transfer clause for a focused assertion
+			CustomCategoryIDs: []string{"id1", "id2"},
+			RollUpChildren:    true,
+		}
+		clause, args, _ := buildSpendingFilter(filters, base)
+		if !contains(clause, "custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1") {
+			t.Errorf("expected rollup subquery, got: %s", clause)
+		}
+		if !contains(clause, "parent_id::text IN") {
+			t.Errorf("expected parent_id rollup, got: %s", clause)
+		}
+		if len(args) != 5 { // 3 base + 2 ids
+			t.Errorf("expected 5 args, got %d", len(args))
+		}
+	})
+
+	t.Run("no rollup matches exact ids only", func(t *testing.T) {
+		filters := domain.SpendingFilters{
+			IncludeTransfers:  true,
+			CustomCategoryIDs: []string{"id1"},
+			RollUpChildren:    false,
+		}
+		clause, _, _ := buildSpendingFilter(filters, base)
+		if !contains(clause, "custom_category_override_id::text IN") {
+			t.Errorf("expected exact-id match, got: %s", clause)
+		}
+		if contains(clause, "parent_id::text IN") {
+			t.Errorf("did not expect rollup subquery, got: %s", clause)
+		}
+	})
+}

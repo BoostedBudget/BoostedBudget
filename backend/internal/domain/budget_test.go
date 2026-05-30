@@ -168,7 +168,7 @@ func TestBudget_Validate(t *testing.T) {
 				UserID:         "user-123",
 				Name:           "Test Budget",
 				Period:         BudgetPeriodCustom,
-				StartDate:      validEndDate,   // later date as start
+				StartDate:      validEndDate,    // later date as start
 				EndDate:        &validStartDate, // earlier date as end
 				Amount:         100.00,
 				ExpectedIncome: 100.00,
@@ -305,6 +305,93 @@ func TestBudget_TotalSpent(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBudget_Totals_NoDoubleCountSubAllocations verifies that a parent's totals are
+// not double-counted with their sub-allocations (Issue #1203).
+func TestBudget_Totals_NoDoubleCountSubAllocations(t *testing.T) {
+	food := "FOOD_AND_DRINK"
+	fastFood := "FOOD_AND_DRINK_FAST_FOOD"
+	customParentID := "11111111-1111-1111-1111-111111111111"
+	customChildID := "22222222-2222-2222-2222-222222222222"
+
+	t.Run("PFC primary + detailed: detailed is within the primary", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300, SpentAmount: 150},                       // parent
+			{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, AllocatedAmount: 50, SpentAmount: 20}, // child
+		}}
+		// Only the parent counts (the $50/$20 is within the $300/$150).
+		if got := b.TotalAllocated(); got != 300 {
+			t.Errorf("TotalAllocated() = %v, want 300", got)
+		}
+		if got := b.TotalSpent(); got != 150 {
+			t.Errorf("TotalSpent() = %v, want 150", got)
+		}
+	})
+
+	t.Run("PFC detailed without its primary budgeted counts standalone", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, AllocatedAmount: 50, SpentAmount: 20},
+		}}
+		if got := b.TotalAllocated(); got != 50 {
+			t.Errorf("TotalAllocated() = %v, want 50", got)
+		}
+	})
+
+	t.Run("custom child nested under budgeted custom parent", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "custom", CustomCategoryID: &customParentID, AllocatedAmount: 300, SpentAmount: 150},
+			{CategoryKind: "custom", CustomCategoryID: &customChildID, CustomParentID: &customParentID, AllocatedAmount: 50, SpentAmount: 20},
+		}}
+		if got := b.TotalAllocated(); got != 300 {
+			t.Errorf("TotalAllocated() = %v, want 300", got)
+		}
+		if got := b.TotalSpent(); got != 150 {
+			t.Errorf("TotalSpent() = %v, want 150", got)
+		}
+	})
+
+	t.Run("custom child nested under budgeted PFC primary", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300, SpentAmount: 150},
+			{CategoryKind: "custom", CustomCategoryID: &customChildID, CustomParentPFCPrimary: &food, AllocatedAmount: 50, SpentAmount: 20},
+		}}
+		if got := b.TotalAllocated(); got != 300 {
+			t.Errorf("TotalAllocated() = %v, want 300", got)
+		}
+		if got := b.TotalSpent(); got != 150 {
+			t.Errorf("TotalSpent() = %v, want 150", got)
+		}
+	})
+}
+
+// TestBudget_OverEarmarkedParentIDs verifies informational over-earmark detection (Issue #1203).
+func TestBudget_OverEarmarkedParentIDs(t *testing.T) {
+	food := "FOOD_AND_DRINK"
+	fastFood := "FOOD_AND_DRINK_FAST_FOOD"
+	coffee := "FOOD_AND_DRINK_COFFEE"
+
+	t.Run("children within parent: no overage", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			{ID: "p", CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300},
+			{ID: "c1", CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, AllocatedAmount: 50},
+		}}
+		if got := b.OverEarmarkedParentIDs(); len(got) != 0 {
+			t.Errorf("expected no over-earmarked parents, got %v", got)
+		}
+	})
+
+	t.Run("children exceed parent: flagged", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			{ID: "p", CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 100},
+			{ID: "c1", CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, AllocatedAmount: 60},
+			{ID: "c2", CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &coffee, AllocatedAmount: 60},
+		}}
+		got := b.OverEarmarkedParentIDs()
+		if len(got) != 1 || got[0] != "p" {
+			t.Errorf("expected parent 'p' over-earmarked (120 > 100), got %v", got)
+		}
+	})
 }
 
 // TestBudget_TotalAllocated tests the TotalAllocated calculation

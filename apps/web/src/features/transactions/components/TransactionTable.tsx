@@ -8,6 +8,8 @@ import { getCategoryColor } from '@/lib/category-colors'
 import { getEffectiveCategory, getEffectiveCategoryLabel, getEffectiveDetailedCategory } from '@/shared/categories/getEffectiveCategory'
 import { getDetailedLabel, getPfcDetailedFilterOptions } from '@/shared/categories/pfcOptions'
 import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect'
+import type { CustomCategoryOption } from '@/shared/components/HierarchicalCategoryTreeSelect/HierarchicalCategoryTreeSelect'
+import { CategoryIcon } from '@/shared/components/IconPicker'
 import { formatTransactionAmount, isOutflow } from '@/shared/transactions/amount'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
@@ -47,6 +49,10 @@ export interface TransactionTableProps {
   /** Selected PFC detailed sub-category enum values (hierarchical category filter) */
   selectedDetaileds?: string[]
   onDetailedsChange?: (values: string[]) => void
+  /** Custom categories + selection for the hierarchical category filter (#1203) */
+  customCategories?: CustomCategoryOption[]
+  selectedCustomIds?: string[]
+  onCustomIdsChange?: (ids: string[]) => void
   /** Infinite scroll: called when user scrolls near the bottom */
   onScrollEnd?: () => void
   /** Infinite scroll: whether more pages exist */
@@ -89,6 +95,9 @@ export function TransactionTable({
   onPrimariesChange,
   selectedDetaileds,
   onDetailedsChange,
+  customCategories,
+  selectedCustomIds,
+  onCustomIdsChange,
   onScrollEnd,
   hasMore,
   isFetchingMore,
@@ -207,7 +216,29 @@ export function TransactionTable({
       minSize: 120,
       maxSize: 280,
       render: (row) => {
-        const categoryLabel = getEffectiveCategoryLabel(getEffectiveCategory(row))
+        const eff = getEffectiveCategory(row)
+        const categoryLabel = getEffectiveCategoryLabel(eff)
+        // For a custom category, show its icon + color (Issue #1203) when we can
+        // resolve it from the loaded custom categories; otherwise fall back to the
+        // generic color dot.
+        const customMatch =
+          eff?.kind === 'custom'
+            ? customCategories?.find((c) => c.id === eff.custom_category_id)
+            : undefined
+        if (customMatch) {
+          return (
+            <span className="inline-flex items-center gap-1.5">
+              <span
+                className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full"
+                style={{ backgroundColor: customMatch.color ?? '#6B7280', color: '#fff' }}
+                aria-hidden
+              >
+                <CategoryIcon name={customMatch.icon} className="h-2.5 w-2.5" />
+              </span>
+              {categoryLabel}
+            </span>
+          )
+        }
         return (
           <span className="inline-flex items-center gap-1.5">
             <span
@@ -224,10 +255,17 @@ export function TransactionTable({
           onPrimariesChange={onPrimariesChange}
           selectedDetaileds={selectedDetaileds ?? []}
           onDetailedsChange={onDetailedsChange}
+          customCategories={customCategories}
+          selectedCustomIds={selectedCustomIds ?? []}
+          onCustomIdsChange={onCustomIdsChange}
           aria-label="Filter by category"
         />
       ) : undefined,
-      isFilterActive: (selectedPrimaries?.length ?? 0) + (selectedDetaileds?.length ?? 0) > 0,
+      isFilterActive:
+        (selectedPrimaries?.length ?? 0) +
+          (selectedDetaileds?.length ?? 0) +
+          (selectedCustomIds?.length ?? 0) >
+        0,
     },
     {
       id: 'sub_category',

@@ -8,6 +8,7 @@ import type { CustomCategory } from '../../categories/types'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
 import { TagEditor } from '../../tags/components/TagEditor'
 import { CategoryEditor } from '../../categories/components/CategoryEditor'
+import { useReviewMutations } from '../hooks/useReviewMutations'
 import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
 import {
   useUpdateTransactionTags,
@@ -56,6 +57,18 @@ export function TransactionEditor({
   // Use generated mutation hooks
   const updateTagsMutation = useUpdateTransactionTags()
   const updateCategoryMutation = useUpdateTransactionCategory()
+  const { setReviewed, isPending: isReviewing } = useReviewMutations()
+
+  const handleToggleReviewed = async () => {
+    setError(null)
+    try {
+      const next = !transaction.reviewed
+      await setReviewed(transaction.id, next)
+      onSave({ ...transaction, reviewed: next })
+    } catch {
+      setError('Failed to update review status. Please try again.')
+    }
+  }
 
   const initialTags = transaction.tags || []
   const initialCategory = effectiveCategoryToStringArray(transaction)
@@ -176,6 +189,34 @@ export function TransactionEditor({
             onCategoryCreated={onCategoryCreated}
             disabled={isSaving}
           />
+        </div>
+
+        <div className="px-6 py-4 border-b border-border/50">
+          <label className="block mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Review
+          </label>
+          <div className="flex items-center justify-between">
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
+                transaction.reviewed
+                  ? 'bg-emerald-500/15 text-emerald-600'
+                  : 'bg-amber-500/15 text-amber-600'
+              }`}
+              data-testid="review-status-badge"
+            >
+              {transaction.reviewed ? 'Reviewed' : 'Unreviewed'}
+            </span>
+            <ReadOnlyGuard message="Resubscribe to review transactions">
+              <button
+                type="button"
+                onClick={handleToggleReviewed}
+                disabled={isReviewing}
+                className="px-3 py-1.5 border border-input rounded-md bg-card text-foreground text-sm font-medium cursor-pointer hover:bg-muted transition-all disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {transaction.reviewed ? 'Mark unreviewed' : 'Mark reviewed'}
+              </button>
+            </ReadOnlyGuard>
+          </div>
         </div>
 
         <div className="flex justify-end gap-3 px-6 py-4">

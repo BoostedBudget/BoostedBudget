@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -61,8 +62,8 @@ func (ist IncomeSourceType) IsValid() bool {
 // IncomeSource represents a tracked source of income for envelope budgeting.
 type IncomeSource struct {
 	Type         IncomeSourceType `json:"type"`
-	Value        string           `json:"value"`                  // Category name, tag name, or description
-	Description  string           `json:"description,omitempty"`  // Optional user-friendly label
+	Value        string           `json:"value"`                   // Category name, tag name, or description
+	Description  string           `json:"description,omitempty"`   // Optional user-friendly label
 	ValueDisplay string           `json:"value_display,omitempty"` // Human-readable display for Value when Type is pfc_primary
 }
 
@@ -190,22 +191,108 @@ func (b *Budget) Validate() error {
 	return nil
 }
 
-// TotalAllocated returns the sum of all category allocations.
-func (b *Budget) TotalAllocated() float64 {
-	var total float64
+// budgetedParentSets returns lookup sets of the PFC primaries and custom category
+// IDs that are budgeted as top-level rows, used to detect sub-allocations.
+func (b *Budget) budgetedParentSets() (pfcPrimaries, customIDs map[string]bool) {
+	pfcPrimaries = make(map[string]bool)
+	customIDs = make(map[string]bool)
 	for _, cat := range b.Categories {
-		total += cat.AllocatedAmount
+		if cat.CategoryKind == "pfc" && cat.PFCPrimary != nil && cat.PFCDetailed == nil {
+			pfcPrimaries[*cat.PFCPrimary] = true
+		}
+		if cat.CategoryKind == "custom" && cat.CustomCategoryID != nil {
+			customIDs[*cat.CustomCategoryID] = true
+		}
+	}
+	return pfcPrimaries, customIDs
+}
+
+// TotalAllocated returns the sum of TOP-LEVEL category allocations. Sub-allocations
+// (a child whose parent is also budgeted) are excluded because their amount is
+// already accounted for within the parent's allocation (Issue #1203).
+func (b *Budget) TotalAllocated() float64 {
+	pfcPrimaries, customIDs := b.budgetedParentSets()
+	var total float64
+	for i := range b.Categories {
+		if b.Categories[i].IsSubAllocationWithin(pfcPrimaries, customIDs) {
+			continue
+		}
+		total += b.Categories[i].AllocatedAmount
 	}
 	return total
 }
 
-// TotalSpent returns the sum of all category spent amounts.
+// TotalSpent returns the sum of TOP-LEVEL category spent amounts. A parent's
+// SpentAmount already rolls up its children's matched spend, so summing only
+// top-level rows avoids double-counting (Issue #1203). This also fixes the
+// pre-existing PFC primary + detailed double-count.
 func (b *Budget) TotalSpent() float64 {
+	pfcPrimaries, customIDs := b.budgetedParentSets()
 	var total float64
-	for _, cat := range b.Categories {
-		total += cat.SpentAmount
+	for i := range b.Categories {
+		if b.Categories[i].IsSubAllocationWithin(pfcPrimaries, customIDs) {
+			continue
+		}
+		total += b.Categories[i].SpentAmount
 	}
 	return total
+}
+
+// ChildrenAllocatedByParent maps each budgeted parent category's ID to the sum of
+// its budgeted children's allocations (sub-allocations), Issue #1203.
+func (b *Budget) ChildrenAllocatedByParent() map[string]float64 {
+	pfcPrimaryToID := make(map[string]string)
+	customIDToCatID := make(map[string]string)
+	for i := range b.Categories {
+		c := &b.Categories[i]
+		if c.CategoryKind == "pfc" && c.PFCPrimary != nil && c.PFCDetailed == nil {
+			pfcPrimaryToID[*c.PFCPrimary] = c.ID
+		}
+		if c.CategoryKind == "custom" && c.CustomCategoryID != nil {
+			customIDToCatID[*c.CustomCategoryID] = c.ID
+		}
+	}
+
+	sums := make(map[string]float64)
+	for i := range b.Categories {
+		c := &b.Categories[i]
+		var parentID string
+		switch c.CategoryKind {
+		case "pfc":
+			if c.PFCDetailed != nil && c.PFCPrimary != nil {
+				parentID = pfcPrimaryToID[*c.PFCPrimary]
+			}
+		case "custom":
+			if c.CustomParentID != nil {
+				parentID = customIDToCatID[*c.CustomParentID]
+			} else if c.CustomParentPFCPrimary != nil {
+				parentID = pfcPrimaryToID[*c.CustomParentPFCPrimary]
+			}
+		}
+		if parentID != "" {
+			sums[parentID] += c.AllocatedAmount
+		}
+	}
+	return sums
+}
+
+// OverEarmarkedParentIDs returns the IDs of budgeted parent categories whose child
+// sub-allocations exceed the parent's own allocation. Informational only — the app
+// permits over-earmarking (mirrors ExceedsExpectedIncome), Issue #1203.
+func (b *Budget) OverEarmarkedParentIDs() []string {
+	childSums := b.ChildrenAllocatedByParent()
+	byID := make(map[string]float64, len(b.Categories))
+	for i := range b.Categories {
+		byID[b.Categories[i].ID] = b.Categories[i].AllocatedAmount
+	}
+	var over []string
+	for parentID, childSum := range childSums {
+		if allocated, ok := byID[parentID]; ok && childSum > allocated {
+			over = append(over, parentID)
+		}
+	}
+	sort.Strings(over)
+	return over
 }
 
 // RemainingAmount returns the budget amount minus total spent.
@@ -268,9 +355,36 @@ type BudgetCategory struct {
 	PFCPrimaryDisplay  *string `json:"pfc_primary_display,omitempty" db:"-"`
 	PFCDetailedDisplay *string `json:"pfc_detailed_display,omitempty" db:"-"`
 
+	// Parent linkage of the referenced custom category (Issue #1203), populated
+	// from a join when the budget is loaded. Used to detect sub-allocations
+	// (a child whose parent is also budgeted) so totals aren't double-counted.
+	CustomParentID         *string `json:"custom_parent_id,omitempty" db:"-"`
+	CustomParentPFCPrimary *string `json:"custom_parent_pfc_primary,omitempty" db:"-"`
+
 	// Flexible matching fields (Issue #491)
 	Tags       []string   `json:"tags" db:"-"`
 	MatchLogic MatchLogic `json:"match_logic" db:"match_logic"`
+}
+
+// IsSubAllocationWithin reports whether this category's hierarchical parent is also
+// present among the given budget categories — i.e. this row is a sub-allocation
+// "within" a budgeted parent and must be excluded from budget totals (Issue #1203).
+func (bc *BudgetCategory) IsSubAllocationWithin(budgetedPFCPrimaries, budgetedCustomIDs map[string]bool) bool {
+	switch bc.CategoryKind {
+	case "pfc":
+		// A PFC detailed is a child of its primary when that primary is also budgeted.
+		if bc.PFCDetailed != nil && bc.PFCPrimary != nil && budgetedPFCPrimaries[*bc.PFCPrimary] {
+			return true
+		}
+	case "custom":
+		if bc.CustomParentID != nil && budgetedCustomIDs[*bc.CustomParentID] {
+			return true
+		}
+		if bc.CustomParentPFCPrimary != nil && budgetedPFCPrimaries[*bc.CustomParentPFCPrimary] {
+			return true
+		}
+	}
+	return false
 }
 
 // Validate checks that the BudgetCategory has all required fields.
@@ -363,11 +477,11 @@ type CreateBudgetRequest struct {
 
 // CreateBudgetCategoryRequest represents a category allocation in a budget creation request.
 type CreateBudgetCategoryRequest struct {
-	CategoryKind     string   `json:"category_kind" validate:"required,oneof=pfc custom"`
-	PFCPrimary       *string  `json:"pfc_primary,omitempty"`
-	PFCDetailed      *string  `json:"pfc_detailed,omitempty"`
-	CustomCategoryID *string  `json:"custom_category_id,omitempty" validate:"omitempty,uuid"`
-	AllocatedAmount  float64  `json:"allocated_amount" validate:"required,gte=0"`
+	CategoryKind     string  `json:"category_kind" validate:"required,oneof=pfc custom"`
+	PFCPrimary       *string `json:"pfc_primary,omitempty"`
+	PFCDetailed      *string `json:"pfc_detailed,omitempty"`
+	CustomCategoryID *string `json:"custom_category_id,omitempty" validate:"omitempty,uuid"`
+	AllocatedAmount  float64 `json:"allocated_amount" validate:"required,gte=0"`
 
 	// Flexible matching fields (Issue #491)
 	Tags       []string   `json:"tags,omitempty"`
@@ -404,14 +518,14 @@ type UpdateBudgetCategoryRequest struct {
 // CategoryPreviewRequest represents the request to preview matching transactions for a category config.
 // Issue #497: Transaction preview feature
 type CategoryPreviewRequest struct {
-	CategoryKind     string   `json:"category_kind"`
-	PFCPrimary       *string  `json:"pfc_primary,omitempty"`
-	PFCDetailed      *string  `json:"pfc_detailed,omitempty"`
-	CustomCategoryID *string  `json:"custom_category_id,omitempty"`
-	Tags             []string `json:"tags,omitempty"`
+	CategoryKind     string     `json:"category_kind"`
+	PFCPrimary       *string    `json:"pfc_primary,omitempty"`
+	PFCDetailed      *string    `json:"pfc_detailed,omitempty"`
+	CustomCategoryID *string    `json:"custom_category_id,omitempty"`
+	Tags             []string   `json:"tags,omitempty"`
 	MatchLogic       MatchLogic `json:"match_logic" validate:"required,oneof=category_only tag_only and or"`
-	StartDate        string   `json:"start_date" validate:"required"`
-	EndDate          string   `json:"end_date" validate:"required"`
+	StartDate        string     `json:"start_date" validate:"required"`
+	EndDate          string     `json:"end_date" validate:"required"`
 }
 
 // CategoryPreviewResponse represents the response with matching transaction stats.

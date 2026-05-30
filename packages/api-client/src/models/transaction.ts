@@ -66,6 +66,8 @@ export interface Transaction {
   pfc_primary_display?: string;
   pfc_primary_override?: string;
   pfc_primary_override_display?: string;
+  reviewed: boolean;
+  reviewed_at?: string;
   source: string;
   /** @nullable */
   tags: string[] | null;
