@@ -357,6 +357,10 @@ func (h *TransactionHandler) UpdateTransactionCategory(ctx context.Context, inpu
 		if b.CustomCategoryID != nil {
 			return nil, huma.Error400BadRequest("custom_category_id must be omitted when kind=pfc")
 		}
+	case "clear":
+		if (b.PFCPrimary != nil && *b.PFCPrimary != "") || (b.PFCDetailed != nil && *b.PFCDetailed != "") || b.CustomCategoryID != nil {
+			return nil, huma.Error400BadRequest("pfc_primary/pfc_detailed/custom_category_id must be omitted when kind=clear")
+		}
 	}
 
 	tx, err := h.service.UpdateTransactionCategory(ctx, input.UserID, input.ID, input.Body.Kind, input.Body.PFCPrimary, input.Body.PFCDetailed, input.Body.CustomCategoryID)
