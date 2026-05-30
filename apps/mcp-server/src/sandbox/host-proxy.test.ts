@@ -71,6 +71,39 @@ describe('createHostProxy', () => {
     expect((err as HostProxyError).code).toBe('invalid_confirmation')
   })
 
+  // ── Rate limiting — per-user isolation ──────────────────────────────────
+
+  it('rate-limits per userId independently (no cross-user bleed)', async () => {
+    const { createRateLimiter } = await import('../limits/rate-limit')
+    // Shared limiter with maxPerMinute=1 per user
+    const rateLimiter = createRateLimiter({ maxPerMinute: 1, maxConcurrent: 10 })
+
+    // user-1 exhausts their personal limit
+    const proxy1 = createHostProxy({ mutator: makeMutator(), userId: 'user-1', rateLimiter })
+    await proxy1.invoke(ALLOWED_READ_OP, {})
+    await expect(proxy1.invoke(ALLOWED_READ_OP, {})).rejects.toMatchObject({ code: 'denied' })
+
+    // user-2 uses a DIFFERENT userId with the SAME shared rateLimiter instance.
+    // Their budget must be independent — user-1 exhausting MUST NOT block user-2.
+    const proxy2 = createHostProxy({ mutator: makeMutator(), userId: 'user-2', rateLimiter })
+    await expect(proxy2.invoke(ALLOWED_READ_OP, {})).resolves.toBeDefined()
+  })
+
+  it('defaults userId to anonymous — same bucket for all anonymous callers', async () => {
+    // This test documents the bug: if no userId is passed, all callers share 'anonymous'
+    // Fix: always pass userId (props.clerkUserId) when constructing the proxy in agent.ts
+    const { createRateLimiter } = await import('../limits/rate-limit')
+    const rateLimiter = createRateLimiter({ maxPerMinute: 1, maxConcurrent: 10 })
+
+    // Two "different users" but neither passes userId → both default to 'anonymous'
+    const proxy1 = createHostProxy({ mutator: makeMutator(), rateLimiter }) // no userId
+    const proxy2 = createHostProxy({ mutator: makeMutator(), rateLimiter }) // no userId
+
+    await proxy1.invoke(ALLOWED_READ_OP, {})                           // uses 'anonymous' slot
+    await expect(proxy2.invoke(ALLOWED_READ_OP, {}))                   // also 'anonymous' → BLOCKED
+      .rejects.toMatchObject({ code: 'denied' })
+  })
+
   // ── Credential injection ─────────────────────────────────────────────────
 
   it('injects credentials from credential provider', async () => {

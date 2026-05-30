@@ -19,6 +19,7 @@ import { buildExecuteHandler } from './tools/execute'
 import { buildRecipeTools } from './tools/recipes'
 import { createHostProxy } from '../sandbox/host-proxy'
 import { createFetchMutator } from '../client/fetch-mutator'
+import { createRateLimiter } from '../limits/rate-limit'
 import { createPosthogClient, MCP_EVENTS } from '../analytics/posthog-client'
 import { extractMcpHeaders, buildPropsFromHeaders } from './agent-auth'
 import type { SpecIndex } from '../spec/search-runtime'
@@ -95,7 +96,10 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
         originSecret: env.BOOSTEDBUDGET_ORIGIN_SECRET,
       }),
     })
-    const proxy = createHostProxy({ mutator })
+    // Per-session rate limiter — bound to this DO instance lifetime, not the module global.
+    // Keyed on props.clerkUserId so each user gets an independent bucket.
+    const rateLimiter = createRateLimiter({ maxPerMinute: 60, maxConcurrent: 5 })
+    const proxy = createHostProxy({ mutator, userId: props.clerkUserId, rateLimiter })
 
     // PostHog analytics client (no-op if POSTHOG_API_KEY is unset)
     const posthog = createPosthogClient((env as Record<string, unknown>)['POSTHOG_API_KEY'] as string ?? '')
