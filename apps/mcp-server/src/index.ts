@@ -60,11 +60,12 @@ export default {
 
     // ── All other routes require a valid Clerk OAuth token ─────────────────
     let authCtx
+    let rawAccessToken: string
     try {
-      const token = ClerkTokenVerifier.extractBearerToken(
+      rawAccessToken = ClerkTokenVerifier.extractBearerToken(
         request.headers.get('Authorization') ?? undefined,
       )
-      authCtx = await verifyClerkToken(token, env)
+      authCtx = await verifyClerkToken(rawAccessToken, env)
       await assertNotRevoked(authCtx, env)
     } catch {
       return unauthorizedResponse(env.MCP_RESOURCE_URL, 'invalid_token')
@@ -73,15 +74,17 @@ export default {
     // ── MCP endpoint — route to BoostedBudgetMcpAgent Durable Object ──────────
     if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
       // Inject auth context as trusted internal headers before routing to the DO.
-      // The DO is only reachable through this Worker (never directly exposed),
-      // so these headers are trustworthy.
-      // Build headers from scratch to prevent client-supplied X-MCP-* header injection.
-      // Delete then set guarantees exactly one trusted value even if the client sent duplicates.
+      // The DO is only reachable through this Worker (never directly exposed).
+      // Build headers from scratch — delete then set to prevent injection/duplicates.
       const forwardHeaders = new Headers(request.headers)
       forwardHeaders.delete('X-MCP-Clerk-User-Id')
       forwardHeaders.delete('X-MCP-Grant-Id')
+      forwardHeaders.delete('X-MCP-Access-Token')
       forwardHeaders.set('X-MCP-Clerk-User-Id', authCtx.clerkUserId)
       forwardHeaders.set('X-MCP-Grant-Id', authCtx.grantId)
+      // Pass the raw Clerk OAuth JWT so the DO can use it as the bearer token
+      // when calling the Go backend (which validates Clerk JWTs, not user IDs).
+      forwardHeaders.set('X-MCP-Access-Token', rawAccessToken!)
       const authedRequest = new Request(request, { headers: forwardHeaders })
 
       const mcpHandler = BoostedBudgetMcpAgent.serve('/mcp', {
