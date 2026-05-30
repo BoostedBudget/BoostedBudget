@@ -67,33 +67,47 @@ export default {
       )
       authCtx = await verifyClerkToken(rawAccessToken, env)
       await assertNotRevoked(authCtx, env)
-    } catch {
+    } catch (err) {
+      // Log auth failures for operational visibility (Workers Logs enabled in wrangler.toml).
+      // Do NOT include the raw token or sensitive payload in the log — just the error type.
+      const errName = err instanceof Error ? err.constructor.name : typeof err
+      console.error(`[mcp-auth] token verification failed: ${errName}`, {
+        path: url.pathname,
+        method: request.method,
+      })
       return unauthorizedResponse(env.MCP_RESOURCE_URL, 'invalid_token')
     }
 
-    // ── MCP endpoint — route to BoostedBudgetMcpAgent Durable Object ──────────
-    if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
-      // Inject auth context as trusted internal headers before routing to the DO.
-      // The DO is only reachable through this Worker (never directly exposed).
-      // Build headers from scratch — delete then set to prevent injection/duplicates.
-      const forwardHeaders = new Headers(request.headers)
-      forwardHeaders.delete('X-MCP-Clerk-User-Id')
-      forwardHeaders.delete('X-MCP-Grant-Id')
-      forwardHeaders.delete('X-MCP-Access-Token')
-      forwardHeaders.set('X-MCP-Clerk-User-Id', authCtx.clerkUserId)
-      forwardHeaders.set('X-MCP-Grant-Id', authCtx.grantId)
-      // Pass the raw Clerk OAuth JWT so the DO can use it as the bearer token
-      // when calling the Go backend (which validates Clerk JWTs, not user IDs).
-      forwardHeaders.set('X-MCP-Access-Token', rawAccessToken!)
-      const authedRequest = new Request(request, { headers: forwardHeaders })
+    // ── Inject trusted auth headers — shared by both MCP transports ─────────
+    // Build headers from scratch — delete then set to prevent injection/duplicates.
+    // The DO is only reachable through this Worker (never directly exposed).
+    const forwardHeaders = new Headers(request.headers)
+    // Clear any existing MCP headers
+    for (const key of ['X-MCP-Clerk-User-Id', 'X-MCP-Grant-Id', 'X-MCP-Access-Token']) {
+      forwardHeaders.delete(key)
+    }
+    // Set trusted headers from verified auth context
+    forwardHeaders.set('X-MCP-Clerk-User-Id', authCtx.clerkUserId)
+    forwardHeaders.set('X-MCP-Grant-Id', authCtx.grantId)
+    forwardHeaders.set('X-MCP-Access-Token', rawAccessToken!)
+    const authedRequest = new Request(request, { headers: forwardHeaders })
 
+    // ── MCP Streamable HTTP transport (primary) ────────────────────────────
+    if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
       const mcpHandler = BoostedBudgetMcpAgent.serve('/mcp', {
         binding: 'MCP_AGENT',
       })
       return mcpHandler.fetch(authedRequest, env as Parameters<typeof mcpHandler.fetch>[1], {} as ExecutionContext)
     }
 
-    // TODO Phase 8: Sentry/tracing error boundary
+    // ── MCP SSE transport (legacy clients that don't support Streamable HTTP) ─
+    // Served at /sse; the DO session is the same BoostedBudgetMcpAgent.
+    if (url.pathname === '/sse' || url.pathname.startsWith('/sse/')) {
+      const sseHandler = BoostedBudgetMcpAgent.serveSSE('/sse', {
+        binding: 'MCP_AGENT',
+      })
+      return sseHandler.fetch(authedRequest, env as Parameters<typeof sseHandler.fetch>[1], {} as ExecutionContext)
+    }
 
     return new Response(JSON.stringify({ error: 'not_found' }), {
       status: 404,

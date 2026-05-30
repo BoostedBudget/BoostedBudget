@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generatedAt": "2026-05-30T03:45:53.731Z",
+  "generatedAt": "2026-05-30T16:25:53.130Z",
   "entries": [
     {
       "operationId": "getAccounts",
@@ -868,7 +868,7 @@
       "tags": [
         "MCP Recipes"
       ],
-      "manifestClass": "write",
+      "manifestClass": "read",
       "excluded": false
     },
     {

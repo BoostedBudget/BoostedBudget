@@ -79,4 +79,30 @@ describe('buildPropsFromHeaders', () => {
     })
     expect(props.accessToken).not.toBe('MISSING_ACCESS_TOKEN')
   })
+
+  it('produces a different token on the second request with a refreshed token', () => {
+    // GAP-R3-11: the DO fetch() override must call updateProps() on EVERY request
+    // (no !this.props?.accessToken guard) so refreshed tokens are picked up.
+    // This test verifies extractMcpHeaders + buildPropsFromHeaders correctly models the
+    // per-request header→props pipeline; the actual guard removal is in agent.ts fetch().
+    const firstRequest = new Request('https://example.com/mcp', {
+      headers: {
+        'X-MCP-Access-Token': 'token-v1',
+        'X-MCP-Clerk-User-Id': 'user_1',
+        'X-MCP-Grant-Id': 'grant_1',
+      },
+    })
+    const secondRequest = new Request('https://example.com/mcp', {
+      headers: {
+        'X-MCP-Access-Token': 'token-v2-refreshed',
+        'X-MCP-Clerk-User-Id': 'user_1',
+        'X-MCP-Grant-Id': 'grant_1',
+      },
+    })
+    const props1 = buildPropsFromHeaders(extractMcpHeaders(firstRequest)!)
+    const props2 = buildPropsFromHeaders(extractMcpHeaders(secondRequest)!)
+    expect(props1.accessToken).toBe('token-v1')
+    expect(props2.accessToken).toBe('token-v2-refreshed')
+    expect(props1.accessToken).not.toBe(props2.accessToken)
+  })
 })

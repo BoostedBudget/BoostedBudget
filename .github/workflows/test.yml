@@ -27,6 +27,7 @@ jobs:
       api: ${{ steps.filter.outputs.api }}
       migrations: ${{ steps.filter.outputs.migrations }}
       workflow: ${{ steps.filter.outputs.workflow }}
+      mcp: ${{ steps.filter.outputs.mcp }}
     steps:
       - uses: actions/checkout@v6
 
@@ -331,6 +332,15 @@ jobs:
       - name: Run MCP server unit tests
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: bun test src/
+
+      - name: Typecheck MCP server
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        # Uses --skipLibCheck to avoid OOM from large generated api-client type declarations.
+        run: node --max-old-space-size=2048 ./node_modules/.bin/tsc --noEmit --skipLibCheck
+
+      - name: Lint MCP server
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: bun run lint
 
       - name: Check manifest completeness (deny-by-default CI gate)
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server

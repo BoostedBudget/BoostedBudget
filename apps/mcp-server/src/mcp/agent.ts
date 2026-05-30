@@ -69,15 +69,18 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
    * We extract the Clerk OAuth access token here (before MCP protocol handling)
    * and store it via updateProps() so init() can use it as the bearer token.
    *
+   * IMPORTANT: updateProps() is called on EVERY request (no guard on existing props).
+   * This ensures a refreshed Clerk access token is picked up mid-session rather than
+   * keeping the first token alive for the lifetime of the DO — which would cause
+   * backend 401s after the initial token expires.
+   *
    * Headers injected by index.ts after JWKS verification (delete-then-set,
    * injection-safe). The DO is not directly accessible; index.ts is the only entry.
    */
   override async fetch(request: Request): Promise<Response> {
-    if (!this.props?.accessToken) {
-      const headers = extractMcpHeaders(request)
-      if (headers) {
-        await this.updateProps(buildPropsFromHeaders(headers))
-      }
+    const headers = extractMcpHeaders(request)
+    if (headers) {
+      await this.updateProps(buildPropsFromHeaders(headers))
     }
     return super.fetch(request)
   }
@@ -86,21 +89,24 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
     const specIndex = await getSpecIndex()
     const env = this.env as Env
 
-    const props = this.props as McpAgentProps
-
-    // Inject access token into credentials; fall back to sentinel string to fail closed
-    const accessToken = props.accessToken ?? 'MISSING_ACCESS_TOKEN'
-    const mutator = createFetchMutator({
-      baseUrl: env.BOOSTEDBUDGET_API_URL,
-      getCredentials: async () => ({
-        authorization: `Bearer ${accessToken}`,
-        originSecret: env.BOOSTEDBUDGET_ORIGIN_SECRET,
-      }),
-    })
     // Per-session rate limiter — bound to this DO instance lifetime, not the module global.
     // Keyed on props.clerkUserId so each user gets an independent bucket.
     const rateLimiter = createRateLimiter({ maxPerMinute: 60, maxConcurrent: 5 })
-    const proxy = createHostProxy({ mutator, userId: props.clerkUserId, rateLimiter })
+
+    // Read credentials from this.props live (not a captured snapshot) so that a refreshed
+    // Clerk access token from a later request is picked up by subsequent backend calls.
+    const mutator = createFetchMutator({
+      baseUrl: env.BOOSTEDBUDGET_API_URL,
+      getCredentials: async () => ({
+        authorization: `Bearer ${(this.props as McpAgentProps).accessToken}`,
+        originSecret: env.BOOSTEDBUDGET_ORIGIN_SECRET,
+      }),
+    })
+    const proxy = createHostProxy({
+      mutator,
+      userId: (this.props as McpAgentProps).clerkUserId,
+      rateLimiter,
+    })
 
     // PostHog analytics client (no-op if POSTHOG_API_KEY is unset)
     const posthog = createPosthogClient((env as Record<string, unknown>)['POSTHOG_API_KEY'] as string ?? '')
@@ -124,9 +130,10 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
         },
       },
       async (input) => {
-        posthog.capture(props.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'search' })
+        const p = this.props as McpAgentProps
+        posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'search' })
         const result = handleSearch(input, specIndex)
-        void audit.record({ actorUserId: props.clerkUserId, grantId: props.grantId ?? 'unknown',
+        void audit.record({ actorUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown',
           operationClass: 'read', operationId: 'search', result: 'success' })
         return result
       },
@@ -151,17 +158,23 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
               body: z.record(z.unknown()).optional().describe('Request body for write operations'),
               pathParams: z.record(z.string()).optional().describe('Path parameters (e.g. { id: "abc" })'),
             }),
-          ).describe('Ordered list of API calls to execute'),
+          ).max(25, 'Maximum 25 calls per execute() invocation').describe('Ordered list of API calls to execute (max 25)'),
           confirmationToken: z.string().optional().describe('Confirmation token for write operations'),
         },
       },
       async (input) => {
-        posthog.capture(props.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'execute' })
+        const p = this.props as McpAgentProps
+        posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'execute' })
         const result = await executeHandler(input)
         const callCount = input.calls?.length ?? 0
-        posthog.capture(props.clerkUserId, MCP_EVENTS.CODE_EXECUTED, { callCount })
-        void audit.record({ actorUserId: props.clerkUserId, grantId: props.grantId ?? 'unknown',
-          operationClass: 'read', operationId: 'execute', result: 'success' })
+        posthog.capture(p.clerkUserId, MCP_EVENTS.CODE_EXECUTED, { callCount })
+        void audit.record({
+          actorUserId: p.clerkUserId,
+          grantId: p.grantId ?? 'unknown',
+          operationClass: 'read',
+          operationId: 'execute',
+          result: 'success',
+        })
         return result
       },
     )

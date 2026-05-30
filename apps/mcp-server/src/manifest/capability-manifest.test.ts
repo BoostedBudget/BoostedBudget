@@ -100,6 +100,34 @@ describe('write operations', () => {
   })
 })
 
+// ── Recipe operations ──────────────────────────────────────────────────────
+
+describe('recipe operations', () => {
+  it('classifies runMCPRecipe as READ (v1 recipes are read-only compositions)', () => {
+    // GAP-R3-10: runMCPRecipe was misclassified as write, causing host-proxy to demand
+    // a confirmation token that the recipe.run tool has no input field for.
+    // v1 recipes can only compose read-class ops, so running them is a read operation.
+    const entry = getCapability('runMCPRecipe')
+    expect(entry?.class).toBe('read')
+    expect(entry?.confirmationRequired).toBe(false)
+    expect(entry?.excluded).toBe(false)
+  })
+
+  it('classifies listMCPRecipes as read', () => {
+    expect(getCapability('listMCPRecipes')?.class).toBe('read')
+  })
+
+  it('classifies getMCPRecipe as read', () => {
+    expect(getCapability('getMCPRecipe')?.class).toBe('read')
+  })
+
+  it('classifies createMCPRecipe as write (confirmation required)', () => {
+    const entry = getCapability('createMCPRecipe')
+    expect(entry?.class).toBe('write')
+    expect(entry?.confirmationRequired).toBe(true)
+  })
+})
+
 // ── Excluded operations (permanently non-MCP) ─────────────────────────────
 
 describe('excluded operations', () => {

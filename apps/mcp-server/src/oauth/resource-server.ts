@@ -13,6 +13,7 @@
 interface ResourceServerEnv {
   MCP_RESOURCE_URL: string
   CLERK_JWKS_URL: string
+  CLERK_ISSUER_URL: string
 }
 
 export interface ProtectedResourceMetadata {
@@ -29,12 +30,12 @@ export interface ProtectedResourceMetadata {
 export function buildProtectedResourceMetadata(
   env: ResourceServerEnv,
 ): ProtectedResourceMetadata {
-  const jwksUrl = new URL(env.CLERK_JWKS_URL)
-  const clerkAsBase = `${jwksUrl.protocol}//${jwksUrl.host}`
-
+  // Use CLERK_ISSUER_URL directly as the canonical AS identifier (RFC 9728 §2).
+  // Do NOT derive from CLERK_JWKS_URL — the JWKS URL may be a direct/CDN endpoint
+  // that differs from the issuer, causing MCP clients to discover the wrong AS.
   return {
     resource: env.MCP_RESOURCE_URL,
-    authorization_servers: [clerkAsBase],
+    authorization_servers: [env.CLERK_ISSUER_URL],
     scopes_supported: ['openid', 'email', 'profile', 'public_metadata'],
     bearer_methods_supported: ['header'],
   }

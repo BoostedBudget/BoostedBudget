@@ -17,14 +17,27 @@ const EnvSchema = z
     ENVIRONMENT: z.enum(['production', 'staging', 'development']),
   })
   .superRefine((data, ctx) => {
-    if (data.ENVIRONMENT !== 'development') {
-      if (!data.BOOSTEDBUDGET_API_URL.startsWith('https://')) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'BOOSTEDBUDGET_API_URL must use https:// in non-development environments',
-          path: ['BOOSTEDBUDGET_API_URL'],
-        })
-      }
+    const isProd = data.ENVIRONMENT !== 'development'
+
+    if (isProd && !data.BOOSTEDBUDGET_API_URL.startsWith('https://')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'BOOSTEDBUDGET_API_URL must use https:// in non-development environments',
+        path: ['BOOSTEDBUDGET_API_URL'],
+      })
+    }
+
+    // Reject the known placeholder value so a misconfigured deploy fails loudly at startup
+    // rather than silently returning 401 on every authenticated request.
+    if (isProd && data.MCP_OAUTH_AUDIENCE.startsWith('PLACEHOLDER_')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'MCP_OAUTH_AUDIENCE is still set to the placeholder value. ' +
+          'Create a Clerk OAuth app and set the real client_id via: ' +
+          'echo "<client_id>" | wrangler secret put MCP_OAUTH_AUDIENCE [--env staging]',
+        path: ['MCP_OAUTH_AUDIENCE'],
+      })
     }
   })
 
