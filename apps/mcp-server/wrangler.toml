@@ -1,0 +1,46 @@
+name = "boostedbudget-mcp"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Production environment routes
+routes = [
+  { pattern = "mcp.boostedbudget.com/*", zone_name = "boostedbudget.com" }
+]
+
+# Durable Objects — McpAgent for Streamable HTTP session continuity (configured in Phase 4)
+# [[durable_objects.bindings]]
+# name = "MCP_AGENT"
+# class_name = "BoostedBudgetMcpAgent"
+
+# [[migrations]]
+# tag = "v1"
+# new_classes = ["BoostedBudgetMcpAgent"]
+
+# Dynamic Worker Loader for sandbox isolates (configured in Phase 4)
+# Requires Workers for Platforms dispatch namespace on paid plan
+# [[dispatch_namespaces]]
+# binding = "DISPATCHER"
+# namespace = "mcp-sandbox"
+
+[vars]
+ENVIRONMENT = "production"
+MCP_RESOURCE_URL = "https://mcp.boostedbudget.com"
+
+# Secrets (set via `wrangler secret put`):
+#   CLERK_SECRET_KEY
+#   CLERK_PUBLISHABLE_KEY
+#   CLERK_JWKS_URL
+#   BOOSTEDBUDGET_ORIGIN_SECRET
+#   BOOSTEDBUDGET_API_URL (override per env)
+
+[env.staging]
+name = "boostedbudget-mcp-staging"
+routes = [
+  { pattern = "mcp.staging.boostedbudget.com/*", zone_name = "boostedbudget.com" }
+]
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+MCP_RESOURCE_URL = "https://mcp.staging.boostedbudget.com"
+BOOSTEDBUDGET_API_URL = "https://staging-api.boostedbudget.com"
