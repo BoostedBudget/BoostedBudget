@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generatedAt": "2026-05-30T01:53:42.414Z",
+  "generatedAt": "2026-05-30T02:08:25.131Z",
   "entries": [
     {
       "operationId": "getAccounts",
@@ -793,6 +793,72 @@
       ],
       "manifestClass": "read",
       "excluded": true
+    },
+    {
+      "operationId": "listMCPRecipes",
+      "method": "GET",
+      "path": "/api/v1/mcp/recipes",
+      "summary": "List recipes",
+      "tags": [
+        "MCP Recipes"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "createMCPRecipe",
+      "method": "POST",
+      "path": "/api/v1/mcp/recipes",
+      "summary": "Create a recipe",
+      "tags": [
+        "MCP Recipes"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "getMCPRecipe",
+      "method": "GET",
+      "path": "/api/v1/mcp/recipes/{id}",
+      "summary": "Get a recipe",
+      "tags": [
+        "MCP Recipes"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "updateMCPRecipe",
+      "method": "PUT",
+      "path": "/api/v1/mcp/recipes/{id}",
+      "summary": "Update a recipe",
+      "tags": [
+        "MCP Recipes"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "deleteMCPRecipe",
+      "method": "DELETE",
+      "path": "/api/v1/mcp/recipes/{id}",
+      "summary": "Delete a recipe",
+      "tags": [
+        "MCP Recipes"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "runMCPRecipe",
+      "method": "POST",
+      "path": "/api/v1/mcp/recipes/{id}/run",
+      "summary": "Run a recipe",
+      "tags": [
+        "MCP Recipes"
+      ],
+      "manifestClass": "write",
+      "excluded": false
     },
     {
       "operationId": "getNotifications",
