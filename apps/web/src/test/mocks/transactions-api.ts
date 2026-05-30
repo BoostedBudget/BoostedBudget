@@ -43,6 +43,18 @@ export const mockUseInfiniteTransactions = mock(() => ({
   updateTransaction: mock(() => Promise.resolve()),
 }))
 
+// === useSetTransactionReviewed / useBulkSetTransactionReviewed (#1203) ===
+export const mockSetTransactionReviewedMutateAsync = mock(() => Promise.resolve({}))
+export const mockUseSetTransactionReviewed = mock(() => ({
+  mutateAsync: mockSetTransactionReviewedMutateAsync,
+  isPending: false,
+}))
+export const mockBulkSetTransactionReviewedMutateAsync = mock(() => Promise.resolve({}))
+export const mockUseBulkSetTransactionReviewed = mock(() => ({
+  mutateAsync: mockBulkSetTransactionReviewedMutateAsync,
+  isPending: false,
+}))
+
 // Query key mock
 export const mockGetTransactionsQueryKey = mock(() => ['transactions'])
 
@@ -53,5 +65,7 @@ mock.module('@boostedbudget/api-client/endpoints/transactions/transactions', () 
   useGetTransactions: mockUseGetTransactions,
   useUpdateTransactionTags: mockUseUpdateTransactionTags,
   useUpdateTransactionCategory: mockUseUpdateTransactionCategory,
+  useSetTransactionReviewed: mockUseSetTransactionReviewed,
+  useBulkSetTransactionReviewed: mockUseBulkSetTransactionReviewed,
   getGetTransactionsQueryKey: mockGetTransactionsQueryKey,
 }))

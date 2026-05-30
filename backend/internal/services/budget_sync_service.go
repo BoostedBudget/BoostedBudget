@@ -62,11 +62,11 @@ type BudgetSyncService interface {
 
 // budgetSyncService implements BudgetSyncService
 type budgetSyncService struct {
-	budgetRepo       BudgetSyncRepository
-	incomeService    BudgetIncomeCalculator
-	categoryService  BudgetSpentCalculator
-	logger           *slog.Logger
-	eventProcessor   EventTriggerProcessor // Optional: triggers automation rules on budget updates
+	budgetRepo      BudgetSyncRepository
+	incomeService   BudgetIncomeCalculator
+	categoryService BudgetSpentCalculator
+	logger          *slog.Logger
+	eventProcessor  EventTriggerProcessor // Optional: triggers automation rules on budget updates
 }
 
 // NewBudgetSyncService creates a new BudgetSyncService instance.
@@ -130,8 +130,7 @@ func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domai
 		return fmt.Errorf("failed to get budget categories: %w", err)
 	}
 
-	// Step 3: Calculate and update spent amount for each category
-	var totalSpent float64
+	// Step 3: Calculate and update spent amount for each category.
 	for i := range categories {
 		spentAmount, err := s.categoryService.CalculateCategorySpent(
 			ctx, budget.UserID, &categories[i], startDate, endDate)
@@ -144,7 +143,7 @@ func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domai
 			continue
 		}
 
-		totalSpent += spentAmount
+		categories[i].SpentAmount = spentAmount
 
 		if err := s.budgetRepo.UpdateCategorySpentAmount(ctx, categories[i].ID, spentAmount); err != nil {
 			s.logger.Error("failed to update category spent amount",
@@ -154,6 +153,10 @@ func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domai
 			continue
 		}
 	}
+
+	// Total over TOP-LEVEL categories only — a parent's spend already rolls up its
+	// children, so summing every row would double-count sub-allocations (Issue #1203).
+	totalSpent := (&domain.Budget{Categories: categories}).TotalSpent()
 
 	// Step 4: Trigger automation rules if event processor is set
 	// Issue #35: Rules Engine Core - budget_updated event

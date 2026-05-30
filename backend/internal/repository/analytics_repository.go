@@ -299,7 +299,7 @@ func effectiveCategoryDisplayExpr() string {
 // effectiveTransferExpr returns the SQL expression for the effective PFC primary used
 // in transfer filtering. Reads the denormalized effective_pfc_primary column directly.
 // effective_pfc_primary is NULL for custom-kind rows (never match TRANSFER%), so
-// COALESCE to '' ensures the NOT LIKE filter still works correctly.
+// COALESCE to ” ensures the NOT LIKE filter still works correctly.
 func effectiveTransferExpr() string {
 	return `COALESCE(t.effective_pfc_primary, '')`
 }
@@ -322,6 +322,30 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 
 	if !filters.IncludeTransfers {
 		clause += ` AND ` + effectiveTransferExpr() + ` NOT LIKE 'TRANSFER%'`
+	}
+
+	// Issue #1203: scope to specific custom categories. With RollUpChildren a parent
+	// custom id also matches its children (parent_id). user_id is $1 in spending queries.
+	if len(filters.CustomCategoryIDs) > 0 {
+		placeholders := make([]string, len(filters.CustomCategoryIDs))
+		for i, id := range filters.CustomCategoryIDs {
+			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+			args = append(args, id)
+			argIndex++
+		}
+		idList := strings.Join(placeholders, ", ")
+		if filters.RollUpChildren {
+			clause += fmt.Sprintf(
+				" AND t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
+					"SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text IN (%s) OR parent_id::text IN (%s)))",
+				idList, idList,
+			)
+		} else {
+			clause += fmt.Sprintf(
+				" AND t.category_override_kind = 'custom' AND t.custom_category_override_id::text IN (%s)",
+				idList,
+			)
+		}
 	}
 
 	return clause, args, argIndex

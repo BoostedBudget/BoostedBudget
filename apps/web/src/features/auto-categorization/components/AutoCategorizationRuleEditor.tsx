@@ -23,7 +23,7 @@ import { SearchableSelect } from '../../../shared/components/SearchableSelect'
 import type { Account } from '../../accounts/types'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
 import type { Detailed } from '@boostedbudget/api-client/models/detailed'
-import { useGetPlaidDetailedCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
+import { useGetPlaidDetailedCategories, useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
 
 // Account types available for selection
 const ACCOUNT_TYPES = [
@@ -173,7 +173,8 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
   const [targetKind, setTargetKind] = useState<RuleTargetKind | null>(rule?.target_kind ?? null)
   const [targetPfcPrimary, setTargetPfcPrimary] = useState<string | null>(rule?.target_pfc_primary ?? null)
   const [targetPfcDetailed, setTargetPfcDetailed] = useState<string | null>(rule?.target_pfc_detailed ?? null)
-  const [targetCustomCategoryId] = useState<string | null>(rule?.target_custom_category_id ?? null)
+  // #1203: custom-target picker is now editable.
+  const [targetCustomCategoryId, setTargetCustomCategoryId] = useState<string | null>(rule?.target_custom_category_id ?? null)
 
   // Form state - tags
   const [targetTags, setTargetTags] = useState<string[]>(rule?.target_tags || [])
@@ -399,6 +400,8 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
 
   // PFC v2 (#1073): map combobox selection back to discriminated state.
   const handleTargetPrimaryChange = (value: string) => {
+    // Choosing a PFC/none/clear target is mutually exclusive with a custom target (#1203).
+    setTargetCustomCategoryId(null)
     if (value === '' || value === null) {
       // No selection — clear all target fields (rule has no category action).
       setTargetKind(null)
@@ -415,6 +418,26 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
       setTargetPfcPrimary(value)
       setTargetPfcDetailed(null)
     }
+  }
+
+  // #1203: custom-category target picker.
+  const { data: customCategoriesData } = useGetUserCategories()
+  const customCategoryOptions = useMemo(
+    () => (customCategoriesData ?? []).map((c) => ({ value: c.id, label: c.name })),
+    [customCategoriesData]
+  )
+
+  const handleTargetCustomChange = (value: string) => {
+    if (!value) {
+      setTargetKind(null)
+      setTargetCustomCategoryId(null)
+      return
+    }
+    // Selecting a custom category switches the target to custom and clears any PFC target.
+    setTargetKind('custom')
+    setTargetCustomCategoryId(value)
+    setTargetPfcPrimary(null)
+    setTargetPfcDetailed(null)
   }
 
   const addTag = () => {
@@ -814,20 +837,17 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
             Target Category
           </label>
           {targetKind === 'custom' ? (
-            // PFC v2 (#1073): the custom-target picker UI is deferred. Existing rules with a
-            // custom target are shown read-only so users can edit other fields without
-            // accidentally clearing the target. Editing the custom target itself is unsupported
-            // in this version — track in a follow-up.
-            <div
-              className="px-3 py-2 text-sm border border-input rounded bg-muted text-muted-foreground"
-              data-testid="target-custom-readonly"
-              aria-label="Custom category target (read-only)"
-            >
-              Custom category: <code className="font-mono text-xs">{rule?.target_custom_category_display ?? targetCustomCategoryId}</code>
-              <span className="block text-xs mt-1 text-muted-foreground/80">
-                Editing the custom-category target is not yet supported in this UI.
-              </span>
-            </div>
+            // #1203: editable custom-category picker (replaces the former read-only display).
+            <SearchableSelect
+              options={customCategoryOptions}
+              value={targetCustomCategoryId ?? ''}
+              onChange={(value) => handleTargetCustomChange(value || '')}
+              placeholder="Search custom categories..."
+              disabled={saving}
+              aria-label="Custom category target"
+              allowClear
+              clearLabel="No category change"
+            />
           ) : (
             <>
               {/* PFC v2 (#1073): primary picker + optional detailed cascade. */}
@@ -842,6 +862,24 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
                 clearLabel="No category change"
               />
             </>
+          )}
+          {/* #1203: switch a PFC/none rule to a custom-category target. */}
+          {targetKind !== 'custom' && customCategoryOptions.length > 0 && (
+            <div className="mt-2">
+              <label htmlFor="target-custom" className={labelClass}>
+                …or a custom category
+              </label>
+              <SearchableSelect
+                options={customCategoryOptions}
+                value=""
+                onChange={(value) => handleTargetCustomChange(value || '')}
+                placeholder="Search custom categories..."
+                disabled={saving}
+                aria-label="Use a custom category target"
+                allowClear
+                clearLabel="No category change"
+              />
+            </div>
           )}
           {targetKind === 'pfc' && targetPfcPrimary && (
             <div className="mt-2">

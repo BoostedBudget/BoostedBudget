@@ -3,14 +3,23 @@ import type { BudgetCategory } from '../../types'
 import type { UserTag } from '@/features/tags/types'
 import type { CustomCategory } from '@boostedbudget/api-client/models/customCategory'
 
-// Mock useGetUserCategories so BudgetCategoryManager can resolve custom category names
+// Mock useGetUserCategories so BudgetCategoryManager can resolve custom category names.
+// Also stub the category mutation/usage hooks so the embedded CustomCategoryManager
+// (opened via the "Manage categories" launcher, #1203) can mount.
 const mockUseGetUserCategories = mock(() => ({
   data: [] as CustomCategory[],
   isLoading: false,
   error: null,
+  refetch: mock(() => Promise.resolve()),
 }))
+const mockMutation = () => ({ mutateAsync: mock(() => Promise.resolve()), isPending: false })
 mock.module('@boostedbudget/api-client/endpoints/categories/categories', () => ({
   useGetUserCategories: mockUseGetUserCategories,
+  useCreateCategory: mock(mockMutation),
+  useUpdateCategory: mock(mockMutation),
+  useDeleteCategory: mock(mockMutation),
+  useGetCategoryUsage: mock(() => ({ data: undefined, isLoading: false, error: null })),
+  getGetUserCategoriesQueryKey: mock(() => ['user-categories']),
 }))
 
 mock.module('./AllocationBreakdown', () => ({
@@ -124,6 +133,18 @@ describe('BudgetCategoryManager', () => {
   it('should render empty state when no categories', () => {
     renderManager()
     expect(screen.getByText(/no.*categories/i)).toBeInTheDocument()
+  })
+
+  it('opens the custom category manager from the "Manage categories" launcher (#1203)', async () => {
+    const user = userEvent.setup()
+    renderManager()
+
+    await user.click(screen.getByRole('button', { name: /manage categories/i }))
+
+    // The embedded CustomCategoryManager renders its own "Custom categories" heading.
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /^custom categories$/i })).toBeInTheDocument()
+    })
   })
 
   it('should render BudgetCategoryCard for each category', () => {

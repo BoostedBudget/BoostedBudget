@@ -50,6 +50,14 @@ TEST_FILES=(
     "src/features/pricing/hooks/usePricingContext.test.tsx"
     # usePostSignInCheckoutIntent: mockUseCreatePaddleCheckout state leaks from prior tests (#1038)
     "src/features/pricing/hooks/usePostSignInCheckoutIntent.test.tsx"
+    # CustomCategoryManager: shared useGetUserCategories mock clobbered in full suite (#1203)
+    "src/features/categories/components/CustomCategoryManager.test.tsx"
+    # These need the centralized categories/transactions API mocks but the budgets tests
+    # clobber them via inline global mock.module() in the full suite (#1203)
+    "src/features/categories/hooks/useCustomCategories.test.tsx"
+    "src/features/categories/hooks/useCategoryMutations.test.tsx"
+    "src/features/transactions/hooks/useReviewMutations.test.tsx"
+    "src/features/reports/components/CustomCategoryFilter.test.tsx"
 )
 
 # Build test command

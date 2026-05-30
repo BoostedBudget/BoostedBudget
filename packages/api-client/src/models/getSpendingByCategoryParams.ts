@@ -49,4 +49,12 @@ export type GetSpendingByCategoryParams = {
    * Primary category to drill into subcategories
    */
   category?: string;
+  /**
+   * Comma-separated custom category UUIDs to scope the report (Issue #1203)
+   */
+  custom_category_ids?: string;
+  /**
+   * When true, a parent custom category also includes its children (default true)
+   */
+  roll_up?: string;
 };

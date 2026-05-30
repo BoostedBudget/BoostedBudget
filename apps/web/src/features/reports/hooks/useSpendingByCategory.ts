@@ -14,6 +14,8 @@ interface SpendingFilters {
   endDate?: string
   accountTypes?: string[]
   category?: string
+  /** Scope to specific custom categories (#1203); parents roll up children. */
+  customCategoryIds?: string[]
 }
 
 interface UseSpendingByCategoryOptions {
@@ -40,6 +42,9 @@ export function useSpendingByCategory(
       end_date: filters.endDate,
       account_types: filters.accountTypes?.join(','),
       category: filters.category,
+      ...(filters.customCategoryIds?.length
+        ? { custom_category_ids: filters.customCategoryIds.join(',') }
+        : {}),
     }
   }, [filters])
 

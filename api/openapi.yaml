@@ -744,6 +744,10 @@ components:
           type: string
         custom_category_id:
           type: string
+        custom_parent_id:
+          type: string
+        custom_parent_pfc_primary:
+          type: string
         id:
           type: string
         match_logic:
@@ -778,6 +782,30 @@ components:
         - updated_at
         - tags
         - match_logic
+      type: object
+    BulkSetTransactionReviewedInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/BulkSetTransactionReviewedInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        reviewed:
+          description: true to mark reviewed, false to move back to the unreviewed inbox
+          type: boolean
+        transaction_ids:
+          description: Transaction UUIDs to update (owned by the caller)
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - transaction_ids
+        - reviewed
       type: object
     CancelDeletionResponseBody:
       additionalProperties: false
@@ -1152,6 +1180,34 @@ components:
         - total_amount
         - has_more
       type: object
+    CategoryUsage:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CategoryUsage.json
+          format: uri
+          readOnly: true
+          type: string
+        budget_count:
+          format: int64
+          type: integer
+        child_count:
+          format: int64
+          type: integer
+        rule_count:
+          format: int64
+          type: integer
+        transaction_count:
+          format: int64
+          type: integer
+      required:
+        - transaction_count
+        - budget_count
+        - rule_count
+        - child_count
+      type: object
     CheckRoleResponseBody:
       additionalProperties: false
       properties:
@@ -1444,6 +1500,8 @@ components:
           type: string
         name:
           type: string
+        parent_id:
+          type: string
         parent_pfc_primary:
           type: string
       required:
@@ -1518,6 +1576,10 @@ components:
         id:
           type: string
         name:
+          type: string
+        parent_id:
+          type: string
+        parent_name:
           type: string
         parent_pfc_primary:
           type: string
@@ -3247,6 +3309,39 @@ components:
         - clerk
         - plaid
       type: object
+    SetTransactionReviewedInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SetTransactionReviewedInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        reviewed:
+          description: true to mark reviewed, false to move back to the unreviewed inbox
+          type: boolean
+      required:
+        - reviewed
+      type: object
+    SetTransactionReviewedOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SetTransactionReviewedOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        updated:
+          description: Number of transactions whose review state changed
+          format: int64
+          type: integer
+      required:
+        - updated
+      type: object
     SpendingByCategory:
       additionalProperties: false
       properties:
@@ -3710,6 +3805,11 @@ components:
           type: string
         pfc_primary_override_display:
           type: string
+        reviewed:
+          type: boolean
+        reviewed_at:
+          format: date-time
+          type: string
         source:
           type: string
         tags:
@@ -3744,6 +3844,7 @@ components:
         - name
         - pending
         - category_source
+        - reviewed
         - tags
         - tags_source
         - created_at
@@ -4035,6 +4136,8 @@ components:
         icon:
           type: string
         name:
+          type: string
+        parent_id:
           type: string
         parent_pfc_primary:
           type: string
@@ -5871,6 +5974,20 @@ paths:
           schema:
             description: Primary category to drill into subcategories
             type: string
+        - description: "Comma-separated custom category UUIDs to scope the report (Issue #1203)"
+          explode: false
+          in: query
+          name: custom_category_ids
+          schema:
+            description: "Comma-separated custom category UUIDs to scope the report (Issue #1203)"
+            type: string
+        - description: When true, a parent custom category also includes its children (default true)
+          explode: false
+          in: query
+          name: roll_up
+          schema:
+            description: When true, a parent custom category also includes its children (default true)
+            type: string
       responses:
         "200":
           content:
@@ -6820,6 +6937,36 @@ paths:
       security:
         - clerk: []
       summary: Update a category
+      tags:
+        - Categories
+  /api/v1/categories/{id}/usage:
+    get:
+      description: Returns counts of transactions, budgets, rules, and child categories referencing the category (for delete-impact warnings).
+      operationId: getCategoryUsage
+      parameters:
+        - description: Category UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Category UUID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoryUsage"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get category usage counts
       tags:
         - Categories
   /api/v1/dashboard/account-types:
@@ -8316,6 +8463,13 @@ paths:
           schema:
             description: Filter by pending status (true/false)
             type: string
+        - description: "Filter by review state: true (reviewed), false (unreviewed inbox), omit for both"
+          explode: false
+          in: query
+          name: reviewed
+          schema:
+            description: "Filter by review state: true (reviewed), false (unreviewed inbox), omit for both"
+            type: string
         - description: Filter by minimum absolute amount
           explode: false
           in: query
@@ -8399,6 +8553,34 @@ paths:
       summary: List transactions
       tags:
         - Transactions
+  /api/v1/transactions/review:
+    patch:
+      description: Marks multiple transactions reviewed or unreviewed for the authenticated user.
+      operationId: bulkSetTransactionReviewed
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkSetTransactionReviewedInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetTransactionReviewedOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Bulk update transaction review state
+      tags:
+        - Transactions
   /api/v1/transactions/{id}:
     get:
       description: Retrieves a specific transaction by its UUID.
@@ -8463,6 +8645,42 @@ paths:
       security:
         - clerk: []
       summary: Update transaction category
+      tags:
+        - Transactions
+  /api/v1/transactions/{id}/review:
+    patch:
+      description: Marks a transaction reviewed or unreviewed (moves it out of / into the unreviewed inbox).
+      operationId: setTransactionReviewed
+      parameters:
+        - description: Transaction UUID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Transaction UUID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetTransactionReviewedInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetTransactionReviewedOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Update transaction review state
       tags:
         - Transactions
   /api/v1/transactions/{id}/tags:

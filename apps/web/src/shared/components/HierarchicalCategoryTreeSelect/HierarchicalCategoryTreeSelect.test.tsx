@@ -568,6 +568,34 @@ describe('HierarchicalCategoryTreeSelect', () => {
       expect(screen.getByText('Food & Drink')).toBeInTheDocument()
     })
 
+    it('moves focus between treeitem rows with ArrowDown/ArrowUp (#1203 a11y)', () => {
+      render(
+        <HierarchicalCategoryTreeSelect
+          selectedPrimaries={[]}
+          onPrimariesChange={() => {}}
+          selectedDetaileds={[]}
+          onDetailedsChange={() => {}}
+        />
+      )
+      fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+
+      const rows = screen.getAllByRole('treeitem')
+      expect(rows.length).toBeGreaterThan(1)
+
+      rows[0].focus()
+      expect(document.activeElement).toBe(rows[0])
+      fireEvent.keyDown(rows[0], { key: 'ArrowDown' })
+      expect(document.activeElement).toBe(rows[1])
+      fireEvent.keyDown(rows[1], { key: 'ArrowUp' })
+      expect(document.activeElement).toBe(rows[0])
+
+      // Home/End jump to the first/last treeitem.
+      fireEvent.keyDown(rows[0], { key: 'End' })
+      expect(document.activeElement).toBe(rows[rows.length - 1])
+      fireEvent.keyDown(rows[rows.length - 1], { key: 'Home' })
+      expect(document.activeElement).toBe(rows[0])
+    })
+
     it('fires primary row onClick when Enter is pressed on a primary row button', () => {
       const onPrimariesChange = mock(() => {})
       render(
@@ -644,6 +672,107 @@ describe('HierarchicalCategoryTreeSelect', () => {
     await userEvent.click(screen.getByTestId('expand-toggle-FOOD_AND_DRINK'))
     // click the already-selected detailed row
     await userEvent.click(screen.getByTestId('detailed-row-FOOD_AND_DRINK_COFFEE'))
+    expect(onSingleSelectChange).toHaveBeenCalledWith(null)
+  })
+
+  // ─── Custom categories (#1203) ──────────────────────────────────────────────
+
+  const customCats = [
+    { id: 'cust-1', name: 'Coffee Budget', color: '#FF0000', icon: 'coffee', parent_id: null },
+    { id: 'cust-2', name: 'Side Hustle', color: '#00FF00', icon: 'briefcase', parent_id: null },
+  ]
+
+  it('renders no custom section when customCategories is omitted', () => {
+    render(
+      <HierarchicalCategoryTreeSelect
+        selectedPrimaries={[]}
+        onPrimariesChange={() => {}}
+        selectedDetaileds={[]}
+        onDetailedsChange={() => {}}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+    expect(screen.queryByTestId('custom-section')).toBeNull()
+  })
+
+  it('multi-select: renders custom rows and toggles via onCustomIdsChange', () => {
+    const onCustomIdsChange = mock(() => {})
+    render(
+      <HierarchicalCategoryTreeSelect
+        selectedPrimaries={[]}
+        onPrimariesChange={() => {}}
+        selectedDetaileds={[]}
+        onDetailedsChange={() => {}}
+        customCategories={customCats}
+        selectedCustomIds={[]}
+        onCustomIdsChange={onCustomIdsChange}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+    const row = screen.getByTestId('custom-row-cust-1')
+    expect(row.getAttribute('data-custom')).toBe('true')
+    fireEvent.click(row)
+    expect(onCustomIdsChange).toHaveBeenCalledWith(['cust-1'])
+  })
+
+  it('multi-select: renders a custom parent with its nested child in hierarchy order (#1203)', () => {
+    const hierCats = [
+      { id: 'p1', name: 'Food', color: '#FF0000', icon: 'utensils', parent_id: null },
+      { id: 'c1', name: 'Fast Food', color: '#00FF00', icon: 'burger', parent_id: 'p1' },
+    ]
+    render(
+      <HierarchicalCategoryTreeSelect
+        selectedPrimaries={[]}
+        onPrimariesChange={() => {}}
+        selectedDetaileds={[]}
+        onDetailedsChange={() => {}}
+        customCategories={hierCats}
+        selectedCustomIds={[]}
+        onCustomIdsChange={() => {}}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+
+    const parent = screen.getByTestId('custom-row-p1')
+    const child = screen.getByTestId('custom-row-c1')
+    expect(parent).toBeInTheDocument()
+    expect(child).toBeInTheDocument()
+    // Child renders after its parent in the DOM (parent-then-child ordering).
+    expect(parent.compareDocumentPosition(child) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Child is rendered at the nested (detailed) indentation level, parent at the top level.
+    expect(child.className).toContain('pl-')
+  })
+
+  it('multi-select: shows active dot when a custom id is selected', () => {
+    render(
+      <HierarchicalCategoryTreeSelect
+        selectedPrimaries={[]}
+        onPrimariesChange={() => {}}
+        selectedDetaileds={[]}
+        onDetailedsChange={() => {}}
+        customCategories={customCats}
+        selectedCustomIds={['cust-1']}
+        onCustomIdsChange={() => {}}
+      />
+    )
+    expect(screen.getByTestId('active-dot')).toBeInTheDocument()
+  })
+
+  it('single-select: selecting a custom row emits its id and clears the PFC selection', () => {
+    const onSingleSelectChange = mock(() => {})
+    const onSingleSelectCustomChange = mock(() => {})
+    render(
+      <HierarchicalCategoryTreeSelect
+        singleSelectValue={null}
+        onSingleSelectChange={onSingleSelectChange}
+        customCategories={customCats}
+        singleSelectCustomId={null}
+        onSingleSelectCustomChange={onSingleSelectCustomChange}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+    fireEvent.click(screen.getByTestId('custom-row-cust-2'))
+    expect(onSingleSelectCustomChange).toHaveBeenCalledWith('cust-2')
     expect(onSingleSelectChange).toHaveBeenCalledWith(null)
   })
 })

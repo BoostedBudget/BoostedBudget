@@ -36,6 +36,8 @@ export interface BudgetCategory {
   category_kind: string;
   created_at: string;
   custom_category_id?: string;
+  custom_parent_id?: string;
+  custom_parent_pfc_primary?: string;
   id: string;
   match_logic: string;
   pfc_detailed?: string;

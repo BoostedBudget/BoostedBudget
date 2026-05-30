@@ -234,6 +234,28 @@ describe('AutoCategorizationRuleEditor', () => {
       expect(screen.getByDisplayValue('starbucks')).toBeInTheDocument()
     })
 
+    it('shows an editable custom-category picker for a custom-target rule (#1203)', () => {
+      const customRule: CategorizationRule = {
+        ...mockExistingRule,
+        target_kind: 'custom',
+        target_pfc_primary: undefined,
+        target_pfc_detailed: undefined,
+        target_custom_category_id: 'cust-1',
+      }
+      render(
+        <AutoCategorizationRuleEditor
+          mode="edit"
+          rule={customRule}
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+      // Editable picker is present; the former read-only display is gone.
+      expect(screen.getByLabelText('Custom category target')).toBeInTheDocument()
+      expect(screen.queryByTestId('target-custom-readonly')).toBeNull()
+    })
+
     it('should show existing tags', () => {
       render(
         <AutoCategorizationRuleEditor
