@@ -43,21 +43,40 @@ export interface HostProxyConfig {
   getCredentials?: () => Promise<Credentials>
 }
 
-// One-time confirmation tokens, one-use per operationId, 5-minute TTL
-const pendingConfirmations = new Map<string, { operationId: string; issuedAt: number }>()
+// One-time confirmation tokens, one-use, bound to operationId + args hash, 5-minute TTL.
+// Binding to a hash of the args prevents confirming one write from authorizing a different one.
+const pendingConfirmations = new Map<
+  string,
+  { operationId: string; argsHash: string; issuedAt: number }
+>()
 
 const CONFIRMATION_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
-function issueConfirmationToken(operationId: string): string {
+/** Simple stable hash of an args object — deterministic JSON stringify + djb2 */
+function hashArgs(args: Record<string, unknown>): string {
+  const json = JSON.stringify(args, Object.keys(args).sort())
+  let h = 5381
+  for (let i = 0; i < json.length; i++) {
+    h = (((h << 5) + h) ^ json.charCodeAt(i)) >>> 0
+  }
+  return h.toString(16)
+}
+
+function issueConfirmationToken(operationId: string, args: Record<string, unknown>): string {
   const token = crypto.randomUUID()
-  pendingConfirmations.set(token, { operationId, issuedAt: Date.now() })
+  pendingConfirmations.set(token, { operationId, argsHash: hashArgs(args), issuedAt: Date.now() })
   return token
 }
 
-function consumeConfirmationToken(token: string, operationId: string): boolean {
+function consumeConfirmationToken(
+  token: string,
+  operationId: string,
+  args: Record<string, unknown>,
+): boolean {
   const entry = pendingConfirmations.get(token)
   if (!entry) return false
   if (entry.operationId !== operationId) return false
+  if (entry.argsHash !== hashArgs(args)) return false // args must match exactly
   if (Date.now() - entry.issuedAt > CONFIRMATION_TTL_MS) {
     pendingConfirmations.delete(token)
     return false
@@ -86,7 +105,7 @@ export function createHostProxy(config: HostProxyConfig) {
       // 2. Write gate: confirmation token required
       if (entry.confirmationRequired) {
         if (!opts.confirmationToken) {
-          const token = issueConfirmationToken(operationId)
+          const token = issueConfirmationToken(operationId, args)
           throw new HostProxyError(
             'confirmation_required',
             `Write operation '${operationId}' requires confirmation. Re-invoke with the provided confirmationToken.`,
@@ -94,7 +113,7 @@ export function createHostProxy(config: HostProxyConfig) {
           )
         }
 
-        const valid = consumeConfirmationToken(opts.confirmationToken, operationId)
+        const valid = consumeConfirmationToken(opts.confirmationToken, operationId, args)
         if (!valid) {
           throw new HostProxyError(
             'invalid_confirmation',
