@@ -70,15 +70,26 @@ function getJwks(jwksUrl: string): ReturnType<typeof createRemoteJWKSet> {
   return jwksCache.get(jwksUrl)!
 }
 
+/** Type for the jose jwtVerify function — used for DI in tests */
+export type JwtVerifyFn = typeof jwtVerify
+
 /**
  * Verify a Clerk OAuth access token and return an AuthContext.
  * Throws TokenVerificationError on failure.
+ *
+ * @param token      Raw JWT from the Authorization header
+ * @param env        Environment bindings (CLERK_JWKS_URL, CLERK_ISSUER_URL, MCP_OAUTH_AUDIENCE)
+ * @param jwtVerifyFn  Optional jose jwtVerify override — used in unit tests to avoid real JWKS
  */
-export async function verifyClerkToken(token: string, env: ClerkVerifierEnv): Promise<AuthContext> {
+export async function verifyClerkToken(
+  token: string,
+  env: ClerkVerifierEnv,
+  jwtVerifyFn: JwtVerifyFn = jwtVerify,
+): Promise<AuthContext> {
   const jwks = getJwks(env.CLERK_JWKS_URL)
 
   try {
-    const { payload } = await jwtVerify(token, jwks, {
+    const { payload } = await jwtVerifyFn(token, jwks, {
       issuer: env.CLERK_ISSUER_URL,
       audience: env.MCP_OAUTH_AUDIENCE,
     })

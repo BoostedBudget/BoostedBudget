@@ -16,7 +16,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	echomiddleware "github.com/labstack/echo/v4/middleware"
-	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/database"
@@ -34,6 +33,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/maxnussbaum/BoostedBudget/internal/workers"
 	"github.com/riverqueue/river"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 )
 
 func main() {
@@ -145,10 +145,10 @@ func main() {
 	go middleware.StartCIDRRefresher(cfCtx, 24*time.Hour, cfCIDRRef)
 
 	// Middleware (order matters!)
-	e.Use(middleware.RequestID())                                                          // 1. Generate request IDs first
-	e.Use(middleware.SecurityHeaders(cfg.Environment))                                    // 2. Security hardening headers
-	e.Use(middleware.CloudflareOnly(cfCIDRRef, cfg.CFOriginSecret, cfg.Environment))      // 3. Cloudflare-only enforcement: blocks direct *.fly.dev access
-	e.Use(middleware.IPRateLimiter(middleware.RateLimitConfig{                            // 4. Per-IP rate limiting
+	e.Use(middleware.RequestID())                                                    // 1. Generate request IDs first
+	e.Use(middleware.SecurityHeaders(cfg.Environment))                               // 2. Security hardening headers
+	e.Use(middleware.CloudflareOnly(cfCIDRRef, cfg.CFOriginSecret, cfg.Environment)) // 3. Cloudflare-only enforcement: blocks direct *.fly.dev access
+	e.Use(middleware.IPRateLimiter(middleware.RateLimitConfig{                       // 4. Per-IP rate limiting
 		IPLimit:           cfg.RateLimitIP,
 		AuthEndpointLimit: cfg.RateLimitAuth,
 		WindowDuration:    time.Minute,
@@ -242,6 +242,9 @@ func main() {
 	// Issue #633: Declare DLQ cleanup check worker
 	var dlqCleanupCheckWorker *jobs.DLQCleanupCheckWorker
 
+	// Issue #1087 R4-7: Declare idempotency cleanup worker (always active)
+	var idempotencyCleanupWorker *jobs.IdempotencyCleanupWorker
+
 	// Issue #1007: Declare email change propagation worker.
 	// Issue #1015: Created unconditionally (before Plaid block); registered with River after.
 	var emailChangePropagationWorker *jobs.EmailChangePropagationWorker
@@ -319,32 +322,32 @@ func main() {
 		accountRepo := repository.NewAccountRepository(db, fieldEncryptor)
 		transactionRepo := repository.NewTransactionRepository(db, fieldEncryptor)
 		webhookRepo := repository.NewWebhookRepository(db, fieldEncryptor)
-		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db, fieldEncryptor)            // Issue #45, #46: Paddle webhooks
-		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db, fieldEncryptor)   // Issues #747 #748: Paddle transaction audit log
-		identityRepo := repository.NewUserIdentityRepository(db, fieldEncryptor) // Maps Clerk IDs to user UUIDs
-		notificationRepo := repository.NewNotificationRepository(db, fieldEncryptor)             // Issue #257: Notification storage
-		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db)       // Issue #353: Balance tracking
-		userTagRepo := repository.NewUserTagRepository(db)                       // Issue #345: User tags
-		customCategoryRepo := repository.NewCustomCategoryRepository(db)         // Issue #345: Custom categories
-		categorizationRuleRepo := repository.NewCategorizationRuleRepository(db) // Issue #346: Categorization rules
-		analyticsRepo := repository.NewAnalyticsRepository(db)                   // Issue #354: Cash flow analytics
-		budgetRepo := repository.NewBudgetRepository(db)                         // Issue #28: Budget management
-		savingsGoalRepo := repository.NewSavingsGoalRepository(db)               // Issue #28: Savings goals
-		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db)   // Issue #354: Dashboard preferences
-		transferSuggestionRepo := repository.NewTransferSuggestionRepository(db) // Issue #36: Transfer suggestions
-		automationRuleRepo := repository.NewAutomationRulesRepository(db)        // Issue #37: Automation rules
-		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)    // Issue #639: Admin user management
-		systemHealthRepo := repository.NewSystemHealthRepository(db)             // Issue #640: System health monitoring
-		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)           // Issue #640: Dead letter queue metrics
-		securityRepo := repository.NewSecurityRepository(db)                           // Issue #659: Plaid Investments
-		holdingRepo := repository.NewHoldingRepository(db)                             // Issue #659: Plaid Investments
-		investmentTxnRepo := repository.NewInvestmentTransactionRepository(db)        // Issue #659: Plaid Investments
-		creditLiabilityRepo := repository.NewCreditLiabilityRepository(db)            // Issue #910: Plaid Liabilities
+		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db, fieldEncryptor)                // Issue #45, #46: Paddle webhooks
+		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db, fieldEncryptor)        // Issues #747 #748: Paddle transaction audit log
+		identityRepo := repository.NewUserIdentityRepository(db, fieldEncryptor)                     // Maps Clerk IDs to user UUIDs
+		notificationRepo := repository.NewNotificationRepository(db, fieldEncryptor)                 // Issue #257: Notification storage
+		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db)                           // Issue #353: Balance tracking
+		userTagRepo := repository.NewUserTagRepository(db)                                           // Issue #345: User tags
+		customCategoryRepo := repository.NewCustomCategoryRepository(db)                             // Issue #345: Custom categories
+		categorizationRuleRepo := repository.NewCategorizationRuleRepository(db)                     // Issue #346: Categorization rules
+		analyticsRepo := repository.NewAnalyticsRepository(db)                                       // Issue #354: Cash flow analytics
+		budgetRepo := repository.NewBudgetRepository(db)                                             // Issue #28: Budget management
+		savingsGoalRepo := repository.NewSavingsGoalRepository(db)                                   // Issue #28: Savings goals
+		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db)                       // Issue #354: Dashboard preferences
+		transferSuggestionRepo := repository.NewTransferSuggestionRepository(db)                     // Issue #36: Transfer suggestions
+		automationRuleRepo := repository.NewAutomationRulesRepository(db)                            // Issue #37: Automation rules
+		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)                       // Issue #639: Admin user management
+		systemHealthRepo := repository.NewSystemHealthRepository(db)                                 // Issue #640: System health monitoring
+		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)                               // Issue #640: Dead letter queue metrics
+		securityRepo := repository.NewSecurityRepository(db)                                         // Issue #659: Plaid Investments
+		holdingRepo := repository.NewHoldingRepository(db)                                           // Issue #659: Plaid Investments
+		investmentTxnRepo := repository.NewInvestmentTransactionRepository(db)                       // Issue #659: Plaid Investments
+		creditLiabilityRepo := repository.NewCreditLiabilityRepository(db)                           // Issue #910: Plaid Liabilities
 		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db, fieldEncryptor)       // Issue #910: Plaid Liabilities
 		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor) // Issue #910: Plaid Liabilities
-			merchantRepo := repository.NewMerchantRepository(db)                            // Issue #1163: Merchant batch-upsert
+		merchantRepo := repository.NewMerchantRepository(db)                                         // Issue #1163: Merchant batch-upsert
 
-			// Create mock audit logger (will be replaced with real implementation later)
+		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
 
 		// Clerk Backend API service — used by deletion service and email propagation worker
@@ -694,7 +697,7 @@ func main() {
 					ruleApplicationService,
 					budgetSyncService,
 					transactionMonitorService,
-					merchantRepo,   // Issue #1163: Merchant batch-upsert
+					merchantRepo, // Issue #1163: Merchant batch-upsert
 					appLogger,
 				)
 
@@ -884,10 +887,10 @@ func main() {
 					river.PeriodicInterval(24*time.Hour),
 					func() (river.JobArgs, *river.InsertOpts) {
 						return jobs.PaddleReconciliationArgs{
-							TriggerSource: "periodic",
-						}, &river.InsertOpts{
-							Queue: "low",
-						}
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+							}
 					},
 					&river.PeriodicJobOpts{RunOnStart: false},
 				))
@@ -900,10 +903,10 @@ func main() {
 					river.PeriodicInterval(24*time.Hour),
 					func() (river.JobArgs, *river.InsertOpts) {
 						return jobs.RetentionCleanupCheckArgs{
-							TriggerSource: "periodic",
-						}, &river.InsertOpts{
-							Queue: "low",
-						}
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+							}
 					},
 					&river.PeriodicJobOpts{RunOnStart: false},
 				))
@@ -916,15 +919,29 @@ func main() {
 					river.PeriodicInterval(24*time.Hour),
 					func() (river.JobArgs, *river.InsertOpts) {
 						return jobs.DLQCleanupCheckArgs{
-							TriggerSource: "periodic",
-						}, &river.InsertOpts{
-							Queue: "low",
-						}
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+							}
 					},
 					&river.PeriodicJobOpts{RunOnStart: false},
 				))
 				appLogger.Info("DLQ cleanup check periodic job configured (daily)")
 			}
+
+			// Issue #1087 R4-7: Idempotency keys cleanup (daily — deletes expired rows)
+			periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+				river.PeriodicInterval(24*time.Hour),
+				func() (river.JobArgs, *river.InsertOpts) {
+					return jobs.IdempotencyCleanupArgs{
+						TriggerSource: "periodic",
+					}, &river.InsertOpts{
+						Queue: "low",
+					}
+				},
+				&river.PeriodicJobOpts{RunOnStart: false},
+			))
+			appLogger.Info("Idempotency cleanup periodic job configured (daily)")
 
 			if len(periodicJobs) > 0 {
 				riverConfig.PeriodicJobs = periodicJobs
@@ -964,6 +981,9 @@ func main() {
 				river.AddWorker(riverWorkers, dlqCleanupCheckWorker)
 				appLogger.Info("DLQ cleanup check worker registered with River")
 			}
+			// Issue #1087 R4-7: Idempotency cleanup worker (always active — repo always available)
+			river.AddWorker(riverWorkers, idempotencyCleanupWorker)
+			appLogger.Info("Idempotency cleanup worker registered with River")
 			if subscriptionWebhookWorker != nil {
 				river.AddWorker(riverWorkers, subscriptionWebhookWorker)
 				appLogger.Info("Paddle subscription webhook worker registered with River")
@@ -1109,18 +1129,41 @@ func main() {
 		humaAPI.UseMiddleware(humaAdminMiddleware)
 		appLogger.Info("Huma Admin middleware applied")
 
+		// Shared idempotency repository (Issue #1087: MCP server — R4-5 wiring)
+		humaIdempotencyRepo := repository.NewIdempotencyRepository(db)
+		humaMCPAuditRepo := repository.NewMCPAuditRepository(db)
+
+		// R4-7: Idempotency cleanup periodic job (deletes expired rows daily)
+		// Uses = not := to assign to the outer var declared at the top of main().
+		idempotencyCleanupWorker = jobs.NewIdempotencyCleanupWorker(jobs.IdempotencyCleanupWorkerDeps{
+			Repo:   humaIdempotencyRepo,
+			Logger: appLogger,
+		})
+		appLogger.Info("Idempotency cleanup worker created (River)")
+
 		// Register Huma tag routes (Issue #345: User tag management)
-		humaTagHandler := operations.NewTagHandler(userTagService)
+		humaTagHandler := operations.NewTagHandler(userTagService, operations.TagHandlerDeps{
+			IdempotencyRepo: humaIdempotencyRepo,
+			DB:              db,
+			MCPAuditRepo:    humaMCPAuditRepo,
+		})
 		operations.RegisterTagRoutes(humaAPI, humaTagHandler)
 		appLogger.Info("Huma tag routes registered")
 
 		// Register Huma transaction routes (Issue #559: Huma migration)
-		humaTransactionHandler := operations.NewTransactionHandler(transactionService)
+		humaTransactionHandler := operations.NewTransactionHandler(transactionService, operations.TransactionHandlerDeps{
+			DB:           db,
+			MCPAuditRepo: humaMCPAuditRepo,
+		})
 		operations.RegisterTransactionRoutes(humaAPI, humaTransactionHandler)
 		appLogger.Info("Huma transaction routes registered")
 
 		// Register Huma category routes (Issue #559: Huma migration)
-		humaCategoryHandler := operations.NewCategoryHandler(customCategoryService)
+		humaCategoryHandler := operations.NewCategoryHandler(customCategoryService, operations.CategoryHandlerDeps{
+			IdempotencyRepo: humaIdempotencyRepo,
+			DB:              db,
+			MCPAuditRepo:    humaMCPAuditRepo,
+		})
 		operations.RegisterCategoryRoutes(humaAPI, humaCategoryHandler)
 		appLogger.Info("Huma category routes registered")
 
@@ -1155,7 +1198,6 @@ func main() {
 		appLogger.Info("Huma analytics routes registered")
 
 		// Register MCP recipe routes (Issue #1087: MCP server)
-		humaIdempotencyRepo := repository.NewIdempotencyRepository(db)
 		humaRecipeRepo := repository.NewRecipeRepository(db)
 		humaRecipeService := services.NewRecipeService(humaRecipeRepo)
 		humaRecipeHandler := operations.NewRecipeHandler(humaRecipeService, humaIdempotencyRepo)
@@ -1164,7 +1206,6 @@ func main() {
 
 		// Register MCP audit log route (Issue #1087: MCP server, GAP-2)
 		// Service-auth via CloudflareOnly middleware (X-Origin-Secret, not end-user Clerk JWT)
-		humaMCPAuditRepo := repository.NewMCPAuditRepository(db)
 		humaMCPAuditHandler := operations.NewMCPAuditHandler(humaMCPAuditRepo)
 		operations.RegisterMCPAuditRoutes(humaAPI, humaMCPAuditHandler)
 		appLogger.Info("MCP audit log route registered")
@@ -1175,12 +1216,21 @@ func main() {
 		appLogger.Info("Huma dashboard preferences routes registered")
 
 		// Register Huma budget routes (Issue #559: Huma migration)
-		humaBudgetHandler := operations.NewBudgetHandler(budgetService, budgetSyncService, transactionService)
+		humaBudgetHandler := operations.NewBudgetHandler(budgetService, budgetSyncService, transactionService, operations.BudgetHandlerDeps{
+			IdempotencyRepo: humaIdempotencyRepo,
+			DB:              db,
+			MCPAuditRepo:    humaMCPAuditRepo,
+		})
 		operations.RegisterBudgetRoutes(humaAPI, humaBudgetHandler)
 		appLogger.Info("Huma budget routes registered")
 
 		// Register Huma savings goal routes (Issue #559: Huma migration)
-		humaSavingsGoalHandler := operations.NewSavingsGoalHandler(savingsGoalService)
+		humaSavingsGoalHandler := operations.NewSavingsGoalHandler(savingsGoalService, operations.SavingsGoalHandlerDeps{
+			IdempotencyRepo: humaIdempotencyRepo,
+			DB:              db,
+			MCPAuditRepo:    humaMCPAuditRepo,
+			AccountGetter:   accountRepo,
+		})
 		operations.RegisterSavingsGoalRoutes(humaAPI, humaSavingsGoalHandler)
 		appLogger.Info("Huma savings goal routes registered")
 

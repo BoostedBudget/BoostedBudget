@@ -93,6 +93,21 @@ func TestRecipeService_Create(t *testing.T) {
 		}
 	})
 
+	t.Run("R4-4: rejects recipe with non-empty schedule (scheduling not available in v1)", func(t *testing.T) {
+		repo := &mockRecipeRepository{}
+		svc := NewRecipeService(repo)
+		schedule := "0 9 * * 1" // weekly Monday 9am
+		req := domain.CreateMCPRecipeRequest{
+			Name:     "Weekly Summary",
+			Spec:     validRecipeSpec(),
+			Schedule: &schedule,
+		}
+		_, err := svc.Create(ctx, "user-1", req)
+		if err == nil {
+			t.Error("expected error: scheduled recipes are not available in v1")
+		}
+	})
+
 	t.Run("rejects recipe with write-class operation", func(t *testing.T) {
 		repo := &mockRecipeRepository{}
 		svc := NewRecipeService(repo)
@@ -147,6 +162,24 @@ func TestRecipeService_Create(t *testing.T) {
 		_, err := svc.Create(ctx, "user-1", req)
 		if err == nil {
 			t.Error("expected error from repository")
+		}
+	})
+}
+
+func TestRecipeService_Update(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("R4-4: rejects update with non-empty schedule", func(t *testing.T) {
+		repo := &mockRecipeRepository{
+			getFn: func(_ context.Context, id string, _ string) (*domain.MCPRecipe, error) {
+				return &domain.MCPRecipe{ID: id, UserID: "user-1", Name: "R", Spec: validRecipeSpec()}, nil
+			},
+		}
+		svc := NewRecipeService(repo)
+		schedule := "0 9 * * 1"
+		_, err := svc.Update(ctx, "r1", "user-1", domain.UpdateMCPRecipeRequest{Schedule: &schedule})
+		if err == nil {
+			t.Error("expected error: scheduled recipes are not available in v1")
 		}
 	})
 }

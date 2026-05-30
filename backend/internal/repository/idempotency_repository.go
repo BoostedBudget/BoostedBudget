@@ -20,6 +20,11 @@ type IdempotencyRepository interface {
 	// If the key does not exist, fn() is called; on success, the result is stored and returned.
 	// fn() errors are propagated without storing anything.
 	GetOrCreate(ctx context.Context, key, userID, operationID string, fn func() (interface{}, error), result interface{}) error
+
+	// DeleteExpired removes all rows past their expires_at timestamp.
+	// Called by the idempotency cleanup periodic job (R4-7, migration 000086/000087).
+	// Returns the number of deleted rows.
+	DeleteExpired(ctx context.Context) (int64, error)
 }
 
 type idempotencyRepository struct {
@@ -65,18 +70,24 @@ func (r *idempotencyRepository) GetOrCreate(
 		return fmt.Errorf("failed to serialize idempotency result: %w", err)
 	}
 
-	// Store in idempotency_keys table (best-effort; failure doesn't break the operation)
+	// Store in idempotency_keys table (best-effort; failure doesn't break the operation).
+	// ON CONFLICT (user_id, key) — per-user uniqueness (migration 000087).
 	_, storeErr := r.db.Exec(ctx,
 		`INSERT INTO idempotency_keys (key, user_id, operation_id, response_body)
 		 VALUES ($1, $2, $3, $4::jsonb)
-		 ON CONFLICT (key) DO NOTHING`,
+		 ON CONFLICT (user_id, key) DO NOTHING`,
 		key, userID, operationID, resultJSON,
 	)
-	if storeErr != nil {
-		// Log but don't fail — the operation succeeded; idempotency might not be
-		// enforced for this particular call but the response is still valid.
-		_ = storeErr
-	}
+	// If store fails, log doesn't fail — operation succeeded; dedup best-effort only
+	_ = storeErr
 
 	return json.Unmarshal(resultJSON, result)
+}
+
+func (r *idempotencyRepository) DeleteExpired(ctx context.Context) (int64, error) {
+	tag, err := r.db.Exec(ctx, `DELETE FROM idempotency_keys WHERE expires_at < NOW()`)
+	if err != nil {
+		return 0, fmt.Errorf("idempotency_keys cleanup failed: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

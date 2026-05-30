@@ -9,17 +9,35 @@ import (
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/pfc"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
 // CategoryHandler handles custom category-related HTTP requests.
 type CategoryHandler struct {
-	service services.CustomCategoryService
+	service         services.CustomCategoryService
+	idempotencyRepo repository.IdempotencyRepository // optional; nil disables dedup
+	db              repository.DB
+	mcpAuditRepo    repository.MCPAuditRepository
+}
+
+type CategoryHandlerDeps struct {
+	IdempotencyRepo repository.IdempotencyRepository
+	DB              repository.DB
+	MCPAuditRepo    repository.MCPAuditRepository
 }
 
 // NewCategoryHandler creates a new CategoryHandler instance.
-func NewCategoryHandler(service services.CustomCategoryService) *CategoryHandler {
-	return &CategoryHandler{service: service}
+// deps are optional (pass nil/omit for spec-gen nil-stubs); when non-nil,
+// createCustomCategory requests with an Idempotency-Key header are deduplicated.
+func NewCategoryHandler(service services.CustomCategoryService, deps ...CategoryHandlerDeps) *CategoryHandler {
+	h := &CategoryHandler{service: service}
+	if len(deps) > 0 {
+		h.idempotencyRepo = deps[0].IdempotencyRepo
+		h.db = deps[0].DB
+		h.mcpAuditRepo = deps[0].MCPAuditRepo
+	}
+	return h
 }
 
 // --- Input/Output Types ---
@@ -48,6 +66,8 @@ type GetCategoryByIDOutput struct {
 // CreateCategoryInput represents the input for creating a category.
 type CreateCategoryInput struct {
 	inputs.AuthenticatedInput
+	inputs.IdempotencyInput // reads Idempotency-Key header; empty = no deduplication
+	inputs.MCPContextInput
 	Body domain.CreateCustomCategoryRequest
 }
 
@@ -142,11 +162,48 @@ func (h *CategoryHandler) GetCategoryByID(ctx context.Context, input *GetCategor
 // CreateCategory handles POST /api/v1/categories requests.
 // Creates a new custom category for the authenticated user.
 func (h *CategoryHandler) CreateCategory(ctx context.Context, input *CreateCategoryInput) (*CreateCategoryOutput, error) {
+	// MCP origin: use transactional audit
+	if input.IsMCPOrigin() && h.db != nil && h.mcpAuditRepo != nil {
+		tx, err := h.db.Begin(ctx)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		defer rollbackMCPAuditTx(ctx, tx)
+
+		txCategoryRepo := repository.NewCustomCategoryRepository(tx)
+		txCategoryService := services.NewCustomCategoryService(txCategoryRepo)
+		category, err := txCategoryService.CreateCategory(ctx, input.UserID, &input.Body)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+
+		if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createCategory", input.IdempotencyKey); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		return &CreateCategoryOutput{Body: category}, nil
+	}
+
+	// Idempotency dedup without MCP audit
+	if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+		var category *domain.CustomCategory
+		err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createCustomCategory",
+			func() (interface{}, error) {
+				return h.service.CreateCategory(ctx, input.UserID, &input.Body)
+			}, &category)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		return &CreateCategoryOutput{Body: category}, nil
+	}
+
+	// No dedup
 	category, err := h.service.CreateCategory(ctx, input.UserID, &input.Body)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
-
 	return &CreateCategoryOutput{Body: category}, nil
 }
 

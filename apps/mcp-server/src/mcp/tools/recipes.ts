@@ -25,7 +25,7 @@ export interface SaveRecipeInput {
   name: string
   description?: string
   calls: RecipeCall[]
-  schedule?: string
+  // schedule is intentionally absent in v1: scheduler not built yet (follow-up issue).
   confirmationToken?: string
 }
 
@@ -75,7 +75,7 @@ export function buildRecipeTools(proxy: HostProxy): RecipeTools {
 
         await proxy.invoke(
           'createMCPRecipe',
-          { url: '/api/v1/mcp/recipes', method: 'POST', data: { name: input.name, description: input.description, spec, schedule: input.schedule } },
+          { url: '/api/v1/mcp/recipes', method: 'POST', data: { name: input.name, description: input.description, spec } },
           { confirmationToken: input.confirmationToken },
         )
         return { content: [{ type: 'text', text: `Recipe "${input.name}" saved successfully.` }] }

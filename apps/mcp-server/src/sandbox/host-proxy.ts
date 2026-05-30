@@ -43,20 +43,38 @@ export interface InvokeOptions {
 export interface HostProxyConfig {
   mutator: FetchMutator
   getCredentials?: () => Promise<Credentials>
-  /** User ID for rate/concurrency limiting (clerkUserId) */
+  /** User ID for rate/concurrency limiting AND confirmation token binding (clerkUserId) */
   userId?: string
+  /** Grant ID for confirmation token binding — prevents cross-grant replay after re-auth */
+  grantId?: string
   /** Rate limiter instance — shared across tool invocations in the same DO session */
   rateLimiter?: RateLimiter
+  /**
+   * Injectable clock for confirmation token TTL — returns current epoch ms.
+   * Defaults to Date.now(). Override in tests to control time without real sleep.
+   */
+  getNow?: () => number
 }
 
 // Default limiter: 60 req/min, 5 concurrent per DO session (per-user, per-session)
 const DEFAULT_LIMITER = createRateLimiter({ maxPerMinute: 60, maxConcurrent: 5 })
 
-// One-time confirmation tokens, one-use, bound to operationId + args hash, 5-minute TTL.
-// Binding to a hash of the args prevents confirming one write from authorizing a different one.
+// One-time confirmation tokens, one-use, 5-minute TTL.
+// Bound to: userId + grantId + operationId + argsHash.
+// The userId+grantId binding prevents cross-user and cross-grant replay within a shared isolate.
+// The argsHash binding prevents a token for one write from authorizing a different write.
+// idempotencyKey is a stable UUID generated at challenge time and forwarded on the confirmed write
+// so the backend can deduplicate retries of the same logical operation.
 const pendingConfirmations = new Map<
   string,
-  { operationId: string; argsHash: string; issuedAt: number }
+  {
+    userId: string
+    grantId: string
+    operationId: string
+    argsHash: string
+    issuedAt: number
+    idempotencyKey: string
+  }
 >()
 
 const CONFIRMATION_TTL_MS = 5 * 60 * 1000 // 5 minutes
@@ -79,31 +97,61 @@ async function hashArgs(args: Record<string, unknown>): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-async function issueConfirmationToken(operationId: string, args: Record<string, unknown>): Promise<string> {
+async function issueConfirmationToken(
+  userId: string,
+  grantId: string,
+  operationId: string,
+  args: Record<string, unknown>,
+  getNow: () => number,
+): Promise<string> {
   const token = crypto.randomUUID()
-  pendingConfirmations.set(token, { operationId, argsHash: await hashArgs(args), issuedAt: Date.now() })
+  // idempotencyKey is generated once at challenge time and forwarded on the confirmed write
+  // so the backend can deduplicate network retries of the same logical MCP write.
+  const idempotencyKey = crypto.randomUUID()
+  pendingConfirmations.set(token, {
+    userId,
+    grantId,
+    operationId,
+    argsHash: await hashArgs(args),
+    issuedAt: getNow(),
+    idempotencyKey,
+  })
   return token
 }
 
+/** Returns the idempotency key that was minted at challenge time, or null if invalid. */
 async function consumeConfirmationToken(
   token: string,
+  userId: string,
+  grantId: string,
   operationId: string,
   args: Record<string, unknown>,
-): Promise<boolean> {
+  getNow: () => number,
+): Promise<{ idempotencyKey: string } | null> {
   const entry = pendingConfirmations.get(token)
-  if (!entry) return false
-  if (entry.operationId !== operationId) return false
-  if (entry.argsHash !== await hashArgs(args)) return false // args must match exactly
-  if (Date.now() - entry.issuedAt > CONFIRMATION_TTL_MS) {
+  if (!entry) return null
+  // Binding checks: reject cross-user, cross-grant, wrong-op, and args-mismatch replays.
+  if (entry.userId !== userId) return null
+  if (entry.grantId !== grantId) return null
+  if (entry.operationId !== operationId) return null
+  if (entry.argsHash !== await hashArgs(args)) return null // TOCTOU: args must match exactly
+  if (getNow() - entry.issuedAt > CONFIRMATION_TTL_MS) {
     pendingConfirmations.delete(token)
-    return false
+    return null
   }
   pendingConfirmations.delete(token)
-  return true
+  return { idempotencyKey: entry.idempotencyKey }
 }
 
 export function createHostProxy(config: HostProxyConfig) {
-  const { mutator, getCredentials, userId = 'anonymous', rateLimiter = DEFAULT_LIMITER } = config
+  const {
+    mutator,
+    getCredentials,
+    userId = 'anonymous',
+    grantId = 'anonymous',
+    rateLimiter = DEFAULT_LIMITER,
+    getNow = Date.now,
+  } = config
 
   return {
     async invoke(operationId: string, args: Record<string, unknown>, opts: InvokeOptions = {}): Promise<unknown> {
@@ -125,22 +173,27 @@ export function createHostProxy(config: HostProxyConfig) {
         throw new HostProxyError('excluded', `Operation '${operationId}' is not available via MCP`)
       }
 
+      let confirmedIdempotencyKey: string | undefined
       if (entry.confirmationRequired) {
         if (!opts.confirmationToken) {
-          const token = await issueConfirmationToken(operationId, args)
+          // Token is bound to this userId+grantId — prevents cross-user and cross-grant replay.
+          // The idempotency key is minted here and forwarded on the confirmed call so the backend
+          // can deduplicate retries.
+          const token = await issueConfirmationToken(userId, grantId, operationId, args, getNow)
           throw new HostProxyError(
             'confirmation_required',
             `Write operation '${operationId}' requires confirmation. Re-invoke with the provided confirmationToken.`,
             token,
           )
         }
-        const valid = await consumeConfirmationToken(opts.confirmationToken, operationId, args)
-        if (!valid) {
+        const consumed = await consumeConfirmationToken(opts.confirmationToken, userId, grantId, operationId, args, getNow)
+        if (!consumed) {
           throw new HostProxyError(
             'invalid_confirmation',
-            'Confirmation token is invalid, expired, or already used.',
+            'Confirmation token is invalid, expired, already used, or issued for a different user/grant.',
           )
         }
+        confirmedIdempotencyKey = consumed.idempotencyKey
       }
 
       // Acquire concurrency slot
@@ -157,14 +210,17 @@ export function createHostProxy(config: HostProxyConfig) {
       try {
         const credentials = getCredentials ? await getCredentials() : undefined
         const requestConfig = args as Parameters<FetchMutator>[0]
+        // Use idempotency key from confirmed write (stable, minted at challenge time) if available,
+        // otherwise fall back to caller-provided key.
+        const effectiveIdempotencyKey = confirmedIdempotencyKey ?? opts.idempotencyKey
         const headers: Record<string, string> = credentials
           ? {
               Authorization: credentials.authorization,
               'X-Origin-Secret': credentials.originSecret,
-              ...(opts.idempotencyKey && { 'Idempotency-Key': opts.idempotencyKey }),
+              ...(effectiveIdempotencyKey && { 'Idempotency-Key': effectiveIdempotencyKey }),
             }
-          : opts.idempotencyKey
-            ? { 'Idempotency-Key': opts.idempotencyKey }
+          : effectiveIdempotencyKey
+            ? { 'Idempotency-Key': effectiveIdempotencyKey }
             : {}
 
         return await mutator(
