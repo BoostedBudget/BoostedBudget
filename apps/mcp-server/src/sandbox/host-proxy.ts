@@ -119,7 +119,14 @@ async function issueConfirmationToken(
   return token
 }
 
-/** Returns the idempotency key that was minted at challenge time, or null if invalid. */
+/**
+ * Returns the idempotency key that was minted at challenge time, or null if invalid.
+ *
+ * The token is burned (deleted from the Map) BEFORE any async work so that two
+ * concurrent confirmed calls with the same token cannot both read the same entry
+ * and both succeed. Burning an invalid concurrent attempt is preferable to
+ * authorising two writes.
+ */
 async function consumeConfirmationToken(
   token: string,
   userId: string,
@@ -128,18 +135,17 @@ async function consumeConfirmationToken(
   args: Record<string, unknown>,
   getNow: () => number,
 ): Promise<{ idempotencyKey: string } | null> {
+  // Capture and immediately burn — one-time use enforced before any async work.
   const entry = pendingConfirmations.get(token)
   if (!entry) return null
-  // Binding checks: reject cross-user, cross-grant, wrong-op, and args-mismatch replays.
+  pendingConfirmations.delete(token) // burn first; sync, before any await
+
+  // Binding checks: reject cross-user, cross-grant, wrong-op, expired, and args-mismatch.
   if (entry.userId !== userId) return null
   if (entry.grantId !== grantId) return null
   if (entry.operationId !== operationId) return null
+  if (getNow() - entry.issuedAt > CONFIRMATION_TTL_MS) return null
   if (entry.argsHash !== await hashArgs(args)) return null // TOCTOU: args must match exactly
-  if (getNow() - entry.issuedAt > CONFIRMATION_TTL_MS) {
-    pendingConfirmations.delete(token)
-    return null
-  }
-  pendingConfirmations.delete(token)
   return { idempotencyKey: entry.idempotencyKey }
 }
 

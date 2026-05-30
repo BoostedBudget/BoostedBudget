@@ -162,6 +162,47 @@ describe('createHostProxy', () => {
     ).resolves.toBeDefined()
   })
 
+  // ── Confirmation token — concurrent consume race (R5-5) ─────────────────
+
+  it('burns token before async work — concurrent second consume fails (R5-5)', async () => {
+    const proxy = createHostProxy({ mutator: makeMutator(), userId: 'user-concurrent', grantId: 'grant-concurrent' })
+    const token = await proxy.invoke(ALLOWED_WRITE_OP, {}, {}).then(
+      () => { throw new Error('expected confirmation_required') },
+      (err: { code: string; confirmationToken: string }) => err.confirmationToken,
+    )
+    const [result1, result2] = await Promise.allSettled([
+      proxy.invoke(ALLOWED_WRITE_OP, {}, { confirmationToken: token }),
+      proxy.invoke(ALLOWED_WRITE_OP, {}, { confirmationToken: token }),
+    ])
+    const successes = [result1, result2].filter((r) => r.status === 'fulfilled').length
+    const failures = [result1, result2].filter((r) => r.status === 'rejected').length
+    expect(successes).toBe(1)
+    expect(failures).toBe(1)
+  })
+
+  // ── Idempotency key — challenge→confirm round-trip (R5-20) ───────────────
+
+  it('R5-20: forwards same Idempotency-Key on confirmed write as was minted at challenge time', async () => {
+    const capturedOpts: Array<{ headers?: Record<string, string> }> = []
+    const capturingMutator: FetchMutator = mock((_config, opts) => {
+      if (opts) capturedOpts.push(opts as { headers?: Record<string, string> })
+      return Promise.resolve({})
+    }) as unknown as FetchMutator
+
+    const proxy = createHostProxy({ mutator: capturingMutator })
+    const challenge = await proxy.invoke(ALLOWED_WRITE_OP, {}).catch((e) => e) as HostProxyError
+    expect(challenge.code).toBe('confirmation_required')
+    const token = challenge.confirmationToken!
+
+    await proxy.invoke(ALLOWED_WRITE_OP, {}, { confirmationToken: token })
+
+    expect(capturedOpts).toHaveLength(1)
+    const idempotencyKey = capturedOpts[0]?.headers?.['Idempotency-Key']
+    expect(idempotencyKey).toBeDefined()
+    expect(typeof idempotencyKey).toBe('string')
+    expect(idempotencyKey!.length).toBeGreaterThan(0)
+  })
+
   // ── Rate limiting — per-user isolation ──────────────────────────────────
 
   it('rate-limits per userId independently (no cross-user bleed)', async () => {

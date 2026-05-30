@@ -17,6 +17,7 @@
 import { describe, expect, it, mock } from 'bun:test'
 import { buildExecuteHandler } from './tools/execute'
 import { createHostProxy } from '../sandbox/host-proxy'
+import { toAuditEntry } from './audit-mapping'
 
 const WRITE_OP = 'updateTransactionCategory'
 
@@ -120,5 +121,46 @@ describe('agent.ts host-proxy user/grant binding (R4-3 + R4-9)', () => {
     })
     const err = await proxyB.invoke(WRITE_OP, {}, { confirmationToken: tokenA }).catch((e) => e)
     expect(err.code).toBe('invalid_confirmation')
+  })
+})
+
+// ── R5-19: toAuditEntry pure helper ─────────────────────────────────────────
+
+describe('toAuditEntry (R5-19)', () => {
+  const actor = { clerkUserId: 'user-abc', grantId: 'grant-xyz' }
+
+  it('maps a read/success event correctly', () => {
+    const entry = toAuditEntry({ operationId: 'getTransactions', operationClass: 'read', result: 'success' }, actor)
+    expect(entry.actorUserId).toBe('user-abc')
+    expect(entry.grantId).toBe('grant-xyz')
+    expect(entry.operationId).toBe('getTransactions')
+    expect(entry.operationClass).toBe('read')
+    expect(entry.result).toBe('success')
+    expect(entry.confirmationPresented).toBe(false)
+    expect(entry.confirmationConfirmed).toBe(false)
+  })
+
+  it('maps a write/success (confirmed) event — confirmationConfirmed=true', () => {
+    const entry = toAuditEntry({ operationId: 'updateTransactionCategory', operationClass: 'write', result: 'success' }, actor)
+    expect(entry.confirmationPresented).toBe(false)
+    expect(entry.confirmationConfirmed).toBe(true)
+  })
+
+  it('maps a write/confirmation_required event — confirmationPresented=true, Confirmed=false', () => {
+    const entry = toAuditEntry({ operationId: 'updateTransactionCategory', operationClass: 'write', result: 'confirmation_required' }, actor)
+    expect(entry.confirmationPresented).toBe(true)
+    expect(entry.confirmationConfirmed).toBe(false)
+  })
+
+  it('maps a denied event — both flags false', () => {
+    const entry = toAuditEntry({ operationId: 'checkRole', operationClass: 'read', result: 'denied' }, actor)
+    expect(entry.confirmationPresented).toBe(false)
+    expect(entry.confirmationConfirmed).toBe(false)
+  })
+
+  it('maps an error event — both flags false', () => {
+    const entry = toAuditEntry({ operationId: 'getAccounts', operationClass: 'read', result: 'error' }, actor)
+    expect(entry.confirmationPresented).toBe(false)
+    expect(entry.confirmationConfirmed).toBe(false)
   })
 })

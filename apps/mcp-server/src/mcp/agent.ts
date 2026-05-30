@@ -23,6 +23,7 @@ import { createRateLimiter } from '../limits/rate-limit'
 import { createPosthogClient, MCP_EVENTS } from '../analytics/posthog-client'
 import { createAuditClient } from '../audit/audit-client'
 import { extractMcpHeaders, buildPropsFromHeaders } from './agent-auth'
+import { toAuditEntry } from './audit-mapping'
 import type { SpecIndex } from '../spec/search-runtime'
 import type { Env } from '../env'
 
@@ -100,6 +101,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       getCredentials: async () => ({
         authorization: `Bearer ${(this.props as McpAgentProps).accessToken}`,
         originSecret: env.BOOSTEDBUDGET_ORIGIN_SECRET,
+        mcpWorkerSecret: env.MCP_WORKER_SECRET,
       }),
     })
     const proxy = createHostProxy({
@@ -174,14 +176,9 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
         const callCount = input.calls?.length ?? 0
         posthog.capture(p.clerkUserId, MCP_EVENTS.CODE_EXECUTED, { callCount })
         // Record one audit entry per executed call with the real class and result.
+        const actor = { clerkUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown' }
         for (const event of auditEvents) {
-          void audit.record({
-            actorUserId: p.clerkUserId,
-            grantId: p.grantId ?? 'unknown',
-            ...event,
-            confirmationPresented: event.result === 'confirmation_required',
-            confirmationConfirmed: event.operationClass === 'write' && event.result === 'success',
-          })
+          void audit.record(toAuditEntry(event, actor))
         }
         return toolResult
       },

@@ -21,6 +21,7 @@ type SavingsGoalHandler struct {
 	db              repository.DB
 	mcpAuditRepo    repository.MCPAuditRepository
 	accountGetter   services.AccountGetter
+	mcpWorkerSecret string
 }
 
 type SavingsGoalHandlerDeps struct {
@@ -28,6 +29,7 @@ type SavingsGoalHandlerDeps struct {
 	DB              repository.DB
 	MCPAuditRepo    repository.MCPAuditRepository
 	AccountGetter   services.AccountGetter
+	MCPWorkerSecret string
 }
 
 // NewSavingsGoalHandler creates a new SavingsGoalHandler instance.
@@ -40,6 +42,7 @@ func NewSavingsGoalHandler(service services.SavingsGoalService, deps ...SavingsG
 		h.db = deps[0].DB
 		h.mcpAuditRepo = deps[0].MCPAuditRepo
 		h.accountGetter = deps[0].AccountGetter
+		h.mcpWorkerSecret = deps[0].MCPWorkerSecret
 	}
 	return h
 }
@@ -114,7 +117,7 @@ type DeleteSavingsGoalInput struct {
 // Creates a new savings goal for the authenticated user.
 func (h *SavingsGoalHandler) CreateGoal(ctx context.Context, input *CreateSavingsGoalInput) (*CreateSavingsGoalOutput, error) {
 	// MCP origin: use transactional audit
-	if input.IsMCPOrigin() && h.db != nil && h.mcpAuditRepo != nil && h.accountGetter != nil {
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.db != nil && h.mcpAuditRepo != nil && h.accountGetter != nil {
 		tx, err := h.db.Begin(ctx)
 		if err != nil {
 			return nil, humaerrors.LoggingMapError(ctx, err)

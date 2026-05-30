@@ -19,12 +19,14 @@ type CategoryHandler struct {
 	idempotencyRepo repository.IdempotencyRepository // optional; nil disables dedup
 	db              repository.DB
 	mcpAuditRepo    repository.MCPAuditRepository
+	mcpWorkerSecret string
 }
 
 type CategoryHandlerDeps struct {
 	IdempotencyRepo repository.IdempotencyRepository
 	DB              repository.DB
 	MCPAuditRepo    repository.MCPAuditRepository
+	MCPWorkerSecret string
 }
 
 // NewCategoryHandler creates a new CategoryHandler instance.
@@ -36,6 +38,7 @@ func NewCategoryHandler(service services.CustomCategoryService, deps ...Category
 		h.idempotencyRepo = deps[0].IdempotencyRepo
 		h.db = deps[0].DB
 		h.mcpAuditRepo = deps[0].MCPAuditRepo
+		h.mcpWorkerSecret = deps[0].MCPWorkerSecret
 	}
 	return h
 }
@@ -162,13 +165,34 @@ func (h *CategoryHandler) GetCategoryByID(ctx context.Context, input *GetCategor
 // CreateCategory handles POST /api/v1/categories requests.
 // Creates a new custom category for the authenticated user.
 func (h *CategoryHandler) CreateCategory(ctx context.Context, input *CreateCategoryInput) (*CreateCategoryOutput, error) {
-	// MCP origin: use transactional audit
-	if input.IsMCPOrigin() && h.db != nil && h.mcpAuditRepo != nil {
+	// MCP origin: use transactional audit with atomic idempotency.
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.db != nil && h.mcpAuditRepo != nil {
 		tx, err := h.db.Begin(ctx)
 		if err != nil {
 			return nil, humaerrors.LoggingMapError(ctx, err)
 		}
 		defer rollbackMCPAuditTx(ctx, tx)
+
+		// Idempotency check inside the transaction so the reservation is atomic
+		// with the entity write and the audit insert.
+		if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+			var category *domain.CustomCategory
+			if err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, input.IdempotencyKey, input.UserID, "createCategory",
+				func() (interface{}, error) {
+					txCategoryRepo := repository.NewCustomCategoryRepository(tx)
+					txCategoryService := services.NewCustomCategoryService(txCategoryRepo)
+					return txCategoryService.CreateCategory(ctx, input.UserID, &input.Body)
+				}, &category); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createCategory", input.IdempotencyKey); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			return &CreateCategoryOutput{Body: category}, nil
+		}
 
 		txCategoryRepo := repository.NewCustomCategoryRepository(tx)
 		txCategoryService := services.NewCustomCategoryService(txCategoryRepo)

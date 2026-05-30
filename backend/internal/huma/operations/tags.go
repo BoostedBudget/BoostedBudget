@@ -18,12 +18,14 @@ type TagHandler struct {
 	idempotencyRepo repository.IdempotencyRepository // optional; nil disables dedup
 	db              repository.DB
 	mcpAuditRepo    repository.MCPAuditRepository
+	mcpWorkerSecret string
 }
 
 type TagHandlerDeps struct {
 	IdempotencyRepo repository.IdempotencyRepository
 	DB              repository.DB
 	MCPAuditRepo    repository.MCPAuditRepository
+	MCPWorkerSecret string
 }
 
 // NewTagHandler creates a new TagHandler instance.
@@ -35,6 +37,7 @@ func NewTagHandler(service services.UserTagService, deps ...TagHandlerDeps) *Tag
 		h.idempotencyRepo = deps[0].IdempotencyRepo
 		h.db = deps[0].DB
 		h.mcpAuditRepo = deps[0].MCPAuditRepo
+		h.mcpWorkerSecret = deps[0].MCPWorkerSecret
 	}
 	return h
 }
@@ -130,13 +133,36 @@ func (h *TagHandler) GetTagByID(ctx context.Context, input *GetTagByIDInput) (*G
 // CreateTag handles POST /api/v1/tags requests.
 // Creates a new tag for the authenticated user.
 func (h *TagHandler) CreateTag(ctx context.Context, input *CreateTagInput) (*CreateTagOutput, error) {
-	// MCP origin: use transactional audit
-	if input.IsMCPOrigin() && h.db != nil && h.mcpAuditRepo != nil {
+	// MCP origin: use transactional audit with atomic idempotency.
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.db != nil && h.mcpAuditRepo != nil {
 		tx, err := h.db.Begin(ctx)
 		if err != nil {
 			return nil, humaerrors.LoggingMapError(ctx, err)
 		}
 		defer rollbackMCPAuditTx(ctx, tx)
+
+		// Idempotency check inside the transaction so the reservation is atomic
+		// with the entity write and the audit insert.
+		if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+			var tag *domain.UserTag
+			if err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, input.IdempotencyKey, input.UserID, "createUserTag",
+				func() (interface{}, error) {
+					txTagRepo := repository.NewUserTagRepository(tx)
+					txTagService := services.NewUserTagService(txTagRepo)
+					return txTagService.CreateTag(ctx, input.UserID, &input.Body)
+				}, &tag); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			// On a cache hit fn() was not called; on a cache miss fn() ran inside the tx.
+			// Either way, record the audit and commit — the audit row signals this attempt.
+			if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createUserTag", input.IdempotencyKey); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			return &CreateTagOutput{Body: tag}, nil
+		}
 
 		txTagRepo := repository.NewUserTagRepository(tx)
 		txTagService := services.NewUserTagService(txTagRepo)

@@ -671,6 +671,14 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: bun test src/
 
+      - name: Typecheck MCP server
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: NODE_OPTIONS=--max-old-space-size=2048 bun run typecheck
+
+      - name: Lint MCP server
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: bun run lint
+
       - name: Check manifest completeness
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: bun run scripts/check-manifest-completeness.ts
@@ -678,6 +686,20 @@ jobs:
       - name: Check no direct API calls
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: bun run scripts/check-no-direct-api-calls.ts
+
+      - name: Rebuild spec index and check for drift
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: |
+          bun run src/spec/index-builder.ts
+          git diff --exit-code src/spec/generated/spec-index.json || \
+            (echo "::error::MCP spec index is outdated. Run 'bun run src/spec/index-builder.ts' and commit." && exit 1)
+
+      - name: Rebuild facade and check for drift
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: |
+          bun run scripts/generate-facade.ts
+          git diff --exit-code src/client/generated/facade.ts || \
+            (echo "::error::MCP facade is outdated. Run 'bun run scripts/generate-facade.ts' and commit." && exit 1)
 
       - name: Deploy MCP Worker to production
         uses: cloudflare/wrangler-action@v4

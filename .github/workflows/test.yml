@@ -336,7 +336,7 @@ jobs:
       - name: Typecheck MCP server
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         # Uses --skipLibCheck to avoid OOM from large generated api-client type declarations.
-        run: node --max-old-space-size=2048 ./node_modules/.bin/tsc --noEmit --skipLibCheck
+        run: NODE_OPTIONS=--max-old-space-size=2048 bun run typecheck
 
       - name: Lint MCP server
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
@@ -354,7 +354,7 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: |
           bun run src/spec/index-builder.ts
-          if git diff --exit-code apps/mcp-server/src/spec/generated/spec-index.json; then
+          if git diff --exit-code src/spec/generated/spec-index.json; then
             echo "::notice::MCP spec index is up to date"
           else
             echo "::error::MCP spec index is outdated! Run 'bun run src/spec/index-builder.ts' and commit."
@@ -365,7 +365,7 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: |
           bun run scripts/generate-facade.ts
-          if git diff --exit-code apps/mcp-server/src/client/generated/facade.ts; then
+          if git diff --exit-code src/client/generated/facade.ts; then
             echo "::notice::MCP client facade is up to date"
           else
             echo "::error::MCP client facade is outdated! Run 'bun run scripts/generate-facade.ts' and commit."

@@ -18,14 +18,16 @@ import (
 
 // TransactionHandler handles transaction-related HTTP requests.
 type TransactionHandler struct {
-	service      services.TransactionService
-	db           repository.DB
-	mcpAuditRepo repository.MCPAuditRepository
+	service         services.TransactionService
+	db              repository.DB
+	mcpAuditRepo    repository.MCPAuditRepository
+	mcpWorkerSecret string
 }
 
 type TransactionHandlerDeps struct {
-	DB           repository.DB
-	MCPAuditRepo repository.MCPAuditRepository
+	DB              repository.DB
+	MCPAuditRepo    repository.MCPAuditRepository
+	MCPWorkerSecret string
 }
 
 // NewTransactionHandler creates a new TransactionHandler instance.
@@ -34,6 +36,7 @@ func NewTransactionHandler(service services.TransactionService, deps ...Transact
 	if len(deps) > 0 {
 		h.db = deps[0].DB
 		h.mcpAuditRepo = deps[0].MCPAuditRepo
+		h.mcpWorkerSecret = deps[0].MCPWorkerSecret
 	}
 	return h
 }
@@ -382,7 +385,7 @@ func (h *TransactionHandler) UpdateTransactionCategory(ctx context.Context, inpu
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 	// MCP audit (fire-and-forget)
-	if input.IsMCPOrigin() && h.mcpAuditRepo != nil {
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.mcpAuditRepo != nil {
 		_ = recordMCPWriteAudit(ctx, h.mcpAuditRepo, input.UserID, input.MCPGrantID, "updateTransactionCategory", "")
 	}
 	return &UpdateTransactionCategoryOutput{Body: tx}, nil

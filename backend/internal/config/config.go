@@ -95,6 +95,10 @@ type Config struct {
 
 	// Cloudflare Origin Secret (CF_ORIGIN_SECRET) — required in prod/staging
 	CFOriginSecret string
+
+	// MCP Worker Secret (MCP_WORKER_SECRET) — shared secret between MCP Cloudflare Worker
+	// and backend; used to verify X-MCP-Worker-Secret header; fail-closed when empty.
+	MCPWorkerSecret string // env: MCP_WORKER_SECRET, default: ""
 }
 
 // Load loads configuration from environment variables
@@ -185,6 +189,9 @@ func Load() (*Config, error) {
 
 		// Cloudflare Origin Secret
 		CFOriginSecret: getEnv("CF_ORIGIN_SECRET", ""),
+
+		// MCP Worker Secret (fail-closed when empty — IsMCPOrigin returns false)
+		MCPWorkerSecret: getEnv("MCP_WORKER_SECRET", ""),
 	}
 
 	// Validate required fields for production

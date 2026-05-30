@@ -9,7 +9,7 @@
     "deploy:staging": "wrangler deploy --env staging",
     "test": "bun test src/",
     "test:watch": "bun test --watch src/",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit --skipLibCheck",
     "lint": "eslint . --max-warnings 0",
     "build:spec-index": "bun run src/spec/index-builder.ts",
     "build:facade": "bun run scripts/generate-facade.ts",

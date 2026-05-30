@@ -8,6 +8,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/stretchr/testify/assert"
@@ -42,6 +43,16 @@ func (m *mockIdempotencyRepository) GetOrCreate(
 	m.cached[key] = recipe
 	*(result.(**domain.MCPRecipe)) = recipe
 	return nil
+}
+
+func (m *mockIdempotencyRepository) GetOrCreateInTx(
+	ctx context.Context,
+	_ pgx.Tx,
+	key, userID, operationID string,
+	fn func() (interface{}, error),
+	result interface{},
+) error {
+	return m.GetOrCreate(ctx, key, userID, operationID, fn, result)
 }
 
 func (m *mockIdempotencyRepository) DeleteExpired(_ context.Context) (int64, error) {

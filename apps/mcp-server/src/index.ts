@@ -33,7 +33,7 @@ const CORS_HEADERS = {
 }
 
 export default {
-  async fetch(request: Request, rawEnv: Env): Promise<Response> {
+  async fetch(request: Request, rawEnv: Env, ctx: ExecutionContext): Promise<Response> {
     const env = parseEnv(rawEnv)
     const url = new URL(request.url)
 
@@ -83,7 +83,7 @@ export default {
     // The DO is only reachable through this Worker (never directly exposed).
     const forwardHeaders = new Headers(request.headers)
     // Clear any existing MCP headers
-    for (const key of ['X-MCP-Clerk-User-Id', 'X-MCP-Grant-Id', 'X-MCP-Access-Token', 'X-MCP-Origin']) {
+    for (const key of ['X-MCP-Clerk-User-Id', 'X-MCP-Grant-Id', 'X-MCP-Access-Token', 'X-MCP-Origin', 'X-MCP-Worker-Secret']) {
       forwardHeaders.delete(key)
     }
     // Set trusted headers from verified auth context
@@ -91,6 +91,7 @@ export default {
     forwardHeaders.set('X-MCP-Grant-Id', authCtx.grantId)
     forwardHeaders.set('X-MCP-Access-Token', rawAccessToken!)
     forwardHeaders.set('X-MCP-Origin', '1')
+    forwardHeaders.set('X-MCP-Worker-Secret', env.MCP_WORKER_SECRET)
     const authedRequest = new Request(request, { headers: forwardHeaders })
 
     // ── MCP Streamable HTTP transport (primary) ────────────────────────────
@@ -98,7 +99,7 @@ export default {
       const mcpHandler = BoostedBudgetMcpAgent.serve('/mcp', {
         binding: 'MCP_AGENT',
       })
-      return mcpHandler.fetch(authedRequest, env as Parameters<typeof mcpHandler.fetch>[1], {} as ExecutionContext)
+      return mcpHandler.fetch(authedRequest, env as Parameters<typeof mcpHandler.fetch>[1], ctx)
     }
 
     // ── MCP SSE transport (legacy clients that don't support Streamable HTTP) ─
@@ -107,7 +108,7 @@ export default {
       const sseHandler = BoostedBudgetMcpAgent.serveSSE('/sse', {
         binding: 'MCP_AGENT',
       })
-      return sseHandler.fetch(authedRequest, env as Parameters<typeof sseHandler.fetch>[1], {} as ExecutionContext)
+      return sseHandler.fetch(authedRequest, env as Parameters<typeof sseHandler.fetch>[1], ctx)
     }
 
     return new Response(JSON.stringify({ error: 'not_found' }), {

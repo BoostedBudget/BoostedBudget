@@ -18,7 +18,6 @@ export interface SpecEntry {
 
 export interface SpecIndex {
   version: string
-  generatedAt: string
   entries: SpecEntry[]
 }
 
