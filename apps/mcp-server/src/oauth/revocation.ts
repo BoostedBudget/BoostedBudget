@@ -1,17 +1,22 @@
 /**
  * Revocation check for Clerk OAuth access tokens.
  *
- * Since Clerk JWTs are stateless (no server-side token store, per plan decision),
- * instant revocation is not possible. We implement the closest practical approach:
+ * ⚠️ KNOWN LIMITATION: The current implementation does NOT call Clerk's session
+ * status API. assertNotRevoked() unconditionally marks grants as valid after a
+ * cache miss. Effective revocation SLA = Clerk access token TTL (~5 minutes),
+ * NOT the 30-second cache described below.
  *
- *   Effective revocation SLA = min(token TTL, revocation cache TTL)
- *   Target: sub-60s with ~5min token TTL + ~30s cache
+ * Revoking an OAuth grant in BoostedBudget settings will stop new authentications
+ * immediately (the JWKS validation in clerk-verifier.ts will reject new tokens),
+ * but existing sessions continue until token expiry (~5 minutes by default).
  *
- * On each request we do a lightweight check against Clerk's session status API,
- * cached briefly so we don't call Clerk on every MCP tool invocation.
+ * To achieve true sub-60s revocation, implement a Clerk session status API call
+ * in assertNotRevoked() — see CLERK_SECRET_KEY in wrangler.toml secrets.
+ * This is tracked as a follow-up improvement.
  *
- * The cache is intentionally in-memory (Worker isolate memory) — it resets on
- * isolate reload, which is acceptable for the revocation SLA.
+ * markRevoked() is used when this Worker instance is explicitly notified of a
+ * revocation event (e.g., via a webhook) — it provides faster local revocation
+ * for the current isolate's in-memory cache.
  */
 
 import type { AuthContext } from './clerk-verifier'
