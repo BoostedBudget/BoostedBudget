@@ -8,14 +8,13 @@ routes = [
   { pattern = "mcp.boostedbudget.com/*", zone_name = "boostedbudget.com" }
 ]
 
-# Durable Objects — McpAgent for Streamable HTTP session continuity (configured in Phase 4)
-# [[durable_objects.bindings]]
-# name = "MCP_AGENT"
-# class_name = "BoostedBudgetMcpAgent"
+[[durable_objects.bindings]]
+name = "MCP_AGENT"
+class_name = "BoostedBudgetMcpAgent"
 
-# [[migrations]]
-# tag = "v1"
-# new_classes = ["BoostedBudgetMcpAgent"]
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BoostedBudgetMcpAgent"]
 
 # Dynamic Worker Loader for sandbox isolates (configured in Phase 4)
 # Requires Workers for Platforms dispatch namespace on paid plan
@@ -30,9 +29,11 @@ MCP_RESOURCE_URL = "https://mcp.boostedbudget.com"
 # Secrets (set via `wrangler secret put`):
 #   CLERK_SECRET_KEY
 #   CLERK_PUBLISHABLE_KEY
-#   CLERK_JWKS_URL
+#   CLERK_JWKS_URL           e.g. https://clerk.boostedbudget.com/.well-known/jwks.json
+#   CLERK_ISSUER_URL         e.g. https://clerk.boostedbudget.com  (Clerk Frontend API URL)
+#   MCP_OAUTH_AUDIENCE       the OAuth client_id registered in Clerk for this MCP app
 #   BOOSTEDBUDGET_ORIGIN_SECRET
-#   BOOSTEDBUDGET_API_URL (override per env)
+#   BOOSTEDBUDGET_API_URL    (override per env; defaults to https://api.boostedbudget.com)
 
 [env.staging]
 name = "boostedbudget-mcp-staging"

@@ -2,8 +2,10 @@ import { describe, expect, it, mock } from 'bun:test'
 import { ClerkTokenVerifier, AuthContext, TokenVerificationError } from './clerk-verifier'
 
 // NOTE: Real JWKS-based JWT tests require crypto infrastructure.
-// We test the verifier's parsing + error-handling logic by mocking jose.jwtVerify.
-// End-to-end JWKS verification is covered by the Phase 3 Claude Desktop interop checkpoint.
+// We test the verifier's parsing, audience/issuer validation contract, and error-handling
+// logic by mocking jose.jwtVerify.
+// End-to-end JWKS + issuer/audience verification is covered by the Phase 3 Claude Desktop
+// interop checkpoint.
 
 describe('TokenVerificationError', () => {
   it('is an instance of Error', () => {
