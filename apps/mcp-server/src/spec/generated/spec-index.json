@@ -1,0 +1,1432 @@
+{
+  "version": "1",
+  "generatedAt": "2026-05-30T01:09:27.875Z",
+  "entries": [
+    {
+      "operationId": "getAccounts",
+      "method": "GET",
+      "path": "/api/v1/accounts",
+      "summary": "Get accounts",
+      "tags": [
+        "Accounts"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "reorderAccounts",
+      "method": "PATCH",
+      "path": "/api/v1/accounts/reorder",
+      "summary": "Reorder accounts",
+      "tags": [
+        "Accounts"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "updateAccount",
+      "method": "PATCH",
+      "path": "/api/v1/accounts/{id}",
+      "summary": "Update account",
+      "tags": [
+        "Accounts"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "deleteAccount",
+      "method": "DELETE",
+      "path": "/api/v1/accounts/{id}",
+      "summary": "Delete account",
+      "tags": [
+        "Accounts"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "checkRole",
+      "method": "GET",
+      "path": "/api/v1/admin/check-role",
+      "summary": "Check if current user is admin",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "listAdminDeadLetterJobs",
+      "method": "GET",
+      "path": "/api/v1/admin/dead-letter-jobs",
+      "summary": "List dead letter jobs (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "bulkDeleteAdminDeadLetterJobs",
+      "method": "POST",
+      "path": "/api/v1/admin/dead-letter-jobs/bulk-delete",
+      "summary": "Bulk delete dead letter jobs (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getAdminDeadLetterJobStats",
+      "method": "GET",
+      "path": "/api/v1/admin/dead-letter-jobs/stats",
+      "summary": "Get dead letter job statistics (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getAdminDeadLetterJobDetail",
+      "method": "GET",
+      "path": "/api/v1/admin/dead-letter-jobs/{id}",
+      "summary": "Get dead letter job detail (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "deleteAdminDeadLetterJob",
+      "method": "DELETE",
+      "path": "/api/v1/admin/dead-letter-jobs/{id}",
+      "summary": "Delete a dead letter job (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getAdminDeadLetterJobArgs",
+      "method": "GET",
+      "path": "/api/v1/admin/dead-letter-jobs/{id}/args",
+      "summary": "Get raw (unredacted) job args (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "addAdminDeadLetterJobNotes",
+      "method": "POST",
+      "path": "/api/v1/admin/dead-letter-jobs/{id}/notes",
+      "summary": "Add admin notes to a dead letter job (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "retryAdminDeadLetterJob",
+      "method": "POST",
+      "path": "/api/v1/admin/dead-letter-jobs/{id}/retry",
+      "summary": "Retry a dead letter job (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getAdminPaymentFailures",
+      "method": "GET",
+      "path": "/api/v1/admin/payments/failures",
+      "summary": "List failed payment transactions (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "fireWebhook",
+      "method": "POST",
+      "path": "/api/v1/admin/plaid/fire-webhook",
+      "summary": "Fire a Plaid webhook (QA only)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "grantTrial",
+      "method": "POST",
+      "path": "/api/v1/admin/subscription/grant-trial",
+      "summary": "Grant trial subscription (QA only)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getSystemHealth",
+      "method": "GET",
+      "path": "/api/v1/admin/system/health",
+      "summary": "Get system health metrics (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "listAdminUsers",
+      "method": "GET",
+      "path": "/api/v1/admin/users",
+      "summary": "List users (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getAdminUserDetail",
+      "method": "GET",
+      "path": "/api/v1/admin/users/{user_id}",
+      "summary": "Get user details (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "get-admin-user-subscription",
+      "method": "GET",
+      "path": "/api/v1/admin/users/{user_id}/subscription",
+      "summary": "Get user subscription details",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "create-admin-subscription-override",
+      "method": "POST",
+      "path": "/api/v1/admin/users/{user_id}/subscription/override",
+      "summary": "Create subscription resource override",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "update-admin-user-tier",
+      "method": "PUT",
+      "path": "/api/v1/admin/users/{user_id}/subscription/tier",
+      "summary": "Update user subscription tier",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "listAdminPaddleWebhooks",
+      "method": "GET",
+      "path": "/api/v1/admin/webhooks/paddle",
+      "summary": "List Paddle webhook events (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getAdminPaddleWebhookStats",
+      "method": "GET",
+      "path": "/api/v1/admin/webhooks/paddle/stats",
+      "summary": "Get Paddle webhook statistics (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getAdminPaddleWebhookDetail",
+      "method": "GET",
+      "path": "/api/v1/admin/webhooks/paddle/{id}",
+      "summary": "Get Paddle webhook detail (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "replayAdminPaddleWebhook",
+      "method": "POST",
+      "path": "/api/v1/admin/webhooks/paddle/{id}/replay",
+      "summary": "Replay a Paddle webhook (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getCashFlowHistory",
+      "method": "GET",
+      "path": "/api/v1/analytics/cash-flow-history",
+      "summary": "Get cash flow history",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getCashFlowSummary",
+      "method": "GET",
+      "path": "/api/v1/analytics/cash-flow-summary",
+      "summary": "Get cash flow summary",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getSpendingByCategory",
+      "method": "GET",
+      "path": "/api/v1/analytics/spending-by-category",
+      "summary": "Get spending by category",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getSpendingByMerchant",
+      "method": "GET",
+      "path": "/api/v1/analytics/spending-by-merchant",
+      "summary": "Get spending by merchant",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getSpendingTrends",
+      "method": "GET",
+      "path": "/api/v1/analytics/spending-trends",
+      "summary": "Get spending trends",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getUserRules",
+      "method": "GET",
+      "path": "/api/v1/auto-categorization",
+      "summary": "Get user categorization rules",
+      "tags": [
+        "Auto-Categorization"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "createRule",
+      "method": "POST",
+      "path": "/api/v1/auto-categorization",
+      "summary": "Create a new categorization rule",
+      "tags": [
+        "Auto-Categorization"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getRuleByID",
+      "method": "GET",
+      "path": "/api/v1/auto-categorization/{id}",
+      "summary": "Get rule by ID",
+      "tags": [
+        "Auto-Categorization"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "updateRule",
+      "method": "PUT",
+      "path": "/api/v1/auto-categorization/{id}",
+      "summary": "Update a rule",
+      "tags": [
+        "Auto-Categorization"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "deleteRule",
+      "method": "DELETE",
+      "path": "/api/v1/auto-categorization/{id}",
+      "summary": "Delete a rule",
+      "tags": [
+        "Auto-Categorization"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "toggleRule",
+      "method": "POST",
+      "path": "/api/v1/auto-categorization/{id}/toggle",
+      "summary": "Toggle a rule",
+      "tags": [
+        "Auto-Categorization"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getBudgets",
+      "method": "GET",
+      "path": "/api/v1/budgets",
+      "summary": "Get budgets",
+      "tags": [
+        "Budgets"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "createBudget",
+      "method": "POST",
+      "path": "/api/v1/budgets",
+      "summary": "Create budget",
+      "tags": [
+        "Budgets"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "getAvailableCategories",
+      "method": "GET",
+      "path": "/api/v1/budgets/categories/available",
+      "summary": "Get available categories",
+      "tags": [
+        "Budgets"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "previewCategoryMatches",
+      "method": "POST",
+      "path": "/api/v1/budgets/categories/preview",
+      "summary": "Preview category matches",
+      "tags": [
+        "Budget"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getCurrentBudget",
+      "method": "GET",
+      "path": "/api/v1/budgets/current",
+      "summary": "Get current budget",
+      "tags": [
+        "Budgets"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getBudget",
+      "method": "GET",
+      "path": "/api/v1/budgets/{id}",
+      "summary": "Get budget",
+      "tags": [
+        "Budgets"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "updateBudget",
+      "method": "PUT",
+      "path": "/api/v1/budgets/{id}",
+      "summary": "Update budget",
+      "tags": [
+        "Budgets"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "deleteBudget",
+      "method": "DELETE",
+      "path": "/api/v1/budgets/{id}",
+      "summary": "Delete budget",
+      "tags": [
+        "Budgets"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "addBudgetCategory",
+      "method": "POST",
+      "path": "/api/v1/budgets/{id}/categories",
+      "summary": "Add budget category",
+      "tags": [
+        "Budgets"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "updateBudgetCategory",
+      "method": "PUT",
+      "path": "/api/v1/budgets/{id}/categories/{categoryId}",
+      "summary": "Update budget category",
+      "tags": [
+        "Budgets"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "deleteBudgetCategory",
+      "method": "DELETE",
+      "path": "/api/v1/budgets/{id}/categories/{categoryId}",
+      "summary": "Delete budget category",
+      "tags": [
+        "Budgets"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "getCategoryTransactions",
+      "method": "GET",
+      "path": "/api/v1/budgets/{id}/categories/{categoryId}/transactions",
+      "summary": "Get category transactions",
+      "tags": [
+        "Budgets"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "syncBudget",
+      "method": "POST",
+      "path": "/api/v1/budgets/{id}/sync",
+      "summary": "Sync budget",
+      "tags": [
+        "Budgets"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "getUserCategories",
+      "method": "GET",
+      "path": "/api/v1/categories",
+      "summary": "Get user categories",
+      "tags": [
+        "Categories"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "createCategory",
+      "method": "POST",
+      "path": "/api/v1/categories",
+      "summary": "Create a new category",
+      "tags": [
+        "Categories"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "getPlaidCategories",
+      "method": "GET",
+      "path": "/api/v1/categories/plaid",
+      "summary": "Get Plaid categories",
+      "tags": [
+        "Categories"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getPlaidDetailedCategories",
+      "method": "GET",
+      "path": "/api/v1/categories/plaid-detailed",
+      "summary": "List curated Plaid PFC detailed categories",
+      "tags": [
+        "Categories"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getPlaidPrimaryCategories",
+      "method": "GET",
+      "path": "/api/v1/categories/plaid-primaries",
+      "summary": "List curated Plaid PFC primary categories",
+      "tags": [
+        "Categories"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getCategoryByID",
+      "method": "GET",
+      "path": "/api/v1/categories/{id}",
+      "summary": "Get category by ID",
+      "tags": [
+        "Categories"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "updateCategory",
+      "method": "PUT",
+      "path": "/api/v1/categories/{id}",
+      "summary": "Update a category",
+      "tags": [
+        "Categories"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "deleteCategory",
+      "method": "DELETE",
+      "path": "/api/v1/categories/{id}",
+      "summary": "Delete a category",
+      "tags": [
+        "Categories"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "getCategoryUsage",
+      "method": "GET",
+      "path": "/api/v1/categories/{id}/usage",
+      "summary": "Get category usage counts",
+      "tags": [
+        "Categories"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getAccountTypes",
+      "method": "GET",
+      "path": "/api/v1/dashboard/account-types",
+      "summary": "Get account types",
+      "tags": [
+        "Dashboard"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getBalanceHistory",
+      "method": "GET",
+      "path": "/api/v1/dashboard/balance-history",
+      "summary": "Get balance history",
+      "tags": [
+        "Dashboard"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getBalanceSummary",
+      "method": "GET",
+      "path": "/api/v1/dashboard/balance-summary",
+      "summary": "Get balance summary",
+      "tags": [
+        "Dashboard"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getDefaultLayout",
+      "method": "GET",
+      "path": "/api/v1/dashboard/default-layout",
+      "summary": "Get default dashboard layout",
+      "tags": [
+        "Dashboard"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getNetWorth",
+      "method": "GET",
+      "path": "/api/v1/dashboard/net-worth",
+      "summary": "Get current net worth",
+      "tags": [
+        "Dashboard"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getNetWorthHistory",
+      "method": "GET",
+      "path": "/api/v1/dashboard/net-worth-history",
+      "summary": "Get net worth history",
+      "tags": [
+        "Dashboard"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getDashboardPreferences",
+      "method": "GET",
+      "path": "/api/v1/dashboard/preferences",
+      "summary": "Get dashboard preferences",
+      "tags": [
+        "Dashboard"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "saveDashboardPreferences",
+      "method": "PUT",
+      "path": "/api/v1/dashboard/preferences",
+      "summary": "Save dashboard preferences",
+      "tags": [
+        "Dashboard"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "resetDashboardPreferences",
+      "method": "POST",
+      "path": "/api/v1/dashboard/preferences/reset",
+      "summary": "Reset dashboard preferences",
+      "tags": [
+        "Dashboard"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getWidgetTypes",
+      "method": "GET",
+      "path": "/api/v1/dashboard/widget-types",
+      "summary": "Get available widget types",
+      "tags": [
+        "Dashboard"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "disconnectInstitution",
+      "method": "DELETE",
+      "path": "/api/v1/linked-items/{id}",
+      "summary": "Disconnect institution",
+      "tags": [
+        "Accounts"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getNotifications",
+      "method": "GET",
+      "path": "/api/v1/notifications",
+      "summary": "Get user notifications",
+      "tags": [
+        "Notifications"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "markAllNotificationsAsRead",
+      "method": "PATCH",
+      "path": "/api/v1/notifications/read-all",
+      "summary": "Mark all notifications as read",
+      "tags": [
+        "Notifications"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "getUnreadNotificationCount",
+      "method": "GET",
+      "path": "/api/v1/notifications/unread/count",
+      "summary": "Get unread notification count",
+      "tags": [
+        "Notifications"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "markNotificationAsRead",
+      "method": "PATCH",
+      "path": "/api/v1/notifications/{id}/read",
+      "summary": "Mark notification as read",
+      "tags": [
+        "Notifications"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "exchangePublicToken",
+      "method": "POST",
+      "path": "/api/v1/plaid/exchange-token",
+      "summary": "Exchange public token",
+      "tags": [
+        "Plaid"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "createLinkToken",
+      "method": "POST",
+      "path": "/api/v1/plaid/link-token",
+      "summary": "Create Plaid link token",
+      "tags": [
+        "Plaid"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "qaAuthBypass",
+      "method": "POST",
+      "path": "/api/v1/qa/auth/bypass",
+      "summary": "QA auth bypass",
+      "tags": [
+        "QA"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getRegions",
+      "method": "GET",
+      "path": "/api/v1/regions",
+      "summary": "Get available regions",
+      "tags": [
+        "Regions"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getAutomationRules",
+      "method": "GET",
+      "path": "/api/v1/rules",
+      "summary": "Get user automation rules",
+      "tags": [
+        "Automation Rules"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "createAutomationRule",
+      "method": "POST",
+      "path": "/api/v1/rules",
+      "summary": "Create a new automation rule",
+      "tags": [
+        "Automation Rules"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getAutomationRuleByID",
+      "method": "GET",
+      "path": "/api/v1/rules/{id}",
+      "summary": "Get automation rule by ID",
+      "tags": [
+        "Automation Rules"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "updateAutomationRule",
+      "method": "PUT",
+      "path": "/api/v1/rules/{id}",
+      "summary": "Update an automation rule",
+      "tags": [
+        "Automation Rules"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "deleteAutomationRule",
+      "method": "DELETE",
+      "path": "/api/v1/rules/{id}",
+      "summary": "Delete an automation rule",
+      "tags": [
+        "Automation Rules"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "disableAutomationRule",
+      "method": "POST",
+      "path": "/api/v1/rules/{id}/disable",
+      "summary": "Disable automation rule",
+      "tags": [
+        "Automation Rules"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "enableAutomationRule",
+      "method": "POST",
+      "path": "/api/v1/rules/{id}/enable",
+      "summary": "Enable automation rule",
+      "tags": [
+        "Automation Rules"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getRuleExecutions",
+      "method": "GET",
+      "path": "/api/v1/rules/{id}/executions",
+      "summary": "Get rule execution history",
+      "tags": [
+        "Automation Rules"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "testAutomationRule",
+      "method": "POST",
+      "path": "/api/v1/rules/{id}/test",
+      "summary": "Test automation rule",
+      "tags": [
+        "Automation Rules"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "toggleAutomationRule",
+      "method": "POST",
+      "path": "/api/v1/rules/{id}/toggle",
+      "summary": "Toggle an automation rule",
+      "tags": [
+        "Automation Rules"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "triggerAutomationRule",
+      "method": "POST",
+      "path": "/api/v1/rules/{id}/trigger",
+      "summary": "Manually trigger an automation rule",
+      "tags": [
+        "Automation Rules"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getSavingsGoals",
+      "method": "GET",
+      "path": "/api/v1/savings-goals",
+      "summary": "Get savings goals",
+      "tags": [
+        "Savings Goals"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "createSavingsGoal",
+      "method": "POST",
+      "path": "/api/v1/savings-goals",
+      "summary": "Create savings goal",
+      "tags": [
+        "Savings Goals"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "getActiveSavingsGoals",
+      "method": "GET",
+      "path": "/api/v1/savings-goals/active",
+      "summary": "Get active savings goals",
+      "tags": [
+        "Savings Goals"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getSavingsGoal",
+      "method": "GET",
+      "path": "/api/v1/savings-goals/{id}",
+      "summary": "Get savings goal",
+      "tags": [
+        "Savings Goals"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "updateSavingsGoal",
+      "method": "PUT",
+      "path": "/api/v1/savings-goals/{id}",
+      "summary": "Update savings goal",
+      "tags": [
+        "Savings Goals"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "deleteSavingsGoal",
+      "method": "DELETE",
+      "path": "/api/v1/savings-goals/{id}",
+      "summary": "Delete savings goal",
+      "tags": [
+        "Savings Goals"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "get-billing-portal-url",
+      "method": "GET",
+      "path": "/api/v1/subscription/billing-portal",
+      "summary": "Get billing portal URL",
+      "tags": [
+        "Subscription",
+        "Paddle"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "cancel-paddle-subscription",
+      "method": "POST",
+      "path": "/api/v1/subscription/cancel",
+      "summary": "Cancel subscription",
+      "tags": [
+        "Subscription",
+        "Paddle"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "create-paddle-checkout",
+      "method": "POST",
+      "path": "/api/v1/subscription/checkout",
+      "summary": "Create Paddle checkout session",
+      "tags": [
+        "Subscription",
+        "Paddle"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "get-current-subscription",
+      "method": "GET",
+      "path": "/api/v1/subscription/current",
+      "summary": "Get current subscription",
+      "tags": [
+        "Subscription",
+        "Paddle"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "preview-paddle-subscription-update",
+      "method": "POST",
+      "path": "/api/v1/subscription/preview-update",
+      "summary": "Preview subscription tier change",
+      "tags": [
+        "Subscription",
+        "Paddle"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getSubscriptionTiers",
+      "method": "GET",
+      "path": "/api/v1/subscription/tiers",
+      "summary": "Get subscription tiers",
+      "tags": [
+        "Subscription"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "update-paddle-subscription",
+      "method": "POST",
+      "path": "/api/v1/subscription/update",
+      "summary": "Update subscription tier",
+      "tags": [
+        "Subscription",
+        "Paddle"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getUserTags",
+      "method": "GET",
+      "path": "/api/v1/tags",
+      "summary": "Get user tags",
+      "tags": [
+        "Tags"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "createTag",
+      "method": "POST",
+      "path": "/api/v1/tags",
+      "summary": "Create a new tag",
+      "tags": [
+        "Tags"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "getTagByID",
+      "method": "GET",
+      "path": "/api/v1/tags/{id}",
+      "summary": "Get tag by ID",
+      "tags": [
+        "Tags"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "updateTag",
+      "method": "PUT",
+      "path": "/api/v1/tags/{id}",
+      "summary": "Update a tag",
+      "tags": [
+        "Tags"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "deleteTag",
+      "method": "DELETE",
+      "path": "/api/v1/tags/{id}",
+      "summary": "Delete a tag",
+      "tags": [
+        "Tags"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "getTransactions",
+      "method": "GET",
+      "path": "/api/v1/transactions",
+      "summary": "List transactions",
+      "tags": [
+        "Transactions"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "bulkSetTransactionReviewed",
+      "method": "PATCH",
+      "path": "/api/v1/transactions/review",
+      "summary": "Bulk update transaction review state",
+      "tags": [
+        "Transactions"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "getTransactionByID",
+      "method": "GET",
+      "path": "/api/v1/transactions/{id}",
+      "summary": "Get transaction by ID",
+      "tags": [
+        "Transactions"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "updateTransactionCategory",
+      "method": "PUT",
+      "path": "/api/v1/transactions/{id}/category",
+      "summary": "Update transaction category",
+      "tags": [
+        "Transactions"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "setTransactionReviewed",
+      "method": "PATCH",
+      "path": "/api/v1/transactions/{id}/review",
+      "summary": "Update transaction review state",
+      "tags": [
+        "Transactions"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "updateTransactionTags",
+      "method": "PUT",
+      "path": "/api/v1/transactions/{id}/tags",
+      "summary": "Update transaction tags",
+      "tags": [
+        "Transactions"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "getTransferSuggestions",
+      "method": "GET",
+      "path": "/api/v1/transfer-suggestions",
+      "summary": "Get pending transfer suggestions",
+      "tags": [
+        "TransferSuggestions"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "acceptTransferSuggestion",
+      "method": "PATCH",
+      "path": "/api/v1/transfer-suggestions/{id}/accept",
+      "summary": "Accept a transfer suggestion",
+      "tags": [
+        "TransferSuggestions"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "rejectTransferSuggestion",
+      "method": "PATCH",
+      "path": "/api/v1/transfer-suggestions/{id}/reject",
+      "summary": "Reject a transfer suggestion",
+      "tags": [
+        "TransferSuggestions"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "getUserAccounts",
+      "method": "GET",
+      "path": "/api/v1/user-accounts",
+      "summary": "List user accounts",
+      "tags": [
+        "User Accounts"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getUserAccountById",
+      "method": "GET",
+      "path": "/api/v1/user-accounts/{id}",
+      "summary": "Get user account by ID",
+      "tags": [
+        "User Accounts"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "updateUserAccount",
+      "method": "PATCH",
+      "path": "/api/v1/user-accounts/{id}",
+      "summary": "Update user account",
+      "tags": [
+        "User Accounts"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "requestDeletion",
+      "method": "POST",
+      "path": "/api/v1/user/delete",
+      "summary": "Request account deletion",
+      "tags": [
+        "User"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "cancelDeletion",
+      "method": "GET",
+      "path": "/api/v1/user/delete/cancel/{token}",
+      "summary": "Cancel account deletion",
+      "tags": [
+        "User"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getPrivacySettings",
+      "method": "GET",
+      "path": "/api/v1/user/privacy",
+      "summary": "Get privacy settings",
+      "tags": [
+        "Privacy"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "updatePrivacySettings",
+      "method": "PUT",
+      "path": "/api/v1/user/privacy",
+      "summary": "Update privacy settings",
+      "tags": [
+        "Privacy"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getUserProfile",
+      "method": "GET",
+      "path": "/api/v1/user/profile",
+      "summary": "Get user profile",
+      "tags": [
+        "Profile"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "updateUserProfile",
+      "method": "PUT",
+      "path": "/api/v1/user/profile",
+      "summary": "Update user profile",
+      "tags": [
+        "Profile"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getHealth",
+      "method": "GET",
+      "path": "/health",
+      "summary": "Health check",
+      "tags": [
+        "Health"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "getMetrics",
+      "method": "GET",
+      "path": "/metrics",
+      "summary": "Get Prometheus metrics",
+      "tags": [
+        "Monitoring"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "paddle-webhook",
+      "method": "POST",
+      "path": "/webhooks/paddle",
+      "summary": "Receive Paddle webhook notifications",
+      "tags": [
+        "Webhooks",
+        "Paddle"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "handlePlaidWebhook",
+      "method": "POST",
+      "path": "/webhooks/plaid",
+      "summary": "Handle Plaid webhook",
+      "tags": [
+        "Webhooks"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    }
+  ]
+}
