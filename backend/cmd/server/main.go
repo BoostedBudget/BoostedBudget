@@ -1154,6 +1154,13 @@ func main() {
 		operations.RegisterAnalyticsRoutes(humaAPI, humaAnalyticsHandler)
 		appLogger.Info("Huma analytics routes registered")
 
+		// Register MCP recipe routes (Issue #1087: MCP server)
+		humaRecipeRepo := repository.NewRecipeRepository(db)
+		humaRecipeService := services.NewRecipeService(humaRecipeRepo)
+		humaRecipeHandler := operations.NewRecipeHandler(humaRecipeService)
+		operations.RegisterRecipeRoutes(humaAPI, humaRecipeHandler)
+		appLogger.Info("MCP recipe routes registered")
+
 		// Register Huma dashboard preferences routes (Issue #559: Huma migration)
 		humaDashboardPrefsHandler := operations.NewDashboardPreferencesHandler(dashboardPrefsService)
 		operations.RegisterDashboardPreferencesRoutes(humaAPI, humaDashboardPrefsHandler)
