@@ -9,6 +9,8 @@ import { getCapability } from '../manifest/capability-manifest'
 import { redactError } from '../errors/redact'
 import { ApiError } from '../client/fetch-mutator'
 import type { FetchMutator, Credentials } from '../client/fetch-mutator'
+import { createRateLimiter, RateLimitError } from '../limits/rate-limit'
+import type { RateLimiter } from '../limits/rate-limit'
 import crypto from 'node:crypto'
 
 export type HostProxyErrorCode =
@@ -41,7 +43,14 @@ export interface InvokeOptions {
 export interface HostProxyConfig {
   mutator: FetchMutator
   getCredentials?: () => Promise<Credentials>
+  /** User ID for rate/concurrency limiting (clerkUserId) */
+  userId?: string
+  /** Rate limiter instance — shared across tool invocations in the same DO session */
+  rateLimiter?: RateLimiter
 }
+
+// Default limiter: 60 req/min, 5 concurrent per DO session (per-user, per-session)
+const DEFAULT_LIMITER = createRateLimiter({ maxPerMinute: 60, maxConcurrent: 5 })
 
 // One-time confirmation tokens, one-use, bound to operationId + args hash, 5-minute TTL.
 // Binding to a hash of the args prevents confirming one write from authorizing a different one.
@@ -94,10 +103,20 @@ async function consumeConfirmationToken(
 }
 
 export function createHostProxy(config: HostProxyConfig) {
-  const { mutator, getCredentials } = config
+  const { mutator, getCredentials, userId = 'anonymous', rateLimiter = DEFAULT_LIMITER } = config
 
   return {
     async invoke(operationId: string, args: Record<string, unknown>, opts: InvokeOptions = {}): Promise<unknown> {
+      // Rate limit check (before manifest gate — saves DB lookups on abusive callers)
+      try {
+        rateLimiter.check(userId)
+      } catch (err) {
+        if (err instanceof RateLimitError) {
+          throw new HostProxyError('denied', err.message)
+        }
+        throw err
+      }
+
       const entry = getCapability(operationId)
       if (!entry) {
         throw new HostProxyError('denied', `Unknown operation: ${operationId}`)
@@ -124,6 +143,17 @@ export function createHostProxy(config: HostProxyConfig) {
         }
       }
 
+      // Acquire concurrency slot
+      let releaseSlot: (() => void) | undefined
+      try {
+        releaseSlot = rateLimiter.acquire(userId)
+      } catch (err) {
+        if (err instanceof RateLimitError) {
+          throw new HostProxyError('denied', err.message)
+        }
+        throw err
+      }
+
       try {
         const credentials = getCredentials ? await getCredentials() : undefined
         const requestConfig = args as Parameters<FetchMutator>[0]
@@ -147,6 +177,8 @@ export function createHostProxy(config: HostProxyConfig) {
             ? redactError({ message: String(err.message), status: err.status }).message
             : redactError(err).message
         throw new HostProxyError('backend_error', message)
+      } finally {
+        releaseSlot?.()
       }
     },
   }
