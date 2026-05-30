@@ -23,6 +23,9 @@ import {
 } from './oauth/resource-server'
 import { ClerkTokenVerifier, verifyClerkToken } from './oauth/clerk-verifier'
 import { assertNotRevoked } from './oauth/revocation'
+import { BoostedBudgetMcpAgent } from './mcp/agent'
+
+export { BoostedBudgetMcpAgent }
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -67,16 +70,26 @@ export default {
       return unauthorizedResponse(env.MCP_RESOURCE_URL, 'invalid_token')
     }
 
-    // TODO Phase 4: McpAgent dispatch (Durable Object) — passes authCtx
-    // TODO Phase 8: Sentry/tracing error boundary
+    // ── MCP endpoint — route to BoostedBudgetMcpAgent Durable Object ──────────
+    if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
+      // Inject auth context as trusted internal headers before routing to the DO.
+      // The DO is only reachable through this Worker (never directly exposed),
+      // so these headers are trustworthy.
+      const authedRequest = new Request(request, {
+        headers: new Headers({
+          ...Object.fromEntries(request.headers.entries()),
+          'X-MCP-Clerk-User-Id': authCtx.clerkUserId,
+          'X-MCP-Grant-Id': authCtx.grantId,
+        }),
+      })
 
-    // MCP endpoint stub (Phase 4 will implement the McpAgent dispatch)
-    if (url.pathname === '/mcp') {
-      return new Response(
-        JSON.stringify({ error: 'mcp_not_yet_implemented', phase: 4 }),
-        { status: 501, headers: { 'Content-Type': 'application/json' } },
-      )
+      const mcpHandler = BoostedBudgetMcpAgent.serve('/mcp', {
+        binding: 'MCP_AGENT',
+      })
+      return mcpHandler.fetch(authedRequest, env as Parameters<typeof mcpHandler.fetch>[1], {} as ExecutionContext)
     }
+
+    // TODO Phase 8: Sentry/tracing error boundary
 
     return new Response(JSON.stringify({ error: 'not_found' }), {
       status: 404,

@@ -10,6 +10,10 @@ const EnvSchema = z
     BOOSTEDBUDGET_API_URL: z.string().url(),
     BOOSTEDBUDGET_ORIGIN_SECRET: z.string().min(1),
     MCP_RESOURCE_URL: z.string().url(),
+    /** Clerk Frontend API URL — used as JWT issuer for audience/issuer validation */
+    CLERK_ISSUER_URL: z.string().url(),
+    /** OAuth client_id registered in Clerk for this MCP app — used as JWT audience */
+    MCP_OAUTH_AUDIENCE: z.string().min(1),
     ENVIRONMENT: z.enum(['production', 'staging', 'development']),
   })
   .superRefine((data, ctx) => {

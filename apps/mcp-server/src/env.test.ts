@@ -6,6 +6,8 @@ describe('parseEnv', () => {
     CLERK_SECRET_KEY: 'sk_test_abc123',
     CLERK_PUBLISHABLE_KEY: 'pk_test_abc123',
     CLERK_JWKS_URL: 'https://clerk.example.com/.well-known/jwks.json',
+    CLERK_ISSUER_URL: 'https://clerk.example.com',
+    MCP_OAUTH_AUDIENCE: 'mcp_client_id_abc123',
     BOOSTEDBUDGET_API_URL: 'https://api.boostedbudget.com',
     BOOSTEDBUDGET_ORIGIN_SECRET: 'super-secret-origin-value',
     MCP_RESOURCE_URL: 'https://mcp.boostedbudget.com',

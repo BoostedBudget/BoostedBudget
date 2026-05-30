@@ -55,6 +55,10 @@ export class AuthContext {
 
 interface ClerkVerifierEnv {
   CLERK_JWKS_URL: string
+  /** Clerk Frontend API URL (issuer), e.g. https://clerk.boostedbudget.com */
+  CLERK_ISSUER_URL: string
+  /** OAuth client_id registered for this MCP app in Clerk — used as audience */
+  MCP_OAUTH_AUDIENCE: string
 }
 
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>()
@@ -74,7 +78,10 @@ export async function verifyClerkToken(token: string, env: ClerkVerifierEnv): Pr
   const jwks = getJwks(env.CLERK_JWKS_URL)
 
   try {
-    const { payload } = await jwtVerify(token, jwks)
+    const { payload } = await jwtVerify(token, jwks, {
+      issuer: env.CLERK_ISSUER_URL,
+      audience: env.MCP_OAUTH_AUDIENCE,
+    })
 
     const clerkUserId = payload.sub
     if (!clerkUserId) {
