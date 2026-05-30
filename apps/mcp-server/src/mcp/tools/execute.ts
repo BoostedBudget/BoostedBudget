@@ -114,7 +114,9 @@ export function buildExecuteHandler(
 
       if (!capability || capability.excluded) {
         results.push(`❌ ${call.operationId}: not available via MCP`)
-        break // denied ops skip audit (manifest gate logs denial)
+        // Emit a denied audit event so the audit trail is complete (R5-9).
+        auditEvents.push({ operationId: call.operationId, operationClass, result: 'denied' })
+        break
       }
 
       const args = buildRequestArgs(call, specEntries)

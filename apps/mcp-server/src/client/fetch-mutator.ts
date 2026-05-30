@@ -32,6 +32,8 @@ export interface Credentials {
   authorization: string
   /** Value for the X-Origin-Secret header (satisfies the backend's CloudflareOnly middleware) */
   originSecret: string
+  /** Value for the X-MCP-Worker-Secret header (proves request originated from the MCP Worker) */
+  mcpWorkerSecret: string
 }
 
 export type CredentialProvider = () => Promise<Credentials>
@@ -84,6 +86,7 @@ export function createFetchMutator(config: FetchMutatorConfig): FetchMutator {
       'Content-Type': 'application/json',
       Authorization: creds.authorization,
       'X-Origin-Secret': creds.originSecret,
+      'X-MCP-Worker-Secret': creds.mcpWorkerSecret,
       ...reqHeaders,
       ...opts.headers,
     }

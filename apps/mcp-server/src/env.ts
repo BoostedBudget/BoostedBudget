@@ -9,6 +9,8 @@ const EnvSchema = z
     CLERK_JWKS_URL: z.string().url(),
     BOOSTEDBUDGET_API_URL: z.string().url(),
     BOOSTEDBUDGET_ORIGIN_SECRET: z.string().min(1),
+    /** Shared secret between this Worker and the Go backend — validates X-MCP-Worker-Secret */
+    MCP_WORKER_SECRET: z.string().min(1),
     MCP_RESOURCE_URL: z.string().url(),
     /** Clerk Frontend API URL — used as JWT issuer for audience/issuer validation */
     CLERK_ISSUER_URL: z.string().url(),

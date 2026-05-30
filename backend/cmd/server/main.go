@@ -1146,14 +1146,16 @@ func main() {
 			IdempotencyRepo: humaIdempotencyRepo,
 			DB:              db,
 			MCPAuditRepo:    humaMCPAuditRepo,
+			MCPWorkerSecret: cfg.MCPWorkerSecret,
 		})
 		operations.RegisterTagRoutes(humaAPI, humaTagHandler)
 		appLogger.Info("Huma tag routes registered")
 
 		// Register Huma transaction routes (Issue #559: Huma migration)
 		humaTransactionHandler := operations.NewTransactionHandler(transactionService, operations.TransactionHandlerDeps{
-			DB:           db,
-			MCPAuditRepo: humaMCPAuditRepo,
+			DB:              db,
+			MCPAuditRepo:    humaMCPAuditRepo,
+			MCPWorkerSecret: cfg.MCPWorkerSecret,
 		})
 		operations.RegisterTransactionRoutes(humaAPI, humaTransactionHandler)
 		appLogger.Info("Huma transaction routes registered")
@@ -1163,6 +1165,7 @@ func main() {
 			IdempotencyRepo: humaIdempotencyRepo,
 			DB:              db,
 			MCPAuditRepo:    humaMCPAuditRepo,
+			MCPWorkerSecret: cfg.MCPWorkerSecret,
 		})
 		operations.RegisterCategoryRoutes(humaAPI, humaCategoryHandler)
 		appLogger.Info("Huma category routes registered")
@@ -1220,6 +1223,7 @@ func main() {
 			IdempotencyRepo: humaIdempotencyRepo,
 			DB:              db,
 			MCPAuditRepo:    humaMCPAuditRepo,
+			MCPWorkerSecret: cfg.MCPWorkerSecret,
 		})
 		operations.RegisterBudgetRoutes(humaAPI, humaBudgetHandler)
 		appLogger.Info("Huma budget routes registered")
@@ -1230,6 +1234,7 @@ func main() {
 			DB:              db,
 			MCPAuditRepo:    humaMCPAuditRepo,
 			AccountGetter:   accountRepo,
+			MCPWorkerSecret: cfg.MCPWorkerSecret,
 		})
 		operations.RegisterSavingsGoalRoutes(humaAPI, humaSavingsGoalHandler)
 		appLogger.Info("Huma savings goal routes registered")

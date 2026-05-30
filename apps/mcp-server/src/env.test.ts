@@ -10,6 +10,7 @@ describe('parseEnv', () => {
     MCP_OAUTH_AUDIENCE: 'mcp_client_id_abc123',
     BOOSTEDBUDGET_API_URL: 'https://api.boostedbudget.com',
     BOOSTEDBUDGET_ORIGIN_SECRET: 'super-secret-origin-value',
+    MCP_WORKER_SECRET: 'worker-to-backend-shared-secret',
     MCP_RESOURCE_URL: 'https://mcp.boostedbudget.com',
     ENVIRONMENT: 'production',
   }

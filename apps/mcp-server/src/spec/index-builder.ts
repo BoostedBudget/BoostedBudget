@@ -87,7 +87,6 @@ export async function buildSpecIndex(): Promise<SpecIndex> {
 
   const index: SpecIndex = {
     version: '1',
-    generatedAt: new Date().toISOString(),
     entries,
   }
 

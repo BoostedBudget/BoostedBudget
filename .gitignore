@@ -319,7 +319,8 @@ apps/web/dist/
 # Package manager lockfiles - Bun only
 package-lock.json
 # Bun workspace lockfiles (only root bun.lock should exist)
-apps/*/bun.lock
+# Binary lockfile variant bun may create locally (not the canonical text bun.lock)
+/bun.lockbapps/*/bun.lock
 packages/*/bun.lock
 
 # Turborepo

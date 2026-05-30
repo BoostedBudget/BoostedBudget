@@ -80,15 +80,18 @@ describe('buildExecuteHandler', () => {
     expect(auditEvents[0]?.result).toBe('success')
   })
 
-  it('returns denied error for excluded operations', async () => {
+  it('returns denied error for excluded operations and emits a denied audit event (R5-9)', async () => {
     const proxy = makeFailingProxy('excluded', "Operation 'checkRole' is not available via MCP")
     const handler = buildExecuteHandler(proxy)
 
-    const { toolResult } = await handler({
+    const { toolResult, auditEvents } = await handler({
       calls: [{ operationId: 'checkRole' }],
     })
 
     expect(toolResult.content[0]?.text).toContain('not available')
+    // A denied/excluded op must produce an audit event so the trail is complete.
+    expect(auditEvents).toHaveLength(1)
+    expect(auditEvents[0]).toMatchObject({ operationId: 'checkRole', result: 'denied' })
   })
 
   it('executes multiple operations in sequence — emits one audit event per call', async () => {

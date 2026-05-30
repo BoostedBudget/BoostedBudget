@@ -21,12 +21,14 @@ type BudgetHandler struct {
 	idempotencyRepo    repository.IdempotencyRepository // optional; nil disables dedup
 	db                 repository.DB
 	mcpAuditRepo       repository.MCPAuditRepository
+	mcpWorkerSecret    string
 }
 
 type BudgetHandlerDeps struct {
 	IdempotencyRepo repository.IdempotencyRepository
 	DB              repository.DB
 	MCPAuditRepo    repository.MCPAuditRepository
+	MCPWorkerSecret string
 }
 
 // NewBudgetHandler creates a new BudgetHandler instance.
@@ -42,6 +44,7 @@ func NewBudgetHandler(service services.BudgetService, syncService services.Budge
 		h.idempotencyRepo = deps[0].IdempotencyRepo
 		h.db = deps[0].DB
 		h.mcpAuditRepo = deps[0].MCPAuditRepo
+		h.mcpWorkerSecret = deps[0].MCPWorkerSecret
 	}
 	return h
 }
@@ -193,7 +196,7 @@ func (h *BudgetHandler) CreateBudget(ctx context.Context, input *CreateBudgetInp
 			return nil, humaerrors.LoggingMapError(ctx, err)
 		}
 		// MCP audit (fire-and-forget)
-		if input.IsMCPOrigin() && h.mcpAuditRepo != nil {
+		if input.IsMCPOrigin(h.mcpWorkerSecret) && h.mcpAuditRepo != nil {
 			_ = recordMCPWriteAudit(ctx, h.mcpAuditRepo, input.UserID, input.MCPGrantID, "createBudget", input.IdempotencyKey)
 		}
 		return &CreateBudgetOutput{Body: budget}, nil
@@ -205,7 +208,7 @@ func (h *BudgetHandler) CreateBudget(ctx context.Context, input *CreateBudgetInp
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 	// MCP audit (fire-and-forget)
-	if input.IsMCPOrigin() && h.mcpAuditRepo != nil {
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.mcpAuditRepo != nil {
 		_ = recordMCPWriteAudit(ctx, h.mcpAuditRepo, input.UserID, input.MCPGrantID, "createBudget", input.IdempotencyKey)
 	}
 	return &CreateBudgetOutput{Body: budget}, nil

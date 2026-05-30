@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,6 +17,14 @@ type mockMCPAuditRepository struct {
 }
 
 func (m *mockMCPAuditRepository) Record(ctx context.Context, entry *domain.MCPAuditEntry) error {
+	if m.shouldError {
+		return assert.AnError
+	}
+	m.recordedEntry = entry
+	return nil
+}
+
+func (m *mockMCPAuditRepository) RecordInTx(_ context.Context, _ pgx.Tx, entry *domain.MCPAuditEntry) error {
 	if m.shouldError {
 		return assert.AnError
 	}

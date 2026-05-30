@@ -39,6 +39,9 @@ BOOSTEDBUDGET_API_URL = "https://api.boostedbudget.com"
 #   CLERK_ISSUER_URL         e.g. https://clerk.boostedbudget.com  (Clerk Frontend API URL)
 #   MCP_OAUTH_AUDIENCE       the OAuth client_id registered in Clerk for this MCP app
 #   BOOSTEDBUDGET_ORIGIN_SECRET
+#   MCP_WORKER_SECRET        shared secret between this Worker and the Go backend;
+#                            generate: openssl rand -hex 32
+#                            set on backend:  MCP_WORKER_SECRET=<value>
 #   BOOSTEDBUDGET_API_URL    (override per env; defaults to https://api.boostedbudget.com)
 
 [env.staging]
