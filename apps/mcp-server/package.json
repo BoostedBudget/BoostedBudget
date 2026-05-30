@@ -1,0 +1,30 @@
+{
+  "name": "@boostedbudget/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:staging": "wrangler deploy --env staging",
+    "test": "bun test src/",
+    "test:watch": "bun test --watch src/",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext ts --report-unused-disable-directives --max-warnings 0",
+    "build:spec-index": "bun run src/spec/index-builder.ts",
+    "build:facade": "bun run scripts/generate-facade.ts",
+    "build:artifacts": "bun run build:spec-index && bun run build:facade"
+  },
+  "dependencies": {
+    "@boostedbudget/api-client": "workspace:*",
+    "agents": "^0.13.3",
+    "@cloudflare/workers-oauth-provider": "^0.7.0",
+    "zod": "^3.24.2",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250620.0",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.20.0"
+  }
+}
