@@ -233,4 +233,52 @@ func TestRecipeService_Run(t *testing.T) {
 			t.Errorf("expected getCashFlowSummary, got %q", result.Calls[0].OperationID)
 		}
 	})
+
+	t.Run("GAP-R3-10: rejects stored recipe that contains a write-class op at run time", func(t *testing.T) {
+		// Defense-in-depth: even if a recipe was saved before a manifest change, Run()
+		// must re-validate and reject any spec containing a write-class operation.
+		// This prevents a stored recipe from bypassing the v1 read-only constraint.
+		repo := &mockRecipeRepository{
+			getFn: func(_ context.Context, id string, _ string) (*domain.MCPRecipe, error) {
+				return &domain.MCPRecipe{
+					ID:     id,
+					UserID: "user-1",
+					Name:   "Stale Recipe",
+					// Stored spec contains a write-class op (e.g. saved before manifest change)
+					Spec: []domain.MCPRecipeCall{
+						{OperationID: "createBudget", Body: map[string]interface{}{"name": "bad"}},
+					},
+					CreatedAt: time.Now(),
+					UpdatedAt: time.Now(),
+				}, nil
+			},
+		}
+		svc := NewRecipeService(repo)
+		_, err := svc.Run(ctx, "stale-recipe", "user-1")
+		if err == nil {
+			t.Error("expected Run to reject a recipe spec containing a write-class operation")
+		}
+	})
+
+	t.Run("GAP-R3-10: rejects stored recipe that contains an excluded op at run time", func(t *testing.T) {
+		repo := &mockRecipeRepository{
+			getFn: func(_ context.Context, id string, _ string) (*domain.MCPRecipe, error) {
+				return &domain.MCPRecipe{
+					ID:     id,
+					UserID: "user-1",
+					Name:   "Excluded Op Recipe",
+					Spec: []domain.MCPRecipeCall{
+						{OperationID: "checkRole"}, // excluded admin op
+					},
+					CreatedAt: time.Now(),
+					UpdatedAt: time.Now(),
+				}, nil
+			},
+		}
+		svc := NewRecipeService(repo)
+		_, err := svc.Run(ctx, "excluded-recipe", "user-1")
+		if err == nil {
+			t.Error("expected Run to reject a recipe spec containing an excluded operation")
+		}
+	})
 }

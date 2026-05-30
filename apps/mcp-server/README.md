@@ -200,7 +200,7 @@ The Worker **never** touches the database directly. All data goes through the Go
 
 ## Known Limitations
 
-- **Revocation**: Revoking the OAuth grant in BoostedBudget settings takes effect within the token TTL (~5 minutes) rather than instantly. This is a known limitation of stateless JWTs.
+- **Revocation**: Revoking the OAuth grant in the **Clerk dashboard** (or via a BoostedBudget account settings page once that UI is built) takes effect within the token TTL (~5 minutes) rather than instantly. This is a known limitation of stateless JWTs.
 - **Sandbox**: `execute()` calls a typed API client (not agent-authored TypeScript in a V8 isolate). This is a simplified Code Mode implementation.
 - **Rate limits**: 60 requests/minute, 5 concurrent per session.
 - **Unattended writes**: Automation rules and scheduled write recipes are not yet supported (planned for a future release).

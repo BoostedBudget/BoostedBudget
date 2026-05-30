@@ -4,6 +4,7 @@ import { buildProtectedResourceMetadata, buildWwwAuthenticate } from './resource
 const ENV = {
   MCP_RESOURCE_URL: 'https://mcp.boostedbudget.com',
   CLERK_JWKS_URL: 'https://clerk.boostedbudget.com/.well-known/jwks.json',
+  CLERK_ISSUER_URL: 'https://clerk.boostedbudget.com',
 }
 
 describe('buildProtectedResourceMetadata', () => {
@@ -12,12 +13,22 @@ describe('buildProtectedResourceMetadata', () => {
     expect(meta.resource).toBe('https://mcp.boostedbudget.com')
   })
 
-  it('lists authorization_servers pointing at Clerk JWKS base URL', () => {
+  it('lists authorization_servers pointing at CLERK_ISSUER_URL (not derived from JWKS URL)', () => {
     const meta = buildProtectedResourceMetadata(ENV)
     expect(meta.authorization_servers).toHaveLength(1)
-    expect(meta.authorization_servers[0]).toBe(
-      'https://clerk.boostedbudget.com',
-    )
+    expect(meta.authorization_servers[0]).toBe('https://clerk.boostedbudget.com')
+  })
+
+  it('uses CLERK_ISSUER_URL directly when JWKS host differs', () => {
+    // When the issuer URL and JWKS URL resolve to different hosts (e.g. direct JWKS URL),
+    // authorization_servers must use CLERK_ISSUER_URL — not a URL derived from CLERK_JWKS_URL.
+    const meta = buildProtectedResourceMetadata({
+      MCP_RESOURCE_URL: 'https://mcp.example.com',
+      CLERK_JWKS_URL: 'https://direct-jwks-host.clerk.accounts.dev/.well-known/jwks.json',
+      CLERK_ISSUER_URL: 'https://clerk.example.com',
+    })
+    expect(meta.authorization_servers[0]).toBe('https://clerk.example.com')
+    expect(meta.authorization_servers[0]).not.toContain('direct-jwks-host')
   })
 
   it('lists supported scopes', () => {

@@ -64,4 +64,35 @@ describe('parseEnv', () => {
     })
     expect(result.BOOSTEDBUDGET_API_URL).toBe('http://localhost:8080')
   })
+
+  it('GAP-R3-16: throws in production when MCP_OAUTH_AUDIENCE is the placeholder value', () => {
+    // Prevents silent 401-on-every-request when a deploy forgets to set the real Clerk client_id.
+    expect(() =>
+      parseEnv({
+        ...validEnv,
+        MCP_OAUTH_AUDIENCE: 'PLACEHOLDER_UPDATE_AFTER_CLERK_OAUTH_APP_CREATED',
+        ENVIRONMENT: 'production',
+      }),
+    ).toThrow()
+  })
+
+  it('GAP-R3-16: throws in staging when MCP_OAUTH_AUDIENCE is the placeholder value', () => {
+    expect(() =>
+      parseEnv({
+        ...validEnv,
+        MCP_OAUTH_AUDIENCE: 'PLACEHOLDER_UPDATE_AFTER_CLERK_OAUTH_APP_CREATED',
+        ENVIRONMENT: 'staging',
+      }),
+    ).toThrow()
+  })
+
+  it('GAP-R3-16: allows any PLACEHOLDER_ value in development (local testing)', () => {
+    // In development, placeholder values are acceptable so devs can run without a real Clerk OAuth app.
+    const result = parseEnv({
+      ...validEnv,
+      MCP_OAUTH_AUDIENCE: 'PLACEHOLDER_UPDATE_AFTER_CLERK_OAUTH_APP_CREATED',
+      ENVIRONMENT: 'development',
+    })
+    expect(result.MCP_OAUTH_AUDIENCE).toBe('PLACEHOLDER_UPDATE_AFTER_CLERK_OAUTH_APP_CREATED')
+  })
 })

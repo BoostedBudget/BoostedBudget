@@ -3,6 +3,11 @@ main = "src/index.ts"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Workers Logs — stream logs to the Cloudflare dashboard (Observability tab).
+# Captures console.log/error from Worker code and all uncaught exceptions.
+[observability]
+enabled = true
+
 # Production environment routes
 routes = [
   { pattern = "mcp.boostedbudget.com/*", zone_name = "boostedbudget.com" }
@@ -25,6 +30,7 @@ new_sqlite_classes = ["BoostedBudgetMcpAgent"]
 [vars]
 ENVIRONMENT = "production"
 MCP_RESOURCE_URL = "https://mcp.boostedbudget.com"
+BOOSTEDBUDGET_API_URL = "https://api.boostedbudget.com"
 
 # Secrets (set via `wrangler secret put`):
 #   CLERK_SECRET_KEY
@@ -40,6 +46,9 @@ name = "boostedbudget-mcp-staging"
 routes = [
   { pattern = "mcp.staging.boostedbudget.com/*", zone_name = "boostedbudget.com" }
 ]
+
+[env.staging.observability]
+enabled = true
 
 [[env.staging.durable_objects.bindings]]
 name = "MCP_AGENT"

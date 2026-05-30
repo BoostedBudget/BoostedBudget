@@ -82,10 +82,14 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // ── MCP Recipes (read/write allowed; recipes exposed as MCP tools) ────────
   read('listMCPRecipes'),
   read('getMCPRecipe'),
+  // runMCPRecipe is READ in v1: recipes can only compose read-class ops, so running
+  // them produces no writes. The tool resolves the recipe to ordered API calls and
+  // returns them for the agent to pass to execute(). Classifying as write would
+  // require a confirmation token that the recipe.run tool has no input field for.
+  read('runMCPRecipe'),
   write('createMCPRecipe', { idempotent: false }),
   write('updateMCPRecipe', { idempotent: true }),
   write('deleteMCPRecipe', { destructive: true }),
-  write('runMCPRecipe'),
 
   // ── Analytics (all read) ────────────────────────────────────────────────
   read('getCashFlowHistory'),

@@ -115,8 +115,15 @@ test-fast:
 	@cd apps/web && bun run test:ci
 	@echo "✅ Frontend coverage: apps/web/coverage/combined.lcov"
 	@echo ""
-	@echo "4️⃣  Linting..."
+	@echo "4️⃣  MCP Server Tests..."
+	@cd apps/mcp-server && bun test src/
+	@cd apps/mcp-server && bun run scripts/check-manifest-completeness.ts
+	@cd apps/mcp-server && bun run scripts/check-no-direct-api-calls.ts
+	@echo "✅ MCP server tests passed"
+	@echo ""
+	@echo "5️⃣  Linting..."
 	@cd apps/web && bun run lint
+	@cd apps/mcp-server && bun run lint
 	@echo "✅ Linting passed"
 	@echo ""
 	@echo "========================================"
@@ -169,7 +176,13 @@ test-all:
 	@cd apps/web && bun run test:ci
 	@echo "✅ Frontend coverage: apps/web/coverage/combined.lcov"
 	@echo ""
-	@echo "4️⃣  Building Backend Binary for E2E Tests..."
+	@echo "4️⃣  MCP Server Tests..."
+	@cd apps/mcp-server && bun test src/
+	@cd apps/mcp-server && bun run scripts/check-manifest-completeness.ts
+	@cd apps/mcp-server && bun run scripts/check-no-direct-api-calls.ts
+	@echo "✅ MCP server tests passed"
+	@echo ""
+	@echo "5️⃣  Building Backend Binary for E2E Tests..."
 	@cd backend && go build -o bin/server ./cmd/server
 	@echo "✅ Backend binary: backend/bin/server"
 	@echo ""
@@ -268,8 +281,20 @@ generate-all: generate-openapi generate-api-client
 	@echo "✅ All code generation complete!"
 
 # Validate all generated code
-validate-all: validate-openapi validate-api-client
+validate-all: validate-openapi validate-api-client validate-mcp-artifacts
 	@echo "✅ All generated code is up to date!"
+
+# Validate MCP Worker generated artifacts (facade + spec-index) match current OpenAPI spec.
+# Mirrors validate-openapi / validate-api-client patterns.
+validate-mcp-artifacts:
+	@echo "Validating MCP server generated artifacts..."
+	@cd apps/mcp-server && bun run src/spec/index-builder.ts
+	@git diff --exit-code apps/mcp-server/src/spec/generated/spec-index.json || \
+		(echo "❌ MCP spec-index.json is outdated. Run: cd apps/mcp-server && bun run src/spec/index-builder.ts" && exit 1)
+	@cd apps/mcp-server && bun run scripts/generate-facade.ts
+	@git diff --exit-code apps/mcp-server/src/client/generated/facade.ts || \
+		(echo "❌ MCP facade.ts is outdated. Run: cd apps/mcp-server && bun run scripts/generate-facade.ts" && exit 1)
+	@echo "✅ MCP Worker artifacts are up to date"
 
 # Code generation (deprecated - use generate-openapi)
 generate:
@@ -283,6 +308,7 @@ generate:
 lint:
 	cd backend && golangci-lint run
 	cd apps/web && bun run lint
+	cd apps/mcp-server && bun run lint
 
 # Cleanup
 clean:

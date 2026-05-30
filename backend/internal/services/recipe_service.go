@@ -141,6 +141,13 @@ func (s *recipeService) Run(ctx context.Context, id string, userID string) (*dom
 	if err != nil || recipe == nil {
 		return nil, fmt.Errorf("recipe not found: %s", id)
 	}
+	// Re-validate spec at run time (defense-in-depth: GAP-R3-10).
+	// A recipe saved before a manifest change must not be allowed to run write-class ops.
+	// The Worker's execute() tool also gates on the manifest, but we enforce here too
+	// so the backend never silently resolves a spec that violates the v1 read-only constraint.
+	if err := validateSpec(recipe.Spec); err != nil {
+		return nil, fmt.Errorf("recipe spec no longer valid: %w", err)
+	}
 	return &domain.MCPRecipeRunResult{
 		RecipeID: recipe.ID,
 		Name:     recipe.Name,

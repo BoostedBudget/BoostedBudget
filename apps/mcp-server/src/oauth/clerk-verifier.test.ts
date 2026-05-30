@@ -1,4 +1,4 @@
-import { describe, expect, it, mock } from 'bun:test'
+import { describe, expect, it } from 'bun:test'
 import { ClerkTokenVerifier, AuthContext, TokenVerificationError } from './clerk-verifier'
 
 // NOTE: Real JWKS-based JWT tests require crypto infrastructure.
