@@ -41,6 +41,14 @@ routes = [
   { pattern = "mcp.staging.boostedbudget.com/*", zone_name = "boostedbudget.com" }
 ]
 
+[[env.staging.durable_objects.bindings]]
+name = "MCP_AGENT"
+class_name = "BoostedBudgetMcpAgent"
+
+[[env.staging.migrations]]
+tag = "v1"
+new_sqlite_classes = ["BoostedBudgetMcpAgent"]
+
 [env.staging.vars]
 ENVIRONMENT = "staging"
 MCP_RESOURCE_URL = "https://mcp.staging.boostedbudget.com"
