@@ -15,6 +15,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { McpAgent } from 'agents/mcp'
 import { z } from 'zod'
 import { handleSearch } from './tools/search'
+import { buildExecuteHandler } from './tools/execute'
+import { createHostProxy } from '../sandbox/host-proxy'
+import { createFetchMutator } from '../client/fetch-mutator'
 import type { SpecIndex } from '../spec/search-runtime'
 import type { Env } from '../env'
 
@@ -46,6 +49,17 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
 
   async init(): Promise<void> {
     const specIndex = await getSpecIndex()
+    const env = this.env as Env
+
+    // Build the host-proxy with credential injection from Worker secrets
+    const mutator = createFetchMutator({
+      baseUrl: env.BOOSTEDBUDGET_API_URL,
+      getCredentials: async () => ({
+        authorization: `Bearer ${(this.props as McpAgentProps).clerkUserId}`, // token injected via props
+        originSecret: env.BOOSTEDBUDGET_ORIGIN_SECRET,
+      }),
+    })
+    const proxy = createHostProxy({ mutator })
 
     // ── search tool ──────────────────────────────────────────────────────────
     this.server.registerTool(
@@ -62,19 +76,20 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           limit: z.number().int().min(1).max(50).optional().describe('Max results to return (default: 20)'),
         },
       },
-      async (input) => {
-        return handleSearch(input, specIndex)
-      },
+      async (input) => handleSearch(input, specIndex),
     )
 
-    // ── execute tool (stub — implemented in Phase 5) ─────────────────────────
+    // ── execute tool (reads + confirmation-gated writes) ─────────────────────
+    const executeHandler = buildExecuteHandler(proxy, specIndex.entries)
     this.server.registerTool(
       'execute',
       {
         description:
           'Execute one or more BoostedBudget API operations. ' +
           'Use search() first to find the right operationId, then call execute() ' +
-          'with a list of operation calls to chain. Write operations require confirmation.',
+          'with a list of operation calls to chain. ' +
+          'Write operations will return a confirmation challenge on first call — ' +
+          're-invoke with the provided confirmationToken to complete the write.',
         inputSchema: {
           calls: z.array(
             z.object({
@@ -84,18 +99,10 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
               pathParams: z.record(z.string()).optional().describe('Path parameters (e.g. { id: "abc" })'),
             }),
           ).describe('Ordered list of API calls to execute'),
-          confirmationToken: z.string().optional().describe('Confirmation token for write operations (obtained from a previous execute() that required confirmation)'),
+          confirmationToken: z.string().optional().describe('Confirmation token for write operations'),
         },
       },
-      async (_input) => {
-        // Phase 5: implement host-proxy execution
-        return {
-          content: [{
-            type: 'text' as const,
-            text: 'execute() is not yet implemented (Phase 5). Use search() to discover operations.',
-          }],
-        }
-      },
+      async (input) => executeHandler(input),
     )
   }
 }
