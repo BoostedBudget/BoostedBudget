@@ -282,6 +282,61 @@ func (h *AnalyticsHandler) GetSpendingTrends(ctx context.Context, input *GetSpen
 	return &GetSpendingTrendsOutput{Body: response}, nil
 }
 
+// GetCategoryTotalForPeriodInput represents input for GET /analytics/category-total.
+type GetCategoryTotalForPeriodInput struct {
+	inputs.AuthenticatedInput
+	StartDate string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
+	EndDate   string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
+	Category  string `query:"category" required:"true" doc:"Category identifier (PFC primary or custom:<uuid>)"`
+}
+
+// GetCategoryTotalForPeriodOutput represents the response for GET /analytics/category-total.
+type GetCategoryTotalForPeriodOutput struct {
+	Body *domain.CategoryTotalResponse
+}
+
+// GetTopExpenseInput represents input for GET /analytics/top-expense.
+type GetTopExpenseInput struct {
+	inputs.AuthenticatedInput
+	StartDate string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
+	EndDate   string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
+}
+
+// GetTopExpenseOutput represents the response for GET /analytics/top-expense.
+type GetTopExpenseOutput struct {
+	Body *domain.TopExpenseResponse
+}
+
+// GetCategoryTotalForPeriod handles GET /api/v1/analytics/category-total requests.
+func (h *AnalyticsHandler) GetCategoryTotalForPeriod(ctx context.Context, input *GetCategoryTotalForPeriodInput) (*GetCategoryTotalForPeriodOutput, error) {
+	startDate, endDate, err := dateutil.ParseDateRange(input.StartDate, input.EndDate)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := h.service.GetCategoryTotalForPeriod(ctx, input.UserID, input.Category, startDate, endDate)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return &GetCategoryTotalForPeriodOutput{Body: response}, nil
+}
+
+// GetTopExpense handles GET /api/v1/analytics/top-expense requests.
+func (h *AnalyticsHandler) GetTopExpense(ctx context.Context, input *GetTopExpenseInput) (*GetTopExpenseOutput, error) {
+	startDate, endDate, err := dateutil.ParseDateRange(input.StartDate, input.EndDate)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := h.service.GetTopExpense(ctx, input.UserID, startDate, endDate)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return &GetTopExpenseOutput{Body: response}, nil
+}
+
 // RegisterAnalyticsRoutes registers analytics routes with the Huma API.
 // Note: These routes require the Clerk middleware to be applied.
 func RegisterAnalyticsRoutes(api huma.API, handler *AnalyticsHandler) {
@@ -339,4 +394,26 @@ func RegisterAnalyticsRoutes(api huma.API, handler *AnalyticsHandler) {
 		Tags:        []string{"Analytics"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetSpendingTrends)
+
+	// GET /api/v1/analytics/category-total - MCP helper: total spend for a category (Issue #1087)
+	huma.Register(api, huma.Operation{
+		OperationID: "getCategoryTotalForPeriod",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/analytics/category-total",
+		Summary:     "Get total spend for a category",
+		Description: "Returns the total expense amount and transaction count for a specific category in a date range. Single DB round-trip; designed as an AI-tool-callable function.",
+		Tags:        []string{"Analytics"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetCategoryTotalForPeriod)
+
+	// GET /api/v1/analytics/top-expense - MCP helper: top single expense (Issue #1087)
+	huma.Register(api, huma.Operation{
+		OperationID: "getTopExpense",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/analytics/top-expense",
+		Summary:     "Get top expense",
+		Description: "Returns the single largest expense transaction in a date range. Returns null when no expenses exist. Designed as an AI-tool-callable function.",
+		Tags:        []string{"Analytics"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetTopExpense)
 }

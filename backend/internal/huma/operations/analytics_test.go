@@ -55,6 +55,14 @@ func (m *mockAnalyticsService) GetSpendingTrends(ctx context.Context, userID str
 	return m.spendingTrendsResponse, m.spendingTrendsErr
 }
 
+func (m *mockAnalyticsService) GetCategoryTotalForPeriod(_ context.Context, _ string, _ string, _ time.Time, _ time.Time) (*domain.CategoryTotalResponse, error) {
+	return nil, nil
+}
+
+func (m *mockAnalyticsService) GetTopExpense(_ context.Context, _ string, _ time.Time, _ time.Time) (*domain.TopExpenseResponse, error) {
+	return nil, nil
+}
+
 // Helper functions to create test data
 func createTestCashFlowSummary() *domain.CashFlowSummaryResponse {
 	return &domain.CashFlowSummaryResponse{

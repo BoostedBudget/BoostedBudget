@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generatedAt": "2026-05-30T01:09:27.875Z",
+  "generatedAt": "2026-05-30T01:53:42.414Z",
   "entries": [
     {
       "operationId": "getAccounts",
@@ -311,6 +311,17 @@
       "excluded": false
     },
     {
+      "operationId": "getCategoryTotalForPeriod",
+      "method": "GET",
+      "path": "/api/v1/analytics/category-total",
+      "summary": "Get total spend for a category",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
       "operationId": "getSpendingByCategory",
       "method": "GET",
       "path": "/api/v1/analytics/spending-by-category",
@@ -337,6 +348,17 @@
       "method": "GET",
       "path": "/api/v1/analytics/spending-trends",
       "summary": "Get spending trends",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getTopExpense",
+      "method": "GET",
+      "path": "/api/v1/analytics/top-expense",
+      "summary": "Get top expense",
       "tags": [
         "Analytics"
       ],

@@ -43,15 +43,19 @@ import type {
 import type {
   CashFlowHistoryResponse,
   CashFlowSummaryResponse,
+  CategoryTotalResponse,
   ErrorModel,
   GetCashFlowHistoryParams,
   GetCashFlowSummaryParams,
+  GetCategoryTotalForPeriodParams,
   GetSpendingByCategoryParams,
   GetSpendingByMerchantParams,
   GetSpendingTrendsParams,
+  GetTopExpenseParams,
   SpendingByCategoryResponse,
   SpendingByMerchantResponse,
   SpendingTrendsResponse,
+  TopExpenseResponse,
 } from "../../models";
 
 import { customInstance } from "../../client";
@@ -394,6 +398,176 @@ export function useGetCashFlowSummary<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getGetCashFlowSummaryQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Returns the total expense amount and transaction count for a specific category in a date range. Single DB round-trip; designed as an AI-tool-callable function.
+ * @summary Get total spend for a category
+ */
+export const getCategoryTotalForPeriod = (
+  params: GetCategoryTotalForPeriodParams,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<CategoryTotalResponse>(
+    { url: `/api/v1/analytics/category-total`, method: "GET", params, signal },
+    options,
+  );
+};
+
+export const getGetCategoryTotalForPeriodQueryKey = (
+  params?: GetCategoryTotalForPeriodParams,
+) => {
+  return [
+    `/api/v1/analytics/category-total`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetCategoryTotalForPeriodQueryOptions = <
+  TData = Awaited<ReturnType<typeof getCategoryTotalForPeriod>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetCategoryTotalForPeriodParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCategoryTotalForPeriod>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetCategoryTotalForPeriodQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getCategoryTotalForPeriod>>
+  > = ({ signal }) => getCategoryTotalForPeriod(params, requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getCategoryTotalForPeriod>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetCategoryTotalForPeriodQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getCategoryTotalForPeriod>>
+>;
+export type GetCategoryTotalForPeriodQueryError = ErrorType<ErrorModel>;
+
+export function useGetCategoryTotalForPeriod<
+  TData = Awaited<ReturnType<typeof getCategoryTotalForPeriod>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetCategoryTotalForPeriodParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCategoryTotalForPeriod>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCategoryTotalForPeriod>>,
+          TError,
+          Awaited<ReturnType<typeof getCategoryTotalForPeriod>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetCategoryTotalForPeriod<
+  TData = Awaited<ReturnType<typeof getCategoryTotalForPeriod>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetCategoryTotalForPeriodParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCategoryTotalForPeriod>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCategoryTotalForPeriod>>,
+          TError,
+          Awaited<ReturnType<typeof getCategoryTotalForPeriod>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetCategoryTotalForPeriod<
+  TData = Awaited<ReturnType<typeof getCategoryTotalForPeriod>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetCategoryTotalForPeriodParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCategoryTotalForPeriod>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get total spend for a category
+ */
+
+export function useGetCategoryTotalForPeriod<
+  TData = Awaited<ReturnType<typeof getCategoryTotalForPeriod>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetCategoryTotalForPeriodParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCategoryTotalForPeriod>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetCategoryTotalForPeriodQueryOptions(
+    params,
+    options,
+  );
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,
@@ -905,6 +1079,150 @@ export function useGetSpendingTrends<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getGetSpendingTrendsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Returns the single largest expense transaction in a date range. Returns null when no expenses exist. Designed as an AI-tool-callable function.
+ * @summary Get top expense
+ */
+export const getTopExpense = (
+  params: GetTopExpenseParams,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<TopExpenseResponse>(
+    { url: `/api/v1/analytics/top-expense`, method: "GET", params, signal },
+    options,
+  );
+};
+
+export const getGetTopExpenseQueryKey = (params?: GetTopExpenseParams) => {
+  return [
+    `/api/v1/analytics/top-expense`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetTopExpenseQueryOptions = <
+  TData = Awaited<ReturnType<typeof getTopExpense>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetTopExpenseParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getTopExpense>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetTopExpenseQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getTopExpense>>> = ({
+    signal,
+  }) => getTopExpense(params, requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getTopExpense>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetTopExpenseQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getTopExpense>>
+>;
+export type GetTopExpenseQueryError = ErrorType<ErrorModel>;
+
+export function useGetTopExpense<
+  TData = Awaited<ReturnType<typeof getTopExpense>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetTopExpenseParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getTopExpense>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTopExpense>>,
+          TError,
+          Awaited<ReturnType<typeof getTopExpense>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetTopExpense<
+  TData = Awaited<ReturnType<typeof getTopExpense>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetTopExpenseParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getTopExpense>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTopExpense>>,
+          TError,
+          Awaited<ReturnType<typeof getTopExpense>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetTopExpense<
+  TData = Awaited<ReturnType<typeof getTopExpense>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetTopExpenseParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getTopExpense>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get top expense
+ */
+
+export function useGetTopExpense<
+  TData = Awaited<ReturnType<typeof getTopExpense>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetTopExpenseParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getTopExpense>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetTopExpenseQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,
