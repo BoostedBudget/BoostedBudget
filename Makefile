@@ -94,7 +94,7 @@ test-fast:
 	fi
 	@echo ""
 	@echo "2️⃣  Backend Tests..."
-	@cd backend && go test ./... -v -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic ./...
+	@cd backend && go test ./... -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic ./...
 	@echo ""
 	@echo "📊 Checking backend coverage threshold (≥60%)..."
 	@cd backend && COVERAGE=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
@@ -111,9 +111,9 @@ test-fast:
 	@cd backend && go tool cover -html=coverage.out -o coverage.html
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
-	@echo "3️⃣  Frontend Tests (bun:test + vitest combined coverage)..."
-	@cd apps/web && bun run test:ci
-	@echo "✅ Frontend coverage: apps/web/coverage/combined.lcov"
+	@echo "3️⃣  Frontend Tests (bun:test — fast, no coverage)..."
+	@cd apps/web && bun run test
+	@echo "✅ Frontend tests passed (run 'make test-all' for vitest coverage)"
 	@echo ""
 	@echo "4️⃣  MCP Server Tests..."
 	@cd apps/mcp-server && bun test src/
@@ -132,10 +132,8 @@ test-fast:
 	@echo ""
 	@echo "📄 Coverage Reports:"
 	@echo "  Backend:  backend/coverage.html (open in browser)"
-	@echo "  Frontend: apps/web/coverage/combined.lcov (bun:test + vitest combined)"
-	@echo "            apps/web/coverage/html/index.html (if lcov/genhtml installed)"
 	@echo ""
-	@echo "⚠️  Remember: Run 'make test-all' to include E2E tests before creating PRs!"
+	@echo "⚠️  Remember: Run 'make test-all' to include E2E tests + frontend coverage before creating PRs!"
 
 # All Tests + Coverage Reports (including E2E)
 # Use this before creating PRs to ensure full validation (2-4 minutes, ~1.5GB)
