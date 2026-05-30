@@ -75,13 +75,14 @@ export default {
       // Inject auth context as trusted internal headers before routing to the DO.
       // The DO is only reachable through this Worker (never directly exposed),
       // so these headers are trustworthy.
-      const authedRequest = new Request(request, {
-        headers: new Headers({
-          ...Object.fromEntries(request.headers.entries()),
-          'X-MCP-Clerk-User-Id': authCtx.clerkUserId,
-          'X-MCP-Grant-Id': authCtx.grantId,
-        }),
-      })
+      // Build headers from scratch to prevent client-supplied X-MCP-* header injection.
+      // Delete then set guarantees exactly one trusted value even if the client sent duplicates.
+      const forwardHeaders = new Headers(request.headers)
+      forwardHeaders.delete('X-MCP-Clerk-User-Id')
+      forwardHeaders.delete('X-MCP-Grant-Id')
+      forwardHeaders.set('X-MCP-Clerk-User-Id', authCtx.clerkUserId)
+      forwardHeaders.set('X-MCP-Grant-Id', authCtx.grantId)
+      const authedRequest = new Request(request, { headers: forwardHeaders })
 
       const mcpHandler = BoostedBudgetMcpAgent.serve('/mcp', {
         binding: 'MCP_AGENT',
