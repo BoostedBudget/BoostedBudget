@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -620,6 +621,61 @@ func TestUpdateTransactionCategory_MismatchedFields(t *testing.T) {
 	assert.Nil(t, output)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "custom_category_id must be omitted")
+}
+
+// TestUpdateTransactionCategory_ClearWithStrayField asserts a 400 (not a DB 500) when
+// kind=clear is sent with a stray override field (#1203 discriminated-union validation).
+func TestUpdateTransactionCategory_ClearWithStrayField(t *testing.T) {
+	customID := "cat-1"
+	pfcPrimary := "FOOD_AND_DRINK"
+	pfcDetailed := "FOOD_AND_DRINK_RESTAURANTS"
+	cases := []struct {
+		name string
+		body UpdateTransactionCategoryBody
+	}{
+		{"stray custom id", UpdateTransactionCategoryBody{Kind: "clear", CustomCategoryID: &customID}},
+		{"stray pfc primary", UpdateTransactionCategoryBody{Kind: "clear", PFCPrimary: &pfcPrimary}},
+		{"stray pfc detailed", UpdateTransactionCategoryBody{Kind: "clear", PFCDetailed: &pfcDetailed}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := NewTransactionHandler(&mockTransactionService{})
+			input := &UpdateTransactionCategoryInput{
+				AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+				ID:                 "tx-123",
+				Body:               tc.body,
+			}
+
+			output, err := handler.UpdateTransactionCategory(context.Background(), input)
+
+			assert.Nil(t, output)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "must be omitted when kind=clear")
+			if se, ok := err.(huma.StatusError); ok {
+				assert.Equal(t, http.StatusBadRequest, se.GetStatus())
+			} else {
+				t.Fatalf("expected a huma.StatusError, got %T", err)
+			}
+		})
+	}
+}
+
+// TestUpdateTransactionCategory_ClearSucceeds asserts a clear with no override fields is accepted.
+func TestUpdateTransactionCategory_ClearSucceeds(t *testing.T) {
+	userID := "user-123"
+	mockService := &mockTransactionService{transaction: createTestTransaction(userID)}
+	handler := NewTransactionHandler(mockService)
+
+	input := &UpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 "tx-123",
+		Body:               UpdateTransactionCategoryBody{Kind: "clear"},
+	}
+
+	output, err := handler.UpdateTransactionCategory(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
 }
 
 // TestUpdateTransactionCategory_NotFound tests 404 for non-existent transaction.
