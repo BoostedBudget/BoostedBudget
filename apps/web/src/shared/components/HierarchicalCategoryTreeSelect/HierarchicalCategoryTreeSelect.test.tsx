@@ -568,6 +568,34 @@ describe('HierarchicalCategoryTreeSelect', () => {
       expect(screen.getByText('Food & Drink')).toBeInTheDocument()
     })
 
+    it('moves focus between treeitem rows with ArrowDown/ArrowUp (#1203 a11y)', () => {
+      render(
+        <HierarchicalCategoryTreeSelect
+          selectedPrimaries={[]}
+          onPrimariesChange={() => {}}
+          selectedDetaileds={[]}
+          onDetailedsChange={() => {}}
+        />
+      )
+      fireEvent.click(screen.getByRole('button', { name: /category filter/i }))
+
+      const rows = screen.getAllByRole('treeitem')
+      expect(rows.length).toBeGreaterThan(1)
+
+      rows[0].focus()
+      expect(document.activeElement).toBe(rows[0])
+      fireEvent.keyDown(rows[0], { key: 'ArrowDown' })
+      expect(document.activeElement).toBe(rows[1])
+      fireEvent.keyDown(rows[1], { key: 'ArrowUp' })
+      expect(document.activeElement).toBe(rows[0])
+
+      // Home/End jump to the first/last treeitem.
+      fireEvent.keyDown(rows[0], { key: 'End' })
+      expect(document.activeElement).toBe(rows[rows.length - 1])
+      fireEvent.keyDown(rows[rows.length - 1], { key: 'Home' })
+      expect(document.activeElement).toBe(rows[0])
+    })
+
     it('fires primary row onClick when Enter is pressed on a primary row button', () => {
       const onPrimariesChange = mock(() => {})
       render(

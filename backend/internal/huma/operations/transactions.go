@@ -339,6 +339,26 @@ func (h *TransactionHandler) UpdateTransactionTags(ctx context.Context, input *U
 // UpdateTransactionCategory handles PUT /api/v1/transactions/:id/category requests.
 // Updates the category override on a specific transaction using the PFC v2 discriminated union.
 func (h *TransactionHandler) UpdateTransactionCategory(ctx context.Context, input *UpdateTransactionCategoryInput) (*UpdateTransactionCategoryOutput, error) {
+	// Validate the discriminated union before hitting the DB so malformed combinations
+	// return 400 rather than tripping a DB CHECK/FK and surfacing as a 500 (#1203).
+	b := input.Body
+	switch b.Kind {
+	case "custom":
+		if b.CustomCategoryID == nil || *b.CustomCategoryID == "" {
+			return nil, huma.Error400BadRequest("custom_category_id is required when kind=custom")
+		}
+		if b.PFCPrimary != nil || b.PFCDetailed != nil {
+			return nil, huma.Error400BadRequest("pfc_primary/pfc_detailed must be omitted when kind=custom")
+		}
+	case "pfc":
+		if b.PFCPrimary == nil || *b.PFCPrimary == "" {
+			return nil, huma.Error400BadRequest("pfc_primary is required when kind=pfc")
+		}
+		if b.CustomCategoryID != nil {
+			return nil, huma.Error400BadRequest("custom_category_id must be omitted when kind=pfc")
+		}
+	}
+
 	tx, err := h.service.UpdateTransactionCategory(ctx, input.UserID, input.ID, input.Body.Kind, input.Body.PFCPrimary, input.Body.PFCDetailed, input.Body.CustomCategoryID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)

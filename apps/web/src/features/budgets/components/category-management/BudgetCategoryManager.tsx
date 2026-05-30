@@ -102,7 +102,8 @@ export function BudgetCategoryManager({
 
   const customCategoryMap = useMemo<CustomCategoryMap>(
     () => new Map(
-      (userCategories ?? []).map(cat => [
+      // Guard against a non-array query value (e.g. under a mocked/errored query).
+      (Array.isArray(userCategories) ? userCategories : []).map(cat => [
         cat.id,
         { name: cat.name, parent_pfc_primary: cat.parent_pfc_primary ?? null },
       ])

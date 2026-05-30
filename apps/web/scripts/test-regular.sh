@@ -59,6 +59,12 @@ EXCLUDE_PATTERNS=(
     # CustomCategoryManager: relies on the shared useGetUserCategories mock state, which
     # other test files clobber via global mock.module() in the full suite (#1203)
     "src/features/categories/components/CustomCategoryManager.test.tsx"
+    # These depend on the centralized categories/transactions API mocks, which the budgets
+    # tests clobber via inline global mock.module() in the full suite (#1203)
+    "src/features/categories/hooks/useCustomCategories.test.tsx"
+    "src/features/categories/hooks/useCategoryMutations.test.tsx"
+    "src/features/transactions/hooks/useReviewMutations.test.tsx"
+    "src/features/reports/components/CustomCategoryFilter.test.tsx"
 )
 
 echo "Running regular tests (excluding real-implementation tests)..."
