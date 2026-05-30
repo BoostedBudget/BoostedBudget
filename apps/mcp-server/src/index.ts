@@ -17,26 +17,67 @@
 
 import { type Env, parseEnv } from './env'
 import { handleHealth } from './health'
+import {
+  buildProtectedResourceMetadata,
+  unauthorizedResponse,
+} from './oauth/resource-server'
+import { ClerkTokenVerifier, verifyClerkToken } from './oauth/clerk-verifier'
+import { assertNotRevoked } from './oauth/revocation'
+
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Expose-Headers': 'WWW-Authenticate',
+}
 
 export default {
   async fetch(request: Request, rawEnv: Env): Promise<Response> {
-    // Validate environment bindings eagerly so misconfigured deployments
-    // fail loudly rather than producing mysterious runtime errors.
-    parseEnv(rawEnv)
-
+    const env = parseEnv(rawEnv)
     const url = new URL(request.url)
+
+    // ── CORS preflight ─────────────────────────────────────────────────────
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS })
+    }
 
     // ── Health check (no auth) ─────────────────────────────────────────────
     if (url.pathname === '/health' && request.method === 'GET') {
       return handleHealth()
     }
 
-    // TODO Phase 3: OAuth protected-resource metadata
-    // TODO Phase 3: OAuth authorization-server metadata
-    // TODO Phase 4: McpAgent dispatch (Durable Object)
+    // ── OAuth protected-resource metadata (no auth required, RFC 9728) ────
+    if (
+      url.pathname === '/.well-known/oauth-protected-resource' ||
+      url.pathname === '/.well-known/oauth-protected-resource/mcp'
+    ) {
+      return new Response(JSON.stringify(buildProtectedResourceMetadata(env)), {
+        status: 200,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // ── All other routes require a valid Clerk OAuth token ─────────────────
+    let authCtx
+    try {
+      const token = ClerkTokenVerifier.extractBearerToken(
+        request.headers.get('Authorization') ?? undefined,
+      )
+      authCtx = await verifyClerkToken(token, env)
+      await assertNotRevoked(authCtx, env)
+    } catch {
+      return unauthorizedResponse(env.MCP_RESOURCE_URL, 'invalid_token')
+    }
+
+    // TODO Phase 4: McpAgent dispatch (Durable Object) — passes authCtx
     // TODO Phase 8: Sentry/tracing error boundary
 
-    // Catch-all for unimplemented routes
+    // MCP endpoint stub (Phase 4 will implement the McpAgent dispatch)
+    if (url.pathname === '/mcp') {
+      return new Response(
+        JSON.stringify({ error: 'mcp_not_yet_implemented', phase: 4 }),
+        { status: 501, headers: { 'Content-Type': 'application/json' } },
+      )
+    }
+
     return new Response(JSON.stringify({ error: 'not_found' }), {
       status: 404,
       headers: { 'Content-Type': 'application/json' },
