@@ -121,7 +121,11 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
     const audit = createAuditClient(env)
 
     // ── search tool ──────────────────────────────────────────────────────────
-    this.server.registerTool(
+    // Zod 3.25 changed type inference for z.objectOutputType<T> in registerTool's generic
+    // constraint, causing TS2589 (type instantiation excessively deep). Cast to any to bypass
+    // deep inference; explicit input types on callbacks preserve runtime correctness.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(this.server as any).registerTool(
       'search',
       {
         description:
@@ -135,7 +139,9 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           limit: z.number().int().min(1).max(50).optional().describe('Max results to return (default: 20)'),
         },
       },
-      async (input) => {
+      // Explicit type annotation avoids TS2589 (type instantiation excessively deep)
+      // triggered by Zod 3.25's changed inference for nested schemas in registerTool.
+      async (input: { query?: string; class?: 'read' | 'write'; tag?: string; limit?: number }) => {
         const p = this.props as McpAgentProps
         posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'search' })
         const result = handleSearch(input, specIndex)
@@ -147,7 +153,8 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
 
     // ── execute tool (reads + confirmation-gated writes) ─────────────────────
     const executeHandler = buildExecuteHandler(proxy, specIndex.entries)
-    this.server.registerTool(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see search tool comment above
+    ;(this.server as any).registerTool(
       'execute',
       {
         description:
@@ -168,7 +175,10 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           confirmationToken: z.string().optional().describe('Confirmation token for write operations'),
         },
       },
-      async (input) => {
+      async (input: {
+        calls: Array<{ operationId: string; params?: Record<string, unknown>; body?: Record<string, unknown>; pathParams?: Record<string, string> }>
+        confirmationToken?: string
+      }) => {
         const p = this.props as McpAgentProps
         posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'execute' })
         // ExecuteResult includes per-call audit events with the correct operationClass/result.
@@ -203,7 +213,8 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       },
     )
 
-    this.server.registerTool(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see search tool comment above
+    ;(this.server as any).registerTool(
       'recipe.save',
       {
         description:
@@ -224,7 +235,12 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           confirmationToken: z.string().optional(),
         },
       },
-      async (input) => {
+      async (input: {
+        name: string
+        description?: string
+        calls: Array<{ operationId: string; params?: Record<string, unknown>; body?: Record<string, unknown>; pathParams?: Record<string, string> }>
+        confirmationToken?: string
+      }) => {
         const p = this.props as McpAgentProps
         // save() returns {toolResult, auditResult} so we can emit the correct audit label.
         // auditResult='confirmation_required' on the first (challenge) call; 'success' on confirm.
@@ -242,7 +258,8 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       },
     )
 
-    this.server.registerTool(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see search tool comment above
+    ;(this.server as any).registerTool(
       'recipe.run',
       {
         description: 'Resolve a saved recipe to its ordered list of API calls, then pass them to execute().',
@@ -250,7 +267,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           id: z.string().describe('Recipe ID (from recipe.list())'),
         },
       },
-      async (input) => {
+      async (input: { id: string }) => {
         const p = this.props as McpAgentProps
         const result = await recipeTools.run(input)
         void audit.record({ actorUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown',
