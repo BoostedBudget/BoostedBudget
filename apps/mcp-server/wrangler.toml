@@ -27,6 +27,10 @@ new_sqlite_classes = ["BoostedBudgetMcpAgent"]
 # binding = "DISPATCHER"
 # namespace = "mcp-sandbox"
 
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "02ac4a0117734620a09972b7dd2d78ff"
+
 [vars]
 ENVIRONMENT = "production"
 MCP_RESOURCE_URL = "https://mcp.boostedbudget.com"
@@ -48,11 +52,15 @@ BOOSTEDBUDGET_API_URL = "https://api.boostedbudget.com"
 [env.staging]
 name = "boostedbudget-mcp-staging"
 routes = [
-  { pattern = "mcp.staging.boostedbudget.com/*", zone_name = "boostedbudget.com" }
+  { pattern = "staging-mcp.boostedbudget.com/*", zone_name = "boostedbudget.com" }
 ]
 
 [env.staging.observability]
 enabled = true
+
+[[env.staging.kv_namespaces]]
+binding = "OAUTH_KV"
+id = "cf8557252388405a9cdf2857c5573e1c"
 
 [[env.staging.durable_objects.bindings]]
 name = "MCP_AGENT"
@@ -64,5 +72,5 @@ new_sqlite_classes = ["BoostedBudgetMcpAgent"]
 
 [env.staging.vars]
 ENVIRONMENT = "staging"
-MCP_RESOURCE_URL = "https://mcp.staging.boostedbudget.com"
+MCP_RESOURCE_URL = "https://staging-mcp.boostedbudget.com"
 BOOSTEDBUDGET_API_URL = "https://staging-api.boostedbudget.com"

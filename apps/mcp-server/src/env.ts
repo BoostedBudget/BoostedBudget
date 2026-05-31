@@ -58,9 +58,7 @@ export function parseEnv(raw: unknown): ParsedEnv {
  * Extend this as new bindings are added.
  */
 export interface Env extends ParsedEnv {
-  // Phase 4: Durable Object binding for McpAgent
-  // MCP_AGENT: DurableObjectNamespace
-
-  // Phase 4: Dynamic Worker Loader / dispatch namespace for sandbox
-  // DISPATCHER: DispatchNamespace
+  // KV namespace for OAuth state (client registrations, auth codes, tokens)
+  // Managed by @cloudflare/workers-oauth-provider
+  OAUTH_KV: KVNamespace
 }
