@@ -59,7 +59,7 @@ func TestIdempotencyRepository_GetOrCreate(t *testing.T) {
 		var result map[string]interface{}
 		called := false
 
-		err = repo.GetOrCreate(ctx, key, userID, opID, func() (interface{}, error) {
+		_, err = repo.GetOrCreate(ctx, key, userID, opID, func() (interface{}, error) {
 			called = true
 			return nil, nil
 		}, &result)
@@ -89,7 +89,7 @@ func TestIdempotencyRepository_GetOrCreate(t *testing.T) {
 		var result map[string]interface{}
 		fnResult := map[string]interface{}{"id": "new-budget", "name": "New Budget"}
 
-		err = repo.GetOrCreate(ctx, key, userID, opID, func() (interface{}, error) {
+		_, err = repo.GetOrCreate(ctx, key, userID, opID, func() (interface{}, error) {
 			return fnResult, nil
 		}, &result)
 
@@ -111,7 +111,7 @@ func TestIdempotencyRepository_GetOrCreate(t *testing.T) {
 		repo := repository.NewIdempotencyRepository(mock)
 		var result map[string]interface{}
 
-		err = repo.GetOrCreate(ctx, key, userID, opID, func() (interface{}, error) {
+		_, err = repo.GetOrCreate(ctx, key, userID, opID, func() (interface{}, error) {
 			return nil, errors.New("service error")
 		}, &result)
 

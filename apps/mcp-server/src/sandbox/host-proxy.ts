@@ -105,6 +105,16 @@ async function issueConfirmationToken(
   args: Record<string, unknown>,
   getNow: () => number,
 ): Promise<string> {
+  // Opportunistic sweep: evict expired entries before inserting a new one.
+  // Challenged-but-never-confirmed tokens accumulate until isolate recycle without this.
+  // No timer needed — each new challenge cleans up at most a handful of stale entries.
+  const now = getNow()
+  for (const [tok, entry] of pendingConfirmations) {
+    if (now - entry.issuedAt > CONFIRMATION_TTL_MS) {
+      pendingConfirmations.delete(tok)
+    }
+  }
+
   const token = crypto.randomUUID()
   // idempotencyKey is generated once at challenge time and forwarded on the confirmed write
   // so the backend can deduplicate network retries of the same logical MCP write.
@@ -114,7 +124,7 @@ async function issueConfirmationToken(
     grantId,
     operationId,
     argsHash: await hashArgs(args),
-    issuedAt: getNow(),
+    issuedAt: now,
     idempotencyKey,
   })
   return token

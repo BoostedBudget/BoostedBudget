@@ -115,7 +115,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
     })
 
     // PostHog analytics client (no-op if POSTHOG_API_KEY is unset)
-    const posthog = createPosthogClient((env as Record<string, unknown>)['POSTHOG_API_KEY'] as string ?? '')
+    const posthog = createPosthogClient((env as Record<string, unknown>)['POSTHOG_API_KEY'] as string | undefined ?? '')
 
     // Audit client — posts read/protocol events to POST /api/v1/mcp/audit (fire-and-forget)
     const audit = createAuditClient(env)
@@ -194,7 +194,13 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
         description: 'List your saved MCP workflow recipes.',
         inputSchema: {},
       },
-      async () => recipeTools.list({}),
+      async () => {
+        const p = this.props as McpAgentProps
+        const result = await recipeTools.list({})
+        void audit.record({ actorUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown',
+          operationClass: 'read', operationId: 'recipe.list', result: 'success' })
+        return result
+      },
     )
 
     this.server.registerTool(
@@ -218,7 +224,13 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           confirmationToken: z.string().optional(),
         },
       },
-      async (input) => recipeTools.save(input),
+      async (input) => {
+        const p = this.props as McpAgentProps
+        const result = await recipeTools.save(input)
+        void audit.record({ actorUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown',
+          operationClass: 'write', operationId: 'recipe.save', result: 'success' })
+        return result
+      },
     )
 
     this.server.registerTool(
@@ -229,7 +241,13 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           id: z.string().describe('Recipe ID (from recipe.list())'),
         },
       },
-      async (input) => recipeTools.run(input),
+      async (input) => {
+        const p = this.props as McpAgentProps
+        const result = await recipeTools.run(input)
+        void audit.record({ actorUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown',
+          operationClass: 'read', operationId: 'recipe.run', result: 'success' })
+        return result
+      },
     )
   }
 }

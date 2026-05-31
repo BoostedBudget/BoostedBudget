@@ -214,10 +214,10 @@ func (h *CategoryHandler) CreateCategory(ctx context.Context, input *CreateCateg
 		return &CreateCategoryOutput{Body: category}, nil
 	}
 
-	// Idempotency dedup without MCP audit
+	// Idempotency dedup without MCP audit (non-MCP path)
 	if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
 		var category *domain.CustomCategory
-		err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createCustomCategory",
+		_, err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createCustomCategory",
 			func() (interface{}, error) {
 				return h.service.CreateCategory(ctx, input.UserID, &input.Body)
 			}, &category)

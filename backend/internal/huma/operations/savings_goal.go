@@ -163,10 +163,10 @@ func (h *SavingsGoalHandler) CreateGoal(ctx context.Context, input *CreateSaving
 		return &CreateSavingsGoalOutput{Body: goal}, nil
 	}
 
-	// Idempotency dedup without MCP audit
+	// Idempotency dedup without MCP audit (non-MCP path)
 	if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
 		var goal *domain.SavingsGoal
-		err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createSavingsGoal",
+		_, err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createSavingsGoal",
 			func() (interface{}, error) {
 				return h.service.CreateGoal(ctx, input.UserID, &input.Body)
 			}, &goal)
