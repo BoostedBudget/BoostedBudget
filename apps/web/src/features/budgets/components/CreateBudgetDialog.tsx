@@ -107,6 +107,7 @@ export function CreateBudgetDialog({
   // Reset form when dialog closes
   useEffect(() => {
     if (!isOpen) {
+       
       setFormData({ ...initialFormData, start_date: getDefaultStartDate() });
       setErrors({});
       setApiError(null);

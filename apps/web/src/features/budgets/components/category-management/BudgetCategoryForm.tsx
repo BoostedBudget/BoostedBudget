@@ -98,6 +98,7 @@ export function BudgetCategoryForm({
   useEffect(() => {
     if (isOpen) {
       if (mode === 'edit' && initialData) {
+         
         setFormData({
           category_kind: initialData.category_kind || 'pfc',
           pfc_primary: initialData.pfc_primary || '',

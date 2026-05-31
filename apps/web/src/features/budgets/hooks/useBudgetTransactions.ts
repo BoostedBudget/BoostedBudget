@@ -82,9 +82,13 @@ export function useBudgetTransactions(
     if (data) {
       // Cast transactions to local type
       const transactions = data.transactions as unknown as Transaction[];
+       
       setAllTransactions(transactions);
+       
       setTotalCount(data.total_count);
+       
       setTotalAmount(data.total_amount);
+       
       setHasMore(data.has_more);
       offsetRef.current = pageSize;
     }
