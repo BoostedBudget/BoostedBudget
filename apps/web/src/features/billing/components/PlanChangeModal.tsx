@@ -43,11 +43,16 @@ export function PlanChangeModal({
   // Sync pre-fill when opening, reset when closing
   useEffect(() => {
     if (open) {
+       
       setSelectedTier(initialTier ?? null)
+       
       setBillingInterval(initialInterval ?? currentBillingInterval)
     } else {
+       
       setSelectedTier(null)
+       
       setDowngradeConfirmed(false)
+       
       setBillingInterval(currentBillingInterval)
     }
   }, [open, initialTier, initialInterval, currentBillingInterval])

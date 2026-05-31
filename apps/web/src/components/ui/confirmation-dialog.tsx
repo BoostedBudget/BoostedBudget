@@ -76,6 +76,7 @@ export function ConfirmationDialog({
   const inputId = React.useId()
 
   React.useEffect(() => {
+     
     if (!open) setTyped('')
   }, [open])
 

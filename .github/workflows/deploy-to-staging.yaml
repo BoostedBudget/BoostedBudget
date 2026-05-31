@@ -49,6 +49,7 @@ jobs:
       backend_changed:      ${{ steps.compute.outputs.backend_changed }}
       fly_config_changed:   ${{ steps.compute.outputs.fly_config_changed }}
       frontend_changed:     ${{ steps.compute.outputs.frontend_changed }}
+      mcp_changed:          ${{ steps.compute.outputs.mcp_changed }}
       backend_prior_sha:    ${{ steps.resolve-tags.outputs.backend_prior_sha }}
       frontend_prior_sha:   ${{ steps.resolve-tags.outputs.frontend_prior_sha }}
 
@@ -136,6 +137,14 @@ jobs:
             api:      ['api/**', 'api/openapi.yaml']
             workflow: ['.github/workflows/**']
 
+      - id: filter-mcp
+        uses: dorny/paths-filter@v4
+        with:
+          base: ${{ steps.resolve-tags.outputs.backend_prior_sha || steps.resolve-sha.outputs.deploy_sha }}
+          ref:  ${{ steps.resolve-sha.outputs.deploy_sha }}
+          filters: |
+            mcp: ['apps/mcp-server/**', 'api/openapi.yaml', '.github/workflows/**']
+
       - id: filter-fly-config
         if: steps.resolve-tags.outputs.bootstrap_backend == 'false'
         env:
@@ -173,6 +182,7 @@ jobs:
           FE_FRONTEND:      ${{ steps.filter-frontend.outputs.frontend }}
           FE_API:           ${{ steps.filter-frontend.outputs.api }}
           FE_WORKFLOW:      ${{ steps.filter-frontend.outputs.workflow }}
+          MCP_CHANGED:      ${{ steps.filter-mcp.outputs.mcp }}
         run: |
           set -euo pipefail
 
@@ -200,10 +210,16 @@ jobs:
             frontend_changed=true
           fi
 
+          mcp_changed=false
+          if [ "$FORCE_REBUILD" = "true" ] || [ "${MCP_CHANGED:-}" = "true" ]; then
+            mcp_changed=true
+          fi
+
           echo "backend_changed=${backend_changed}"       >> "$GITHUB_OUTPUT"
           echo "fly_config_changed=${fly_config_changed}" >> "$GITHUB_OUTPUT"
           echo "frontend_changed=${frontend_changed}"     >> "$GITHUB_OUTPUT"
-          echo "Backend changed: ${backend_changed}, Fly config changed: ${fly_config_changed}, Frontend changed: ${frontend_changed}"
+          echo "mcp_changed=${mcp_changed}"               >> "$GITHUB_OUTPUT"
+          echo "Backend changed: ${backend_changed}, Fly config changed: ${fly_config_changed}, Frontend changed: ${frontend_changed}, MCP changed: ${mcp_changed}"
 
   # =============================================================================
   # Build and Push Backend Image to GHCR
@@ -551,12 +567,104 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
+  # Deploy MCP Worker to Cloudflare Workers (Staging)
+  # Issue #1087: MCP server for BoostedBudget
+  # NOTE: CLOUDFLARE_API_TOKEN needs Workers Scripts:Edit permission
+  # =============================================================================
+  deploy-mcp-worker:
+    name: Deploy MCP Worker (Staging)
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.mcp_changed == 'true' }}
+    runs-on: [self-hosted, macOS, mac-mini]
+    environment:
+      name: staging
+      url: https://mcp.staging.boostedbudget.com
+    env:
+      UNIQUE_WORKSPACE: workspace-deploy-mcp-staging-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout deploy SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.detect-changes.outputs.deploy_sha }}
+          path: ${{ env.UNIQUE_WORKSPACE }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.1.29"
+
+      - name: Install MCP server dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: bun install --frozen-lockfile
+
+      - name: Run MCP server tests
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: bun test src/
+
+      - name: Typecheck MCP server
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: NODE_OPTIONS=--max-old-space-size=2048 bun run typecheck
+
+      - name: Lint MCP server
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: bun run lint
+
+      - name: Check manifest completeness
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: bun run scripts/check-manifest-completeness.ts
+
+      - name: Check no direct API call bypasses
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: bun run scripts/check-no-direct-api-calls.ts
+
+      - name: Rebuild spec index and check for drift
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: |
+          bun run src/spec/index-builder.ts
+          git diff --exit-code src/spec/generated/spec-index.json || \
+            (echo "::error::MCP spec index is outdated. Run 'bun run src/spec/index-builder.ts' and commit." && exit 1)
+
+      - name: Rebuild facade and check for drift
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: |
+          bun run scripts/generate-facade.ts
+          git diff --exit-code src/client/generated/facade.ts || \
+            (echo "::error::MCP facade is outdated. Run 'bun run scripts/generate-facade.ts' and commit." && exit 1)
+
+      - name: Deploy MCP Worker to staging
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+          packageManager: bun
+          command: deploy --env staging
+
+      - name: Deployment summary
+        env:
+          DEPLOY_SHA: ${{ needs.detect-changes.outputs.deploy_sha }}
+        run: |
+          echo "### MCP Worker Staging Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Deploy SHA:** \`${DEPLOY_SHA}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**URL:** https://mcp.staging.boostedbudget.com" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
   # Staging Smoke Tests
   # =============================================================================
   smoke-tests:
     name: Staging Smoke Tests
-    needs: [detect-changes, deploy-backend, deploy-frontend]
-    if: always() && !cancelled() && needs.deploy-backend.result == 'success' && (needs.deploy-frontend.result == 'success' || needs.deploy-frontend.result == 'skipped')
+    needs: [detect-changes, deploy-backend, deploy-frontend, deploy-mcp-worker]
+    if: always() && !cancelled() && needs.deploy-backend.result == 'success' && (needs.deploy-frontend.result == 'success' || needs.deploy-frontend.result == 'skipped') && (needs.deploy-mcp-worker.result == 'success' || needs.deploy-mcp-worker.result == 'skipped')
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-smoke-tests-staging-${{ github.run_id }}

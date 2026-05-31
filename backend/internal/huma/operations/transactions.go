@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,17 +13,33 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
 // TransactionHandler handles transaction-related HTTP requests.
 type TransactionHandler struct {
-	service services.TransactionService
+	service         services.TransactionService
+	db              repository.DB
+	mcpAuditRepo    repository.MCPAuditRepository
+	mcpWorkerSecret string
+}
+
+type TransactionHandlerDeps struct {
+	DB              repository.DB
+	MCPAuditRepo    repository.MCPAuditRepository
+	MCPWorkerSecret string
 }
 
 // NewTransactionHandler creates a new TransactionHandler instance.
-func NewTransactionHandler(service services.TransactionService) *TransactionHandler {
-	return &TransactionHandler{service: service}
+func NewTransactionHandler(service services.TransactionService, deps ...TransactionHandlerDeps) *TransactionHandler {
+	h := &TransactionHandler{service: service}
+	if len(deps) > 0 {
+		h.db = deps[0].DB
+		h.mcpAuditRepo = deps[0].MCPAuditRepo
+		h.mcpWorkerSecret = deps[0].MCPWorkerSecret
+	}
+	return h
 }
 
 // --- Input/Output Types ---
@@ -94,6 +111,7 @@ type UpdateTransactionTagsOutput struct {
 // UpdateTransactionCategoryInput represents the input for updating transaction category.
 type UpdateTransactionCategoryInput struct {
 	inputs.AuthenticatedInput
+	inputs.MCPContextInput
 	ID   string                        `path:"id" doc:"Transaction UUID"`
 	Body UpdateTransactionCategoryBody `json:"body"`
 }
@@ -367,7 +385,13 @@ func (h *TransactionHandler) UpdateTransactionCategory(ctx context.Context, inpu
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
-
+	// MCP audit (fire-and-forget; entity update is value-idempotent so retries are safe,
+	// but each retry still writes an audit row since no idempotency key is available on PATCH).
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.mcpAuditRepo != nil {
+		if auditErr := recordMCPWriteAudit(ctx, h.mcpAuditRepo, input.UserID, input.MCPGrantID, "updateTransactionCategory", ""); auditErr != nil {
+			slog.WarnContext(ctx, "MCP audit write failed (non-atomic post-write)", "operation", "updateTransactionCategory", "error", auditErr)
+		}
+	}
 	return &UpdateTransactionCategoryOutput{Body: tx}, nil
 }
 

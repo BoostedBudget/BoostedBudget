@@ -94,7 +94,7 @@ test-fast:
 	fi
 	@echo ""
 	@echo "2️⃣  Backend Tests..."
-	@cd backend && go test ./... -v -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic ./...
+	@cd backend && go test ./... -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic ./...
 	@echo ""
 	@echo "📊 Checking backend coverage threshold (≥60%)..."
 	@cd backend && COVERAGE=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
@@ -111,12 +111,19 @@ test-fast:
 	@cd backend && go tool cover -html=coverage.out -o coverage.html
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
-	@echo "3️⃣  Frontend Tests (bun:test + vitest combined coverage)..."
-	@cd apps/web && bun run test:ci
-	@echo "✅ Frontend coverage: apps/web/coverage/combined.lcov"
+	@echo "3️⃣  Frontend Tests (bun:test — fast, no coverage)..."
+	@cd apps/web && bun run test
+	@echo "✅ Frontend tests passed (run 'make test-all' for vitest coverage)"
 	@echo ""
-	@echo "4️⃣  Linting..."
+	@echo "4️⃣  MCP Server Tests..."
+	@cd apps/mcp-server && bun test src/
+	@cd apps/mcp-server && bun run scripts/check-manifest-completeness.ts
+	@cd apps/mcp-server && bun run scripts/check-no-direct-api-calls.ts
+	@echo "✅ MCP server tests passed"
+	@echo ""
+	@echo "5️⃣  Linting..."
 	@cd apps/web && bun run lint
+	@cd apps/mcp-server && bun run lint
 	@echo "✅ Linting passed"
 	@echo ""
 	@echo "========================================"
@@ -125,10 +132,8 @@ test-fast:
 	@echo ""
 	@echo "📄 Coverage Reports:"
 	@echo "  Backend:  backend/coverage.html (open in browser)"
-	@echo "  Frontend: apps/web/coverage/combined.lcov (bun:test + vitest combined)"
-	@echo "            apps/web/coverage/html/index.html (if lcov/genhtml installed)"
 	@echo ""
-	@echo "⚠️  Remember: Run 'make test-all' to include E2E tests before creating PRs!"
+	@echo "⚠️  Remember: Run 'make test-all' to include E2E tests + frontend coverage before creating PRs!"
 
 # All Tests + Coverage Reports (including E2E)
 # Use this before creating PRs to ensure full validation (2-4 minutes, ~1.5GB)
@@ -169,7 +174,13 @@ test-all:
 	@cd apps/web && bun run test:ci
 	@echo "✅ Frontend coverage: apps/web/coverage/combined.lcov"
 	@echo ""
-	@echo "4️⃣  Building Backend Binary for E2E Tests..."
+	@echo "4️⃣  MCP Server Tests..."
+	@cd apps/mcp-server && bun test src/
+	@cd apps/mcp-server && bun run scripts/check-manifest-completeness.ts
+	@cd apps/mcp-server && bun run scripts/check-no-direct-api-calls.ts
+	@echo "✅ MCP server tests passed"
+	@echo ""
+	@echo "5️⃣  Building Backend Binary for E2E Tests..."
 	@cd backend && go build -o bin/server ./cmd/server
 	@echo "✅ Backend binary: backend/bin/server"
 	@echo ""
@@ -268,8 +279,20 @@ generate-all: generate-openapi generate-api-client
 	@echo "✅ All code generation complete!"
 
 # Validate all generated code
-validate-all: validate-openapi validate-api-client
+validate-all: validate-openapi validate-api-client validate-mcp-artifacts
 	@echo "✅ All generated code is up to date!"
+
+# Validate MCP Worker generated artifacts (facade + spec-index) match current OpenAPI spec.
+# Mirrors validate-openapi / validate-api-client patterns.
+validate-mcp-artifacts:
+	@echo "Validating MCP server generated artifacts..."
+	@cd apps/mcp-server && bun run src/spec/index-builder.ts
+	@git diff --exit-code apps/mcp-server/src/spec/generated/spec-index.json || \
+		(echo "❌ MCP spec-index.json is outdated. Run: cd apps/mcp-server && bun run src/spec/index-builder.ts" && exit 1)
+	@cd apps/mcp-server && bun run scripts/generate-facade.ts
+	@git diff --exit-code apps/mcp-server/src/client/generated/facade.ts || \
+		(echo "❌ MCP facade.ts is outdated. Run: cd apps/mcp-server && bun run scripts/generate-facade.ts" && exit 1)
+	@echo "✅ MCP Worker artifacts are up to date"
 
 # Code generation (deprecated - use generate-openapi)
 generate:
@@ -283,6 +306,7 @@ generate:
 lint:
 	cd backend && golangci-lint run
 	cd apps/web && bun run lint
+	cd apps/mcp-server && bun run lint
 
 # Cleanup
 clean:

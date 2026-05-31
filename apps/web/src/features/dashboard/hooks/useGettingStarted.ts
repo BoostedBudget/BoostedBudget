@@ -109,7 +109,7 @@ export function useGettingStarted(): UseGettingStartedReturn {
   useEffect(() => {
     if (!isActivated && !isDismissed && !hasAccounts && !accountsLoading) {
       setLocalStorageFlag(GETTING_STARTED_ACTIVATED_KEY)
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+       
       setIsActivated(true)
     }
   }, [isActivated, isDismissed, hasAccounts, accountsLoading])
@@ -118,7 +118,7 @@ export function useGettingStarted(): UseGettingStartedReturn {
     if (allComplete && isActivated && !isDismissed && !isCelebrating) {
       // Persist dismissal immediately so a reload during celebration doesn't re-show checklist
       setLocalStorageFlag(GETTING_STARTED_DISMISSED_KEY)
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+       
       setIsCelebrating(true)
       const timer = setTimeout(() => {
         setIsDismissed(true)

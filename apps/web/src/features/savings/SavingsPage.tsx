@@ -44,6 +44,7 @@ export function SavingsPage() {
   // Auto-open create dialog when navigated here with location.state.openCreateDialog
   useEffect(() => {
     if ((location.state as { openCreateDialog?: boolean } | null)?.openCreateDialog) {
+       
       setActiveDialog('create')
       navigate(location.pathname, { replace: true, state: {} })
     }
