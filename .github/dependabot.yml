@@ -123,6 +123,17 @@ updates:
         update-types:
           - "minor"
           - "patch"
+      mcp-worker:
+        # Cloudflare Worker + MCP Server deps in apps/mcp-server
+        patterns:
+          - "wrangler"
+          - "@cloudflare/*"
+          - "agents"
+          - "@modelcontextprotocol/*"
+          - "jose"
+        update-types:
+          - "minor"
+          - "patch"
 
   # =============================================================================
   # GitHub Actions

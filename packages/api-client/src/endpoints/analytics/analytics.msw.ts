@@ -35,9 +35,11 @@ import type { RequestHandlerOptions } from "msw";
 import type {
   CashFlowHistoryResponse,
   CashFlowSummaryResponse,
+  CategoryTotalResponse,
   SpendingByCategoryResponse,
   SpendingByMerchantResponse,
   SpendingTrendsResponse,
+  TopExpenseResponse,
 } from "../../models";
 
 export const getGetCashFlowHistoryResponseMock = (
@@ -89,6 +91,19 @@ export const getGetCashFlowSummaryResponseMock = (
     undefined,
   ]),
   start_date: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getGetCategoryTotalForPeriodResponseMock = (
+  overrideResponse: Partial<Extract<CategoryTotalResponse, object>> = {},
+): CategoryTotalResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  pfc_primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  total: faker.number.float({ fractionDigits: 2 }),
+  transaction_count: faker.number.int(),
   ...overrideResponse,
 });
 
@@ -181,6 +196,21 @@ export const getGetSpendingTrendsResponseMock = (
   ...overrideResponse,
 });
 
+export const getGetTopExpenseResponseMock = (
+  overrideResponse: Partial<Extract<TopExpenseResponse, object>> = {},
+): TopExpenseResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  amount: faker.number.float({ fractionDigits: 2 }),
+  category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  merchant_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  pfc_primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  transaction_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
 export const getGetCashFlowHistoryMockHandler = (
   overrideResponse?:
     | CashFlowHistoryResponse
@@ -226,6 +256,32 @@ export const getGetCashFlowSummaryMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getGetCashFlowSummaryResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetCategoryTotalForPeriodMockHandler = (
+  overrideResponse?:
+    | CategoryTotalResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<CategoryTotalResponse> | CategoryTotalResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/category-total",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetCategoryTotalForPeriodResponseMock(),
         { status: 200 },
       );
     },
@@ -310,10 +366,38 @@ export const getGetSpendingTrendsMockHandler = (
     options,
   );
 };
+
+export const getGetTopExpenseMockHandler = (
+  overrideResponse?:
+    | TopExpenseResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<TopExpenseResponse> | TopExpenseResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/top-expense",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetTopExpenseResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 export const getAnalyticsMock = () => [
   getGetCashFlowHistoryMockHandler(),
   getGetCashFlowSummaryMockHandler(),
+  getGetCategoryTotalForPeriodMockHandler(),
   getGetSpendingByCategoryMockHandler(),
   getGetSpendingByMerchantMockHandler(),
   getGetSpendingTrendsMockHandler(),
+  getGetTopExpenseMockHandler(),
 ];

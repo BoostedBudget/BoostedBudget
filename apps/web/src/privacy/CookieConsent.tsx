@@ -34,6 +34,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
     // Check if user has already provided consent
     if (!consentData || consentData.version !== COOKIE_CONSENT_VERSION) {
       // Show banner if no consent or version mismatch
+       
       setShowBanner(true);
     } else {
       // Apply existing consents

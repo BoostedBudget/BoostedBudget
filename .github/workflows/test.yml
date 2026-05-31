@@ -27,6 +27,7 @@ jobs:
       api: ${{ steps.filter.outputs.api }}
       migrations: ${{ steps.filter.outputs.migrations }}
       workflow: ${{ steps.filter.outputs.workflow }}
+      mcp: ${{ steps.filter.outputs.mcp }}
     steps:
       - uses: actions/checkout@v6
 
@@ -53,6 +54,9 @@ jobs:
               - 'backend/migrations/**'
             workflow:
               - '.github/workflows/**'
+            mcp:
+              - 'apps/mcp-server/**'
+              - 'api/openapi.yaml'
 
   # =============================================================================
   # E2E Tests (starts immediately — no needs — so it gets runner priority over
@@ -283,6 +287,88 @@ jobs:
             echo ""
             echo "Diff (first 100 lines):"
             git diff packages/api-client/src | head -100
+            exit 1
+          fi
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
+  # MCP Server Validation (Issue #1087: manifest completeness + anti-bypass)
+  # =============================================================================
+  mcp-server-validate:
+    name: MCP Server Validation
+    needs: [detect-changes, openapi-validate]
+    if: |
+      always() &&
+      (needs.detect-changes.outputs.mcp == 'true' ||
+       needs.detect-changes.outputs.api == 'true' ||
+       needs.detect-changes.outputs.backend == 'true' ||
+       needs.detect-changes.outputs.workflow == 'true')
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-mcp-validate-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.1.29"
+
+      - name: Install MCP server dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: bun install --frozen-lockfile
+
+      - name: Run MCP server unit tests
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: bun test src/
+
+      - name: Typecheck MCP server
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        # Uses --skipLibCheck to avoid OOM from large generated api-client type declarations.
+        run: NODE_OPTIONS=--max-old-space-size=2048 bun run typecheck
+
+      - name: Lint MCP server
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: bun run lint
+
+      - name: Check manifest completeness (deny-by-default CI gate)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: bun run scripts/check-manifest-completeness.ts
+
+      - name: Check no direct API call bypasses
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: bun run scripts/check-no-direct-api-calls.ts
+
+      - name: Rebuild spec index and check for drift
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: |
+          bun run src/spec/index-builder.ts
+          if git diff --exit-code src/spec/generated/spec-index.json; then
+            echo "::notice::MCP spec index is up to date"
+          else
+            echo "::error::MCP spec index is outdated! Run 'bun run src/spec/index-builder.ts' and commit."
+            exit 1
+          fi
+
+      - name: Rebuild facade and check for drift
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: |
+          bun run scripts/generate-facade.ts
+          if git diff --exit-code src/client/generated/facade.ts; then
+            echo "::notice::MCP client facade is up to date"
+          else
+            echo "::error::MCP client facade is outdated! Run 'bun run scripts/generate-facade.ts' and commit."
             exit 1
           fi
 

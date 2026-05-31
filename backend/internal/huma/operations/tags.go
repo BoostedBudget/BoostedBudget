@@ -8,17 +8,38 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
 // TagHandler handles user tag-related HTTP requests.
 type TagHandler struct {
-	service services.UserTagService
+	service         services.UserTagService
+	idempotencyRepo repository.IdempotencyRepository // optional; nil disables dedup
+	db              repository.DB
+	mcpAuditRepo    repository.MCPAuditRepository
+	mcpWorkerSecret string
+}
+
+type TagHandlerDeps struct {
+	IdempotencyRepo repository.IdempotencyRepository
+	DB              repository.DB
+	MCPAuditRepo    repository.MCPAuditRepository
+	MCPWorkerSecret string
 }
 
 // NewTagHandler creates a new TagHandler instance.
-func NewTagHandler(service services.UserTagService) *TagHandler {
-	return &TagHandler{service: service}
+// deps are optional (pass nil/omit for spec-gen nil-stubs); when non-nil,
+// createUserTag requests with an Idempotency-Key header are deduplicated.
+func NewTagHandler(service services.UserTagService, deps ...TagHandlerDeps) *TagHandler {
+	h := &TagHandler{service: service}
+	if len(deps) > 0 {
+		h.idempotencyRepo = deps[0].IdempotencyRepo
+		h.db = deps[0].DB
+		h.mcpAuditRepo = deps[0].MCPAuditRepo
+		h.mcpWorkerSecret = deps[0].MCPWorkerSecret
+	}
+	return h
 }
 
 // --- Input/Output Types ---
@@ -47,6 +68,8 @@ type GetTagByIDOutput struct {
 // CreateTagInput represents the input for creating a tag.
 type CreateTagInput struct {
 	inputs.AuthenticatedInput
+	inputs.IdempotencyInput // reads Idempotency-Key header; empty = no deduplication
+	inputs.MCPContextInput
 	Body domain.CreateUserTagRequest
 }
 
@@ -110,11 +133,75 @@ func (h *TagHandler) GetTagByID(ctx context.Context, input *GetTagByIDInput) (*G
 // CreateTag handles POST /api/v1/tags requests.
 // Creates a new tag for the authenticated user.
 func (h *TagHandler) CreateTag(ctx context.Context, input *CreateTagInput) (*CreateTagOutput, error) {
+	// MCP origin: use transactional audit with atomic idempotency.
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.db != nil && h.mcpAuditRepo != nil {
+		tx, err := h.db.Begin(ctx)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		defer rollbackMCPAuditTx(ctx, tx)
+
+		// Idempotency check inside the transaction so the reservation is atomic
+		// with the entity write and the audit insert.
+		if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+			var tag *domain.UserTag
+			cacheHit, err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, input.IdempotencyKey, input.UserID, "createUserTag",
+				func() (interface{}, error) {
+					txTagRepo := repository.NewUserTagRepository(tx)
+					txTagService := services.NewUserTagService(txTagRepo)
+					return txTagService.CreateTag(ctx, input.UserID, &input.Body)
+				}, &tag)
+			if err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if cacheHit {
+				// Deduplicated retry: no entity was written; rollback (no audit row for a no-op).
+				return &CreateTagOutput{Body: tag}, nil
+			}
+			// First create: record audit and commit atomically.
+			if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createUserTag", input.IdempotencyKey); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			return &CreateTagOutput{Body: tag}, nil
+		}
+
+		txTagRepo := repository.NewUserTagRepository(tx)
+		txTagService := services.NewUserTagService(txTagRepo)
+		tag, err := txTagService.CreateTag(ctx, input.UserID, &input.Body)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+
+		if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createUserTag", input.IdempotencyKey); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		return &CreateTagOutput{Body: tag}, nil
+	}
+
+	// Idempotency dedup without MCP audit (non-MCP path)
+	if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+		var tag *domain.UserTag
+		_, err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createUserTag",
+			func() (interface{}, error) {
+				return h.service.CreateTag(ctx, input.UserID, &input.Body)
+			}, &tag)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		return &CreateTagOutput{Body: tag}, nil
+	}
+
+	// No dedup
 	tag, err := h.service.CreateTag(ctx, input.UserID, &input.Body)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
-
 	return &CreateTagOutput{Body: tag}, nil
 }
 

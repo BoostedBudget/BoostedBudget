@@ -219,3 +219,19 @@ func TestLoad_DatabaseMaxConnsConfigurable(t *testing.T) {
 
 	assert.Equal(t, int32(50), cfg.DatabaseMaxConns)
 }
+
+func TestLoad_MCPWorkerSecretDefaultsEmpty(t *testing.T) {
+	cfg, err := Load()
+	require.NoError(t, err)
+	// Default is empty — IsMCPOrigin() returns false (fail-closed) in dev.
+	assert.Equal(t, "", cfg.MCPWorkerSecret)
+}
+
+func TestLoad_MCPWorkerSecretConfigurable(t *testing.T) {
+	t.Setenv("MCP_WORKER_SECRET", "test-mcp-worker-secret")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "test-mcp-worker-secret", cfg.MCPWorkerSecret)
+}

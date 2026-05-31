@@ -52,10 +52,12 @@ export function TransactionAmountFilter({
 
   // Sync with external changes
   useEffect(() => {
+     
     setMinValue(formatAmount(minAmount))
   }, [minAmount])
 
   useEffect(() => {
+     
     setMaxValue(formatAmount(maxAmount))
   }, [maxAmount])
 

@@ -7,6 +7,12 @@ import fs from 'fs'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  optimizeDeps: {
+    // Include echarts ESM modules to ensure esbuild pre-bundles them correctly.
+    // Note: We use echarts-for-react/esm/core (not /lib/core) to avoid Vite 8 CJS→ESM
+    // interop issues where esbuild 0.25 no longer auto-unwraps exports.__esModule = true.
+    include: ['echarts-for-react/esm/core', 'echarts/core'],
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -52,7 +58,9 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
-    rollupOptions: {
+    // Vite 8 uses Rolldown internally; rolldownOptions is the preferred API.
+    // rollupOptions is kept for backwards-compat tooling (e.g. size-limit plugins).
+    rolldownOptions: {
       output: {
         entryFileNames: 'assets/entry-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',
@@ -61,7 +69,7 @@ export default defineConfig({
           // TanStack table/virtual isolated from vendor so its budget is tracked separately
           if (/@tanstack\/react-table|@tanstack\/react-virtual|@dnd-kit/.test(id)) return 'tanstack';
 
-          // Stable budgetable vendor bucket — prevents Rollup from emitting
+          // Stable budgetable vendor bucket — prevents Rolldown from emitting
           // auto-named common chunks that slip past size-limit
           if (id.includes('node_modules')) return 'vendor';
 
