@@ -3,15 +3,15 @@ main = "src/index.ts"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Production environment routes (must be before any [section] headers in TOML)
+routes = [
+  { pattern = "mcp.boostedbudget.com/*", zone_name = "boostedbudget.com" }
+]
+
 # Workers Logs — stream logs to the Cloudflare dashboard (Observability tab).
 # Captures console.log/error from Worker code and all uncaught exceptions.
 [observability]
 enabled = true
-
-# Production environment routes
-routes = [
-  { pattern = "mcp.boostedbudget.com/*", zone_name = "boostedbudget.com" }
-]
 
 [[durable_objects.bindings]]
 name = "MCP_AGENT"
