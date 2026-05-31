@@ -41,7 +41,7 @@ export function CancelDeletionPage() {
   useEffect(() => {
     // Automatically attempt cancellation on page load if token exists
     if (token && autoProcessing) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+       
       handleCancel()
     }
   }, [token, autoProcessing, handleCancel])
