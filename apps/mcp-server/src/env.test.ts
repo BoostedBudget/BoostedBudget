@@ -8,6 +8,7 @@ describe('parseEnv', () => {
     CLERK_JWKS_URL: 'https://clerk.example.com/.well-known/jwks.json',
     CLERK_ISSUER_URL: 'https://clerk.example.com',
     MCP_OAUTH_AUDIENCE: 'mcp_client_id_abc123',
+    CLERK_OAUTH_CLIENT_SECRET: 'mcp_client_secret_abc123',
     BOOSTEDBUDGET_API_URL: 'https://api.boostedbudget.com',
     BOOSTEDBUDGET_ORIGIN_SECRET: 'super-secret-origin-value',
     MCP_WORKER_SECRET: 'worker-to-backend-shared-secret',

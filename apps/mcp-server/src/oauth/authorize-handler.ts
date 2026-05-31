@@ -79,12 +79,13 @@ export async function handleCallback(
   const authRequest = JSON.parse(authRequestJson)
 
   // Exchange the Clerk authorization code for an access token.
-  // CLERK_SECRET_KEY holds the OAuth app client secret.
+  // CLERK_OAUTH_CLIENT_SECRET is the client_secret from the Clerk OAuth Application
+  // (Clerk dashboard → Configure → OAuth Applications → your app's secret).
   const tokenBody = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
     client_id: env.MCP_OAUTH_AUDIENCE,
-    client_secret: env.CLERK_SECRET_KEY,
+    client_secret: env.CLERK_OAUTH_CLIENT_SECRET,
     redirect_uri: `${env.MCP_RESOURCE_URL}/oauth/callback`,
   })
 
@@ -97,10 +98,14 @@ export async function handleCallback(
   if (!tokenRes.ok) {
     const body = await tokenRes.text()
     console.error('[oauth-callback] Clerk token exchange failed:', tokenRes.status, body)
-    return new Response(JSON.stringify({ error: 'upstream_error', detail: 'Clerk token exchange failed' }), {
-      status: 502,
-      headers: { 'Content-Type': 'application/json' },
-    })
+    return new Response(
+      `<!doctype html><html><head><title>Authorization failed</title></head><body style="font-family:sans-serif;max-width:480px;margin:80px auto;padding:0 24px">
+<h2>Authorization failed</h2>
+<p>Could not complete sign-in with your BoostedBudget account. Please close this window and try again.</p>
+<p style="color:#888;font-size:13px">If this keeps happening, contact support.</p>
+</body></html>`,
+      { status: 502, headers: { 'Content-Type': 'text/html' } },
+    )
   }
 
   const tokens = (await tokenRes.json()) as {
