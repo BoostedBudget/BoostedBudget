@@ -52,7 +52,9 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
-    rollupOptions: {
+    // Vite 8 uses Rolldown internally; rolldownOptions is the preferred API.
+    // rollupOptions is kept for backwards-compat tooling (e.g. size-limit plugins).
+    rolldownOptions: {
       output: {
         entryFileNames: 'assets/entry-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',
@@ -61,7 +63,7 @@ export default defineConfig({
           // TanStack table/virtual isolated from vendor so its budget is tracked separately
           if (/@tanstack\/react-table|@tanstack\/react-virtual|@dnd-kit/.test(id)) return 'tanstack';
 
-          // Stable budgetable vendor bucket — prevents Rollup from emitting
+          // Stable budgetable vendor bucket — prevents Rolldown from emitting
           // auto-named common chunks that slip past size-limit
           if (id.includes('node_modules')) return 'vendor';
 
