@@ -16,6 +16,8 @@ const EnvSchema = z
     CLERK_ISSUER_URL: z.string().url(),
     /** OAuth client_id registered in Clerk for this MCP app — used as JWT audience */
     MCP_OAUTH_AUDIENCE: z.string().min(1),
+    /** OAuth client_secret for the Clerk OAuth Application (Configure → OAuth Applications in Clerk dashboard) */
+    CLERK_OAUTH_CLIENT_SECRET: z.string().min(1),
     ENVIRONMENT: z.enum(['production', 'staging', 'development']),
   })
   .superRefine((data, ctx) => {

@@ -41,7 +41,8 @@ BOOSTEDBUDGET_API_URL = "https://api.boostedbudget.com"
 #   CLERK_PUBLISHABLE_KEY
 #   CLERK_JWKS_URL           e.g. https://clerk.boostedbudget.com/.well-known/jwks.json
 #   CLERK_ISSUER_URL         e.g. https://clerk.boostedbudget.com  (Clerk Frontend API URL)
-#   MCP_OAUTH_AUDIENCE       the OAuth client_id registered in Clerk for this MCP app
+#   MCP_OAUTH_AUDIENCE          the OAuth client_id from Clerk dashboard → Configure → OAuth Applications
+#   CLERK_OAUTH_CLIENT_SECRET   the OAuth client_secret from the same Clerk OAuth Application
 #   BOOSTEDBUDGET_ORIGIN_SECRET
 #   MCP_WORKER_SECRET        shared secret between this Worker and the Go backend;
 #                            generate: openssl rand -hex 32
