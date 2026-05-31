@@ -228,7 +228,7 @@ func (h *BudgetHandler) CreateBudget(ctx context.Context, input *CreateBudgetInp
 		if err != nil {
 			return nil, humaerrors.LoggingMapError(ctx, err)
 		}
-		if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createBudget", ""); err != nil {
+		if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createBudget", input.IdempotencyKey); err != nil {
 			return nil, humaerrors.LoggingMapError(ctx, err)
 		}
 		if err := tx.Commit(ctx); err != nil {

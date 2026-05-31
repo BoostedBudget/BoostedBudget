@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
@@ -36,9 +38,11 @@ type mockBudgetService struct {
 	updateCategoryErr  error
 	deleteCategoryErr  error
 	getCategoriesErr   error
+	createCallCount    int // tracks CreateBudget invocations (R9-7)
 }
 
 func (m *mockBudgetService) CreateBudget(ctx context.Context, userID string, req *domain.CreateBudgetRequest) (*domain.Budget, error) {
+	m.createCallCount++
 	if m.createErr != nil {
 		return nil, m.createErr
 	}
@@ -869,6 +873,191 @@ func TestUpdateBudget_WithExpectedIncome(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	assert.Equal(t, expectedIncome, output.Body.ExpectedIncome, "response should include updated expected_income")
+}
+
+// --- MCP transactional branch tests (R9-7) ---
+
+// mockBudgetIdempotencyRepository supports GetOrCreateInTx for budget tests.
+// Reuses mockTx / mockDB from tags_test.go (same package).
+type mockBudgetIdempotencyRepository struct {
+	inTxCalls int
+	cached    map[string]*domain.Budget
+}
+
+func (m *mockBudgetIdempotencyRepository) GetOrCreate(
+	_ context.Context,
+	key, _, _ string,
+	fn func() (interface{}, error),
+	result interface{},
+) (bool, error) {
+	if existing, ok := m.cached[key]; ok {
+		*(result.(**domain.Budget)) = existing
+		return true, nil
+	}
+	res, err := fn()
+	if err != nil {
+		return false, err
+	}
+	budget := res.(*domain.Budget)
+	if m.cached == nil {
+		m.cached = make(map[string]*domain.Budget)
+	}
+	m.cached[key] = budget
+	*(result.(**domain.Budget)) = budget
+	return false, nil
+}
+
+func (m *mockBudgetIdempotencyRepository) GetOrCreateInTx(
+	ctx context.Context,
+	_ pgx.Tx,
+	key, userID, operationID string,
+	fn func() (interface{}, error),
+	result interface{},
+) (bool, error) {
+	m.inTxCalls++
+	return m.GetOrCreate(ctx, key, userID, operationID, fn, result)
+}
+
+func (m *mockBudgetIdempotencyRepository) DeleteExpired(_ context.Context) (int64, error) {
+	return 0, nil
+}
+
+// mockMCPAuditRepositoryForBudget succeeds on RecordInTx.
+type mockMCPAuditRepositoryForBudget struct {
+	recordInTxCalled bool
+}
+
+func (m *mockMCPAuditRepositoryForBudget) Record(_ context.Context, _ *domain.MCPAuditEntry) error {
+	return nil
+}
+func (m *mockMCPAuditRepositoryForBudget) RecordInTx(_ context.Context, _ pgx.Tx, _ *domain.MCPAuditEntry) error {
+	m.recordInTxCalled = true
+	return nil
+}
+
+// mockMCPAuditRepositoryFailForBudget always fails on RecordInTx (rollback test).
+type mockMCPAuditRepositoryFailForBudget struct{}
+
+func (m *mockMCPAuditRepositoryFailForBudget) Record(_ context.Context, _ *domain.MCPAuditEntry) error {
+	return nil
+}
+func (m *mockMCPAuditRepositoryFailForBudget) RecordInTx(_ context.Context, _ pgx.Tx, _ *domain.MCPAuditEntry) error {
+	return fmt.Errorf("simulated audit DB failure")
+}
+
+// testBudget returns a minimal domain.Budget for use in tests.
+func testBudget() *domain.Budget {
+	return &domain.Budget{
+		ID:          "budget-test-1",
+		UserID:      "user-mcp-budget",
+		Name:        "Test Budget",
+		Amount:      1000,
+		Period:      domain.BudgetPeriodMonthly,
+		IsActive:    true,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+}
+
+// TestCreateBudget_MCPOrigin_IdempotencyDedup verifies the MCP transactional path (R9-7 / R8-1):
+// Two MCP POST /budgets requests with the same Idempotency-Key return the same body and
+// only invoke GetOrCreateInTx (not double-create).
+func TestCreateBudget_MCPOrigin_IdempotencyDedup(t *testing.T) {
+	userID := "user-mcp-budget"
+	idempotencyKey := "idem-budget-r9"
+	expectedBudget := testBudget()
+	const workerSecret = "test-worker-secret-r9"
+
+	tx := &mockTx{}
+	db := &mockDB{tx: tx}
+	auditRepo := &mockMCPAuditRepositoryForBudget{}
+
+	idempotencyRepo := &mockBudgetIdempotencyRepository{
+		cached: map[string]*domain.Budget{
+			idempotencyKey: expectedBudget,
+		},
+	}
+
+	svc := &mockBudgetService{budget: expectedBudget}
+	syncSvc := &mockBudgetSyncService{}
+	// Use the existing repo-based transaction service (same pattern as other budget tests)
+	txSvc := services.NewTransactionService(&mockTransactionRepoForBudget{}, &mockCustomCategoryRepoForBudget{})
+
+	handler := NewBudgetHandler(svc, syncSvc, txSvc, BudgetHandlerDeps{
+		IdempotencyRepo: idempotencyRepo,
+		DB:              db,
+		MCPAuditRepo:    auditRepo,
+		MCPWorkerSecret: workerSecret,
+	})
+
+	input := &CreateBudgetInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		IdempotencyInput:   inputs.IdempotencyInput{IdempotencyKey: idempotencyKey},
+		MCPContextInput:    inputs.MCPContextInput{MCPGrantID: "grant-r9", MCPWorkerSecret: workerSecret},
+		Body: domain.CreateBudgetRequest{
+			Name:   "Test Budget",
+			Period: domain.BudgetPeriodMonthly,
+			Amount: 1000,
+		},
+	}
+
+	// First POST — cache hit, returns cached budget
+	out1, err := handler.CreateBudget(context.Background(), input)
+	require.NoError(t, err)
+	require.NotNil(t, out1)
+	assert.Equal(t, expectedBudget.ID, out1.Body.ID)
+
+	// Second POST with same key — also returns cached budget
+	out2, err := handler.CreateBudget(context.Background(), input)
+	require.NoError(t, err)
+	require.NotNil(t, out2)
+	assert.Equal(t, out1.Body.ID, out2.Body.ID)
+
+	// GetOrCreateInTx called twice; cached result returned each time
+	assert.Equal(t, 2, idempotencyRepo.inTxCalls, "GetOrCreateInTx must be called for each MCP request")
+	// No audit row written on cache-hit
+	assert.False(t, auditRepo.recordInTxCalled, "RecordInTx must NOT be called on cache-hit")
+	// No service CreateBudget call (cache pre-seeded)
+	assert.Equal(t, 0, svc.createCallCount, "budget service must not be called on cache-hit")
+}
+
+// TestCreateBudget_MCPOrigin_AuditFailureRollsBack verifies fail-closed audit (R9-7 / R8-1):
+// If audit INSERT fails inside the tx, the budget must NOT be persisted (rollback).
+func TestCreateBudget_MCPOrigin_AuditFailureRollsBack(t *testing.T) {
+	userID := "user-mcp-audit-fail"
+	const workerSecret = "test-worker-secret-fail"
+
+	tx := &mockTx{}
+	db := &mockDB{tx: tx}
+
+	handler := NewBudgetHandler(
+		&mockBudgetService{budget: testBudget()},
+		&mockBudgetSyncService{},
+		services.NewTransactionService(&mockTransactionRepoForBudget{}, &mockCustomCategoryRepoForBudget{}),
+		BudgetHandlerDeps{
+			IdempotencyRepo: &mockBudgetIdempotencyRepository{},
+			DB:              db,
+			MCPAuditRepo:    &mockMCPAuditRepositoryFailForBudget{},
+			MCPWorkerSecret: workerSecret,
+		},
+	)
+
+	input := &CreateBudgetInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		IdempotencyInput:   inputs.IdempotencyInput{IdempotencyKey: ""},
+		MCPContextInput:    inputs.MCPContextInput{MCPGrantID: "grant-fail", MCPWorkerSecret: workerSecret},
+		Body: domain.CreateBudgetRequest{
+			Name:      "Fail Budget",
+			Period:    domain.BudgetPeriodMonthly,
+			Amount:    100,
+			StartDate: time.Now(),
+		},
+	}
+
+	out, err := handler.CreateBudget(context.Background(), input)
+	assert.Error(t, err, "handler must return error when audit INSERT fails (fail-closed)")
+	assert.Nil(t, out)
+	assert.False(t, tx.committed, "tx must NOT be committed when audit fails")
 }
 
 // TestBudgetResponseJSON tests JSON serialization of response.
