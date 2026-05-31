@@ -1,6 +1,11 @@
 import { forwardRef } from 'react'
 import type React from 'react'
-import ReactEChartsCore from 'echarts-for-react/lib/core'
+// Use ESM path (/esm/core) instead of CJS (/lib/core) to avoid Vite 8 CJS→ESM
+// interop issues. The /lib/core CJS module uses exports.__esModule = true which
+// esbuild 0.25 (Vite 8) no longer unwraps automatically, causing ReactEChartsCore
+// to be received as an object instead of a component. The /esm/core path is native
+// ESM and doesn't need interop handling.
+import ReactEChartsCore from 'echarts-for-react/esm/core'
 import type { EChartsOption } from 'echarts'
 import { echarts } from './echarts-setup'
 import './themes'

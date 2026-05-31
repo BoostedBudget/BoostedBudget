@@ -7,6 +7,12 @@ import fs from 'fs'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  optimizeDeps: {
+    // Include echarts ESM modules to ensure esbuild pre-bundles them correctly.
+    // Note: We use echarts-for-react/esm/core (not /lib/core) to avoid Vite 8 CJS→ESM
+    // interop issues where esbuild 0.25 no longer auto-unwraps exports.__esModule = true.
+    include: ['echarts-for-react/esm/core', 'echarts/core'],
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

@@ -3,7 +3,7 @@ import React from 'react'
 import { render, screen } from '@testing-library/react'
 
 // Mock echarts-for-react/lib/core before importing EChartsChart
-mock.module('echarts-for-react/lib/core', () => {
+mock.module('echarts-for-react/esm/core', () => {
   const MockReactEChartsCore = React.forwardRef<
     unknown,
     {
