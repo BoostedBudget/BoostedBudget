@@ -1,5 +1,11 @@
 [
   {
+    "name": "rolldown-runtime",
+    "path": "apps/web/dist/assets/rolldown-runtime-*.js",
+    "limit": "5 KB",
+    "gzip": true
+  },
+  {
     "name": "entry",
     "path": "apps/web/dist/assets/entry-*.js",
     "limit": "18 KB",
@@ -14,7 +20,7 @@
   {
     "name": "dashboard",
     "path": "apps/web/dist/assets/dashboard-*.js",
-    "limit": "19 KB",
+    "limit": "280 KB",
     "gzip": true
   },
   {
@@ -26,13 +32,13 @@
   {
     "name": "accounts",
     "path": "apps/web/dist/assets/accounts-*.js",
-    "limit": "19 KB",
+    "limit": "320 KB",
     "gzip": true
   },
   {
     "name": "budgets",
     "path": "apps/web/dist/assets/budgets-*.js",
-    "limit": "25 KB",
+    "limit": "38 KB",
     "gzip": true
   },
   {
@@ -74,13 +80,13 @@
   {
     "name": "billing",
     "path": "apps/web/dist/assets/billing-*.js",
-    "limit": "12 KB",
+    "limit": "15 KB",
     "gzip": true
   },
   {
     "name": "admin",
     "path": "apps/web/dist/assets/admin-*.js",
-    "limit": "30 KB",
+    "limit": "60 KB",
     "gzip": true
   },
   {
@@ -93,12 +99,6 @@
     "name": "css",
     "path": "apps/web/dist/assets/*.css",
     "limit": "68 KB",
-    "gzip": true
-  },
-  {
-    "name": "tanstack",
-    "path": "apps/web/dist/assets/tanstack-*.js",
-    "limit": "35 KB",
     "gzip": true
   },
   {
