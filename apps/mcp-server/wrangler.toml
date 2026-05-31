@@ -48,7 +48,7 @@ BOOSTEDBUDGET_API_URL = "https://api.boostedbudget.com"
 [env.staging]
 name = "boostedbudget-mcp-staging"
 routes = [
-  { pattern = "mcp.staging.boostedbudget.com/*", zone_name = "boostedbudget.com" }
+  { pattern = "staging-mcp.boostedbudget.com/*", zone_name = "boostedbudget.com" }
 ]
 
 [env.staging.observability]
@@ -64,5 +64,5 @@ new_sqlite_classes = ["BoostedBudgetMcpAgent"]
 
 [env.staging.vars]
 ENVIRONMENT = "staging"
-MCP_RESOURCE_URL = "https://mcp.staging.boostedbudget.com"
+MCP_RESOURCE_URL = "https://staging-mcp.boostedbudget.com"
 BOOSTEDBUDGET_API_URL = "https://staging-api.boostedbudget.com"

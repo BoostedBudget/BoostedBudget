@@ -15,7 +15,7 @@
  * the single gatekeeper for auth, scoping, and validation.
  */
 
-import { type Env, parseEnv } from './env'
+import { type Env, type ParsedEnv, parseEnv } from './env'
 import { handleHealth } from './health'
 import {
   buildProtectedResourceMetadata,
@@ -34,7 +34,17 @@ const CORS_HEADERS = {
 
 export default {
   async fetch(request: Request, rawEnv: Env, ctx: ExecutionContext): Promise<Response> {
-    const env = parseEnv(rawEnv)
+    let env: ParsedEnv
+    try {
+      env = parseEnv(rawEnv)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'env validation failed'
+      console.error('[mcp-startup] env validation error:', message)
+      return new Response(JSON.stringify({ error: 'misconfigured' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
     const url = new URL(request.url)
 
     // ── CORS preflight ─────────────────────────────────────────────────────
