@@ -22,6 +22,14 @@ type MCPContextInput struct {
 // time (prevents timing attacks). The Worker is the sole injector of X-MCP-Worker-Secret;
 // it does not send X-MCP-Origin in backend API calls, so we check only the secret.
 // If expectedSecret is empty (misconfigured backend), returns false — fail closed.
+//
+// Design note — silent downgrade on failure (intentional):
+// When IsMCPOrigin() returns false (missing/wrong secret), the handler falls through to
+// the non-MCP code path (no transactional audit, normal idempotency). This is a deliberate
+// mode-selector, NOT a hard gate. A request with MCP markers but wrong secret still succeeds
+// as a regular write — it simply won't be audited via the MCP path.
+// This design keeps the audit path opt-in (Worker must actively assert identity) rather than
+// rejecting writes outright, which would break non-Worker callers.
 func (m *MCPContextInput) IsMCPOrigin(expectedSecret string) bool {
 	if expectedSecret == "" {
 		return false

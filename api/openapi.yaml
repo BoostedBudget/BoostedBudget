@@ -7702,6 +7702,13 @@ paths:
     post:
       description: Records a security audit entry for an MCP operation. Called by the trusted MCP Worker; authenticated by CloudflareOnly middleware (X-Origin-Secret), not end-user Clerk JWT.
       operationId: recordMCPAuditEntry
+      parameters:
+        - description: Worker-only shared secret; validated constant-time before recording
+          in: header
+          name: X-MCP-Worker-Secret
+          schema:
+            description: Worker-only shared secret; validated constant-time before recording
+            type: string
       requestBody:
         content:
           application/json:

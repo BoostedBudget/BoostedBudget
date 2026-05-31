@@ -26,15 +26,15 @@ func (m *mockIdempotencyRepository) GetOrCreate(
 	key, userID, operationID string,
 	fn func() (interface{}, error),
 	result interface{},
-) error {
+) (bool, error) {
 	m.getCalls = append(m.getCalls, key)
 	if existing, ok := m.cached[key]; ok {
 		*(result.(**domain.MCPRecipe)) = existing
-		return nil
+		return true, nil
 	}
 	res, err := fn()
 	if err != nil {
-		return err
+		return false, err
 	}
 	recipe := res.(*domain.MCPRecipe)
 	if m.cached == nil {
@@ -42,7 +42,7 @@ func (m *mockIdempotencyRepository) GetOrCreate(
 	}
 	m.cached[key] = recipe
 	*(result.(**domain.MCPRecipe)) = recipe
-	return nil
+	return false, nil
 }
 
 func (m *mockIdempotencyRepository) GetOrCreateInTx(
@@ -52,8 +52,8 @@ func (m *mockIdempotencyRepository) GetOrCreateInTx(
 	fn func() (interface{}, error),
 	result interface{},
 ) (bool, error) {
-	err := m.GetOrCreate(ctx, key, userID, operationID, fn, result)
-	return false, err
+	cacheHit, err := m.GetOrCreate(ctx, key, userID, operationID, fn, result)
+	return cacheHit, err
 }
 
 func (m *mockIdempotencyRepository) DeleteExpired(_ context.Context) (int64, error) {

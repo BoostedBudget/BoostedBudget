@@ -1209,7 +1209,7 @@ func main() {
 
 		// Register MCP audit log route (Issue #1087: MCP server, GAP-2)
 		// Service-auth via CloudflareOnly middleware (X-Origin-Secret, not end-user Clerk JWT)
-		humaMCPAuditHandler := operations.NewMCPAuditHandler(humaMCPAuditRepo)
+		humaMCPAuditHandler := operations.NewMCPAuditHandler(humaMCPAuditRepo, cfg.MCPWorkerSecret)
 		operations.RegisterMCPAuditRoutes(humaAPI, humaMCPAuditHandler)
 		appLogger.Info("MCP audit log route registered")
 

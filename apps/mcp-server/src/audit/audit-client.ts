@@ -33,7 +33,9 @@ export interface AuditClient {
 
 /**
  * Create an audit client that posts to POST /api/v1/mcp/audit.
- * The endpoint is secured by X-Origin-Secret (CloudflareOnly middleware), not Clerk JWT.
+ * The endpoint requires two headers:
+ *   - X-Origin-Secret: proves the request is from a Cloudflare-proxied origin (layer 1)
+ *   - X-MCP-Worker-Secret: proves the request is from THIS Worker specifically (layer 2)
  * Returns a no-op client when env is not configured.
  */
 export function createAuditClient(env: Env): AuditClient {
@@ -49,6 +51,7 @@ export function createAuditClient(env: Env): AuditClient {
         headers: {
           'Content-Type': 'application/json',
           'X-Origin-Secret': env.BOOSTEDBUDGET_ORIGIN_SECRET,
+          'X-MCP-Worker-Secret': env.MCP_WORKER_SECRET,
         },
         body: JSON.stringify({
           actor_user_id: entry.actorUserId,

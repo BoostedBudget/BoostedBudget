@@ -184,10 +184,10 @@ func (h *TagHandler) CreateTag(ctx context.Context, input *CreateTagInput) (*Cre
 		return &CreateTagOutput{Body: tag}, nil
 	}
 
-	// Idempotency dedup without MCP audit
+	// Idempotency dedup without MCP audit (non-MCP path)
 	if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
 		var tag *domain.UserTag
-		err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createUserTag",
+		_, err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createUserTag",
 			func() (interface{}, error) {
 				return h.service.CreateTag(ctx, input.UserID, &input.Body)
 			}, &tag)

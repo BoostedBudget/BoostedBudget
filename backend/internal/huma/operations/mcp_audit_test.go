@@ -35,20 +35,21 @@ func (m *mockMCPAuditRepository) RecordInTx(_ context.Context, _ pgx.Tx, entry *
 func TestMCPAuditHandler_RecordAuditEntry(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("records a valid read-class audit entry", func(t *testing.T) {
+	t.Run("records a valid read-class audit entry with correct Worker secret", func(t *testing.T) {
 		repo := &mockMCPAuditRepository{}
-		handler := NewMCPAuditHandler(repo)
+		handler := NewMCPAuditHandler(repo, "test-worker-secret")
 
 		input := &RecordMCPAuditInput{
+			MCPWorkerSecret: "test-worker-secret",
 			Body: RecordMCPAuditBody{
-				ActorUserID:            "user-123",
-				GrantID:                "grant-456",
-				Scopes:                 []string{"email", "profile"},
-				OperationClass:         "read",
-				OperationID:            "getTransactions",
-				ConfirmationPresented:  false,
-				ConfirmationConfirmed:  false,
-				Result:                 "success",
+				ActorUserID:           "user-123",
+				GrantID:               "grant-456",
+				Scopes:                []string{"email", "profile"},
+				OperationClass:        "read",
+				OperationID:           "getTransactions",
+				ConfirmationPresented: false,
+				ConfirmationConfirmed: false,
+				Result:                "success",
 			},
 		}
 
@@ -64,11 +65,31 @@ func TestMCPAuditHandler_RecordAuditEntry(t *testing.T) {
 		assert.Equal(t, "success", repo.recordedEntry.Result)
 	})
 
+	t.Run("R7-2: rejects request with missing or wrong Worker secret (403)", func(t *testing.T) {
+		repo := &mockMCPAuditRepository{}
+		handler := NewMCPAuditHandler(repo, "real-secret")
+
+		// No secret
+		_, err := handler.RecordAuditEntry(ctx, &RecordMCPAuditInput{
+			Body: RecordMCPAuditBody{ActorUserID: "u", GrantID: "g", OperationClass: "read", OperationID: "op", Result: "success"},
+		})
+		assert.Error(t, err, "missing secret must be rejected")
+
+		// Wrong secret
+		_, err = handler.RecordAuditEntry(ctx, &RecordMCPAuditInput{
+			MCPWorkerSecret: "wrong-secret",
+			Body:            RecordMCPAuditBody{ActorUserID: "u", GrantID: "g", OperationClass: "read", OperationID: "op", Result: "success"},
+		})
+		assert.Error(t, err, "wrong secret must be rejected")
+		assert.Nil(t, repo.recordedEntry, "no entry should be recorded on rejection")
+	})
+
 	t.Run("records a write-class audit entry with confirmation confirmed", func(t *testing.T) {
 		repo := &mockMCPAuditRepository{}
-		handler := NewMCPAuditHandler(repo)
+		handler := NewMCPAuditHandler(repo, "test-worker-secret")
 
 		input := &RecordMCPAuditInput{
+			MCPWorkerSecret: "test-worker-secret",
 			Body: RecordMCPAuditBody{
 				ActorUserID:           "user-123",
 				GrantID:               "grant-789",
@@ -93,9 +114,10 @@ func TestMCPAuditHandler_RecordAuditEntry(t *testing.T) {
 
 	t.Run("propagates repository error", func(t *testing.T) {
 		repo := &mockMCPAuditRepository{shouldError: true}
-		handler := NewMCPAuditHandler(repo)
+		handler := NewMCPAuditHandler(repo, "test-worker-secret")
 
 		input := &RecordMCPAuditInput{
+			MCPWorkerSecret: "test-worker-secret",
 			Body: RecordMCPAuditBody{
 				ActorUserID:    "u",
 				GrantID:        "g",

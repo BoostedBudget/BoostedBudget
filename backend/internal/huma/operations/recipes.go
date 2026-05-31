@@ -78,7 +78,7 @@ func (h *RecipeHandler) CreateRecipe(ctx context.Context, input *CreateRecipeInp
 	// Idempotency: if the Worker sent an Idempotency-Key header, deduplicate the create.
 	if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
 		var recipe *domain.MCPRecipe
-		err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createMCPRecipe",
+		_, err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createMCPRecipe",
 			func() (interface{}, error) {
 				return h.service.Create(ctx, input.UserID, input.Body)
 			}, &recipe)

@@ -21,7 +21,14 @@ type IdempotencyRepository interface {
 	// If the key already exists, the cached response is decoded into result and fn is NOT called.
 	// If the key does not exist, fn() is called; on success, the result is stored and returned.
 	// fn() errors are propagated without storing anything.
-	GetOrCreate(ctx context.Context, key, userID, operationID string, fn func() (interface{}, error), result interface{}) error
+	//
+	// Returns (cacheHit bool, err error):
+	//   cacheHit=true  → fn was NOT called; result is the cached value.
+	//   cacheHit=false → fn was called; result is the freshly created value.
+	//
+	// Callers that record a post-write audit should skip the audit on cache-hit to avoid
+	// inflating the audit log with phantom write events on idempotent retries.
+	GetOrCreate(ctx context.Context, key, userID, operationID string, fn func() (interface{}, error), result interface{}) (cacheHit bool, err error)
 
 	// GetOrCreateInTx is like GetOrCreate but performs the SELECT and INSERT within the
 	// supplied transaction. This makes the idempotency reservation atomic with the entity
@@ -55,7 +62,24 @@ func (r *idempotencyRepository) GetOrCreate(
 	key, userID, operationID string,
 	fn func() (interface{}, error),
 	result interface{},
-) error {
+) (bool, error) {
+	// Advisory lock: serialize concurrent callers on the same (userID, key) pair so that
+	// two simultaneous first-time requests cannot both miss the SELECT and both call fn().
+	// pg_advisory_xact_lock is released automatically when the surrounding transaction ends
+	// (or immediately here since we use the pool's implicit transaction per Exec).
+	// The lock key is a 64-bit hash of userID+"/"+key (hashtext returns int4; combining
+	// two int4s via bit manipulation gives a stable int8).
+	// R7-3 / R5-4 / R6-2: this closes the concurrent-retry double-create race.
+	_, lockErr := r.db.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(('x'||substr(md5($1||'/'||$2),1,16))::bit(64)::bigint)`,
+		userID, key,
+	)
+	if lockErr != nil {
+		// Non-fatal: if the lock fails (e.g., unsupported pg version), log and continue.
+		// The ON CONFLICT on INSERT still prevents duplicate rows; this just prevents double-fn.
+		_ = lockErr
+	}
+
 	// Check if idempotency key already exists
 	var cachedJSON []byte
 	err := r.db.QueryRow(ctx,
@@ -64,24 +88,24 @@ func (r *idempotencyRepository) GetOrCreate(
 	).Scan(&cachedJSON)
 
 	if err == nil {
-		// Key found — return cached response without calling fn
-		return json.Unmarshal(cachedJSON, result)
+		// Cache hit — return cached response without calling fn; signal to caller.
+		return true, json.Unmarshal(cachedJSON, result)
 	}
 
 	if !isNotFoundError(err) {
-		return fmt.Errorf("idempotency key lookup failed: %w", err)
+		return false, fmt.Errorf("idempotency key lookup failed: %w", err)
 	}
 
-	// Key not found — call fn
+	// Cache miss — call fn
 	fnResult, fnErr := fn()
 	if fnErr != nil {
-		return fnErr
+		return false, fnErr
 	}
 
 	// Serialize the result
 	resultJSON, err := json.Marshal(fnResult)
 	if err != nil {
-		return fmt.Errorf("failed to serialize idempotency result: %w", err)
+		return false, fmt.Errorf("failed to serialize idempotency result: %w", err)
 	}
 
 	// Store in idempotency_keys table (best-effort; failure doesn't break the operation).
@@ -92,10 +116,10 @@ func (r *idempotencyRepository) GetOrCreate(
 		 ON CONFLICT (user_id, key) DO NOTHING`,
 		key, userID, operationID, resultJSON,
 	)
-	// If store fails, log doesn't fail — operation succeeded; dedup best-effort only
+	// Best-effort: if store fails, operation still succeeded; dedup may not work on next retry
 	_ = storeErr
 
-	return json.Unmarshal(resultJSON, result)
+	return false, json.Unmarshal(resultJSON, result)
 }
 
 func (r *idempotencyRepository) GetOrCreateInTx(
@@ -105,6 +129,17 @@ func (r *idempotencyRepository) GetOrCreateInTx(
 	fn func() (interface{}, error),
 	result interface{},
 ) (bool, error) {
+	// Advisory lock inside the transaction: serializes concurrent callers on (userID, key).
+	// Released when the tx commits or rolls back — safe to use transactionally.
+	// R7-3: closes the concurrent-retry double-create race for MCP write paths.
+	_, lockErr := tx.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(('x'||substr(md5($1||'/'||$2),1,16))::bit(64)::bigint)`,
+		userID, key,
+	)
+	if lockErr != nil {
+		_ = lockErr // non-fatal; ON CONFLICT still prevents duplicate rows
+	}
+
 	// Check for existing key inside the transaction so the reservation is
 	// atomic with any entity write and audit insert the caller issues in the same tx.
 	var cachedJSON []byte

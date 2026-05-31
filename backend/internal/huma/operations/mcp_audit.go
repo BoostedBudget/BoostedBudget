@@ -5,18 +5,21 @@ package operations
 //
 // Authentication: this endpoint is NOT secured with Clerk JWT. It is called
 // by the trusted MCP Cloudflare Worker (service call), not end-users.
-// Security is provided by the existing CloudflareOnly middleware (X-Origin-Secret
-// + Cloudflare IP CIDR check) that applies to all routes.
+// Security: CloudflareOnly (CF IP + X-Origin-Secret) is layer 1 — it gates all routes.
+// Layer 2: this handler also requires X-MCP-Worker-Secret (a separate Worker-only secret)
+// so that any caller that happens to know the host-wide X-Origin-Secret cannot forge audit rows.
+// The Worker sends X-MCP-Worker-Secret from its MCP_WORKER_SECRET binding.
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
-"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
 // MCPAuditRepository is the interface the handler uses (subset of repository.MCPAuditRepository).
@@ -26,12 +29,14 @@ type MCPAuditRepository interface {
 
 // MCPAuditHandler handles POST /api/v1/mcp/audit
 type MCPAuditHandler struct {
-	repo MCPAuditRepository
+	repo            MCPAuditRepository
+	mcpWorkerSecret string // required: proves call came from MCP Worker, not any CF-origin caller
 }
 
 // NewMCPAuditHandler creates a new MCPAuditHandler.
-func NewMCPAuditHandler(repo MCPAuditRepository) *MCPAuditHandler {
-	return &MCPAuditHandler{repo: repo}
+// mcpWorkerSecret must match the value in MCP_WORKER_SECRET config (fail-closed when empty).
+func NewMCPAuditHandler(repo MCPAuditRepository, mcpWorkerSecret string) *MCPAuditHandler {
+	return &MCPAuditHandler{repo: repo, mcpWorkerSecret: mcpWorkerSecret}
 }
 
 // Ensure repository.MCPAuditRepository satisfies our interface (compile-time check).
@@ -54,9 +59,12 @@ type RecordMCPAuditBody struct {
 
 // RecordMCPAuditInput is the full input for POST /api/v1/mcp/audit.
 // No AuthenticatedInput — this is a service call from the trusted MCP Worker,
-// not an end-user request. CloudflareOnly middleware provides auth.
+// not an end-user request. Authentication: CloudflareOnly (layer 1) + X-MCP-Worker-Secret (layer 2).
 type RecordMCPAuditInput struct {
-	Body RecordMCPAuditBody
+	// X-MCP-Worker-Secret proves the request came from the MCP Cloudflare Worker
+	// and not from an arbitrary caller that happens to know the host-wide X-Origin-Secret.
+	MCPWorkerSecret string `header:"X-MCP-Worker-Secret" doc:"Worker-only shared secret; validated constant-time before recording"`
+	Body            RecordMCPAuditBody
 }
 
 // RecordMCPAuditOutput is the response for POST /api/v1/mcp/audit.
@@ -64,6 +72,12 @@ type RecordMCPAuditOutput struct{}
 
 // RecordAuditEntry handles POST /api/v1/mcp/audit.
 func (h *MCPAuditHandler) RecordAuditEntry(ctx context.Context, input *RecordMCPAuditInput) (*RecordMCPAuditOutput, error) {
+	// Layer 2 auth: constant-time comparison of the Worker-only shared secret.
+	// Fail-closed when unconfigured (empty expected secret blocks all callers).
+	if h.mcpWorkerSecret == "" || subtle.ConstantTimeCompare([]byte(input.MCPWorkerSecret), []byte(h.mcpWorkerSecret)) != 1 {
+		return nil, huma.Error403Forbidden("invalid or missing Worker secret")
+	}
+
 	entry := &domain.MCPAuditEntry{
 		ActorUserID:           input.Body.ActorUserID,
 		GrantID:               input.Body.GrantID,

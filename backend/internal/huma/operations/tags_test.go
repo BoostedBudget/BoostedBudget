@@ -395,14 +395,14 @@ func (m *mockTagIdempotencyRepository) GetOrCreate(
 	key, _, _ string,
 	fn func() (interface{}, error),
 	result interface{},
-) error {
+) (bool, error) {
 	if existing, ok := m.cached[key]; ok {
 		*(result.(**domain.UserTag)) = existing
-		return nil
+		return true, nil
 	}
 	res, err := fn()
 	if err != nil {
-		return err
+		return false, err
 	}
 	tag := res.(*domain.UserTag)
 	if m.cached == nil {
@@ -410,7 +410,7 @@ func (m *mockTagIdempotencyRepository) GetOrCreate(
 	}
 	m.cached[key] = tag
 	*(result.(**domain.UserTag)) = tag
-	return nil
+	return false, nil
 }
 
 func (m *mockTagIdempotencyRepository) GetOrCreateInTx(
