@@ -2,8 +2,17 @@ import { Mail, CheckCircle2, Globe, Shield, Copy } from 'lucide-react'
 import { SubscriptionCard } from './components/SubscriptionCard'
 import { ThemeSelector } from './components/ThemeSelector'
 import { ProfileForm } from './ProfileForm'
+import { lazy, Suspense } from 'react'
 import { PrivacySettings } from './PrivacySettings'
 import { useProfile } from './hooks/useProfile'
+
+// Lazy-loaded: keeps the category manager (and its icon set) out of the profile
+// route bundle — it's only needed when the Categories tab is opened (#1203).
+const CustomCategoryManager = lazy(() =>
+  import('@/features/categories/components/CustomCategoryManager').then((m) => ({
+    default: m.CustomCategoryManager,
+  }))
+)
 import { useIsAdmin, useAdminMode, AdminSettingsSection } from '@/features/admin'
 import { useRegions } from '../../shared/hooks/useRegions'
 import { useTabState, useCopyToClipboard } from '../../shared/hooks'
@@ -18,7 +27,7 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
   const { user, loading, error, refetch } = useProfile()
   const { isAdmin, loading: adminLoading } = useIsAdmin()
   const { adminModeEnabled, toggleAdminMode } = useAdminMode()
-  const [activeTab, setActiveTab] = useTabState('tab', 'profile', ['profile', 'privacy'] as const)
+  const [activeTab, setActiveTab] = useTabState('tab', 'profile', ['profile', 'privacy', 'categories'] as const)
   const { copy, copied } = useCopyToClipboard()
   const { getRegionWithFlag } = useRegions()
 
@@ -94,6 +103,16 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
           onClick={() => setActiveTab('privacy')}
         >
           Privacy Settings
+        </button>
+        <button
+          className={`bg-transparent border-none border-b-[3px] px-6 py-3 text-base font-medium cursor-pointer transition-all duration-200 -mb-[2px] ${
+            activeTab === 'categories'
+              ? 'active text-primary border-b-primary font-semibold'
+              : 'text-muted-foreground border-b-transparent hover:text-foreground hover:bg-muted'
+          }`}
+          onClick={() => setActiveTab('categories')}
+        >
+          Categories
         </button>
       </div>
 
@@ -182,6 +201,14 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
       )}
 
       {activeTab === 'privacy' && <PrivacySettings onSettingsChange={onPrivacySettingsChange} />}
+
+      {activeTab === 'categories' && (
+        <section className="bg-card border border-border rounded-lg p-6">
+          <Suspense fallback={<p className="text-sm text-muted-foreground">Loading categories…</p>}>
+            <CustomCategoryManager />
+          </Suspense>
+        </section>
+      )}
     </div>
   )
 }

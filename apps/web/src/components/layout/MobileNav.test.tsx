@@ -154,4 +154,50 @@ describe('MobileNav', () => {
     const trigger = screen.getByRole('button', { name: /open menu/i })
     expect(trigger).toHaveClass('custom-class')
   })
+
+  describe('loginEnabled prop', () => {
+    it('does not render login button when loginEnabled=false', async () => {
+      const user = userEvent.setup()
+      render(
+        <BrowserRouter>
+          <MobileNav
+            isAuthenticated={false}
+            user={null}
+            onLogout={mockOnLogout}
+            onLogin={mockOnLogin}
+            loginEnabled={false}
+          />
+        </BrowserRouter>
+      )
+
+      await user.click(screen.getByRole('button', { name: /open menu/i }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument()
+      })
+
+      expect(screen.queryByRole('button', { name: /log in/i })).not.toBeInTheDocument()
+    })
+
+    it('renders login button when loginEnabled=true', async () => {
+      const user = userEvent.setup()
+      render(
+        <BrowserRouter>
+          <MobileNav
+            isAuthenticated={false}
+            user={null}
+            onLogout={mockOnLogout}
+            onLogin={mockOnLogin}
+            loginEnabled={true}
+          />
+        </BrowserRouter>
+      )
+
+      await user.click(screen.getByRole('button', { name: /open menu/i }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument()
+      })
+    })
+  })
 })

@@ -79,6 +79,10 @@ export type GetTransactionsParams = {
    */
   pending?: string;
   /**
+   * Filter by review state: true (reviewed), false (unreviewed inbox), omit for both
+   */
+  reviewed?: string;
+  /**
    * Filter by minimum absolute amount
    */
   min_amount?: string;

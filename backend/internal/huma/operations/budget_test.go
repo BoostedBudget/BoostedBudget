@@ -152,6 +152,7 @@ func (m *mockTransactionRepoForBudget) GetByExternalID(ctx context.Context, sour
 func (m *mockTransactionRepoForBudget) GetByID(ctx context.Context, id string) (*domain.Transaction, error) { return nil, nil }
 func (m *mockTransactionRepoForBudget) UpdateTags(ctx context.Context, id string, userID string, tags []string, tagsSource []domain.TagSource) error { return nil }
 func (m *mockTransactionRepoForBudget) UpdateCategory(ctx context.Context, id string, userID string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) error { return nil }
+func (m *mockTransactionRepoForBudget) SetReviewed(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error) { return 0, nil }
 func (m *mockTransactionRepoForBudget) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) { return nil, nil }
 func (m *mockTransactionRepoForBudget) GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error) { return 0, nil }
 func (m *mockTransactionRepoForBudget) GetIncomeSumByTag(ctx context.Context, userID string, tag string, startDate, endDate time.Time) (float64, error) { return 0, nil }
@@ -197,6 +198,21 @@ func (m *mockCustomCategoryRepoForBudget) DecrementUsageCount(ctx context.Contex
 }
 func (m *mockCustomCategoryRepoForBudget) GetNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error) {
 	return map[string]string{}, nil
+}
+func (m *mockCustomCategoryRepoForBudget) GetChildren(ctx context.Context, parentID string) ([]*domain.CustomCategory, error) {
+	return nil, nil
+}
+func (m *mockCustomCategoryRepoForBudget) HasChildren(ctx context.Context, id string) (bool, error) {
+	return false, nil
+}
+func (m *mockCustomCategoryRepoForBudget) ClearParentForChildren(ctx context.Context, parentID string) error {
+	return nil
+}
+func (m *mockCustomCategoryRepoForBudget) GetCategoryUsage(ctx context.Context, userID, categoryID string) (*domain.CategoryUsage, error) {
+	return &domain.CategoryUsage{}, nil
+}
+func (m *mockCustomCategoryRepoForBudget) DeleteWithReassignment(ctx context.Context, userID, categoryID string) error {
+	return nil
 }
 
 // Helper function to create test budget

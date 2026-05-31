@@ -45,6 +45,15 @@ export function posthogConfig(): Partial<PostHogConfig> {
 }
 
 /**
+ * Returns true when a PostHog key is available (runtime config or build-time env).
+ * Note: the VITE_POSTHOG_KEY path is a build-time constant and cannot be mutated in
+ * tests; cover it via integration tests or accept the window.ENV path as the test proxy.
+ */
+export function isPostHogConfigured(): boolean {
+  return !!(window.ENV?.POSTHOG_KEY || import.meta.env.VITE_POSTHOG_KEY)
+}
+
+/**
  * Initialize PostHog from runtime config.
  * No-op if POSTHOG_KEY is not configured.
  */

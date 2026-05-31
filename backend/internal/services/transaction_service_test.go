@@ -102,6 +102,11 @@ func (m *MockTransactionRepository) UpdateCategory(ctx context.Context, id strin
 	return args.Error(0)
 }
 
+func (m *MockTransactionRepository) SetReviewed(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error) {
+	args := m.Called(ctx, userID, transactionIDs, reviewed)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 func (m *MockTransactionRepository) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
@@ -910,6 +915,9 @@ func TestUpdateTransactionCategory_PopulatesCustomCategoryDisplay(t *testing.T) 
 
 	// GetTransactionByID is called twice: once for ownership check, once to return result.
 	mockRepo.On("GetByID", ctx, "txn-cat").Return(txn, nil).Times(2)
+	// Custom-category ownership validation (#1203): category is owned by the same user.
+	mockCategoryRepo.On("GetByID", ctx, catID).
+		Return(&domain.CustomCategory{ID: catID, UserID: "user-1"}, nil)
 	mockRepo.On("UpdateCategory", ctx, "txn-cat", "user-1",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockCategoryRepo.On("GetNamesByIDs", ctx, "user-1", []string{catID}).
@@ -921,6 +929,29 @@ func TestUpdateTransactionCategory_PopulatesCustomCategoryDisplay(t *testing.T) 
 	assert.Equal(t, "Household", *result.CustomCategoryOverrideDisplay)
 	mockRepo.AssertExpectations(t)
 	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestUpdateTransactionCategory_RejectsForeignCustomCategory asserts a transaction cannot be
+// assigned a custom category owned by another user (#1203 security): the service rejects it and
+// never calls the repo update.
+func TestUpdateTransactionCategory_RejectsForeignCustomCategory(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewTransactionService(mockRepo, mockCategoryRepo)
+
+	catID := "cat-foreign"
+	txn := &domain.Transaction{ID: "txn-x", UserID: "user-1"}
+	mockRepo.On("GetByID", ctx, "txn-x").Return(txn, nil)
+	mockCategoryRepo.On("GetByID", ctx, catID).
+		Return(&domain.CustomCategory{ID: catID, UserID: "other-user"}, nil)
+
+	_, err := service.UpdateTransactionCategory(ctx, "user-1", "txn-x", "custom", nil, nil, &catID)
+
+	require.Error(t, err)
+	mockRepo.AssertNotCalled(t, "UpdateCategory",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestListByBudgetCategory_PopulatesCustomCategoryDisplay asserts enrichment via budget category path.
@@ -951,4 +982,35 @@ func TestListByBudgetCategory_PopulatesCustomCategoryDisplay(t *testing.T) {
 	assert.Equal(t, "Dining Out", *result[0].CustomCategoryOverrideDisplay)
 	mockRepo.AssertExpectations(t)
 	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestTransactionService_SetReviewed_DelegatesToRepo verifies the service forwards the
+// review request to the repository and returns its updated count (Issue #1203).
+func TestTransactionService_SetReviewed_DelegatesToRepo(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+	ctx := context.Background()
+
+	ids := []string{"tx-1", "tx-2"}
+	mockRepo.On("SetReviewed", ctx, "user-1", ids, true).Return(int64(2), nil)
+
+	n, err := service.SetReviewed(ctx, "user-1", ids, true)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestTransactionService_SetReviewed_EmptyIDs verifies the service short-circuits on an
+// empty id slice and never touches the repository (Issue #1203).
+func TestTransactionService_SetReviewed_EmptyIDs(t *testing.T) {
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+	ctx := context.Background()
+
+	n, err := service.SetReviewed(ctx, "user-1", []string{}, true)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+	mockRepo.AssertNotCalled(t, "SetReviewed", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }

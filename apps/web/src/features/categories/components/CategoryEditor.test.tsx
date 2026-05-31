@@ -217,6 +217,20 @@ describe('CategoryEditor', () => {
       expect(colorIndicator).toHaveStyle({ backgroundColor: '#FF5733' })
     })
 
+    it('resolves an existing custom override passed by id to its name and color (#1203)', () => {
+      // Transactions carry an existing custom override as a raw id (custom_category_id),
+      // so the editor must match the option by key (id), not only by pfc/name.
+      const Wrapper = createWrapper()
+      render(
+        <CategoryEditor {...defaultProps} selectedCategory={['cat-1']} />,
+        { wrapper: Wrapper }
+      )
+
+      expect(screen.getByText('Food & Dining')).toBeInTheDocument()
+      const colorIndicator = screen.getByTestId('category-color')
+      expect(colorIndicator).toHaveStyle({ backgroundColor: '#FF5733' })
+    })
+
     it('should use default color when category has no color', () => {
       const categoriesWithNoColor = [
         {

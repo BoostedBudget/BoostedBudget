@@ -30,12 +30,37 @@ export interface BudgetCategory {
   pfc_primary_display?: string;
   pfc_detailed_display?: string;
   custom_category_id?: string;
+  // Parent linkage of the referenced custom category (#1203), populated by the API.
+  // Used to detect sub-allocations so budget totals aren't double-counted.
+  custom_parent_id?: string | null;
+  custom_parent_pfc_primary?: string | null;
   allocated_amount: number;
   spent_amount: number;
   created_at: string;
   updated_at: string;
   tags: string[];
   match_logic: MatchLogic;
+}
+
+/**
+ * Reports whether `cat` is a sub-allocation within a parent that is also budgeted
+ * (#1203). Mirrors the backend Budget.IsSubAllocationWithin — such rows are excluded
+ * from budget totals because their amount/spend is already inside the parent.
+ */
+export function isSubAllocationWithin(
+  cat: BudgetCategory,
+  budgetedPfcPrimaries: Set<string>,
+  budgetedCustomIds: Set<string>
+): boolean {
+  if (cat.category_kind === 'pfc') {
+    return !!(cat.pfc_detailed && cat.pfc_primary && budgetedPfcPrimaries.has(cat.pfc_primary));
+  }
+  if (cat.category_kind === 'custom') {
+    if (cat.custom_parent_id && budgetedCustomIds.has(cat.custom_parent_id)) return true;
+    if (cat.custom_parent_pfc_primary && budgetedPfcPrimaries.has(cat.custom_parent_pfc_primary))
+      return true;
+  }
+  return false;
 }
 
 export interface Budget {
@@ -113,8 +138,25 @@ export interface UpdateBudgetCategoryRequest {
 
 export function computeBudgetMetrics(budget: Budget): BudgetWithMetrics {
   const categories = budget.categories || [];
-  const total_allocated = categories.reduce((sum, cat) => sum + cat.allocated_amount, 0);
-  const total_spent = categories.reduce((sum, cat) => sum + cat.spent_amount, 0);
+
+  // Totals sum TOP-LEVEL categories only — a parent's spend already rolls up its
+  // children, and a sub-allocation's amount is within its parent (#1203). This
+  // mirrors the backend Budget.TotalAllocated/TotalSpent.
+  const budgetedPfcPrimaries = new Set<string>();
+  const budgetedCustomIds = new Set<string>();
+  for (const cat of categories) {
+    if (cat.category_kind === 'pfc' && cat.pfc_primary && !cat.pfc_detailed) {
+      budgetedPfcPrimaries.add(cat.pfc_primary);
+    }
+    if (cat.category_kind === 'custom' && cat.custom_category_id) {
+      budgetedCustomIds.add(cat.custom_category_id);
+    }
+  }
+  const topLevel = categories.filter(
+    (cat) => !isSubAllocationWithin(cat, budgetedPfcPrimaries, budgetedCustomIds)
+  );
+  const total_allocated = topLevel.reduce((sum, cat) => sum + cat.allocated_amount, 0);
+  const total_spent = topLevel.reduce((sum, cat) => sum + cat.spent_amount, 0);
   const spendingBasis = budget.expected_income ?? budget.amount;
   const remaining_amount = spendingBasis - total_spent;
   const percent_used = spendingBasis > 0 ? (total_spent / spendingBasis) * 100 : 0;

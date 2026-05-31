@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -31,6 +32,7 @@ type mockTransactionService struct {
 	capturedFilters   domain.TransactionFilters
 	capturedCursor    *domain.TransactionCursor
 	capturedLimit     int
+	setReviewedFn     func(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error)
 }
 
 func (m *mockTransactionService) ListTransactions(
@@ -82,6 +84,13 @@ func (m *mockTransactionService) GetDistinctPlaidCategories(ctx context.Context,
 
 func (m *mockTransactionService) ListByBudgetCategory(ctx context.Context, userID string, budgetCategory *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
 	return nil, 0, 0, nil
+}
+
+func (m *mockTransactionService) SetReviewed(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error) {
+	if m.setReviewedFn != nil {
+		return m.setReviewedFn(ctx, userID, transactionIDs, reviewed)
+	}
+	return int64(len(transactionIDs)), nil
 }
 
 func (m *mockTransactionService) ListTransactionsByCursor(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) (*services.TransactionListResponse, error) {
@@ -199,6 +208,158 @@ func TestGetTransactions_PFCDetailedsParsing(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	assert.Equal(t, []string{"FOOD_AND_DRINK_RESTAURANTS", "TRANSPORTATION_GAS"}, mockService.capturedFilters.PFCDetaileds)
+}
+
+// TestGetTransactions_CustomCategoryIDsParsing verifies the custom_category_ids query
+// parameter is parsed into capturedFilters.CustomCategoryIDs (Issue #1203).
+func TestGetTransactions_CustomCategoryIDsParsing(t *testing.T) {
+	userID := "user-123"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.Transaction{},
+			Limit:        50,
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		CustomCategoryIDs:     "cat-aaa,cat-bbb",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, []string{"cat-aaa", "cat-bbb"}, mockService.capturedFilters.CustomCategoryIDs)
+}
+
+// TestGetTransactions_ReviewedFilterParsing verifies the reviewed query parameter is
+// parsed into capturedFilters.Reviewed (Issue #1203).
+func TestGetTransactions_ReviewedFilterParsing(t *testing.T) {
+	userID := "user-123"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.Transaction{},
+			Limit:        50,
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		Reviewed:              "false",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.capturedFilters.Reviewed)
+	assert.False(t, *mockService.capturedFilters.Reviewed)
+}
+
+// TestGetTransactions_InvalidReviewed tests a 400 for a non-boolean reviewed parameter.
+func TestGetTransactions_InvalidReviewed(t *testing.T) {
+	mockService := &mockTransactionService{}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: "user-123"},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		Reviewed:              "maybe",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Invalid reviewed parameter")
+}
+
+// TestSetTransactionReviewed_Success verifies the single-transaction review handler
+// forwards a one-element id slice and returns the updated count (Issue #1203).
+func TestSetTransactionReviewed_Success(t *testing.T) {
+	var gotIDs []string
+	var gotReviewed bool
+	mockService := &mockTransactionService{
+		setReviewedFn: func(_ context.Context, _ string, ids []string, reviewed bool) (int64, error) {
+			gotIDs = ids
+			gotReviewed = reviewed
+			return 1, nil
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	input := &SetTransactionReviewedInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "tx-123",
+	}
+	input.Body.Reviewed = true
+
+	output, err := handler.SetTransactionReviewed(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, int64(1), output.Body.Updated)
+	assert.Equal(t, []string{"tx-123"}, gotIDs)
+	assert.True(t, gotReviewed)
+}
+
+// TestBulkSetTransactionReviewed_Success verifies the bulk review handler forwards all
+// ids and returns the updated count (Issue #1203).
+func TestBulkSetTransactionReviewed_Success(t *testing.T) {
+	mockService := &mockTransactionService{
+		setReviewedFn: func(_ context.Context, _ string, ids []string, _ bool) (int64, error) {
+			return int64(len(ids)), nil
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	input := &BulkSetTransactionReviewedInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body.TransactionIDs = []string{"tx-1", "tx-2", "tx-3"}
+	input.Body.Reviewed = true
+
+	output, err := handler.BulkSetTransactionReviewed(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, int64(3), output.Body.Updated)
+}
+
+// TestBulkSetTransactionReviewed_EmptyIDs tests a 400 when no transaction ids are given,
+// and confirms the service is never called.
+func TestBulkSetTransactionReviewed_EmptyIDs(t *testing.T) {
+	called := false
+	mockService := &mockTransactionService{
+		setReviewedFn: func(_ context.Context, _ string, _ []string, _ bool) (int64, error) {
+			called = true
+			return 0, nil
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	input := &BulkSetTransactionReviewedInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body.TransactionIDs = []string{}
+	input.Body.Reviewed = true
+
+	output, err := handler.BulkSetTransactionReviewed(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "transaction_ids must not be empty")
+	assert.False(t, called, "service should not be called when ids are empty")
 }
 
 // TestGetTransactions_InvalidDateFormat tests error for invalid date format.
@@ -397,6 +558,118 @@ func TestUpdateTransactionCategory_Success(t *testing.T) {
 			Kind:       "pfc",
 			PFCPrimary: &pfcPrimary,
 		},
+	}
+
+	output, err := handler.UpdateTransactionCategory(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+}
+
+// TestUpdateTransactionCategory_CustomMissingID asserts a 400 (not a DB 500) when
+// kind=custom is sent without a custom_category_id (#1203 discriminated-union validation).
+func TestUpdateTransactionCategory_CustomMissingID(t *testing.T) {
+	handler := NewTransactionHandler(&mockTransactionService{})
+	input := &UpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "tx-123",
+		Body:               UpdateTransactionCategoryBody{Kind: "custom"},
+	}
+
+	output, err := handler.UpdateTransactionCategory(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "custom_category_id is required")
+}
+
+// TestUpdateTransactionCategory_PFCMissingPrimary asserts a 400 when kind=pfc is sent
+// without a pfc_primary.
+func TestUpdateTransactionCategory_PFCMissingPrimary(t *testing.T) {
+	handler := NewTransactionHandler(&mockTransactionService{})
+	input := &UpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "tx-123",
+		Body:               UpdateTransactionCategoryBody{Kind: "pfc"},
+	}
+
+	output, err := handler.UpdateTransactionCategory(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pfc_primary is required")
+}
+
+// TestUpdateTransactionCategory_MismatchedFields asserts a 400 when fields don't match the
+// kind (e.g. kind=pfc with a custom_category_id), instead of falling through to a DB 500.
+func TestUpdateTransactionCategory_MismatchedFields(t *testing.T) {
+	handler := NewTransactionHandler(&mockTransactionService{})
+	pfcPrimary := "FOOD_AND_DRINK"
+	customID := "cat-1"
+	input := &UpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "tx-123",
+		Body: UpdateTransactionCategoryBody{
+			Kind:             "pfc",
+			PFCPrimary:       &pfcPrimary,
+			CustomCategoryID: &customID,
+		},
+	}
+
+	output, err := handler.UpdateTransactionCategory(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "custom_category_id must be omitted")
+}
+
+// TestUpdateTransactionCategory_ClearWithStrayField asserts a 400 (not a DB 500) when
+// kind=clear is sent with a stray override field (#1203 discriminated-union validation).
+func TestUpdateTransactionCategory_ClearWithStrayField(t *testing.T) {
+	customID := "cat-1"
+	pfcPrimary := "FOOD_AND_DRINK"
+	pfcDetailed := "FOOD_AND_DRINK_RESTAURANTS"
+	cases := []struct {
+		name string
+		body UpdateTransactionCategoryBody
+	}{
+		{"stray custom id", UpdateTransactionCategoryBody{Kind: "clear", CustomCategoryID: &customID}},
+		{"stray pfc primary", UpdateTransactionCategoryBody{Kind: "clear", PFCPrimary: &pfcPrimary}},
+		{"stray pfc detailed", UpdateTransactionCategoryBody{Kind: "clear", PFCDetailed: &pfcDetailed}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := NewTransactionHandler(&mockTransactionService{})
+			input := &UpdateTransactionCategoryInput{
+				AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+				ID:                 "tx-123",
+				Body:               tc.body,
+			}
+
+			output, err := handler.UpdateTransactionCategory(context.Background(), input)
+
+			assert.Nil(t, output)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "must be omitted when kind=clear")
+			if se, ok := err.(huma.StatusError); ok {
+				assert.Equal(t, http.StatusBadRequest, se.GetStatus())
+			} else {
+				t.Fatalf("expected a huma.StatusError, got %T", err)
+			}
+		})
+	}
+}
+
+// TestUpdateTransactionCategory_ClearSucceeds asserts a clear with no override fields is accepted.
+func TestUpdateTransactionCategory_ClearSucceeds(t *testing.T) {
+	userID := "user-123"
+	mockService := &mockTransactionService{transaction: createTestTransaction(userID)}
+	handler := NewTransactionHandler(mockService)
+
+	input := &UpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 "tx-123",
+		Body:               UpdateTransactionCategoryBody{Kind: "clear"},
 	}
 
 	output, err := handler.UpdateTransactionCategory(context.Background(), input)

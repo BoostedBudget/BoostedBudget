@@ -200,6 +200,39 @@ describe('BudgetCategoryForm', () => {
       expect(categorySelect).not.toBeDisabled()
     })
 
+    it('should group a custom sub-category under its custom parent (parent_id) in a labeled optgroup', async () => {
+      // A custom parent "Food" with a custom child "Fast Food" (parent_id). The child
+      // option must render under an <optgroup> labeled with the parent's name — AC5 (#1203).
+      const parent = makeCustomCategory('cat-parent', 'Food')
+      const child: CustomCategory = {
+        ...makeCustomCategory('cat-child', 'Fast Food'),
+        parent_id: 'cat-parent',
+      }
+      mockUseGetUserCategories.mockReturnValue({
+        data: [parent, child],
+        isLoading: false,
+        error: null,
+      })
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      await switchToCustom()
+
+      const childOption = screen.getByRole('option', { name: /Fast Food/i }) as HTMLOptionElement
+      const group = childOption.closest('optgroup')
+      expect(group).not.toBeNull()
+      expect(group?.label).toBe('Food')
+    })
+
     it('should NOT show Custom Categories button when useGetUserCategories returns empty', () => {
       mockUseGetUserCategories.mockReturnValue({
         data: [],

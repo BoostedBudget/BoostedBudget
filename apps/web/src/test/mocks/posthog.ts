@@ -24,8 +24,19 @@ mock.module('posthog-js', () => ({
   default: mockPosthogInstance,
 }))
 
-// Mock our posthog lib so tests that import it get no-ops
+// Mock our posthog lib so tests that import it get no-ops.
+// isPostHogConfigured uses the real window.ENV check so individual tests can control
+// configured vs. non-configured state by setting window.ENV.POSTHOG_KEY.
 mock.module('../../shared/lib/posthog', () => ({
   initPostHog: mock(() => {}),
   posthog: mockPosthogInstance,
+  isPostHogConfigured: () => !!(window.ENV?.POSTHOG_KEY),
+}))
+
+export const mockUseFeatureFlagEnabled = mock(() => undefined as boolean | undefined)
+
+// Mock posthog-js/react for feature flag hooks
+mock.module('posthog-js/react', () => ({
+  PostHogProvider: ({ children }: { children: unknown }) => children,
+  useFeatureFlagEnabled: mockUseFeatureFlagEnabled,
 }))

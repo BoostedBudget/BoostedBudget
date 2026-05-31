@@ -24,7 +24,7 @@ export function NotFoundPage() {
       </p>
       <div className="flex flex-col sm:flex-row gap-4 items-center">
         <Button asChild size="lg">
-          <Link to="/dashboard">Go to Dashboard</Link>
+          <Link to="/">Go Home</Link>
         </Button>
         <a
           href="mailto:support@boostedbudget.com"

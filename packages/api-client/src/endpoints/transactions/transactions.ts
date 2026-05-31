@@ -44,9 +44,12 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  BulkSetTransactionReviewedInputBody,
   ErrorModel,
   GetTransactionsOutputBody,
   GetTransactionsParams,
+  SetTransactionReviewedInputBody,
+  SetTransactionReviewedOutputBody,
   Transaction,
   UpdateTransactionCategoryBody,
   UpdateTransactionTagsBody,
@@ -246,6 +249,103 @@ export function useGetTransactions<
   return { ...query, queryKey: queryOptions.queryKey };
 }
 
+/**
+ * Marks multiple transactions reviewed or unreviewed for the authenticated user.
+ * @summary Bulk update transaction review state
+ */
+export const bulkSetTransactionReviewed = (
+  bulkSetTransactionReviewedInputBody: BodyType<
+    NonReadonly<BulkSetTransactionReviewedInputBody>
+  >,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<SetTransactionReviewedOutputBody>(
+    {
+      url: `/api/v1/transactions/review`,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      data: bulkSetTransactionReviewedInputBody,
+      signal,
+    },
+    options,
+  );
+};
+
+export const getBulkSetTransactionReviewedMutationOptions = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof bulkSetTransactionReviewed>>,
+    TError,
+    { data: BodyType<NonReadonly<BulkSetTransactionReviewedInputBody>> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customInstance>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof bulkSetTransactionReviewed>>,
+  TError,
+  { data: BodyType<NonReadonly<BulkSetTransactionReviewedInputBody>> },
+  TContext
+> => {
+  const mutationKey = ["bulkSetTransactionReviewed"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof bulkSetTransactionReviewed>>,
+    { data: BodyType<NonReadonly<BulkSetTransactionReviewedInputBody>> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return bulkSetTransactionReviewed(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type BulkSetTransactionReviewedMutationResult = NonNullable<
+  Awaited<ReturnType<typeof bulkSetTransactionReviewed>>
+>;
+export type BulkSetTransactionReviewedMutationBody = BodyType<
+  NonReadonly<BulkSetTransactionReviewedInputBody>
+>;
+export type BulkSetTransactionReviewedMutationError = ErrorType<ErrorModel>;
+
+/**
+ * @summary Bulk update transaction review state
+ */
+export const useBulkSetTransactionReviewed = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof bulkSetTransactionReviewed>>,
+      TError,
+      { data: BodyType<NonReadonly<BulkSetTransactionReviewedInputBody>> },
+      TContext
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof bulkSetTransactionReviewed>>,
+  TError,
+  { data: BodyType<NonReadonly<BulkSetTransactionReviewedInputBody>> },
+  TContext
+> => {
+  return useMutation(
+    getBulkSetTransactionReviewedMutationOptions(options),
+    queryClient,
+  );
+};
 /**
  * Retrieves a specific transaction by its UUID.
  * @summary Get transaction by ID
@@ -510,6 +610,110 @@ export const useUpdateTransactionCategory = <
 > => {
   return useMutation(
     getUpdateTransactionCategoryMutationOptions(options),
+    queryClient,
+  );
+};
+/**
+ * Marks a transaction reviewed or unreviewed (moves it out of / into the unreviewed inbox).
+ * @summary Update transaction review state
+ */
+export const setTransactionReviewed = (
+  id: string,
+  setTransactionReviewedInputBody: BodyType<
+    NonReadonly<SetTransactionReviewedInputBody>
+  >,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<SetTransactionReviewedOutputBody>(
+    {
+      url: `/api/v1/transactions/${id}/review`,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      data: setTransactionReviewedInputBody,
+      signal,
+    },
+    options,
+  );
+};
+
+export const getSetTransactionReviewedMutationOptions = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setTransactionReviewed>>,
+    TError,
+    {
+      id: string;
+      data: BodyType<NonReadonly<SetTransactionReviewedInputBody>>;
+    },
+    TContext
+  >;
+  request?: SecondParameter<typeof customInstance>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setTransactionReviewed>>,
+  TError,
+  { id: string; data: BodyType<NonReadonly<SetTransactionReviewedInputBody>> },
+  TContext
+> => {
+  const mutationKey = ["setTransactionReviewed"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setTransactionReviewed>>,
+    { id: string; data: BodyType<NonReadonly<SetTransactionReviewedInputBody>> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return setTransactionReviewed(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetTransactionReviewedMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setTransactionReviewed>>
+>;
+export type SetTransactionReviewedMutationBody = BodyType<
+  NonReadonly<SetTransactionReviewedInputBody>
+>;
+export type SetTransactionReviewedMutationError = ErrorType<ErrorModel>;
+
+/**
+ * @summary Update transaction review state
+ */
+export const useSetTransactionReviewed = <
+  TError = ErrorType<ErrorModel>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof setTransactionReviewed>>,
+      TError,
+      {
+        id: string;
+        data: BodyType<NonReadonly<SetTransactionReviewedInputBody>>;
+      },
+      TContext
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof setTransactionReviewed>>,
+  TError,
+  { id: string; data: BodyType<NonReadonly<SetTransactionReviewedInputBody>> },
+  TContext
+> => {
+  return useMutation(
+    getSetTransactionReviewedMutationOptions(options),
     queryClient,
   );
 };

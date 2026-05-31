@@ -11,6 +11,7 @@ import {
   mockUseCreatePaddleCheckout,
   mockCreatePaddleCheckoutMutateAsync,
 } from '@/test/mocks/subscription-api'
+import { mockUseFeatureFlagEnabled } from '@/test/mocks/posthog'
 
 const mockNavigate = mock(() => {})
 mock.module('react-router-dom', () => ({
@@ -86,6 +87,9 @@ beforeEach(() => {
 
 afterEach(() => {
   sessionStorage.clear()
+  // Ensure PostHog state doesn't leak from lockdown tests into subsequent tests
+  delete (window as Window & { ENV?: unknown }).ENV
+  mockUseFeatureFlagEnabled.mockReturnValue(undefined)
 })
 
 describe('TierActionButton', () => {
@@ -117,6 +121,37 @@ describe('TierActionButton', () => {
       renderButton({ status: 'signed-out' })
       fireEvent.click(screen.getByRole('button'))
       expect(mockNavigate).toHaveBeenCalledWith('/sign-up', expect.anything())
+    })
+  })
+
+  describe('signed-out state with lockdown active (login_enabled=false)', () => {
+    beforeEach(() => {
+      window.ENV = { POSTHOG_KEY: 'test-key' }
+      mockUseFeatureFlagEnabled.mockReturnValue(false)
+    })
+
+    afterEach(() => {
+      delete (window as Window & { ENV?: unknown }).ENV
+      mockUseFeatureFlagEnabled.mockReturnValue(undefined)
+    })
+
+    it('shows disabled Coming Soon button', () => {
+      renderButton({ status: 'signed-out' })
+      const btn = screen.getByRole('button')
+      expect(btn.textContent).toContain('Coming Soon')
+      expect(btn).toBeDisabled()
+    })
+
+    it('does not navigate to sign-up when clicked', () => {
+      renderButton({ status: 'signed-out' })
+      fireEvent.click(screen.getByRole('button'))
+      expect(mockNavigate).not.toHaveBeenCalled()
+    })
+
+    it('does not store checkout intent in sessionStorage', () => {
+      renderButton({ status: 'signed-out' })
+      fireEvent.click(screen.getByRole('button'))
+      expect(sessionStorage.getItem('checkout_intent')).toBeNull()
     })
   })
 

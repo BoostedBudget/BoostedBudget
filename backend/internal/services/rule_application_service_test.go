@@ -38,17 +38,17 @@ func TestRuleApplicationService_ApplyRulesToTransaction(t *testing.T) {
 	// Setup rules
 	rules := []*domain.CategorizationRule{
 		{
-			ID:              "rule-1",
-			UserID:          userID,
-			Name:            "Coffee Rule",
-			Enabled:         true,
-			Priority:        10,
-			Conditions:      []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "starbucks"}},
-			ConditionLogic:  "AND",
-			TargetKind:      strPtr("pfc"),
+			ID:               "rule-1",
+			UserID:           userID,
+			Name:             "Coffee Rule",
+			Enabled:          true,
+			Priority:         10,
+			Conditions:       []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "starbucks"}},
+			ConditionLogic:   "AND",
+			TargetKind:       strPtr("pfc"),
 			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
-			TagBehavior:     "add",
-			Source:          "manual",
+			TagBehavior:      "add",
+			Source:           "manual",
 		},
 	}
 
@@ -84,17 +84,17 @@ func TestRuleApplicationService_SkipManualOverride(t *testing.T) {
 
 	rules := []*domain.CategorizationRule{
 		{
-			ID:              "rule-1",
-			UserID:          userID,
-			Name:            "Coffee Rule",
-			Enabled:         true,
-			Priority:        10,
-			Conditions:      []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "starbucks"}},
-			ConditionLogic:  "AND",
-			TargetKind:      strPtr("pfc"),
+			ID:               "rule-1",
+			UserID:           userID,
+			Name:             "Coffee Rule",
+			Enabled:          true,
+			Priority:         10,
+			Conditions:       []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "starbucks"}},
+			ConditionLogic:   "AND",
+			TargetKind:       strPtr("pfc"),
 			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
-			TagBehavior:     "add",
-			Source:          "manual",
+			TagBehavior:      "add",
+			Source:           "manual",
 		},
 	}
 
@@ -105,10 +105,10 @@ func TestRuleApplicationService_SkipManualOverride(t *testing.T) {
 	existingKind := "pfc"
 	existingPrimary := "GENERAL_MERCHANDISE"
 	tx := &domain.Transaction{
-		ID:                  "tx-123",
-		UserID:              userID,
-		MerchantName:        &merchantName,
-		CategorySourceField: domain.CategorySourceManual,
+		ID:                   "tx-123",
+		UserID:               userID,
+		MerchantName:         &merchantName,
+		CategorySourceField:  domain.CategorySourceManual,
 		CategoryOverrideKind: &existingKind,
 		PFCPrimaryOverride:   &existingPrimary,
 	}
@@ -123,6 +123,71 @@ func TestRuleApplicationService_SkipManualOverride(t *testing.T) {
 	mockRepo.AssertNotCalled(t, "IncrementMatchCount", mock.Anything, mock.Anything)
 }
 
+// TestRuleApplicationService_CategoryMatchMarksReviewed verifies a rule applying a
+// category action marks the transaction reviewed (Issue #1203).
+func TestRuleApplicationService_CategoryMatchMarksReviewed(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	service := NewRuleApplicationService(mockRepo)
+	ctx := context.Background()
+	userID := "user-123"
+
+	rules := []*domain.CategorizationRule{{
+		ID: "rule-1", UserID: userID, Name: "Coffee", Enabled: true, Priority: 10,
+		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
+		ConditionLogic: "AND", TargetKind: strPtr("pfc"), TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+		TagBehavior: "add", Source: "manual",
+	}}
+	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
+	mockRepo.On("IncrementMatchCount", ctx, "rule-1").Return(nil)
+
+	merchant := "Blue Bottle Coffee"
+	tx := &domain.Transaction{ID: "tx-1", UserID: userID, MerchantName: &merchant}
+
+	require.NoError(t, service.ApplyRulesToTransaction(ctx, tx))
+	assert.True(t, tx.Reviewed, "category-applying rule should mark reviewed")
+	require.NotNil(t, tx.ReviewedAt)
+}
+
+// TestRuleApplicationService_TagOnlyDoesNotMarkReviewed verifies a tag-only match does
+// NOT mark the transaction reviewed (Issue #1203).
+func TestRuleApplicationService_TagOnlyDoesNotMarkReviewed(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	service := NewRuleApplicationService(mockRepo)
+	ctx := context.Background()
+	userID := "user-123"
+
+	rules := []*domain.CategorizationRule{{
+		ID: "rule-1", UserID: userID, Name: "Tag only", Enabled: true, Priority: 10,
+		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
+		ConditionLogic: "AND", TargetTags: []string{"morning"}, TagBehavior: "add", Source: "manual",
+	}}
+	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
+	mockRepo.On("IncrementMatchCount", ctx, "rule-1").Return(nil)
+
+	merchant := "Blue Bottle Coffee"
+	tx := &domain.Transaction{ID: "tx-1", UserID: userID, MerchantName: &merchant}
+
+	require.NoError(t, service.ApplyRulesToTransaction(ctx, tx))
+	assert.False(t, tx.Reviewed, "tag-only rule must not mark reviewed")
+	assert.Nil(t, tx.ReviewedAt)
+}
+
+// TestRuleApplicationService_SkipsReviewed verifies reviewed transactions are protected
+// from auto-recategorization (Issue #1203).
+func TestRuleApplicationService_SkipsReviewed(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	service := NewRuleApplicationService(mockRepo)
+	ctx := context.Background()
+	userID := "user-123"
+
+	merchant := "Blue Bottle Coffee"
+	tx := &domain.Transaction{ID: "tx-1", UserID: userID, MerchantName: &merchant, Reviewed: true}
+
+	require.NoError(t, service.ApplyRulesToTransaction(ctx, tx))
+	assert.Nil(t, tx.CategoryOverrideKind, "reviewed transaction must not be recategorized")
+	mockRepo.AssertNotCalled(t, "GetEnabledByUserID", mock.Anything, mock.Anything)
+}
+
 // TestRuleApplicationService_ApplyTags tests that tags are applied from all matching rules
 func TestRuleApplicationService_ApplyTags(t *testing.T) {
 	mockRepo := new(mockRuleApplicationRepository)
@@ -132,18 +197,18 @@ func TestRuleApplicationService_ApplyTags(t *testing.T) {
 
 	rules := []*domain.CategorizationRule{
 		{
-			ID:              "rule-1",
-			UserID:          userID,
-			Name:            "Coffee Rule",
-			Enabled:         true,
-			Priority:        10,
-			Conditions:      []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
-			ConditionLogic:  "AND",
-			TargetKind:      strPtr("pfc"),
+			ID:               "rule-1",
+			UserID:           userID,
+			Name:             "Coffee Rule",
+			Enabled:          true,
+			Priority:         10,
+			Conditions:       []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
+			ConditionLogic:   "AND",
+			TargetKind:       strPtr("pfc"),
 			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
-			TargetTags:      []string{"coffee", "morning"},
-			TagBehavior:     "add",
-			Source:          "manual",
+			TargetTags:       []string{"coffee", "morning"},
+			TagBehavior:      "add",
+			Source:           "manual",
 		},
 		{
 			ID:             "rule-2",
@@ -191,17 +256,17 @@ func TestRuleApplicationService_ApplyRulesToBatch(t *testing.T) {
 
 	rules := []*domain.CategorizationRule{
 		{
-			ID:              "rule-1",
-			UserID:          userID,
-			Name:            "Coffee Rule",
-			Enabled:         true,
-			Priority:        10,
-			Conditions:      []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
-			ConditionLogic:  "AND",
-			TargetKind:      strPtr("pfc"),
+			ID:               "rule-1",
+			UserID:           userID,
+			Name:             "Coffee Rule",
+			Enabled:          true,
+			Priority:         10,
+			Conditions:       []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
+			ConditionLogic:   "AND",
+			TargetKind:       strPtr("pfc"),
 			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
-			TagBehavior:     "add",
-			Source:          "manual",
+			TagBehavior:      "add",
+			Source:           "manual",
 		},
 	}
 
@@ -222,6 +287,54 @@ func TestRuleApplicationService_ApplyRulesToBatch(t *testing.T) {
 	assert.Equal(t, domain.CategorySourceRule, txns[0].CategorySourceField)
 	// Second transaction should NOT match (no coffee in name)
 	assert.Equal(t, domain.CategorySource(""), txns[1].CategorySourceField)
+}
+
+// TestRuleApplicationService_ApplyRulesToBatch_MarksReviewed verifies that a batch
+// (sync-path) category match marks the transaction reviewed (Issue #1203).
+func TestRuleApplicationService_ApplyRulesToBatch_MarksReviewed(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	service := NewRuleApplicationService(mockRepo)
+	ctx := context.Background()
+	userID := "user-123"
+
+	rules := []*domain.CategorizationRule{{
+		ID: "rule-1", UserID: userID, Name: "Coffee", Enabled: true, Priority: 10,
+		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
+		ConditionLogic: "AND", TargetKind: strPtr("pfc"), TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+		TagBehavior: "add", Source: "manual",
+	}}
+	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
+	mockRepo.On("IncrementMatchCount", ctx, "rule-1").Return(nil)
+
+	merchant := "Blue Bottle Coffee"
+	txns := []domain.Transaction{{ID: "tx-1", UserID: userID, MerchantName: &merchant}}
+
+	require.NoError(t, service.ApplyRulesToBatch(ctx, txns, userID))
+	assert.True(t, txns[0].Reviewed, "batch category match should mark reviewed")
+	require.NotNil(t, txns[0].ReviewedAt)
+}
+
+// TestRuleApplicationService_ApplyRulesToBatch_SkipsReviewed verifies reviewed rows
+// are not recategorized by the batch path (Issue #1203).
+func TestRuleApplicationService_ApplyRulesToBatch_SkipsReviewed(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	service := NewRuleApplicationService(mockRepo)
+	ctx := context.Background()
+	userID := "user-123"
+
+	rules := []*domain.CategorizationRule{{
+		ID: "rule-1", UserID: userID, Name: "Coffee", Enabled: true, Priority: 10,
+		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
+		ConditionLogic: "AND", TargetKind: strPtr("pfc"), TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+		TagBehavior: "add", Source: "manual",
+	}}
+	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
+
+	merchant := "Blue Bottle Coffee"
+	txns := []domain.Transaction{{ID: "tx-1", UserID: userID, MerchantName: &merchant, Reviewed: true}}
+
+	require.NoError(t, service.ApplyRulesToBatch(ctx, txns, userID))
+	assert.Nil(t, txns[0].CategoryOverrideKind, "reviewed transaction must not be recategorized in batch")
 }
 
 // TestRuleApplicationService_NoRules tests graceful handling when user has no rules

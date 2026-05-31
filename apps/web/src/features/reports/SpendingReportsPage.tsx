@@ -20,6 +20,7 @@ import { useSpendingByMerchant } from './hooks/useSpendingByMerchant'
 import { useSpendingTrends } from './hooks/useSpendingTrends'
 import { CategoryBreakdownChart } from './components/CategoryBreakdownChart'
 import { CategoryDrilldownHeading } from './components/CategoryDrilldownHeading'
+import { CustomCategoryFilter } from './components/CustomCategoryFilter'
 import { SpendingTrendsChart } from './components/SpendingTrendsChart'
 import { TopMerchantsTable } from './components/TopMerchantsTable'
 import type { SortState } from '@/shared/components/DataTable'
@@ -32,6 +33,7 @@ export function SpendingReportsPage() {
   const [customStartDate, setCustomStartDate] = useState('')
   const [customEndDate, setCustomEndDate] = useState('')
   const [drilldown, setDrilldown] = useState<{ category: string; displayLabel: string } | undefined>()
+  const [customCategoryIds, setCustomCategoryIds] = useState<string[]>([])
   const [merchantSort, setMerchantSort] = useState<SortState>({ columnId: 'total', direction: 'desc' })
 
   const derivedRange = preset !== 'custom' ? getDateRange(preset) : null
@@ -47,7 +49,7 @@ export function SpendingReportsPage() {
   const enabled = Boolean(startDate && endDate)
 
   const { data: categoryData, loading: categoryLoading } = useSpendingByCategory({
-    filters: { ...filters, category: drilldown?.category },
+    filters: { ...filters, category: drilldown?.category, customCategoryIds },
     enabled,
   })
 
@@ -72,6 +74,12 @@ export function SpendingReportsPage() {
     setCustomEndDate(end)
     setDrilldown(undefined)
     trackEvent(ANALYTICS_EVENTS.REPORT_DATE_CHANGED, { preset: 'custom' })
+  }
+
+  const handleCustomCategoryFilterChange = (ids: string[]) => {
+    setCustomCategoryIds(ids)
+    setDrilldown(undefined)
+    trackEvent(ANALYTICS_EVENTS.REPORT_CUSTOM_CATEGORY_FILTERED, { count: ids.length })
   }
 
   const handleCategoryClick = (category: string, displayLabel: string) => {
@@ -111,6 +119,11 @@ export function SpendingReportsPage() {
           onPresetChange={handlePresetChange}
           onCustomRangeChange={handleCustomRange}
           excludePresets={['all']}
+        />
+        <CustomCategoryFilter
+          selectedIds={customCategoryIds}
+          onChange={handleCustomCategoryFilterChange}
+          className="mt-4"
         />
       </div>
 
