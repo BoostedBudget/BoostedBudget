@@ -226,10 +226,19 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       },
       async (input) => {
         const p = this.props as McpAgentProps
-        const result = await recipeTools.save(input)
-        void audit.record({ actorUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown',
-          operationClass: 'write', operationId: 'recipe.save', result: 'success' })
-        return result
+        // save() returns {toolResult, auditResult} so we can emit the correct audit label.
+        // auditResult='confirmation_required' on the first (challenge) call; 'success' on confirm.
+        const { toolResult, auditResult } = await recipeTools.save(input)
+        void audit.record({
+          actorUserId: p.clerkUserId,
+          grantId: p.grantId ?? 'unknown',
+          operationClass: 'write',
+          operationId: 'recipe.save',
+          result: auditResult,
+          confirmationPresented: auditResult === 'confirmation_required',
+          confirmationConfirmed: auditResult === 'success',
+        })
+        return toolResult
       },
     )
 

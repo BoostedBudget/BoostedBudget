@@ -39,7 +39,7 @@ export interface AuditClient {
  * Returns a no-op client when env is not configured.
  */
 export function createAuditClient(env: Env): AuditClient {
-  if (!env.BOOSTEDBUDGET_API_URL || !env.BOOSTEDBUDGET_ORIGIN_SECRET) {
+  if (!env.BOOSTEDBUDGET_API_URL || !env.BOOSTEDBUDGET_ORIGIN_SECRET || !env.MCP_WORKER_SECRET) {
     return { record: () => Promise.resolve() }
   }
 

@@ -49,6 +49,13 @@ func TestIdempotencyRepository_GetOrCreate(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
+		// R8-4: advisory lock Exec fires first; swallowed via _ = lockErr so pgxmock returns
+		// an error for the unregistered Exec — but the test still passes because lockErr is
+		// intentionally non-fatal. Register the expectation to make coverage explicit.
+		mock.ExpectExec("pg_advisory_xact_lock").
+			WithArgs(userID, key).
+			WillReturnResult(pgxmock.NewResult("SELECT", 1))
+
 		// Simulate: key found in DB
 		mock.ExpectQuery("SELECT response_body FROM idempotency_keys").
 			WithArgs(key, userID).
@@ -74,6 +81,11 @@ func TestIdempotencyRepository_GetOrCreate(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+
+		// R8-4: advisory lock Exec fires first
+		mock.ExpectExec("pg_advisory_xact_lock").
+			WithArgs(userID, key).
+			WillReturnResult(pgxmock.NewResult("SELECT", 1))
 
 		// Simulate: key not found
 		mock.ExpectQuery("SELECT response_body FROM idempotency_keys").
@@ -102,6 +114,11 @@ func TestIdempotencyRepository_GetOrCreate(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
+
+		// R8-4: advisory lock Exec fires first
+		mock.ExpectExec("pg_advisory_xact_lock").
+			WithArgs(userID, key).
+			WillReturnResult(pgxmock.NewResult("SELECT", 1))
 
 		// Simulate: key not found
 		mock.ExpectQuery("SELECT response_body FROM idempotency_keys").

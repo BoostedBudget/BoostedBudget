@@ -186,21 +186,66 @@ type GetCategoryTransactionsOutput struct {
 // CreateBudget handles POST /api/v1/budgets requests.
 // Creates a new budget for the authenticated user.
 func (h *BudgetHandler) CreateBudget(ctx context.Context, input *CreateBudgetInput) (*CreateBudgetOutput, error) {
-	// Idempotency dedup
+	// MCP origin: use transactional audit with atomic idempotency (R8-1 — mirrors tags/categories pattern).
+	// This ensures the advisory lock in GetOrCreateInTx is effective (inside an explicit tx) and the
+	// audit row is atomic with the budget write. The non-tx GetOrCreate path had a lock that was
+	// immediately released (ineffective for mutual exclusion).
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.db != nil && h.mcpAuditRepo != nil {
+		tx, err := h.db.Begin(ctx)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		defer rollbackMCPAuditTx(ctx, tx)
+
+		// CreateBudget only uses budgetRepo; other service deps (customCategoryRepo, plaidCategoryRepo)
+		// are not called during a create and can be left as-is from the outer service.
+		txBudgetRepo := repository.NewBudgetRepository(tx)
+		txBudgetService := services.NewBudgetService(txBudgetRepo, nil, nil, slog.Default())
+
+		if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+			var budget *domain.Budget
+			cacheHit, err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, input.IdempotencyKey, input.UserID, "createBudget",
+				func() (interface{}, error) {
+					return txBudgetService.CreateBudget(ctx, input.UserID, &input.Body)
+				}, &budget)
+			if err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if cacheHit {
+				return &CreateBudgetOutput{Body: budget}, nil // deferred rollback runs
+			}
+			if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createBudget", input.IdempotencyKey); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			return &CreateBudgetOutput{Body: budget}, nil
+		}
+
+		// No idempotency key: still use the tx for atomic audit
+		budget, err := txBudgetService.CreateBudget(ctx, input.UserID, &input.Body)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createBudget", ""); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		return &CreateBudgetOutput{Body: budget}, nil
+	}
+
+	// Non-MCP: idempotency dedup without audit
 	if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
 		var budget *domain.Budget
-		cacheHit, err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createBudget",
+		_, err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createBudget",
 			func() (interface{}, error) {
 				return h.service.CreateBudget(ctx, input.UserID, &input.Body)
 			}, &budget)
 		if err != nil {
 			return nil, humaerrors.LoggingMapError(ctx, err)
-		}
-		// MCP audit (fire-and-forget): skip on cache-hit — a deduplicated retry is not a new write.
-		if !cacheHit && input.IsMCPOrigin(h.mcpWorkerSecret) && h.mcpAuditRepo != nil {
-			if auditErr := recordMCPWriteAudit(ctx, h.mcpAuditRepo, input.UserID, input.MCPGrantID, "createBudget", input.IdempotencyKey); auditErr != nil {
-				slog.WarnContext(ctx, "MCP audit write failed (non-atomic post-write)", "operation", "createBudget", "error", auditErr)
-			}
 		}
 		return &CreateBudgetOutput{Body: budget}, nil
 	}
@@ -209,12 +254,6 @@ func (h *BudgetHandler) CreateBudget(ctx context.Context, input *CreateBudgetInp
 	budget, err := h.service.CreateBudget(ctx, input.UserID, &input.Body)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
-	}
-	// MCP audit (fire-and-forget; no idempotency key on this path so every call audits)
-	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.mcpAuditRepo != nil {
-		if auditErr := recordMCPWriteAudit(ctx, h.mcpAuditRepo, input.UserID, input.MCPGrantID, "createBudget", ""); auditErr != nil {
-			slog.WarnContext(ctx, "MCP audit write failed (non-atomic post-write)", "operation", "createBudget", "error", auditErr)
-		}
 	}
 	return &CreateBudgetOutput{Body: budget}, nil
 }
