@@ -281,7 +281,7 @@ main() {
   else
     backend_url="https://boostedbudget-api-staging.fly.dev"
     frontend_url="https://boostedbudget-web-staging.fly.dev"
-    mcp_url="https://mcp.staging.boostedbudget.com"
+    mcp_url="https://staging-mcp.boostedbudget.com"
   fi
 
   echo -e "${GREEN}✓ Successfully rolled back ${ENVIRONMENT}!${NC}"

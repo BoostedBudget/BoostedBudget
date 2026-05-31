@@ -30,7 +30,7 @@ elif [ "$ENVIRONMENT" == "staging" ]; then
   API_URL="https://staging-api.boostedbudget.com"
   # Skip frontend checks - Cloudflare Zero Trust blocks automated requests
   WEB_URL=""
-  MCP_URL="https://mcp.staging.boostedbudget.com"
+  MCP_URL="https://staging-mcp.boostedbudget.com"
 elif [ "$ENVIRONMENT" == "qa" ]; then
   # QA runs on Mac Mini - use localhost or Tailscale URL
   API_URL="${QA_API_URL:-http://localhost:8080}"
@@ -151,8 +151,8 @@ if [ -n "$MCP_URL" ]; then
   echo -e "${BLUE}  MCP Worker Checks${NC}"
   echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-  # MCP Health endpoint
-  if check_endpoint "$MCP_URL/health" "200"; then
+  # MCP Health endpoint — Workers start instantly; 3 retries × 5s is plenty
+  if check_endpoint "$MCP_URL/health" "200" 3 5; then
     if check_json_response "$MCP_URL/health" ".status" "ok"; then
       print_test "pass" "MCP Worker health endpoint is responding"
     else
@@ -165,7 +165,7 @@ if [ -n "$MCP_URL" ]; then
   fi
 
   # OAuth protected-resource metadata (RFC 9728) — must be reachable unauthenticated
-  if check_endpoint "$MCP_URL/.well-known/oauth-protected-resource" "200"; then
+  if check_endpoint "$MCP_URL/.well-known/oauth-protected-resource" "200" 3 5; then
     if check_json_response "$MCP_URL/.well-known/oauth-protected-resource" ".resource" "$MCP_URL"; then
       print_test "pass" "MCP OAuth protected-resource metadata is serving correctly"
     else
