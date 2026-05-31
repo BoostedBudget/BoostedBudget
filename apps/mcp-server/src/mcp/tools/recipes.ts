@@ -33,9 +33,20 @@ export interface RunRecipeInput {
   id: string
 }
 
+/**
+ * SaveRecipeResult carries the tool result plus the real audit outcome so that
+ * agent.ts can emit the correct audit event (success vs confirmation_required vs error).
+ * This matches the ExecuteResult pattern used by the execute tool.
+ */
+export interface SaveRecipeResult {
+  toolResult: McpToolResult
+  /** The actual outcome to record in the audit log — NOT always 'success'. */
+  auditResult: 'success' | 'confirmation_required' | 'error'
+}
+
 interface RecipeTools {
   list(input: Record<string, never>): Promise<McpToolResult>
-  save(input: SaveRecipeInput): Promise<McpToolResult>
+  save(input: SaveRecipeInput): Promise<SaveRecipeResult>
   run(input: RunRecipeInput): Promise<McpToolResult>
 }
 
@@ -64,7 +75,7 @@ export function buildRecipeTools(proxy: HostProxy): RecipeTools {
       }
     },
 
-    async save(input: SaveRecipeInput): Promise<McpToolResult> {
+    async save(input: SaveRecipeInput): Promise<SaveRecipeResult> {
       try {
         const spec = input.calls.map((c) => ({
           operation_id: c.operationId,
@@ -78,18 +89,27 @@ export function buildRecipeTools(proxy: HostProxy): RecipeTools {
           { url: '/api/v1/mcp/recipes', method: 'POST', data: { name: input.name, description: input.description, spec } },
           { confirmationToken: input.confirmationToken },
         )
-        return { content: [{ type: 'text', text: `Recipe "${input.name}" saved successfully.` }] }
+        return {
+          toolResult: { content: [{ type: 'text', text: `Recipe "${input.name}" saved successfully.` }] },
+          auditResult: 'success',
+        }
       } catch (err) {
         if (err instanceof HostProxyError && err.code === 'confirmation_required') {
           return {
-            content: [{
-              type: 'text',
-              text: `Recipe creation requires confirmation. Re-invoke recipe.save() with confirmationToken: "${err.confirmationToken}"`,
-            }],
+            toolResult: {
+              content: [{
+                type: 'text',
+                text: `Recipe creation requires confirmation. Re-invoke recipe.save() with confirmationToken: "${err.confirmationToken}"`,
+              }],
+            },
+            auditResult: 'confirmation_required',
           }
         }
         const msg = err instanceof HostProxyError ? err.message : 'Failed to save recipe'
-        return { content: [{ type: 'text', text: `Error: ${msg}` }] }
+        return {
+          toolResult: { content: [{ type: 'text', text: `Error: ${msg}` }] },
+          auditResult: 'error',
+        }
       }
     },
 
