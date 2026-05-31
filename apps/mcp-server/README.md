@@ -122,13 +122,13 @@ Agent responds:
 
 ---
 
-### 3. "Save a weekly cash flow summary recipe"
+### 3. "Save a reusable cash flow summary recipe"
 
-The agent saves a named read-only recipe that can be re-run weekly:
+The agent saves a named read-only recipe you can run on-demand anytime:
 
 ```
 You: Create a recipe called "Weekly Cash Flow" that summarizes my cash flow
-     for the last 7 days. Schedule it every Monday morning.
+     for the last 7 days. I want to run it whenever I need it.
 
 Agent calls:
   recipe.save({
@@ -149,18 +149,21 @@ Agent calls:
           end_date: "{{date_today}}"
         }
       }
-    ],
-    schedule: "0 9 * * 1"   // Every Monday at 9am
+    ]
   })
 
   → confirmation prompt (save is a write)
   → confirmed → recipe saved with id: "rec_abc123"
 
 Agent responds:
-  Saved "Weekly Cash Flow" recipe (id: rec_abc123). It will run every Monday
-  at 9am and deliver a cash flow + spending breakdown for the past week.
-  You can also run it on demand with: recipe.run({ id: "rec_abc123" })
+  Saved "Weekly Cash Flow" recipe (id: rec_abc123).
+  Run it anytime with: recipe.run({ id: "rec_abc123" })
+  This will return the API calls to pass to execute().
 ```
+
+> **Note:** Scheduled recipe execution (running recipes automatically on a cron) is planned
+> for a future release — see [follow-up #1220](https://github.com/BoostedBudget/BoostedBudget/issues/1220).
+> In v1, recipes are saved and run on-demand.
 
 ---
 
