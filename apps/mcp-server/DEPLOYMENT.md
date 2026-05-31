@@ -122,7 +122,7 @@ Add a Cloudflare DNS record (orange-clouded):
 
 ```
 Type  Name                           Content (proxied)
-A     mcp.staging.boostedbudget.com  192.0.2.1    (proxied)
+A     staging-mcp.boostedbudget.com  192.0.2.1    (proxied)
 A     mcp.boostedbudget.com          192.0.2.1    (proxied)
 ```
 
@@ -137,7 +137,7 @@ A     mcp.boostedbudget.com          192.0.2.1    (proxied)
   "mcpServers": {
     "boostedbudget-staging": {
       "type": "remote",
-      "url": "https://mcp.staging.boostedbudget.com/mcp"
+      "url": "https://staging-mcp.boostedbudget.com/mcp"
     }
   }
 }

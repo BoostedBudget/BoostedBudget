@@ -28,7 +28,7 @@ Connect Claude Desktop, Cursor, or any MCP-compatible agent to your BoostedBudge
 4. An OAuth browser window will open — log in with your BoostedBudget account and grant access
 5. You're connected. Try one of the example prompts below.
 
-**Staging (for testing):** use `https://mcp.staging.boostedbudget.com/mcp` instead.
+**Staging (for testing):** use `https://staging-mcp.boostedbudget.com/mcp` instead.
 
 ### Cursor / other MCP clients
 
