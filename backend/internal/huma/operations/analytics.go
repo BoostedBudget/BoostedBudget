@@ -441,9 +441,8 @@ type GetMonthOverMonthSpendingChangeOutput struct {
 // GetMonthOverMonthSpendingChange handles GET /api/v1/analytics/month-over-month requests.
 func (h *AnalyticsHandler) GetMonthOverMonthSpendingChange(ctx context.Context, input *GetMonthOverMonthSpendingChangeInput) (*GetMonthOverMonthSpendingChangeOutput, error) {
 	months := input.Months
-	if months == 0 {
-		months = 6 // default when param is omitted
-	}
+	// Huma pre-fills default:"6" for omitted params; no zero-guard needed.
+	// Explicit ?months=0 falls through to the range check and returns 400.
 	if months < 2 || months > 24 {
 		return nil, huma.Error400BadRequest("months must be between 2 and 24")
 	}
