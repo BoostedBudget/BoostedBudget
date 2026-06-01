@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -640,6 +641,52 @@ func TestRuleApplicationService_EmitBatchSideEffects_UsesCategoryRuleID(t *testi
 	mockRepo.On("IncrementMatchCount", ctx, "rule-cat-low").Return(nil).Once()
 
 	service.EmitBatchSideEffects(ctx, userID, applications, insertedIDs)
+
+	mockAn.AssertNumberOfCalls(t, "Capture", 1)
+	mockAn.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestRuleApplicationService_ApplyRulesToTransaction_UsesCategoryRuleID_ForAnalytics
+// verifies that the single-transaction path emits auto_categorization_executed using
+// CategoryRuleID (the rule that actually set the category), NOT MatchedRuleIDs[0]
+// which may be a higher-priority tag-only rule (Issue #1213).
+// This is the single-transaction counterpart of EmitBatchSideEffects_UsesCategoryRuleID.
+func TestRuleApplicationService_ApplyRulesToTransaction_UsesCategoryRuleID_ForAnalytics(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	mockAn := new(mockAnalyticsForRuleService)
+	service := NewRuleApplicationService(mockRepo)
+	service.SetAnalytics(mockAn)
+	ctx := context.Background()
+	userID := "user-1213"
+
+	// rule-tag-high: priority 20, tag-only — matches first, so MatchedRuleIDs[0] = "rule-tag-high" (WRONG attribution)
+	// rule-cat-low:  priority 10, category — CategoryRuleID = "rule-cat-low" (CORRECT attribution)
+	coffeeCond := []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}}
+	rules := []*domain.CategorizationRule{
+		{
+			ID: "rule-tag-high", UserID: userID, Name: "Tag rule", Enabled: true, Priority: 20,
+			Conditions: coffeeCond, ConditionLogic: "AND", TargetTags: []string{"morning"}, TagBehavior: "add", Source: "manual",
+		},
+		{
+			ID: "rule-cat-low", UserID: userID, Name: "Category rule", Enabled: true, Priority: 10,
+			Conditions: coffeeCond, ConditionLogic: "AND",
+			TargetKind: strPtr("pfc"), TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+			TagBehavior: "add", Source: "manual",
+		},
+	}
+	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
+	mockRepo.On("IncrementMatchCount", ctx, "rule-tag-high").Return(nil).Once()
+	mockRepo.On("IncrementMatchCount", ctx, "rule-cat-low").Return(nil).Once()
+
+	// Expect analytics with rule_id = "rule-cat-low" (CategoryRuleID), NOT "rule-tag-high" (MatchedRuleIDs[0]).
+	mockAn.On("Capture", userID, phclient.EventAutoCategorizationExecuted, mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["rule_id"] == "rule-cat-low"
+	})).Return()
+
+	merchant := "Blue Bottle Coffee"
+	err := service.ApplyRulesToTransaction(ctx, &domain.Transaction{ID: "tx-single", UserID: userID, MerchantName: &merchant})
+	require.NoError(t, err)
 
 	mockAn.AssertNumberOfCalls(t, "Capture", 1)
 	mockAn.AssertExpectations(t)
