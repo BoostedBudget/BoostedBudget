@@ -42,12 +42,14 @@ import type {
 
 import type {
   AverageMonthlySpendResponse,
+  BudgetVsActualResponse,
   CashFlowHistoryResponse,
   CashFlowSummaryResponse,
   CategoryBreakdownForMerchantResponse,
   CategoryTotalResponse,
   ErrorModel,
   GetAverageMonthlySpendParams,
+  GetBudgetVsActualParams,
   GetCashFlowHistoryParams,
   GetCashFlowSummaryParams,
   GetCategoryBreakdownForMerchantParams,
@@ -55,20 +57,24 @@ import type {
   GetIncomeSourceBreakdownParams,
   GetLargestTransactionsForPeriodParams,
   GetMonthOverMonthSpendingChangeParams,
+  GetNetWorthTrendParams,
   GetSavingsRateForPeriodParams,
   GetSpendingByCategoryParams,
   GetSpendingByMerchantParams,
   GetSpendingTrendsParams,
   GetTopExpenseParams,
+  GetUnusualSpendParams,
   IncomeSourceBreakdownResponse,
   LargestTransactionsResponse,
   MonthOverMonthResponse,
+  NetWorthTrendResponse,
   RecurringSubscriptionsResponse,
   SavingsRateResponse,
   SpendingByCategoryResponse,
   SpendingByMerchantResponse,
   SpendingTrendsResponse,
   TopExpenseResponse,
+  UnusualSpendResponse,
 } from "../../models";
 
 import { customInstance } from "../../client";
@@ -239,6 +245,178 @@ export function useGetAverageMonthlySpend<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getGetAverageMonthlySpendQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Returns active budgets for the given period with allocated vs spent amounts, remaining balance, over-budget flag, and utilisation percentage. period selects by configured budget period (weekly/monthly/quarterly/yearly/custom). AI-tool-callable.
+ * @summary Get budget vs actual
+ */
+export const getBudgetVsActual = (
+  params: GetBudgetVsActualParams,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<BudgetVsActualResponse>(
+    {
+      url: `/api/v1/analytics/budget-vs-actual`,
+      method: "GET",
+      params,
+      signal,
+    },
+    options,
+  );
+};
+
+export const getGetBudgetVsActualQueryKey = (
+  params?: GetBudgetVsActualParams,
+) => {
+  return [
+    `/api/v1/analytics/budget-vs-actual`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetBudgetVsActualQueryOptions = <
+  TData = Awaited<ReturnType<typeof getBudgetVsActual>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetBudgetVsActualParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getBudgetVsActual>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetBudgetVsActualQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getBudgetVsActual>>
+  > = ({ signal }) => getBudgetVsActual(params, requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getBudgetVsActual>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetBudgetVsActualQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getBudgetVsActual>>
+>;
+export type GetBudgetVsActualQueryError = ErrorType<ErrorModel>;
+
+export function useGetBudgetVsActual<
+  TData = Awaited<ReturnType<typeof getBudgetVsActual>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetBudgetVsActualParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getBudgetVsActual>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getBudgetVsActual>>,
+          TError,
+          Awaited<ReturnType<typeof getBudgetVsActual>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetBudgetVsActual<
+  TData = Awaited<ReturnType<typeof getBudgetVsActual>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetBudgetVsActualParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getBudgetVsActual>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getBudgetVsActual>>,
+          TError,
+          Awaited<ReturnType<typeof getBudgetVsActual>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetBudgetVsActual<
+  TData = Awaited<ReturnType<typeof getBudgetVsActual>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetBudgetVsActualParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getBudgetVsActual>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get budget vs actual
+ */
+
+export function useGetBudgetVsActual<
+  TData = Awaited<ReturnType<typeof getBudgetVsActual>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetBudgetVsActualParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getBudgetVsActual>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetBudgetVsActualQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,
@@ -1461,6 +1639,173 @@ export function useGetMonthOverMonthSpendingChange<
 }
 
 /**
+ * Returns net worth bucketed by grouping (daily/weekly/monthly) over the trailing 12 months. Uses balance snapshot history. AI-tool-callable.
+ * @summary Get net worth trend
+ */
+export const getNetWorthTrend = (
+  params?: GetNetWorthTrendParams,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<NetWorthTrendResponse>(
+    { url: `/api/v1/analytics/net-worth-trend`, method: "GET", params, signal },
+    options,
+  );
+};
+
+export const getGetNetWorthTrendQueryKey = (
+  params?: GetNetWorthTrendParams,
+) => {
+  return [
+    `/api/v1/analytics/net-worth-trend`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetNetWorthTrendQueryOptions = <
+  TData = Awaited<ReturnType<typeof getNetWorthTrend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetNetWorthTrendParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getNetWorthTrend>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetNetWorthTrendQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getNetWorthTrend>>
+  > = ({ signal }) => getNetWorthTrend(params, requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getNetWorthTrend>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetNetWorthTrendQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getNetWorthTrend>>
+>;
+export type GetNetWorthTrendQueryError = ErrorType<ErrorModel>;
+
+export function useGetNetWorthTrend<
+  TData = Awaited<ReturnType<typeof getNetWorthTrend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: undefined | GetNetWorthTrendParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getNetWorthTrend>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getNetWorthTrend>>,
+          TError,
+          Awaited<ReturnType<typeof getNetWorthTrend>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetNetWorthTrend<
+  TData = Awaited<ReturnType<typeof getNetWorthTrend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetNetWorthTrendParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getNetWorthTrend>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getNetWorthTrend>>,
+          TError,
+          Awaited<ReturnType<typeof getNetWorthTrend>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetNetWorthTrend<
+  TData = Awaited<ReturnType<typeof getNetWorthTrend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetNetWorthTrendParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getNetWorthTrend>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get net worth trend
+ */
+
+export function useGetNetWorthTrend<
+  TData = Awaited<ReturnType<typeof getNetWorthTrend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params?: GetNetWorthTrendParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getNetWorthTrend>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetNetWorthTrendQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
  * Detects recurring subscription charges using heuristic analysis of the trailing 12-month transaction history. Returns merchants with monthly-cadence charges (≥3 occurrences, ~30-day gap). Designed as an AI-tool-callable function.
  * @summary Get recurring subscriptions
  */
@@ -2427,6 +2772,170 @@ export function useGetTopExpense<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getGetTopExpenseQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Returns transactions in the query window that exceed 2 standard deviations above the per-category baseline mean (3-month window before startDate). AI-tool-callable.
+ * @summary Get unusual spend
+ */
+export const getUnusualSpend = (
+  params: GetUnusualSpendParams,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<UnusualSpendResponse>(
+    { url: `/api/v1/analytics/unusual-spend`, method: "GET", params, signal },
+    options,
+  );
+};
+
+export const getGetUnusualSpendQueryKey = (params?: GetUnusualSpendParams) => {
+  return [
+    `/api/v1/analytics/unusual-spend`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetUnusualSpendQueryOptions = <
+  TData = Awaited<ReturnType<typeof getUnusualSpend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetUnusualSpendParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getUnusualSpend>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetUnusualSpendQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getUnusualSpend>>> = ({
+    signal,
+  }) => getUnusualSpend(params, requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getUnusualSpend>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetUnusualSpendQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getUnusualSpend>>
+>;
+export type GetUnusualSpendQueryError = ErrorType<ErrorModel>;
+
+export function useGetUnusualSpend<
+  TData = Awaited<ReturnType<typeof getUnusualSpend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetUnusualSpendParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getUnusualSpend>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getUnusualSpend>>,
+          TError,
+          Awaited<ReturnType<typeof getUnusualSpend>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetUnusualSpend<
+  TData = Awaited<ReturnType<typeof getUnusualSpend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetUnusualSpendParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getUnusualSpend>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getUnusualSpend>>,
+          TError,
+          Awaited<ReturnType<typeof getUnusualSpend>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetUnusualSpend<
+  TData = Awaited<ReturnType<typeof getUnusualSpend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetUnusualSpendParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getUnusualSpend>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get unusual spend
+ */
+
+export function useGetUnusualSpend<
+  TData = Awaited<ReturnType<typeof getUnusualSpend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetUnusualSpendParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getUnusualSpend>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetUnusualSpendQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

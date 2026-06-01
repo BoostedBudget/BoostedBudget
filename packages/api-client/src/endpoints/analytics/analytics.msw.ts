@@ -34,6 +34,7 @@ import type { RequestHandlerOptions } from "msw";
 
 import type {
   AverageMonthlySpendResponse,
+  BudgetVsActualResponse,
   CashFlowHistoryResponse,
   CashFlowSummaryResponse,
   CategoryBreakdownForMerchantResponse,
@@ -41,12 +42,14 @@ import type {
   IncomeSourceBreakdownResponse,
   LargestTransactionsResponse,
   MonthOverMonthResponse,
+  NetWorthTrendResponse,
   RecurringSubscriptionsResponse,
   SavingsRateResponse,
   SpendingByCategoryResponse,
   SpendingByMerchantResponse,
   SpendingTrendsResponse,
   TopExpenseResponse,
+  UnusualSpendResponse,
 } from "../../models";
 
 export const getGetAverageMonthlySpendResponseMock = (
@@ -58,6 +61,33 @@ export const getGetAverageMonthlySpendResponseMock = (
   month_count: faker.number.int(),
   start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
   total_spend: faker.number.float({ fractionDigits: 2 }),
+  ...overrideResponse,
+});
+
+export const getGetBudgetVsActualResponseMock = (
+  overrideResponse: Partial<Extract<BudgetVsActualResponse, object>> = {},
+): BudgetVsActualResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  budgets: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      allocated_amount: faker.number.float({ fractionDigits: 2 }),
+      budget_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      budget_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      over_budget: faker.datatype.boolean(),
+      pct_used: faker.number.float({ fractionDigits: 2 }),
+      period: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      remaining: faker.number.float({ fractionDigits: 2 }),
+      spent_amount: faker.number.float({ fractionDigits: 2 }),
+    })),
+    null,
+  ]),
+  period: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  total_allocated: faker.number.float({ fractionDigits: 2 }),
+  total_remaining: faker.number.float({ fractionDigits: 2 }),
+  total_spent: faker.number.float({ fractionDigits: 2 }),
   ...overrideResponse,
 });
 
@@ -235,6 +265,40 @@ export const getGetMonthOverMonthSpendingChangeResponseMock = (
   ...overrideResponse,
 });
 
+export const getGetNetWorthTrendResponseMock = (
+  overrideResponse: Partial<Extract<NetWorthTrendResponse, object>> = {},
+): NetWorthTrendResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  buckets: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      change_abs: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          null,
+        ]),
+        null,
+      ]),
+      change_pct: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          null,
+        ]),
+        null,
+      ]),
+      date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      net_worth: faker.number.float({ fractionDigits: 2 }),
+    })),
+    null,
+  ]),
+  end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  grouping: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
 export const getGetRecurringSubscriptionsResponseMock = (
   overrideResponse: Partial<
     Extract<RecurringSubscriptionsResponse, object>
@@ -382,6 +446,32 @@ export const getGetTopExpenseResponseMock = (
   ...overrideResponse,
 });
 
+export const getGetUnusualSpendResponseMock = (
+  overrideResponse: Partial<Extract<UnusualSpendResponse, object>> = {},
+): UnusualSpendResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  items: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      amount: faker.number.float({ fractionDigits: 2 }),
+      baseline_avg: faker.number.float({ fractionDigits: 2 }),
+      category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      merchant_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      pfc_primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      sigma_above: faker.number.float({ fractionDigits: 2 }),
+      transaction_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    })),
+    null,
+  ]),
+  sigma_threshold: faker.number.float({ fractionDigits: 2 }),
+  start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
 export const getGetAverageMonthlySpendMockHandler = (
   overrideResponse?:
     | AverageMonthlySpendResponse
@@ -401,6 +491,32 @@ export const getGetAverageMonthlySpendMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getGetAverageMonthlySpendResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetBudgetVsActualMockHandler = (
+  overrideResponse?:
+    | BudgetVsActualResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<BudgetVsActualResponse> | BudgetVsActualResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/budget-vs-actual",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetBudgetVsActualResponseMock(),
         { status: 200 },
       );
     },
@@ -594,6 +710,32 @@ export const getGetMonthOverMonthSpendingChangeMockHandler = (
   );
 };
 
+export const getGetNetWorthTrendMockHandler = (
+  overrideResponse?:
+    | NetWorthTrendResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<NetWorthTrendResponse> | NetWorthTrendResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/net-worth-trend",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetNetWorthTrendResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetRecurringSubscriptionsMockHandler = (
   overrideResponse?:
     | RecurringSubscriptionsResponse
@@ -751,8 +893,35 @@ export const getGetTopExpenseMockHandler = (
     options,
   );
 };
+
+export const getGetUnusualSpendMockHandler = (
+  overrideResponse?:
+    | UnusualSpendResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<UnusualSpendResponse> | UnusualSpendResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/unusual-spend",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetUnusualSpendResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 export const getAnalyticsMock = () => [
   getGetAverageMonthlySpendMockHandler(),
+  getGetBudgetVsActualMockHandler(),
   getGetCashFlowHistoryMockHandler(),
   getGetCashFlowSummaryMockHandler(),
   getGetCategoryTotalForPeriodMockHandler(),
@@ -760,10 +929,12 @@ export const getAnalyticsMock = () => [
   getGetLargestTransactionsForPeriodMockHandler(),
   getGetCategoryBreakdownForMerchantMockHandler(),
   getGetMonthOverMonthSpendingChangeMockHandler(),
+  getGetNetWorthTrendMockHandler(),
   getGetRecurringSubscriptionsMockHandler(),
   getGetSavingsRateForPeriodMockHandler(),
   getGetSpendingByCategoryMockHandler(),
   getGetSpendingByMerchantMockHandler(),
   getGetSpendingTrendsMockHandler(),
   getGetTopExpenseMockHandler(),
+  getGetUnusualSpendMockHandler(),
 ];
