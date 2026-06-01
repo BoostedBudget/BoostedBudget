@@ -33,20 +33,20 @@ type TransferSuggestionService interface {
 // transferSuggestionService implements TransferSuggestionService.
 type transferSuggestionService struct {
 	suggestionRepo TransferSuggestionRepository
-	analytics      phclient.Analytics
+	gdprAnalytics  phclient.GDPRAnalytics
 }
 
 // NewTransferSuggestionService creates a new TransferSuggestionService.
-// Returns the concrete type so callers can invoke optional setter methods (SetAnalytics).
+// Returns the concrete type so callers can invoke optional setter methods (SetGDPRAnalytics).
 func NewTransferSuggestionService(suggestionRepo TransferSuggestionRepository) *transferSuggestionService {
 	return &transferSuggestionService{
 		suggestionRepo: suggestionRepo,
 	}
 }
 
-// SetAnalytics sets the analytics client for event capture.
-func (s *transferSuggestionService) SetAnalytics(a phclient.Analytics) {
-	s.analytics = a
+// SetGDPRAnalytics sets the GDPR-consent-gated analytics client for user-behavior event capture.
+func (s *transferSuggestionService) SetGDPRAnalytics(a phclient.GDPRAnalytics) {
+	s.gdprAnalytics = a
 }
 
 // AcceptSuggestion accepts a pending transfer suggestion.
@@ -83,9 +83,9 @@ func (s *transferSuggestionService) AcceptSuggestion(
 		suggestion.UserNotes = notes
 	}
 
-	// 6. Fire analytics event
-	if s.analytics != nil {
-		s.analytics.Capture(userID, phclient.TransferSuggestionAccepted, map[string]interface{}{
+	// 6. Fire analytics event (GDPR consent-gated: user-initiated action)
+	if s.gdprAnalytics != nil {
+		s.gdprAnalytics.CaptureIfConsented(ctx, userID, phclient.TransferSuggestionAccepted, map[string]interface{}{
 			"amount":        suggestion.Amount,
 			"currency_code": suggestion.CurrencyCode,
 			"source":        string(suggestion.Source),
@@ -130,9 +130,9 @@ func (s *transferSuggestionService) RejectSuggestion(
 		suggestion.UserNotes = notes
 	}
 
-	// 6. Fire analytics event
-	if s.analytics != nil {
-		s.analytics.Capture(userID, phclient.TransferSuggestionRejected, map[string]interface{}{
+	// 6. Fire analytics event (GDPR consent-gated: user-initiated action)
+	if s.gdprAnalytics != nil {
+		s.gdprAnalytics.CaptureIfConsented(ctx, userID, phclient.TransferSuggestionRejected, map[string]interface{}{
 			"amount":        suggestion.Amount,
 			"currency_code": suggestion.CurrencyCode,
 			"source":        string(suggestion.Source),
