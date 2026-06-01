@@ -1109,6 +1109,61 @@ components:
         - created_at
         - updated_at
       type: object
+    CategoryBreakdownForMerchantResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CategoryBreakdownForMerchantResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        categories:
+          items:
+            $ref: "#/components/schemas/CategoryBreakdownItem"
+          type:
+            - array
+            - "null"
+        end_date:
+          type: string
+        merchant_name:
+          type: string
+        start_date:
+          type: string
+        total_spend:
+          format: double
+          type: number
+      required:
+        - merchant_name
+        - categories
+        - total_spend
+        - start_date
+        - end_date
+      type: object
+    CategoryBreakdownItem:
+      additionalProperties: false
+      properties:
+        category:
+          type: string
+        percentage:
+          format: double
+          type: number
+        pfc_primary_display:
+          type: string
+        total:
+          format: double
+          type: number
+        transaction_count:
+          format: int64
+          type: integer
+      required:
+        - category
+        - pfc_primary_display
+        - total
+        - percentage
+        - transaction_count
+      type: object
     CategoryPreviewRequest:
       additionalProperties: false
       properties:
@@ -2389,6 +2444,114 @@ components:
         - type
         - value
       type: object
+    IncomeSourceBreakdownResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/IncomeSourceBreakdownResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        end_date:
+          type: string
+        sources:
+          items:
+            $ref: "#/components/schemas/IncomeSourceItem"
+          type:
+            - array
+            - "null"
+        start_date:
+          type: string
+        total_income:
+          format: double
+          type: number
+      required:
+        - sources
+        - total_income
+        - start_date
+        - end_date
+      type: object
+    IncomeSourceItem:
+      additionalProperties: false
+      properties:
+        category:
+          type: string
+        percentage:
+          format: double
+          type: number
+        pfc_primary_display:
+          type: string
+        total:
+          format: double
+          type: number
+        transaction_count:
+          format: int64
+          type: integer
+      required:
+        - category
+        - pfc_primary_display
+        - total
+        - percentage
+        - transaction_count
+      type: object
+    LargestTransactionItem:
+      additionalProperties: false
+      properties:
+        account_id:
+          type: string
+        amount:
+          format: double
+          type: number
+        category:
+          type: string
+        date:
+          type: string
+        merchant_name:
+          type: string
+        pfc_primary_display:
+          type: string
+        transaction_id:
+          type: string
+      required:
+        - transaction_id
+        - merchant_name
+        - amount
+        - category
+        - pfc_primary_display
+        - date
+        - account_id
+      type: object
+    LargestTransactionsResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/LargestTransactionsResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        end_date:
+          type: string
+        limit:
+          format: int64
+          type: integer
+        start_date:
+          type: string
+        transactions:
+          items:
+            $ref: "#/components/schemas/LargestTransactionItem"
+          type:
+            - array
+            - "null"
+      required:
+        - transactions
+        - limit
+        - start_date
+        - end_date
+      type: object
     LinkTokenResponse:
       additionalProperties: false
       properties:
@@ -2530,6 +2693,56 @@ components:
           type: string
       required:
         - message
+      type: object
+    MonthOverMonthBucket:
+      additionalProperties: false
+      properties:
+        change_abs:
+          format: double
+          type:
+            - number
+            - "null"
+        change_pct:
+          format: double
+          type:
+            - number
+            - "null"
+        month:
+          type: string
+        total:
+          format: double
+          type: number
+      required:
+        - month
+        - total
+        - change_pct
+        - change_abs
+      type: object
+    MonthOverMonthResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/MonthOverMonthResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        buckets:
+          items:
+            $ref: "#/components/schemas/MonthOverMonthBucket"
+          type:
+            - array
+            - "null"
+        category:
+          type: string
+        month_count:
+          format: int64
+          type: integer
+      required:
+        - buckets
+        - category
+        - month_count
       type: object
     NetWorthCategoryBalance:
       additionalProperties: false
@@ -3551,6 +3764,42 @@ components:
         - is_completed
         - created_at
         - updated_at
+      type: object
+    SavingsRateResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SavingsRateResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        end_date:
+          type: string
+        expenses:
+          format: double
+          type: number
+        income:
+          format: double
+          type: number
+        net_savings:
+          format: double
+          type: number
+        savings_rate:
+          format: double
+          type:
+            - number
+            - "null"
+        start_date:
+          type: string
+      required:
+        - savings_rate
+        - income
+        - expenses
+        - net_savings
+        - start_date
+        - end_date
       type: object
     ServiceCheck:
       additionalProperties: false
@@ -6380,6 +6629,221 @@ paths:
       summary: Get total spend for a category
       tags:
         - Analytics
+  /api/v1/analytics/income-sources:
+    get:
+      description: Returns income (inflow) totals grouped by category with percentages. AI-tool-callable.
+      operationId: getIncomeSourceBreakdown
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: Comma-separated account types to filter
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter
+            type: string
+        - description: Include transfer transactions (true/false, default false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfer transactions (true/false, default false)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncomeSourceBreakdownResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get income source breakdown
+      tags:
+        - Analytics
+  /api/v1/analytics/largest-transactions:
+    get:
+      description: Returns the N largest expense transactions in a date range, ordered by amount descending. AI-tool-callable.
+      operationId: getLargestTransactionsForPeriod
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: Comma-separated account types to filter
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter
+            type: string
+        - description: Include transfer transactions (true/false, default false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfer transactions (true/false, default false)
+            type: string
+        - description: Maximum number of transactions to return (1-100, default 10)
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 10
+            description: Maximum number of transactions to return (1-100, default 10)
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LargestTransactionsResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get largest transactions for period
+      tags:
+        - Analytics
+  /api/v1/analytics/merchant-category-breakdown:
+    get:
+      description: Returns spending totals grouped by category for a specific merchant, with percentages. AI-tool-callable.
+      operationId: getCategoryBreakdownForMerchant
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: Merchant name to filter by
+          explode: false
+          in: query
+          name: merchant_name
+          required: true
+          schema:
+            description: Merchant name to filter by
+            type: string
+        - description: Comma-separated account types to filter
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter
+            type: string
+        - description: Include transfer transactions (true/false, default false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfer transactions (true/false, default false)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoryBreakdownForMerchantResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get category breakdown for merchant
+      tags:
+        - Analytics
+  /api/v1/analytics/month-over-month:
+    get:
+      description: Returns monthly spend buckets with period-over-period percentage and absolute changes. months param controls lookback (2-24). AI-tool-callable.
+      operationId: getMonthOverMonthSpendingChange
+      parameters:
+        - description: Optional category to filter by
+          explode: false
+          in: query
+          name: category
+          schema:
+            description: Optional category to filter by
+            type: string
+        - description: Number of months to look back (2-24, default 6)
+          explode: false
+          in: query
+          name: months
+          schema:
+            default: 6
+            description: Number of months to look back (2-24, default 6)
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonthOverMonthResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get month-over-month spending change
+      tags:
+        - Analytics
   /api/v1/analytics/recurring-subscriptions:
     get:
       description: Detects recurring subscription charges using heuristic analysis of the trailing 12-month transaction history. Returns merchants with monthly-cadence charges (≥3 occurrences, ~30-day gap). Designed as an AI-tool-callable function.
@@ -6400,6 +6864,45 @@ paths:
       security:
         - clerk: []
       summary: Get recurring subscriptions
+      tags:
+        - Analytics
+  /api/v1/analytics/savings-rate:
+    get:
+      description: Returns savings rate (income - expenses) / income for a date range. Null savings_rate when income is zero. AI-tool-callable.
+      operationId: getSavingsRateForPeriod
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavingsRateResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get savings rate for period
       tags:
         - Analytics
   /api/v1/analytics/spending-by-category:
