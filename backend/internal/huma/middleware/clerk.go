@@ -4,7 +4,9 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -99,6 +101,18 @@ type oauthCacheEntry struct {
 	expiry time.Time
 }
 
+// oauthCacheMaxEntries bounds the verifier cache so it cannot grow without limit
+// (e.g. under token spraying). When exceeded, expired entries are pruned and, if
+// still over the cap, the cache is reset — it is only a latency optimization.
+const oauthCacheMaxEntries = 10000
+
+// tokenCacheKey returns a non-reversible key so raw bearer tokens are never
+// retained in memory as map keys.
+func tokenCacheKey(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
 // NewClerkOAuthVerifier builds the production verifier using the Clerk secret key.
 func NewClerkOAuthVerifier(secretKey string) *clerkOAuthVerifier {
 	return &clerkOAuthVerifier{
@@ -116,8 +130,9 @@ func (v *clerkOAuthVerifier) VerifyAccessToken(ctx context.Context, token string
 	}
 
 	now := time.Now()
+	key := tokenCacheKey(token)
 	v.mu.Lock()
-	if e, ok := v.cache[token]; ok && now.Before(e.expiry) {
+	if e, ok := v.cache[key]; ok && now.Before(e.expiry) {
 		v.mu.Unlock()
 		return e.userID, nil
 	}
@@ -160,7 +175,17 @@ func (v *clerkOAuthVerifier) VerifyAccessToken(ctx context.Context, token string
 	}
 
 	v.mu.Lock()
-	v.cache[token] = oauthCacheEntry{userID: userID, expiry: now.Add(v.ttl)}
+	if len(v.cache) >= oauthCacheMaxEntries {
+		for k, e := range v.cache {
+			if !now.Before(e.expiry) {
+				delete(v.cache, k)
+			}
+		}
+		if len(v.cache) >= oauthCacheMaxEntries {
+			v.cache = make(map[string]oauthCacheEntry)
+		}
+	}
+	v.cache[key] = oauthCacheEntry{userID: userID, expiry: now.Add(v.ttl)}
 	v.mu.Unlock()
 
 	return userID, nil
