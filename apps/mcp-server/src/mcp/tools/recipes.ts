@@ -21,6 +21,47 @@ export interface RecipeCall {
   pathParams?: Record<string, string>
 }
 
+export interface RecipeTemplate {
+  name: string
+  description: string
+  calls: RecipeCall[]
+}
+
+/**
+ * Starter recipe templates for common financial workflows.
+ * These are non-runnable templates — the agent fills in {{MONTH_START}} /
+ * {{MONTH_END}} with actual dates (e.g. 2025-01-01 / 2025-01-31) before
+ * passing to recipe.save(), then recipe.run() to execute.
+ */
+export const STARTER_RECIPE_TEMPLATES: RecipeTemplate[] = [
+  {
+    name: 'Monthly Financial Review',
+    description: 'A complete monthly financial health check: overall summary, largest expenses, and unusual spending.',
+    calls: [
+      { operationId: 'getFinancialSummary', params: { start_date: '{{MONTH_START}}', end_date: '{{MONTH_END}}' } },
+      { operationId: 'getLargestTransactionsForPeriod', params: { start_date: '{{MONTH_START}}', end_date: '{{MONTH_END}}', limit: 10 } },
+      { operationId: 'getUnusualSpend', params: { start_date: '{{MONTH_START}}', end_date: '{{MONTH_END}}' } },
+    ],
+  },
+  {
+    name: 'Spending Deep-Dive',
+    description: 'Detailed spending analysis: category breakdown, month-over-month trends, and top merchant categories.',
+    calls: [
+      { operationId: 'getSpendingByCategory', params: { start_date: '{{MONTH_START}}', end_date: '{{MONTH_END}}' } },
+      { operationId: 'getMonthOverMonthSpendingChange', params: { months: 6 } },
+      { operationId: 'getLargestTransactionsForPeriod', params: { start_date: '{{MONTH_START}}', end_date: '{{MONTH_END}}', limit: 5 } },
+    ],
+  },
+  {
+    name: 'Subscription Audit',
+    description: 'Review all detected recurring subscriptions and your largest recent charges.',
+    calls: [
+      { operationId: 'getRecurringSubscriptions' },
+      { operationId: 'getLargestTransactionsForPeriod', params: { start_date: '{{MONTH_START}}', end_date: '{{MONTH_END}}', limit: 10 } },
+    ],
+  },
+]
+
 export interface SaveRecipeInput {
   name: string
   description?: string
@@ -48,6 +89,7 @@ interface RecipeTools {
   list(input: Record<string, never>): Promise<McpToolResult>
   save(input: SaveRecipeInput): Promise<SaveRecipeResult>
   run(input: RunRecipeInput): Promise<McpToolResult>
+  templates(): McpToolResult
 }
 
 /**
@@ -134,6 +176,19 @@ export function buildRecipeTools(proxy: HostProxy): RecipeTools {
       } catch (err) {
         const msg = err instanceof HostProxyError ? err.message : 'Failed to run recipe'
         return { content: [{ type: 'text', text: `Error: ${msg}` }] }
+      }
+    },
+
+    templates(): McpToolResult {
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            templates: STARTER_RECIPE_TEMPLATES,
+            note: 'These are non-runnable templates. Replace {{MONTH_START}}/{{MONTH_END}} with actual dates (e.g. 2025-01-01 / 2025-01-31), then use recipe.save() to instantiate as a saved recipe. Use recipe.run() to execute it.',
+          }, null, 2),
+        }],
+        isError: false,
       }
     },
   }

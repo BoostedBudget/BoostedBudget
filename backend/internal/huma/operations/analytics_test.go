@@ -1069,6 +1069,7 @@ func TestSpendingRouteRegistration(t *testing.T) {
 		"/api/v1/analytics/unusual-spend",
 		"/api/v1/analytics/net-worth-trend",
 		"/api/v1/analytics/budget-vs-actual",
+		"/api/v1/analytics/financial-summary",
 	}
 	for _, path := range paths {
 		resp := api.Get(path)
@@ -1272,4 +1273,138 @@ func TestGetBudgetVsActual_RouteRegistration(t *testing.T) {
 	assert.Contains(t, string(b), `"total_spent"`)
 	assert.Contains(t, string(b), `"total_remaining"`)
 	assert.Contains(t, string(b), `"period"`)
+}
+
+// ─── PR4: GetFinancialSummary handler tests ───────────────────────────────────
+
+// TestGetFinancialSummary_AllSubMetricsSucceed verifies the composite endpoint
+// populates all sub-metrics when every service call succeeds.
+func TestGetFinancialSummary_AllSubMetricsSucceed(t *testing.T) {
+	rate := 0.4
+	mockService := &mockAnalyticsService{
+		savingsRateResponse: &domain.SavingsRateResponse{
+			SavingsRate: &rate,
+			Income:      5000.0,
+			Expenses:    3000.0,
+			NetSavings:  2000.0,
+			StartDate:   "2024-01-01",
+			EndDate:     "2024-01-31",
+		},
+		averageMonthlySpendResponse: &domain.AverageMonthlySpendResponse{
+			AverageMonthlySpend: 3000.0,
+			TotalSpend:          3000.0,
+			MonthCount:          1,
+			StartDate:           "2024-01-01",
+			EndDate:             "2024-01-31",
+		},
+		spendingByCategoryResponse: &domain.SpendingByCategoryResponse{
+			StartDate:  "2024-01-01",
+			EndDate:    "2024-01-31",
+			TotalSpent: 3000.0,
+			Categories: []domain.SpendingByCategory{
+				{Category: "FOOD_AND_DRINK", Total: 500.0, Percentage: 16.7, TransactionCount: 10},
+			},
+		},
+		monthOverMonthResponse: &domain.MonthOverMonthResponse{
+			Buckets:    []domain.MonthOverMonthBucket{{Month: "2024-01-01", Total: 3000.0}},
+			Category:   "",
+			MonthCount: 6,
+		},
+		budgetVsActualResponse: &domain.BudgetVsActualResponse{
+			Budgets:        []domain.BudgetVsActualItem{},
+			TotalAllocated: 500.0,
+			TotalSpent:     350.0,
+			TotalRemaining: 150.0,
+			Period:         "monthly",
+		},
+		netWorthTrendResponse: &domain.NetWorthTrendResponse{
+			Buckets:   []domain.NetWorthBucket{{Date: "2024-01-01", NetWorth: 50000.0}},
+			Grouping:  "monthly",
+			StartDate: "2023-02-01",
+			EndDate:   "2024-01-31",
+		},
+	}
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetFinancialSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+	}
+
+	output, err := handler.GetFinancialSummary(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.Body)
+	assert.NotEmpty(t, output.Body.GeneratedAt)
+	assert.NotNil(t, output.Body.SavingsRate)
+	assert.NotNil(t, output.Body.AverageSpend)
+	assert.NotNil(t, output.Body.TopCategories)
+	assert.NotNil(t, output.Body.MomChange)
+	assert.NotNil(t, output.Body.BudgetVsActual)
+	assert.NotNil(t, output.Body.NetWorthTrend)
+}
+
+// TestGetFinancialSummary_OneSubMetricFails verifies that when one sub-metric
+// returns an error, the response is still 200 with that section nil.
+func TestGetFinancialSummary_OneSubMetricFails(t *testing.T) {
+	rate := 0.4
+	mockService := &mockAnalyticsService{
+		savingsRateResponse: &domain.SavingsRateResponse{
+			SavingsRate: &rate,
+			Income:      5000.0,
+			Expenses:    3000.0,
+		},
+		averageMonthlySpendResponse: &domain.AverageMonthlySpendResponse{
+			AverageMonthlySpend: 3000.0,
+		},
+		// spendingByCategory fails — top_categories should be nil
+		spendingByCategoryErr: errors.New("db timeout"),
+		monthOverMonthResponse: &domain.MonthOverMonthResponse{
+			Buckets:    []domain.MonthOverMonthBucket{},
+			MonthCount: 6,
+		},
+		budgetVsActualResponse: &domain.BudgetVsActualResponse{
+			Period: "monthly",
+		},
+		netWorthTrendResponse: &domain.NetWorthTrendResponse{
+			Grouping: "monthly",
+		},
+	}
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetFinancialSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+	}
+
+	output, err := handler.GetFinancialSummary(context.Background(), input)
+
+	// 200 overall even though one sub-metric failed
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.Body)
+	assert.Nil(t, output.Body.TopCategories, "failed sub-metric should be nil")
+	assert.NotNil(t, output.Body.SavingsRate, "other sub-metrics should still be populated")
+	assert.NotNil(t, output.Body.AverageSpend)
+}
+
+// TestGetFinancialSummary_InvalidDateRange verifies that date validation errors
+// propagate as 400 (non-degradable pre-work).
+func TestGetFinancialSummary_InvalidDateRange(t *testing.T) {
+	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+
+	input := &GetFinancialSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-31",
+		EndDate:            "2024-01-01", // end before start
+	}
+
+	output, err := handler.GetFinancialSummary(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "end_date cannot be before start_date")
 }

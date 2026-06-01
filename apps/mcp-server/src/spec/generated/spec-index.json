@@ -343,6 +343,17 @@
       "excluded": false
     },
     {
+      "operationId": "getFinancialSummary",
+      "method": "GET",
+      "path": "/api/v1/analytics/financial-summary",
+      "summary": "Get financial summary",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
       "operationId": "getIncomeSourceBreakdown",
       "method": "GET",
       "path": "/api/v1/analytics/income-sources",

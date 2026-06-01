@@ -2192,6 +2192,33 @@ components:
         - item_id
         - accounts_linked
       type: object
+    FinancialSummaryResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/FinancialSummaryResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        average_monthly_spend:
+          $ref: "#/components/schemas/AverageMonthlySpendResponse"
+        budget_vs_actual:
+          $ref: "#/components/schemas/BudgetVsActualResponse"
+        generated_at:
+          type: string
+        mom_spending_change:
+          $ref: "#/components/schemas/MonthOverMonthResponse"
+        net_worth_trend:
+          $ref: "#/components/schemas/NetWorthTrendResponse"
+        savings_rate:
+          $ref: "#/components/schemas/SavingsRateResponse"
+        top_categories:
+          $ref: "#/components/schemas/SpendingByCategoryResponse"
+      required:
+        - generated_at
+      type: object
     FireWebhookRequestBody:
       additionalProperties: false
       properties:
@@ -6838,6 +6865,59 @@ paths:
       security:
         - clerk: []
       summary: Get total spend for a category
+      tags:
+        - Analytics
+  /api/v1/analytics/financial-summary:
+    get:
+      description: "Returns a bundled financial summary with parallel fan-out across key analytics metrics. Sub-metrics are best-effort: individual failures are logged and the section is omitted from the response (200 with partial data). Designed as an AI-tool-callable single round-trip for common 'how am I doing financially?' questions."
+      operationId: getFinancialSummary
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: Comma-separated account types (optional)
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types (optional)
+            type: string
+        - description: Include transfers (true/false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfers (true/false)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinancialSummaryResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get financial summary
       tags:
         - Analytics
   /api/v1/analytics/income-sources:
