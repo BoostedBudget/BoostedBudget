@@ -15,7 +15,7 @@
  * They do NOT prove real grant revocation — only the staging spike does.
  */
 
-import { describe, expect, it, beforeEach, mock } from 'bun:test'
+import { describe, expect, it, beforeEach, afterEach, mock, setSystemTime } from 'bun:test'
 import { assertNotRevoked, markRevoked, clearRevocationCache, computeCacheKey } from './revocation'
 import { TokenVerificationError } from './clerk-verifier'
 
@@ -49,6 +49,11 @@ function serverErrorResponse(): Response {
 beforeEach(() => {
   clearRevocationCache()
   globalThis.fetch = asFetch(mock(() => Promise.resolve(activeResponse())))
+})
+
+afterEach(() => {
+  // Reset any setSystemTime() calls so clock manipulation doesn't bleed between tests.
+  setSystemTime()
 })
 
 // ─── computeCacheKey ──────────────────────────────────────────────────────────
@@ -200,6 +205,32 @@ describe('assertNotRevoked — caching', () => {
     await assertNotRevoked({ accessToken: otherToken }, TEST_ENV)
     // Different tokens → two separate Clerk calls
     expect(fetchSpy.mock.calls.length).toBe(2)
+  })
+
+  it('re-fetches after verified_active TTL expires (30s)', async () => {
+    const fetchSpy = mock(() => Promise.resolve(activeResponse()))
+    globalThis.fetch = asFetch(fetchSpy)
+    // First call → Clerk (cache miss)
+    await assertNotRevoked({ accessToken: TEST_TOKEN }, TEST_ENV)
+    expect(fetchSpy.mock.calls.length).toBe(1)
+    // Second call within TTL → cache hit (no re-fetch)
+    await assertNotRevoked({ accessToken: TEST_TOKEN }, TEST_ENV)
+    expect(fetchSpy.mock.calls.length).toBe(1)
+    // Advance time past CACHE_TTLS.verified_active (30 000ms)
+    setSystemTime(Date.now() + 31_000)
+    // Third call — TTL expired → re-fetches from Clerk
+    await assertNotRevoked({ accessToken: TEST_TOKEN }, TEST_ENV)
+    expect(fetchSpy.mock.calls.length).toBe(2)
+  })
+
+  // ⚠️ SPIKE-SENSITIVE: current behavior is fail-open on 4xx.
+  // If Step-0 staging spike shows Clerk returns 4xx for revoked grants,
+  // update introspectClerkToken's mapping to treat 4xx as 'revoked' (fail-closed).
+  it('currently fails open on Clerk 4xx (revisit mapping after Step-0 spike)', async () => {
+    globalThis.fetch = asFetch(
+      mock(() => Promise.resolve(new Response(JSON.stringify({ error: 'invalid_token' }), { status: 400 }))),
+    )
+    await expect(assertNotRevoked({ accessToken: TEST_TOKEN }, TEST_ENV)).resolves.toBeUndefined()
   })
 })
 

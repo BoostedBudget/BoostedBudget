@@ -25,7 +25,7 @@ export class McpApiHandler extends WorkerEntrypoint<Env> {
     // to detect revoked grants within ~30s. Fails open — Clerk outages do not block MCP.
     // ⚠️ PRE-MERGE: run the Step-0 staging spike first (see issue #1224 plan) to confirm
     //    that POST /oauth_applications/access_tokens/verify reflects JWT grant revocation.
-    const revocationBlock = await checkRevocationOrRespond(accessToken, this.env)
+    const revocationBlock = await checkRevocationOrRespond({ accessToken, clerkUserId }, this.env)
     if (revocationBlock) return revocationBlock
 
     // Build a clean set of headers — strip any inbound X-MCP-* headers then set
