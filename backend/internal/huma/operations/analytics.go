@@ -440,13 +440,19 @@ type GetMonthOverMonthSpendingChangeOutput struct {
 
 // GetMonthOverMonthSpendingChange handles GET /api/v1/analytics/month-over-month requests.
 func (h *AnalyticsHandler) GetMonthOverMonthSpendingChange(ctx context.Context, input *GetMonthOverMonthSpendingChangeInput) (*GetMonthOverMonthSpendingChangeOutput, error) {
-	months := validateLimit(input.Months, 6, 24)
-	if months < 2 {
+	months := input.Months
+	if months <= 0 {
+		months = 6 // default
+	}
+	if months < 2 || months > 24 {
 		return nil, huma.Error400BadRequest("months must be between 2 and 24")
 	}
 
 	accountTypes := parseAccountTypes(input.AccountTypes)
-	includeTransfers, _ := parseBoolString(input.IncludeTransfers)
+	includeTransfers, err := parseBoolString(input.IncludeTransfers)
+	if err != nil {
+		return nil, err
+	}
 
 	response, err := h.service.GetMonthOverMonthSpendingChange(ctx, input.UserID, input.Category, months, accountTypes, includeTransfers)
 	if err != nil {
