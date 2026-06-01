@@ -1057,8 +1057,10 @@ func TestAnalyticsService_GetRecurringSubscriptions(t *testing.T) {
 	nextExpected := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	t.Run("happy path: two subscriptions mapped to response items", func(t *testing.T) {
+		var capturedLookback time.Time
 		mockRepo := &mockAnalyticsRepository{
 			getRecurringSubscriptionsFn: func(ctx context.Context, userID string, lookbackStart time.Time) ([]domain.RecurringSubscriptionRow, error) {
+				capturedLookback = lookbackStart
 				return []domain.RecurringSubscriptionRow{
 					{
 						MerchantName:     "Netflix",
@@ -1113,6 +1115,13 @@ func TestAnalyticsService_GetRecurringSubscriptions(t *testing.T) {
 		}
 		if result.Subscriptions[1].MerchantName != "Spotify" {
 			t.Errorf("expected second merchant Spotify, got %q", result.Subscriptions[1].MerchantName)
+		}
+		// Verify the service passes a ~12-month lookback to the repository.
+		expectedLookback := time.Now().AddDate(-1, 0, 0)
+		if capturedLookback.IsZero() {
+			t.Error("expected lookbackStart to be passed to repository")
+		} else if diff := expectedLookback.Sub(capturedLookback); diff < -24*time.Hour || diff > 24*time.Hour {
+			t.Errorf("expected lookbackStart to be ~12 months ago, got %v (diff: %v)", capturedLookback, diff)
 		}
 	})
 
