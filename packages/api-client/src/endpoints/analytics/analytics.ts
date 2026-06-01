@@ -41,10 +41,12 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  AverageMonthlySpendResponse,
   CashFlowHistoryResponse,
   CashFlowSummaryResponse,
   CategoryTotalResponse,
   ErrorModel,
+  GetAverageMonthlySpendParams,
   GetCashFlowHistoryParams,
   GetCashFlowSummaryParams,
   GetCategoryTotalForPeriodParams,
@@ -62,6 +64,178 @@ import { customInstance } from "../../client";
 import type { ErrorType } from "../../client";
 
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
+
+/**
+ * Returns the average monthly expense total over a date range. Single DB round-trip; designed as an AI-tool-callable function.
+ * @summary Get average monthly spend
+ */
+export const getAverageMonthlySpend = (
+  params: GetAverageMonthlySpendParams,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<AverageMonthlySpendResponse>(
+    {
+      url: `/api/v1/analytics/average-monthly-spend`,
+      method: "GET",
+      params,
+      signal,
+    },
+    options,
+  );
+};
+
+export const getGetAverageMonthlySpendQueryKey = (
+  params?: GetAverageMonthlySpendParams,
+) => {
+  return [
+    `/api/v1/analytics/average-monthly-spend`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetAverageMonthlySpendQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAverageMonthlySpend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetAverageMonthlySpendParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAverageMonthlySpend>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAverageMonthlySpendQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAverageMonthlySpend>>
+  > = ({ signal }) => getAverageMonthlySpend(params, requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAverageMonthlySpend>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAverageMonthlySpendQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAverageMonthlySpend>>
+>;
+export type GetAverageMonthlySpendQueryError = ErrorType<ErrorModel>;
+
+export function useGetAverageMonthlySpend<
+  TData = Awaited<ReturnType<typeof getAverageMonthlySpend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetAverageMonthlySpendParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAverageMonthlySpend>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAverageMonthlySpend>>,
+          TError,
+          Awaited<ReturnType<typeof getAverageMonthlySpend>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAverageMonthlySpend<
+  TData = Awaited<ReturnType<typeof getAverageMonthlySpend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetAverageMonthlySpendParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAverageMonthlySpend>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAverageMonthlySpend>>,
+          TError,
+          Awaited<ReturnType<typeof getAverageMonthlySpend>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAverageMonthlySpend<
+  TData = Awaited<ReturnType<typeof getAverageMonthlySpend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetAverageMonthlySpendParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAverageMonthlySpend>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get average monthly spend
+ */
+
+export function useGetAverageMonthlySpend<
+  TData = Awaited<ReturnType<typeof getAverageMonthlySpend>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  params: GetAverageMonthlySpendParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAverageMonthlySpend>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAverageMonthlySpendQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * Returns time series cash flow data grouped by period for charts.

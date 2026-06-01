@@ -282,6 +282,40 @@ func (h *AnalyticsHandler) GetSpendingTrends(ctx context.Context, input *GetSpen
 	return &GetSpendingTrendsOutput{Body: response}, nil
 }
 
+// GetAverageMonthlySpendInput represents input for GET /analytics/average-monthly-spend.
+type GetAverageMonthlySpendInput struct {
+	inputs.AuthenticatedInput
+	StartDate    string   `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
+	EndDate      string   `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
+	AccountTypes []string `query:"account_types" doc:"Optional: filter by account types (e.g. depository, credit)"`
+}
+
+// GetAverageMonthlySpendOutput represents the response for GET /analytics/average-monthly-spend.
+type GetAverageMonthlySpendOutput struct {
+	Body *domain.AverageMonthlySpendResponse
+}
+
+// GetAverageMonthlySpend handles GET /api/v1/analytics/average-monthly-spend requests.
+func (h *AnalyticsHandler) GetAverageMonthlySpend(ctx context.Context, input *GetAverageMonthlySpendInput) (*GetAverageMonthlySpendOutput, error) {
+	startDate, endDate, err := dateutil.ParseDateRange(input.StartDate, input.EndDate)
+	if err != nil {
+		return nil, err
+	}
+
+	filters := domain.SpendingFilters{
+		StartDate:    startDate,
+		EndDate:      endDate,
+		AccountTypes: input.AccountTypes,
+	}
+
+	response, err := h.service.GetAverageMonthlySpend(ctx, input.UserID, filters)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return &GetAverageMonthlySpendOutput{Body: response}, nil
+}
+
 // GetCategoryTotalForPeriodInput represents input for GET /analytics/category-total.
 type GetCategoryTotalForPeriodInput struct {
 	inputs.AuthenticatedInput
@@ -394,6 +428,17 @@ func RegisterAnalyticsRoutes(api huma.API, handler *AnalyticsHandler) {
 		Tags:        []string{"Analytics"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetSpendingTrends)
+
+	// GET /api/v1/analytics/average-monthly-spend - MCP helper (Issue #1215)
+	huma.Register(api, huma.Operation{
+		OperationID: "getAverageMonthlySpend",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/analytics/average-monthly-spend",
+		Summary:     "Get average monthly spend",
+		Description: "Returns the average monthly expense total over a date range. Single DB round-trip; designed as an AI-tool-callable function.",
+		Tags:        []string{"Analytics"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetAverageMonthlySpend)
 
 	// GET /api/v1/analytics/category-total - MCP helper: total spend for a category (Issue #1087)
 	huma.Register(api, huma.Operation{

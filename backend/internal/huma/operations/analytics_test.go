@@ -63,6 +63,10 @@ func (m *mockAnalyticsService) GetTopExpense(_ context.Context, _ string, _ time
 	return nil, nil
 }
 
+func (m *mockAnalyticsService) GetAverageMonthlySpend(_ context.Context, _ string, _ domain.SpendingFilters) (*domain.AverageMonthlySpendResponse, error) {
+	return nil, nil
+}
+
 // Helper functions to create test data
 func createTestCashFlowSummary() *domain.CashFlowSummaryResponse {
 	return &domain.CashFlowSummaryResponse{

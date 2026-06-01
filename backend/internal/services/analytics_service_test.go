@@ -18,6 +18,7 @@ type mockAnalyticsRepository struct {
 	getSpendingTrendsFn           func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error)
 	getCategoryTotalForPeriodFn   func(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalRow, error)
 	getTopExpenseFn               func(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.TopExpenseRow, error)
+	getAverageMonthlySpendFn      func(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error)
 }
 
 func (m *mockAnalyticsRepository) GetCashFlowAggregation(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
@@ -67,6 +68,13 @@ func (m *mockAnalyticsRepository) GetTopExpense(ctx context.Context, userID stri
 		return m.getTopExpenseFn(ctx, userID, startDate, endDate)
 	}
 	return nil, nil
+}
+
+func (m *mockAnalyticsRepository) GetAverageMonthlySpend(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error) {
+	if m.getAverageMonthlySpendFn != nil {
+		return m.getAverageMonthlySpendFn(ctx, userID, filters)
+	}
+	return &domain.AverageMonthlySpendRow{}, nil
 }
 
 func TestAnalyticsService_GetCashFlowSummary(t *testing.T) {
@@ -801,6 +809,130 @@ func TestAnalyticsService_GetSpendingTrends(t *testing.T) {
 		}
 
 		_, err := service.GetSpendingTrends(ctx, "user-123", filters)
+		if err == nil {
+			t.Error("expected error from repository")
+		}
+	})
+}
+
+func TestAnalyticsService_GetAverageMonthlySpend(t *testing.T) {
+	ctx := context.Background()
+	loc := time.UTC
+
+	t.Run("happy path: total=300 over 3 months gives average=100", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getAverageMonthlySpendFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error) {
+				return &domain.AverageMonthlySpendRow{Total: 300.0}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+
+		// ~91 days spans 3 months ceiling(91/30.4375)=3
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+		}
+
+		result, err := service.GetAverageMonthlySpend(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.TotalSpend != 300.0 {
+			t.Errorf("expected total 300, got %f", result.TotalSpend)
+		}
+		if result.MonthCount != 3 {
+			t.Errorf("expected 3 months, got %d", result.MonthCount)
+		}
+		if result.AverageMonthlySpend != 100.0 {
+			t.Errorf("expected average 100, got %f", result.AverageMonthlySpend)
+		}
+		if result.StartDate != "2024-01-01" {
+			t.Errorf("expected start_date 2024-01-01, got %s", result.StartDate)
+		}
+		if result.EndDate != "2024-03-31" {
+			t.Errorf("expected end_date 2024-03-31, got %s", result.EndDate)
+		}
+	})
+
+	t.Run("zero total returns average=0", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getAverageMonthlySpendFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error) {
+				return &domain.AverageMonthlySpendRow{Total: 0.0}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 1, 31, 0, 0, 0, 0, loc),
+		}
+
+		result, err := service.GetAverageMonthlySpend(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.AverageMonthlySpend != 0.0 {
+			t.Errorf("expected average 0, got %f", result.AverageMonthlySpend)
+		}
+		if result.TotalSpend != 0.0 {
+			t.Errorf("expected total 0, got %f", result.TotalSpend)
+		}
+	})
+
+	t.Run("single day range gives month_count=1", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getAverageMonthlySpendFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error) {
+				return &domain.AverageMonthlySpendRow{Total: 50.0}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 15, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 15, 0, 0, 0, 0, loc),
+		}
+
+		result, err := service.GetAverageMonthlySpend(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.MonthCount != 1 {
+			t.Errorf("expected month_count=1 for same-day range, got %d", result.MonthCount)
+		}
+		if result.AverageMonthlySpend != 50.0 {
+			t.Errorf("expected average 50, got %f", result.AverageMonthlySpend)
+		}
+	})
+
+	t.Run("end_date before start_date returns error", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{}
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+		}
+
+		_, err := service.GetAverageMonthlySpend(ctx, "user-123", filters)
+		if err == nil {
+			t.Error("expected error when end_date is before start_date")
+		}
+	})
+
+	t.Run("repository error is returned", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getAverageMonthlySpendFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error) {
+				return nil, errors.New("db error")
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+
+		filters := domain.SpendingFilters{
+			StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, loc),
+			EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+		}
+
+		_, err := service.GetAverageMonthlySpend(ctx, "user-123", filters)
 		if err == nil {
 			t.Error("expected error from repository")
 		}

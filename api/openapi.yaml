@@ -575,6 +575,36 @@ components:
         - operator
         - value
       type: object
+    AverageMonthlySpendResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AverageMonthlySpendResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        average_monthly_spend:
+          format: double
+          type: number
+        end_date:
+          type: string
+        month_count:
+          format: int64
+          type: integer
+        start_date:
+          type: string
+        total_spend:
+          format: double
+          type: number
+      required:
+        - average_monthly_spend
+        - total_spend
+        - month_count
+        - start_date
+        - end_date
+      type: object
     BalanceHistoryResponse:
       additionalProperties: false
       properties:
@@ -6089,6 +6119,56 @@ paths:
       summary: Replay a Paddle webhook (admin)
       tags:
         - Admin
+  /api/v1/analytics/average-monthly-spend:
+    get:
+      description: Returns the average monthly expense total over a date range. Single DB round-trip; designed as an AI-tool-callable function.
+      operationId: getAverageMonthlySpend
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: "Optional: filter by account types (e.g. depository, credit)"
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: "Optional: filter by account types (e.g. depository, credit)"
+            items:
+              type: string
+            type:
+              - array
+              - "null"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AverageMonthlySpendResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get average monthly spend
+      tags:
+        - Analytics
   /api/v1/analytics/cash-flow-history:
     get:
       description: Returns time series cash flow data grouped by period for charts.
