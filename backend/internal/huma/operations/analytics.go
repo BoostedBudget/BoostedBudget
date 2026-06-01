@@ -311,6 +311,25 @@ func (h *AnalyticsHandler) GetAverageMonthlySpend(ctx context.Context, input *Ge
 	return &GetAverageMonthlySpendOutput{Body: response}, nil
 }
 
+// GetRecurringSubscriptionsInput represents input for GET /analytics/recurring-subscriptions.
+type GetRecurringSubscriptionsInput struct {
+	inputs.AuthenticatedInput
+}
+
+// GetRecurringSubscriptionsOutput represents the response for GET /analytics/recurring-subscriptions.
+type GetRecurringSubscriptionsOutput struct {
+	Body *domain.RecurringSubscriptionsResponse
+}
+
+// GetRecurringSubscriptions handles GET /api/v1/analytics/recurring-subscriptions requests.
+func (h *AnalyticsHandler) GetRecurringSubscriptions(ctx context.Context, input *GetRecurringSubscriptionsInput) (*GetRecurringSubscriptionsOutput, error) {
+	response, err := h.service.GetRecurringSubscriptions(ctx, input.UserID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	return &GetRecurringSubscriptionsOutput{Body: response}, nil
+}
+
 // GetCategoryTotalForPeriodInput represents input for GET /analytics/category-total.
 type GetCategoryTotalForPeriodInput struct {
 	inputs.AuthenticatedInput
@@ -434,6 +453,17 @@ func RegisterAnalyticsRoutes(api huma.API, handler *AnalyticsHandler) {
 		Tags:        []string{"Analytics"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetAverageMonthlySpend)
+
+	// GET /api/v1/analytics/recurring-subscriptions - MCP helper: recurring charge detection (Issue #1215)
+	huma.Register(api, huma.Operation{
+		OperationID: "getRecurringSubscriptions",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/analytics/recurring-subscriptions",
+		Summary:     "Get recurring subscriptions",
+		Description: "Detects recurring subscription charges using heuristic analysis of the trailing 12-month transaction history. Returns merchants with monthly-cadence charges (≥3 occurrences, ~30-day gap). Designed as an AI-tool-callable function.",
+		Tags:        []string{"Analytics"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetRecurringSubscriptions)
 
 	// GET /api/v1/analytics/category-total - MCP helper: total spend for a category (Issue #1087)
 	huma.Register(api, huma.Operation{

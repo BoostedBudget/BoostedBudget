@@ -44,6 +44,10 @@ type AnalyticsService interface {
 	// GetAverageMonthlySpend returns the average monthly spend over the date range in filters.
 	// Single DB round-trip; token-efficient summary; AI-tool-callable (Issue #1215).
 	GetAverageMonthlySpend(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendResponse, error)
+
+	// GetRecurringSubscriptions detects recurring subscription charges using heuristic SQL.
+	// No date params; uses a 12-month trailing window. AI-tool-callable (Issue #1215).
+	GetRecurringSubscriptions(ctx context.Context, userID string) (*domain.RecurringSubscriptionsResponse, error)
 }
 
 type analyticsService struct {
@@ -474,6 +478,34 @@ func (s *analyticsService) GetAverageMonthlySpend(ctx context.Context, userID st
 		MonthCount:          monthCount,
 		StartDate:           filters.StartDate.Format("2006-01-02"),
 		EndDate:             filters.EndDate.Format("2006-01-02"),
+	}, nil
+}
+
+// GetRecurringSubscriptions detects recurring subscription charges using heuristic SQL.
+// Uses a trailing 12-month window. AI-tool-callable (Issue #1215).
+func (s *analyticsService) GetRecurringSubscriptions(ctx context.Context, userID string) (*domain.RecurringSubscriptionsResponse, error) {
+	lookbackStart := time.Now().AddDate(-1, 0, 0)
+
+	rows, err := s.analyticsRepo.GetRecurringSubscriptions(ctx, userID, lookbackStart)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recurring subscriptions: %w", err)
+	}
+
+	items := make([]domain.RecurringSubscriptionItem, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, domain.RecurringSubscriptionItem{
+			MerchantName:     row.MerchantName,
+			Amount:           row.Amount,
+			OccurrenceCount:  row.OccurrenceCount,
+			AvgGapDays:       row.AvgGapDays,
+			LastChargeDate:   row.LastChargeDate.Format("2006-01-02"),
+			NextExpectedDate: row.NextExpectedDate.Format("2006-01-02"),
+		})
+	}
+
+	return &domain.RecurringSubscriptionsResponse{
+		Subscriptions: items,
+		AsOfDate:      time.Now().Format("2006-01-02"),
 	}, nil
 }
 

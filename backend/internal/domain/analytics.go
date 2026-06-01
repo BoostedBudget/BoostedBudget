@@ -240,3 +240,31 @@ type AverageMonthlySpendResponse struct {
 	StartDate           string  `json:"start_date"`
 	EndDate             string  `json:"end_date"`
 }
+
+// RecurringSubscriptionRow is the raw DB row for GetRecurringSubscriptions.
+type RecurringSubscriptionRow struct {
+	MerchantName     string
+	Amount           float64
+	OccurrenceCount  int
+	AvgGapDays       float64
+	StddevGapDays    float64
+	LastChargeDate   time.Time
+	NextExpectedDate time.Time
+}
+
+// RecurringSubscriptionItem is a single detected recurring subscription.
+type RecurringSubscriptionItem struct {
+	MerchantName     string  `json:"merchant_name"`
+	Amount           float64 `json:"amount"`
+	OccurrenceCount  int     `json:"occurrence_count"`
+	AvgGapDays       float64 `json:"avg_gap_days"`
+	LastChargeDate   string  `json:"last_charge_date"`
+	NextExpectedDate string  `json:"next_expected_date"`
+}
+
+// RecurringSubscriptionsResponse is the response for GET /analytics/recurring-subscriptions.
+// AI-tool-callable: heuristic detection of recurring charges (monthly cadence). Issue #1215.
+type RecurringSubscriptionsResponse struct {
+	Subscriptions []RecurringSubscriptionItem `json:"subscriptions"`
+	AsOfDate      string                      `json:"as_of_date"`
+}

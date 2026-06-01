@@ -17,18 +17,20 @@ import (
 
 // mockAnalyticsService is a mock implementation of services.AnalyticsService
 type mockAnalyticsService struct {
-	summaryResponse              *domain.CashFlowSummaryResponse
-	historyResponse              *domain.CashFlowHistoryResponse
-	spendingByCategoryResponse   *domain.SpendingByCategoryResponse
-	spendingByMerchantResponse   *domain.SpendingByMerchantResponse
-	spendingTrendsResponse       *domain.SpendingTrendsResponse
-	averageMonthlySpendResponse  *domain.AverageMonthlySpendResponse
-	summaryErr                   error
-	historyErr                   error
-	spendingByCategoryErr        error
-	spendingByMerchantErr        error
-	spendingTrendsErr            error
-	averageMonthlySpendErr       error
+	summaryResponse                *domain.CashFlowSummaryResponse
+	historyResponse                *domain.CashFlowHistoryResponse
+	spendingByCategoryResponse     *domain.SpendingByCategoryResponse
+	spendingByMerchantResponse     *domain.SpendingByMerchantResponse
+	spendingTrendsResponse         *domain.SpendingTrendsResponse
+	averageMonthlySpendResponse    *domain.AverageMonthlySpendResponse
+	recurringSubscriptionsResponse *domain.RecurringSubscriptionsResponse
+	summaryErr                     error
+	historyErr                     error
+	spendingByCategoryErr          error
+	spendingByMerchantErr          error
+	spendingTrendsErr              error
+	averageMonthlySpendErr         error
+	recurringSubscriptionsErr      error
 }
 
 func (m *mockAnalyticsService) GetCashFlowSummary(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowSummaryResponse, error) {
@@ -67,6 +69,10 @@ func (m *mockAnalyticsService) GetTopExpense(_ context.Context, _ string, _ time
 
 func (m *mockAnalyticsService) GetAverageMonthlySpend(_ context.Context, _ string, _ domain.SpendingFilters) (*domain.AverageMonthlySpendResponse, error) {
 	return m.averageMonthlySpendResponse, m.averageMonthlySpendErr
+}
+
+func (m *mockAnalyticsService) GetRecurringSubscriptions(_ context.Context, _ string) (*domain.RecurringSubscriptionsResponse, error) {
+	return m.recurringSubscriptionsResponse, m.recurringSubscriptionsErr
 }
 
 // Helper functions to create test data
@@ -656,6 +662,56 @@ func TestGetAverageMonthlySpend_ServiceError(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestGetRecurringSubscriptions_Success tests successful recurring subscription detection.
+func TestGetRecurringSubscriptions_Success(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		recurringSubscriptionsResponse: &domain.RecurringSubscriptionsResponse{
+			Subscriptions: []domain.RecurringSubscriptionItem{
+				{
+					MerchantName:     "Netflix",
+					Amount:           15.99,
+					OccurrenceCount:  12,
+					AvgGapDays:       30.5,
+					LastChargeDate:   "2024-12-01",
+					NextExpectedDate: "2025-01-01",
+				},
+			},
+			AsOfDate: "2025-01-01",
+		},
+	}
+
+	handler := NewAnalyticsHandler(mockService)
+	input := &GetRecurringSubscriptionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+
+	output, err := handler.GetRecurringSubscriptions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.Body)
+	assert.Len(t, output.Body.Subscriptions, 1)
+	assert.Equal(t, "Netflix", output.Body.Subscriptions[0].MerchantName)
+	assert.InDelta(t, 15.99, output.Body.Subscriptions[0].Amount, 0.001)
+}
+
+// TestGetRecurringSubscriptions_ServiceError tests service error propagation.
+func TestGetRecurringSubscriptions_ServiceError(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		recurringSubscriptionsErr: errors.New("db error"),
+	}
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetRecurringSubscriptionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+
+	output, err := handler.GetRecurringSubscriptions(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
 // TestSpendingRouteRegistration tests that spending routes are properly registered.
 func TestSpendingRouteRegistration(t *testing.T) {
 	_, api := humatest.New(t)
@@ -668,6 +724,7 @@ func TestSpendingRouteRegistration(t *testing.T) {
 		"/api/v1/analytics/spending-by-merchant",
 		"/api/v1/analytics/spending-trends",
 		"/api/v1/analytics/average-monthly-spend",
+		"/api/v1/analytics/recurring-subscriptions",
 	}
 	for _, path := range paths {
 		resp := api.Get(path)

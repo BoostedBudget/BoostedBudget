@@ -183,6 +183,8 @@ export * from "./queueMetrics";
 export * from "./recordMCPAuditBody";
 export * from "./recordMCPAuditBodyOperationClass";
 export * from "./recordMCPAuditBodyResult";
+export * from "./recurringSubscriptionItem";
+export * from "./recurringSubscriptionsResponse";
 export * from "./regionResponse";
 export * from "./regionsResponseBody";
 export * from "./regionsResponseBodyRegions";

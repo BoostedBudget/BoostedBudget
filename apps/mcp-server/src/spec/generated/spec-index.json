@@ -332,6 +332,17 @@
       "excluded": false
     },
     {
+      "operationId": "getRecurringSubscriptions",
+      "method": "GET",
+      "path": "/api/v1/analytics/recurring-subscriptions",
+      "summary": "Get recurring subscriptions",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
       "operationId": "getSpendingByCategory",
       "method": "GET",
       "path": "/api/v1/analytics/spending-by-category",

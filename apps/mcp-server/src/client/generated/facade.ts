@@ -43,6 +43,10 @@ export function createApiClient(mutator: FetchMutator) {
       getCategoryTotalForPeriod(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/category-total', method: 'GET', params, signal })
       },
+      /** GET /api/v1/analytics/recurring-subscriptions */
+      getRecurringSubscriptions(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/analytics/recurring-subscriptions', method: 'GET', signal })
+      },
       /** GET /api/v1/analytics/spending-by-category */
       getSpendingByCategory(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/spending-by-category', method: 'GET', params, signal })
