@@ -707,6 +707,9 @@ func (h *AnalyticsHandler) GetFinancialSummary(ctx context.Context, input *GetFi
 		return nil
 	})
 
+	// All goroutines above return nil on error (degradable design — failures are logged
+	// and the field is omitted). g.Wait() will always return nil here; this guard is
+	// defensive in case future goroutines ever propagate non-degradable errors.
 	if err := g.Wait(); err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}

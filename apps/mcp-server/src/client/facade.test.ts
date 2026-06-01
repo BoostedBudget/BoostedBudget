@@ -86,7 +86,7 @@ describe('createApiClient', () => {
     )
   })
 
-  it('contains exactly 86 allowed operation methods', () => {
+  it('contains exactly 95 allowed operation methods', () => {
     const mutator = mock(() => Promise.resolve({})) as unknown as FetchMutator
     const client = createApiClient(mutator)
 

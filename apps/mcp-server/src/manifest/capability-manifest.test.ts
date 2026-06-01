@@ -242,7 +242,7 @@ describe('helper functions', () => {
 // ── Completeness: every known operationId is classified ───────────────────
 
 describe('completeness', () => {
-  it('covers all 130 known operationIds (no unknown ops in the spec)', async () => {
+  it('covers all 149 known operationIds (no unknown ops in the spec)', async () => {
     // We import the full list to ensure no ops are silently absent
     const { ALL_OPERATION_IDS } = await import('./capability-manifest')
     expect(ALL_OPERATION_IDS.length).toBe(149)
