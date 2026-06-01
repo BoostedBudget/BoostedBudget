@@ -2,8 +2,10 @@ package operations
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/dateutil"
@@ -11,6 +13,7 @@ import (
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
+	"golang.org/x/sync/errgroup"
 )
 
 // AnalyticsHandler handles analytics-related HTTP requests.
@@ -613,6 +616,104 @@ func (h *AnalyticsHandler) GetBudgetVsActual(ctx context.Context, input *GetBudg
 	return &GetBudgetVsActualOutput{Body: response}, nil
 }
 
+// GetFinancialSummaryInput represents input for GET /analytics/financial-summary.
+type GetFinancialSummaryInput struct {
+	inputs.AuthenticatedInput
+	StartDate        string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
+	EndDate          string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
+	AccountTypes     string `query:"account_types" doc:"Comma-separated account types (optional)"`
+	IncludeTransfers string `query:"include_transfers" doc:"Include transfers (true/false)"`
+}
+
+// GetFinancialSummaryOutput represents the response for GET /analytics/financial-summary.
+type GetFinancialSummaryOutput struct {
+	Body *domain.FinancialSummaryResponse
+}
+
+// GetFinancialSummary handles GET /api/v1/analytics/financial-summary requests.
+// It performs a parallel fan-out across all key analytics metrics. Sub-metrics are
+// best-effort: individual failures are logged and the section is omitted from the
+// response rather than returning a 500. Designed as an AI-tool-callable single
+// round-trip for "how am I doing financially?" questions.
+func (h *AnalyticsHandler) GetFinancialSummary(ctx context.Context, input *GetFinancialSummaryInput) (*GetFinancialSummaryOutput, error) {
+	filters, err := parseSpendingFilters(input.StartDate, input.EndDate, input.AccountTypes, input.IncludeTransfers)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &domain.FinancialSummaryResponse{
+		GeneratedAt: time.Now().UTC().Format("2006-01-02T15:04:05Z"),
+	}
+
+	g, gCtx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		r, e := h.service.GetSavingsRateForPeriod(gCtx, input.UserID, filters.StartDate, filters.EndDate)
+		if e != nil {
+			slog.WarnContext(ctx, "financial_summary: savings_rate sub-metric failed", "error", e)
+			return nil
+		}
+		resp.SavingsRate = r
+		return nil
+	})
+
+	g.Go(func() error {
+		r, e := h.service.GetAverageMonthlySpend(gCtx, input.UserID, *filters)
+		if e != nil {
+			slog.WarnContext(ctx, "financial_summary: average_spend sub-metric failed", "error", e)
+			return nil
+		}
+		resp.AverageSpend = r
+		return nil
+	})
+
+	g.Go(func() error {
+		r, e := h.service.GetSpendingByCategory(gCtx, input.UserID, *filters)
+		if e != nil {
+			slog.WarnContext(ctx, "financial_summary: top_categories sub-metric failed", "error", e)
+			return nil
+		}
+		resp.TopCategories = r
+		return nil
+	})
+
+	g.Go(func() error {
+		r, e := h.service.GetMonthOverMonthSpendingChange(gCtx, input.UserID, "", 6)
+		if e != nil {
+			slog.WarnContext(ctx, "financial_summary: mom_change sub-metric failed", "error", e)
+			return nil
+		}
+		resp.MomChange = r
+		return nil
+	})
+
+	g.Go(func() error {
+		r, e := h.service.GetBudgetVsActual(gCtx, input.UserID, "monthly")
+		if e != nil {
+			slog.WarnContext(ctx, "financial_summary: budget_vs_actual sub-metric failed", "error", e)
+			return nil
+		}
+		resp.BudgetVsActual = r
+		return nil
+	})
+
+	g.Go(func() error {
+		r, e := h.service.GetNetWorthTrend(gCtx, input.UserID, "monthly")
+		if e != nil {
+			slog.WarnContext(ctx, "financial_summary: net_worth_trend sub-metric failed", "error", e)
+			return nil
+		}
+		resp.NetWorthTrend = r
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return &GetFinancialSummaryOutput{Body: resp}, nil
+}
+
 // RegisterAnalyticsRoutes registers analytics routes with the Huma API.
 // Note: These routes require the Clerk middleware to be applied.
 func RegisterAnalyticsRoutes(api huma.API, handler *AnalyticsHandler) {
@@ -802,4 +903,15 @@ func RegisterAnalyticsRoutes(api huma.API, handler *AnalyticsHandler) {
 		Tags:        []string{"Analytics"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetBudgetVsActual)
+
+	// GET /api/v1/analytics/financial-summary - composite fan-out (Issue #1215 PR4)
+	huma.Register(api, huma.Operation{
+		OperationID: "getFinancialSummary",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/analytics/financial-summary",
+		Summary:     "Get financial summary",
+		Description: "Returns a bundled financial summary with parallel fan-out across key analytics metrics. Sub-metrics are best-effort: individual failures are logged and the section is omitted from the response (200 with partial data). Designed as an AI-tool-callable single round-trip for common 'how am I doing financially?' questions.",
+		Tags:        []string{"Analytics"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetFinancialSummary)
 }

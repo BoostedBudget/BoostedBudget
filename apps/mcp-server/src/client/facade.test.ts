@@ -96,6 +96,6 @@ describe('createApiClient', () => {
         count += Object.values(ns as object).filter((v) => typeof v === 'function').length
       }
     }
-    expect(count).toBe(86)
+    expect(count).toBe(95)
   })
 })

@@ -32,6 +32,7 @@ var MCPOperationManifest = map[string]MCPOperationClass{
 	"getUnusualSpend":                     MCPClassRead,
 	"getNetWorthTrend":                    MCPClassRead,
 	"getBudgetVsActual":                   MCPClassRead,
+	"getFinancialSummary":                 MCPClassRead,
 	// Accounts
 	"getAccounts":      MCPClassRead,
 	"reorderAccounts":  MCPClassWrite,

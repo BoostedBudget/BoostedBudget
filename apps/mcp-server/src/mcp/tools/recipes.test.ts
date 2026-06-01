@@ -1,6 +1,7 @@
 import { describe, expect, it, mock } from 'bun:test'
-import { buildRecipeTools } from './recipes'
+import { buildRecipeTools, STARTER_RECIPE_TEMPLATES } from './recipes'
 import { HostProxyError } from '../../sandbox/host-proxy'
+import { getCapability } from '../../manifest/capability-manifest'
 
 function makeProxy(getResult: unknown = [], runResult: unknown = { calls: [] }) {
   return {
@@ -90,5 +91,54 @@ describe('recipe.run', () => {
 
     expect(result.content[0]?.type).toBe('text')
     expect(result.content[0]?.text).toContain('getCashFlowSummary')
+  })
+})
+
+describe('recipe.templates', () => {
+  it('returns a non-empty list of starter templates', () => {
+    const proxy = makeProxy()
+    const tools = buildRecipeTools(proxy)
+    const result = tools.templates()
+
+    expect(result.isError).toBe(false)
+    expect(result.content[0]?.type).toBe('text')
+    const parsed = JSON.parse(result.content[0]?.text ?? '{}')
+    expect(Array.isArray(parsed.templates)).toBe(true)
+    expect(parsed.templates.length).toBeGreaterThan(0)
+    expect(parsed.note).toContain('recipe.save()')
+  })
+
+  it('every operationId in every template exists in capability-manifest as read', () => {
+    for (const template of STARTER_RECIPE_TEMPLATES) {
+      for (const call of template.calls) {
+        const entry = getCapability(call.operationId)
+        expect(entry).toBeDefined()
+        expect(entry?.class).toBe('read')
+        expect(entry?.excluded).toBe(false)
+      }
+    }
+  })
+
+  it('each template call conforms to the SaveRecipeInput.calls shape', () => {
+    for (const template of STARTER_RECIPE_TEMPLATES) {
+      expect(typeof template.name).toBe('string')
+      expect(template.name.length).toBeGreaterThan(0)
+      expect(Array.isArray(template.calls)).toBe(true)
+      for (const call of template.calls) {
+        // operationId must be a non-empty string
+        expect(typeof call.operationId).toBe('string')
+        expect(call.operationId.length).toBeGreaterThan(0)
+        // params, body, pathParams are optional but must be objects if present
+        if (call.params !== undefined) {
+          expect(typeof call.params).toBe('object')
+        }
+        if (call.body !== undefined) {
+          expect(typeof call.body).toBe('object')
+        }
+        if (call.pathParams !== undefined) {
+          expect(typeof call.pathParams).toBe('object')
+        }
+      }
+    }
   })
 })

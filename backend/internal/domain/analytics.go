@@ -464,3 +464,20 @@ type BudgetVsActualResponse struct {
 	TotalRemaining float64              `json:"total_remaining"`
 	Period         string               `json:"period"`
 }
+
+// ─── Issue #1215 PR4: composite financial summary ──────────────────────────
+
+// FinancialSummaryResponse is the response for GET /analytics/financial-summary.
+// It is a parallel fan-out of all key analytics metrics for a given date range.
+// Sub-metrics are best-effort: individual failures are logged and the field is
+// omitted (nil) rather than propagating a 500. Designed as an AI-tool-callable
+// single round-trip for "how am I doing financially?" questions.
+type FinancialSummaryResponse struct {
+	SavingsRate   *SavingsRateResponse         `json:"savings_rate,omitempty"`
+	AverageSpend  *AverageMonthlySpendResponse  `json:"average_monthly_spend,omitempty"`
+	TopCategories *SpendingByCategoryResponse   `json:"top_categories,omitempty"`
+	MomChange     *MonthOverMonthResponse       `json:"mom_spending_change,omitempty"`
+	BudgetVsActual *BudgetVsActualResponse      `json:"budget_vs_actual,omitempty"`
+	NetWorthTrend *NetWorthTrendResponse        `json:"net_worth_trend,omitempty"`
+	GeneratedAt   string                        `json:"generated_at"`
+}

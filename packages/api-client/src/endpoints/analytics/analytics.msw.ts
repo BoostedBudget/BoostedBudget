@@ -39,6 +39,7 @@ import type {
   CashFlowSummaryResponse,
   CategoryBreakdownForMerchantResponse,
   CategoryTotalResponse,
+  FinancialSummaryResponse,
   IncomeSourceBreakdownResponse,
   LargestTransactionsResponse,
   MonthOverMonthResponse,
@@ -153,6 +154,158 @@ export const getGetCategoryTotalForPeriodResponseMock = (
   start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
   total: faker.number.float({ fractionDigits: 2 }),
   transaction_count: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetFinancialSummaryResponseMock = (
+  overrideResponse: Partial<Extract<FinancialSummaryResponse, object>> = {},
+): FinancialSummaryResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  average_monthly_spend: faker.helpers.arrayElement([
+    {
+      $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+      average_monthly_spend: faker.number.float({ fractionDigits: 2 }),
+      end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      month_count: faker.number.int(),
+      start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      total_spend: faker.number.float({ fractionDigits: 2 }),
+    },
+    undefined,
+  ]),
+  budget_vs_actual: faker.helpers.arrayElement([
+    {
+      $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+      budgets: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          allocated_amount: faker.number.float({ fractionDigits: 2 }),
+          budget_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          budget_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          over_budget: faker.datatype.boolean(),
+          pct_used: faker.number.float({ fractionDigits: 2 }),
+          period: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          remaining: faker.number.float({ fractionDigits: 2 }),
+          spent_amount: faker.number.float({ fractionDigits: 2 }),
+        })),
+        null,
+      ]),
+      period: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      total_allocated: faker.number.float({ fractionDigits: 2 }),
+      total_remaining: faker.number.float({ fractionDigits: 2 }),
+      total_spent: faker.number.float({ fractionDigits: 2 }),
+    },
+    undefined,
+  ]),
+  generated_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  mom_spending_change: faker.helpers.arrayElement([
+    {
+      $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+      buckets: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          change_abs: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              null,
+            ]),
+            null,
+          ]),
+          change_pct: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              null,
+            ]),
+            null,
+          ]),
+          month: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          total: faker.number.float({ fractionDigits: 2 }),
+        })),
+        null,
+      ]),
+      category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      month_count: faker.number.int(),
+    },
+    undefined,
+  ]),
+  net_worth_trend: faker.helpers.arrayElement([
+    {
+      $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+      buckets: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          change_abs: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              null,
+            ]),
+            null,
+          ]),
+          change_pct: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              faker.number.float({ fractionDigits: 2 }),
+              null,
+            ]),
+            null,
+          ]),
+          date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          net_worth: faker.number.float({ fractionDigits: 2 }),
+        })),
+        null,
+      ]),
+      end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      grouping: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    },
+    undefined,
+  ]),
+  savings_rate: faker.helpers.arrayElement([
+    {
+      $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+      end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      expenses: faker.number.float({ fractionDigits: 2 }),
+      income: faker.number.float({ fractionDigits: 2 }),
+      net_savings: faker.number.float({ fractionDigits: 2 }),
+      savings_rate: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          null,
+        ]),
+        null,
+      ]),
+      start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    },
+    undefined,
+  ]),
+  top_categories: faker.helpers.arrayElement([
+    {
+      $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+      categories: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({
+          category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          percentage: faker.number.float({ fractionDigits: 2 }),
+          pfc_primary_display: faker.string.alpha({
+            length: { min: 10, max: 20 },
+          }),
+          total: faker.number.float({ fractionDigits: 2 }),
+          transaction_count: faker.number.int(),
+        })),
+        null,
+      ]),
+      end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      total_spent: faker.number.float({ fractionDigits: 2 }),
+    },
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -602,6 +755,32 @@ export const getGetCategoryTotalForPeriodMockHandler = (
   );
 };
 
+export const getGetFinancialSummaryMockHandler = (
+  overrideResponse?:
+    | FinancialSummaryResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<FinancialSummaryResponse> | FinancialSummaryResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/financial-summary",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetFinancialSummaryResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetIncomeSourceBreakdownMockHandler = (
   overrideResponse?:
     | IncomeSourceBreakdownResponse
@@ -925,6 +1104,7 @@ export const getAnalyticsMock = () => [
   getGetCashFlowHistoryMockHandler(),
   getGetCashFlowSummaryMockHandler(),
   getGetCategoryTotalForPeriodMockHandler(),
+  getGetFinancialSummaryMockHandler(),
   getGetIncomeSourceBreakdownMockHandler(),
   getGetLargestTransactionsForPeriodMockHandler(),
   getGetCategoryBreakdownForMerchantMockHandler(),

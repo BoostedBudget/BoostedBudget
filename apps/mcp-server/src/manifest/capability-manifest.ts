@@ -109,6 +109,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getUnusualSpend'),                     // MCP analytics helper — Issue #1215 PR3
   read('getNetWorthTrend'),                    // MCP analytics helper — Issue #1215 PR3
   read('getBudgetVsActual'),                   // MCP analytics helper — Issue #1215 PR3
+  read('getFinancialSummary'),                 // MCP analytics composite — Issue #1215 PR4
 
   // ── Accounts ────────────────────────────────────────────────────────────
   read('getAccounts'),
