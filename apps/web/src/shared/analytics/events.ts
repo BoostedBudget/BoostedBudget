@@ -117,7 +117,7 @@ export const ANALYTICS_EVENTS = {
   TRANSACTION_REVIEWED: 'transaction_reviewed',
 
   // Issue #1215: MCP analytics helper endpoints — analytics views
-  FINANCIAL_SUMMARY_VIEWED: 'financial_summary_viewed',
+  ANALYTICS_FINANCIAL_SUMMARY_VIEWED: 'analytics_financial_summary_viewed',
   ANALYTICS_SAVINGS_RATE_VIEWED: 'analytics_savings_rate_viewed',
   ANALYTICS_MOM_CHANGE_VIEWED: 'analytics_mom_change_viewed',
   ANALYTICS_RECURRING_SUBS_VIEWED: 'analytics_recurring_subs_viewed',
