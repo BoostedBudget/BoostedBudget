@@ -115,7 +115,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
     })
 
     // PostHog analytics client (no-op if POSTHOG_API_KEY is unset)
-    const posthog = createPosthogClient((env as Record<string, unknown>)['POSTHOG_API_KEY'] as string | undefined ?? '')
+    const posthog = createPosthogClient((env as unknown as Record<string, unknown>)['POSTHOG_API_KEY'] as string | undefined ?? '')
 
     // Audit client — posts read/protocol events to POST /api/v1/mcp/audit (fire-and-forget)
     const audit = createAuditClient(env)

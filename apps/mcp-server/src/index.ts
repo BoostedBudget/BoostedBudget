@@ -1,121 +1,90 @@
 /**
  * BoostedBudget MCP Server — Cloudflare Worker entry point.
  *
- * Phases:
- *   0   — Scaffold: env validation + /health
- *   3   — OAuth resource-server metadata + Clerk token verification
- *   4   — MCP agent (search tool, sandboxed)
- *   5   — Execute reads via host-proxy
- *   6b  — Writes (confirmation-gated)
- *   7   — Read-only recipes
- *   8   — PostHog + hardening
+ * Uses @cloudflare/workers-oauth-provider to act as a full OAuth 2.1 AS,
+ * supporting Dynamic Client Registration (RFC 7591) so Claude Code and other
+ * MCP clients can connect without pre-registration.
+ *
+ * Auth flow:
+ *   1. MCP client does DCR at /oauth/register (handled by OAuthProvider)
+ *   2. MCP client redirects user to /oauth/authorize (our handler → Clerk)
+ *   3. Clerk authenticates the user, redirects to /oauth/callback
+ *   4. /oauth/callback exchanges code with Clerk, completes authorization
+ *   5. OAuthProvider issues its own access token to the MCP client
+ *   6. Authenticated requests reach McpApiHandler → BoostedBudgetMcpAgent DO
  *
  * The Worker NEVER touches the database. It calls the Go backend
- * (api.boostedbudget.com) via typed Orval client. The backend is
- * the single gatekeeper for auth, scoping, and validation.
+ * (api.boostedbudget.com / staging-api.boostedbudget.com) via Orval client.
  */
 
-import { type Env, parseEnv } from './env'
+import { OAuthProvider, getOAuthApi } from '@cloudflare/workers-oauth-provider'
+import type { OAuthProviderOptions } from '@cloudflare/workers-oauth-provider'
 import { handleHealth } from './health'
-import {
-  buildProtectedResourceMetadata,
-  unauthorizedResponse,
-} from './oauth/resource-server'
-import { ClerkTokenVerifier, verifyClerkToken } from './oauth/clerk-verifier'
-import { assertNotRevoked } from './oauth/revocation'
+import { handleAuthorize, handleCallback } from './oauth/authorize-handler'
+import { McpApiHandler } from './mcp/mcp-api-handler'
 import { BoostedBudgetMcpAgent } from './mcp/agent'
+import { parseEnv } from './env'
+import type { Env } from './env'
 
 export { BoostedBudgetMcpAgent }
+export { McpApiHandler }
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Expose-Headers': 'WWW-Authenticate',
-}
+const oauthOptions: OAuthProviderOptions<Env> = {
+  // /mcp and /sse routes are authenticated; all other routes go to defaultHandler
+  apiRoute: ['/mcp', '/sse'],
+  apiHandler: McpApiHandler,
 
-export default {
-  async fetch(request: Request, rawEnv: Env, ctx: ExecutionContext): Promise<Response> {
-    const env = parseEnv(rawEnv)
-    const url = new URL(request.url)
+  defaultHandler: {
+    async fetch(request: Request, rawEnv: Env): Promise<Response> {
+      try {
+        parseEnv(rawEnv)
+      } catch (err) {
+        console.error('[mcp-startup] env validation error:', err instanceof Error ? err.message : err)
+        return new Response(JSON.stringify({ error: 'misconfigured' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
 
-    // ── CORS preflight ─────────────────────────────────────────────────────
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: CORS_HEADERS })
-    }
+      const url = new URL(request.url)
 
-    // ── Health check (no auth) ─────────────────────────────────────────────
-    if (url.pathname === '/health' && request.method === 'GET') {
-      return handleHealth()
-    }
+      if (request.method === 'OPTIONS') {
+        return new Response(null, {
+          status: 204,
+          headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'WWW-Authenticate' },
+        })
+      }
 
-    // ── OAuth protected-resource metadata (no auth required, RFC 9728) ────
-    if (
-      url.pathname === '/.well-known/oauth-protected-resource' ||
-      url.pathname === '/.well-known/oauth-protected-resource/mcp'
-    ) {
-      return new Response(JSON.stringify(buildProtectedResourceMetadata(env)), {
-        status: 200,
-        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      if (url.pathname === '/health') {
+        return handleHealth()
+      }
+
+      // OAuth authorization UI — redirects user to Clerk for authentication
+      if (url.pathname === '/oauth/authorize') {
+        const oauthHelpers = getOAuthApi(oauthOptions, rawEnv as Env)
+        return handleAuthorize(request, rawEnv as Env, oauthHelpers)
+      }
+
+      // Clerk redirects here after user authenticates
+      if (url.pathname === '/oauth/callback') {
+        const oauthHelpers = getOAuthApi(oauthOptions, rawEnv as Env)
+        return handleCallback(request, rawEnv as Env, oauthHelpers)
+      }
+
+      return new Response(JSON.stringify({ error: 'not_found' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
       })
-    }
-
-    // ── All other routes require a valid Clerk OAuth token ─────────────────
-    let authCtx
-    let rawAccessToken: string
-    try {
-      rawAccessToken = ClerkTokenVerifier.extractBearerToken(
-        request.headers.get('Authorization') ?? undefined,
-      )
-      authCtx = await verifyClerkToken(rawAccessToken, env)
-      await assertNotRevoked(authCtx, env)
-    } catch (err) {
-      // Log auth failures for operational visibility (Workers Logs enabled in wrangler.toml).
-      // Do NOT include the raw token or sensitive payload in the log — just the error type.
-      const errName = err instanceof Error ? err.constructor.name : typeof err
-      console.error(`[mcp-auth] token verification failed: ${errName}`, {
-        path: url.pathname,
-        method: request.method,
-      })
-      return unauthorizedResponse(env.MCP_RESOURCE_URL, 'invalid_token')
-    }
-
-    // ── Inject trusted auth headers — shared by both MCP transports ─────────
-    // Build headers from scratch — delete then set to prevent injection/duplicates.
-    // The DO is only reachable through this Worker (never directly exposed).
-    const forwardHeaders = new Headers(request.headers)
-    // Clear any existing MCP headers
-    for (const key of ['X-MCP-Clerk-User-Id', 'X-MCP-Grant-Id', 'X-MCP-Access-Token', 'X-MCP-Origin', 'X-MCP-Worker-Secret']) {
-      forwardHeaders.delete(key)
-    }
-    // Set trusted headers from verified auth context
-    forwardHeaders.set('X-MCP-Clerk-User-Id', authCtx.clerkUserId)
-    forwardHeaders.set('X-MCP-Grant-Id', authCtx.grantId)
-    forwardHeaders.set('X-MCP-Access-Token', rawAccessToken!)
-    forwardHeaders.set('X-MCP-Origin', '1')
-    forwardHeaders.set('X-MCP-Worker-Secret', env.MCP_WORKER_SECRET)
-    const authedRequest = new Request(request, { headers: forwardHeaders })
-
-    // ── MCP Streamable HTTP transport (primary) ────────────────────────────
-    if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
-      const mcpHandler = BoostedBudgetMcpAgent.serve('/mcp', {
-        binding: 'MCP_AGENT',
-      })
-      return mcpHandler.fetch(authedRequest, env as Parameters<typeof mcpHandler.fetch>[1], ctx)
-    }
-
-    // ── MCP SSE transport (legacy clients that don't support Streamable HTTP) ─
-    // Served at /sse; the DO session is the same BoostedBudgetMcpAgent.
-    if (url.pathname === '/sse' || url.pathname.startsWith('/sse/')) {
-      const sseHandler = BoostedBudgetMcpAgent.serveSSE('/sse', {
-        binding: 'MCP_AGENT',
-      })
-      return sseHandler.fetch(authedRequest, env as Parameters<typeof sseHandler.fetch>[1], ctx)
-    }
-
-    return new Response(JSON.stringify({ error: 'not_found' }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' },
-    })
+    },
   },
+
+  // OAuth endpoints — all implemented by the library
+  authorizeEndpoint: '/oauth/authorize',
+  tokenEndpoint: '/oauth/token',
+  clientRegistrationEndpoint: '/oauth/register',
+
+  scopesSupported: ['openid', 'email', 'profile'],
+  // resource auto-detected from request origin (staging vs prod handled automatically)
 }
 
-export type { Env }
+export default new OAuthProvider<Env>(oauthOptions)
