@@ -38,8 +38,11 @@ export type GetAverageMonthlySpendParams = {
    */
   end_date: string;
   /**
-   * Optional: filter by account types (e.g. depository, credit)
-   * @nullable
+   * Comma-separated account types to filter (e.g. depository,credit)
    */
-  account_types?: string[] | null;
+  account_types?: string;
+  /**
+   * Include transfer transactions (true/false, default false)
+   */
+  include_transfers?: string;
 };

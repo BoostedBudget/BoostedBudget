@@ -608,7 +608,7 @@ func (r *analyticsRepository) GetAverageMonthlySpend(ctx context.Context, userID
 	query := fmt.Sprintf(`
 		SELECT COALESCE(SUM(t.amount), 0) as total
 		FROM transactions t
-		JOIN accounts a ON a.id = t.account_id
+		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
