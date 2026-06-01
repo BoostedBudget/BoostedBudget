@@ -258,21 +258,14 @@ func calculatePeriodEnd(periodStart time.Time, grouping string) time.Time {
 	}
 }
 
-// isPFCPrimary reports whether s is a known PFCv2 primary enum.
-func isPFCPrimary(s string) bool {
-	for _, p := range pfc.AllPrimaries() {
-		if p.Enum == s {
-			return true
-		}
-	}
-	return false
-}
-
 // pfcDisplayName returns the appropriate display name for a category enum.
 // Primary enums use PrimaryDisplayName; detailed enums use DetailedDisplayName.
 func pfcDisplayName(category string) string {
-	if isPFCPrimary(category) {
-		return pfc.PrimaryDisplayName(category)
+	// Check if it's a primary enum
+	for _, p := range pfc.AllPrimaries() {
+		if p.Enum == category {
+			return pfc.PrimaryDisplayName(category)
+		}
 	}
 	// Detailed enum — look up the primary from the registry.
 	for _, d := range pfc.AllDetailed() {
@@ -322,9 +315,7 @@ func (s *analyticsService) GetSpendingByCategory(ctx context.Context, userID str
 	}
 
 	for i := range categories {
-		if totalSpent > 0 {
-			categories[i].Percentage = (categories[i].Total / totalSpent) * 100
-		}
+		categories[i].Percentage = calculatePercentage(categories[i].Total, totalSpent)
 	}
 
 	return &domain.SpendingByCategoryResponse{
@@ -348,9 +339,7 @@ func (s *analyticsService) GetSpendingByMerchant(ctx context.Context, userID str
 	}
 
 	for i := range merchants {
-		if totalSpent > 0 {
-			merchants[i].Percentage = (merchants[i].Total / totalSpent) * 100
-		}
+		merchants[i].Percentage = calculatePercentage(merchants[i].Total, totalSpent)
 	}
 
 	return &domain.SpendingByMerchantResponse{
@@ -470,12 +459,20 @@ func (s *analyticsService) GetSpendingTrends(ctx context.Context, userID string,
 	}, nil
 }
 
-// absFloat returns the absolute value of a float64
+// absFloat returns the absolute value of a float64 (used in period comparison calculations)
 func absFloat(v float64) float64 {
 	if v < 0 {
 		return -v
 	}
 	return v
+}
+
+// calculatePercentage safely computes (value / total) * 100, returning 0 if total is 0
+func calculatePercentage(value, total float64) float64 {
+	if total > 0 {
+		return (value / total) * 100
+	}
+	return 0
 }
 
 // GetCategoryTotalForPeriod returns the total spend for a specific category in a date range.
@@ -674,9 +671,7 @@ func (s *analyticsService) GetCategoryBreakdownForMerchant(ctx context.Context, 
 			PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
 			Total:             row.Total,
 			TransactionCount:  row.Count,
-		}
-		if totalSpend > 0 {
-			item.Percentage = (row.Total / totalSpend) * 100
+			Percentage:        calculatePercentage(row.Total, totalSpend),
 		}
 		categories = append(categories, item)
 	}
@@ -709,9 +704,7 @@ func (s *analyticsService) GetIncomeSourceBreakdown(ctx context.Context, userID 
 			PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
 			Total:             row.Total,
 			TransactionCount:  row.Count,
-		}
-		if totalIncome > 0 {
-			item.Percentage = (row.Total / totalIncome) * 100
+			Percentage:        calculatePercentage(row.Total, totalIncome),
 		}
 		sources = append(sources, item)
 	}
@@ -929,10 +922,6 @@ func (s *analyticsService) GetBudgetVsActual(ctx context.Context, userID string,
 	for _, row := range rows {
 		remaining := row.AllocatedAmount - row.SpentAmount
 		overBudget := row.SpentAmount > row.AllocatedAmount
-		var pctUsed float64
-		if row.AllocatedAmount != 0 {
-			pctUsed = (row.SpentAmount / row.AllocatedAmount) * 100
-		}
 		budgets = append(budgets, domain.BudgetVsActualItem{
 			BudgetID:        row.BudgetID,
 			BudgetName:      row.BudgetName,
@@ -941,7 +930,7 @@ func (s *analyticsService) GetBudgetVsActual(ctx context.Context, userID string,
 			SpentAmount:     row.SpentAmount,
 			Remaining:       remaining,
 			OverBudget:      overBudget,
-			PctUsed:         pctUsed,
+			PctUsed:         calculatePercentage(row.SpentAmount, row.AllocatedAmount),
 		})
 		totalAllocated += row.AllocatedAmount
 		totalSpent += row.SpentAmount

@@ -70,28 +70,13 @@ func parseCashFlowFilters(startDateStr, endDateStr, accountTypes, includeTransfe
 	}
 	filters.StartDate = startDate
 	filters.EndDate = endDate
+	filters.AccountTypes = parseAccountTypes(accountTypes)
 
-	// Parse account_types (optional, comma-separated)
-	if accountTypes != "" {
-		parts := strings.Split(accountTypes, ",")
-		for _, p := range parts {
-			trimmed := strings.TrimSpace(p)
-			if trimmed != "" {
-				filters.AccountTypes = append(filters.AccountTypes, trimmed)
-			}
-		}
+	includeTransfersVal, err := parseBoolString(includeTransfers)
+	if err != nil {
+		return nil, err
 	}
-
-	// Parse include_transfers (optional, default false)
-	if includeTransfers != "" {
-		if includeTransfers == "true" {
-			filters.IncludeTransfers = true
-		} else if includeTransfers == "false" {
-			filters.IncludeTransfers = false
-		} else {
-			return nil, huma.Error400BadRequest("Invalid include_transfers value. Use true or false")
-		}
-	}
+	filters.IncludeTransfers = includeTransfersVal
 
 	// Parse grouping (optional)
 	if grouping != "" {
@@ -151,6 +136,35 @@ type GetSpendingTrendsOutput struct {
 	Body *domain.SpendingTrendsResponse
 }
 
+// parseBoolString parses string "true"/"false" to bool, returning false if empty
+func parseBoolString(s string) (bool, error) {
+	if s == "" {
+		return false, nil
+	}
+	if s == "true" {
+		return true, nil
+	}
+	if s == "false" {
+		return false, nil
+	}
+	return false, huma.Error400BadRequest("Invalid boolean value. Use true or false")
+}
+
+// parseAccountTypes parses comma-separated account types into a slice
+func parseAccountTypes(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
 // parseSpendingFilters parses query parameters into SpendingFilters.
 func parseSpendingFilters(startDateStr, endDateStr, accountTypes, includeTransfers string) (*domain.SpendingFilters, error) {
 	filters := &domain.SpendingFilters{}
@@ -161,26 +175,13 @@ func parseSpendingFilters(startDateStr, endDateStr, accountTypes, includeTransfe
 	}
 	filters.StartDate = startDate
 	filters.EndDate = endDate
+	filters.AccountTypes = parseAccountTypes(accountTypes)
 
-	if accountTypes != "" {
-		parts := strings.Split(accountTypes, ",")
-		for _, p := range parts {
-			trimmed := strings.TrimSpace(p)
-			if trimmed != "" {
-				filters.AccountTypes = append(filters.AccountTypes, trimmed)
-			}
-		}
+	includeTransfersVal, err := parseBoolString(includeTransfers)
+	if err != nil {
+		return nil, err
 	}
-
-	if includeTransfers != "" {
-		if includeTransfers == "true" {
-			filters.IncludeTransfers = true
-		} else if includeTransfers == "false" {
-			filters.IncludeTransfers = false
-		} else {
-			return nil, huma.Error400BadRequest("Invalid include_transfers value. Use true or false")
-		}
-	}
+	filters.IncludeTransfers = includeTransfersVal
 
 	return filters, nil
 }
@@ -248,6 +249,17 @@ func (h *AnalyticsHandler) GetSpendingByCategory(ctx context.Context, input *Get
 	return &GetSpendingByCategoryOutput{Body: response}, nil
 }
 
+// validateLimit ensures limit is between 1 and maxLimit, defaulting to defaultLimit if invalid
+func validateLimit(limit, defaultLimit, maxLimit int) int {
+	if limit <= 0 {
+		return defaultLimit
+	}
+	if limit > maxLimit {
+		return maxLimit
+	}
+	return limit
+}
+
 // GetSpendingByMerchant handles GET /api/v1/analytics/spending-by-merchant requests.
 // Returns top merchants by spending with percentages.
 func (h *AnalyticsHandler) GetSpendingByMerchant(ctx context.Context, input *GetSpendingByMerchantInput) (*GetSpendingByMerchantOutput, error) {
@@ -256,10 +268,7 @@ func (h *AnalyticsHandler) GetSpendingByMerchant(ctx context.Context, input *Get
 		return nil, err
 	}
 
-	limit := input.Limit
-	if limit <= 0 {
-		limit = 10
-	}
+	limit := validateLimit(input.Limit, 10, 1000)
 
 	response, err := h.service.GetSpendingByMerchant(ctx, input.UserID, *filters, limit)
 	if err != nil {
@@ -431,23 +440,13 @@ type GetMonthOverMonthSpendingChangeOutput struct {
 
 // GetMonthOverMonthSpendingChange handles GET /api/v1/analytics/month-over-month requests.
 func (h *AnalyticsHandler) GetMonthOverMonthSpendingChange(ctx context.Context, input *GetMonthOverMonthSpendingChangeInput) (*GetMonthOverMonthSpendingChangeOutput, error) {
-	months := input.Months
-	if months <= 0 {
-		months = 6
-	}
-	if months > 24 {
+	months := validateLimit(input.Months, 6, 24)
+	if months < 2 {
 		return nil, huma.Error400BadRequest("months must be between 2 and 24")
 	}
 
-	var accountTypes []string
-	if input.AccountTypes != "" {
-		for _, p := range strings.Split(input.AccountTypes, ",") {
-			if t := strings.TrimSpace(p); t != "" {
-				accountTypes = append(accountTypes, t)
-			}
-		}
-	}
-	includeTransfers := input.IncludeTransfers == "true"
+	accountTypes := parseAccountTypes(input.AccountTypes)
+	includeTransfers, _ := parseBoolString(input.IncludeTransfers)
 
 	response, err := h.service.GetMonthOverMonthSpendingChange(ctx, input.UserID, input.Category, months, accountTypes, includeTransfers)
 	if err != nil {
@@ -479,13 +478,7 @@ func (h *AnalyticsHandler) GetLargestTransactionsForPeriod(ctx context.Context, 
 		return nil, err
 	}
 
-	limit := input.Limit
-	if limit <= 0 {
-		limit = 10
-	}
-	if limit > 100 {
-		limit = 100
-	}
+	limit := validateLimit(input.Limit, 10, 100)
 
 	response, err := h.service.GetLargestTransactionsForPeriod(ctx, input.UserID, *filters, limit)
 	if err != nil {
