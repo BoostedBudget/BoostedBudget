@@ -28,14 +28,14 @@
   },
   "devDependencies": {
     "@apidevtools/json-schema-ref-parser": "^15.3.5",
-    "@cloudflare/workers-types": "^4.20250620.0",
+    "@cloudflare/workers-types": "^4.20260601.1",
     "@eslint/js": "^9.0.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",
     "globals": "^15.0.0",
     "typescript": "^5.8.3",
-    "wrangler": "^4.20.0",
+    "wrangler": "^4.95.0",
     "yaml": "^2.8.3"
   }
 }
