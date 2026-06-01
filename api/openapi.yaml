@@ -813,6 +813,73 @@ components:
         - tags
         - match_logic
       type: object
+    BudgetVsActualItem:
+      additionalProperties: false
+      properties:
+        allocated_amount:
+          format: double
+          type: number
+        budget_id:
+          type: string
+        budget_name:
+          type: string
+        over_budget:
+          type: boolean
+        pct_used:
+          format: double
+          type: number
+        period:
+          type: string
+        remaining:
+          format: double
+          type: number
+        spent_amount:
+          format: double
+          type: number
+      required:
+        - budget_id
+        - budget_name
+        - period
+        - allocated_amount
+        - spent_amount
+        - remaining
+        - over_budget
+        - pct_used
+      type: object
+    BudgetVsActualResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/BudgetVsActualResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        budgets:
+          items:
+            $ref: "#/components/schemas/BudgetVsActualItem"
+          type:
+            - array
+            - "null"
+        period:
+          type: string
+        total_allocated:
+          format: double
+          type: number
+        total_remaining:
+          format: double
+          type: number
+        total_spent:
+          format: double
+          type: number
+      required:
+        - budgets
+        - total_allocated
+        - total_spent
+        - total_remaining
+        - period
+      type: object
     BulkSetTransactionReviewedInputBody:
       additionalProperties: false
       properties:
@@ -2744,6 +2811,30 @@ components:
         - category
         - month_count
       type: object
+    NetWorthBucket:
+      additionalProperties: false
+      properties:
+        change_abs:
+          format: double
+          type:
+            - number
+            - "null"
+        change_pct:
+          format: double
+          type:
+            - number
+            - "null"
+        date:
+          type: string
+        net_worth:
+          format: double
+          type: number
+      required:
+        - date
+        - net_worth
+        - change_abs
+        - change_pct
+      type: object
     NetWorthCategoryBalance:
       additionalProperties: false
       properties:
@@ -2875,6 +2966,34 @@ components:
         - total_assets
         - total_liabilities
         - by_category
+      type: object
+    NetWorthTrendResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/NetWorthTrendResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        buckets:
+          items:
+            $ref: "#/components/schemas/NetWorthBucket"
+          type:
+            - array
+            - "null"
+        end_date:
+          type: string
+        grouping:
+          type: string
+        start_date:
+          type: string
+      required:
+        - buckets
+        - grouping
+        - start_date
+        - end_date
       type: object
     Notification:
       additionalProperties: false
@@ -4507,6 +4626,67 @@ components:
           type: string
       required:
         - type
+      type: object
+    UnusualSpendItem:
+      additionalProperties: false
+      properties:
+        amount:
+          format: double
+          type: number
+        baseline_avg:
+          format: double
+          type: number
+        category:
+          type: string
+        date:
+          type: string
+        merchant_name:
+          type: string
+        pfc_primary_display:
+          type: string
+        sigma_above:
+          format: double
+          type: number
+        transaction_id:
+          type: string
+      required:
+        - transaction_id
+        - merchant_name
+        - amount
+        - category
+        - pfc_primary_display
+        - date
+        - baseline_avg
+        - sigma_above
+      type: object
+    UnusualSpendResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UnusualSpendResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        end_date:
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/UnusualSpendItem"
+          type:
+            - array
+            - "null"
+        sigma_threshold:
+          format: double
+          type: number
+        start_date:
+          type: string
+      required:
+        - items
+        - start_date
+        - end_date
+        - sigma_threshold
       type: object
     UpdateAccountOutputBody:
       additionalProperties: false
@@ -6469,6 +6649,37 @@ paths:
       summary: Get average monthly spend
       tags:
         - Analytics
+  /api/v1/analytics/budget-vs-actual:
+    get:
+      description: Returns active budgets for the given period with allocated vs spent amounts, remaining balance, over-budget flag, and utilisation percentage. period selects by configured budget period (weekly/monthly/quarterly/yearly/custom). AI-tool-callable.
+      operationId: getBudgetVsActual
+      parameters:
+        - description: "Budget period to query: weekly, monthly, quarterly, yearly, or custom"
+          explode: false
+          in: query
+          name: period
+          required: true
+          schema:
+            description: "Budget period to query: weekly, monthly, quarterly, yearly, or custom"
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetVsActualResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get budget vs actual
+      tags:
+        - Analytics
   /api/v1/analytics/cash-flow-history:
     get:
       description: Returns time series cash flow data grouped by period for charts.
@@ -6844,6 +7055,37 @@ paths:
       summary: Get month-over-month spending change
       tags:
         - Analytics
+  /api/v1/analytics/net-worth-trend:
+    get:
+      description: Returns net worth bucketed by grouping (daily/weekly/monthly) over the trailing 12 months. Uses balance snapshot history. AI-tool-callable.
+      operationId: getNetWorthTrend
+      parameters:
+        - description: "Bucket size: daily, weekly, or monthly (default monthly)"
+          explode: false
+          in: query
+          name: grouping
+          schema:
+            default: monthly
+            description: "Bucket size: daily, weekly, or monthly (default monthly)"
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetWorthTrendResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get net worth trend
+      tags:
+        - Analytics
   /api/v1/analytics/recurring-subscriptions:
     get:
       description: Detects recurring subscription charges using heuristic analysis of the trailing 12-month transaction history. Returns merchants with monthly-cadence charges (≥3 occurrences, ~30-day gap). Designed as an AI-tool-callable function.
@@ -7131,6 +7373,45 @@ paths:
       security:
         - clerk: []
       summary: Get top expense
+      tags:
+        - Analytics
+  /api/v1/analytics/unusual-spend:
+    get:
+      description: Returns transactions in the query window that exceed 2 standard deviations above the per-category baseline mean (3-month window before startDate). AI-tool-callable.
+      operationId: getUnusualSpend
+      parameters:
+        - description: Start of query window (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of query window (YYYY-MM-DD)
+            type: string
+        - description: End of query window (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of query window (YYYY-MM-DD)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnusualSpendResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get unusual spend
       tags:
         - Analytics
   /api/v1/auto-categorization:

@@ -299,6 +299,17 @@
       "excluded": false
     },
     {
+      "operationId": "getBudgetVsActual",
+      "method": "GET",
+      "path": "/api/v1/analytics/budget-vs-actual",
+      "summary": "Get budget vs actual",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
       "operationId": "getCashFlowHistory",
       "method": "GET",
       "path": "/api/v1/analytics/cash-flow-history",
@@ -376,6 +387,17 @@
       "excluded": false
     },
     {
+      "operationId": "getNetWorthTrend",
+      "method": "GET",
+      "path": "/api/v1/analytics/net-worth-trend",
+      "summary": "Get net worth trend",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
       "operationId": "getRecurringSubscriptions",
       "method": "GET",
       "path": "/api/v1/analytics/recurring-subscriptions",
@@ -435,6 +457,17 @@
       "method": "GET",
       "path": "/api/v1/analytics/top-expense",
       "summary": "Get top expense",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getUnusualSpend",
+      "method": "GET",
+      "path": "/api/v1/analytics/unusual-spend",
+      "summary": "Get unusual spend",
       "tags": [
         "Analytics"
       ],

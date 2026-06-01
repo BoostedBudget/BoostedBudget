@@ -31,6 +31,10 @@ export function createApiClient(mutator: FetchMutator) {
       getAverageMonthlySpend(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/average-monthly-spend', method: 'GET', params, signal })
       },
+      /** GET /api/v1/analytics/budget-vs-actual */
+      getBudgetVsActual(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/analytics/budget-vs-actual', method: 'GET', params, signal })
+      },
       /** GET /api/v1/analytics/cash-flow-history */
       getCashFlowHistory(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/cash-flow-history', method: 'GET', params, signal })
@@ -59,6 +63,10 @@ export function createApiClient(mutator: FetchMutator) {
       getMonthOverMonthSpendingChange(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/month-over-month', method: 'GET', params, signal })
       },
+      /** GET /api/v1/analytics/net-worth-trend */
+      getNetWorthTrend(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/analytics/net-worth-trend', method: 'GET', params, signal })
+      },
       /** GET /api/v1/analytics/recurring-subscriptions */
       getRecurringSubscriptions(signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/recurring-subscriptions', method: 'GET', signal })
@@ -82,6 +90,10 @@ export function createApiClient(mutator: FetchMutator) {
       /** GET /api/v1/analytics/top-expense */
       getTopExpense(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/top-expense', method: 'GET', params, signal })
+      },
+      /** GET /api/v1/analytics/unusual-spend */
+      getUnusualSpend(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/analytics/unusual-spend', method: 'GET', params, signal })
       },
     } as const,
     autoCategorization: {
