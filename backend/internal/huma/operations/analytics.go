@@ -285,9 +285,10 @@ func (h *AnalyticsHandler) GetSpendingTrends(ctx context.Context, input *GetSpen
 // GetAverageMonthlySpendInput represents input for GET /analytics/average-monthly-spend.
 type GetAverageMonthlySpendInput struct {
 	inputs.AuthenticatedInput
-	StartDate    string   `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
-	EndDate      string   `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
-	AccountTypes []string `query:"account_types" doc:"Optional: filter by account types (e.g. depository, credit)"`
+	StartDate        string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
+	EndDate          string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
+	AccountTypes     string `query:"account_types" doc:"Comma-separated account types to filter (e.g. depository,credit)"`
+	IncludeTransfers string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
 }
 
 // GetAverageMonthlySpendOutput represents the response for GET /analytics/average-monthly-spend.
@@ -297,18 +298,12 @@ type GetAverageMonthlySpendOutput struct {
 
 // GetAverageMonthlySpend handles GET /api/v1/analytics/average-monthly-spend requests.
 func (h *AnalyticsHandler) GetAverageMonthlySpend(ctx context.Context, input *GetAverageMonthlySpendInput) (*GetAverageMonthlySpendOutput, error) {
-	startDate, endDate, err := dateutil.ParseDateRange(input.StartDate, input.EndDate)
+	filters, err := parseSpendingFilters(input.StartDate, input.EndDate, input.AccountTypes, input.IncludeTransfers)
 	if err != nil {
 		return nil, err
 	}
 
-	filters := domain.SpendingFilters{
-		StartDate:    startDate,
-		EndDate:      endDate,
-		AccountTypes: input.AccountTypes,
-	}
-
-	response, err := h.service.GetAverageMonthlySpend(ctx, input.UserID, filters)
+	response, err := h.service.GetAverageMonthlySpend(ctx, input.UserID, *filters)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}

@@ -443,8 +443,8 @@ func TestGetAverageMonthlySpend(t *testing.T) {
 
 		rows := pgxmock.NewRows([]string{"total"}).AddRow(150.0)
 
-		// Query must use JOIN accounts so buildSpendingFilter account-type filter works
-		mock.ExpectQuery(`(?i)JOIN accounts`).
+		// Query must use LEFT JOIN accounts so pre-relink transactions remain visible (matches all other spending queries)
+		mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
 			WithArgs(userID, filters.StartDate, filters.EndDate).
 			WillReturnRows(rows)
 

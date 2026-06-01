@@ -466,10 +466,7 @@ func (s *analyticsService) GetAverageMonthlySpend(ctx context.Context, userID st
 		monthCount = 1
 	}
 
-	var avg float64
-	if monthCount > 0 {
-		avg = row.Total / float64(monthCount)
-	}
+	avg := row.Total / float64(monthCount)
 
 	return &domain.AverageMonthlySpendResponse{
 		AverageMonthlySpend: avg,

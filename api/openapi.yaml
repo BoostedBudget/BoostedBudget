@@ -6140,17 +6140,20 @@ paths:
           schema:
             description: End of date range (YYYY-MM-DD)
             type: string
-        - description: "Optional: filter by account types (e.g. depository, credit)"
+        - description: Comma-separated account types to filter (e.g. depository,credit)
           explode: false
           in: query
           name: account_types
           schema:
-            description: "Optional: filter by account types (e.g. depository, credit)"
-            items:
-              type: string
-            type:
-              - array
-              - "null"
+            description: Comma-separated account types to filter (e.g. depository,credit)
+            type: string
+        - description: Include transfer transactions (true/false, default false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfer transactions (true/false, default false)
+            type: string
       responses:
         "200":
           content:

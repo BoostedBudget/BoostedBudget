@@ -22,11 +22,13 @@ type mockAnalyticsService struct {
 	spendingByCategoryResponse   *domain.SpendingByCategoryResponse
 	spendingByMerchantResponse   *domain.SpendingByMerchantResponse
 	spendingTrendsResponse       *domain.SpendingTrendsResponse
+	averageMonthlySpendResponse  *domain.AverageMonthlySpendResponse
 	summaryErr                   error
 	historyErr                   error
 	spendingByCategoryErr        error
 	spendingByMerchantErr        error
 	spendingTrendsErr            error
+	averageMonthlySpendErr       error
 }
 
 func (m *mockAnalyticsService) GetCashFlowSummary(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowSummaryResponse, error) {
@@ -64,7 +66,7 @@ func (m *mockAnalyticsService) GetTopExpense(_ context.Context, _ string, _ time
 }
 
 func (m *mockAnalyticsService) GetAverageMonthlySpend(_ context.Context, _ string, _ domain.SpendingFilters) (*domain.AverageMonthlySpendResponse, error) {
-	return nil, nil
+	return m.averageMonthlySpendResponse, m.averageMonthlySpendErr
 }
 
 // Helper functions to create test data
@@ -591,17 +593,81 @@ func TestGetSpendingTrends_InvalidDate(t *testing.T) {
 	assert.Contains(t, err.Error(), "end_date is required")
 }
 
+// TestGetAverageMonthlySpend_Success tests successful average monthly spend retrieval.
+func TestGetAverageMonthlySpend_Success(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		averageMonthlySpendResponse: &domain.AverageMonthlySpendResponse{
+			AverageMonthlySpend: 100.0,
+			TotalSpend:          300.0,
+			MonthCount:          3,
+			StartDate:           "2024-01-01",
+			EndDate:             "2024-03-31",
+		},
+	}
+
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetAverageMonthlySpendInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-03-31",
+	}
+
+	output, err := handler.GetAverageMonthlySpend(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.InDelta(t, 100.0, output.Body.AverageMonthlySpend, 0.001)
+	assert.Equal(t, 3, output.Body.MonthCount)
+}
+
+// TestGetAverageMonthlySpend_EndBeforeStart tests date validation.
+func TestGetAverageMonthlySpend_EndBeforeStart(t *testing.T) {
+	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+
+	input := &GetAverageMonthlySpendInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-03-31",
+		EndDate:            "2024-01-01",
+	}
+
+	output, err := handler.GetAverageMonthlySpend(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// TestGetAverageMonthlySpend_ServiceError tests service error propagation.
+func TestGetAverageMonthlySpend_ServiceError(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		averageMonthlySpendErr: errors.New("db error"),
+	}
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetAverageMonthlySpendInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-03-31",
+	}
+
+	output, err := handler.GetAverageMonthlySpend(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
 // TestSpendingRouteRegistration tests that spending routes are properly registered.
 func TestSpendingRouteRegistration(t *testing.T) {
 	_, api := humatest.New(t)
 	handler := NewAnalyticsHandler(&mockAnalyticsService{})
 	RegisterAnalyticsRoutes(api, handler)
 
-	// All 3 spending endpoints should exist (return 401, not 404)
+	// All spending endpoints should exist (return 401, not 404)
 	paths := []string{
 		"/api/v1/analytics/spending-by-category",
 		"/api/v1/analytics/spending-by-merchant",
 		"/api/v1/analytics/spending-trends",
+		"/api/v1/analytics/average-monthly-spend",
 	}
 	for _, path := range paths {
 		resp := api.Get(path)
