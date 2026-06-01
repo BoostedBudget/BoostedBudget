@@ -117,12 +117,11 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 
 	// Optional filter: account types
 	if len(filters.AccountTypes) > 0 {
-		placeholders := make([]string, len(filters.AccountTypes))
-		for i, at := range filters.AccountTypes {
-			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+		placeholders := buildPlaceholders(len(filters.AccountTypes), argIndex)
+		for _, at := range filters.AccountTypes {
 			args = append(args, at)
-			argIndex++
 		}
+		argIndex += len(filters.AccountTypes)
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
@@ -186,12 +185,11 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 
 	// Optional filter: account types
 	if len(filters.AccountTypes) > 0 {
-		placeholders := make([]string, len(filters.AccountTypes))
-		for i, at := range filters.AccountTypes {
-			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+		placeholders := buildPlaceholders(len(filters.AccountTypes), argIndex)
+		for _, at := range filters.AccountTypes {
 			args = append(args, at)
-			argIndex++
 		}
+		argIndex += len(filters.AccountTypes)
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
@@ -290,7 +288,7 @@ func generateEmptyPeriods(startDate, endDate time.Time, grouping string) []domai
 	return result
 }
 
-// truncateDate truncates a date to the start of its period
+// truncateDate truncates a date to the start of its period (used for both cash flow and net worth bucketing)
 func truncateDate(t time.Time, grouping string) time.Time {
 	switch grouping {
 	case "weekly":
@@ -307,7 +305,7 @@ func truncateDate(t time.Time, grouping string) time.Time {
 	}
 }
 
-// advancePeriod advances the date by one period
+// advancePeriod advances the date by one period (used for both cash flow and net worth bucketing)
 func advancePeriod(t time.Time, grouping string) time.Time {
 	switch grouping {
 	case "weekly":
@@ -352,19 +350,27 @@ func effectiveTransferExpr() string {
 	return `COALESCE(t.effective_pfc_primary, '')`
 }
 
-// spendingBaseQuery returns the common WHERE clause args and starting argIndex for spending queries.
+// buildPlaceholders creates numbered placeholders ($1, $2, ...) for parameterized query building
+func buildPlaceholders(count, startIndex int) []string {
+	placeholders := make([]string, count)
+	for i := 0; i < count; i++ {
+		placeholders[i] = fmt.Sprintf("$%d", startIndex+i)
+	}
+	return placeholders
+}
+
+// buildSpendingFilter returns the common WHERE clause args and starting argIndex for spending queries.
 func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{}) (string, []interface{}, int) {
 	args := baseArgs
 	argIndex := len(args) + 1
 	clause := ""
 
 	if len(filters.AccountTypes) > 0 {
-		placeholders := make([]string, len(filters.AccountTypes))
-		for i, at := range filters.AccountTypes {
-			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+		placeholders := buildPlaceholders(len(filters.AccountTypes), argIndex)
+		for _, at := range filters.AccountTypes {
 			args = append(args, at)
-			argIndex++
 		}
+		argIndex += len(filters.AccountTypes)
 		clause += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
@@ -375,12 +381,11 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 	// Issue #1203: scope to specific custom categories. With RollUpChildren a parent
 	// custom id also matches its children (parent_id). user_id is $1 in spending queries.
 	if len(filters.CustomCategoryIDs) > 0 {
-		placeholders := make([]string, len(filters.CustomCategoryIDs))
-		for i, id := range filters.CustomCategoryIDs {
-			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+		placeholders := buildPlaceholders(len(filters.CustomCategoryIDs), argIndex)
+		for _, id := range filters.CustomCategoryIDs {
 			args = append(args, id)
-			argIndex++
 		}
+		argIndex += len(filters.CustomCategoryIDs)
 		idList := strings.Join(placeholders, ", ")
 		if filters.RollUpChildren {
 			clause += fmt.Sprintf(

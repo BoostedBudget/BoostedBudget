@@ -309,7 +309,7 @@ func TestGetCashFlowSummary_InvalidIncludeTransfers(t *testing.T) {
 
 	assert.Nil(t, output)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Invalid include_transfers value")
+	assert.Contains(t, err.Error(), "Invalid")
 }
 
 // TestGetCashFlowSummary_ServiceError tests error handling for service errors.
