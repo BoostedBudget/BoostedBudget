@@ -119,6 +119,33 @@ describe('recipe.templates', () => {
     }
   })
 
+  it('each starter template call conforms to SaveRecipeInput.calls shape at runtime', () => {
+    for (const tmpl of STARTER_RECIPE_TEMPLATES) {
+      expect(typeof tmpl.name).toBe('string')
+      expect(tmpl.name.length).toBeGreaterThan(0)
+      expect(Array.isArray(tmpl.calls)).toBe(true)
+      expect(tmpl.calls.length).toBeGreaterThan(0)
+      for (const call of tmpl.calls) {
+        // Required field: operationId must be a non-empty string
+        expect(typeof call.operationId).toBe('string')
+        expect(call.operationId.length).toBeGreaterThan(0)
+        // Optional fields must be plain objects when present (not arrays, not strings)
+        if (call.params !== undefined) {
+          expect(typeof call.params).toBe('object')
+          expect(Array.isArray(call.params)).toBe(false)
+        }
+        if (call.body !== undefined) {
+          expect(typeof call.body).toBe('object')
+          expect(Array.isArray(call.body)).toBe(false)
+        }
+        if (call.pathParams !== undefined) {
+          expect(typeof call.pathParams).toBe('object')
+          expect(Array.isArray(call.pathParams)).toBe(false)
+        }
+      }
+    }
+  })
+
   it('each template call conforms to the SaveRecipeInput.calls shape', () => {
     for (const template of STARTER_RECIPE_TEMPLATES) {
       expect(typeof template.name).toBe('string')
