@@ -25,6 +25,8 @@ type mockAnalyticsRepository struct {
 	getLargestTransactionsForPeriodFn   func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.LargestTransactionRow, error)
 	getCategoryBreakdownForMerchantFn   func(ctx context.Context, userID string, merchantName string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
 	getIncomeSourceBreakdownFn          func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.IncomeSourceRow, error)
+	getUnusualSpendFn                   func(ctx context.Context, userID string, baselineStart, startDate, endDate time.Time, sigmaThreshold float64) ([]domain.UnusualSpendRow, error)
+	getBudgetVsActualFn                 func(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error)
 }
 
 func (m *mockAnalyticsRepository) GetCashFlowAggregation(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
@@ -123,6 +125,20 @@ func (m *mockAnalyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, 
 		return m.getIncomeSourceBreakdownFn(ctx, userID, filters)
 	}
 	return nil, nil
+}
+
+func (m *mockAnalyticsRepository) GetUnusualSpend(ctx context.Context, userID string, baselineStart, startDate, endDate time.Time, sigmaThreshold float64) ([]domain.UnusualSpendRow, error) {
+	if m.getUnusualSpendFn != nil {
+		return m.getUnusualSpendFn(ctx, userID, baselineStart, startDate, endDate, sigmaThreshold)
+	}
+	return []domain.UnusualSpendRow{}, nil
+}
+
+func (m *mockAnalyticsRepository) GetBudgetVsActual(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error) {
+	if m.getBudgetVsActualFn != nil {
+		return m.getBudgetVsActualFn(ctx, userID, period)
+	}
+	return []domain.BudgetVsActualRow{}, nil
 }
 
 func TestAnalyticsService_GetCashFlowSummary(t *testing.T) {
@@ -1635,6 +1651,383 @@ func TestAnalyticsService_GetRecurringSubscriptions(t *testing.T) {
 		service := NewAnalyticsService(mockRepo)
 
 		_, err := service.GetRecurringSubscriptions(ctx, "user-123")
+		if err == nil {
+			t.Error("expected error from repository")
+		}
+	})
+}
+
+func TestAnalyticsService_GetUnusualSpend(t *testing.T) {
+	ctx := context.Background()
+	loc := time.UTC
+
+	start := time.Date(2024, 4, 1, 0, 0, 0, 0, loc)
+	end := time.Date(2024, 4, 30, 0, 0, 0, 0, loc)
+	txDate := time.Date(2024, 4, 15, 0, 0, 0, 0, loc)
+
+	t.Run("happy path: outlier returned with correct fields", func(t *testing.T) {
+		var capturedBaseline time.Time
+		var capturedSigma float64
+		mockRepo := &mockAnalyticsRepository{
+			getUnusualSpendFn: func(ctx context.Context, userID string, baselineStart, startDate, endDate time.Time, sigmaThreshold float64) ([]domain.UnusualSpendRow, error) {
+				capturedBaseline = baselineStart
+				capturedSigma = sigmaThreshold
+				return []domain.UnusualSpendRow{
+					{
+						TransactionID: "tx-outlier",
+						MerchantName:  "Fancy Restaurant",
+						Amount:        350.0,
+						Category:      "FOOD_AND_DRINK",
+						Date:          txDate,
+						BaselineAvg:   50.0,
+						SigmaAbove:    3.5,
+					},
+				}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+
+		result, err := service.GetUnusualSpend(ctx, "user-123", start, end)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("expected non-nil result")
+		}
+		if len(result.Items) != 1 {
+			t.Fatalf("expected 1 item, got %d", len(result.Items))
+		}
+		item := result.Items[0]
+		if item.TransactionID != "tx-outlier" {
+			t.Errorf("expected transaction_id tx-outlier, got %s", item.TransactionID)
+		}
+		if item.MerchantName != "Fancy Restaurant" {
+			t.Errorf("expected merchant_name Fancy Restaurant, got %s", item.MerchantName)
+		}
+		if item.Amount != 350.0 {
+			t.Errorf("expected amount 350, got %f", item.Amount)
+		}
+		if item.Category != "FOOD_AND_DRINK" {
+			t.Errorf("expected category FOOD_AND_DRINK, got %s", item.Category)
+		}
+		if item.PFCPrimaryDisplay == "" {
+			t.Error("expected non-empty pfc_primary_display")
+		}
+		if item.Date != "2024-04-15" {
+			t.Errorf("expected date 2024-04-15, got %s", item.Date)
+		}
+		if item.BaselineAvg != 50.0 {
+			t.Errorf("expected baseline_avg 50, got %f", item.BaselineAvg)
+		}
+		if item.SigmaAbove != 3.5 {
+			t.Errorf("expected sigma_above 3.5, got %f", item.SigmaAbove)
+		}
+		if result.SigmaThreshold != 2.0 {
+			t.Errorf("expected sigma_threshold 2.0, got %f", result.SigmaThreshold)
+		}
+		// Service should compute baseline 3 months before start
+		expectedBaseline := start.AddDate(0, -3, 0)
+		if !capturedBaseline.Equal(expectedBaseline) {
+			t.Errorf("expected baseline %v, got %v", expectedBaseline, capturedBaseline)
+		}
+		if capturedSigma != 2.0 {
+			t.Errorf("expected sigma 2.0 passed to repo, got %f", capturedSigma)
+		}
+	})
+
+	t.Run("end_date before start_date returns error", func(t *testing.T) {
+		service := NewAnalyticsService(&mockAnalyticsRepository{})
+		_, err := service.GetUnusualSpend(ctx, "user-123", end, start)
+		if err == nil {
+			t.Error("expected error when end_date before start_date")
+		}
+	})
+
+	t.Run("empty result returns empty items slice not nil", func(t *testing.T) {
+		service := NewAnalyticsService(&mockAnalyticsRepository{})
+		result, err := service.GetUnusualSpend(ctx, "user-123", start, end)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Items == nil {
+			t.Error("expected non-nil items slice")
+		}
+	})
+
+	t.Run("repository error is propagated", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getUnusualSpendFn: func(ctx context.Context, userID string, baselineStart, startDate, endDate time.Time, sigmaThreshold float64) ([]domain.UnusualSpendRow, error) {
+				return nil, errors.New("db error")
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+		_, err := service.GetUnusualSpend(ctx, "user-123", start, end)
+		if err == nil {
+			t.Error("expected error from repository")
+		}
+	})
+}
+
+// mockBalanceSnapshotRepository implements the minimal interface needed for testing GetNetWorthTrend.
+type mockBalanceSnapshotRepository struct {
+	getAggregatedHistoryFn func(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error)
+}
+
+func (m *mockBalanceSnapshotRepository) Create(ctx context.Context, snapshot *domain.BalanceSnapshot) error {
+	return nil
+}
+func (m *mockBalanceSnapshotRepository) GetByUserIDAndDateRange(ctx context.Context, userID string, startDate, endDate time.Time) ([]domain.BalanceSnapshot, error) {
+	return nil, nil
+}
+func (m *mockBalanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
+	if m.getAggregatedHistoryFn != nil {
+		return m.getAggregatedHistoryFn(ctx, userID, startDate, endDate, accountTypes)
+	}
+	return nil, nil
+}
+func (m *mockBalanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userID string) ([]domain.BalanceSnapshot, error) {
+	return nil, nil
+}
+func (m *mockBalanceSnapshotRepository) GetLatestByAccountID(ctx context.Context, accountID string) (*domain.BalanceSnapshot, error) {
+	return nil, nil
+}
+func (m *mockBalanceSnapshotRepository) DeleteByAccountID(ctx context.Context, accountID string) error {
+	return nil
+}
+
+func TestAnalyticsService_GetNetWorthTrend(t *testing.T) {
+	ctx := context.Background()
+	loc := time.UTC
+
+	t.Run("nil balanceSnapshotRepo returns error", func(t *testing.T) {
+		service := NewAnalyticsService(&mockAnalyticsRepository{})
+		// No SetBalanceSnapshotRepo call — repo is nil
+		_, err := service.GetNetWorthTrend(ctx, "user-123", "monthly")
+		if err == nil {
+			t.Error("expected error when balanceSnapshotRepo is nil")
+		}
+	})
+
+	t.Run("invalid grouping returns error", func(t *testing.T) {
+		service := NewAnalyticsService(&mockAnalyticsRepository{})
+		service.SetBalanceSnapshotRepo(&mockBalanceSnapshotRepository{})
+		_, err := service.GetNetWorthTrend(ctx, "user-123", "quarterly")
+		if err == nil {
+			t.Error("expected error for invalid grouping")
+		}
+	})
+
+	t.Run("3 daily points grouped monthly → 1 bucket", func(t *testing.T) {
+		day1 := time.Date(2024, 3, 10, 0, 0, 0, 0, loc)
+		day2 := time.Date(2024, 3, 20, 0, 0, 0, 0, loc)
+		day3 := time.Date(2024, 3, 25, 0, 0, 0, 0, loc)
+
+		mockBalRepo := &mockBalanceSnapshotRepository{
+			getAggregatedHistoryFn: func(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
+				return []domain.BalanceHistoryPoint{
+					{Date: day1, TotalBalance: 10000.0},
+					{Date: day2, TotalBalance: 10500.0},
+					{Date: day3, TotalBalance: 11000.0},
+				}, nil
+			},
+		}
+
+		service := NewAnalyticsService(&mockAnalyticsRepository{})
+		service.SetBalanceSnapshotRepo(mockBalRepo)
+
+		result, err := service.GetNetWorthTrend(ctx, "user-123", "monthly")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("expected non-nil result")
+		}
+		// 3 days all in March → 1 monthly bucket
+		if len(result.Buckets) != 1 {
+			t.Fatalf("expected 1 bucket for monthly grouping of 3 March points, got %d", len(result.Buckets))
+		}
+		bucket := result.Buckets[0]
+		// Last daily value in March = 11000
+		if bucket.NetWorth != 11000.0 {
+			t.Errorf("expected net_worth 11000 (last daily value), got %f", bucket.NetWorth)
+		}
+		// First bucket: no change
+		if bucket.ChangeAbs != nil {
+			t.Error("expected nil change_abs for first bucket")
+		}
+		if bucket.ChangePct != nil {
+			t.Error("expected nil change_pct for first bucket")
+		}
+		if result.Grouping != "monthly" {
+			t.Errorf("expected grouping monthly, got %s", result.Grouping)
+		}
+	})
+
+	t.Run("two monthly buckets have change_abs and change_pct", func(t *testing.T) {
+		day1 := time.Date(2024, 2, 28, 0, 0, 0, 0, loc)
+		day2 := time.Date(2024, 3, 31, 0, 0, 0, 0, loc)
+
+		mockBalRepo := &mockBalanceSnapshotRepository{
+			getAggregatedHistoryFn: func(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
+				return []domain.BalanceHistoryPoint{
+					{Date: day1, TotalBalance: 10000.0},
+					{Date: day2, TotalBalance: 12000.0},
+				}, nil
+			},
+		}
+
+		service := NewAnalyticsService(&mockAnalyticsRepository{})
+		service.SetBalanceSnapshotRepo(mockBalRepo)
+
+		result, err := service.GetNetWorthTrend(ctx, "user-123", "monthly")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Buckets) != 2 {
+			t.Fatalf("expected 2 buckets, got %d", len(result.Buckets))
+		}
+		b1 := result.Buckets[0]
+		b2 := result.Buckets[1]
+		if b1.ChangeAbs != nil || b1.ChangePct != nil {
+			t.Error("expected nil changes for first bucket")
+		}
+		if b2.ChangeAbs == nil {
+			t.Fatal("expected non-nil change_abs for second bucket")
+		}
+		if *b2.ChangeAbs != 2000.0 {
+			t.Errorf("expected change_abs 2000, got %f", *b2.ChangeAbs)
+		}
+		if b2.ChangePct == nil {
+			t.Fatal("expected non-nil change_pct for second bucket")
+		}
+		// 2000/10000 = 0.2 (20%)
+		if *b2.ChangePct != 0.2 {
+			t.Errorf("expected change_pct 0.2, got %f", *b2.ChangePct)
+		}
+	})
+
+	t.Run("repository error is propagated", func(t *testing.T) {
+		mockBalRepo := &mockBalanceSnapshotRepository{
+			getAggregatedHistoryFn: func(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
+				return nil, errors.New("db error")
+			},
+		}
+		service := NewAnalyticsService(&mockAnalyticsRepository{})
+		service.SetBalanceSnapshotRepo(mockBalRepo)
+
+		_, err := service.GetNetWorthTrend(ctx, "user-123", "monthly")
+		if err == nil {
+			t.Error("expected error from repository")
+		}
+	})
+}
+
+func TestAnalyticsService_GetBudgetVsActual(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("happy path: computed fields correct", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getBudgetVsActualFn: func(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error) {
+				return []domain.BudgetVsActualRow{
+					{BudgetID: "bgt-1", BudgetName: "Groceries", Period: "monthly", AllocatedAmount: 500.0, SpentAmount: 600.0},
+					{BudgetID: "bgt-2", BudgetName: "Transport", Period: "monthly", AllocatedAmount: 200.0, SpentAmount: 150.0},
+				}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+
+		result, err := service.GetBudgetVsActual(ctx, "user-123", "monthly")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Budgets) != 2 {
+			t.Fatalf("expected 2 budgets, got %d", len(result.Budgets))
+		}
+		// Groceries: over budget
+		g := result.Budgets[0]
+		if g.BudgetName != "Groceries" {
+			t.Errorf("expected Groceries first, got %s", g.BudgetName)
+		}
+		if !g.OverBudget {
+			t.Error("expected Groceries to be over budget")
+		}
+		if g.Remaining != -100.0 {
+			t.Errorf("expected Remaining -100, got %f", g.Remaining)
+		}
+		if g.PctUsed != 120.0 {
+			t.Errorf("expected PctUsed 120, got %f", g.PctUsed)
+		}
+		// Transport: under budget
+		tr := result.Budgets[1]
+		if tr.OverBudget {
+			t.Error("expected Transport to be under budget")
+		}
+		if tr.Remaining != 50.0 {
+			t.Errorf("expected Remaining 50, got %f", tr.Remaining)
+		}
+		if tr.PctUsed != 75.0 {
+			t.Errorf("expected PctUsed 75, got %f", tr.PctUsed)
+		}
+		// Totals
+		if result.TotalAllocated != 700.0 {
+			t.Errorf("expected total_allocated 700, got %f", result.TotalAllocated)
+		}
+		if result.TotalSpent != 750.0 {
+			t.Errorf("expected total_spent 750, got %f", result.TotalSpent)
+		}
+		if result.TotalRemaining != -50.0 {
+			t.Errorf("expected total_remaining -50, got %f", result.TotalRemaining)
+		}
+		if result.Period != "monthly" {
+			t.Errorf("expected period monthly, got %s", result.Period)
+		}
+	})
+
+	t.Run("allocated_amount=0 yields pct_used=0 not division error", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getBudgetVsActualFn: func(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error) {
+				return []domain.BudgetVsActualRow{
+					{BudgetID: "bgt-1", BudgetName: "Empty", Period: "monthly", AllocatedAmount: 0, SpentAmount: 10.0},
+				}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+		result, err := service.GetBudgetVsActual(ctx, "user-123", "monthly")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Budgets[0].PctUsed != 0.0 {
+			t.Errorf("expected pct_used 0 when allocated=0, got %f", result.Budgets[0].PctUsed)
+		}
+	})
+
+	t.Run("empty result returns non-nil response with empty budgets", func(t *testing.T) {
+		service := NewAnalyticsService(&mockAnalyticsRepository{})
+		result, err := service.GetBudgetVsActual(ctx, "user-123", "yearly")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Budgets == nil {
+			t.Error("expected non-nil budgets slice")
+		}
+	})
+
+	t.Run("invalid period returns error", func(t *testing.T) {
+		service := NewAnalyticsService(&mockAnalyticsRepository{})
+		_, err := service.GetBudgetVsActual(ctx, "user-123", "biannual")
+		if err == nil {
+			t.Error("expected error for invalid period")
+		}
+	})
+
+	t.Run("repository error is propagated", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getBudgetVsActualFn: func(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error) {
+				return nil, errors.New("db error")
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+		_, err := service.GetBudgetVsActual(ctx, "user-123", "monthly")
 		if err == nil {
 			t.Error("expected error from repository")
 		}
