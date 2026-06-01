@@ -729,20 +729,21 @@ func (r *analyticsRepository) GetRecurringSubscriptions(ctx context.Context, use
 }
 
 // GetSavingsRateForPeriod returns income and expense totals for computing savings rate.
-// Income: ABS(amount < 0), Expenses: amount > 0. Excludes transfers and pending transactions.
+// Income: ABS(amount < 0), Expenses: amount > 0. Excludes pending transactions.
+// No transfer filter: TRANSFER_IN transactions represent real income (e.g. payroll at some banks).
 // Single DB round-trip; rate computed in service layer (Issue #1215 PR2).
 func (r *analyticsRepository) GetSavingsRateForPeriod(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.SavingsRateRow, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
 	const query = `
 		SELECT
-			COALESCE(ABS(SUM(CASE WHEN t.amount < 0 AND t.pending = false THEN t.amount ELSE 0 END)), 0) AS income,
-			COALESCE(SUM(CASE WHEN t.amount > 0 AND t.pending = false THEN t.amount ELSE 0 END), 0) AS expenses
+			COALESCE(ABS(SUM(CASE WHEN t.amount < 0 THEN t.amount ELSE 0 END)), 0) AS income,
+			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) AS expenses
 		FROM transactions t
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
-		  AND COALESCE(t.effective_pfc_primary, '') NOT LIKE 'TRANSFER%'
+		  AND t.pending = false
 	`
 
 	var row domain.SavingsRateRow
@@ -885,7 +886,7 @@ func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Contex
 	}
 	defer rows.Close()
 
-	var results []domain.CategoryBreakdownForMerchantRow
+	results := make([]domain.CategoryBreakdownForMerchantRow, 0)
 	for rows.Next() {
 		var row domain.CategoryBreakdownForMerchantRow
 		if err := rows.Scan(&row.Category, &row.Total, &row.Count); err != nil {
@@ -919,7 +920,6 @@ func (r *analyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, user
 		  AND t.date <= $3
 		  AND t.amount < 0
 		  AND t.pending = false
-		  AND COALESCE(t.effective_pfc_primary, '') NOT LIKE 'TRANSFER%%'
 		  %s
 		GROUP BY (%s)
 		ORDER BY ABS(SUM(t.amount)) DESC
@@ -931,7 +931,7 @@ func (r *analyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, user
 	}
 	defer rows.Close()
 
-	var results []domain.IncomeSourceRow
+	results := make([]domain.IncomeSourceRow, 0)
 	for rows.Next() {
 		var row domain.IncomeSourceRow
 		if err := rows.Scan(&row.Category, &row.Total, &row.Count); err != nil {
