@@ -203,7 +203,7 @@ The Worker **never** touches the database directly. All data goes through the Go
 
 ## Known Limitations
 
-- **Revocation**: Revoking the OAuth grant in the **Clerk dashboard** (or via a BoostedBudget account settings page once that UI is built) takes effect within the token TTL (~5 minutes) rather than instantly. This is a known limitation of stateless JWTs.
+- **Revocation**: Revoking the OAuth grant in the **Clerk dashboard** (or via a BoostedBudget account settings page once that UI is built) is detected within approximately **30–60 seconds** via a layer-2 Clerk token introspection check on every `/mcp` and `/sse` request (cached per isolate for 30 s). This is a best-effort SLA — not a hard security boundary. Caveats: (a) the check fails open if Clerk's API is unreachable (Clerk outages do not block MCP); (b) the per-isolate cache means a revoked grant may remain valid for up to 30 s per Worker isolate; (c) long-lived `/sse` streams are checked at connection time, not per message — they may survive until the next reconnect after revocation. The underlying Clerk OAuth JWT access token TTL is ~1 day.
 - **Sandbox**: `execute()` calls a typed API client (not agent-authored TypeScript in a V8 isolate). This is a simplified Code Mode implementation.
 - **Rate limits**: 60 requests/minute, 5 concurrent per session.
 - **Unattended writes**: Automation rules and scheduled write recipes are not yet supported (planned for a future release).
