@@ -878,7 +878,7 @@ func TestProcessAddedTransactions_Success(t *testing.T) {
 			return false
 		}
 		return true
-	})).Return(nil)
+	})).Return(nil, nil)
 
 	// Execute
 	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
@@ -944,7 +944,7 @@ func TestProcessAddedTransactions_Deduplication(t *testing.T) {
 	// Both transactions will be passed, database constraint handles it
 	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
 		return len(txns) == 2 // Both passed to DB, constraint handles dedup
-	})).Return(nil)
+	})).Return(nil, nil)
 
 	// Execute
 	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
@@ -1019,7 +1019,7 @@ func TestProcessAddedTransactions_PartialFailure(t *testing.T) {
 	// Mock: CreateBatch should only receive 2 transactions (3rd skipped due to missing account)
 	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
 		return len(txns) == 2 // Only first 2 transactions
-	})).Return(nil)
+	})).Return(nil, nil)
 
 	// Execute
 	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
@@ -1748,7 +1748,7 @@ func TestProcessAddedTransactions_SetsPFCFields(t *testing.T) {
 			return false
 		}
 		return true
-	})).Return(nil)
+	})).Return(nil, nil)
 
 	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
 
@@ -1961,7 +1961,7 @@ func TestSyncTransactions_CursorPersistsAfterTxnStorageFailure(t *testing.T) {
 	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", newCursor).Return(nil)
 
 	// Mock: Transaction storage FAILS
-	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(errors.New("database connection lost"))
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, errors.New("database connection lost"))
 
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
@@ -2039,7 +2039,7 @@ func TestSyncTransactions_CursorResumeFromLastSuccessfulPage(t *testing.T) {
 	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", finalCursor).Return(nil)
 
 	// Mock: Transaction storage succeeds
-	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil)
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, nil)
 
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
@@ -2196,7 +2196,7 @@ func TestSyncTransactions_FinalPageCursorUpdate(t *testing.T) {
 	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", finalCursor).Return(nil)
 
 	// Mock: Transaction storage succeeds
-	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil)
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, nil)
 
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
@@ -2422,7 +2422,7 @@ func TestTransactionSyncService_SyncTransactions_SetsUserAccountID(t *testing.T)
 			return false
 		}
 		return true
-	})).Return(nil)
+	})).Return(nil, nil)
 
 	// Mock cursor update
 	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", "cursor-123").Return(nil)
@@ -2523,7 +2523,7 @@ func TestTransactionSyncService_SyncTransactions_LooksUpUserAccountFromAccount(t
 			return false
 		}
 		return true
-	})).Return(nil)
+	})).Return(nil, nil)
 
 	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", "cursor-456").Return(nil)
 
@@ -2593,7 +2593,7 @@ func TestTransactionSyncService_ProcessAddedTransactions_SetsUserAccountID(t *te
 			return false
 		}
 		return true
-	})).Return(nil)
+	})).Return(nil, nil)
 
 	// Execute - note: processAddedTransactions signature will need to be updated
 	// to accept userAccountMap parameter for Issue #171
@@ -2655,7 +2655,7 @@ func TestTransactionSyncService_ProcessAddedTransactions_NullUserAccountID_Handl
 			return false
 		}
 		return true
-	})).Return(nil)
+	})).Return(nil, nil)
 
 	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, userAccountMap)
 
@@ -2727,7 +2727,7 @@ func TestTransactionSyncService_Relink_PreservesEnrichments(t *testing.T) {
 			return false
 		}
 		return true
-	})).Return(nil)
+	})).Return(nil, nil)
 
 	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, userAccountMap)
 
@@ -2916,7 +2916,7 @@ func TestProcessAddedTransactions_StampsMerchantID(t *testing.T) {
 			return false
 		}
 		return *txns[0].MerchantID == starbucksID
-	})).Return(nil)
+	})).Return(nil, nil)
 
 	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
 
@@ -2963,7 +2963,7 @@ func TestProcessAddedTransactions_MerchantUpsertError_ContinuesSync(t *testing.T
 	// CreateBatch must still be called — MerchantID will be nil (best-effort)
 	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
 		return len(txns) == 1 && txns[0].MerchantID == nil
-	})).Return(nil)
+	})).Return(nil, nil)
 
 	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
 
@@ -3002,7 +3002,7 @@ func TestProcessAddedTransactions_NoMerchantName_SkipsMerchantUpsert(t *testing.
 		},
 	}
 
-	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil)
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, nil)
 
 	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
 
@@ -3145,4 +3145,149 @@ func TestProcessModifiedTransactions_MerchantUpsertError_ContinuesUpdate(t *test
 	require.NoError(t, err, "update must not fail when merchant upsert errors")
 	mockMerchantRepo.AssertExpectations(t)
 	mockTransactionRepo.AssertExpectations(t)
+}
+
+// ---------------------------------------------------------------------------
+// Issue #1213 — RED tests for processAddedTransactions wiring.
+// These test that analytics side-effects are gated on insertedIDs from
+// CreateBatch, and that MonitorForMatches still receives all transactions.
+// ---------------------------------------------------------------------------
+
+// mockRuleApplicationServiceFor1213 mocks RuleApplicationService with the
+// new interface (ApplyRulesToBatch returns []BatchRuleApplication, EmitBatchSideEffects).
+type mockRuleApplicationServiceFor1213 struct {
+	mock.Mock
+}
+
+func (m *mockRuleApplicationServiceFor1213) ApplyRulesToTransaction(ctx context.Context, tx *domain.Transaction) error {
+	args := m.Called(ctx, tx)
+	return args.Error(0)
+}
+
+func (m *mockRuleApplicationServiceFor1213) ApplyRulesToBatch(ctx context.Context, txns []domain.Transaction, userID string) ([]BatchRuleApplication, error) {
+	args := m.Called(ctx, txns, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]BatchRuleApplication), args.Error(1)
+}
+
+func (m *mockRuleApplicationServiceFor1213) EmitBatchSideEffects(ctx context.Context, userID string, applications []BatchRuleApplication, insertedIDs map[string]bool) {
+	m.Called(ctx, userID, applications, insertedIDs)
+}
+
+// mockTransactionMonitorServiceFor1213 captures MonitorForMatches calls.
+type mockTransactionMonitorServiceFor1213 struct {
+	mock.Mock
+}
+
+func (m *mockTransactionMonitorServiceFor1213) MonitorForMatches(ctx context.Context, userID string, newTransactions []*domain.Transaction) error {
+	args := m.Called(ctx, userID, newTransactions)
+	return args.Error(0)
+}
+
+// TestProcessAddedTransactions_EmitBatchSideEffectsCalledWithInsertedIDs verifies
+// that after CreateBatch, EmitBatchSideEffects is called with the exact insertedIDs
+// map returned by CreateBatch.  Analytics/match-count filtering is then the
+// responsibility of EmitBatchSideEffects (tested in rule_application_service_test.go).
+func TestProcessAddedTransactions_EmitBatchSideEffectsCalledWithInsertedIDs(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockRuleService := new(mockRuleApplicationServiceFor1213)
+	mockMonitor := new(mockTransactionMonitorServiceFor1213)
+
+	service := NewTransactionSyncService(
+		nil, nil,
+		mockTransactionRepo,
+		nil, nil, nil, nil, nil,
+		mockRuleService,
+		nil,
+		mockMonitor,
+		nil,
+		nil, // logger
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "li-1", UserID: "user-1213"}
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	added := []plaid.Transaction{
+		{TransactionId: "tx-a", AccountId: "plaid-acc-1", Amount: 10.00, Date: "2024-01-01", Name: "Inserted"},
+		{TransactionId: "tx-b", AccountId: "plaid-acc-1", Amount: 20.00, Date: "2024-01-01", Name: "Conflict"},
+	}
+
+	// Simulate: rule matched both transactions
+	fakeApplications := []BatchRuleApplication{
+		{TransactionID: "tx-a", MatchedRuleIDs: []string{"r1"}, CategoryApplied: true, CategoryRuleID: "r1"},
+		{TransactionID: "tx-b", MatchedRuleIDs: []string{"r1"}, CategoryApplied: true, CategoryRuleID: "r1"},
+	}
+	mockRuleService.On("ApplyRulesToBatch", ctx, mock.Anything, "user-1213").
+		Return(fakeApplications, nil)
+
+	// CreateBatch returns: tx-a inserted, tx-b conflicted.
+	// CreateBatch now returns (map[string]bool, error).
+	insertedIDs := map[string]bool{"tx-a": true}
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).
+		Return(insertedIDs, nil)
+
+	// EmitBatchSideEffects must be called with exactly the returned insertedIDs.
+	mockRuleService.On("EmitBatchSideEffects", ctx, "user-1213",
+		mock.MatchedBy(func(apps []BatchRuleApplication) bool { return len(apps) == 2 }),
+		mock.MatchedBy(func(ids map[string]bool) bool { return ids["tx-a"] && !ids["tx-b"] }),
+	).Return()
+
+	// MonitorForMatches must still receive ALL transactions (both inserted and conflict-updated).
+	mockMonitor.On("MonitorForMatches", ctx, "user-1213",
+		mock.MatchedBy(func(txns []*domain.Transaction) bool { return len(txns) == 2 }),
+	).Return(nil)
+
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
+
+	require.NoError(t, err)
+	mockRuleService.AssertExpectations(t)
+	mockTransactionRepo.AssertExpectations(t)
+	mockMonitor.AssertExpectations(t)
+}
+
+// TestProcessAddedTransactions_MonitorForMatchesReceivesAllTransactions ensures
+// that MonitorForMatches receives all persisted transactions, not just inserted
+// ones, preserving the existing re-link matching semantics.
+func TestProcessAddedTransactions_MonitorForMatchesReceivesAllTransactions(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockMonitor := new(mockTransactionMonitorServiceFor1213)
+
+	service := NewTransactionSyncService(
+		nil, nil,
+		mockTransactionRepo,
+		nil, nil, nil, nil, nil,
+		nil, // ruleApplicationService
+		nil,
+		mockMonitor,
+		nil,
+		nil, // logger
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "li-2", UserID: "user-monitor"}
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	added := []plaid.Transaction{
+		{TransactionId: "tx-relink", AccountId: "plaid-acc-1", Amount: 50.00, Date: "2024-01-01", Name: "Re-linked"},
+	}
+
+	// Only the re-linked row is in the batch; createBatch returns it as NOT inserted
+	// (it was conflict-updated for FK refresh on re-link).
+	notInserted := map[string]bool{"tx-relink": false}
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(notInserted, nil)
+
+	// MonitorForMatches must STILL receive the re-linked transaction even though
+	// it was not a fresh insert (the monitor needs it to refresh transfer matching).
+	mockMonitor.On("MonitorForMatches", ctx, "user-monitor",
+		mock.MatchedBy(func(txns []*domain.Transaction) bool { return len(txns) == 1 }),
+	).Return(nil)
+
+	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
+
+	require.NoError(t, err)
+	mockTransactionRepo.AssertExpectations(t)
+	mockMonitor.AssertExpectations(t)
 }

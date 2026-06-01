@@ -24,9 +24,12 @@ func (m *MockTransactionRepository) Create(ctx context.Context, transaction *dom
 	return args.Error(0)
 }
 
-func (m *MockTransactionRepository) CreateBatch(ctx context.Context, transactions []domain.Transaction) error {
+func (m *MockTransactionRepository) CreateBatch(ctx context.Context, transactions []domain.Transaction) (map[string]bool, error) {
 	args := m.Called(ctx, transactions)
-	return args.Error(0)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string]bool), args.Error(1)
 }
 
 func (m *MockTransactionRepository) Update(ctx context.Context, transaction *domain.Transaction) error {
