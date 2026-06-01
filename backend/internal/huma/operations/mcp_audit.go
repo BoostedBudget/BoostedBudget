@@ -27,16 +27,25 @@ type MCPAuditRepository interface {
 	Record(ctx context.Context, entry *domain.MCPAuditEntry) error
 }
 
+// UserIdentityResolver resolves a Clerk user ID to the internal user identity.
+// Satisfied by repository.UserIdentityRepository.
+type UserIdentityResolver interface {
+	GetByClerkID(ctx context.Context, clerkUserID string) (*domain.UserIdentity, error)
+}
+
 // MCPAuditHandler handles POST /api/v1/mcp/audit
 type MCPAuditHandler struct {
-	repo            MCPAuditRepository
-	mcpWorkerSecret string // required: proves call came from MCP Worker, not any CF-origin caller
+	repo             MCPAuditRepository
+	mcpWorkerSecret  string               // required: proves call came from MCP Worker, not any CF-origin caller
+	identityResolver UserIdentityResolver // resolves the Worker-asserted Clerk user ID to the internal UUID (#1247)
 }
 
 // NewMCPAuditHandler creates a new MCPAuditHandler.
 // mcpWorkerSecret must match the value in MCP_WORKER_SECRET config (fail-closed when empty).
-func NewMCPAuditHandler(repo MCPAuditRepository, mcpWorkerSecret string) *MCPAuditHandler {
-	return &MCPAuditHandler{repo: repo, mcpWorkerSecret: mcpWorkerSecret}
+// identityResolver maps the Worker-asserted Clerk user ID to the internal user UUID
+// (the actor_user_id column is a UUID; the Worker only knows the Clerk ID — #1247).
+func NewMCPAuditHandler(repo MCPAuditRepository, mcpWorkerSecret string, identityResolver UserIdentityResolver) *MCPAuditHandler {
+	return &MCPAuditHandler{repo: repo, mcpWorkerSecret: mcpWorkerSecret, identityResolver: identityResolver}
 }
 
 // Ensure repository.MCPAuditRepository satisfies our interface (compile-time check).
@@ -44,7 +53,7 @@ var _ MCPAuditRepository = (*repository.MCPAuditRepositoryImpl)(nil)
 
 // RecordMCPAuditBody is the request body for POST /api/v1/mcp/audit.
 type RecordMCPAuditBody struct {
-	ActorUserID           string   `json:"actor_user_id" doc:"Internal user UUID"`
+	ActorUserID           string   `json:"actor_user_id" doc:"Clerk user ID of the actor; resolved to the internal user UUID server-side"`
 	GrantID               string   `json:"grant_id" doc:"OAuth grant ID from the Clerk token"`
 	Scopes                []string `json:"scopes,omitempty" doc:"OAuth scopes granted"`
 	OperationClass        string   `json:"operation_class" enum:"read,write" doc:"Operation class: read or write"`
@@ -78,8 +87,20 @@ func (h *MCPAuditHandler) RecordAuditEntry(ctx context.Context, input *RecordMCP
 		return nil, huma.Error403Forbidden("invalid or missing Worker secret")
 	}
 
+	// Resolve the Worker-asserted Clerk user ID to the internal user UUID.
+	// The actor_user_id column is a UUID; the Worker only knows the Clerk ID (#1247).
+	// We do not trust a client-supplied internal UUID — the actor is always derived
+	// server-side from the Clerk identity.
+	if h.identityResolver == nil {
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("mcp audit: identity resolver not configured"))
+	}
+	identity, err := h.identityResolver.GetByClerkID(ctx, input.Body.ActorUserID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to resolve actor identity %q: %w", input.Body.ActorUserID, err))
+	}
+
 	entry := &domain.MCPAuditEntry{
-		ActorUserID:           input.Body.ActorUserID,
+		ActorUserID:           identity.UserID,
 		GrantID:               input.Body.GrantID,
 		Scopes:                input.Body.Scopes,
 		OperationClass:        input.Body.OperationClass,

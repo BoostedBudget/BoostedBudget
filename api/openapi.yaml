@@ -3074,7 +3074,7 @@ components:
           readOnly: true
           type: string
         actor_user_id:
-          description: Internal user UUID
+          description: Clerk user ID of the actor; resolved to the internal user UUID server-side
           type: string
         confirmation_confirmed:
           description: Whether confirmation was provided and valid
