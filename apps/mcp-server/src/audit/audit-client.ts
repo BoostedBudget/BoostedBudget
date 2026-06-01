@@ -11,8 +11,14 @@
  * For true fail-closed write audit, implement within the Go write handler itself.
  */
 
-import type { Env } from '../env'
 import { MCP_WORKER_USER_AGENT } from '../client/user-agent'
+
+/** Minimal env shape required by the audit client. */
+interface AuditClientEnv {
+  BOOSTEDBUDGET_API_URL: string
+  BOOSTEDBUDGET_ORIGIN_SECRET: string
+  MCP_WORKER_SECRET: string
+}
 
 export interface AuditEntry {
   actorUserId: string
@@ -39,7 +45,7 @@ export interface AuditClient {
  *   - X-MCP-Worker-Secret: proves the request is from THIS Worker specifically (layer 2)
  * Returns a no-op client when env is not configured.
  */
-export function createAuditClient(env: Env): AuditClient {
+export function createAuditClient(env: AuditClientEnv): AuditClient {
   if (!env.BOOSTEDBUDGET_API_URL || !env.BOOSTEDBUDGET_ORIGIN_SECRET || !env.MCP_WORKER_SECRET) {
     return { record: () => Promise.resolve() }
   }
