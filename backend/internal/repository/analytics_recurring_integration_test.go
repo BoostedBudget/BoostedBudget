@@ -65,13 +65,29 @@ func TestGetRecurringSubscriptions_Integration(t *testing.T) {
 		require.NoError(t, err, "seed Netflix transaction %d", i)
 	}
 
-	// One-off purchase: Amazon, $99, only once — should NOT be detected.
+	// One-off purchase: Amazon, $99, only once — should NOT be detected (< 3 occurrences).
 	oneOffID := uuid.New()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transactions (id, user_id, account_id, linked_item_id, source, name, merchant_name, amount, date, pending, pfc_primary)
 		VALUES ($1, $2, $3, $4, 'plaid', 'Amazon', 'Amazon', 99.00, $5, false, 'SHOPPING')
 	`, oneOffID, userID, accountID, linkedItemID, now.AddDate(0, -1, 0).Format("2006-01-02"))
 	require.NoError(t, err, "seed one-off Amazon transaction")
+
+	// Irregular vendor: charges at 15d, 45d, 60d intervals — avg ~40 days but stddev ~19 → should NOT be detected.
+	irregularDates := []time.Time{
+		now.AddDate(0, -5, 0),            // 5 months ago
+		now.AddDate(0, -5, 0).Add(15 * 24 * time.Hour),  // +15 days
+		now.AddDate(0, -5, 0).Add(60 * 24 * time.Hour),  // +60 days (gap 45d)
+		now.AddDate(0, -5, 0).Add(120 * 24 * time.Hour), // +120 days (gap 60d)
+	}
+	for i, d := range irregularDates {
+		txID := uuid.New()
+		_, err = tx.Exec(ctx, `
+			INSERT INTO transactions (id, user_id, account_id, linked_item_id, source, name, merchant_name, amount, date, pending, pfc_primary)
+			VALUES ($1, $2, $3, $4, 'plaid', 'IrregularCo', 'IrregularCo', 49.99, $5, false, 'GENERAL_MERCHANDISE')
+		`, txID, userID, accountID, linkedItemID, d.Format("2006-01-02"))
+		require.NoError(t, err, "seed irregular transaction %d", i)
+	}
 
 	// Use the transaction-wrapped pool so the test data is visible to the repo call.
 	txRepo := NewAnalyticsRepository(tx)

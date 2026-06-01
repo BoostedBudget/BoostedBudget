@@ -671,7 +671,7 @@ func (r *analyticsRepository) GetRecurringSubscriptions(ctx context.Context, use
 			avg_gap_days,
 			COALESCE(stddev_gap_days, 0)                                               AS stddev_gap_days,
 			last_charge_date,
-			(last_charge_date + (ROUND(avg_gap_days)::integer || ' days')::interval)::date AS next_expected_date
+			last_charge_date + ROUND(avg_gap_days)::integer AS next_expected_date
 		FROM merchant_stats
 		WHERE avg_gap_days BETWEEN 25 AND 40
 		  AND COALESCE(stddev_gap_days, 0) < 10
