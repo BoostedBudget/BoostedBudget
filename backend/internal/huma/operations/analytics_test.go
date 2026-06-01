@@ -887,6 +887,63 @@ func TestGetMonthOverMonthSpendingChange_ServiceError(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestGetMonthOverMonthSpendingChange_InvalidIncludeTransfers tests that invalid include_transfers
+// returns 400, consistent with all other analytics handlers.
+func TestGetMonthOverMonthSpendingChange_InvalidIncludeTransfers(t *testing.T) {
+	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	input := &GetMonthOverMonthSpendingChangeInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Months:             6,
+		IncludeTransfers:   "maybe", // invalid
+	}
+	output, err := handler.GetMonthOverMonthSpendingChange(context.Background(), input)
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Invalid")
+}
+
+// TestGetMonthOverMonthSpendingChange_MonthsAboveMax tests that months>24 returns 400.
+func TestGetMonthOverMonthSpendingChange_MonthsAboveMax(t *testing.T) {
+	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	input := &GetMonthOverMonthSpendingChangeInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Months:             25, // above max
+	}
+	output, err := handler.GetMonthOverMonthSpendingChange(context.Background(), input)
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "months must be between 2 and 24")
+}
+
+// TestGetMonthOverMonthSpendingChange_MonthsZeroDefaults tests that months=0 defaults to 6.
+func TestGetMonthOverMonthSpendingChange_MonthsZeroDefaults(t *testing.T) {
+	mockSvc := &mockAnalyticsService{monthOverMonthResponse: &domain.MonthOverMonthResponse{MonthCount: 6}}
+	handler := NewAnalyticsHandler(mockSvc)
+	input := &GetMonthOverMonthSpendingChangeInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Months:             0, // should default to 6
+	}
+	output, err := handler.GetMonthOverMonthSpendingChange(context.Background(), input)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, 6, output.Body.MonthCount)
+}
+
+// TestGetMonthOverMonthSpendingChange_MonthsBoundaries tests valid boundary values 2 and 24.
+func TestGetMonthOverMonthSpendingChange_MonthsBoundaries(t *testing.T) {
+	for _, months := range []int{2, 24} {
+		mockSvc := &mockAnalyticsService{monthOverMonthResponse: &domain.MonthOverMonthResponse{MonthCount: months}}
+		handler := NewAnalyticsHandler(mockSvc)
+		input := &GetMonthOverMonthSpendingChangeInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			Months:             months,
+		}
+		output, err := handler.GetMonthOverMonthSpendingChange(context.Background(), input)
+		require.NoError(t, err, "months=%d should be valid", months)
+		require.NotNil(t, output)
+	}
+}
+
 // TestGetLargestTransactionsForPeriod_Success tests successful largest transaction retrieval.
 func TestGetLargestTransactionsForPeriod_Success(t *testing.T) {
 	mockService := &mockAnalyticsService{
