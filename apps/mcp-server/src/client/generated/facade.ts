@@ -43,9 +43,29 @@ export function createApiClient(mutator: FetchMutator) {
       getCategoryTotalForPeriod(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/category-total', method: 'GET', params, signal })
       },
+      /** GET /api/v1/analytics/income-sources */
+      getIncomeSourceBreakdown(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/analytics/income-sources', method: 'GET', params, signal })
+      },
+      /** GET /api/v1/analytics/largest-transactions */
+      getLargestTransactionsForPeriod(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/analytics/largest-transactions', method: 'GET', params, signal })
+      },
+      /** GET /api/v1/analytics/merchant-category-breakdown */
+      getCategoryBreakdownForMerchant(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/analytics/merchant-category-breakdown', method: 'GET', params, signal })
+      },
+      /** GET /api/v1/analytics/month-over-month */
+      getMonthOverMonthSpendingChange(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/analytics/month-over-month', method: 'GET', params, signal })
+      },
       /** GET /api/v1/analytics/recurring-subscriptions */
       getRecurringSubscriptions(signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/recurring-subscriptions', method: 'GET', signal })
+      },
+      /** GET /api/v1/analytics/savings-rate */
+      getSavingsRateForPeriod(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/analytics/savings-rate', method: 'GET', params, signal })
       },
       /** GET /api/v1/analytics/spending-by-category */
       getSpendingByCategory(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {

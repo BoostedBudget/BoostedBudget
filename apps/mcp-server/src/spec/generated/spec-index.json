@@ -332,10 +332,65 @@
       "excluded": false
     },
     {
+      "operationId": "getIncomeSourceBreakdown",
+      "method": "GET",
+      "path": "/api/v1/analytics/income-sources",
+      "summary": "Get income source breakdown",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getLargestTransactionsForPeriod",
+      "method": "GET",
+      "path": "/api/v1/analytics/largest-transactions",
+      "summary": "Get largest transactions for period",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getCategoryBreakdownForMerchant",
+      "method": "GET",
+      "path": "/api/v1/analytics/merchant-category-breakdown",
+      "summary": "Get category breakdown for merchant",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getMonthOverMonthSpendingChange",
+      "method": "GET",
+      "path": "/api/v1/analytics/month-over-month",
+      "summary": "Get month-over-month spending change",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
       "operationId": "getRecurringSubscriptions",
       "method": "GET",
       "path": "/api/v1/analytics/recurring-subscriptions",
       "summary": "Get recurring subscriptions",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getSavingsRateForPeriod",
+      "method": "GET",
+      "path": "/api/v1/analytics/savings-rate",
+      "summary": "Get savings rate for period",
       "tags": [
         "Analytics"
       ],

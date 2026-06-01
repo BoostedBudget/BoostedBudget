@@ -36,8 +36,13 @@ import type {
   AverageMonthlySpendResponse,
   CashFlowHistoryResponse,
   CashFlowSummaryResponse,
+  CategoryBreakdownForMerchantResponse,
   CategoryTotalResponse,
+  IncomeSourceBreakdownResponse,
+  LargestTransactionsResponse,
+  MonthOverMonthResponse,
   RecurringSubscriptionsResponse,
+  SavingsRateResponse,
   SpendingByCategoryResponse,
   SpendingByMerchantResponse,
   SpendingTrendsResponse,
@@ -121,6 +126,115 @@ export const getGetCategoryTotalForPeriodResponseMock = (
   ...overrideResponse,
 });
 
+export const getGetIncomeSourceBreakdownResponseMock = (
+  overrideResponse: Partial<
+    Extract<IncomeSourceBreakdownResponse, object>
+  > = {},
+): IncomeSourceBreakdownResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  sources: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      percentage: faker.number.float({ fractionDigits: 2 }),
+      pfc_primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      total: faker.number.float({ fractionDigits: 2 }),
+      transaction_count: faker.number.int(),
+    })),
+    null,
+  ]),
+  start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  total_income: faker.number.float({ fractionDigits: 2 }),
+  ...overrideResponse,
+});
+
+export const getGetLargestTransactionsForPeriodResponseMock = (
+  overrideResponse: Partial<Extract<LargestTransactionsResponse, object>> = {},
+): LargestTransactionsResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  limit: faker.number.int(),
+  start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  transactions: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      account_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      amount: faker.number.float({ fractionDigits: 2 }),
+      category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      merchant_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      pfc_primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      transaction_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    })),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetCategoryBreakdownForMerchantResponseMock = (
+  overrideResponse: Partial<
+    Extract<CategoryBreakdownForMerchantResponse, object>
+  > = {},
+): CategoryBreakdownForMerchantResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  categories: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      percentage: faker.number.float({ fractionDigits: 2 }),
+      pfc_primary_display: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      total: faker.number.float({ fractionDigits: 2 }),
+      transaction_count: faker.number.int(),
+    })),
+    null,
+  ]),
+  end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  merchant_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  total_spend: faker.number.float({ fractionDigits: 2 }),
+  ...overrideResponse,
+});
+
+export const getGetMonthOverMonthSpendingChangeResponseMock = (
+  overrideResponse: Partial<Extract<MonthOverMonthResponse, object>> = {},
+): MonthOverMonthResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  buckets: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      change_abs: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          null,
+        ]),
+        null,
+      ]),
+      change_pct: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          null,
+        ]),
+        null,
+      ]),
+      month: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      total: faker.number.float({ fractionDigits: 2 }),
+    })),
+    null,
+  ]),
+  category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  month_count: faker.number.int(),
+  ...overrideResponse,
+});
+
 export const getGetRecurringSubscriptionsResponseMock = (
   overrideResponse: Partial<
     Extract<RecurringSubscriptionsResponse, object>
@@ -142,6 +256,25 @@ export const getGetRecurringSubscriptionsResponseMock = (
     })),
     null,
   ]),
+  ...overrideResponse,
+});
+
+export const getGetSavingsRateForPeriodResponseMock = (
+  overrideResponse: Partial<Extract<SavingsRateResponse, object>> = {},
+): SavingsRateResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  expenses: faker.number.float({ fractionDigits: 2 }),
+  income: faker.number.float({ fractionDigits: 2 }),
+  net_savings: faker.number.float({ fractionDigits: 2 }),
+  savings_rate: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.number.float({ fractionDigits: 2 }),
+      null,
+    ]),
+    null,
+  ]),
+  start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
   ...overrideResponse,
 });
 
@@ -353,6 +486,114 @@ export const getGetCategoryTotalForPeriodMockHandler = (
   );
 };
 
+export const getGetIncomeSourceBreakdownMockHandler = (
+  overrideResponse?:
+    | IncomeSourceBreakdownResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<IncomeSourceBreakdownResponse>
+        | IncomeSourceBreakdownResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/income-sources",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetIncomeSourceBreakdownResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetLargestTransactionsForPeriodMockHandler = (
+  overrideResponse?:
+    | LargestTransactionsResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<LargestTransactionsResponse> | LargestTransactionsResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/largest-transactions",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetLargestTransactionsForPeriodResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetCategoryBreakdownForMerchantMockHandler = (
+  overrideResponse?:
+    | CategoryBreakdownForMerchantResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<CategoryBreakdownForMerchantResponse>
+        | CategoryBreakdownForMerchantResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/merchant-category-breakdown",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetCategoryBreakdownForMerchantResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetMonthOverMonthSpendingChangeMockHandler = (
+  overrideResponse?:
+    | MonthOverMonthResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<MonthOverMonthResponse> | MonthOverMonthResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/month-over-month",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetMonthOverMonthSpendingChangeResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetRecurringSubscriptionsMockHandler = (
   overrideResponse?:
     | RecurringSubscriptionsResponse
@@ -374,6 +615,32 @@ export const getGetRecurringSubscriptionsMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getGetRecurringSubscriptionsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetSavingsRateForPeriodMockHandler = (
+  overrideResponse?:
+    | SavingsRateResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<SavingsRateResponse> | SavingsRateResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/savings-rate",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetSavingsRateForPeriodResponseMock(),
         { status: 200 },
       );
     },
@@ -489,7 +756,12 @@ export const getAnalyticsMock = () => [
   getGetCashFlowHistoryMockHandler(),
   getGetCashFlowSummaryMockHandler(),
   getGetCategoryTotalForPeriodMockHandler(),
+  getGetIncomeSourceBreakdownMockHandler(),
+  getGetLargestTransactionsForPeriodMockHandler(),
+  getGetCategoryBreakdownForMerchantMockHandler(),
+  getGetMonthOverMonthSpendingChangeMockHandler(),
   getGetRecurringSubscriptionsMockHandler(),
+  getGetSavingsRateForPeriodMockHandler(),
   getGetSpendingByCategoryMockHandler(),
   getGetSpendingByMerchantMockHandler(),
   getGetSpendingTrendsMockHandler(),
