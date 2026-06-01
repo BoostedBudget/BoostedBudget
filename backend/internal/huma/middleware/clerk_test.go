@@ -95,7 +95,7 @@ func setupTestAPI(t *testing.T, repo *mockUserIdentityRepository, svc *mockRegis
 	api := humachi.New(router, huma.DefaultConfig("Test API", "1.0.0"))
 
 	// Add the Clerk middleware
-	middleware := humamiddleware.NewClerkMiddleware("sk_test_secret", repo, svc, nil)
+	middleware := humamiddleware.NewClerkMiddleware("sk_test_secret", repo, svc, nil, nil)
 	api.UseMiddleware(middleware)
 
 	// Register a protected test operation

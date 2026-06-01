@@ -33,7 +33,7 @@ import type { RecordMCPAuditBodyResult } from "./recordMCPAuditBodyResult";
 export interface RecordMCPAuditBody {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
-  /** Internal user UUID */
+  /** Clerk user ID of the actor; resolved to the internal user UUID server-side */
   actor_user_id: string;
   /** Whether confirmation was provided and valid */
   confirmation_confirmed: boolean;
