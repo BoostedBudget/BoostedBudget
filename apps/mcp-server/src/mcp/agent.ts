@@ -275,5 +275,20 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
         return result
       },
     )
+
+    this.server.registerTool(
+      'recipe.templates',
+      {
+        description: 'List available starter recipe templates. These are non-runnable; replace {{MONTH_START}}/{{MONTH_END}} with actual dates (e.g. 2025-01-01 / 2025-01-31), then use recipe.save() to instantiate one as a saved recipe. Use recipe.run() to execute it.',
+        inputSchema: {},
+      },
+      async () => {
+        const p = this.props as McpAgentProps
+        const result = recipeTools.templates()
+        void audit.record({ actorUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown',
+          operationClass: 'read', operationId: 'recipe.templates', result: 'success' })
+        return result
+      },
+    )
   }
 }
