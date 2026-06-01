@@ -88,6 +88,11 @@ func NewAnalyticsRepository(db DB) AnalyticsRepository {
 	return &analyticsRepository{db: db}
 }
 
+// Date bucketing convention: all analytics queries bucket transactions by the t.date column
+// without timezone conversion. t.date is stored as a PostgreSQL DATE (UTC calendar day).
+// Callers pass UTC-normalized time.Time values from dateutil.ParseDateRange.
+// Tests pin time.UTC throughout for consistency.
+
 // GetCashFlowAggregation returns aggregated income and expenses for a date range.
 // Income: amount < 0 (inflow/credit)
 // Expenses: amount > 0 (outflow/debit, PFCv2)
