@@ -52,8 +52,9 @@ type AnalyticsRepository interface {
 	GetSavingsRateForPeriod(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.SavingsRateRow, error)
 
 	// GetMonthOverMonthSpending returns monthly expense totals grouped by month.
-	// Single DB round-trip using DATE_TRUNC GROUP BY (Issue #1215 PR2).
-	GetMonthOverMonthSpending(ctx context.Context, userID string, startDate time.Time, category string) ([]domain.MonthOverMonthBucketRow, error)
+	// Single DB round-trip using DATE_TRUNC GROUP BY. filters.AccountTypes and
+	// filters.IncludeTransfers are honoured; StartDate/EndDate are computed from months. Issue #1215 PR2/gaps.
+	GetMonthOverMonthSpending(ctx context.Context, userID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error)
 
 	// GetLargestTransactionsForPeriod returns the N largest expense transactions in a date range.
 	// Single DB round-trip; limit enforced in SQL (Issue #1215 PR2).
@@ -764,13 +765,26 @@ func (r *analyticsRepository) GetSavingsRateForPeriod(ctx context.Context, userI
 }
 
 // GetMonthOverMonthSpending returns monthly expense totals grouped by month.
-// Single DB round-trip using DATE_TRUNC GROUP BY (Issue #1215 PR2).
-func (r *analyticsRepository) GetMonthOverMonthSpending(ctx context.Context, userID string, startDate time.Time, category string) ([]domain.MonthOverMonthBucketRow, error) {
+// Single DB round-trip using DATE_TRUNC GROUP BY. filters.AccountTypes and
+// filters.IncludeTransfers are honoured; StartDate/EndDate are computed from months. Issue #1215 PR2/gaps.
+func (r *analyticsRepository) GetMonthOverMonthSpending(ctx context.Context, userID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
 	catExpr := effectiveCategoryExpr(false)
 	args := []interface{}{userID, startDate}
-	argIndex := 3
+
+	var categoryFilter string
+	if category != "" {
+		args = append(args, category)
+		categoryFilter = fmt.Sprintf(" AND (%s) = $%d", catExpr, len(args))
+	}
+
+	// Pass only AccountTypes/IncludeTransfers — StartDate/EndDate are not used by buildSpendingFilter
+	accountFilter := domain.SpendingFilters{
+		AccountTypes:     filters.AccountTypes,
+		IncludeTransfers: filters.IncludeTransfers,
+	}
+	filterClause, args, _ := buildSpendingFilter(accountFilter, args)
 
 	query := fmt.Sprintf(`
 		SELECT DATE_TRUNC('month', t.date)::date AS month, COALESCE(SUM(t.amount), 0) AS total
@@ -780,21 +794,12 @@ func (r *analyticsRepository) GetMonthOverMonthSpending(ctx context.Context, use
 		  AND t.date >= $2
 		  AND t.amount > 0
 		  AND t.pending = false
-		  AND COALESCE(t.effective_pfc_primary, '') NOT LIKE 'TRANSFER%%'
-	`)
-
-	if category != "" {
-		query += fmt.Sprintf(" AND (%s) = $%d", catExpr, argIndex)
-		args = append(args, category)
-		argIndex++
-	}
-
-	query += `
+		  %s
+		  %s
 		GROUP BY DATE_TRUNC('month', t.date)
 		ORDER BY month ASC
-	`
+	`, categoryFilter, filterClause)
 
-	_ = argIndex // used when category is set
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get month-over-month spending: %w", err)

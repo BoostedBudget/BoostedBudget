@@ -58,9 +58,9 @@ type AnalyticsService interface {
 	// Returns nil savings_rate pointer when income is zero. AI-tool-callable (Issue #1215 PR2).
 	GetSavingsRateForPeriod(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.SavingsRateResponse, error)
 
-	// GetMonthOverMonthSpendingChange returns monthly spend buckets with period-over-period changes.
-	// AI-tool-callable (Issue #1215 PR2).
-	GetMonthOverMonthSpendingChange(ctx context.Context, userID string, category string, months int) (*domain.MonthOverMonthResponse, error)
+	// GetMonthOverMonthSpendingChange returns monthly spend buckets with period-over-period delta.
+	// category is optional; accountTypes and includeTransfers filter the data. Issue #1215 PR2/gaps.
+	GetMonthOverMonthSpendingChange(ctx context.Context, userID string, category string, months int, accountTypes []string, includeTransfers bool) (*domain.MonthOverMonthResponse, error)
 
 	// GetLargestTransactionsForPeriod returns the N largest expense transactions in a date range.
 	// AI-tool-callable (Issue #1215 PR2).
@@ -585,14 +585,18 @@ func (s *analyticsService) GetSavingsRateForPeriod(ctx context.Context, userID s
 }
 
 // GetMonthOverMonthSpendingChange returns monthly spend buckets with period-over-period delta.
-// months must be between 2 and 24.
-func (s *analyticsService) GetMonthOverMonthSpendingChange(ctx context.Context, userID string, category string, months int) (*domain.MonthOverMonthResponse, error) {
+// months must be between 2 and 24. accountTypes and includeTransfers are forwarded to the repo layer.
+func (s *analyticsService) GetMonthOverMonthSpendingChange(ctx context.Context, userID string, category string, months int, accountTypes []string, includeTransfers bool) (*domain.MonthOverMonthResponse, error) {
 	if months < 2 || months > 24 {
 		return nil, fmt.Errorf("months must be between 2 and 24")
 	}
 
 	startDate := time.Now().AddDate(0, -months, 0)
-	rows, err := s.analyticsRepo.GetMonthOverMonthSpending(ctx, userID, startDate, category)
+	filters := domain.SpendingFilters{
+		AccountTypes:     accountTypes,
+		IncludeTransfers: includeTransfers,
+	}
+	rows, err := s.analyticsRepo.GetMonthOverMonthSpending(ctx, userID, startDate, category, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get month-over-month spending: %w", err)
 	}

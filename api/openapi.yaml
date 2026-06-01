@@ -7101,22 +7101,36 @@ paths:
       description: Returns monthly spend buckets with period-over-period percentage and absolute changes. months param controls lookback (2-24). AI-tool-callable.
       operationId: getMonthOverMonthSpendingChange
       parameters:
-        - description: Optional category to filter by
+        - description: Optional PFC primary or custom:<uuid> to scope spending
           explode: false
           in: query
           name: category
           schema:
-            description: Optional category to filter by
+            description: Optional PFC primary or custom:<uuid> to scope spending
             type: string
-        - description: Number of months to look back (2-24, default 6)
+        - description: Months to look back (2-24, default 6)
           explode: false
           in: query
           name: months
           schema:
             default: 6
-            description: Number of months to look back (2-24, default 6)
+            description: Months to look back (2-24, default 6)
             format: int64
             type: integer
+        - description: Comma-separated account types to filter (e.g. depository,credit)
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter (e.g. depository,credit)
+            type: string
+        - description: Include transfer transactions (true/false, default false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfer transactions (true/false, default false)
+            type: string
       responses:
         "200":
           content:

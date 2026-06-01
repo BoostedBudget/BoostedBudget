@@ -95,7 +95,7 @@ func (m *mockAnalyticsService) GetSavingsRateForPeriod(_ context.Context, _ stri
 	return m.savingsRateResponse, m.savingsRateErr
 }
 
-func (m *mockAnalyticsService) GetMonthOverMonthSpendingChange(_ context.Context, _ string, _ string, _ int) (*domain.MonthOverMonthResponse, error) {
+func (m *mockAnalyticsService) GetMonthOverMonthSpendingChange(_ context.Context, _ string, _ string, _ int, _ []string, _ bool) (*domain.MonthOverMonthResponse, error) {
 	return m.monthOverMonthResponse, m.monthOverMonthErr
 }
 
