@@ -11,14 +11,15 @@ import (
 
 // mockAnalyticsRepository is a mock implementation for testing
 type mockAnalyticsRepository struct {
-	getCashFlowAggregationFn      func(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error)
-	getCashFlowGroupedFn          func(ctx context.Context, userID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error)
-	getSpendingByCategoryFn       func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error)
-	getSpendingByMerchantFn       func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error)
-	getSpendingTrendsFn           func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error)
-	getCategoryTotalForPeriodFn   func(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalRow, error)
-	getTopExpenseFn               func(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.TopExpenseRow, error)
-	getAverageMonthlySpendFn      func(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error)
+	getCashFlowAggregationFn         func(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error)
+	getCashFlowGroupedFn             func(ctx context.Context, userID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error)
+	getSpendingByCategoryFn          func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error)
+	getSpendingByMerchantFn          func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error)
+	getSpendingTrendsFn              func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error)
+	getCategoryTotalForPeriodFn      func(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalRow, error)
+	getTopExpenseFn                  func(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.TopExpenseRow, error)
+	getAverageMonthlySpendFn         func(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error)
+	getRecurringSubscriptionsFn      func(ctx context.Context, userID string, lookbackStart time.Time) ([]domain.RecurringSubscriptionRow, error)
 }
 
 func (m *mockAnalyticsRepository) GetCashFlowAggregation(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
@@ -75,6 +76,13 @@ func (m *mockAnalyticsRepository) GetAverageMonthlySpend(ctx context.Context, us
 		return m.getAverageMonthlySpendFn(ctx, userID, filters)
 	}
 	return &domain.AverageMonthlySpendRow{}, nil
+}
+
+func (m *mockAnalyticsRepository) GetRecurringSubscriptions(ctx context.Context, userID string, lookbackStart time.Time) ([]domain.RecurringSubscriptionRow, error) {
+	if m.getRecurringSubscriptionsFn != nil {
+		return m.getRecurringSubscriptionsFn(ctx, userID, lookbackStart)
+	}
+	return nil, nil
 }
 
 func TestAnalyticsService_GetCashFlowSummary(t *testing.T) {
@@ -1038,6 +1046,110 @@ func TestAnalyticsService_GetSpendingTrends_CustomCategory(t *testing.T) {
 		}
 		if cats[0].PFCPrimaryDisplay != "My Coffee Budget" {
 			t.Errorf("expected PFCPrimaryDisplay 'My Coffee Budget', got %q (uuid must not leak through pfcDisplayName)", cats[0].PFCPrimaryDisplay)
+		}
+	})
+}
+
+func TestAnalyticsService_GetRecurringSubscriptions(t *testing.T) {
+	ctx := context.Background()
+
+	lastCharge := time.Date(2024, 12, 1, 0, 0, 0, 0, time.UTC)
+	nextExpected := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	t.Run("happy path: two subscriptions mapped to response items", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getRecurringSubscriptionsFn: func(ctx context.Context, userID string, lookbackStart time.Time) ([]domain.RecurringSubscriptionRow, error) {
+				return []domain.RecurringSubscriptionRow{
+					{
+						MerchantName:     "Netflix",
+						Amount:           15.99,
+						OccurrenceCount:  12,
+						AvgGapDays:       30.5,
+						StddevGapDays:    1.2,
+						LastChargeDate:   lastCharge,
+						NextExpectedDate: nextExpected,
+					},
+					{
+						MerchantName:     "Spotify",
+						Amount:           9.99,
+						OccurrenceCount:  12,
+						AvgGapDays:       29.8,
+						StddevGapDays:    0.9,
+						LastChargeDate:   lastCharge,
+						NextExpectedDate: nextExpected,
+					},
+				}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+
+		result, err := service.GetRecurringSubscriptions(ctx, "user-123")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("expected non-nil result")
+		}
+		if len(result.Subscriptions) != 2 {
+			t.Fatalf("expected 2 subscriptions, got %d", len(result.Subscriptions))
+		}
+		if result.Subscriptions[0].MerchantName != "Netflix" {
+			t.Errorf("expected first merchant Netflix, got %q", result.Subscriptions[0].MerchantName)
+		}
+		if result.Subscriptions[0].Amount != 15.99 {
+			t.Errorf("expected amount 15.99, got %f", result.Subscriptions[0].Amount)
+		}
+		if result.Subscriptions[0].OccurrenceCount != 12 {
+			t.Errorf("expected occurrence_count 12, got %d", result.Subscriptions[0].OccurrenceCount)
+		}
+		if result.Subscriptions[0].LastChargeDate != "2024-12-01" {
+			t.Errorf("expected last_charge_date 2024-12-01, got %q", result.Subscriptions[0].LastChargeDate)
+		}
+		if result.Subscriptions[0].NextExpectedDate != "2025-01-01" {
+			t.Errorf("expected next_expected_date 2025-01-01, got %q", result.Subscriptions[0].NextExpectedDate)
+		}
+		if result.AsOfDate == "" {
+			t.Error("expected non-empty as_of_date")
+		}
+		if result.Subscriptions[1].MerchantName != "Spotify" {
+			t.Errorf("expected second merchant Spotify, got %q", result.Subscriptions[1].MerchantName)
+		}
+	})
+
+	t.Run("empty: no subscriptions returns empty slice not nil", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getRecurringSubscriptionsFn: func(ctx context.Context, userID string, lookbackStart time.Time) ([]domain.RecurringSubscriptionRow, error) {
+				return nil, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+
+		result, err := service.GetRecurringSubscriptions(ctx, "user-123")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("expected non-nil result")
+		}
+		if result.Subscriptions == nil {
+			t.Error("expected empty (not nil) subscriptions slice")
+		}
+		if len(result.Subscriptions) != 0 {
+			t.Errorf("expected 0 subscriptions, got %d", len(result.Subscriptions))
+		}
+	})
+
+	t.Run("repository error is propagated", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getRecurringSubscriptionsFn: func(ctx context.Context, userID string, lookbackStart time.Time) ([]domain.RecurringSubscriptionRow, error) {
+				return nil, errors.New("db error")
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+
+		_, err := service.GetRecurringSubscriptions(ctx, "user-123")
+		if err == nil {
+			t.Error("expected error from repository")
 		}
 	})
 }

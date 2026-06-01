@@ -22,7 +22,8 @@ var MCPOperationManifest = map[string]MCPOperationClass{
 	"getSpendingTrends":           MCPClassRead,
 	"getCategoryTotalForPeriod":   MCPClassRead,
 	"getTopExpense":               MCPClassRead,
-	"getAverageMonthlySpend":      MCPClassRead,
+	"getAverageMonthlySpend":         MCPClassRead,
+	"getRecurringSubscriptions":      MCPClassRead,
 	// Accounts
 	"getAccounts":      MCPClassRead,
 	"reorderAccounts":  MCPClassWrite,

@@ -42,6 +42,10 @@ type AnalyticsRepository interface {
 	// GetAverageMonthlySpend returns the total expense amount for computing average monthly spend.
 	// Single DB round-trip; average computed in the service layer (Issue #1215).
 	GetAverageMonthlySpend(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error)
+
+	// GetRecurringSubscriptions returns heuristic recurring charge candidates over the lookback window.
+	// Single DB round-trip using window functions; complex SQL requires real-DB integration tests (Issue #1215).
+	GetRecurringSubscriptions(ctx context.Context, userID string, lookbackStart time.Time) ([]domain.RecurringSubscriptionRow, error)
 }
 
 // analyticsRepository implements AnalyticsRepository using PostgreSQL
@@ -623,6 +627,85 @@ func (r *analyticsRepository) GetAverageMonthlySpend(ctx context.Context, userID
 		return nil, fmt.Errorf("failed to get average monthly spend: %w", err)
 	}
 	return &row, nil
+}
+
+// GetRecurringSubscriptions returns heuristic recurring charge candidates over the lookback window.
+// Uses window functions (LAG) to compute per-merchant inter-charge gaps; filters to monthly cadence
+// (avg gap 25-40 days, stddev < 10, ≥3 occurrences). Single DB round-trip. Issue #1215.
+func (r *analyticsRepository) GetRecurringSubscriptions(ctx context.Context, userID string, lookbackStart time.Time) ([]domain.RecurringSubscriptionRow, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
+	const query = `
+		WITH merchant_gaps AS (
+			SELECT
+				COALESCE(t.merchant_name, '') AS merchant_name,
+				ROUND(t.amount::numeric, 2)   AS rounded_amount,
+				t.date,
+				LAG(t.date) OVER (
+					PARTITION BY COALESCE(t.merchant_name, ''), ROUND(t.amount::numeric, 2)
+					ORDER BY t.date
+				) AS prev_date
+			FROM transactions t
+			WHERE t.user_id = $1
+			  AND t.amount > 0
+			  AND t.pending = false
+			  AND t.date >= $2
+			  AND COALESCE(t.effective_pfc_primary, '') NOT LIKE 'TRANSFER%'
+		),
+		merchant_stats AS (
+			SELECT
+				merchant_name,
+				rounded_amount                                                          AS amount,
+				COUNT(*)                                                                AS occurrence_count,
+				MAX(date)                                                               AS last_charge_date,
+				AVG((date - prev_date)::integer) FILTER (WHERE prev_date IS NOT NULL)  AS avg_gap_days,
+				STDDEV_POP((date - prev_date)::integer) FILTER (WHERE prev_date IS NOT NULL) AS stddev_gap_days
+			FROM merchant_gaps
+			GROUP BY merchant_name, rounded_amount
+			HAVING COUNT(*) >= 3
+		)
+		SELECT
+			merchant_name,
+			amount,
+			occurrence_count,
+			avg_gap_days,
+			COALESCE(stddev_gap_days, 0)                                               AS stddev_gap_days,
+			last_charge_date,
+			(last_charge_date + (ROUND(avg_gap_days)::integer || ' days')::interval)::date AS next_expected_date
+		FROM merchant_stats
+		WHERE avg_gap_days BETWEEN 25 AND 40
+		  AND COALESCE(stddev_gap_days, 0) < 10
+		ORDER BY amount DESC
+	`
+
+	rows, err := r.db.Query(ctx, query, userID, lookbackStart)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recurring subscriptions: %w", err)
+	}
+	defer rows.Close()
+
+	var results []domain.RecurringSubscriptionRow
+	for rows.Next() {
+		var row domain.RecurringSubscriptionRow
+		if err := rows.Scan(
+			&row.MerchantName,
+			&row.Amount,
+			&row.OccurrenceCount,
+			&row.AvgGapDays,
+			&row.StddevGapDays,
+			&row.LastChargeDate,
+			&row.NextExpectedDate,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan recurring subscription row: %w", err)
+		}
+		results = append(results, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating recurring subscription rows: %w", err)
+	}
+
+	return results, nil
 }
 
 // isNotFoundError returns true for pgx "no rows" sentinel errors

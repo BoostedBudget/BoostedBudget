@@ -54,6 +54,7 @@ import type {
   GetSpendingByMerchantParams,
   GetSpendingTrendsParams,
   GetTopExpenseParams,
+  RecurringSubscriptionsResponse,
   SpendingByCategoryResponse,
   SpendingByMerchantResponse,
   SpendingTrendsResponse,
@@ -742,6 +743,160 @@ export function useGetCategoryTotalForPeriod<
     params,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Detects recurring subscription charges using heuristic analysis of the trailing 12-month transaction history. Returns merchants with monthly-cadence charges (≥3 occurrences, ~30-day gap). Designed as an AI-tool-callable function.
+ * @summary Get recurring subscriptions
+ */
+export const getRecurringSubscriptions = (
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<RecurringSubscriptionsResponse>(
+    { url: `/api/v1/analytics/recurring-subscriptions`, method: "GET", signal },
+    options,
+  );
+};
+
+export const getGetRecurringSubscriptionsQueryKey = () => {
+  return [`/api/v1/analytics/recurring-subscriptions`] as const;
+};
+
+export const getGetRecurringSubscriptionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getRecurringSubscriptions>>,
+  TError = ErrorType<ErrorModel>,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof getRecurringSubscriptions>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof customInstance>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetRecurringSubscriptionsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getRecurringSubscriptions>>
+  > = ({ signal }) => getRecurringSubscriptions(requestOptions, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getRecurringSubscriptions>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetRecurringSubscriptionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getRecurringSubscriptions>>
+>;
+export type GetRecurringSubscriptionsQueryError = ErrorType<ErrorModel>;
+
+export function useGetRecurringSubscriptions<
+  TData = Awaited<ReturnType<typeof getRecurringSubscriptions>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getRecurringSubscriptions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRecurringSubscriptions>>,
+          TError,
+          Awaited<ReturnType<typeof getRecurringSubscriptions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetRecurringSubscriptions<
+  TData = Awaited<ReturnType<typeof getRecurringSubscriptions>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getRecurringSubscriptions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRecurringSubscriptions>>,
+          TError,
+          Awaited<ReturnType<typeof getRecurringSubscriptions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetRecurringSubscriptions<
+  TData = Awaited<ReturnType<typeof getRecurringSubscriptions>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getRecurringSubscriptions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get recurring subscriptions
+ */
+
+export function useGetRecurringSubscriptions<
+  TData = Awaited<ReturnType<typeof getRecurringSubscriptions>>,
+  TError = ErrorType<ErrorModel>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getRecurringSubscriptions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetRecurringSubscriptionsQueryOptions(options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

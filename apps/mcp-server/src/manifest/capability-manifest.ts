@@ -100,6 +100,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getCategoryTotalForPeriod'),  // MCP analytics helper — Issue #1087
   read('getTopExpense'),               // MCP analytics helper — Issue #1087
   read('getAverageMonthlySpend'),      // MCP analytics helper — Issue #1215
+  read('getRecurringSubscriptions'),   // MCP analytics helper — Issue #1215
 
   // ── Accounts ────────────────────────────────────────────────────────────
   read('getAccounts'),

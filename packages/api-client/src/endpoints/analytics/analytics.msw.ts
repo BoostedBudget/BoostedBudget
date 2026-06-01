@@ -37,6 +37,7 @@ import type {
   CashFlowHistoryResponse,
   CashFlowSummaryResponse,
   CategoryTotalResponse,
+  RecurringSubscriptionsResponse,
   SpendingByCategoryResponse,
   SpendingByMerchantResponse,
   SpendingTrendsResponse,
@@ -117,6 +118,30 @@ export const getGetCategoryTotalForPeriodResponseMock = (
   start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
   total: faker.number.float({ fractionDigits: 2 }),
   transaction_count: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetRecurringSubscriptionsResponseMock = (
+  overrideResponse: Partial<
+    Extract<RecurringSubscriptionsResponse, object>
+  > = {},
+): RecurringSubscriptionsResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  as_of_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  subscriptions: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      amount: faker.number.float({ fractionDigits: 2 }),
+      avg_gap_days: faker.number.float({ fractionDigits: 2 }),
+      last_charge_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      merchant_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      next_expected_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      occurrence_count: faker.number.int(),
+    })),
+    null,
+  ]),
   ...overrideResponse,
 });
 
@@ -328,6 +353,34 @@ export const getGetCategoryTotalForPeriodMockHandler = (
   );
 };
 
+export const getGetRecurringSubscriptionsMockHandler = (
+  overrideResponse?:
+    | RecurringSubscriptionsResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<RecurringSubscriptionsResponse>
+        | RecurringSubscriptionsResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/recurring-subscriptions",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetRecurringSubscriptionsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetSpendingByCategoryMockHandler = (
   overrideResponse?:
     | SpendingByCategoryResponse
@@ -436,6 +489,7 @@ export const getAnalyticsMock = () => [
   getGetCashFlowHistoryMockHandler(),
   getGetCashFlowSummaryMockHandler(),
   getGetCategoryTotalForPeriodMockHandler(),
+  getGetRecurringSubscriptionsMockHandler(),
   getGetSpendingByCategoryMockHandler(),
   getGetSpendingByMerchantMockHandler(),
   getGetSpendingTrendsMockHandler(),

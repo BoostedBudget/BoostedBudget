@@ -454,6 +454,76 @@ func TestGetAverageMonthlySpend(t *testing.T) {
 	})
 }
 
+func TestGetRecurringSubscriptions(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+
+	t.Run("returns recurring subscriptions", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		lookbackStart := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+		lastCharge := time.Date(2024, 12, 1, 0, 0, 0, 0, time.UTC)
+		nextExpected := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+		rows := pgxmock.NewRows([]string{
+			"merchant_name", "amount", "occurrence_count",
+			"avg_gap_days", "stddev_gap_days", "last_charge_date", "next_expected_date",
+		}).
+			AddRow("Netflix", 15.99, 12, 30.5, 1.2, lastCharge, nextExpected).
+			AddRow("Spotify", 9.99, 12, 29.8, 0.9, lastCharge, nextExpected)
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, lookbackStart).
+			WillReturnRows(rows)
+
+		result, err := repo.GetRecurringSubscriptions(ctx, userID, lookbackStart)
+		require.NoError(t, err)
+		assert.Len(t, result, 2)
+		assert.Equal(t, "Netflix", result[0].MerchantName)
+		assert.InDelta(t, 15.99, result[0].Amount, 0.001)
+		assert.Equal(t, 12, result[0].OccurrenceCount)
+		assert.InDelta(t, 30.5, result[0].AvgGapDays, 0.001)
+		assert.InDelta(t, 1.2, result[0].StddevGapDays, 0.001)
+		assert.True(t, result[0].LastChargeDate.Equal(lastCharge))
+		assert.True(t, result[0].NextExpectedDate.Equal(nextExpected))
+		assert.Equal(t, "Spotify", result[1].MerchantName)
+	})
+
+	t.Run("returns empty slice on no results", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		lookbackStart := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+		rows := pgxmock.NewRows([]string{
+			"merchant_name", "amount", "occurrence_count",
+			"avg_gap_days", "stddev_gap_days", "last_charge_date", "next_expected_date",
+		})
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, lookbackStart).
+			WillReturnRows(rows)
+
+		result, err := repo.GetRecurringSubscriptions(ctx, userID, lookbackStart)
+		require.NoError(t, err)
+		assert.Empty(t, result)
+	})
+
+	t.Run("propagates db error", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		lookbackStart := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, lookbackStart).
+			WillReturnError(pgx.ErrNoRows)
+
+		_, err := repo.GetRecurringSubscriptions(ctx, userID, lookbackStart)
+		assert.Error(t, err)
+	})
+}
+
 // TestGetCashFlowGrouped_IncludesReplacedAccountTransactions verifies that
 // grouped cash-flow uses LEFT JOIN so pre-relink transactions remain visible.
 func TestGetCashFlowGrouped_IncludesReplacedAccountTransactions(t *testing.T) {
