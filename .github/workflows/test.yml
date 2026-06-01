@@ -173,7 +173,9 @@ jobs:
   openapi-validate:
     name: OpenAPI Spec Validation
     needs: detect-changes
-    if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    # Also run on `api` changes so a hand-edited / stale api/openapi.yaml is re-validated
+    # against the backend (the spec must always match the Huma routes — #1247).
+    if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.api == 'true' || needs.detect-changes.outputs.workflow == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     env:
       UNIQUE_WORKSPACE: workspace-openapi-validate-${{ github.run_id }}
@@ -240,6 +242,7 @@ jobs:
       always() &&
       (needs.detect-changes.outputs.api == 'true' ||
        needs.detect-changes.outputs.frontend == 'true' ||
+       needs.detect-changes.outputs.backend == 'true' ||
        needs.detect-changes.outputs.workflow == 'true')
     runs-on: [self-hosted, macOS, mac-mini]
     env:
