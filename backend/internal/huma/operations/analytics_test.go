@@ -873,18 +873,31 @@ func TestGetMonthOverMonthSpendingChange_AccountTypesAndTransfers(t *testing.T) 
 
 // TestGetMonthOverMonthSpendingChange_ServiceError tests service error propagation.
 func TestGetMonthOverMonthSpendingChange_ServiceError(t *testing.T) {
-	mockService := &mockAnalyticsService{monthOverMonthErr: errors.New("months out of range")}
+	mockService := &mockAnalyticsService{monthOverMonthErr: errors.New("db error")}
 	handler := NewAnalyticsHandler(mockService)
 
 	input := &GetMonthOverMonthSpendingChangeInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
-		Months:             1, // invalid
+		Months:             6, // valid — so the mock service error actually propagates
 	}
 
 	output, err := handler.GetMonthOverMonthSpendingChange(context.Background(), input)
 
 	assert.Nil(t, output)
 	require.Error(t, err)
+}
+
+// TestGetMonthOverMonthSpendingChange_MonthsNegative tests that negative months returns 400.
+func TestGetMonthOverMonthSpendingChange_MonthsNegative(t *testing.T) {
+	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	input := &GetMonthOverMonthSpendingChangeInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Months:             -1, // negative — should be 400, not silently default to 6
+	}
+	output, err := handler.GetMonthOverMonthSpendingChange(context.Background(), input)
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "months must be between 2 and 24")
 }
 
 // TestGetMonthOverMonthSpendingChange_InvalidIncludeTransfers tests that invalid include_transfers
