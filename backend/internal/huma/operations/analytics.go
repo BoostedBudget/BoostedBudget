@@ -385,6 +385,157 @@ func (h *AnalyticsHandler) GetTopExpense(ctx context.Context, input *GetTopExpen
 	return &GetTopExpenseOutput{Body: response}, nil
 }
 
+// GetSavingsRateForPeriodInput represents input for GET /analytics/savings-rate.
+type GetSavingsRateForPeriodInput struct {
+	inputs.AuthenticatedInput
+	StartDate string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
+	EndDate   string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
+}
+
+// GetSavingsRateForPeriodOutput represents the response for GET /analytics/savings-rate.
+type GetSavingsRateForPeriodOutput struct {
+	Body *domain.SavingsRateResponse
+}
+
+// GetSavingsRateForPeriod handles GET /api/v1/analytics/savings-rate requests.
+func (h *AnalyticsHandler) GetSavingsRateForPeriod(ctx context.Context, input *GetSavingsRateForPeriodInput) (*GetSavingsRateForPeriodOutput, error) {
+	startDate, endDate, err := dateutil.ParseDateRange(input.StartDate, input.EndDate)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := h.service.GetSavingsRateForPeriod(ctx, input.UserID, startDate, endDate)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return &GetSavingsRateForPeriodOutput{Body: response}, nil
+}
+
+// GetMonthOverMonthSpendingChangeInput represents input for GET /analytics/month-over-month.
+type GetMonthOverMonthSpendingChangeInput struct {
+	inputs.AuthenticatedInput
+	Category string `query:"category" doc:"Optional category to filter by"`
+	Months   int    `query:"months" doc:"Number of months to look back (2-24, default 6)" default:"6"`
+}
+
+// GetMonthOverMonthSpendingChangeOutput represents the response for GET /analytics/month-over-month.
+type GetMonthOverMonthSpendingChangeOutput struct {
+	Body *domain.MonthOverMonthResponse
+}
+
+// GetMonthOverMonthSpendingChange handles GET /api/v1/analytics/month-over-month requests.
+func (h *AnalyticsHandler) GetMonthOverMonthSpendingChange(ctx context.Context, input *GetMonthOverMonthSpendingChangeInput) (*GetMonthOverMonthSpendingChangeOutput, error) {
+	months := input.Months
+	if months <= 0 {
+		months = 6
+	}
+
+	response, err := h.service.GetMonthOverMonthSpendingChange(ctx, input.UserID, input.Category, months)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return &GetMonthOverMonthSpendingChangeOutput{Body: response}, nil
+}
+
+// GetLargestTransactionsForPeriodInput represents input for GET /analytics/largest-transactions.
+type GetLargestTransactionsForPeriodInput struct {
+	inputs.AuthenticatedInput
+	StartDate        string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
+	EndDate          string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
+	AccountTypes     string `query:"account_types" doc:"Comma-separated account types to filter"`
+	IncludeTransfers string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
+	Limit            int    `query:"limit" doc:"Maximum number of transactions to return (1-100, default 10)" default:"10"`
+}
+
+// GetLargestTransactionsForPeriodOutput represents the response for GET /analytics/largest-transactions.
+type GetLargestTransactionsForPeriodOutput struct {
+	Body *domain.LargestTransactionsResponse
+}
+
+// GetLargestTransactionsForPeriod handles GET /api/v1/analytics/largest-transactions requests.
+func (h *AnalyticsHandler) GetLargestTransactionsForPeriod(ctx context.Context, input *GetLargestTransactionsForPeriodInput) (*GetLargestTransactionsForPeriodOutput, error) {
+	filters, err := parseSpendingFilters(input.StartDate, input.EndDate, input.AccountTypes, input.IncludeTransfers)
+	if err != nil {
+		return nil, err
+	}
+
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	response, err := h.service.GetLargestTransactionsForPeriod(ctx, input.UserID, *filters, limit)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return &GetLargestTransactionsForPeriodOutput{Body: response}, nil
+}
+
+// GetCategoryBreakdownForMerchantInput represents input for GET /analytics/merchant-category-breakdown.
+type GetCategoryBreakdownForMerchantInput struct {
+	inputs.AuthenticatedInput
+	StartDate        string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
+	EndDate          string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
+	MerchantName     string `query:"merchant_name" required:"true" doc:"Merchant name to filter by"`
+	AccountTypes     string `query:"account_types" doc:"Comma-separated account types to filter"`
+	IncludeTransfers string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
+}
+
+// GetCategoryBreakdownForMerchantOutput represents the response for GET /analytics/merchant-category-breakdown.
+type GetCategoryBreakdownForMerchantOutput struct {
+	Body *domain.CategoryBreakdownForMerchantResponse
+}
+
+// GetCategoryBreakdownForMerchant handles GET /api/v1/analytics/merchant-category-breakdown requests.
+func (h *AnalyticsHandler) GetCategoryBreakdownForMerchant(ctx context.Context, input *GetCategoryBreakdownForMerchantInput) (*GetCategoryBreakdownForMerchantOutput, error) {
+	filters, err := parseSpendingFilters(input.StartDate, input.EndDate, input.AccountTypes, input.IncludeTransfers)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := h.service.GetCategoryBreakdownForMerchant(ctx, input.UserID, input.MerchantName, *filters)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return &GetCategoryBreakdownForMerchantOutput{Body: response}, nil
+}
+
+// GetIncomeSourceBreakdownInput represents input for GET /analytics/income-sources.
+type GetIncomeSourceBreakdownInput struct {
+	inputs.AuthenticatedInput
+	StartDate        string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
+	EndDate          string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
+	AccountTypes     string `query:"account_types" doc:"Comma-separated account types to filter"`
+	IncludeTransfers string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
+}
+
+// GetIncomeSourceBreakdownOutput represents the response for GET /analytics/income-sources.
+type GetIncomeSourceBreakdownOutput struct {
+	Body *domain.IncomeSourceBreakdownResponse
+}
+
+// GetIncomeSourceBreakdown handles GET /api/v1/analytics/income-sources requests.
+func (h *AnalyticsHandler) GetIncomeSourceBreakdown(ctx context.Context, input *GetIncomeSourceBreakdownInput) (*GetIncomeSourceBreakdownOutput, error) {
+	filters, err := parseSpendingFilters(input.StartDate, input.EndDate, input.AccountTypes, input.IncludeTransfers)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := h.service.GetIncomeSourceBreakdown(ctx, input.UserID, *filters)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return &GetIncomeSourceBreakdownOutput{Body: response}, nil
+}
+
 // RegisterAnalyticsRoutes registers analytics routes with the Huma API.
 // Note: These routes require the Clerk middleware to be applied.
 func RegisterAnalyticsRoutes(api huma.API, handler *AnalyticsHandler) {
@@ -486,4 +637,59 @@ func RegisterAnalyticsRoutes(api huma.API, handler *AnalyticsHandler) {
 		Tags:        []string{"Analytics"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetTopExpense)
+
+	// GET /api/v1/analytics/savings-rate - MCP helper: savings rate (Issue #1215 PR2)
+	huma.Register(api, huma.Operation{
+		OperationID: "getSavingsRateForPeriod",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/analytics/savings-rate",
+		Summary:     "Get savings rate for period",
+		Description: "Returns savings rate (income - expenses) / income for a date range. Null savings_rate when income is zero. AI-tool-callable.",
+		Tags:        []string{"Analytics"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetSavingsRateForPeriod)
+
+	// GET /api/v1/analytics/month-over-month - MCP helper: month-over-month change (Issue #1215 PR2)
+	huma.Register(api, huma.Operation{
+		OperationID: "getMonthOverMonthSpendingChange",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/analytics/month-over-month",
+		Summary:     "Get month-over-month spending change",
+		Description: "Returns monthly spend buckets with period-over-period percentage and absolute changes. months param controls lookback (2-24). AI-tool-callable.",
+		Tags:        []string{"Analytics"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetMonthOverMonthSpendingChange)
+
+	// GET /api/v1/analytics/largest-transactions - MCP helper: largest transactions (Issue #1215 PR2)
+	huma.Register(api, huma.Operation{
+		OperationID: "getLargestTransactionsForPeriod",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/analytics/largest-transactions",
+		Summary:     "Get largest transactions for period",
+		Description: "Returns the N largest expense transactions in a date range, ordered by amount descending. AI-tool-callable.",
+		Tags:        []string{"Analytics"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetLargestTransactionsForPeriod)
+
+	// GET /api/v1/analytics/merchant-category-breakdown - MCP helper: merchant category breakdown (Issue #1215 PR2)
+	huma.Register(api, huma.Operation{
+		OperationID: "getCategoryBreakdownForMerchant",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/analytics/merchant-category-breakdown",
+		Summary:     "Get category breakdown for merchant",
+		Description: "Returns spending totals grouped by category for a specific merchant, with percentages. AI-tool-callable.",
+		Tags:        []string{"Analytics"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetCategoryBreakdownForMerchant)
+
+	// GET /api/v1/analytics/income-sources - MCP helper: income source breakdown (Issue #1215 PR2)
+	huma.Register(api, huma.Operation{
+		OperationID: "getIncomeSourceBreakdown",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/analytics/income-sources",
+		Summary:     "Get income source breakdown",
+		Description: "Returns income (inflow) totals grouped by category with percentages. AI-tool-callable.",
+		Tags:        []string{"Analytics"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetIncomeSourceBreakdown)
 }

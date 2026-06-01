@@ -48,6 +48,26 @@ type AnalyticsService interface {
 	// GetRecurringSubscriptions detects recurring subscription charges using heuristic SQL.
 	// No date params; uses a 12-month trailing window. AI-tool-callable (Issue #1215).
 	GetRecurringSubscriptions(ctx context.Context, userID string) (*domain.RecurringSubscriptionsResponse, error)
+
+	// GetSavingsRateForPeriod returns the savings rate (income - expenses) / income for a period.
+	// Returns nil savings_rate pointer when income is zero. AI-tool-callable (Issue #1215 PR2).
+	GetSavingsRateForPeriod(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.SavingsRateResponse, error)
+
+	// GetMonthOverMonthSpendingChange returns monthly spend buckets with period-over-period changes.
+	// AI-tool-callable (Issue #1215 PR2).
+	GetMonthOverMonthSpendingChange(ctx context.Context, userID string, category string, months int) (*domain.MonthOverMonthResponse, error)
+
+	// GetLargestTransactionsForPeriod returns the N largest expense transactions in a date range.
+	// AI-tool-callable (Issue #1215 PR2).
+	GetLargestTransactionsForPeriod(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) (*domain.LargestTransactionsResponse, error)
+
+	// GetCategoryBreakdownForMerchant returns spending by category for a specific merchant.
+	// AI-tool-callable (Issue #1215 PR2).
+	GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantName string, filters domain.SpendingFilters) (*domain.CategoryBreakdownForMerchantResponse, error)
+
+	// GetIncomeSourceBreakdown returns income (inflow) totals grouped by category.
+	// AI-tool-callable (Issue #1215 PR2).
+	GetIncomeSourceBreakdown(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.IncomeSourceBreakdownResponse, error)
 }
 
 type analyticsService struct {
@@ -506,6 +526,170 @@ func (s *analyticsService) GetRecurringSubscriptions(ctx context.Context, userID
 	return &domain.RecurringSubscriptionsResponse{
 		Subscriptions: items,
 		AsOfDate:      time.Now().Format("2006-01-02"),
+	}, nil
+}
+
+// GetSavingsRateForPeriod returns the savings rate for a date range.
+// SavingsRate = (income - expenses) / income; nil when income is zero.
+func (s *analyticsService) GetSavingsRateForPeriod(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.SavingsRateResponse, error) {
+	if endDate.Before(startDate) {
+		return nil, fmt.Errorf("end_date cannot be before start_date")
+	}
+
+	row, err := s.analyticsRepo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get savings rate: %w", err)
+	}
+
+	var rate *float64
+	if row.Income > 0 {
+		r := (row.Income - row.Expenses) / row.Income
+		rate = &r
+	}
+
+	return &domain.SavingsRateResponse{
+		SavingsRate: rate,
+		Income:      row.Income,
+		Expenses:    row.Expenses,
+		NetSavings:  row.Income - row.Expenses,
+		StartDate:   startDate.Format("2006-01-02"),
+		EndDate:     endDate.Format("2006-01-02"),
+	}, nil
+}
+
+// GetMonthOverMonthSpendingChange returns monthly spend buckets with period-over-period delta.
+// months must be between 2 and 24.
+func (s *analyticsService) GetMonthOverMonthSpendingChange(ctx context.Context, userID string, category string, months int) (*domain.MonthOverMonthResponse, error) {
+	if months < 2 || months > 24 {
+		return nil, fmt.Errorf("months must be between 2 and 24")
+	}
+
+	startDate := time.Now().AddDate(0, -months, 0)
+	rows, err := s.analyticsRepo.GetMonthOverMonthSpending(ctx, userID, startDate, category)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get month-over-month spending: %w", err)
+	}
+
+	buckets := make([]domain.MonthOverMonthBucket, 0, len(rows))
+	for i, row := range rows {
+		b := domain.MonthOverMonthBucket{
+			Month: row.Month.Format("2006-01-02"),
+			Total: row.Total,
+		}
+		if i > 0 && rows[i-1].Total > 0 {
+			pct := (row.Total - rows[i-1].Total) / rows[i-1].Total
+			abs := row.Total - rows[i-1].Total
+			b.ChangePct = &pct
+			b.ChangeAbs = &abs
+		} else if i > 0 {
+			// previous bucket was zero — can't compute pct, but set abs
+			abs := row.Total - rows[i-1].Total
+			b.ChangeAbs = &abs
+		}
+		buckets = append(buckets, b)
+	}
+
+	return &domain.MonthOverMonthResponse{
+		Buckets:    buckets,
+		Category:   category,
+		MonthCount: months,
+	}, nil
+}
+
+// GetLargestTransactionsForPeriod returns the N largest expense transactions in a date range.
+func (s *analyticsService) GetLargestTransactionsForPeriod(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) (*domain.LargestTransactionsResponse, error) {
+	rows, err := s.analyticsRepo.GetLargestTransactionsForPeriod(ctx, userID, filters, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get largest transactions: %w", err)
+	}
+
+	items := make([]domain.LargestTransactionItem, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, domain.LargestTransactionItem{
+			TransactionID:     row.TransactionID,
+			MerchantName:      row.MerchantName,
+			Amount:            row.Amount,
+			Category:          row.Category,
+			PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+			Date:              row.Date.Format("2006-01-02"),
+			AccountID:         row.AccountID,
+		})
+	}
+
+	return &domain.LargestTransactionsResponse{
+		Transactions: items,
+		Limit:        limit,
+		StartDate:    filters.StartDate.Format("2006-01-02"),
+		EndDate:      filters.EndDate.Format("2006-01-02"),
+	}, nil
+}
+
+// GetCategoryBreakdownForMerchant returns spending by category for a specific merchant.
+func (s *analyticsService) GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantName string, filters domain.SpendingFilters) (*domain.CategoryBreakdownForMerchantResponse, error) {
+	rows, err := s.analyticsRepo.GetCategoryBreakdownForMerchant(ctx, userID, merchantName, filters)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get category breakdown for merchant: %w", err)
+	}
+
+	var totalSpend float64
+	for _, row := range rows {
+		totalSpend += row.Total
+	}
+
+	categories := make([]domain.CategoryBreakdownItem, 0, len(rows))
+	for _, row := range rows {
+		item := domain.CategoryBreakdownItem{
+			Category:          row.Category,
+			PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+			Total:             row.Total,
+			TransactionCount:  row.Count,
+		}
+		if totalSpend > 0 {
+			item.Percentage = (row.Total / totalSpend) * 100
+		}
+		categories = append(categories, item)
+	}
+
+	return &domain.CategoryBreakdownForMerchantResponse{
+		MerchantName: merchantName,
+		Categories:   categories,
+		TotalSpend:   totalSpend,
+		StartDate:    filters.StartDate.Format("2006-01-02"),
+		EndDate:      filters.EndDate.Format("2006-01-02"),
+	}, nil
+}
+
+// GetIncomeSourceBreakdown returns income totals grouped by category with percentages.
+func (s *analyticsService) GetIncomeSourceBreakdown(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.IncomeSourceBreakdownResponse, error) {
+	rows, err := s.analyticsRepo.GetIncomeSourceBreakdown(ctx, userID, filters)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get income source breakdown: %w", err)
+	}
+
+	var totalIncome float64
+	for _, row := range rows {
+		totalIncome += row.Total
+	}
+
+	sources := make([]domain.IncomeSourceItem, 0, len(rows))
+	for _, row := range rows {
+		item := domain.IncomeSourceItem{
+			Category:          row.Category,
+			PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+			Total:             row.Total,
+			TransactionCount:  row.Count,
+		}
+		if totalIncome > 0 {
+			item.Percentage = (row.Total / totalIncome) * 100
+		}
+		sources = append(sources, item)
+	}
+
+	return &domain.IncomeSourceBreakdownResponse{
+		Sources:     sources,
+		TotalIncome: totalIncome,
+		StartDate:   filters.StartDate.Format("2006-01-02"),
+		EndDate:     filters.EndDate.Format("2006-01-02"),
 	}, nil
 }
 

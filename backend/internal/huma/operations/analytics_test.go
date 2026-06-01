@@ -17,20 +17,30 @@ import (
 
 // mockAnalyticsService is a mock implementation of services.AnalyticsService
 type mockAnalyticsService struct {
-	summaryResponse                *domain.CashFlowSummaryResponse
-	historyResponse                *domain.CashFlowHistoryResponse
-	spendingByCategoryResponse     *domain.SpendingByCategoryResponse
-	spendingByMerchantResponse     *domain.SpendingByMerchantResponse
-	spendingTrendsResponse         *domain.SpendingTrendsResponse
-	averageMonthlySpendResponse    *domain.AverageMonthlySpendResponse
-	recurringSubscriptionsResponse *domain.RecurringSubscriptionsResponse
-	summaryErr                     error
-	historyErr                     error
-	spendingByCategoryErr          error
-	spendingByMerchantErr          error
-	spendingTrendsErr              error
-	averageMonthlySpendErr         error
-	recurringSubscriptionsErr      error
+	summaryResponse                         *domain.CashFlowSummaryResponse
+	historyResponse                         *domain.CashFlowHistoryResponse
+	spendingByCategoryResponse              *domain.SpendingByCategoryResponse
+	spendingByMerchantResponse              *domain.SpendingByMerchantResponse
+	spendingTrendsResponse                  *domain.SpendingTrendsResponse
+	averageMonthlySpendResponse             *domain.AverageMonthlySpendResponse
+	recurringSubscriptionsResponse          *domain.RecurringSubscriptionsResponse
+	savingsRateResponse                     *domain.SavingsRateResponse
+	monthOverMonthResponse                  *domain.MonthOverMonthResponse
+	largestTransactionsResponse             *domain.LargestTransactionsResponse
+	categoryBreakdownForMerchantResponse    *domain.CategoryBreakdownForMerchantResponse
+	incomeSourceBreakdownResponse           *domain.IncomeSourceBreakdownResponse
+	summaryErr                              error
+	historyErr                              error
+	spendingByCategoryErr                   error
+	spendingByMerchantErr                   error
+	spendingTrendsErr                       error
+	averageMonthlySpendErr                  error
+	recurringSubscriptionsErr               error
+	savingsRateErr                          error
+	monthOverMonthErr                       error
+	largestTransactionsErr                  error
+	categoryBreakdownForMerchantErr         error
+	incomeSourceBreakdownErr                error
 }
 
 func (m *mockAnalyticsService) GetCashFlowSummary(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowSummaryResponse, error) {
@@ -73,6 +83,26 @@ func (m *mockAnalyticsService) GetAverageMonthlySpend(_ context.Context, _ strin
 
 func (m *mockAnalyticsService) GetRecurringSubscriptions(_ context.Context, _ string) (*domain.RecurringSubscriptionsResponse, error) {
 	return m.recurringSubscriptionsResponse, m.recurringSubscriptionsErr
+}
+
+func (m *mockAnalyticsService) GetSavingsRateForPeriod(_ context.Context, _ string, _ time.Time, _ time.Time) (*domain.SavingsRateResponse, error) {
+	return m.savingsRateResponse, m.savingsRateErr
+}
+
+func (m *mockAnalyticsService) GetMonthOverMonthSpendingChange(_ context.Context, _ string, _ string, _ int) (*domain.MonthOverMonthResponse, error) {
+	return m.monthOverMonthResponse, m.monthOverMonthErr
+}
+
+func (m *mockAnalyticsService) GetLargestTransactionsForPeriod(_ context.Context, _ string, _ domain.SpendingFilters, _ int) (*domain.LargestTransactionsResponse, error) {
+	return m.largestTransactionsResponse, m.largestTransactionsErr
+}
+
+func (m *mockAnalyticsService) GetCategoryBreakdownForMerchant(_ context.Context, _ string, _ string, _ domain.SpendingFilters) (*domain.CategoryBreakdownForMerchantResponse, error) {
+	return m.categoryBreakdownForMerchantResponse, m.categoryBreakdownForMerchantErr
+}
+
+func (m *mockAnalyticsService) GetIncomeSourceBreakdown(_ context.Context, _ string, _ domain.SpendingFilters) (*domain.IncomeSourceBreakdownResponse, error) {
+	return m.incomeSourceBreakdownResponse, m.incomeSourceBreakdownErr
 }
 
 // Helper functions to create test data
@@ -712,6 +742,294 @@ func TestGetRecurringSubscriptions_ServiceError(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestGetSavingsRateForPeriod_Success tests successful savings rate retrieval.
+func TestGetSavingsRateForPeriod_Success(t *testing.T) {
+	rate := 0.4
+	mockService := &mockAnalyticsService{
+		savingsRateResponse: &domain.SavingsRateResponse{
+			SavingsRate: &rate,
+			Income:      5000.0,
+			Expenses:    3000.0,
+			NetSavings:  2000.0,
+			StartDate:   "2024-01-01",
+			EndDate:     "2024-03-31",
+		},
+	}
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetSavingsRateForPeriodInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-03-31",
+	}
+
+	output, err := handler.GetSavingsRateForPeriod(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.InDelta(t, 5000.0, output.Body.Income, 0.001)
+	assert.NotNil(t, output.Body.SavingsRate)
+}
+
+// TestGetSavingsRateForPeriod_EndBeforeStart tests date validation.
+func TestGetSavingsRateForPeriod_EndBeforeStart(t *testing.T) {
+	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+
+	input := &GetSavingsRateForPeriodInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-03-31",
+		EndDate:            "2024-01-01",
+	}
+
+	output, err := handler.GetSavingsRateForPeriod(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// TestGetSavingsRateForPeriod_ServiceError tests service error propagation.
+func TestGetSavingsRateForPeriod_ServiceError(t *testing.T) {
+	mockService := &mockAnalyticsService{savingsRateErr: errors.New("db error")}
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetSavingsRateForPeriodInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-03-31",
+	}
+
+	output, err := handler.GetSavingsRateForPeriod(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// TestGetMonthOverMonthSpendingChange_Success tests successful month-over-month retrieval.
+func TestGetMonthOverMonthSpendingChange_Success(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		monthOverMonthResponse: &domain.MonthOverMonthResponse{
+			Buckets:    []domain.MonthOverMonthBucket{{Month: "2024-01-01", Total: 300.0}},
+			Category:   "",
+			MonthCount: 6,
+		},
+	}
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetMonthOverMonthSpendingChangeInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Months:             6,
+	}
+
+	output, err := handler.GetMonthOverMonthSpendingChange(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, 6, output.Body.MonthCount)
+}
+
+// TestGetMonthOverMonthSpendingChange_ServiceError tests service error propagation.
+func TestGetMonthOverMonthSpendingChange_ServiceError(t *testing.T) {
+	mockService := &mockAnalyticsService{monthOverMonthErr: errors.New("months out of range")}
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetMonthOverMonthSpendingChangeInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Months:             1, // invalid
+	}
+
+	output, err := handler.GetMonthOverMonthSpendingChange(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// TestGetLargestTransactionsForPeriod_Success tests successful largest transaction retrieval.
+func TestGetLargestTransactionsForPeriod_Success(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		largestTransactionsResponse: &domain.LargestTransactionsResponse{
+			Transactions: []domain.LargestTransactionItem{
+				{TransactionID: "tx-001", MerchantName: "Amazon", Amount: 500.0},
+			},
+			Limit:     10,
+			StartDate: "2024-01-01",
+			EndDate:   "2024-03-31",
+		},
+	}
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetLargestTransactionsForPeriodInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-03-31",
+	}
+
+	output, err := handler.GetLargestTransactionsForPeriod(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Len(t, output.Body.Transactions, 1)
+	assert.Equal(t, 10, output.Body.Limit)
+}
+
+// TestGetLargestTransactionsForPeriod_EndBeforeStart tests date validation.
+func TestGetLargestTransactionsForPeriod_EndBeforeStart(t *testing.T) {
+	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+
+	input := &GetLargestTransactionsForPeriodInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-03-31",
+		EndDate:            "2024-01-01",
+	}
+
+	output, err := handler.GetLargestTransactionsForPeriod(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// TestGetLargestTransactionsForPeriod_ServiceError tests service error propagation.
+func TestGetLargestTransactionsForPeriod_ServiceError(t *testing.T) {
+	mockService := &mockAnalyticsService{largestTransactionsErr: errors.New("db error")}
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetLargestTransactionsForPeriodInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-03-31",
+	}
+
+	output, err := handler.GetLargestTransactionsForPeriod(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// TestGetCategoryBreakdownForMerchant_Success tests successful merchant category breakdown.
+func TestGetCategoryBreakdownForMerchant_Success(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		categoryBreakdownForMerchantResponse: &domain.CategoryBreakdownForMerchantResponse{
+			MerchantName: "Amazon",
+			Categories: []domain.CategoryBreakdownItem{
+				{Category: "SHOPPING", PFCPrimaryDisplay: "Shopping", Total: 400.0, Percentage: 80.0, TransactionCount: 5},
+			},
+			TotalSpend: 500.0,
+			StartDate:  "2024-01-01",
+			EndDate:    "2024-03-31",
+		},
+	}
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetCategoryBreakdownForMerchantInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-03-31",
+		MerchantName:       "Amazon",
+	}
+
+	output, err := handler.GetCategoryBreakdownForMerchant(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "Amazon", output.Body.MerchantName)
+	assert.Len(t, output.Body.Categories, 1)
+}
+
+// TestGetCategoryBreakdownForMerchant_EndBeforeStart tests date validation.
+func TestGetCategoryBreakdownForMerchant_EndBeforeStart(t *testing.T) {
+	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+
+	input := &GetCategoryBreakdownForMerchantInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-03-31",
+		EndDate:            "2024-01-01",
+		MerchantName:       "Amazon",
+	}
+
+	output, err := handler.GetCategoryBreakdownForMerchant(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// TestGetCategoryBreakdownForMerchant_ServiceError tests service error propagation.
+func TestGetCategoryBreakdownForMerchant_ServiceError(t *testing.T) {
+	mockService := &mockAnalyticsService{categoryBreakdownForMerchantErr: errors.New("db error")}
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetCategoryBreakdownForMerchantInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-03-31",
+		MerchantName:       "Amazon",
+	}
+
+	output, err := handler.GetCategoryBreakdownForMerchant(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// TestGetIncomeSourceBreakdown_Success tests successful income source breakdown retrieval.
+func TestGetIncomeSourceBreakdown_Success(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		incomeSourceBreakdownResponse: &domain.IncomeSourceBreakdownResponse{
+			Sources: []domain.IncomeSourceItem{
+				{Category: "INCOME", PFCPrimaryDisplay: "Income", Total: 5000.0, Percentage: 100.0, TransactionCount: 3},
+			},
+			TotalIncome: 5000.0,
+			StartDate:   "2024-01-01",
+			EndDate:     "2024-03-31",
+		},
+	}
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetIncomeSourceBreakdownInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-03-31",
+	}
+
+	output, err := handler.GetIncomeSourceBreakdown(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.InDelta(t, 5000.0, output.Body.TotalIncome, 0.001)
+	assert.Len(t, output.Body.Sources, 1)
+}
+
+// TestGetIncomeSourceBreakdown_EndBeforeStart tests date validation.
+func TestGetIncomeSourceBreakdown_EndBeforeStart(t *testing.T) {
+	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+
+	input := &GetIncomeSourceBreakdownInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-03-31",
+		EndDate:            "2024-01-01",
+	}
+
+	output, err := handler.GetIncomeSourceBreakdown(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// TestGetIncomeSourceBreakdown_ServiceError tests service error propagation.
+func TestGetIncomeSourceBreakdown_ServiceError(t *testing.T) {
+	mockService := &mockAnalyticsService{incomeSourceBreakdownErr: errors.New("db error")}
+	handler := NewAnalyticsHandler(mockService)
+
+	input := &GetIncomeSourceBreakdownInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-03-31",
+	}
+
+	output, err := handler.GetIncomeSourceBreakdown(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
 // TestSpendingRouteRegistration tests that spending routes are properly registered.
 func TestSpendingRouteRegistration(t *testing.T) {
 	_, api := humatest.New(t)
@@ -725,6 +1043,11 @@ func TestSpendingRouteRegistration(t *testing.T) {
 		"/api/v1/analytics/spending-trends",
 		"/api/v1/analytics/average-monthly-spend",
 		"/api/v1/analytics/recurring-subscriptions",
+		"/api/v1/analytics/savings-rate",
+		"/api/v1/analytics/month-over-month",
+		"/api/v1/analytics/largest-transactions",
+		"/api/v1/analytics/merchant-category-breakdown",
+		"/api/v1/analytics/income-sources",
 	}
 	for _, path := range paths {
 		resp := api.Get(path)
