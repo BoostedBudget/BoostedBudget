@@ -792,7 +792,7 @@ func (r *analyticsRepository) GetMonthOverMonthSpending(ctx context.Context, use
 	}
 	defer rows.Close()
 
-	var results []domain.MonthOverMonthBucketRow
+	results := make([]domain.MonthOverMonthBucketRow, 0)
 	for rows.Next() {
 		var row domain.MonthOverMonthBucketRow
 		if err := rows.Scan(&row.Month, &row.Total); err != nil {
