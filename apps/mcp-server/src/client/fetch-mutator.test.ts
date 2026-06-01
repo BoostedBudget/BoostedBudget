@@ -1,5 +1,6 @@
 import { describe, expect, it, mock, beforeEach } from 'bun:test'
 import { createFetchMutator, ApiError } from './fetch-mutator'
+import { MCP_WORKER_USER_AGENT } from './user-agent'
 
 const CREDS = {
   authorization: 'Bearer test-token',
@@ -63,6 +64,34 @@ describe('createFetchMutator', () => {
     const headers = init.headers as Record<string, string>
     expect(headers['X-MCP-Worker-Secret']).toBe('worker-secret-value')
     expect(headers['X-MCP-Grant-Id']).toBe('grant-abc-123')
+  })
+
+  it('sends a non-empty User-Agent header (avoids CF "no User-Agent" WAF challenge)', async () => {
+    const mutator = createFetchMutator({
+      baseUrl: BASE_URL,
+      getCredentials: () => Promise.resolve(CREDS),
+    })
+
+    await mutator({ url: '/api/v1/user-accounts', method: 'GET' })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const headers = init.headers as Record<string, string>
+    expect(headers['User-Agent']).toBe(MCP_WORKER_USER_AGENT)
+  })
+
+  it('lets callers override the default User-Agent', async () => {
+    const mutator = createFetchMutator({
+      baseUrl: BASE_URL,
+      getCredentials: () => Promise.resolve(CREDS),
+    })
+
+    await mutator(
+      { url: '/api/v1/accounts', method: 'GET', headers: { 'User-Agent': 'custom-ua/9.9' } },
+    )
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const headers = init.headers as Record<string, string>
+    expect(headers['User-Agent']).toBe('custom-ua/9.9')
   })
 
   it('appends query params to URL', async () => {
