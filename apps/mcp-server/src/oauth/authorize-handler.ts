@@ -1,6 +1,47 @@
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider'
 import type { Env } from '../env'
 
+/** Scopes requested from Clerk. The Clerk OAuth Application MUST have each of these
+ *  enabled (dashboard → OAuth Applications → Scopes), or Clerk redirects back to
+ *  /oauth/callback with ?error=invalid_scope. `openid` yields the id_token we decode
+ *  for the user's `sub`. */
+const CLERK_OAUTH_SCOPES = 'openid email profile'
+
+/** Standard OAuth 2.0 authorization error codes (RFC 6749 §4.1.2.1). Only these are
+ *  reflected to the user; anything else is shown as a generic message. This prevents
+ *  reflected XSS from an attacker-crafted /oauth/callback?error=... URL. */
+const KNOWN_OAUTH_ERRORS = new Set([
+  'invalid_request',
+  'unauthorized_client',
+  'access_denied',
+  'unsupported_response_type',
+  'invalid_scope',
+  'server_error',
+  'temporarily_unavailable',
+])
+
+/** Escape HTML special chars — defense-in-depth for any interpolated value. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/** Render a user-facing HTML error page (shown in the browser tab opened for OAuth). */
+function errorPage(message: string, status: number): Response {
+  return new Response(
+    `<!doctype html><html><head><title>Authorization failed</title></head><body style="font-family:sans-serif;max-width:480px;margin:80px auto;padding:0 24px">
+<h2>Authorization failed</h2>
+<p>${escapeHtml(message)}</p>
+<p style="color:#888;font-size:13px">Please close this window and try again. If this keeps happening, contact support.</p>
+</body></html>`,
+    { status, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+  )
+}
+
 /**
  * /oauth/authorize — redirect the user to Clerk for authentication.
  *
@@ -35,7 +76,7 @@ export async function handleAuthorize(
   clerkUrl.searchParams.set('response_type', 'code')
   clerkUrl.searchParams.set('client_id', env.MCP_OAUTH_AUDIENCE)
   clerkUrl.searchParams.set('redirect_uri', `${env.MCP_RESOURCE_URL}/oauth/callback`)
-  clerkUrl.searchParams.set('scope', 'openid email profile')
+  clerkUrl.searchParams.set('scope', CLERK_OAUTH_SCOPES)
   clerkUrl.searchParams.set('state', stateKey)
 
   return Response.redirect(clerkUrl.toString(), 302)
@@ -58,6 +99,18 @@ export async function handleCallback(
   const url = new URL(request.url)
   const code = url.searchParams.get('code')
   const stateKey = url.searchParams.get('state')
+
+  // Surface upstream (Clerk) authorization errors instead of masking them as
+  // "missing code or state". Clerk redirects here with ?error=... on failure
+  // (e.g. invalid_scope, access_denied).
+  const upstreamError = url.searchParams.get('error')
+  if (upstreamError) {
+    const desc = url.searchParams.get('error_description') ?? ''
+    console.error('[oauth-callback] Clerk authorization error:', upstreamError, desc)
+    // Only reflect a whitelisted error code; never interpolate raw query input.
+    const safeCode = KNOWN_OAUTH_ERRORS.has(upstreamError) ? ` (${upstreamError})` : ''
+    return errorPage(`The identity provider declined the sign-in${safeCode}.`, 502)
+  }
 
   if (!code || !stateKey) {
     return new Response(JSON.stringify({ error: 'invalid_callback', detail: 'missing code or state' }), {
@@ -98,14 +151,7 @@ export async function handleCallback(
   if (!tokenRes.ok) {
     const body = await tokenRes.text()
     console.error('[oauth-callback] Clerk token exchange failed:', tokenRes.status, body)
-    return new Response(
-      `<!doctype html><html><head><title>Authorization failed</title></head><body style="font-family:sans-serif;max-width:480px;margin:80px auto;padding:0 24px">
-<h2>Authorization failed</h2>
-<p>Could not complete sign-in with your BoostedBudget account. Please close this window and try again.</p>
-<p style="color:#888;font-size:13px">If this keeps happening, contact support.</p>
-</body></html>`,
-      { status: 502, headers: { 'Content-Type': 'text/html' } },
-    )
+    return errorPage('Could not complete sign-in with your BoostedBudget account.', 502)
   }
 
   const tokens = (await tokenRes.json()) as {
