@@ -934,10 +934,10 @@ func main() {
 				river.PeriodicInterval(24*time.Hour),
 				func() (river.JobArgs, *river.InsertOpts) {
 					return jobs.IdempotencyCleanupArgs{
-						TriggerSource: "periodic",
-					}, &river.InsertOpts{
-						Queue: "low",
-					}
+							TriggerSource: "periodic",
+						}, &river.InsertOpts{
+							Queue: "low",
+						}
 				},
 				&river.PeriodicJobOpts{RunOnStart: false},
 			))
@@ -1092,6 +1092,12 @@ func main() {
 			identityRepo,
 			registrationService,
 			appLogger,
+			// #1247: MCP-origin service auth — trusted Worker (X-MCP-Worker-Secret)
+			// + Clerk-verified OAuth access token. Disabled if MCPWorkerSecret is empty.
+			&humamiddleware.MCPAuthConfig{
+				WorkerSecret: cfg.MCPWorkerSecret,
+				Verifier:     humamiddleware.NewClerkOAuthVerifier(cfg.ClerkSecretKey),
+			},
 			profileRepo,
 		)
 		humaAPI.UseMiddleware(humaClerkMiddleware)
@@ -1160,6 +1166,15 @@ func main() {
 		operations.RegisterTransactionRoutes(humaAPI, humaTransactionHandler)
 		appLogger.Info("Huma transaction routes registered")
 
+		// Register Huma user account routes (Issue #171; fixes #1247).
+		// These were registered for OpenAPI spec generation (RegisterAllRoutesForSpec)
+		// but never wired into the runtime server, so /api/v1/user-accounts 404'd even
+		// though the generated spec + MCP Worker advertised it.
+		userAccountRepo := repository.NewUserAccountRepository(db, fieldEncryptor)
+		userAccountService := services.NewUserAccountService(userAccountRepo)
+		operations.RegisterUserAccountRoutes(humaAPI, operations.NewUserAccountHandler(userAccountService))
+		appLogger.Info("Huma user account routes registered")
+
 		// Register Huma category routes (Issue #559: Huma migration)
 		humaCategoryHandler := operations.NewCategoryHandler(customCategoryService, operations.CategoryHandlerDeps{
 			IdempotencyRepo: humaIdempotencyRepo,
@@ -1209,7 +1224,7 @@ func main() {
 
 		// Register MCP audit log route (Issue #1087: MCP server, GAP-2)
 		// Service-auth via CloudflareOnly middleware (X-Origin-Secret, not end-user Clerk JWT)
-		humaMCPAuditHandler := operations.NewMCPAuditHandler(humaMCPAuditRepo, cfg.MCPWorkerSecret)
+		humaMCPAuditHandler := operations.NewMCPAuditHandler(humaMCPAuditRepo, cfg.MCPWorkerSecret, identityRepo)
 		operations.RegisterMCPAuditRoutes(humaAPI, humaMCPAuditHandler)
 		appLogger.Info("MCP audit log route registered")
 
