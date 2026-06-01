@@ -12,6 +12,7 @@
  */
 
 import type { Env } from '../env'
+import { MCP_WORKER_USER_AGENT } from '../client/user-agent'
 
 export interface AuditEntry {
   actorUserId: string
@@ -50,6 +51,8 @@ export function createAuditClient(env: Env): AuditClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          // Empty UA trips the backend WAF "no User-Agent" managed-challenge rule.
+          'User-Agent': MCP_WORKER_USER_AGENT,
           'X-Origin-Secret': env.BOOSTEDBUDGET_ORIGIN_SECRET,
           'X-MCP-Worker-Secret': env.MCP_WORKER_SECRET,
         },
