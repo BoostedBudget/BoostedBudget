@@ -223,3 +223,20 @@ type TopExpenseResponse struct {
 	StartDate         string  `json:"start_date"`
 	EndDate           string  `json:"end_date"`
 }
+
+// ─── Issue #1215 analytics helpers ──────────────────────────────────────────
+
+// AverageMonthlySpendRow is the raw DB row for GetAverageMonthlySpend.
+type AverageMonthlySpendRow struct {
+	Total float64
+}
+
+// AverageMonthlySpendResponse is the response for GET /analytics/average-monthly-spend.
+// AI-tool-callable: single DB round-trip, token-efficient summary.
+type AverageMonthlySpendResponse struct {
+	AverageMonthlySpend float64 `json:"average_monthly_spend"`
+	TotalSpend          float64 `json:"total_spend"`
+	MonthCount          int     `json:"month_count"`
+	StartDate           string  `json:"start_date"`
+	EndDate             string  `json:"end_date"`
+}

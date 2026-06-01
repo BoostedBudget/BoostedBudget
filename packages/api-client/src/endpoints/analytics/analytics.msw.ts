@@ -33,6 +33,7 @@ import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
 import type {
+  AverageMonthlySpendResponse,
   CashFlowHistoryResponse,
   CashFlowSummaryResponse,
   CategoryTotalResponse,
@@ -41,6 +42,18 @@ import type {
   SpendingTrendsResponse,
   TopExpenseResponse,
 } from "../../models";
+
+export const getGetAverageMonthlySpendResponseMock = (
+  overrideResponse: Partial<Extract<AverageMonthlySpendResponse, object>> = {},
+): AverageMonthlySpendResponse => ({
+  $schema: faker.helpers.arrayElement([faker.internet.url(), undefined]),
+  average_monthly_spend: faker.number.float({ fractionDigits: 2 }),
+  end_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  month_count: faker.number.int(),
+  start_date: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  total_spend: faker.number.float({ fractionDigits: 2 }),
+  ...overrideResponse,
+});
 
 export const getGetCashFlowHistoryResponseMock = (
   overrideResponse: Partial<Extract<CashFlowHistoryResponse, object>> = {},
@@ -210,6 +223,32 @@ export const getGetTopExpenseResponseMock = (
   transaction_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   ...overrideResponse,
 });
+
+export const getGetAverageMonthlySpendMockHandler = (
+  overrideResponse?:
+    | AverageMonthlySpendResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AverageMonthlySpendResponse> | AverageMonthlySpendResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/api/v1/analytics/average-monthly-spend",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(500);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAverageMonthlySpendResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 
 export const getGetCashFlowHistoryMockHandler = (
   overrideResponse?:
@@ -393,6 +432,7 @@ export const getGetTopExpenseMockHandler = (
   );
 };
 export const getAnalyticsMock = () => [
+  getGetAverageMonthlySpendMockHandler(),
   getGetCashFlowHistoryMockHandler(),
   getGetCashFlowSummaryMockHandler(),
   getGetCategoryTotalForPeriodMockHandler(),

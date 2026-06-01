@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -39,6 +40,10 @@ type AnalyticsService interface {
 	// GetTopExpense returns the single largest expense transaction in a date range.
 	// Returns nil response when no expense transactions exist in the period (Issue #1087).
 	GetTopExpense(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.TopExpenseResponse, error)
+
+	// GetAverageMonthlySpend returns the average monthly spend over the date range in filters.
+	// Single DB round-trip; token-efficient summary; AI-tool-callable (Issue #1215).
+	GetAverageMonthlySpend(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendResponse, error)
 }
 
 type analyticsService struct {
@@ -440,6 +445,38 @@ func (s *analyticsService) GetCategoryTotalForPeriod(ctx context.Context, userID
 		TransactionCount:  row.TransactionCount,
 		StartDate:         startDate.Format("2006-01-02"),
 		EndDate:           endDate.Format("2006-01-02"),
+	}, nil
+}
+
+// GetAverageMonthlySpend returns the average monthly spend over the date range in filters.
+func (s *analyticsService) GetAverageMonthlySpend(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendResponse, error) {
+	if filters.EndDate.Before(filters.StartDate) {
+		return nil, fmt.Errorf("end_date cannot be before start_date")
+	}
+
+	row, err := s.analyticsRepo.GetAverageMonthlySpend(ctx, userID, filters)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get average monthly spend: %w", err)
+	}
+
+	// Compute month count: ceiling of days span / 30.4375 (average days/month)
+	days := filters.EndDate.Sub(filters.StartDate).Hours() / 24
+	monthCount := int(math.Ceil(days / 30.4375))
+	if monthCount < 1 {
+		monthCount = 1
+	}
+
+	var avg float64
+	if monthCount > 0 {
+		avg = row.Total / float64(monthCount)
+	}
+
+	return &domain.AverageMonthlySpendResponse{
+		AverageMonthlySpend: avg,
+		TotalSpend:          row.Total,
+		MonthCount:          monthCount,
+		StartDate:           filters.StartDate.Format("2006-01-02"),
+		EndDate:             filters.EndDate.Format("2006-01-02"),
 	}, nil
 }
 

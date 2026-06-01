@@ -288,6 +288,17 @@
       "excluded": true
     },
     {
+      "operationId": "getAverageMonthlySpend",
+      "method": "GET",
+      "path": "/api/v1/analytics/average-monthly-spend",
+      "summary": "Get average monthly spend",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
       "operationId": "getCashFlowHistory",
       "method": "GET",
       "path": "/api/v1/analytics/cash-flow-history",

@@ -38,6 +38,10 @@ type AnalyticsRepository interface {
 	// Returns nil when no expense transactions exist in the period.
 	// AI-tool-callable: one DB round-trip, returns structured summary (Issue #1087)
 	GetTopExpense(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.TopExpenseRow, error)
+
+	// GetAverageMonthlySpend returns the total expense amount for computing average monthly spend.
+	// Single DB round-trip; average computed in the service layer (Issue #1215).
+	GetAverageMonthlySpend(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error)
 }
 
 // analyticsRepository implements AnalyticsRepository using PostgreSQL
@@ -589,6 +593,34 @@ func (r *analyticsRepository) GetTopExpense(ctx context.Context, userID string, 
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to get top expense: %w", err)
+	}
+	return &row, nil
+}
+
+// GetAverageMonthlySpend returns the total expense amount for computing average monthly spend.
+// Single DB round-trip; average computed in the service layer (Issue #1215).
+func (r *analyticsRepository) GetAverageMonthlySpend(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
+	args := []interface{}{userID, filters.StartDate, filters.EndDate}
+	filterClause, args, _ := buildSpendingFilter(filters, args)
+
+	query := fmt.Sprintf(`
+		SELECT COALESCE(SUM(t.amount), 0) as total
+		FROM transactions t
+		JOIN accounts a ON a.id = t.account_id
+		WHERE t.user_id = $1
+		  AND t.date >= $2
+		  AND t.date <= $3
+		  AND t.amount > 0
+		  AND t.pending = false
+		  %s
+	`, filterClause)
+
+	var row domain.AverageMonthlySpendRow
+	err := r.db.QueryRow(ctx, query, args...).Scan(&row.Total)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get average monthly spend: %w", err)
 	}
 	return &row, nil
 }

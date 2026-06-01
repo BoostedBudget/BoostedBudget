@@ -27,6 +27,10 @@ export function createApiClient(mutator: FetchMutator) {
       },
     } as const,
     analytics: {
+      /** GET /api/v1/analytics/average-monthly-spend */
+      getAverageMonthlySpend(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/analytics/average-monthly-spend', method: 'GET', params, signal })
+      },
       /** GET /api/v1/analytics/cash-flow-history */
       getCashFlowHistory(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/cash-flow-history', method: 'GET', params, signal })

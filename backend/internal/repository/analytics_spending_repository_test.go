@@ -385,6 +385,75 @@ func TestGetCashFlowAggregation_IncludesReplacedAccountTransactions(t *testing.T
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGetAverageMonthlySpend(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	filters := domain.SpendingFilters{
+		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+	}
+
+	t.Run("returns total spend row", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"total"}).
+			AddRow(300.0)
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, filters.StartDate, filters.EndDate).
+			WillReturnRows(rows)
+
+		result, err := repo.GetAverageMonthlySpend(ctx, userID, filters)
+		require.NoError(t, err)
+		assert.Equal(t, 300.0, result.Total)
+	})
+
+	t.Run("returns zero when no spend in period", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"total"}).
+			AddRow(0.0)
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, filters.StartDate, filters.EndDate).
+			WillReturnRows(rows)
+
+		result, err := repo.GetAverageMonthlySpend(ctx, userID, filters)
+		require.NoError(t, err)
+		assert.Equal(t, 0.0, result.Total)
+	})
+
+	t.Run("db error is returned", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, filters.StartDate, filters.EndDate).
+			WillReturnError(pgx.ErrNoRows)
+
+		_, err := repo.GetAverageMonthlySpend(ctx, userID, filters)
+		assert.Error(t, err)
+	})
+
+	t.Run("uses JOIN accounts for account-type filtering", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"total"}).AddRow(150.0)
+
+		// Query must use JOIN accounts so buildSpendingFilter account-type filter works
+		mock.ExpectQuery(`(?i)JOIN accounts`).
+			WithArgs(userID, filters.StartDate, filters.EndDate).
+			WillReturnRows(rows)
+
+		_, err := repo.GetAverageMonthlySpend(ctx, userID, filters)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
 // TestGetCashFlowGrouped_IncludesReplacedAccountTransactions verifies that
 // grouped cash-flow uses LEFT JOIN so pre-relink transactions remain visible.
 func TestGetCashFlowGrouped_IncludesReplacedAccountTransactions(t *testing.T) {
