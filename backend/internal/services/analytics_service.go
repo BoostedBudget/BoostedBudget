@@ -814,13 +814,13 @@ func (s *analyticsService) GetNetWorthTrend(ctx context.Context, userID string, 
 }
 
 // aggregateDailyNetWorth converts a slice of BalanceHistoryPoint into a map of date→totalNetWorth.
-// GetAggregatedHistory already sums per account type; we simply collapse by date.
+// Uses += to accumulate TypeBalance across all account types per date, defending against
+// any future change in GetAggregatedHistory that returns multiple rows per date.
 func aggregateDailyNetWorth(points []domain.BalanceHistoryPoint) map[time.Time]float64 {
 	daily := make(map[time.Time]float64, len(points))
 	for _, p := range points {
-		// BalanceHistoryPoint.TotalBalance already sums all account types for the day.
 		day := p.Date.Truncate(24 * time.Hour)
-		daily[day] = p.TotalBalance
+		daily[day] += p.TotalBalance
 	}
 	return daily
 }
