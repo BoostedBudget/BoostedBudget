@@ -10,6 +10,9 @@ type ConsentChecker interface {
 	HasAnalyticsConsent(ctx context.Context, userID string) (bool, error)
 }
 
+// Compile-time assertion: *GDPRClient must satisfy GDPRAnalytics.
+var _ GDPRAnalytics = (*GDPRClient)(nil)
+
 // GDPRClient wraps Analytics and gates user-behavior events behind consent checks.
 // Use Capture for system/operational events (not gated).
 // Use CaptureIfConsented for user-behavior events.

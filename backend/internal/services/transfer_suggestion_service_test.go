@@ -440,3 +440,25 @@ func TestTransferSuggestionService_AcceptSuggestion_NoAnalyticsWhenNil(t *testin
 	assert.NotNil(t, result)
 	suggestionRepo.AssertExpectations(t)
 }
+
+func TestTransferSuggestionService_RejectSuggestion_NoAnalyticsWhenNil(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+
+	// No analytics set — should not panic.
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-123"
+	suggestionID := "suggestion-123"
+
+	suggestion := createTestTransferSuggestion(userID)
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("UpdateStatus", ctx, suggestionID, domain.SuggestionStatusRejected, (*string)(nil)).Return(nil)
+
+	result, err := svc.RejectSuggestion(ctx, userID, suggestionID, nil)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	suggestionRepo.AssertExpectations(t)
+}
