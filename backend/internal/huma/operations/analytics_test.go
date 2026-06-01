@@ -928,18 +928,19 @@ func TestGetMonthOverMonthSpendingChange_MonthsAboveMax(t *testing.T) {
 	assert.Contains(t, err.Error(), "months must be between 2 and 24")
 }
 
-// TestGetMonthOverMonthSpendingChange_MonthsZeroDefaults tests that months=0 defaults to 6.
+// TestGetMonthOverMonthSpendingChange_MonthsZeroDefaults tests that explicit months=0 returns 400.
+// Huma pre-fills the default (6) for omitted query params before the handler runs;
+// explicit ?months=0 is outside the documented 2-24 range and should be rejected.
 func TestGetMonthOverMonthSpendingChange_MonthsZeroDefaults(t *testing.T) {
-	mockSvc := &mockAnalyticsService{monthOverMonthResponse: &domain.MonthOverMonthResponse{MonthCount: 6}}
-	handler := NewAnalyticsHandler(mockSvc)
+	handler := NewAnalyticsHandler(&mockAnalyticsService{})
 	input := &GetMonthOverMonthSpendingChangeInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
-		Months:             0, // should default to 6
+		Months:             0, // explicit zero — outside 2-24 range, should return 400
 	}
 	output, err := handler.GetMonthOverMonthSpendingChange(context.Background(), input)
-	require.NoError(t, err)
-	require.NotNil(t, output)
-	assert.Equal(t, 6, output.Body.MonthCount)
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "months must be between 2 and 24")
 }
 
 // TestGetMonthOverMonthSpendingChange_MonthsBoundaries tests valid boundary values 2 and 24.
