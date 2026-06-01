@@ -386,6 +386,7 @@ func main() {
 		ruleApplicationService.SetAnalytics(phClient)
 		// Issue #354: Cash flow analytics and dashboard preferences services
 		analyticsService := services.NewAnalyticsService(analyticsRepo)
+		analyticsService.SetBalanceSnapshotRepo(balanceSnapshotRepo) // wires snapshot repo for GetNetWorthTrend (Issue #1215 PR3)
 		// Issue #639: adminUserService is created later after adminService is initialized
 		// Issue #474: Load dashboard layout config for preferences service
 		// This ensures reset-to-default uses YAML config version, not hardcoded version 2
