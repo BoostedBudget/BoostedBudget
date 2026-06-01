@@ -66,6 +66,15 @@ type AnalyticsRepository interface {
 	// GetIncomeSourceBreakdown returns income (amount < 0) totals grouped by category.
 	// Single DB round-trip (Issue #1215 PR2).
 	GetIncomeSourceBreakdown(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.IncomeSourceRow, error)
+
+	// GetUnusualSpend returns transactions in [startDate, endDate] that exceed sigmaThreshold
+	// standard deviations above the per-category mean computed over the 3-month baseline window
+	// immediately before startDate. Integration test required (STDDEV_POP CTE). Issue #1215 PR3.
+	GetUnusualSpend(ctx context.Context, userID string, baselineStart, startDate, endDate time.Time, sigmaThreshold float64) ([]domain.UnusualSpendRow, error)
+
+	// GetBudgetVsActual returns active budgets filtered by period with their allocated and spent amounts.
+	// period selects budgets by their configured budget period (not a date window). Issue #1215 PR3.
+	GetBudgetVsActual(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error)
 }
 
 // analyticsRepository implements AnalyticsRepository using PostgreSQL
@@ -942,6 +951,132 @@ func (r *analyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, user
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating income source rows: %w", err)
+	}
+
+	return results, nil
+}
+
+// GetUnusualSpend returns transactions in [startDate, endDate] where the transaction amount
+// exceeds sigmaThreshold standard deviations above the per-category mean over the baseline window.
+// The baseline window is [baselineStart, startDate). Categories with fewer than 3 transactions
+// or zero variance are excluded. Single DB round-trip via CTE with STDDEV_POP. Issue #1215 PR3.
+func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string, baselineStart, startDate, endDate time.Time, sigmaThreshold float64) ([]domain.UnusualSpendRow, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
+	catExpr := effectiveCategoryExpr(false)
+
+	query := fmt.Sprintf(`
+		WITH baseline AS (
+			SELECT
+				(%s)                                                        AS category,
+				AVG(t.amount)                                               AS mean_amount,
+				NULLIF(STDDEV_POP(t.amount), 0)                            AS stddev_amount,
+				COUNT(*)                                                    AS sample_count
+			FROM transactions t
+			WHERE t.user_id = $1
+			  AND t.date >= $2
+			  AND t.date < $3
+			  AND t.amount > 0
+			  AND t.pending = false
+			  AND COALESCE(t.effective_pfc_primary, '') NOT LIKE 'TRANSFER%%'
+			GROUP BY (%s)
+			HAVING COUNT(*) >= 3
+		)
+		SELECT
+			t.id,
+			COALESCE(t.merchant_name, ''),
+			t.amount,
+			(%s),
+			t.date,
+			b.mean_amount,
+			(t.amount - b.mean_amount) / b.stddev_amount AS sigma_above
+		FROM transactions t
+		JOIN baseline b ON (%s) = b.category
+		WHERE t.user_id = $1
+		  AND t.date >= $3
+		  AND t.date <= $4
+		  AND t.amount > 0
+		  AND t.pending = false
+		  AND COALESCE(t.effective_pfc_primary, '') NOT LIKE 'TRANSFER%%'
+		  AND b.stddev_amount IS NOT NULL
+		  AND (t.amount - b.mean_amount) / b.stddev_amount > $5
+		ORDER BY sigma_above DESC
+	`, catExpr, catExpr, catExpr, catExpr)
+
+	rows, err := r.db.Query(ctx, query, userID, baselineStart, startDate, endDate, sigmaThreshold)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get unusual spend: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]domain.UnusualSpendRow, 0)
+	for rows.Next() {
+		var row domain.UnusualSpendRow
+		if err := rows.Scan(
+			&row.TransactionID,
+			&row.MerchantName,
+			&row.Amount,
+			&row.Category,
+			&row.Date,
+			&row.BaselineAvg,
+			&row.SigmaAbove,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan unusual spend row: %w", err)
+		}
+		results = append(results, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating unusual spend rows: %w", err)
+	}
+
+	return results, nil
+}
+
+// GetBudgetVsActual returns active budgets for a user filtered by their budget period,
+// joined with aggregated allocated and spent amounts from budget_categories.
+// period selects by budget.period column (weekly/monthly/quarterly/yearly/custom).
+// Returns an empty slice when no matching active budgets exist. Issue #1215 PR3.
+func (r *analyticsRepository) GetBudgetVsActual(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error) {
+	const query = `
+		SELECT
+			b.id,
+			b.name,
+			b.period,
+			COALESCE(SUM(bc.allocated_amount), 0) AS allocated_amount,
+			COALESCE(SUM(bc.spent_amount), 0)     AS spent_amount
+		FROM budgets b
+		LEFT JOIN budget_categories bc ON bc.budget_id = b.id
+		WHERE b.user_id = $1
+		  AND b.is_active = true
+		  AND b.period = $2
+		GROUP BY b.id, b.name, b.period
+		ORDER BY b.name ASC
+	`
+
+	rows, err := r.db.Query(ctx, query, userID, period)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get budget vs actual: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]domain.BudgetVsActualRow, 0)
+	for rows.Next() {
+		var row domain.BudgetVsActualRow
+		if err := rows.Scan(
+			&row.BudgetID,
+			&row.BudgetName,
+			&row.Period,
+			&row.AllocatedAmount,
+			&row.SpentAmount,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan budget vs actual row: %w", err)
+		}
+		results = append(results, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating budget vs actual rows: %w", err)
 	}
 
 	return results, nil

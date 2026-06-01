@@ -539,6 +539,80 @@ func (h *AnalyticsHandler) GetIncomeSourceBreakdown(ctx context.Context, input *
 	return &GetIncomeSourceBreakdownOutput{Body: response}, nil
 }
 
+// GetUnusualSpendInput represents input for GET /analytics/unusual-spend.
+type GetUnusualSpendInput struct {
+	inputs.AuthenticatedInput
+	StartDate string `query:"start_date" required:"true" doc:"Start of query window (YYYY-MM-DD)"`
+	EndDate   string `query:"end_date" required:"true" doc:"End of query window (YYYY-MM-DD)"`
+}
+
+// GetUnusualSpendOutput represents the response for GET /analytics/unusual-spend.
+type GetUnusualSpendOutput struct {
+	Body *domain.UnusualSpendResponse
+}
+
+// GetUnusualSpend handles GET /api/v1/analytics/unusual-spend requests.
+func (h *AnalyticsHandler) GetUnusualSpend(ctx context.Context, input *GetUnusualSpendInput) (*GetUnusualSpendOutput, error) {
+	startDate, endDate, err := dateutil.ParseDateRange(input.StartDate, input.EndDate)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := h.service.GetUnusualSpend(ctx, input.UserID, startDate, endDate)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return &GetUnusualSpendOutput{Body: response}, nil
+}
+
+// GetNetWorthTrendInput represents input for GET /analytics/net-worth-trend.
+type GetNetWorthTrendInput struct {
+	inputs.AuthenticatedInput
+	Grouping string `query:"grouping" doc:"Bucket size: daily, weekly, or monthly (default monthly)" default:"monthly"`
+}
+
+// GetNetWorthTrendOutput represents the response for GET /analytics/net-worth-trend.
+type GetNetWorthTrendOutput struct {
+	Body *domain.NetWorthTrendResponse
+}
+
+// GetNetWorthTrend handles GET /api/v1/analytics/net-worth-trend requests.
+func (h *AnalyticsHandler) GetNetWorthTrend(ctx context.Context, input *GetNetWorthTrendInput) (*GetNetWorthTrendOutput, error) {
+	grouping := input.Grouping
+	if grouping == "" {
+		grouping = "monthly"
+	}
+
+	response, err := h.service.GetNetWorthTrend(ctx, input.UserID, grouping)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return &GetNetWorthTrendOutput{Body: response}, nil
+}
+
+// GetBudgetVsActualInput represents input for GET /analytics/budget-vs-actual.
+type GetBudgetVsActualInput struct {
+	inputs.AuthenticatedInput
+	Period string `query:"period" required:"true" doc:"Budget period to query: weekly, monthly, quarterly, yearly, or custom"`
+}
+
+// GetBudgetVsActualOutput represents the response for GET /analytics/budget-vs-actual.
+type GetBudgetVsActualOutput struct {
+	Body *domain.BudgetVsActualResponse
+}
+
+// GetBudgetVsActual handles GET /api/v1/analytics/budget-vs-actual requests.
+func (h *AnalyticsHandler) GetBudgetVsActual(ctx context.Context, input *GetBudgetVsActualInput) (*GetBudgetVsActualOutput, error) {
+	response, err := h.service.GetBudgetVsActual(ctx, input.UserID, input.Period)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return &GetBudgetVsActualOutput{Body: response}, nil
+}
+
 // RegisterAnalyticsRoutes registers analytics routes with the Huma API.
 // Note: These routes require the Clerk middleware to be applied.
 func RegisterAnalyticsRoutes(api huma.API, handler *AnalyticsHandler) {
@@ -695,4 +769,37 @@ func RegisterAnalyticsRoutes(api huma.API, handler *AnalyticsHandler) {
 		Tags:        []string{"Analytics"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetIncomeSourceBreakdown)
+
+	// GET /api/v1/analytics/unusual-spend - MCP helper: unusual spend detection (Issue #1215 PR3)
+	huma.Register(api, huma.Operation{
+		OperationID: "getUnusualSpend",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/analytics/unusual-spend",
+		Summary:     "Get unusual spend",
+		Description: "Returns transactions in the query window that exceed 2 standard deviations above the per-category baseline mean (3-month window before startDate). AI-tool-callable.",
+		Tags:        []string{"Analytics"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetUnusualSpend)
+
+	// GET /api/v1/analytics/net-worth-trend - MCP helper: net worth trend (Issue #1215 PR3)
+	huma.Register(api, huma.Operation{
+		OperationID: "getNetWorthTrend",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/analytics/net-worth-trend",
+		Summary:     "Get net worth trend",
+		Description: "Returns net worth bucketed by grouping (daily/weekly/monthly) over the trailing 12 months. Uses balance snapshot history. AI-tool-callable.",
+		Tags:        []string{"Analytics"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetNetWorthTrend)
+
+	// GET /api/v1/analytics/budget-vs-actual - MCP helper: budget vs actual (Issue #1215 PR3)
+	huma.Register(api, huma.Operation{
+		OperationID: "getBudgetVsActual",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/analytics/budget-vs-actual",
+		Summary:     "Get budget vs actual",
+		Description: "Returns active budgets for the given period with allocated vs spent amounts, remaining balance, over-budget flag, and utilisation percentage. period selects by configured budget period (weekly/monthly/quarterly/yearly/custom). AI-tool-callable.",
+		Tags:        []string{"Analytics"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetBudgetVsActual)
 }

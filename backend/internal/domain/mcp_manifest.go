@@ -29,6 +29,9 @@ var MCPOperationManifest = map[string]MCPOperationClass{
 	"getLargestTransactionsForPeriod":     MCPClassRead,
 	"getCategoryBreakdownForMerchant":     MCPClassRead,
 	"getIncomeSourceBreakdown":            MCPClassRead,
+	"getUnusualSpend":                     MCPClassRead,
+	"getNetWorthTrend":                    MCPClassRead,
+	"getBudgetVsActual":                   MCPClassRead,
 	// Accounts
 	"getAccounts":      MCPClassRead,
 	"reorderAccounts":  MCPClassWrite,

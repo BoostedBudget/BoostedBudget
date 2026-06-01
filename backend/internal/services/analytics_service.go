@@ -12,9 +12,14 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
+// unusualSpendSigmaThreshold is the number of standard deviations above category mean
+// required for a transaction to be flagged as unusual.
+const unusualSpendSigmaThreshold = 2.0
+
 // AnalyticsService provides cash flow analytics functionality
 // Issue #354: Cash Flow Analysis & Income/Expense Visualization
 // Issue #953: Spending Reports
+// Issue #1215: AI-tool-callable analytics endpoints
 type AnalyticsService interface {
 	// GetCashFlowSummary returns aggregated cash flow data for a date range
 	// Includes income, expenses, net cash flow, and period comparison
@@ -68,17 +73,39 @@ type AnalyticsService interface {
 	// GetIncomeSourceBreakdown returns income (inflow) totals grouped by category.
 	// AI-tool-callable (Issue #1215 PR2).
 	GetIncomeSourceBreakdown(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.IncomeSourceBreakdownResponse, error)
+
+	// GetUnusualSpend returns transactions in [startDate, endDate] that exceed 2 sigma above
+	// per-category baseline mean (computed 3 months prior). AI-tool-callable (Issue #1215 PR3).
+	GetUnusualSpend(ctx context.Context, userID string, startDate, endDate time.Time) (*domain.UnusualSpendResponse, error)
+
+	// GetNetWorthTrend returns net worth bucketed by grouping (daily/weekly/monthly) over
+	// the trailing 12 months. Requires SetBalanceSnapshotRepo. AI-tool-callable (Issue #1215 PR3).
+	GetNetWorthTrend(ctx context.Context, userID string, grouping string) (*domain.NetWorthTrendResponse, error)
+
+	// GetBudgetVsActual returns active budgets for the given budget period with allocated vs spent amounts.
+	// period selects budgets by their configured budget period (weekly/monthly/quarterly/yearly/custom).
+	// AI-tool-callable (Issue #1215 PR3).
+	GetBudgetVsActual(ctx context.Context, userID string, period string) (*domain.BudgetVsActualResponse, error)
 }
 
 type analyticsService struct {
-	analyticsRepo repository.AnalyticsRepository
+	analyticsRepo       repository.AnalyticsRepository
+	balanceSnapshotRepo repository.BalanceSnapshotRepository // optional; required for GetNetWorthTrend
 }
 
-// NewAnalyticsService creates a new AnalyticsService instance
-func NewAnalyticsService(analyticsRepo repository.AnalyticsRepository) AnalyticsService {
+// NewAnalyticsService creates a new analyticsService instance.
+// Returns the concrete pointer so callers can wire optional deps (e.g. SetBalanceSnapshotRepo)
+// without changing the 50+ test call-sites that receive the interface.
+func NewAnalyticsService(analyticsRepo repository.AnalyticsRepository) *analyticsService {
 	return &analyticsService{
 		analyticsRepo: analyticsRepo,
 	}
+}
+
+// SetBalanceSnapshotRepo wires the optional BalanceSnapshotRepository.
+// Required for GetNetWorthTrend; safe to omit for all other methods.
+func (s *analyticsService) SetBalanceSnapshotRepo(repo repository.BalanceSnapshotRepository) {
+	s.balanceSnapshotRepo = repo
 }
 
 // GetCashFlowSummary returns aggregated cash flow data for a date range
@@ -712,5 +739,215 @@ func (s *analyticsService) GetTopExpense(ctx context.Context, userID string, sta
 		Date:              row.Date.Format("2006-01-02"),
 		StartDate:         startDate.Format("2006-01-02"),
 		EndDate:           endDate.Format("2006-01-02"),
+	}, nil
+}
+
+// GetUnusualSpend returns transactions in [startDate, endDate] that exceed unusualSpendSigmaThreshold
+// standard deviations above the per-category mean computed over the 3-month baseline window before startDate.
+// AI-tool-callable (Issue #1215 PR3).
+func (s *analyticsService) GetUnusualSpend(ctx context.Context, userID string, startDate, endDate time.Time) (*domain.UnusualSpendResponse, error) {
+	if endDate.Before(startDate) {
+		return nil, fmt.Errorf("end_date cannot be before start_date")
+	}
+
+	baselineStart := startDate.AddDate(0, -3, 0)
+	rows, err := s.analyticsRepo.GetUnusualSpend(ctx, userID, baselineStart, startDate, endDate, unusualSpendSigmaThreshold)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get unusual spend: %w", err)
+	}
+
+	items := make([]domain.UnusualSpendItem, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, domain.UnusualSpendItem{
+			TransactionID:     row.TransactionID,
+			MerchantName:      row.MerchantName,
+			Amount:            row.Amount,
+			Category:          row.Category,
+			PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+			Date:              row.Date.Format("2006-01-02"),
+			BaselineAvg:       row.BaselineAvg,
+			SigmaAbove:        row.SigmaAbove,
+		})
+	}
+
+	return &domain.UnusualSpendResponse{
+		Items:          items,
+		StartDate:      startDate.Format("2006-01-02"),
+		EndDate:        endDate.Format("2006-01-02"),
+		SigmaThreshold: unusualSpendSigmaThreshold,
+	}, nil
+}
+
+// GetNetWorthTrend returns net worth bucketed by grouping (daily/weekly/monthly) over the trailing 12 months.
+// Reuses BalanceSnapshotRepository.GetAggregatedHistory. Requires SetBalanceSnapshotRepo to be called first.
+// AI-tool-callable (Issue #1215 PR3).
+func (s *analyticsService) GetNetWorthTrend(ctx context.Context, userID string, grouping string) (*domain.NetWorthTrendResponse, error) {
+	if s.balanceSnapshotRepo == nil {
+		return nil, fmt.Errorf("balance snapshot repository not configured")
+	}
+
+	validGroupings := map[string]bool{"daily": true, "weekly": true, "monthly": true}
+	if !validGroupings[grouping] {
+		return nil, fmt.Errorf("grouping must be one of: daily, weekly, monthly")
+	}
+
+	endDate := time.Now()
+	startDate := endDate.AddDate(-1, 0, 0)
+
+	points, err := s.balanceSnapshotRepo.GetAggregatedHistory(ctx, userID, startDate, endDate, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get balance history: %w", err)
+	}
+
+	// Aggregate per-day net worth: sum all account-type balances for each date.
+	dailyTotals := aggregateDailyNetWorth(points)
+
+	// Bucket daily totals into the requested grouping, taking the last available value.
+	buckets := bucketNetWorth(dailyTotals, grouping, startDate, endDate)
+
+	return &domain.NetWorthTrendResponse{
+		Buckets:   buckets,
+		Grouping:  grouping,
+		StartDate: startDate.Format("2006-01-02"),
+		EndDate:   endDate.Format("2006-01-02"),
+	}, nil
+}
+
+// aggregateDailyNetWorth converts a slice of BalanceHistoryPoint into a map of date→totalNetWorth.
+// GetAggregatedHistory already sums per account type; we simply collapse by date.
+func aggregateDailyNetWorth(points []domain.BalanceHistoryPoint) map[time.Time]float64 {
+	daily := make(map[time.Time]float64, len(points))
+	for _, p := range points {
+		// BalanceHistoryPoint.TotalBalance already sums all account types for the day.
+		day := p.Date.Truncate(24 * time.Hour)
+		daily[day] = p.TotalBalance
+	}
+	return daily
+}
+
+// bucketNetWorth groups daily net-worth values into the requested grouping.
+// For each bucket, the LAST available daily value within the bucket is used.
+// Returns a slice of NetWorthBucket with change_abs and change_pct computed between buckets.
+func bucketNetWorth(dailyTotals map[time.Time]float64, grouping string, startDate, endDate time.Time) []domain.NetWorthBucket {
+	if len(dailyTotals) == 0 {
+		return make([]domain.NetWorthBucket, 0)
+	}
+
+	// Collect and sort all dates with data.
+	type dateval struct {
+		d time.Time
+		v float64
+	}
+	days := make([]dateval, 0, len(dailyTotals))
+	for d, v := range dailyTotals {
+		days = append(days, dateval{d, v})
+	}
+	sort.Slice(days, func(i, j int) bool { return days[i].d.Before(days[j].d) })
+
+	// For each data point assign it to a bucket key (first day of the bucket period).
+	bucketOf := func(t time.Time) time.Time {
+		switch grouping {
+		case "weekly":
+			weekday := int(t.Weekday())
+			if weekday == 0 {
+				weekday = 7
+			}
+			return time.Date(t.Year(), t.Month(), t.Day()-(weekday-1), 0, 0, 0, 0, t.Location())
+		case "daily":
+			return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+		default: // monthly
+			return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
+		}
+	}
+
+	// Group: for each bucket keep the last daily value (latest date wins).
+	type bucketEntry struct {
+		key      time.Time
+		lastDate time.Time
+		netWorth float64
+	}
+	bucketMap := make(map[time.Time]*bucketEntry)
+	var bucketOrder []time.Time
+
+	for _, dv := range days {
+		key := bucketOf(dv.d)
+		if existing, ok := bucketMap[key]; ok {
+			if dv.d.After(existing.lastDate) {
+				existing.lastDate = dv.d
+				existing.netWorth = dv.v
+			}
+		} else {
+			bucketMap[key] = &bucketEntry{key: key, lastDate: dv.d, netWorth: dv.v}
+			bucketOrder = append(bucketOrder, key)
+		}
+	}
+
+	sort.Slice(bucketOrder, func(i, j int) bool { return bucketOrder[i].Before(bucketOrder[j]) })
+
+	buckets := make([]domain.NetWorthBucket, 0, len(bucketOrder))
+	for i, key := range bucketOrder {
+		entry := bucketMap[key]
+		b := domain.NetWorthBucket{
+			Date:     key.Format("2006-01-02"),
+			NetWorth: entry.netWorth,
+		}
+		if i > 0 {
+			prev := bucketMap[bucketOrder[i-1]]
+			changeAbs := entry.netWorth - prev.netWorth
+			b.ChangeAbs = &changeAbs
+			if prev.netWorth != 0 {
+				changePct := changeAbs / math.Abs(prev.netWorth)
+				b.ChangePct = &changePct
+			}
+		}
+		buckets = append(buckets, b)
+	}
+
+	return buckets
+}
+
+// GetBudgetVsActual returns active budgets for the given period with computed utilisation metrics.
+// period selects by the budget's configured period column (weekly/monthly/quarterly/yearly/custom).
+// AI-tool-callable (Issue #1215 PR3).
+func (s *analyticsService) GetBudgetVsActual(ctx context.Context, userID string, period string) (*domain.BudgetVsActualResponse, error) {
+	if !domain.BudgetPeriod(period).IsValid() {
+		return nil, fmt.Errorf("period must be one of: weekly, monthly, quarterly, yearly, custom")
+	}
+
+	rows, err := s.analyticsRepo.GetBudgetVsActual(ctx, userID, period)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get budget vs actual: %w", err)
+	}
+
+	budgets := make([]domain.BudgetVsActualItem, 0, len(rows))
+	var totalAllocated, totalSpent float64
+
+	for _, row := range rows {
+		remaining := row.AllocatedAmount - row.SpentAmount
+		overBudget := row.SpentAmount > row.AllocatedAmount
+		var pctUsed float64
+		if row.AllocatedAmount != 0 {
+			pctUsed = (row.SpentAmount / row.AllocatedAmount) * 100
+		}
+		budgets = append(budgets, domain.BudgetVsActualItem{
+			BudgetID:        row.BudgetID,
+			BudgetName:      row.BudgetName,
+			Period:          row.Period,
+			AllocatedAmount: row.AllocatedAmount,
+			SpentAmount:     row.SpentAmount,
+			Remaining:       remaining,
+			OverBudget:      overBudget,
+			PctUsed:         pctUsed,
+		})
+		totalAllocated += row.AllocatedAmount
+		totalSpent += row.SpentAmount
+	}
+
+	return &domain.BudgetVsActualResponse{
+		Budgets:        budgets,
+		TotalAllocated: totalAllocated,
+		TotalSpent:     totalSpent,
+		TotalRemaining: totalAllocated - totalSpent,
+		Period:         period,
 	}, nil
 }

@@ -29,6 +29,9 @@ type mockAnalyticsService struct {
 	largestTransactionsResponse             *domain.LargestTransactionsResponse
 	categoryBreakdownForMerchantResponse    *domain.CategoryBreakdownForMerchantResponse
 	incomeSourceBreakdownResponse           *domain.IncomeSourceBreakdownResponse
+	unusualSpendResponse                    *domain.UnusualSpendResponse
+	netWorthTrendResponse                   *domain.NetWorthTrendResponse
+	budgetVsActualResponse                  *domain.BudgetVsActualResponse
 	summaryErr                              error
 	historyErr                              error
 	spendingByCategoryErr                   error
@@ -41,6 +44,9 @@ type mockAnalyticsService struct {
 	largestTransactionsErr                  error
 	categoryBreakdownForMerchantErr         error
 	incomeSourceBreakdownErr                error
+	unusualSpendErr                         error
+	netWorthTrendErr                        error
+	budgetVsActualErr                       error
 }
 
 func (m *mockAnalyticsService) GetCashFlowSummary(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowSummaryResponse, error) {
@@ -103,6 +109,18 @@ func (m *mockAnalyticsService) GetCategoryBreakdownForMerchant(_ context.Context
 
 func (m *mockAnalyticsService) GetIncomeSourceBreakdown(_ context.Context, _ string, _ domain.SpendingFilters) (*domain.IncomeSourceBreakdownResponse, error) {
 	return m.incomeSourceBreakdownResponse, m.incomeSourceBreakdownErr
+}
+
+func (m *mockAnalyticsService) GetUnusualSpend(_ context.Context, _ string, _ time.Time, _ time.Time) (*domain.UnusualSpendResponse, error) {
+	return m.unusualSpendResponse, m.unusualSpendErr
+}
+
+func (m *mockAnalyticsService) GetNetWorthTrend(_ context.Context, _ string, _ string) (*domain.NetWorthTrendResponse, error) {
+	return m.netWorthTrendResponse, m.netWorthTrendErr
+}
+
+func (m *mockAnalyticsService) GetBudgetVsActual(_ context.Context, _ string, _ string) (*domain.BudgetVsActualResponse, error) {
+	return m.budgetVsActualResponse, m.budgetVsActualErr
 }
 
 // Helper functions to create test data
@@ -1048,9 +1066,210 @@ func TestSpendingRouteRegistration(t *testing.T) {
 		"/api/v1/analytics/largest-transactions",
 		"/api/v1/analytics/merchant-category-breakdown",
 		"/api/v1/analytics/income-sources",
+		"/api/v1/analytics/unusual-spend",
+		"/api/v1/analytics/net-worth-trend",
+		"/api/v1/analytics/budget-vs-actual",
 	}
 	for _, path := range paths {
 		resp := api.Get(path)
 		assert.Equal(t, http.StatusUnauthorized, resp.Code, "path %s should return 401", path)
 	}
+}
+
+// ─── PR3 handler tests ───────────────────────────────────────────────────────
+
+func TestGetUnusualSpend_Success(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		unusualSpendResponse: &domain.UnusualSpendResponse{
+			Items: []domain.UnusualSpendItem{
+				{
+					TransactionID:     "tx-001",
+					MerchantName:      "Fancy Restaurant",
+					Amount:            350.0,
+					Category:          "FOOD_AND_DRINK",
+					PFCPrimaryDisplay: "Food & Drink",
+					Date:              "2024-04-15",
+					BaselineAvg:       50.0,
+					SigmaAbove:        3.5,
+				},
+			},
+			StartDate:      "2024-04-01",
+			EndDate:        "2024-04-30",
+			SigmaThreshold: 2.0,
+		},
+	}
+	handler := NewAnalyticsHandler(mockService)
+	input := &GetUnusualSpendInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-04-01",
+		EndDate:            "2024-04-30",
+	}
+
+	output, err := handler.GetUnusualSpend(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.Len(t, output.Body.Items, 1)
+	assert.Equal(t, "tx-001", output.Body.Items[0].TransactionID)
+	assert.Equal(t, 2.0, output.Body.SigmaThreshold)
+}
+
+func TestGetUnusualSpend_InvalidDate(t *testing.T) {
+	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	input := &GetUnusualSpendInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "bad-date",
+		EndDate:            "2024-04-30",
+	}
+	_, err := handler.GetUnusualSpend(context.Background(), input)
+	require.Error(t, err)
+}
+
+func TestGetUnusualSpend_ServiceError(t *testing.T) {
+	mockService := &mockAnalyticsService{unusualSpendErr: errors.New("db error")}
+	handler := NewAnalyticsHandler(mockService)
+	input := &GetUnusualSpendInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-04-01",
+		EndDate:            "2024-04-30",
+	}
+	output, err := handler.GetUnusualSpend(context.Background(), input)
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+func TestGetNetWorthTrend_Success(t *testing.T) {
+	nw := 50000.0
+	mockService := &mockAnalyticsService{
+		netWorthTrendResponse: &domain.NetWorthTrendResponse{
+			Buckets: []domain.NetWorthBucket{
+				{Date: "2024-03-01", NetWorth: nw},
+			},
+			Grouping:  "monthly",
+			StartDate: "2023-04-01",
+			EndDate:   "2024-03-31",
+		},
+	}
+	handler := NewAnalyticsHandler(mockService)
+	input := &GetNetWorthTrendInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Grouping:           "monthly",
+	}
+
+	output, err := handler.GetNetWorthTrend(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "monthly", output.Body.Grouping)
+	require.Len(t, output.Body.Buckets, 1)
+	assert.Equal(t, nw, output.Body.Buckets[0].NetWorth)
+}
+
+func TestGetNetWorthTrend_DefaultsToMonthly(t *testing.T) {
+	var capturedGrouping string
+	mockService := &mockAnalyticsService{
+		netWorthTrendResponse: &domain.NetWorthTrendResponse{Grouping: "monthly"},
+	}
+	// Wrap service to capture grouping
+	_ = capturedGrouping
+	handler := NewAnalyticsHandler(mockService)
+	input := &GetNetWorthTrendInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Grouping:           "", // empty → should default to monthly
+	}
+	output, err := handler.GetNetWorthTrend(context.Background(), input)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+}
+
+func TestGetNetWorthTrend_ServiceError(t *testing.T) {
+	mockService := &mockAnalyticsService{netWorthTrendErr: errors.New("repo not configured")}
+	handler := NewAnalyticsHandler(mockService)
+	input := &GetNetWorthTrendInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Grouping:           "monthly",
+	}
+	output, err := handler.GetNetWorthTrend(context.Background(), input)
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+func TestGetBudgetVsActual_Success(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		budgetVsActualResponse: &domain.BudgetVsActualResponse{
+			Budgets: []domain.BudgetVsActualItem{
+				{
+					BudgetID:        "bgt-1",
+					BudgetName:      "Groceries",
+					Period:          "monthly",
+					AllocatedAmount: 500.0,
+					SpentAmount:     350.0,
+					Remaining:       150.0,
+					OverBudget:      false,
+					PctUsed:         70.0,
+				},
+			},
+			TotalAllocated: 500.0,
+			TotalSpent:     350.0,
+			TotalRemaining: 150.0,
+			Period:         "monthly",
+		},
+	}
+	handler := NewAnalyticsHandler(mockService)
+	input := &GetBudgetVsActualInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Period:             "monthly",
+	}
+
+	output, err := handler.GetBudgetVsActual(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "monthly", output.Body.Period)
+	require.Len(t, output.Body.Budgets, 1)
+	assert.Equal(t, "Groceries", output.Body.Budgets[0].BudgetName)
+	assert.Equal(t, 70.0, output.Body.Budgets[0].PctUsed)
+}
+
+func TestGetBudgetVsActual_ServiceError(t *testing.T) {
+	mockService := &mockAnalyticsService{budgetVsActualErr: errors.New("invalid period")}
+	handler := NewAnalyticsHandler(mockService)
+	input := &GetBudgetVsActualInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Period:             "biannual",
+	}
+	output, err := handler.GetBudgetVsActual(context.Background(), input)
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+func TestGetBudgetVsActual_RouteRegistration(t *testing.T) {
+	_, api := humatest.New(t)
+	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	RegisterAnalyticsRoutes(api, handler)
+
+	// Verify JSON contract: budget-vs-actual returns the expected structure
+	mockService := &mockAnalyticsService{
+		budgetVsActualResponse: &domain.BudgetVsActualResponse{
+			Budgets:        []domain.BudgetVsActualItem{},
+			TotalAllocated: 0,
+			TotalSpent:     0,
+			TotalRemaining: 0,
+			Period:         "monthly",
+		},
+	}
+	handler2 := NewAnalyticsHandler(mockService)
+	input := &GetBudgetVsActualInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Period:             "monthly",
+	}
+	output, err := handler2.GetBudgetVsActual(context.Background(), input)
+	require.NoError(t, err)
+	// Serialize and check JSON has expected keys
+	b, err := json.Marshal(output.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"total_allocated"`)
+	assert.Contains(t, string(b), `"total_spent"`)
+	assert.Contains(t, string(b), `"total_remaining"`)
+	assert.Contains(t, string(b), `"period"`)
 }

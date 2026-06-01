@@ -385,3 +385,82 @@ type IncomeSourceBreakdownResponse struct {
 	StartDate   string             `json:"start_date"`
 	EndDate     string             `json:"end_date"`
 }
+
+// ─── Issue #1215 PR3 analytics helpers ──────────────────────────────────────
+
+// UnusualSpendRow is the raw DB row for GetUnusualSpend.
+type UnusualSpendRow struct {
+	TransactionID string
+	MerchantName  string
+	Amount        float64
+	Category      string
+	Date          time.Time
+	BaselineAvg   float64
+	SigmaAbove    float64
+}
+
+// UnusualSpendItem is a single unusual spend transaction in the response.
+type UnusualSpendItem struct {
+	TransactionID     string  `json:"transaction_id"`
+	MerchantName      string  `json:"merchant_name"`
+	Amount            float64 `json:"amount"`
+	Category          string  `json:"category"`
+	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
+	Date              string  `json:"date"`
+	BaselineAvg       float64 `json:"baseline_avg"`
+	SigmaAbove        float64 `json:"sigma_above"`
+}
+
+// UnusualSpendResponse is the response for GET /analytics/unusual-spend (AI-tool-callable).
+type UnusualSpendResponse struct {
+	Items          []UnusualSpendItem `json:"items"`
+	StartDate      string             `json:"start_date"`
+	EndDate        string             `json:"end_date"`
+	SigmaThreshold float64            `json:"sigma_threshold"`
+}
+
+// NetWorthBucket represents one time period in the net worth trend.
+type NetWorthBucket struct {
+	Date      string   `json:"date"`        // first day of bucket period (YYYY-MM-DD)
+	NetWorth  float64  `json:"net_worth"`
+	ChangeAbs *float64 `json:"change_abs"`  // nil for first bucket
+	ChangePct *float64 `json:"change_pct"`  // nil for first bucket; nil if prev=0
+}
+
+// NetWorthTrendResponse is the response for GET /analytics/net-worth-trend (AI-tool-callable).
+type NetWorthTrendResponse struct {
+	Buckets   []NetWorthBucket `json:"buckets"`
+	Grouping  string           `json:"grouping"`
+	StartDate string           `json:"start_date"`
+	EndDate   string           `json:"end_date"`
+}
+
+// BudgetVsActualRow is the raw DB row for GetBudgetVsActual.
+type BudgetVsActualRow struct {
+	BudgetID        string
+	BudgetName      string
+	Period          string
+	AllocatedAmount float64
+	SpentAmount     float64
+}
+
+// BudgetVsActualItem is a single budget in the budget-vs-actual response.
+type BudgetVsActualItem struct {
+	BudgetID        string  `json:"budget_id"`
+	BudgetName      string  `json:"budget_name"`
+	Period          string  `json:"period"`
+	AllocatedAmount float64 `json:"allocated_amount"`
+	SpentAmount     float64 `json:"spent_amount"`
+	Remaining       float64 `json:"remaining"`
+	OverBudget      bool    `json:"over_budget"`
+	PctUsed         float64 `json:"pct_used"`
+}
+
+// BudgetVsActualResponse is the response for GET /analytics/budget-vs-actual (AI-tool-callable).
+type BudgetVsActualResponse struct {
+	Budgets        []BudgetVsActualItem `json:"budgets"`
+	TotalAllocated float64              `json:"total_allocated"`
+	TotalSpent     float64              `json:"total_spent"`
+	TotalRemaining float64              `json:"total_remaining"`
+	Period         string               `json:"period"`
+}
