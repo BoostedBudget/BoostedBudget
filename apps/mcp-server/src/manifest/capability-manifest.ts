@@ -99,6 +99,17 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getSpendingTrends'),
   read('getCategoryTotalForPeriod'),  // MCP analytics helper — Issue #1087
   read('getTopExpense'),               // MCP analytics helper — Issue #1087
+  read('getAverageMonthlySpend'),              // MCP analytics helper — Issue #1215
+  read('getRecurringSubscriptions'),           // MCP analytics helper — Issue #1215
+  read('getSavingsRateForPeriod'),             // MCP analytics helper — Issue #1215 PR2
+  read('getMonthOverMonthSpendingChange'),     // MCP analytics helper — Issue #1215 PR2
+  read('getLargestTransactionsForPeriod'),     // MCP analytics helper — Issue #1215 PR2
+  read('getCategoryBreakdownForMerchant'),     // MCP analytics helper — Issue #1215 PR2
+  read('getIncomeSourceBreakdown'),            // MCP analytics helper — Issue #1215 PR2
+  read('getUnusualSpend'),                     // MCP analytics helper — Issue #1215 PR3
+  read('getNetWorthTrend'),                    // MCP analytics helper — Issue #1215 PR3
+  read('getBudgetVsActual'),                   // MCP analytics helper — Issue #1215 PR3
+  read('getFinancialSummary'),                 // MCP analytics composite — Issue #1215 PR4
 
   // ── Accounts ────────────────────────────────────────────────────────────
   read('getAccounts'),

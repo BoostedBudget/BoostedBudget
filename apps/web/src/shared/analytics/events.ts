@@ -115,6 +115,18 @@ export const ANALYTICS_EVENTS = {
   BUDGET_SUB_ALLOCATION_ADDED: 'budget_sub_allocation_added',
   REPORT_CUSTOM_CATEGORY_FILTERED: 'report_custom_category_filtered',
   TRANSACTION_REVIEWED: 'transaction_reviewed',
+
+  // Issue #1215: MCP analytics helper endpoints — analytics views
+  ANALYTICS_FINANCIAL_SUMMARY_VIEWED: 'analytics_financial_summary_viewed',
+  ANALYTICS_SAVINGS_RATE_VIEWED: 'analytics_savings_rate_viewed',
+  ANALYTICS_MOM_CHANGE_VIEWED: 'analytics_mom_change_viewed',
+  ANALYTICS_RECURRING_SUBS_VIEWED: 'analytics_recurring_subs_viewed',
+  ANALYTICS_UNUSUAL_SPEND_VIEWED: 'analytics_unusual_spend_viewed',
+  ANALYTICS_BUDGET_VS_ACTUAL_VIEWED: 'analytics_budget_vs_actual_viewed',
+  ANALYTICS_NET_WORTH_TREND_VIEWED: 'analytics_net_worth_trend_viewed',
+  ANALYTICS_INCOME_SOURCES_VIEWED: 'analytics_income_sources_viewed',
+  ANALYTICS_LARGEST_TRANSACTIONS_VIEWED: 'analytics_largest_transactions_viewed',
+  ANALYTICS_AVERAGE_MONTHLY_SPEND_VIEWED: 'analytics_average_monthly_spend_viewed',
 } as const
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[keyof typeof ANALYTICS_EVENTS]
