@@ -46,6 +46,26 @@ type AnalyticsRepository interface {
 	// GetRecurringSubscriptions returns heuristic recurring charge candidates over the lookback window.
 	// Single DB round-trip using window functions; complex SQL requires real-DB integration tests (Issue #1215).
 	GetRecurringSubscriptions(ctx context.Context, userID string, lookbackStart time.Time) ([]domain.RecurringSubscriptionRow, error)
+
+	// GetSavingsRateForPeriod returns income and expense totals for computing savings rate.
+	// Single DB round-trip; savings rate computed in the service layer (Issue #1215 PR2).
+	GetSavingsRateForPeriod(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.SavingsRateRow, error)
+
+	// GetMonthOverMonthSpending returns monthly expense totals grouped by month.
+	// Single DB round-trip using DATE_TRUNC GROUP BY (Issue #1215 PR2).
+	GetMonthOverMonthSpending(ctx context.Context, userID string, startDate time.Time, category string) ([]domain.MonthOverMonthBucketRow, error)
+
+	// GetLargestTransactionsForPeriod returns the N largest expense transactions in a date range.
+	// Single DB round-trip; limit enforced in SQL (Issue #1215 PR2).
+	GetLargestTransactionsForPeriod(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.LargestTransactionRow, error)
+
+	// GetCategoryBreakdownForMerchant returns expense totals grouped by category for a specific merchant.
+	// Single DB round-trip (Issue #1215 PR2).
+	GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantName string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
+
+	// GetIncomeSourceBreakdown returns income (amount < 0) totals grouped by category.
+	// Single DB round-trip (Issue #1215 PR2).
+	GetIncomeSourceBreakdown(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.IncomeSourceRow, error)
 }
 
 // analyticsRepository implements AnalyticsRepository using PostgreSQL
@@ -703,6 +723,225 @@ func (r *analyticsRepository) GetRecurringSubscriptions(ctx context.Context, use
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating recurring subscription rows: %w", err)
+	}
+
+	return results, nil
+}
+
+// GetSavingsRateForPeriod returns income and expense totals for computing savings rate.
+// Income: ABS(amount < 0), Expenses: amount > 0. Excludes transfers and pending transactions.
+// Single DB round-trip; rate computed in service layer (Issue #1215 PR2).
+func (r *analyticsRepository) GetSavingsRateForPeriod(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.SavingsRateRow, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
+	const query = `
+		SELECT
+			COALESCE(ABS(SUM(CASE WHEN t.amount < 0 AND t.pending = false THEN t.amount ELSE 0 END)), 0) AS income,
+			COALESCE(SUM(CASE WHEN t.amount > 0 AND t.pending = false THEN t.amount ELSE 0 END), 0) AS expenses
+		FROM transactions t
+		WHERE t.user_id = $1
+		  AND t.date >= $2
+		  AND t.date <= $3
+		  AND COALESCE(t.effective_pfc_primary, '') NOT LIKE 'TRANSFER%'
+	`
+
+	var row domain.SavingsRateRow
+	err := r.db.QueryRow(ctx, query, userID, startDate, endDate).Scan(&row.Income, &row.Expenses)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get savings rate for period: %w", err)
+	}
+	return &row, nil
+}
+
+// GetMonthOverMonthSpending returns monthly expense totals grouped by month.
+// Single DB round-trip using DATE_TRUNC GROUP BY (Issue #1215 PR2).
+func (r *analyticsRepository) GetMonthOverMonthSpending(ctx context.Context, userID string, startDate time.Time, category string) ([]domain.MonthOverMonthBucketRow, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
+	catExpr := effectiveCategoryExpr(false)
+	args := []interface{}{userID, startDate}
+	argIndex := 3
+
+	query := fmt.Sprintf(`
+		SELECT DATE_TRUNC('month', t.date)::date AS month, COALESCE(SUM(t.amount), 0) AS total
+		FROM transactions t
+		LEFT JOIN accounts a ON t.account_id = a.id
+		WHERE t.user_id = $1
+		  AND t.date >= $2
+		  AND t.amount > 0
+		  AND t.pending = false
+		  AND COALESCE(t.effective_pfc_primary, '') NOT LIKE 'TRANSFER%%'
+	`)
+
+	if category != "" {
+		query += fmt.Sprintf(" AND (%s) = $%d", catExpr, argIndex)
+		args = append(args, category)
+		argIndex++
+	}
+
+	query += `
+		GROUP BY DATE_TRUNC('month', t.date)
+		ORDER BY month ASC
+	`
+
+	_ = argIndex // used when category is set
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get month-over-month spending: %w", err)
+	}
+	defer rows.Close()
+
+	var results []domain.MonthOverMonthBucketRow
+	for rows.Next() {
+		var row domain.MonthOverMonthBucketRow
+		if err := rows.Scan(&row.Month, &row.Total); err != nil {
+			return nil, fmt.Errorf("failed to scan month-over-month row: %w", err)
+		}
+		results = append(results, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating month-over-month rows: %w", err)
+	}
+
+	return results, nil
+}
+
+// GetLargestTransactionsForPeriod returns the N largest expense transactions in a date range.
+// Single DB round-trip; limit enforced in SQL (Issue #1215 PR2).
+func (r *analyticsRepository) GetLargestTransactionsForPeriod(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.LargestTransactionRow, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
+	catExpr := effectiveCategoryExpr(false)
+	args := []interface{}{userID, filters.StartDate, filters.EndDate}
+	filterClause, args, argIndex := buildSpendingFilter(filters, args)
+
+	args = append(args, limit)
+	limitPlaceholder := fmt.Sprintf("$%d", argIndex)
+
+	query := fmt.Sprintf(`
+		SELECT t.id, COALESCE(t.merchant_name, ''), t.amount, (%s), t.date, t.account_id::text
+		FROM transactions t
+		LEFT JOIN accounts a ON t.account_id = a.id
+		WHERE t.user_id = $1
+		  AND t.date >= $2
+		  AND t.date <= $3
+		  AND t.amount > 0
+		  AND t.pending = false
+		  %s
+		ORDER BY t.amount DESC
+		LIMIT %s
+	`, catExpr, filterClause, limitPlaceholder)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get largest transactions: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]domain.LargestTransactionRow, 0)
+	for rows.Next() {
+		var row domain.LargestTransactionRow
+		if err := rows.Scan(&row.TransactionID, &row.MerchantName, &row.Amount, &row.Category, &row.Date, &row.AccountID); err != nil {
+			return nil, fmt.Errorf("failed to scan largest transaction row: %w", err)
+		}
+		results = append(results, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating largest transaction rows: %w", err)
+	}
+
+	return results, nil
+}
+
+// GetCategoryBreakdownForMerchant returns expense totals grouped by category for a specific merchant.
+// Single DB round-trip (Issue #1215 PR2).
+func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantName string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
+	catExpr := effectiveCategoryExpr(false)
+	args := []interface{}{userID, filters.StartDate, filters.EndDate, merchantName}
+	filterClause, args, _ := buildSpendingFilter(filters, args)
+
+	query := fmt.Sprintf(`
+		SELECT (%s), SUM(t.amount), COUNT(*)
+		FROM transactions t
+		LEFT JOIN accounts a ON t.account_id = a.id
+		WHERE t.user_id = $1
+		  AND t.date >= $2
+		  AND t.date <= $3
+		  AND t.amount > 0
+		  AND t.pending = false
+		  AND COALESCE(t.merchant_name, '') = $4
+		  %s
+		GROUP BY (%s)
+		ORDER BY SUM(t.amount) DESC
+	`, catExpr, filterClause, catExpr)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get category breakdown for merchant: %w", err)
+	}
+	defer rows.Close()
+
+	var results []domain.CategoryBreakdownForMerchantRow
+	for rows.Next() {
+		var row domain.CategoryBreakdownForMerchantRow
+		if err := rows.Scan(&row.Category, &row.Total, &row.Count); err != nil {
+			return nil, fmt.Errorf("failed to scan category breakdown row: %w", err)
+		}
+		results = append(results, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating category breakdown rows: %w", err)
+	}
+
+	return results, nil
+}
+
+// GetIncomeSourceBreakdown returns income (amount < 0) totals grouped by category.
+// Single DB round-trip (Issue #1215 PR2).
+func (r *analyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.IncomeSourceRow, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
+
+	catExpr := effectiveCategoryExpr(false)
+	args := []interface{}{userID, filters.StartDate, filters.EndDate}
+	filterClause, args, _ := buildSpendingFilter(filters, args)
+
+	query := fmt.Sprintf(`
+		SELECT (%s) AS category, ABS(SUM(t.amount)) AS total, COUNT(*) AS count
+		FROM transactions t
+		LEFT JOIN accounts a ON t.account_id = a.id
+		WHERE t.user_id = $1
+		  AND t.date >= $2
+		  AND t.date <= $3
+		  AND t.amount < 0
+		  AND t.pending = false
+		  AND COALESCE(t.effective_pfc_primary, '') NOT LIKE 'TRANSFER%%'
+		  %s
+		GROUP BY (%s)
+		ORDER BY ABS(SUM(t.amount)) DESC
+	`, catExpr, filterClause, catExpr)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get income source breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	var results []domain.IncomeSourceRow
+	for rows.Next() {
+		var row domain.IncomeSourceRow
+		if err := rows.Scan(&row.Category, &row.Total, &row.Count); err != nil {
+			return nil, fmt.Errorf("failed to scan income source row: %w", err)
+		}
+		results = append(results, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating income source rows: %w", err)
 	}
 
 	return results, nil

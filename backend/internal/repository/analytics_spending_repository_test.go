@@ -524,6 +524,343 @@ func TestGetRecurringSubscriptions(t *testing.T) {
 	})
 }
 
+func TestGetSavingsRateForPeriod(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC)
+
+	t.Run("returns income and expenses row", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"income", "expenses"}).
+			AddRow(5000.0, 3000.0)
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, startDate, endDate).
+			WillReturnRows(rows)
+
+		result, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate)
+		require.NoError(t, err)
+		assert.InDelta(t, 5000.0, result.Income, 0.001)
+		assert.InDelta(t, 3000.0, result.Expenses, 0.001)
+	})
+
+	t.Run("returns zero income and expenses when no transactions", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"income", "expenses"}).
+			AddRow(0.0, 0.0)
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, startDate, endDate).
+			WillReturnRows(rows)
+
+		result, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate)
+		require.NoError(t, err)
+		assert.Equal(t, 0.0, result.Income)
+		assert.Equal(t, 0.0, result.Expenses)
+	})
+
+	t.Run("db error is returned", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, startDate, endDate).
+			WillReturnError(pgx.ErrNoRows)
+
+		_, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate)
+		assert.Error(t, err)
+	})
+}
+
+func TestGetMonthOverMonthSpending(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	t.Run("returns monthly bucket rows", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		jan := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+		feb := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+
+		rows := pgxmock.NewRows([]string{"month", "total"}).
+			AddRow(jan, 300.0).
+			AddRow(feb, 250.0)
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, startDate).
+			WillReturnRows(rows)
+
+		result, err := repo.GetMonthOverMonthSpending(ctx, userID, startDate, "")
+		require.NoError(t, err)
+		assert.Len(t, result, 2)
+		assert.True(t, result[0].Month.Equal(jan))
+		assert.InDelta(t, 300.0, result[0].Total, 0.001)
+		assert.True(t, result[1].Month.Equal(feb))
+	})
+
+	t.Run("with category filter passes category arg", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		jan := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+		rows := pgxmock.NewRows([]string{"month", "total"}).
+			AddRow(jan, 150.0)
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, startDate, "FOOD_AND_DRINK").
+			WillReturnRows(rows)
+
+		result, err := repo.GetMonthOverMonthSpending(ctx, userID, startDate, "FOOD_AND_DRINK")
+		require.NoError(t, err)
+		assert.Len(t, result, 1)
+	})
+
+	t.Run("returns empty slice when no data", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"month", "total"})
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, startDate).
+			WillReturnRows(rows)
+
+		result, err := repo.GetMonthOverMonthSpending(ctx, userID, startDate, "")
+		require.NoError(t, err)
+		assert.Empty(t, result)
+	})
+
+	t.Run("db error is returned", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, startDate).
+			WillReturnError(pgx.ErrNoRows)
+
+		_, err := repo.GetMonthOverMonthSpending(ctx, userID, startDate, "")
+		assert.Error(t, err)
+	})
+}
+
+func TestGetLargestTransactionsForPeriod(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	filters := domain.SpendingFilters{
+		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+	}
+	limit := 5
+
+	t.Run("returns largest transaction rows ordered by amount desc", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		txDate := time.Date(2024, 2, 15, 0, 0, 0, 0, time.UTC)
+		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "date", "account_id"}).
+			AddRow("tx-001", "Amazon", 500.0, "SHOPPING", txDate, "acc-001").
+			AddRow("tx-002", "Whole Foods", 200.0, "FOOD_AND_DRINK", txDate, "acc-001")
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
+			WillReturnRows(rows)
+
+		result, err := repo.GetLargestTransactionsForPeriod(ctx, userID, filters, limit)
+		require.NoError(t, err)
+		assert.Len(t, result, 2)
+		assert.Equal(t, "tx-001", result[0].TransactionID)
+		assert.Equal(t, "Amazon", result[0].MerchantName)
+		assert.InDelta(t, 500.0, result[0].Amount, 0.001)
+		assert.Equal(t, "acc-001", result[0].AccountID)
+	})
+
+	t.Run("returns empty slice when no data", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "date", "account_id"})
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
+			WillReturnRows(rows)
+
+		result, err := repo.GetLargestTransactionsForPeriod(ctx, userID, filters, limit)
+		require.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Empty(t, result)
+	})
+
+	t.Run("db error is returned", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
+			WillReturnError(pgx.ErrNoRows)
+
+		_, err := repo.GetLargestTransactionsForPeriod(ctx, userID, filters, limit)
+		assert.Error(t, err)
+	})
+
+	t.Run("uses LEFT JOIN accounts for account-type filtering", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "date", "account_id"})
+		mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
+			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
+			WillReturnRows(rows)
+
+		_, err := repo.GetLargestTransactionsForPeriod(ctx, userID, filters, limit)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestGetCategoryBreakdownForMerchant(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	merchantName := "Amazon"
+	filters := domain.SpendingFilters{
+		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+	}
+
+	t.Run("returns category breakdown rows for merchant", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"category", "total", "count"}).
+			AddRow("SHOPPING", 400.0, 5).
+			AddRow("GENERAL_MERCHANDISE", 200.0, 3)
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, filters.StartDate, filters.EndDate, merchantName).
+			WillReturnRows(rows)
+
+		result, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantName, filters)
+		require.NoError(t, err)
+		assert.Len(t, result, 2)
+		assert.Equal(t, "SHOPPING", result[0].Category)
+		assert.InDelta(t, 400.0, result[0].Total, 0.001)
+		assert.Equal(t, 5, result[0].Count)
+	})
+
+	t.Run("returns empty slice when no data", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"category", "total", "count"})
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, filters.StartDate, filters.EndDate, merchantName).
+			WillReturnRows(rows)
+
+		result, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantName, filters)
+		require.NoError(t, err)
+		assert.Empty(t, result)
+	})
+
+	t.Run("db error is returned", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, filters.StartDate, filters.EndDate, merchantName).
+			WillReturnError(pgx.ErrNoRows)
+
+		_, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantName, filters)
+		assert.Error(t, err)
+	})
+
+	t.Run("uses LEFT JOIN accounts for account-type filtering", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"category", "total", "count"})
+		mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
+			WithArgs(userID, filters.StartDate, filters.EndDate, merchantName).
+			WillReturnRows(rows)
+
+		_, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantName, filters)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestGetIncomeSourceBreakdown(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	filters := domain.SpendingFilters{
+		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+	}
+
+	t.Run("returns income source rows", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"category", "total", "count"}).
+			AddRow("INCOME", 5000.0, 3).
+			AddRow("TRANSFER_IN", 1000.0, 2)
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, filters.StartDate, filters.EndDate).
+			WillReturnRows(rows)
+
+		result, err := repo.GetIncomeSourceBreakdown(ctx, userID, filters)
+		require.NoError(t, err)
+		assert.Len(t, result, 2)
+		assert.Equal(t, "INCOME", result[0].Category)
+		assert.InDelta(t, 5000.0, result[0].Total, 0.001)
+		assert.Equal(t, 3, result[0].Count)
+	})
+
+	t.Run("returns empty slice when no data", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"category", "total", "count"})
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, filters.StartDate, filters.EndDate).
+			WillReturnRows(rows)
+
+		result, err := repo.GetIncomeSourceBreakdown(ctx, userID, filters)
+		require.NoError(t, err)
+		assert.Empty(t, result)
+	})
+
+	t.Run("db error is returned", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		mock.ExpectQuery(`SELECT`).
+			WithArgs(userID, filters.StartDate, filters.EndDate).
+			WillReturnError(pgx.ErrNoRows)
+
+		_, err := repo.GetIncomeSourceBreakdown(ctx, userID, filters)
+		assert.Error(t, err)
+	})
+
+	t.Run("uses LEFT JOIN accounts for account-type filtering", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"category", "total", "count"})
+		mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
+			WithArgs(userID, filters.StartDate, filters.EndDate).
+			WillReturnRows(rows)
+
+		_, err := repo.GetIncomeSourceBreakdown(ctx, userID, filters)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
 // TestGetCashFlowGrouped_IncludesReplacedAccountTransactions verifies that
 // grouped cash-flow uses LEFT JOIN so pre-relink transactions remain visible.
 func TestGetCashFlowGrouped_IncludesReplacedAccountTransactions(t *testing.T) {

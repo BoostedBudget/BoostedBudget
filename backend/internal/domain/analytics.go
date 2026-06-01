@@ -268,3 +268,120 @@ type RecurringSubscriptionsResponse struct {
 	Subscriptions []RecurringSubscriptionItem `json:"subscriptions"`
 	AsOfDate      string                      `json:"as_of_date"`
 }
+
+// ─── Issue #1215 PR2 analytics helpers ──────────────────────────────────────
+
+// SavingsRateRow is the raw DB row for GetSavingsRateForPeriod.
+type SavingsRateRow struct {
+	Income   float64
+	Expenses float64
+}
+
+// SavingsRateResponse is the response for GET /analytics/savings-rate (AI-tool-callable).
+type SavingsRateResponse struct {
+	SavingsRate *float64 `json:"savings_rate"` // nil when income=0
+	Income      float64  `json:"income"`
+	Expenses    float64  `json:"expenses"`
+	NetSavings  float64  `json:"net_savings"`
+	StartDate   string   `json:"start_date"`
+	EndDate     string   `json:"end_date"`
+}
+
+// MonthOverMonthBucketRow is a raw DB row for GetMonthOverMonthSpending.
+type MonthOverMonthBucketRow struct {
+	Month time.Time
+	Total float64
+}
+
+// MonthOverMonthBucket is a single month in the month-over-month response.
+type MonthOverMonthBucket struct {
+	Month     string   `json:"month"`      // "2024-01-01" (first day of month)
+	Total     float64  `json:"total"`
+	ChangePct *float64 `json:"change_pct"` // nil for first bucket
+	ChangeAbs *float64 `json:"change_abs"` // nil for first bucket
+}
+
+// MonthOverMonthResponse is the response for GET /analytics/month-over-month (AI-tool-callable).
+type MonthOverMonthResponse struct {
+	Buckets    []MonthOverMonthBucket `json:"buckets"`
+	Category   string                 `json:"category"`    // "" = all spending
+	MonthCount int                    `json:"month_count"`
+}
+
+// LargestTransactionRow is a raw DB row for GetLargestTransactionsForPeriod.
+type LargestTransactionRow struct {
+	TransactionID string
+	MerchantName  string
+	Amount        float64
+	Category      string
+	Date          time.Time
+	AccountID     string
+}
+
+// LargestTransactionItem is a single transaction in the largest-transactions response.
+type LargestTransactionItem struct {
+	TransactionID     string  `json:"transaction_id"`
+	MerchantName      string  `json:"merchant_name"`
+	Amount            float64 `json:"amount"`
+	Category          string  `json:"category"`
+	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
+	Date              string  `json:"date"`
+	AccountID         string  `json:"account_id"`
+}
+
+// LargestTransactionsResponse is the response for GET /analytics/largest-transactions.
+type LargestTransactionsResponse struct {
+	Transactions []LargestTransactionItem `json:"transactions"`
+	Limit        int                      `json:"limit"`
+	StartDate    string                   `json:"start_date"`
+	EndDate      string                   `json:"end_date"`
+}
+
+// CategoryBreakdownForMerchantRow is a raw DB row for GetCategoryBreakdownForMerchant.
+type CategoryBreakdownForMerchantRow struct {
+	Category string
+	Total    float64
+	Count    int
+}
+
+// CategoryBreakdownItem is a single category in the merchant-category-breakdown response.
+type CategoryBreakdownItem struct {
+	Category          string  `json:"category"`
+	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
+	Total             float64 `json:"total"`
+	Percentage        float64 `json:"percentage"`
+	TransactionCount  int     `json:"transaction_count"`
+}
+
+// CategoryBreakdownForMerchantResponse is the response for GET /analytics/merchant-category-breakdown.
+type CategoryBreakdownForMerchantResponse struct {
+	MerchantName string                  `json:"merchant_name"`
+	Categories   []CategoryBreakdownItem `json:"categories"`
+	TotalSpend   float64                 `json:"total_spend"`
+	StartDate    string                  `json:"start_date"`
+	EndDate      string                  `json:"end_date"`
+}
+
+// IncomeSourceRow is a raw DB row for GetIncomeSourceBreakdown.
+type IncomeSourceRow struct {
+	Category string
+	Total    float64
+	Count    int
+}
+
+// IncomeSourceItem is a single income source in the breakdown response.
+type IncomeSourceItem struct {
+	Category          string  `json:"category"`
+	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
+	Total             float64 `json:"total"`
+	Percentage        float64 `json:"percentage"`
+	TransactionCount  int     `json:"transaction_count"`
+}
+
+// IncomeSourceBreakdownResponse is the response for GET /analytics/income-sources.
+type IncomeSourceBreakdownResponse struct {
+	Sources     []IncomeSourceItem `json:"sources"`
+	TotalIncome float64            `json:"total_income"`
+	StartDate   string             `json:"start_date"`
+	EndDate     string             `json:"end_date"`
+}
