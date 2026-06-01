@@ -14,12 +14,16 @@ package domain_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"gopkg.in/yaml.v3"
 )
 
 type specEntry struct {
@@ -113,5 +117,96 @@ func TestMCPManifest_MCPOperationIsReadMatchesTSManifest(t *testing.T) {
 			t.Errorf("%s: MCPOperationIsRead()==true in Go, but TS classifies as %q (excluded=%v)",
 				opID, tsEntry.ManifestClass, tsEntry.Excluded)
 		}
+	}
+}
+
+// openAPISpec is a minimal struct for parsing the paths section of openapi.yaml.
+type openAPISpec struct {
+	Paths map[string]map[string]openAPIOperation `yaml:"paths"`
+}
+
+// openAPIOperation represents a single HTTP operation in the spec.
+type openAPIOperation struct {
+	OperationID string   `yaml:"operationId"`
+	Tags        []string `yaml:"tags"`
+}
+
+// loadOpenAPIAnalyticsOps parses api/openapi.yaml and returns all operationIds
+// that have the "Analytics" tag.
+func loadOpenAPIAnalyticsOps(t *testing.T) []string {
+	t.Helper()
+	_, thisFile, _, _ := runtime.Caller(0)
+	// backend/internal/domain/ → ../../../ = repo root
+	repoRoot := filepath.Join(filepath.Dir(thisFile), "../../../")
+	specPath := filepath.Join(repoRoot, "api/openapi.yaml")
+
+	data, err := os.ReadFile(specPath)
+	if err != nil {
+		t.Fatalf("failed to read api/openapi.yaml at %s: %v", specPath, err)
+	}
+
+	var spec openAPISpec
+	if err := yaml.Unmarshal(data, &spec); err != nil {
+		t.Fatalf("failed to parse api/openapi.yaml: %v", err)
+	}
+
+	httpMethods := []string{"get", "post", "put", "patch", "delete", "head", "options"}
+	var ops []string
+	for _, pathItem := range spec.Paths {
+		for _, method := range httpMethods {
+			op, ok := pathItem[method]
+			if !ok {
+				continue
+			}
+			for _, tag := range op.Tags {
+				if tag == "Analytics" {
+					ops = append(ops, op.OperationID)
+					break
+				}
+			}
+		}
+	}
+	sort.Strings(ops)
+	return ops
+}
+
+// TestMCPManifest_AnalyticsOpsAreInGoManifest ensures that every operation
+// tagged "Analytics" in api/openapi.yaml is classified as MCPClassRead in
+// backend/internal/domain/mcp_manifest.go. This catches the common mistake
+// of adding a Huma Analytics endpoint but forgetting to update mcp_manifest.go.
+func TestMCPManifest_AnalyticsOpsAreInGoManifest(t *testing.T) {
+	analyticsOps := loadOpenAPIAnalyticsOps(t)
+
+	if len(analyticsOps) == 0 {
+		t.Fatal("no Analytics-tagged operations found in api/openapi.yaml — check the YAML parser")
+	}
+
+	var missing []string
+	var misclassified []string
+
+	for _, opID := range analyticsOps {
+		class, found := domain.MCPOperationManifest[opID]
+		if !found {
+			missing = append(missing, opID)
+			continue
+		}
+		if class != domain.MCPClassRead {
+			misclassified = append(misclassified, fmt.Sprintf("%s (classified as %q, want %q)", opID, class, domain.MCPClassRead))
+		}
+	}
+
+	if len(missing) > 0 || len(misclassified) > 0 {
+		var msgs []string
+		for _, id := range missing {
+			msgs = append(msgs, "  MISSING: "+id)
+		}
+		for _, desc := range misclassified {
+			msgs = append(msgs, "  MISCLASSIFIED: "+desc)
+		}
+		t.Errorf(
+			"Analytics ops from api/openapi.yaml are not correctly classified as MCPClassRead in mcp_manifest.go:\n%s\n"+
+				"Fix: add/update these entries in backend/internal/domain/mcp_manifest.go",
+			strings.Join(msgs, "\n"),
+		)
 	}
 }

@@ -347,6 +347,14 @@ func main() {
 		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor) // Issue #910: Plaid Liabilities
 		merchantRepo := repository.NewMerchantRepository(db)                                         // Issue #1163: Merchant batch-upsert
 
+		// Create GDPR-consent-gated analytics client.
+		// User-behavior analytics events (e.g. transfer suggestion accept/reject) use
+		// gdprClient.CaptureIfConsented, which checks privacy settings before firing.
+		// Operational/system events use phClient.Capture directly.
+		// New backend user-behavior events MUST use gdprClient; existing operational events are NOT retrofitted.
+		consentChecker := phclient.NewPrivacyConsentAdapter(privacyRepo)
+		gdprClient := phclient.NewGDPRClient(phClient, consentChecker, appLogger)
+
 		// Create mock audit logger (will be replaced with real implementation later)
 		auditLogger := &mockAuditLogger{}
 
@@ -1197,7 +1205,7 @@ func main() {
 
 		// Register Huma transfer suggestion routes (Issue #952: Notification Center)
 		transferSuggestionSvc := services.NewTransferSuggestionService(transferSuggestionRepo)
-		transferSuggestionSvc.SetAnalytics(phClient)
+		transferSuggestionSvc.SetGDPRAnalytics(gdprClient)
 		humaTransferSuggestionHandler := operations.NewTransferSuggestionHandler(transferSuggestionSvc)
 		operations.RegisterTransferSuggestionRoutes(humaAPI, humaTransferSuggestionHandler)
 		appLogger.Info("Huma transfer suggestion routes registered")
