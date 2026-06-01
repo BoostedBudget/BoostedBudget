@@ -11,6 +11,8 @@
  *   - Supports Idempotency-Key header injection
  */
 
+import { MCP_WORKER_USER_AGENT } from './user-agent'
+
 export interface RequestConfig {
   url: string
   method: string
@@ -86,6 +88,9 @@ export function createFetchMutator(config: FetchMutatorConfig): FetchMutator {
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      // Workers omit User-Agent by default; an empty UA trips a backend WAF
+      // managed-challenge rule. Listed first so callers can still override it.
+      'User-Agent': MCP_WORKER_USER_AGENT,
       Authorization: creds.authorization,
       'X-Origin-Secret': creds.originSecret,
       'X-MCP-Worker-Secret': creds.mcpWorkerSecret,
