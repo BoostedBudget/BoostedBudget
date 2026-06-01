@@ -418,8 +418,10 @@ func (h *AnalyticsHandler) GetSavingsRateForPeriod(ctx context.Context, input *G
 // GetMonthOverMonthSpendingChangeInput represents input for GET /analytics/month-over-month.
 type GetMonthOverMonthSpendingChangeInput struct {
 	inputs.AuthenticatedInput
-	Category string `query:"category" doc:"Optional category to filter by"`
-	Months   int    `query:"months" doc:"Number of months to look back (2-24, default 6)" default:"6"`
+	Category         string `query:"category" doc:"Optional PFC primary or custom:<uuid> to scope spending"`
+	Months           int    `query:"months" doc:"Months to look back (2-24, default 6)" default:"6"`
+	AccountTypes     string `query:"account_types" doc:"Comma-separated account types to filter (e.g. depository,credit)"`
+	IncludeTransfers string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
 }
 
 // GetMonthOverMonthSpendingChangeOutput represents the response for GET /analytics/month-over-month.
@@ -437,7 +439,17 @@ func (h *AnalyticsHandler) GetMonthOverMonthSpendingChange(ctx context.Context, 
 		return nil, huma.Error400BadRequest("months must be between 2 and 24")
 	}
 
-	response, err := h.service.GetMonthOverMonthSpendingChange(ctx, input.UserID, input.Category, months)
+	var accountTypes []string
+	if input.AccountTypes != "" {
+		for _, p := range strings.Split(input.AccountTypes, ",") {
+			if t := strings.TrimSpace(p); t != "" {
+				accountTypes = append(accountTypes, t)
+			}
+		}
+	}
+	includeTransfers := input.IncludeTransfers == "true"
+
+	response, err := h.service.GetMonthOverMonthSpendingChange(ctx, input.UserID, input.Category, months, accountTypes, includeTransfers)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
@@ -678,7 +690,7 @@ func (h *AnalyticsHandler) GetFinancialSummary(ctx context.Context, input *GetFi
 	})
 
 	g.Go(func() error {
-		r, e := h.service.GetMonthOverMonthSpendingChange(gCtx, input.UserID, "", 6)
+		r, e := h.service.GetMonthOverMonthSpendingChange(gCtx, input.UserID, "", 6, nil, false)
 		if e != nil {
 			slog.WarnContext(ctx, "financial_summary: mom_change sub-metric failed", "error", e)
 			return nil

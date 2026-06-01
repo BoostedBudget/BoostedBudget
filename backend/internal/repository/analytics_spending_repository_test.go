@@ -597,7 +597,7 @@ func TestGetMonthOverMonthSpending(t *testing.T) {
 			WithArgs(userID, startDate).
 			WillReturnRows(rows)
 
-		result, err := repo.GetMonthOverMonthSpending(ctx, userID, startDate, "")
+		result, err := repo.GetMonthOverMonthSpending(ctx, userID, startDate, "", domain.SpendingFilters{})
 		require.NoError(t, err)
 		assert.Len(t, result, 2)
 		assert.True(t, result[0].Month.Equal(jan))
@@ -617,7 +617,7 @@ func TestGetMonthOverMonthSpending(t *testing.T) {
 			WithArgs(userID, startDate, "FOOD_AND_DRINK").
 			WillReturnRows(rows)
 
-		result, err := repo.GetMonthOverMonthSpending(ctx, userID, startDate, "FOOD_AND_DRINK")
+		result, err := repo.GetMonthOverMonthSpending(ctx, userID, startDate, "FOOD_AND_DRINK", domain.SpendingFilters{})
 		require.NoError(t, err)
 		assert.Len(t, result, 1)
 	})
@@ -631,7 +631,7 @@ func TestGetMonthOverMonthSpending(t *testing.T) {
 			WithArgs(userID, startDate).
 			WillReturnRows(rows)
 
-		result, err := repo.GetMonthOverMonthSpending(ctx, userID, startDate, "")
+		result, err := repo.GetMonthOverMonthSpending(ctx, userID, startDate, "", domain.SpendingFilters{})
 		require.NoError(t, err)
 		assert.Empty(t, result)
 	})
@@ -644,8 +644,40 @@ func TestGetMonthOverMonthSpending(t *testing.T) {
 			WithArgs(userID, startDate).
 			WillReturnError(pgx.ErrNoRows)
 
-		_, err := repo.GetMonthOverMonthSpending(ctx, userID, startDate, "")
+		_, err := repo.GetMonthOverMonthSpending(ctx, userID, startDate, "", domain.SpendingFilters{})
 		assert.Error(t, err)
+	})
+
+	t.Run("filters by account types when provided", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"month", "total"}).
+			AddRow(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), 200.0)
+		// userID=$1, startDate=$2, then account type=$3
+		mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
+			WithArgs("user-123", pgxmock.AnyArg(), "depository").
+			WillReturnRows(rows)
+		filters := domain.SpendingFilters{AccountTypes: []string{"depository"}}
+		_, err := repo.GetMonthOverMonthSpending(ctx, "user-123", time.Now().AddDate(0, -6, 0), "", filters)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("include_transfers=true does not add transfer filter", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"month", "total"}).
+			AddRow(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), 500.0)
+		// When include_transfers=true, no TRANSFER% predicate in query
+		mock.ExpectQuery(`(?i)FROM transactions`).
+			WithArgs("user-123", pgxmock.AnyArg()).
+			WillReturnRows(rows)
+		filters := domain.SpendingFilters{IncludeTransfers: true}
+		_, err := repo.GetMonthOverMonthSpending(ctx, "user-123", time.Now().AddDate(0, -6, 0), "", filters)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 

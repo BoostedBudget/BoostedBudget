@@ -21,7 +21,7 @@ type mockAnalyticsRepository struct {
 	getAverageMonthlySpendFn            func(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error)
 	getRecurringSubscriptionsFn         func(ctx context.Context, userID string, lookbackStart time.Time) ([]domain.RecurringSubscriptionRow, error)
 	getSavingsRateForPeriodFn           func(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.SavingsRateRow, error)
-	getMonthOverMonthSpendingFn         func(ctx context.Context, userID string, startDate time.Time, category string) ([]domain.MonthOverMonthBucketRow, error)
+	getMonthOverMonthSpendingFn         func(ctx context.Context, userID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error)
 	getLargestTransactionsForPeriodFn   func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.LargestTransactionRow, error)
 	getCategoryBreakdownForMerchantFn   func(ctx context.Context, userID string, merchantName string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
 	getIncomeSourceBreakdownFn          func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.IncomeSourceRow, error)
@@ -99,9 +99,9 @@ func (m *mockAnalyticsRepository) GetSavingsRateForPeriod(ctx context.Context, u
 	return &domain.SavingsRateRow{}, nil
 }
 
-func (m *mockAnalyticsRepository) GetMonthOverMonthSpending(ctx context.Context, userID string, startDate time.Time, category string) ([]domain.MonthOverMonthBucketRow, error) {
+func (m *mockAnalyticsRepository) GetMonthOverMonthSpending(ctx context.Context, userID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error) {
 	if m.getMonthOverMonthSpendingFn != nil {
-		return m.getMonthOverMonthSpendingFn(ctx, userID, startDate, category)
+		return m.getMonthOverMonthSpendingFn(ctx, userID, startDate, category, filters)
 	}
 	return nil, nil
 }
@@ -1213,7 +1213,7 @@ func TestAnalyticsService_GetMonthOverMonthSpendingChange(t *testing.T) {
 
 	t.Run("months<2 returns error", func(t *testing.T) {
 		service := NewAnalyticsService(&mockAnalyticsRepository{})
-		_, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 1)
+		_, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 1, nil, false)
 		if err == nil {
 			t.Error("expected error when months < 2")
 		}
@@ -1221,7 +1221,7 @@ func TestAnalyticsService_GetMonthOverMonthSpendingChange(t *testing.T) {
 
 	t.Run("months>24 returns error", func(t *testing.T) {
 		service := NewAnalyticsService(&mockAnalyticsRepository{})
-		_, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 25)
+		_, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 25, nil, false)
 		if err == nil {
 			t.Error("expected error when months > 24")
 		}
@@ -1229,7 +1229,7 @@ func TestAnalyticsService_GetMonthOverMonthSpendingChange(t *testing.T) {
 
 	t.Run("happy path: first bucket has nil deltas, subsequent buckets have pct/abs", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
-			getMonthOverMonthSpendingFn: func(ctx context.Context, userID string, startDate time.Time, category string) ([]domain.MonthOverMonthBucketRow, error) {
+			getMonthOverMonthSpendingFn: func(ctx context.Context, userID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error) {
 				return []domain.MonthOverMonthBucketRow{
 					{Month: jan, Total: 200.0},
 					{Month: feb, Total: 300.0},
@@ -1239,7 +1239,7 @@ func TestAnalyticsService_GetMonthOverMonthSpendingChange(t *testing.T) {
 		}
 		service := NewAnalyticsService(mockRepo)
 
-		result, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 3)
+		result, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 3, nil, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1277,13 +1277,13 @@ func TestAnalyticsService_GetMonthOverMonthSpendingChange(t *testing.T) {
 
 	t.Run("empty repo result returns non-nil response with empty buckets", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
-			getMonthOverMonthSpendingFn: func(ctx context.Context, userID string, startDate time.Time, category string) ([]domain.MonthOverMonthBucketRow, error) {
+			getMonthOverMonthSpendingFn: func(ctx context.Context, userID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error) {
 				return nil, nil
 			},
 		}
 		service := NewAnalyticsService(mockRepo)
 
-		result, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 6)
+		result, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 6, nil, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1292,6 +1292,24 @@ func TestAnalyticsService_GetMonthOverMonthSpendingChange(t *testing.T) {
 		}
 		if result.Buckets == nil {
 			t.Error("expected non-nil (empty) buckets slice")
+		}
+	})
+
+	t.Run("threads accountTypes to repo", func(t *testing.T) {
+		var capturedFilters domain.SpendingFilters
+		mockRepo := &mockAnalyticsRepository{
+			getMonthOverMonthSpendingFn: func(ctx context.Context, userID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error) {
+				capturedFilters = filters
+				return nil, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+		_, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 6, []string{"depository"}, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(capturedFilters.AccountTypes) != 1 || capturedFilters.AccountTypes[0] != "depository" {
+			t.Errorf("expected account type depository to be threaded to repo, got %v", capturedFilters.AccountTypes)
 		}
 	})
 }

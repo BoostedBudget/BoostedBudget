@@ -30,11 +30,19 @@ Multi-region support planned for Phase 7+.
 
 export type GetMonthOverMonthSpendingChangeParams = {
   /**
-   * Optional category to filter by
+   * Optional PFC primary or custom:<uuid> to scope spending
    */
   category?: string;
   /**
-   * Number of months to look back (2-24, default 6)
+   * Months to look back (2-24, default 6)
    */
   months?: number;
+  /**
+   * Comma-separated account types to filter (e.g. depository,credit)
+   */
+  account_types?: string;
+  /**
+   * Include transfer transactions (true/false, default false)
+   */
+  include_transfers?: string;
 };
