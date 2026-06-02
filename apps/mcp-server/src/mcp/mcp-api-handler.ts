@@ -23,8 +23,8 @@ export class McpApiHandler extends WorkerEntrypoint<Env> {
     // workers-oauth-provider validated the MCP token (layer 1) before reaching here.
     // This layer introspects the stored Clerk OAuth access token against Clerk's API
     // to detect revoked grants within ~30s. Fails open — Clerk outages do not block MCP.
-    // ⚠️ PRE-MERGE: run the Step-0 staging spike first (see issue #1224 plan) to confirm
-    //    that POST /oauth_applications/access_tokens/verify reflects JWT grant revocation.
+    // Spike confirmed (2026-06-02): revocation is reflected immediately via HTTP 404
+    // on the verify endpoint (not at token expiry). See issue #1224 plan for details.
     const revocationBlock = await checkRevocationOrRespond({ accessToken, clerkUserId }, this.env)
     if (revocationBlock) return revocationBlock
 

@@ -1,18 +1,17 @@
 /**
  * Tests for assertNotRevoked / introspectClerkToken.
  *
- * The Clerk verify endpoint contract is:
+ * Clerk verify endpoint contract (confirmed by Step-0 staging spike, 2026-06-02):
  *   POST https://api.clerk.com/oauth_applications/access_tokens/verify
  *   Authorization: Bearer <CLERK_SECRET_KEY>
  *   { "access_token": "..." }
  *
- * Response mapping (provisional — update from Step-0 staging spike results):
- *   2xx { active: true }  → verified_active
- *   2xx { active: false } → revoked
- *   4xx/5xx/network       → unknown_fail_open (fail-open: allow request)
- *
- * ⚠️ These tests prove wiring/caching/fail-open logic.
- * They do NOT prove real grant revocation — only the staging spike does.
+ * Response mapping:
+ *   HTTP 200 + { id, revoked: false, expired: false } → verified_active
+ *   HTTP 200 + { revoked: true }  OR { expired: true } → revoked
+ *   HTTP 404 + { errors: [{ code: "oauth_access_token_not_found" }] } → revoked
+ *   5xx / network / timeout / missing secret → unknown_fail_open (fail-open)
+ *   Other 4xx or unexpected 200 shape       → unknown_fail_open (fail-open)
  */
 
 import { describe, expect, it, beforeEach, afterEach, mock, setSystemTime } from 'bun:test'
@@ -28,18 +27,21 @@ function asFetch(m: ReturnType<typeof mock>) {
   return m as unknown as typeof globalThis.fetch
 }
 
+// Real Clerk BAPI response shape for an active token (spike-verified 2026-06-02)
 function activeResponse(): Response {
-  return new Response(JSON.stringify({ active: true }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  })
+  return new Response(
+    JSON.stringify({ id: 'oat_test123', revoked: false, expired: false, expiration: 9999999999 }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  )
 }
 
-function inactiveResponse(): Response {
-  return new Response(JSON.stringify({ active: false }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  })
+// Real Clerk BAPI response shape after revocation (spike-verified 2026-06-02):
+// HTTP 404 with oauth_access_token_not_found error code
+function revokedResponse(): Response {
+  return new Response(
+    JSON.stringify({ errors: [{ message: 'OAuth Access Token not found', code: 'oauth_access_token_not_found' }] }),
+    { status: 404, headers: { 'Content-Type': 'application/json' } },
+  )
 }
 
 function serverErrorResponse(): Response {
@@ -86,14 +88,14 @@ describe('assertNotRevoked — Clerk introspection', () => {
   })
 
   it('throws TokenVerificationError when Clerk returns inactive', async () => {
-    globalThis.fetch = asFetch(mock(() => Promise.resolve(inactiveResponse())))
+    globalThis.fetch = asFetch(mock(() => Promise.resolve(revokedResponse())))
     await expect(assertNotRevoked({ accessToken: TEST_TOKEN }, TEST_ENV)).rejects.toBeInstanceOf(
       TokenVerificationError,
     )
   })
 
   it('error code is invalid_token when Clerk returns inactive', async () => {
-    globalThis.fetch = asFetch(mock(() => Promise.resolve(inactiveResponse())))
+    globalThis.fetch = asFetch(mock(() => Promise.resolve(revokedResponse())))
     let caught: TokenVerificationError | undefined
     try {
       await assertNotRevoked({ accessToken: TEST_TOKEN }, TEST_ENV)
@@ -178,7 +180,7 @@ describe('assertNotRevoked — caching', () => {
   })
 
   it('caches revoked: repeated calls keep throwing without re-fetching', async () => {
-    const fetchSpy = mock(() => Promise.resolve(inactiveResponse()))
+    const fetchSpy = mock(() => Promise.resolve(revokedResponse()))
     globalThis.fetch = asFetch(fetchSpy)
     await expect(assertNotRevoked({ accessToken: TEST_TOKEN }, TEST_ENV)).rejects.toBeInstanceOf(
       TokenVerificationError,
@@ -223,14 +225,54 @@ describe('assertNotRevoked — caching', () => {
     expect(fetchSpy.mock.calls.length).toBe(2)
   })
 
-  // ⚠️ SPIKE-SENSITIVE: current behavior is fail-open on 4xx.
-  // If Step-0 staging spike shows Clerk returns 4xx for revoked grants,
-  // update introspectClerkToken's mapping to treat 4xx as 'revoked' (fail-closed).
-  it('currently fails open on Clerk 4xx (revisit mapping after Step-0 spike)', async () => {
+  // Spike result (2026-06-02): HTTP 404 with oauth_access_token_not_found is the
+  // revocation signal — mapped to 'revoked' (fail-CLOSED), not fail-open.
+  it('throws on HTTP 404 oauth_access_token_not_found (revocation signal)', async () => {
+    globalThis.fetch = asFetch(mock(() => Promise.resolve(revokedResponse())))
+    await expect(assertNotRevoked({ accessToken: TEST_TOKEN }, TEST_ENV)).rejects.toBeInstanceOf(
+      TokenVerificationError,
+    )
+  })
+
+  it('fails open on other 4xx (non-revocation errors, e.g. 400/429)', async () => {
     globalThis.fetch = asFetch(
-      mock(() => Promise.resolve(new Response(JSON.stringify({ error: 'invalid_token' }), { status: 400 }))),
+      mock(() => Promise.resolve(new Response(JSON.stringify({ error: 'rate_limited' }), { status: 429 }))),
     )
     await expect(assertNotRevoked({ accessToken: TEST_TOKEN }, TEST_ENV)).resolves.toBeUndefined()
+  })
+
+  it('fails open on HTTP 404 with unknown error code (not a revocation signal)', async () => {
+    globalThis.fetch = asFetch(
+      mock(() => Promise.resolve(new Response(
+        JSON.stringify({ errors: [{ code: 'some_other_error' }] }),
+        { status: 404 },
+      ))),
+    )
+    await expect(assertNotRevoked({ accessToken: TEST_TOKEN }, TEST_ENV)).resolves.toBeUndefined()
+  })
+
+  it('throws on HTTP 200 with revoked:true (explicit revoked flag in body)', async () => {
+    globalThis.fetch = asFetch(
+      mock(() => Promise.resolve(new Response(
+        JSON.stringify({ id: 'oat_test', revoked: true, expired: false }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ))),
+    )
+    await expect(assertNotRevoked({ accessToken: TEST_TOKEN }, TEST_ENV)).rejects.toBeInstanceOf(
+      TokenVerificationError,
+    )
+  })
+
+  it('throws on HTTP 200 with expired:true', async () => {
+    globalThis.fetch = asFetch(
+      mock(() => Promise.resolve(new Response(
+        JSON.stringify({ id: 'oat_test', revoked: false, expired: true }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ))),
+    )
+    await expect(assertNotRevoked({ accessToken: TEST_TOKEN }, TEST_ENV)).rejects.toBeInstanceOf(
+      TokenVerificationError,
+    )
   })
 })
 
