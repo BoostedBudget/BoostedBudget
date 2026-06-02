@@ -22,20 +22,20 @@
     "@boostedbudget/api-client": "workspace:*",
     "@cloudflare/workers-oauth-provider": "^0.7.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "agents": "^0.13.3",
+    "agents": "^0.14.0",
     "jose": "^6.2.3",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@apidevtools/json-schema-ref-parser": "^15.3.5",
-    "@cloudflare/workers-types": "^4.20250620.0",
+    "@cloudflare/workers-types": "^4.20260602.1",
     "@eslint/js": "^9.0.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",
     "globals": "^15.0.0",
     "typescript": "^5.8.3",
-    "wrangler": "^4.20.0",
+    "wrangler": "^4.97.0",
     "yaml": "^2.8.3"
   }
 }
