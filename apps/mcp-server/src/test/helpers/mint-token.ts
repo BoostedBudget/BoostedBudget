@@ -63,6 +63,16 @@ function buildFetchSpy() {
       input instanceof Request ? input.url : input instanceof URL ? input.href : String(input)
     const method = (input instanceof Request ? input.method : init?.method ?? 'GET').toUpperCase()
 
+    // JWKS endpoint — clerk-verifier.ts fetches this to verify Clerk JWTs.
+    // Not called in the test API path (OAuthProvider uses opaque tokens), but
+    // intercepted defensively so any accidental JWKS call fails loudly vs network error.
+    if (url.includes('/.well-known/jwks.json')) {
+      return new Response(JSON.stringify({ keys: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
     // Clerk token introspection / revocation endpoint.
     // revocation.ts calls POST https://api.clerk.com/oauth_applications/access_tokens/verify
     // on every MCP request (cache miss). Return verified_active so assertNotRevoked passes.
