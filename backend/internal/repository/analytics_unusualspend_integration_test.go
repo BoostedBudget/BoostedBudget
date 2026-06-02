@@ -21,7 +21,6 @@ import (
 
 func TestGetUnusualSpend_Integration(t *testing.T) {
 	pool := connectTestDB(t)
-	repo := NewAnalyticsRepository(pool)
 	ctx := context.Background()
 
 	// Wrap all seed data in a transaction so it is automatically rolled back.
