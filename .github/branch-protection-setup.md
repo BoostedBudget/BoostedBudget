@@ -303,7 +303,7 @@ Update branch protection when:
 
 - [GitHub Branch Protection Docs](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/defining-the-mergeability-of-pull-requests/about-protected-branches)
 - [GitHub Environments Docs](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
-- [Workflow Documentation](.github/workflows/README.md)
+- [Workflow Documentation](workflows/README.md)
 - [CLAUDE.md](../CLAUDE.md) - Development guidelines
 
 ## Support
