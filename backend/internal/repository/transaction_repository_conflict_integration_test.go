@@ -44,20 +44,23 @@ func TestTransactionRepository_CreateBatch_ConflictPreservesUserFields_Integrati
 	linkedItemID := uuid.New().String()
 	accountID := uuid.New().String()
 
-	require.NoError(t, tx.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
 		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
-	`, userID, "test|"+userID, "integration-1213-"+userID+"@example.com").Close())
+	`, userID, "test|"+userID, "integration-1213-"+userID+"@example.com")
+	require.NoError(t, err, "seed user")
 
-	require.NoError(t, tx.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
 		VALUES ($1, $2, $3, 'enc-test-token')
-	`, linkedItemID, userID, "test-item-"+linkedItemID).Close())
+	`, linkedItemID, userID, "test-item-"+linkedItemID)
+	require.NoError(t, err, "seed linked_item")
 
-	require.NoError(t, tx.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type)
 		VALUES ($1, $2, $3, 'plaid-acc-conflict-test', 'Test Checking', 'depository')
-	`, accountID, linkedItemID, userID).Close())
+	`, accountID, linkedItemID, userID)
+	require.NoError(t, err, "seed account")
 
 	repo := NewTransactionRepository(tx, enc)
 
