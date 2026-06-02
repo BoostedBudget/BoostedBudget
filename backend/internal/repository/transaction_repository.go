@@ -48,9 +48,11 @@ type TransactionRepository interface {
 	// Create creates a new transaction in the database
 	Create(ctx context.Context, transaction *domain.Transaction) error
 
-	// CreateBatch creates multiple transactions in a single database operation
-	// Optimized for bulk inserts during transaction sync
-	CreateBatch(ctx context.Context, transactions []domain.Transaction) error
+	// CreateBatch creates multiple transactions in a single database operation.
+	// Returns a map of transaction IDs that were genuinely inserted (as opposed to
+	// conflict-preserved by ON CONFLICT DO UPDATE).  Callers use this to gate
+	// analytics / match-count side-effects on fresh inserts only (Issue #1213).
+	CreateBatch(ctx context.Context, transactions []domain.Transaction) (map[string]bool, error)
 
 	// Update updates an existing transaction
 	Update(ctx context.Context, transaction *domain.Transaction) error
@@ -292,9 +294,13 @@ func (r *transactionRepository) Create(ctx context.Context, transaction *domain.
 // When a duplicate transaction is encountered (same source, external_transaction_id_blind_idx, user_id),
 // we update the FKs (account_id, linked_item_id, user_account_id) and Plaid fields while
 // PRESERVING user enrichments (user_notes, category_override, tags, tags_source).
-func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []domain.Transaction) error {
+//
+// Issue #1213: Returns a map of transaction IDs that were genuinely inserted.
+// RETURNING id, (xmax::text::bigint = 0) AS inserted lets us distinguish fresh
+// inserts (xmax=0) from conflict-updates (xmax!=0) in a single round-trip.
+func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []domain.Transaction) (map[string]bool, error) {
 	if len(transactions) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Build multi-row INSERT query
@@ -321,7 +327,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		// Encrypt PII fields and compute blind index before writing
 		extIDBlindIdx, err := r.encryptTransactionPIIFields(&transactions[i])
 		if err != nil {
-			return fmt.Errorf("failed to encrypt transaction fields: %w", err)
+			return nil, fmt.Errorf("failed to encrypt transaction fields: %w", err)
 		}
 
 		// Create placeholders for this row
@@ -398,6 +404,12 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 	// - UPDATE: Plaid fields (amount, date, name, merchant_name, pending, etc.) - may change
 	// - UPDATE: external_transaction_id_blind_idx in case it was previously NULL
 	// - PRESERVE: User enrichments (user_notes, category_override_kind, tags, tags_source)
+	//
+	// Issue #1213: RETURNING id, (xmax::text::bigint = 0) AS inserted
+	// xmax = 0 for a freshly inserted row; non-zero for a conflict-updated row.
+	// This lets the caller gate analytics/match-count side-effects on genuine inserts.
+	// Note: user_notes, category_override_kind, tags, tags_source are NOT in the SET
+	// clause so they will be PRESERVED on conflict.
 	query := fmt.Sprintf(`
 		INSERT INTO transactions
 		(id, user_id, account_id, linked_item_id, user_account_id,
@@ -431,16 +443,31 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			    ELSE EXCLUDED.pfc_primary
 			END,
 			updated_at = NOW()
+		RETURNING id, (xmax::text::bigint = 0) AS inserted
 	`, strings.Join(valueStrings, ", "))
-	// Note: user_notes, category_override_kind, tags, tags_source are NOT in the SET clause
-	// so they will be PRESERVED on conflict
 
-	_, err := r.db.Exec(ctx, query, valueArgs...)
+	rows, err := r.db.Query(ctx, query, valueArgs...)
 	if err != nil {
-		return fmt.Errorf("failed to batch create transactions: %w", err)
+		return nil, fmt.Errorf("failed to batch create transactions: %w", err)
+	}
+	defer rows.Close()
+
+	insertedIDs := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		var inserted bool
+		if err := rows.Scan(&id, &inserted); err != nil {
+			return nil, fmt.Errorf("failed to scan batch create result: %w", err)
+		}
+		if inserted {
+			insertedIDs[id] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate batch create results: %w", err)
 	}
 
-	return nil
+	return insertedIDs, nil
 }
 
 // Update updates an existing transaction
