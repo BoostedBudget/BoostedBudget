@@ -106,7 +106,7 @@ jobs:
           FRONTEND_PRIOR: ${{ steps.resolve-tags.outputs.frontend_prior_sha }}
         run: |
           set -euo pipefail
-          # On push events, allow_rollback is not available as an input — default to false.
+          # inputs.allow_rollback is always available (workflow_dispatch-only); :-false is a defensive fallback.
           ALLOW="${ALLOW_ROLLBACK:-false}"
           check() {
             local prior="$1" tag="$2"
@@ -193,7 +193,7 @@ jobs:
           FE_WORKFLOW:      ${{ steps.filter-frontend.outputs.workflow }}
         run: |
           set -euo pipefail
-          # On push events, force_rebuild is not available as an input — default to false.
+          # inputs.force_rebuild is always available (workflow_dispatch-only); :-false is a defensive fallback.
           FORCE="${FORCE_REBUILD:-false}"
 
           # backend_changed: triggers Docker image rebuild + push.

@@ -5,7 +5,7 @@ This directory contains GitHub Actions workflows for BoostedBudget's CI/CD pipel
 ## Workflow Overview
 
 ```
-PR/push to staging ──► test.yml          (CI: backend + frontend + E2E + lint)
+PR to staging/main ──► test.yml          (CI: backend + frontend + E2E + lint)
                                           │
                         promote-to-production.yml  ◄── manual dispatch
                         (merge staging→main + inline back-sync staging←main)
@@ -27,9 +27,9 @@ push to QA branch ────► deploy-qa.yml              ◄── manual di
 
 ### `test.yml` — CI Test Suite
 
-Runs on all PRs and pushes to `staging` or `main`.
+Runs on pull requests only.
 
-**Trigger:** `push` (staging, main), `pull_request`
+**Trigger:** `pull_request` (opened, synchronize, reopened)
 
 **Jobs:**
 - Backend tests (Go, race detection, ≥60% coverage)
@@ -151,7 +151,7 @@ REGISTRY: 'ghcr.io'     # Container registry
 
 ## Branch Protection
 
-See `.github/branch-protection-setup.md` for configuration instructions.
+See `../branch-protection-setup.md` for configuration instructions.
 
 **Required checks for `staging` / `main` PRs:**
 - ✅ `test` job must pass
@@ -203,5 +203,5 @@ fly status --app boostedbudget-web
 
 - [CLAUDE.md](../../CLAUDE.md) — Development guidelines
 - [boosted-budget-fly-deployment.md](../../boosted-budget-fly-deployment.md) — Fly.io deployment strategy
-- [Branch Protection Setup](.github/branch-protection-setup.md) — GitHub settings
+- [Branch Protection Setup](../branch-protection-setup.md) — GitHub settings
 - [Scripts README](../../scripts/README.md) — Deployment scripts
