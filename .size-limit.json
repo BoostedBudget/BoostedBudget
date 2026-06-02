@@ -6,21 +6,51 @@
     "gzip": true
   },
   {
+    "name": "preload-helper",
+    "path": "apps/web/dist/assets/preload-helper-*.js",
+    "limit": "3 KB",
+    "gzip": true
+  },
+  {
     "name": "entry",
     "path": "apps/web/dist/assets/entry-*.js",
-    "limit": "18 KB",
+    "limit": "20 KB",
     "gzip": true
   },
   {
     "name": "vendor",
     "path": "apps/web/dist/assets/vendor-*.js",
-    "limit": "700 KB",
+    "limit": "400 KB",
+    "gzip": true
+  },
+  {
+    "name": "tanstack",
+    "path": "apps/web/dist/assets/tanstack-*.js",
+    "limit": "55 KB",
+    "gzip": true
+  },
+  {
+    "name": "charts",
+    "path": "apps/web/dist/assets/charts-*.js",
+    "limit": "230 KB",
+    "gzip": true
+  },
+  {
+    "name": "api-client",
+    "path": "apps/web/dist/assets/api-client-*.js",
+    "limit": "10 KB",
+    "gzip": true
+  },
+  {
+    "name": "shared",
+    "path": "apps/web/dist/assets/shared-*.js",
+    "limit": "40 KB",
     "gzip": true
   },
   {
     "name": "dashboard",
     "path": "apps/web/dist/assets/dashboard-*.js",
-    "limit": "280 KB",
+    "limit": "20 KB",
     "gzip": true
   },
   {
@@ -30,15 +60,21 @@
     "gzip": true
   },
   {
+    "name": "TransactionsPage",
+    "path": "apps/web/dist/assets/TransactionsPage-*.js",
+    "limit": "5 KB",
+    "gzip": true
+  },
+  {
     "name": "accounts",
     "path": "apps/web/dist/assets/accounts-*.js",
-    "limit": "320 KB",
+    "limit": "20 KB",
     "gzip": true
   },
   {
     "name": "budgets",
     "path": "apps/web/dist/assets/budgets-*.js",
-    "limit": "38 KB",
+    "limit": "25 KB",
     "gzip": true
   },
   {
@@ -56,7 +92,7 @@
   {
     "name": "reports",
     "path": "apps/web/dist/assets/reports-*.js",
-    "limit": "5 KB",
+    "limit": "6 KB",
     "gzip": true
   },
   {
@@ -86,13 +122,13 @@
   {
     "name": "admin",
     "path": "apps/web/dist/assets/admin-*.js",
-    "limit": "60 KB",
+    "limit": "20 KB",
     "gzip": true
   },
   {
     "name": "legal",
     "path": "apps/web/dist/assets/legal-*.js",
-    "limit": "16 KB",
+    "limit": "20 KB",
     "gzip": true
   },
   {
