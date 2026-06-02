@@ -362,6 +362,9 @@ apps/web/test-results/
 apps/web/e2e/.env.test
 .playwright-mcp/
 
+# Wrangler
+.wrangler/
+
 # Fly.io
 .fly/
 fly.toml.bakmigration-performance.json

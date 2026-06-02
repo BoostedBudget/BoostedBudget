@@ -1,5 +1,6 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { BoostedBudgetMcpAgent } from './agent'
+import { checkRevocationOrRespond } from './revocation-gate'
 import type { Env } from '../env'
 
 /**
@@ -17,6 +18,15 @@ export class McpApiHandler extends WorkerEntrypoint<Env> {
       clerkUserId: string
       accessToken: string
     }
+
+    // Layer 2: revocation check.
+    // workers-oauth-provider validated the MCP token (layer 1) before reaching here.
+    // This layer introspects the stored Clerk OAuth access token against Clerk's API
+    // to detect revoked grants within ~30s. Fails open — Clerk outages do not block MCP.
+    // Spike confirmed (2026-06-02): revocation is reflected immediately via HTTP 404
+    // on the verify endpoint (not at token expiry). See issue #1224 plan for details.
+    const revocationBlock = await checkRevocationOrRespond({ accessToken, clerkUserId }, this.env)
+    if (revocationBlock) return revocationBlock
 
     // Build a clean set of headers — strip any inbound X-MCP-* headers then set
     // trusted values from the authenticated props. This prevents clients from
