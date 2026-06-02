@@ -8,8 +8,9 @@ import { exports } from 'cloudflare:workers'
 //   - /mcp without token                     →  401 with WWW-Authenticate challenge
 
 describe('OAuth 401 challenge', () => {
+  const worker = exports.default as { fetch: (req: Request) => Promise<Response> }
+
   it('GET /.well-known/oauth-protected-resource returns 200 with metadata', async () => {
-    const worker = exports.default as { fetch: (req: Request) => Promise<Response> }
     const response = await worker.fetch(
       new Request('http://mcp.test/.well-known/oauth-protected-resource'),
     )
@@ -23,7 +24,6 @@ describe('OAuth 401 challenge', () => {
   })
 
   it('GET /mcp without token returns 401 with WWW-Authenticate', async () => {
-    const worker = exports.default as { fetch: (req: Request) => Promise<Response> }
     const response = await worker.fetch(new Request('http://mcp.test/mcp'))
     expect(response.status).toBe(401)
     const wwwAuth = response.headers.get('WWW-Authenticate')
