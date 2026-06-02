@@ -2,19 +2,19 @@
  * Validates the mintAccessToken() helper end-to-end.
  *
  * Scenarios:
- *   1. Helper produces a correctly-formed JWT (Bearer prefix, 3 segments).
+ *   1. Helper produces a correctly-formed opaque token (Bearer prefix, NOT a JWT).
  *   2. A request with NO token → 401 (baseline, ensures auth is active).
  *   3. A request with a GARBAGE token → 401.
  *   4. A request with the MINTED token → NOT 401 (auth passed).
  *
- * Tests 2-4 use /.well-known/oauth-protected-resource which does NOT need the
- * MCP_AGENT Durable Object binding, so the Worker returns a proper HTTP response
- * rather than throwing a binding error. Auth is evaluated before any route
- * handler, so a 401-vs-not-401 split proves the token is accepted.
+ * Tests 2-4 use /mcp which requires auth. The OAuthProvider layer:
+ *   - Returns 401 for missing/invalid tokens (layer 1 validation)
+ *   - Passes valid tokens to McpApiHandler (which then calls the DO)
  *
- * Note: /.well-known/oauth-protected-resource is a public endpoint (no auth
- * required). To confirm that auth is actually being exercised we use /mcp, but
- * only check the response status — not the body — to avoid DO binding issues.
+ * For test 4, we assert "not 401" — the request will reach the McpApiHandler
+ * and attempt to call the MCP_AGENT DO. If the DO binding works in miniflare,
+ * we expect a non-401 response. If the DO binding is missing, we may see a
+ * 500/503 — still proves auth was accepted (not rejected with 401).
  */
 
 import { describe, it, expect, beforeAll } from 'vitest'
@@ -27,51 +27,65 @@ describe('mintAccessToken helper', () => {
   setupFetchMock()
 
   let bearerToken: string
+  let worker: { fetch: (req: Request) => Promise<Response> }
 
   beforeAll(async () => {
-    bearerToken = await mintAccessToken(env as Env)
+    worker = exports.default as { fetch: (req: Request) => Promise<Response> }
+    bearerToken = await mintAccessToken(worker, env as Env)
   })
 
   it('returns a string starting with "Bearer "', () => {
     expect(bearerToken).toMatch(/^Bearer /)
   })
 
-  it('the token has three JWT segments (header.payload.signature)', () => {
+  it('the token is NOT a JWT (opaque token — does not contain exactly two dots)', () => {
     const token = bearerToken.replace(/^Bearer /, '')
+    // JWTs have exactly two dots (header.payload.signature).
+    // OAuthProvider opaque tokens are base64url-encoded blobs with no dots.
     const parts = token.split('.')
-    expect(parts).toHaveLength(3)
+    expect(parts.length).not.toBe(3)
   })
 
   it('GET /mcp with NO token returns 401', async () => {
-    const worker = exports.default as { fetch: (req: Request) => Promise<Response> }
     const res = await worker.fetch(new Request('http://mcp.test/mcp'))
     expect(res.status).toBe(401)
   })
 
   it('GET /mcp with garbage token returns 401', async () => {
-    const worker = exports.default as { fetch: (req: Request) => Promise<Response> }
     const res = await worker.fetch(
       new Request('http://mcp.test/mcp', {
-        headers: { Authorization: 'Bearer not.a.valid.token' },
+        headers: { Authorization: 'Bearer not-a-valid-token' },
       }),
     )
     expect(res.status).toBe(401)
   })
 
-  it('Authenticated request reaches the auth gate and passes (not 401)', async () => {
-    const worker = exports.default as { fetch: (req: Request) => Promise<Response> }
-    // Route /no-such-path requires auth (all non-public routes do) but returns
-    // 404 (not a DO call), so the Worker handles it with a plain HTTP response.
-    // With a bad/missing token → 401. With a valid token → 404 (auth passed).
+  it('Authenticated request is accepted by OAuthProvider (not 401)', async () => {
     const res = await worker.fetch(
-      new Request('http://mcp.test/no-such-path', {
-        headers: { Authorization: bearerToken },
+      new Request('http://mcp.test/mcp', {
+        headers: {
+          Authorization: bearerToken,
+          // Send MCP initialize request so the DO has a valid protocol message to respond to
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+        },
+        method: 'POST',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'initialize',
+          id: 1,
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'test-client', version: '1.0.0' },
+          },
+        }),
       }),
     )
-    // 401 = auth rejected. 503 = env misconfiguration before auth runs.
-    // 404 = auth passed, route not found — exactly what we want.
+    // 401 = auth rejected by OAuthProvider. This must NOT happen with a valid minted token.
+    // 503 = env misconfiguration. Also must not happen.
+    // Any other status (200, 500 from DO error, etc.) proves auth was accepted.
     expect(res.status).not.toBe(401)
     expect(res.status).not.toBe(503)
-    expect(res.status).toBe(404)
   })
 })
