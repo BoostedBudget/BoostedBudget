@@ -13,7 +13,7 @@
  * The resulting token is an OAuthProvider opaque token (starts with oat_ or similar,
  * NOT a JWT), which is what the Worker's OAuthProvider validates on every MCP request.
  *
- * setupFetchMock(): Registers beforeAll/afterAll hooks that install a global
+ * setupFetchMock(): Registers beforeEach/afterEach hooks that install a global
  *   fetch spy intercepting:
  *   - Clerk token introspection endpoint (assertNotRevoked in revocation.ts calls this)
  *   - Backend audit endpoint (fire-and-forget after tool calls)
@@ -41,10 +41,14 @@
  *   })
  */
 
-import { beforeAll, afterAll, vi } from 'vitest'
+import { beforeEach, afterEach, vi } from 'vitest'
 import { getOAuthApi } from '@cloudflare/workers-oauth-provider'
 import { oauthOptions } from '../../index'
 import type { Env } from '../../env'
+
+// --- Types -------------------------------------------------------------------
+
+type WorkerFetch = { fetch: (req: Request) => Promise<Response> }
 
 // --- Fetch interceptor -------------------------------------------------------
 // We intercept globalThis.fetch because the Worker runs in the same isolate as
@@ -93,13 +97,17 @@ export function handleBaseUrls(url: string, method: string): Response | null {
   return null
 }
 
+function extractUrlAndMethod(input: FetchInput, init?: FetchInit): [string, string] {
+  const url =
+    input instanceof Request ? input.url : input instanceof URL ? input.href : String(input)
+  const method = (input instanceof Request ? input.method : init?.method ?? 'GET').toUpperCase()
+  return [url, method]
+}
+
 function buildFetchSpy() {
   // Build a response factory for test URLs.
   async function mockFetch(input: FetchInput, init?: FetchInit): Promise<Response> {
-    const url =
-      input instanceof Request ? input.url : input instanceof URL ? input.href : String(input)
-    const method = (input instanceof Request ? input.method : init?.method ?? 'GET').toUpperCase()
-
+    const [url, method] = extractUrlAndMethod(input, init)
     const baseResponse = handleBaseUrls(url, method)
     if (baseResponse !== null) return baseResponse
 
@@ -129,10 +137,7 @@ function buildFetchSpy() {
  * Clerk revocation gate runs on the first authenticated MCP request and requires
  * the api.clerk.com interceptor to be in place.
  */
-export async function mintAccessToken(
-  worker: { fetch: (req: Request) => Promise<Response> },
-  env: Env,
-): Promise<string> {
+export async function mintAccessToken(worker: WorkerFetch, env: Env): Promise<string> {
   const helpers = getOAuthApi(oauthOptions, env)
 
   // 1. Register a test OAuth client (public client — no secret needed)
@@ -198,11 +203,15 @@ export async function mintAccessToken(
 }
 
 /**
- * Register beforeAll/afterAll hooks that manage a global fetch spy.
+ * Register beforeEach/afterEach hooks that manage a global fetch spy.
  *
  * Must be called inside a describe() block (or at the top level of a test file).
  * Only one active call at a time — do NOT nest or call from two describe blocks
  * concurrently, as vi.spyOn wraps globalThis.fetch and the spy/restore order matters.
+ *
+ * The spy is re-installed before every test and torn down (via vi.restoreAllMocks)
+ * after every test. This prevents afterEach(vi.restoreAllMocks) calls in consumer
+ * test files from stranding later tests (e.g. SSE smoke) without a fetch interceptor.
  *
  * The spy intercepts:
  *   - JWKS endpoint (throws loudly — should not be reached in integration tests)
@@ -214,16 +223,16 @@ export async function mintAccessToken(
  * buildFetchSpy() for globally needed interceptors.
  *
  * mintAccessToken() must be called after this mock is active (inside beforeAll or it).
+ * Because setupFetchMock uses beforeEach, the spy is active during beforeAll only if
+ * mintAccessToken is called from within an it() or a beforeEach that runs after this one.
+ * If mintAccessToken is called from beforeAll, install a separate spy in that beforeAll.
  */
 export function setupFetchMock(): void {
-  let spy: ReturnType<typeof vi.spyOn> | null = null
-
-  beforeAll(() => {
-    spy = vi.spyOn(globalThis, 'fetch').mockImplementation(buildFetchSpy())
+  beforeEach(() => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(buildFetchSpy())
   })
 
-  afterAll(() => {
-    spy?.mockRestore()
-    spy = null
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 }

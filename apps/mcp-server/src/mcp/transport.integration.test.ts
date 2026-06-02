@@ -15,15 +15,16 @@
  * See package.json test:integration:transport script.
  */
 
-import { describe, it, expect, beforeAll, vi, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { env } from 'cloudflare:test'
 import { exports } from 'cloudflare:workers'
 import type { Env } from '../env'
 import { mintAccessToken, setupFetchMock, handleBaseUrls } from '../test/helpers/mint-token'
+import { clearRevocationCache } from '../oauth/revocation'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type WorkerFetch = (req: Request) => Promise<Response>
+type WorkerFetch = { fetch: (req: Request) => Promise<Response> }
 
 interface JsonRpcResponse {
   jsonrpc: '2.0'
@@ -41,6 +42,14 @@ interface SendMcpResult {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/** Extract URL and HTTP method from Request/URL/string and RequestInit. */
+function extractUrlAndMethod(input: RequestInfo | URL, init?: RequestInit): [string, string] {
+  const url =
+    input instanceof Request ? input.url : input instanceof URL ? input.href : String(input)
+  const method = (input instanceof Request ? input.method : init?.method ?? 'GET').toUpperCase()
+  return [url, method]
+}
+
 /** Auto-incrementing JSON-RPC request ID — ensures each call gets a unique ID. */
 let _rpcId = 0
 
@@ -52,7 +61,7 @@ let _rpcId = 0
  * in the same logical session — the agents SDK uses it to route to the same DO).
  */
 async function sendMcp(
-  worker: { fetch: WorkerFetch },
+  worker: WorkerFetch,
   bearerToken: string,
   method: string,
   params: unknown,
@@ -115,7 +124,7 @@ async function sendMcp(
  * The session ID must be included in all subsequent requests to the same session.
  */
 async function initialize(
-  worker: { fetch: WorkerFetch },
+  worker: WorkerFetch,
   bearerToken: string,
   extraHeaders?: Record<string, string>,
 ): Promise<{ sessionId: string | undefined; serverName: string | undefined; protocolVersion: string | undefined }> {
@@ -163,9 +172,7 @@ type BackendInterceptor = {
 /** Create an extended fetch mock that handles a specific backend URL, delegating to base for others. */
 function makeExtendedFetchSpy(interceptors: BackendInterceptor[]) {
   return async function extendedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    const url =
-      input instanceof Request ? input.url : input instanceof URL ? input.href : String(input)
-    const method = (input instanceof Request ? input.method : init?.method ?? 'GET').toUpperCase()
+    const [url, method] = extractUrlAndMethod(input, init)
 
     // Check per-test interceptors first
     for (const interceptor of interceptors) {
@@ -199,16 +206,11 @@ describe('MCP transport integration', () => {
   setupFetchMock()
 
   let bearerToken: string
-  let worker: { fetch: WorkerFetch }
+  let worker: WorkerFetch
 
   beforeAll(async () => {
-    worker = exports.default as { fetch: WorkerFetch }
+    worker = exports.default as WorkerFetch
     bearerToken = await mintAccessToken(worker, env as Env)
-  })
-
-  // Restore any per-test spy overrides after each test
-  afterEach(() => {
-    vi.restoreAllMocks()
   })
 
   // ── Test 1 (Scenario 1): full MCP chain — initialize → tools/list → tools/call ──
@@ -501,8 +503,13 @@ describe('MCP transport integration', () => {
   // ── Test 4 (Scenario 5): SSE transport smoke ─────────────────────────────
 
   it('Scenario 5: GET /sse with bearer token does not return 401 or 503', async () => {
-    // SSE uses WebSocket-backed transport in the agents SDK.
-    // We just test that auth is accepted — not that streaming works end-to-end.
+    // SSE uses a WebSocket-backed DO transport in the agents SDK.
+    // We test that auth is accepted and the SSE stream opens — not streaming end-to-end.
+    //
+    // Expected status: 200 with Content-Type: text/event-stream.
+    // The legacy SSE handler (createLegacySseHandler in @cloudflare/agents) opens an SSE
+    // ReadableStream immediately and sends the initial "event: endpoint\n..." message.
+    // A 500 here would indicate the DO WebSocket upgrade failed, which is a real defect.
 
     const res = await worker.fetch(
       new Request('http://mcp.test/sse', {
@@ -516,12 +523,6 @@ describe('MCP transport integration', () => {
     // Auth must not be rejected (401) or misconfigured (503)
     expect(res.status).not.toBe(401)
     expect(res.status).not.toBe(503)
-
-    // Accepted outcomes:
-    //   101 — WebSocket upgrade (underlying transport for SSE-over-WS)
-    //   200 — SSE stream opened (older transport style)
-    //   Other — DO handling, connection refused at protocol level (e.g. 400 if
-    //           missing Upgrade header) — still means auth passed
 
     // Drain the body to avoid hanging the test (SSE streams don't auto-close)
     if (res.body) {
@@ -537,8 +538,63 @@ describe('MCP transport integration', () => {
       }
     }
 
-    // Final assertion: status was not an auth or config error
+    // The SSE handler returns 200 (text/event-stream) when auth passes and the
+    // DO WebSocket upgrade succeeds in the test environment (miniflare supports it).
+    // 101 would indicate a raw WebSocket upgrade (not used by the legacy SSE path).
     const status = res.status
-    expect([101, 200, 400, 404, 405, 426, 500]).toContain(status)
+    expect([101, 200]).toContain(status)
+  })
+
+  // ── Test 5 (Scenario 6): revoked token returns 401 ───────────────────────
+
+  it('Scenario 6: revoked token returns 401', async () => {
+    // Clear the per-isolate revocation cache so the token is not served from
+    // a prior "verified_active" entry cached by an earlier test (TTL = 30 s).
+    // Also clear at the end (try/finally) so the "revoked" entry written during
+    // this test does not bleed into later test files that share the same isolate
+    // (all tests use the same Clerk accessToken: 'oat_test_clerk_access_token').
+    clearRevocationCache()
+
+    try {
+      // Override the fetch spy to return "token not found" (HTTP 404) from Clerk —
+      // this is the response shape confirmed in the staging spike (issue #1224).
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const url =
+          input instanceof Request ? input.url : input instanceof URL ? input.href : String(input)
+        const method = (
+          input instanceof Request ? input.method : init?.method ?? 'GET'
+        ).toUpperCase()
+
+        // Simulate Clerk returning "token not found" (revoked) for the introspection call.
+        if (
+          url.includes('api.clerk.com/oauth_applications/access_tokens/verify') &&
+          method === 'POST'
+        ) {
+          return new Response(
+            JSON.stringify({ errors: [{ code: 'oauth_access_token_not_found' }] }),
+            { status: 404, headers: { 'Content-Type': 'application/json' } },
+          )
+        }
+
+        const base = handleBaseUrls(url, method)
+        if (base !== null) return base
+        throw new TypeError(`[Scenario 6] Unintercepted: ${method} ${url}`)
+      })
+
+      // Send an MCP initialize request with the OAuthProvider-valid bearer token.
+      // The token passes layer-1 (OAuthProvider), but the layer-2 Clerk introspection
+      // returns 404 → revoked, so assertNotRevoked throws and the gate returns 401.
+      const result = await sendMcp(worker, bearerToken, 'initialize', {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'test-client', version: '1.0.0' },
+      })
+
+      expect(result.status).toBe(401)
+    } finally {
+      // Always clear the cache after this test so the "revoked" entry for
+      // 'oat_test_clerk_access_token' does not poison subsequent test files.
+      clearRevocationCache()
+    }
   })
 })
