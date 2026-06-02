@@ -63,14 +63,14 @@ function buildFetchSpy() {
       input instanceof Request ? input.url : input instanceof URL ? input.href : String(input)
     const method = (input instanceof Request ? input.method : init?.method ?? 'GET').toUpperCase()
 
-    // JWKS endpoint — clerk-verifier.ts fetches this to verify Clerk JWTs.
-    // Not called in the test API path (OAuthProvider uses opaque tokens), but
-    // intercepted defensively so any accidental JWKS call fails loudly vs network error.
+    // JWKS endpoint — clerk-verifier.ts fetches this during the Clerk redirect flow.
+    // NOT called on the API path (OAuthProvider validates opaque tokens, not JWTs).
+    // Intercept here so an accidental JWKS call fails immediately with a clear message
+    // instead of a cryptic signature-verification error from an empty keyset.
     if (url.includes('/.well-known/jwks.json')) {
-      return new Response(JSON.stringify({ keys: [] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
+      throw new TypeError(
+        `[setupFetchMock] Unexpected JWKS fetch — clerk-verifier.ts should not be called in integration tests (OAuthProvider uses opaque tokens). URL: ${url}`,
+      )
     }
 
     // Clerk token introspection / revocation endpoint.
@@ -109,6 +109,10 @@ function buildFetchSpy() {
  * @param worker - The exported default Worker (from 'cloudflare:workers' exports.default)
  * @param env    - Worker env bindings (from vitest.config.ts miniflare bindings)
  * @returns "Bearer <opaque-token>" string ready for use as an Authorization header
+ *
+ * IMPORTANT: `setupFetchMock()` must be active before calling this function — the
+ * Clerk revocation gate runs on the first authenticated MCP request and requires
+ * the api.clerk.com interceptor to be in place.
  */
 export async function mintAccessToken(
   worker: { fetch: (req: Request) => Promise<Response> },
@@ -182,13 +186,19 @@ export async function mintAccessToken(
  * Register beforeAll/afterAll hooks that manage a global fetch spy.
  *
  * Must be called inside a describe() block (or at the top level of a test file).
+ * Only one active call at a time — do NOT nest or call from two describe blocks
+ * concurrently, as vi.spyOn wraps globalThis.fetch and the spy/restore order matters.
  *
  * The spy intercepts:
- *   - Clerk token introspection / revocation (POST api.clerk.com/oauth_applications/access_tokens/verify)
+ *   - JWKS endpoint (throws loudly — should not be reached in integration tests)
+ *   - Clerk token introspection / revocation (POST api.clerk.com/.../verify)
  *   - Backend audit endpoint (fire-and-forget after tool calls)
  *
- * Per-tool backend API mocks should use vi.spyOn(globalThis, 'fetch') per-test,
- * or extend the interceptor table in buildFetchSpy().
+ * Per-tool backend API mocks (e.g. specific tool call responses) should be added
+ * as additional vi.spyOn wrappers per-test, or extend the interceptor table in
+ * buildFetchSpy() for globally needed interceptors.
+ *
+ * mintAccessToken() must be called after this mock is active (inside beforeAll or it).
  */
 export function setupFetchMock(): void {
   let spy: ReturnType<typeof vi.spyOn> | null = null
