@@ -59,34 +59,112 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: true,
     // Vite 8 uses Rolldown internally; rolldownOptions is the preferred API.
-    // rollupOptions is kept for backwards-compat tooling (e.g. size-limit plugins).
     rolldownOptions: {
       output: {
         entryFileNames: 'assets/entry-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash][extname]',
-        manualChunks(id: string) {
-          // TanStack table/virtual isolated from vendor so its budget is tracked separately
-          if (/@tanstack\/react-table|@tanstack\/react-virtual|@dnd-kit/.test(id)) return 'tanstack';
+        // Rolldown 1.0.x: manualChunks function form is a no-op for node_modules;
+        // use codeSplitting.groups (the non-deprecated API) instead.
+        // includeDependenciesRecursively:false prevents the tanstack group from
+        // vacuuming React / Clerk subtrees via recursive dep capture.
+        codeSplitting: {
+          includeDependenciesRecursively: false,
+          groups: [
+            // ── node_modules splits ──────────────────────────────────────────
+            // tanstack: all @tanstack/* packages + @dnd-kit isolated into a
+            // dedicated chunk, budgeted separately in .size-limit.json.
+            // Broad regex avoids silent omissions if new @tanstack packages are
+            // added. Higher priority wins over the vendor catch-all below.
+            {
+              name: 'tanstack',
+              test: /node_modules\/(@tanstack\/|@dnd-kit\/)/,
+              priority: 20,
+            },
+            // echarts: ~500 KB raw; isolated so dashboard chunk stays lean and
+            // size-limit can budget it independently from general vendor code.
+            {
+              name: 'charts',
+              test: /node_modules\/(echarts|zrender|echarts-for-react)\//,
+              priority: 15,
+            },
+            // vendor: stable catch-all bucket for all remaining node_modules.
+            // Lower priority than tanstack / charts so those win first.
+            {
+              name: 'vendor',
+              test: /node_modules\//,
+              priority: 10,
+            },
 
-          // Stable budgetable vendor bucket — prevents Rolldown from emitting
-          // auto-named common chunks that slip past size-limit
-          if (id.includes('node_modules')) return 'vendor';
-
-          if (!id.includes('/apps/web/src/')) return;
-          if (id.includes('/legal/')) return 'legal';
-          if (id.includes('/features/admin/')) return 'admin';
-          if (id.includes('/features/billing/') || id.includes('/features/pricing/') || id.includes('/features/subscription/')) return 'billing';
-          if (id.includes('/features/transactions/')) return 'transactions';
-          if (id.includes('/features/accounts/')) return 'accounts';
-          if (id.includes('/features/budgets/')) return 'budgets';
-          if (id.includes('/features/rules/')) return 'rules';
-          if (id.includes('/features/dashboard/')) return 'dashboard';
-          if (id.includes('/features/reports/')) return 'reports';
-          if (id.includes('/features/net-worth/')) return 'net-worth';
-          if (id.includes('/features/savings/')) return 'savings';
-          if (id.includes('/features/auto-categorization/')) return 'auto-categorization';
-          if (id.includes('/features/profile/') || id.includes('/features/deletion/')) return 'profile';
+            // ── per-feature route splits ─────────────────────────────────────
+            // Mirror the old manualChunks branches so lazy routes keep their own
+            // chunk and don't inflate the shared vendor bucket.
+            {
+              name: 'legal',
+              test: /\/apps\/web\/src\/legal\//,
+              priority: 5,
+            },
+            {
+              name: 'admin',
+              test: /\/apps\/web\/src\/features\/admin\//,
+              priority: 5,
+            },
+            {
+              name: 'billing',
+              test: /\/apps\/web\/src\/features\/(billing|pricing|subscription)\//,
+              priority: 5,
+            },
+            {
+              name: 'transactions',
+              test: /\/apps\/web\/src\/features\/transactions\//,
+              priority: 5,
+            },
+            {
+              name: 'accounts',
+              test: /\/apps\/web\/src\/features\/accounts\//,
+              priority: 5,
+            },
+            {
+              name: 'budgets',
+              test: /\/apps\/web\/src\/features\/budgets\//,
+              priority: 5,
+            },
+            {
+              name: 'rules',
+              test: /\/apps\/web\/src\/features\/rules\//,
+              priority: 5,
+            },
+            {
+              name: 'dashboard',
+              test: /\/apps\/web\/src\/features\/dashboard\//,
+              priority: 5,
+            },
+            {
+              name: 'reports',
+              test: /\/apps\/web\/src\/features\/reports\//,
+              priority: 5,
+            },
+            {
+              name: 'net-worth',
+              test: /\/apps\/web\/src\/features\/net-worth\//,
+              priority: 5,
+            },
+            {
+              name: 'savings',
+              test: /\/apps\/web\/src\/features\/savings\//,
+              priority: 5,
+            },
+            {
+              name: 'auto-categorization',
+              test: /\/apps\/web\/src\/features\/auto-categorization\//,
+              priority: 5,
+            },
+            {
+              name: 'profile',
+              test: /\/apps\/web\/src\/features\/(profile|deletion)\//,
+              priority: 5,
+            },
+          ],
         },
       },
     },
