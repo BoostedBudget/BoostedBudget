@@ -144,7 +144,9 @@ func (m *mockTransactionRepoForBudget) GetTransactionsForBudgetCategory(ctx cont
 
 // Implement all required TransactionRepository methods as no-ops
 func (m *mockTransactionRepoForBudget) Create(ctx context.Context, tx *domain.Transaction) error { return nil }
-func (m *mockTransactionRepoForBudget) CreateBatch(ctx context.Context, txs []domain.Transaction) error { return nil }
+func (m *mockTransactionRepoForBudget) CreateBatch(ctx context.Context, txs []domain.Transaction) (map[string]bool, error) {
+	return nil, nil
+}
 func (m *mockTransactionRepoForBudget) Update(ctx context.Context, tx *domain.Transaction) error { return nil }
 func (m *mockTransactionRepoForBudget) DeleteByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) error { return nil }
 func (m *mockTransactionRepoForBudget) GetByUserID(ctx context.Context, userID string, limit, offset int) ([]domain.Transaction, error) { return nil, nil }

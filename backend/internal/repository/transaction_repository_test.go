@@ -147,15 +147,19 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 	// Expect batch INSERT with multiple value sets (32 fields per transaction * 2 transactions = 64 args)
 	// Issue #171: user_account_id; Issue #1123: effective_category_name; Issue #1163: merchant_id
 	// Issue #1203: category override columns (4) + category_source + reviewed + reviewed_at
+	// Issue #1213: RETURNING id, (xmax::text::bigint = 0) AS inserted
 	args := make([]interface{}, 64)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
-	mock.ExpectExec("INSERT INTO transactions").
+	rows := pgxmock.NewRows([]string{"id", "inserted"}).
+		AddRow("test-id-1", true).
+		AddRow("test-id-2", true)
+	mock.ExpectQuery("INSERT INTO transactions").
 		WithArgs(args...).
-		WillReturnResult(pgxmock.NewResult("INSERT", 2))
+		WillReturnRows(rows)
 
-	err = repo.CreateBatch(ctx, transactions)
+	_, err = repo.CreateBatch(ctx, transactions)
 	assert.NoError(t, err)
 
 	err = mock.ExpectationsWereMet()
@@ -2286,15 +2290,18 @@ func TestTransactionRepository_CreateBatch_WithUserAccountID(t *testing.T) {
 	}
 
 	// Expect batch INSERT (32 fields per transaction; Issue #1203 added override columns + review state)
+	// Issue #1213: RETURNING id, (xmax::text::bigint = 0) AS inserted
 	args := make([]interface{}, 32)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
-	mock.ExpectExec("INSERT INTO transactions").
+	rows := pgxmock.NewRows([]string{"id", "inserted"}).
+		AddRow("test-id-relink-1", true)
+	mock.ExpectQuery("INSERT INTO transactions").
 		WithArgs(args...).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+		WillReturnRows(rows)
 
-	err = repo.CreateBatch(ctx, transactions)
+	_, err = repo.CreateBatch(ctx, transactions)
 	assert.NoError(t, err)
 
 	err = mock.ExpectationsWereMet()
@@ -2335,13 +2342,15 @@ func TestTransactionRepository_CreateBatch_DOUpdateBehavior(t *testing.T) {
 		args[i] = pgxmock.AnyArg()
 	}
 
-	// The query should use ON CONFLICT DO UPDATE (not DO NOTHING)
-	// This test verifies the query structure includes DO UPDATE
-	mock.ExpectExec("ON CONFLICT.*DO UPDATE").
+	// The query should use ON CONFLICT DO UPDATE (not DO NOTHING) and RETURNING xmax
+	// Issue #1213: RETURNING id, (xmax::text::bigint = 0) AS inserted
+	rows := pgxmock.NewRows([]string{"id", "inserted"}).
+		AddRow("test-do-update-id", false) // conflict-updated row: inserted=false
+	mock.ExpectQuery("ON CONFLICT.*DO UPDATE").
 		WithArgs(args...).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+		WillReturnRows(rows)
 
-	err = repo.CreateBatch(ctx, transactions)
+	_, err = repo.CreateBatch(ctx, transactions)
 	assert.NoError(t, err)
 
 	err = mock.ExpectationsWereMet()
@@ -2382,16 +2391,86 @@ func TestTransactionRepository_CreateBatch_PersistsOverrideAndReview(t *testing.
 	}
 
 	// The INSERT must include the new override + review columns.
+	// Issue #1213: RETURNING id, (xmax::text::bigint = 0) AS inserted
 	args := make([]interface{}, 32)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
-	mock.ExpectExec("category_override_kind, pfc_primary_override, pfc_detailed_override, custom_category_override_id,[\\s]+category_source, reviewed, reviewed_at").
+	rows := pgxmock.NewRows([]string{"id", "inserted"}).
+		AddRow("test-override-id", true)
+	mock.ExpectQuery("category_override_kind, pfc_primary_override, pfc_detailed_override, custom_category_override_id,[\\s]+category_source, reviewed, reviewed_at").
 		WithArgs(args...).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+		WillReturnRows(rows)
 
-	require.NoError(t, repo.CreateBatch(ctx, transactions))
+	_, err = repo.CreateBatch(ctx, transactions)
+	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestTransactionRepository_CreateBatch_ReturnsInsertedIDs verifies that CreateBatch
+// returns (map[string]bool, error) where the map identifies genuinely inserted rows.
+// Issue #1213: This enables callers to gate analytics/match-count side-effects on
+// freshly inserted rows only, avoiding over-counting when ON CONFLICT DO UPDATE
+// preserves existing category/review fields on a conflicting row.
+func TestTransactionRepository_CreateBatch_ReturnsInsertedIDs(t *testing.T) {
+	mockDB, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mockDB.Close()
+
+	repo := NewTransactionRepository(mockDB, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	freshID := uuid.New().String()
+	conflictExistingID := uuid.New().String() // the id returned for the conflict row is the EXISTING row's id
+	externalID1 := "plaid_tx_fresh"
+	externalID2 := "plaid_tx_conflict"
+
+	transactions := []domain.Transaction{
+		{
+			ID:                    freshID,
+			UserID:                "user-123",
+			AccountID:             "account-123",
+			LinkedItemID:          "item-123",
+			Source:                domain.SourcePlaid,
+			ExternalTransactionID: &externalID1,
+			Amount:                -50.00,
+			Date:                  time.Now(),
+			Name:                  "Fresh Transaction",
+		},
+		{
+			ID:                    conflictExistingID, // pre-assigned; on conflict RETURNING returns the existing row id
+			UserID:                "user-123",
+			AccountID:             "account-123",
+			LinkedItemID:          "item-123",
+			Source:                domain.SourcePlaid,
+			ExternalTransactionID: &externalID2,
+			Amount:                -25.00,
+			Date:                  time.Now(),
+			Name:                  "Conflict Transaction",
+		},
+	}
+
+	// RETURNING id, (xmax::text::bigint = 0) AS inserted
+	// Fresh insert: our pre-assigned id, xmax=0 (inserted=true)
+	// Conflict update: existing row id, xmax!=0 (inserted=false)
+	rows := pgxmock.NewRows([]string{"id", "inserted"}).
+		AddRow(freshID, true).
+		AddRow(conflictExistingID, false)
+
+	args := make([]interface{}, 64) // 32 fields * 2 rows
+	for i := range args {
+		args[i] = pgxmock.AnyArg()
+	}
+	mockDB.ExpectQuery("INSERT INTO transactions").
+		WithArgs(args...).
+		WillReturnRows(rows)
+
+	insertedIDs, err := repo.CreateBatch(ctx, transactions)
+
+	require.NoError(t, err)
+	assert.True(t, insertedIDs[freshID], "fresh insert should be in insertedIDs")
+	assert.False(t, insertedIDs[conflictExistingID], "conflict-preserved row should NOT be in insertedIDs")
+	require.NoError(t, mockDB.ExpectationsWereMet())
 }
 
 // TestTransactionRepository_GetByUserAccountID tests retrieval by stable user_account_id

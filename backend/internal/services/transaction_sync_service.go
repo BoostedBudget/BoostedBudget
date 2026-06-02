@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
@@ -361,6 +362,40 @@ func (s *transactionSyncService) SyncTransactions(
 // Issue #261: Transaction Storage Logic - Helper Methods
 // ============================================================================
 
+// upsertMerchants deduplicates and batch-upserts merchant names, returning a map
+// of merchant_name -> merchant UUID. Returns nil if upserting fails or no merchants found.
+// Non-blocking: logs warnings but doesn't fail the sync.
+func (s *transactionSyncService) upsertMerchants(ctx context.Context, transactions []domain.Transaction) map[string]string {
+	if s.merchantRepo == nil {
+		return nil
+	}
+
+	// Deduplicate merchant names
+	nameSet := make(map[string]struct{})
+	for _, txn := range transactions {
+		if txn.MerchantName != nil && *txn.MerchantName != "" {
+			nameSet[*txn.MerchantName] = struct{}{}
+		}
+	}
+
+	if len(nameSet) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(nameSet))
+	for name := range nameSet {
+		names = append(names, name)
+	}
+
+	merchantIDs, err := s.merchantRepo.GetOrCreateMerchants(ctx, names)
+	if err != nil {
+		s.logger.Warn("failed to upsert merchants, continuing without merchant_id", "err", err)
+		return nil
+	}
+
+	return merchantIDs
+}
+
 // buildAccountMaps builds both accountMap and userAccountMap for transaction mapping.
 // Issue #171: userAccountMap provides stable UserAccountID that survives re-links.
 // Returns:
@@ -464,56 +499,60 @@ func (s *transactionSyncService) processAddedTransactions(
 		return nil
 	}
 
-	// Issue #346: Apply categorization rules to transactions before storing
-	// This applies user-defined rules to automatically categorize and tag transactions.
-	// Rules are applied in-place, modifying the transaction slice.
+	// Issue #1213: Pre-assign UUIDs before rule application so that the IDs used
+	// to key BatchRuleApplication records match the ids returned by CreateBatch's
+	// RETURNING clause.  CreateBatch preserves pre-assigned IDs via its
+	// `if tx.ID == ""` guard, so this is safe.
+	for i := range transactions {
+		if transactions[i].ID == "" {
+			transactions[i].ID = uuid.New().String()
+		}
+	}
+
+	// Issue #346: Apply categorization rules to transactions before storing.
+	// Rules are applied in-place.  Side-effects (analytics/match-count) are
+	// deferred to EmitBatchSideEffects after CreateBatch so they are gated on
+	// genuine inserts only (Issue #1213).
+	var ruleApplications []BatchRuleApplication
 	if s.ruleApplicationService != nil {
-		if err := s.ruleApplicationService.ApplyRulesToBatch(ctx, transactions, linkedItem.UserID); err != nil {
+		apps, err := s.ruleApplicationService.ApplyRulesToBatch(ctx, transactions, linkedItem.UserID)
+		if err != nil {
 			// Log but don't fail - rule application is non-critical
 			s.logger.Warn("failed to apply categorization rules", "error", err)
+		} else {
+			ruleApplications = apps
 		}
 	}
 
 	// Issue #1163: Batch-upsert merchants and stamp merchant_id (one DB round-trip, best-effort)
-	if s.merchantRepo != nil {
-		nameSet := make(map[string]struct{})
-		for _, txn := range transactions {
-			if txn.MerchantName != nil && *txn.MerchantName != "" {
-				nameSet[*txn.MerchantName] = struct{}{}
-			}
-		}
-		if len(nameSet) > 0 {
-			names := make([]string, 0, len(nameSet))
-			for name := range nameSet {
-				names = append(names, name)
-			}
-			merchantIDs, err := s.merchantRepo.GetOrCreateMerchants(ctx, names)
-			if err != nil {
-				// Non-blocking: merchant_id is best-effort, sync must not fail
-				s.logger.Warn("failed to upsert merchants, continuing without merchant_id", "err", err)
-			} else {
-				for i := range transactions {
-					if transactions[i].MerchantName != nil {
-						if id, ok := merchantIDs[*transactions[i].MerchantName]; ok {
-							transactions[i].MerchantID = &id
-						}
-					}
+	merchantIDs := s.upsertMerchants(ctx, transactions)
+	if merchantIDs != nil {
+		for i := range transactions {
+			if transactions[i].MerchantName != nil {
+				if id, ok := merchantIDs[*transactions[i].MerchantName]; ok {
+					transactions[i].MerchantID = &id
 				}
 			}
 		}
 	}
 
-	// Store in database (ON CONFLICT DO NOTHING handles deduplication)
-	if err := s.transactionRepo.CreateBatch(ctx, transactions); err != nil {
+	// Store in database (ON CONFLICT DO UPDATE preserves user enrichments on conflict).
+	insertedIDs, err := s.transactionRepo.CreateBatch(ctx, transactions)
+	if err != nil {
 		return fmt.Errorf("failed to create batch of %d transactions: %w", len(transactions), err)
 	}
 
 	s.logger.Info("stored added transactions", "stored", len(transactions), "skipped", len(added)-len(transactions))
 
-	// Issue #36: Monitor for transfer suggestion matches (non-blocking)
-	// Auto-accept pending suggestions that match newly synced transactions.
+	// Issue #1213: Emit analytics/match-count side-effects only for genuinely inserted rows.
+	if s.ruleApplicationService != nil && len(ruleApplications) > 0 {
+		s.ruleApplicationService.EmitBatchSideEffects(ctx, linkedItem.UserID, ruleApplications, insertedIDs)
+	}
+
+	// Issue #36: Monitor for transfer suggestion matches (non-blocking).
+	// All persisted transactions are passed (inserted + conflict-updated), because the
+	// monitor has intentional post-relink matching semantics via stable UserAccountID.
 	if s.transactionMonitorService != nil {
-		// Convert to pointer slice for monitor service
 		txnPtrs := make([]*domain.Transaction, len(transactions))
 		for i := range transactions {
 			txnPtrs[i] = &transactions[i]
@@ -555,30 +594,15 @@ func (s *transactionSyncService) processModifiedTransactions(
 	successCount := 0
 	skippedCount := 0
 
-	// Issue #1163: Batch-upsert merchants and stamp merchant_id (one DB round-trip, best-effort)
-	// Mirrors processAddedTransactions. If upsert fails, Update proceeds with merchant_id = nil.
-	var merchantIDs map[string]string
-	if s.merchantRepo != nil {
-		nameSet := make(map[string]struct{})
-		for _, plaidTxn := range modified {
-			if mn := plaidTxn.MerchantName.Get(); mn != nil && *mn != "" {
-				nameSet[*mn] = struct{}{}
-			}
-		}
-		if len(nameSet) > 0 {
-			names := make([]string, 0, len(nameSet))
-			for name := range nameSet {
-				names = append(names, name)
-			}
-			ids, err := s.merchantRepo.GetOrCreateMerchants(ctx, names)
-			if err != nil {
-				// Non-blocking: merchant_id is best-effort, sync must not fail
-				s.logger.Warn("failed to upsert merchants, continuing without merchant_id", "err", err)
-			} else {
-				merchantIDs = ids
-			}
+	// Issue #1163: Batch-upsert merchants for modified transactions (best-effort)
+	// Build domain txns temporarily just to use shared upsertMerchants helper
+	modifiedDomainTxns := make([]domain.Transaction, len(modified))
+	for i, plaidTxn := range modified {
+		if mn := plaidTxn.MerchantName.Get(); mn != nil {
+			modifiedDomainTxns[i].MerchantName = mn
 		}
 	}
+	merchantIDs := s.upsertMerchants(ctx, modifiedDomainTxns)
 
 	for _, plaidTxn := range modified {
 		// Map Plaid transaction to domain.Transaction (new data from Plaid)

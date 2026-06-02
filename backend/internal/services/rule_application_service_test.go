@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -271,7 +272,7 @@ func TestRuleApplicationService_ApplyRulesToBatch(t *testing.T) {
 	}
 
 	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
-	mockRepo.On("IncrementMatchCount", ctx, "rule-1").Return(nil)
+	// IncrementMatchCount is NOT called by ApplyRulesToBatch (deferred to EmitBatchSideEffects).
 
 	merchant1 := "Starbucks Coffee"
 	merchant2 := "Walmart"
@@ -280,13 +281,14 @@ func TestRuleApplicationService_ApplyRulesToBatch(t *testing.T) {
 		{ID: "tx-2", UserID: userID, MerchantName: &merchant2},
 	}
 
-	err := service.ApplyRulesToBatch(ctx, txns, userID)
+	_, err := service.ApplyRulesToBatch(ctx, txns, userID)
 
 	require.NoError(t, err)
 	// First transaction should match
 	assert.Equal(t, domain.CategorySourceRule, txns[0].CategorySourceField)
 	// Second transaction should NOT match (no coffee in name)
 	assert.Equal(t, domain.CategorySource(""), txns[1].CategorySourceField)
+	mockRepo.AssertNotCalled(t, "IncrementMatchCount", mock.Anything, mock.Anything)
 }
 
 // TestRuleApplicationService_ApplyRulesToBatch_MarksReviewed verifies that a batch
@@ -304,14 +306,16 @@ func TestRuleApplicationService_ApplyRulesToBatch_MarksReviewed(t *testing.T) {
 		TagBehavior: "add", Source: "manual",
 	}}
 	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
-	mockRepo.On("IncrementMatchCount", ctx, "rule-1").Return(nil)
+	// IncrementMatchCount is NOT called by ApplyRulesToBatch (deferred to EmitBatchSideEffects).
 
 	merchant := "Blue Bottle Coffee"
 	txns := []domain.Transaction{{ID: "tx-1", UserID: userID, MerchantName: &merchant}}
 
-	require.NoError(t, service.ApplyRulesToBatch(ctx, txns, userID))
+	_, err := service.ApplyRulesToBatch(ctx, txns, userID)
+	require.NoError(t, err)
 	assert.True(t, txns[0].Reviewed, "batch category match should mark reviewed")
 	require.NotNil(t, txns[0].ReviewedAt)
+	mockRepo.AssertNotCalled(t, "IncrementMatchCount", mock.Anything, mock.Anything)
 }
 
 // TestRuleApplicationService_ApplyRulesToBatch_SkipsReviewed verifies reviewed rows
@@ -333,7 +337,8 @@ func TestRuleApplicationService_ApplyRulesToBatch_SkipsReviewed(t *testing.T) {
 	merchant := "Blue Bottle Coffee"
 	txns := []domain.Transaction{{ID: "tx-1", UserID: userID, MerchantName: &merchant, Reviewed: true}}
 
-	require.NoError(t, service.ApplyRulesToBatch(ctx, txns, userID))
+	_, err := service.ApplyRulesToBatch(ctx, txns, userID)
+	require.NoError(t, err)
 	assert.Nil(t, txns[0].CategoryOverrideKind, "reviewed transaction must not be recategorized in batch")
 }
 
@@ -453,6 +458,241 @@ func strPtr(s string) *string {
 	return &s
 }
 
+// ---------------------------------------------------------------------------
+// mockAnalyticsForRuleService — test double for phclient.Analytics.
+// Pattern from internal/queue/jobs/email_change_propagation_test.go.
+// ---------------------------------------------------------------------------
+
+type mockAnalyticsForRuleService struct {
+	mock.Mock
+}
+
+func (m *mockAnalyticsForRuleService) Capture(distinctID, event string, properties map[string]interface{}) {
+	m.Called(distinctID, event, properties)
+}
+
+func (m *mockAnalyticsForRuleService) Identify(distinctID string, properties map[string]interface{}) {
+	m.Called(distinctID, properties)
+}
+
+func (m *mockAnalyticsForRuleService) Close() {
+	m.Called()
+}
+
+// ---------------------------------------------------------------------------
+// Issue #1213 — RED tests: ApplyRulesToBatch returns BatchRuleApplication
+// slice and emits NO side-effects; EmitBatchSideEffects gates on insertedIDs.
+// ---------------------------------------------------------------------------
+
+// TestRuleApplicationService_ApplyRulesToBatch_ReturnsBatchApplications_NoSideEffects
+// verifies the new contract: ApplyRulesToBatch returns one BatchRuleApplication
+// per matched transaction and does NOT call analytics.Capture or
+// IncrementMatchCount (those are deferred to EmitBatchSideEffects).
+func TestRuleApplicationService_ApplyRulesToBatch_ReturnsBatchApplications_NoSideEffects(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	mockAn := new(mockAnalyticsForRuleService)
+	service := NewRuleApplicationService(mockRepo)
+	service.SetAnalytics(mockAn)
+	ctx := context.Background()
+	userID := "user-1213"
+
+	rules := []*domain.CategorizationRule{{
+		ID: "rule-cat", UserID: userID, Name: "Coffee", Enabled: true, Priority: 10,
+		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}},
+		ConditionLogic: "AND", TargetKind: strPtr("pfc"), TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+		TagBehavior: "add", Source: "manual",
+	}}
+	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
+	// IncrementMatchCount must NOT be called — emitting counts is deferred.
+
+	merchant := "Blue Bottle Coffee"
+	txns := []domain.Transaction{{ID: "tx-fresh", UserID: userID, MerchantName: &merchant}}
+
+	applications, err := service.ApplyRulesToBatch(ctx, txns, userID)
+
+	require.NoError(t, err)
+	require.Len(t, applications, 1, "one application per matched transaction")
+	assert.Equal(t, "tx-fresh", applications[0].TransactionID)
+	assert.True(t, applications[0].CategoryApplied)
+	assert.Equal(t, "rule-cat", applications[0].CategoryRuleID)
+	assert.Contains(t, applications[0].MatchedRuleIDs, "rule-cat")
+
+	// No analytics, no match-count increments in the apply phase.
+	mockAn.AssertNotCalled(t, "Capture", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "IncrementMatchCount", mock.Anything, mock.Anything)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestRuleApplicationService_EmitBatchSideEffects_OnlyEmitsForInsertedRows
+// verifies that analytics and match-count increments fire only for rows whose
+// ID appears in insertedIDs (i.e. were genuinely inserted, not conflict-preserved).
+func TestRuleApplicationService_EmitBatchSideEffects_OnlyEmitsForInsertedRows(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	mockAn := new(mockAnalyticsForRuleService)
+	service := NewRuleApplicationService(mockRepo)
+	service.SetAnalytics(mockAn)
+	ctx := context.Background()
+	userID := "user-1213"
+
+	applications := []BatchRuleApplication{
+		{TransactionID: "tx-inserted", MatchedRuleIDs: []string{"rule-1"}, CategoryApplied: true, CategoryRuleID: "rule-1"},
+		{TransactionID: "tx-conflict", MatchedRuleIDs: []string{"rule-1"}, CategoryApplied: true, CategoryRuleID: "rule-1"},
+	}
+	insertedIDs := map[string]bool{"tx-inserted": true}
+
+	mockAn.On("Capture", userID, mock.AnythingOfType("string"), mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["transaction_id"] == "tx-inserted"
+	})).Return()
+	mockRepo.On("IncrementMatchCount", ctx, "rule-1").Return(nil).Once()
+
+	service.EmitBatchSideEffects(ctx, userID, applications, insertedIDs)
+
+	// Only one Capture and one IncrementMatchCount for tx-inserted.
+	mockAn.AssertNumberOfCalls(t, "Capture", 1)
+	mockRepo.AssertNumberOfCalls(t, "IncrementMatchCount", 1)
+	mockAn.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestRuleApplicationService_EmitBatchSideEffects_TagOnlyInserted_CountsButNoAnalytics
+// verifies that a tag-only match in an inserted row increments the match count
+// but does NOT emit an auto_categorization_executed event.
+func TestRuleApplicationService_EmitBatchSideEffects_TagOnlyInserted_CountsButNoAnalytics(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	mockAn := new(mockAnalyticsForRuleService)
+	service := NewRuleApplicationService(mockRepo)
+	service.SetAnalytics(mockAn)
+	ctx := context.Background()
+	userID := "user-1213"
+
+	// Tag-only: CategoryApplied=false, CategoryRuleID="", but MatchedRuleIDs present.
+	applications := []BatchRuleApplication{
+		{TransactionID: "tx-tag-only", MatchedRuleIDs: []string{"rule-tag"}, CategoryApplied: false, CategoryRuleID: ""},
+	}
+	insertedIDs := map[string]bool{"tx-tag-only": true}
+
+	mockRepo.On("IncrementMatchCount", ctx, "rule-tag").Return(nil).Once()
+
+	service.EmitBatchSideEffects(ctx, userID, applications, insertedIDs)
+
+	mockAn.AssertNotCalled(t, "Capture", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestRuleApplicationService_EmitBatchSideEffects_MixedBatch verifies the full
+// combination: some rows inserted, some conflict-preserved; only the inserted
+// row's side-effects fire.
+func TestRuleApplicationService_EmitBatchSideEffects_MixedBatch(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	mockAn := new(mockAnalyticsForRuleService)
+	service := NewRuleApplicationService(mockRepo)
+	service.SetAnalytics(mockAn)
+	ctx := context.Background()
+	userID := "user-1213"
+
+	applications := []BatchRuleApplication{
+		// inserted — category rule applied
+		{TransactionID: "tx-new", MatchedRuleIDs: []string{"rule-cat"}, CategoryApplied: true, CategoryRuleID: "rule-cat"},
+		// conflict-preserved — same rule matched but upsert preserved existing fields
+		{TransactionID: "tx-old", MatchedRuleIDs: []string{"rule-cat"}, CategoryApplied: true, CategoryRuleID: "rule-cat"},
+		// inserted but no rule matched — not in applications at all (represented by absent application)
+	}
+	insertedIDs := map[string]bool{"tx-new": true} // tx-old NOT inserted
+
+	mockAn.On("Capture", userID, mock.AnythingOfType("string"), mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["transaction_id"] == "tx-new"
+	})).Return()
+	mockRepo.On("IncrementMatchCount", ctx, "rule-cat").Return(nil).Once()
+
+	service.EmitBatchSideEffects(ctx, userID, applications, insertedIDs)
+
+	mockAn.AssertNumberOfCalls(t, "Capture", 1)
+	mockRepo.AssertNumberOfCalls(t, "IncrementMatchCount", 1)
+	mockAn.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestRuleApplicationService_EmitBatchSideEffects_UsesCategoryRuleID verifies
+// that auto_categorization_executed emits the CategoryRuleID (the rule that
+// actually applied the category), not MatchedRuleIDs[0] (which may be a
+// higher-priority tag-only rule that matched earlier).
+func TestRuleApplicationService_EmitBatchSideEffects_UsesCategoryRuleID(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	mockAn := new(mockAnalyticsForRuleService)
+	service := NewRuleApplicationService(mockRepo)
+	service.SetAnalytics(mockAn)
+	ctx := context.Background()
+	userID := "user-1213"
+
+	// rule-tag-high matched first (priority 20), rule-cat-low set the category (priority 10).
+	applications := []BatchRuleApplication{{
+		TransactionID:   "tx-1",
+		MatchedRuleIDs:  []string{"rule-tag-high", "rule-cat-low"}, // tag rule is [0]
+		CategoryApplied: true,
+		CategoryRuleID:  "rule-cat-low", // engine sets this to the actual category rule
+	}}
+	insertedIDs := map[string]bool{"tx-1": true}
+
+	// Expect analytics with rule_id = "rule-cat-low", NOT "rule-tag-high".
+	mockAn.On("Capture", userID, mock.AnythingOfType("string"), mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["rule_id"] == "rule-cat-low"
+	})).Return()
+	mockRepo.On("IncrementMatchCount", ctx, "rule-tag-high").Return(nil).Once()
+	mockRepo.On("IncrementMatchCount", ctx, "rule-cat-low").Return(nil).Once()
+
+	service.EmitBatchSideEffects(ctx, userID, applications, insertedIDs)
+
+	mockAn.AssertNumberOfCalls(t, "Capture", 1)
+	mockAn.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestRuleApplicationService_ApplyRulesToTransaction_UsesCategoryRuleID_ForAnalytics
+// verifies that the single-transaction path emits auto_categorization_executed using
+// CategoryRuleID (the rule that actually set the category), NOT MatchedRuleIDs[0]
+// which may be a higher-priority tag-only rule (Issue #1213).
+// This is the single-transaction counterpart of EmitBatchSideEffects_UsesCategoryRuleID.
+func TestRuleApplicationService_ApplyRulesToTransaction_UsesCategoryRuleID_ForAnalytics(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	mockAn := new(mockAnalyticsForRuleService)
+	service := NewRuleApplicationService(mockRepo)
+	service.SetAnalytics(mockAn)
+	ctx := context.Background()
+	userID := "user-1213"
+
+	// rule-tag-high: priority 20, tag-only — matches first, so MatchedRuleIDs[0] = "rule-tag-high" (WRONG attribution)
+	// rule-cat-low:  priority 10, category — CategoryRuleID = "rule-cat-low" (CORRECT attribution)
+	coffeeCond := []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "coffee"}}
+	rules := []*domain.CategorizationRule{
+		{
+			ID: "rule-tag-high", UserID: userID, Name: "Tag rule", Enabled: true, Priority: 20,
+			Conditions: coffeeCond, ConditionLogic: "AND", TargetTags: []string{"morning"}, TagBehavior: "add", Source: "manual",
+		},
+		{
+			ID: "rule-cat-low", UserID: userID, Name: "Category rule", Enabled: true, Priority: 10,
+			Conditions: coffeeCond, ConditionLogic: "AND",
+			TargetKind: strPtr("pfc"), TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+			TagBehavior: "add", Source: "manual",
+		},
+	}
+	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
+	mockRepo.On("IncrementMatchCount", ctx, "rule-tag-high").Return(nil).Once()
+	mockRepo.On("IncrementMatchCount", ctx, "rule-cat-low").Return(nil).Once()
+
+	// Expect analytics with rule_id = "rule-cat-low" (CategoryRuleID), NOT "rule-tag-high" (MatchedRuleIDs[0]).
+	mockAn.On("Capture", userID, phclient.EventAutoCategorizationExecuted, mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["rule_id"] == "rule-cat-low"
+	})).Return()
+
+	merchant := "Blue Bottle Coffee"
+	err := service.ApplyRulesToTransaction(ctx, &domain.Transaction{ID: "tx-single", UserID: userID, MerchantName: &merchant})
+	require.NoError(t, err)
+
+	mockAn.AssertNumberOfCalls(t, "Capture", 1)
+	mockAn.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+}
+
 // TestRuleApplicationService_ClearCategoryUncategorized tests that rules with
 // TargetKind="clear" remove the category override.
 // Issue #404: TargetKind="clear" represents "clear category" action.
@@ -530,7 +770,7 @@ func TestRuleApplicationService_ClearCategoryUncategorized_Batch(t *testing.T) {
 	}
 
 	mockRepo.On("GetEnabledByUserID", ctx, userID).Return(rules, nil)
-	mockRepo.On("IncrementMatchCount", ctx, "rule-clear").Return(nil)
+	// IncrementMatchCount is NOT called by ApplyRulesToBatch (deferred to EmitBatchSideEffects).
 
 	merchant1 := "Spam Company"
 	merchant2 := "Normal Store"
@@ -541,7 +781,7 @@ func TestRuleApplicationService_ClearCategoryUncategorized_Batch(t *testing.T) {
 		{ID: "tx-2", UserID: userID, MerchantName: &merchant2, CategoryOverrideKind: &existingKind, PFCPrimaryOverride: &existingPrimary},
 	}
 
-	err := service.ApplyRulesToBatch(ctx, txns, userID)
+	_, err := service.ApplyRulesToBatch(ctx, txns, userID)
 
 	require.NoError(t, err)
 	// First transaction should have category cleared
@@ -549,6 +789,7 @@ func TestRuleApplicationService_ClearCategoryUncategorized_Batch(t *testing.T) {
 	assert.Equal(t, domain.CategorySourceRule, txns[0].CategorySourceField)
 	// Second transaction should NOT match (no "spam" in name)
 	assert.Equal(t, "GENERAL_MERCHANDISE", *txns[1].PFCPrimaryOverride, "Non-matching transaction should keep original category")
+	mockRepo.AssertNotCalled(t, "IncrementMatchCount", mock.Anything, mock.Anything)
 }
 
 // TestRuleApplicationService_NoCategoryActionNil tests that rules with nil

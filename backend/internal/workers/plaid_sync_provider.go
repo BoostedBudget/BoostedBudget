@@ -166,8 +166,10 @@ func (p *plaidSyncProvider) processAdded(ctx context.Context, linkedItem *domain
 		domainTxns = append(domainTxns, *domainTxn)
 	}
 
-	// Batch insert into database
-	if err := p.txnRepo.CreateBatch(ctx, domainTxns); err != nil {
+	// Batch insert into database.
+	// TODO: gate EventTypeAdded emission on insertedIDs to avoid duplicate events
+	// on conflict-updated rows (same class as Issue #1213; tracked as follow-up).
+	if _, err := p.txnRepo.CreateBatch(ctx, domainTxns); err != nil {
 		return 0, fmt.Errorf("failed to batch create transactions: %w", err)
 	}
 
