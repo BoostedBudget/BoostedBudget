@@ -96,6 +96,26 @@ export default defineConfig({
               priority: 10,
             },
 
+            // ── shared source splits ─────────────────────────────────────────
+            // api-client: all generated React Query hooks + shared-types live in
+            // workspace packages. Consolidate into one chunk so the many small
+            // per-endpoint files don't each get their own orphan chunk.
+            {
+              name: 'api-client',
+              test: /\/packages\/(api-client|shared-types)\//,
+              priority: 8,
+            },
+            // shared: app-wide utilities, hooks, UI primitives, and components
+            // under src/shared/, src/components/, src/lib/, and cross-feature
+            // utilities (src/features/categories/utils). These are imported by
+            // multiple feature chunks so Rolldown would otherwise auto-split them
+            // into many small unnamed orphan chunks.
+            {
+              name: 'shared',
+              test: /\/apps\/web\/src\/(shared|components|lib)\/|\/apps\/web\/src\/features\/categories\/utils\//,
+              priority: 7,
+            },
+
             // ── per-feature route splits ─────────────────────────────────────
             // Mirror the old manualChunks branches so lazy routes keep their own
             // chunk and don't inflate the shared vendor bucket.
