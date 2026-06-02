@@ -1,16 +1,21 @@
 /**
  * Test helpers for authenticated MCP integration tests.
  *
- * mintAccessToken(env): Generates a valid Clerk-style JWT by:
- *   1. Creating a fresh RSA-PS256 key pair (generated once per test run)
- *   2. Intercepting the JWKS endpoint via a fetch spy so the Worker's jose
- *      verifier accepts the test key
- *   3. Signing a JWT with the correct iss/aud/sub/sid/scope claims
+ * mintAccessToken(worker, env): Generates a valid OAuthProvider opaque access
+ * token (oat_...) by:
+ *   1. Using getOAuthApi to register a test OAuth client in the in-memory KV
+ *   2. Constructing an AuthRequest and completing authorization directly
+ *      (bypasses the Clerk redirect flow — stores clerkUserId + fake accessToken
+ *      as props in the grant)
+ *   3. Extracting the authorization code from the redirect URL
+ *   4. Exchanging the code for an opaque token via POST /oauth/token on the Worker
+ *
+ * The resulting token is an OAuthProvider opaque token (starts with oat_ or similar,
+ * NOT a JWT), which is what the Worker's OAuthProvider validates on every MCP request.
  *
  * setupFetchMock(): Registers beforeAll/afterAll hooks that install a global
  *   fetch spy intercepting:
- *   - JWKS endpoint  (required for every token verification)
- *   - Clerk token introspection endpoint (defensive, in case revocation adds HTTP)
+ *   - Clerk token introspection endpoint (assertNotRevoked in revocation.ts calls this)
  *   - Backend audit endpoint (fire-and-forget after tool calls)
  *
  * Usage in a test file:
@@ -24,11 +29,11 @@
  *
  *     let bearerToken: string
  *     beforeAll(async () => {
- *       bearerToken = await mintAccessToken(env as Env)
+ *       const worker = exports.default as { fetch: (req: Request) => Promise<Response> }
+ *       bearerToken = await mintAccessToken(worker, env as Env)
  *     })
  *
  *     it('...', async () => {
- *       const worker = exports.default as { fetch: (req: Request) => Promise<Response> }
  *       const res = await worker.fetch(new Request('http://mcp.test/mcp', {
  *         headers: { Authorization: bearerToken },
  *       }))
@@ -37,27 +42,9 @@
  */
 
 import { beforeAll, afterAll, vi } from 'vitest'
-import { generateKeyPair, exportJWK, SignJWT } from 'jose'
-
-// Minimal env shape needed to produce a correctly-signed JWT.
-// Matches the fields used by verifyClerkToken() in clerk-verifier.ts.
-interface TokenMintEnv {
-  CLERK_JWKS_URL: string
-  CLERK_ISSUER_URL: string
-  MCP_OAUTH_AUDIENCE: string
-}
-
-// Module-level key pair: generated once per test run, reused across calls.
-let _keyPairPromise: ReturnType<typeof generateKeyPair> | null = null
-// The current JWKS JSON to serve from the mocked endpoint.
-let _jwksPayload: string = JSON.stringify({ keys: [] })
-
-function getKeyPair() {
-  if (!_keyPairPromise) {
-    _keyPairPromise = generateKeyPair('PS256')
-  }
-  return _keyPairPromise
-}
+import { getOAuthApi } from '@cloudflare/workers-oauth-provider'
+import { oauthOptions } from '../../index'
+import type { Env } from '../../env'
 
 // --- Fetch interceptor -------------------------------------------------------
 // We intercept globalThis.fetch because the Worker runs in the same isolate as
@@ -76,20 +63,12 @@ function buildFetchSpy() {
       input instanceof Request ? input.url : input instanceof URL ? input.href : String(input)
     const method = (input instanceof Request ? input.method : init?.method ?? 'GET').toUpperCase()
 
-    // JWKS endpoint — jose fetches this to verify the JWT signature.
-    if (url.includes('/.well-known/jwks.json')) {
-      return new Response(_jwksPayload, {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
-
-    // Clerk token introspection / revocation — defensive mock.
-    // revocation.ts is currently a local-cache stub (no HTTP call), but if a
-    // real introspection call is added this intercept prevents test failures.
-    if (url.includes('api.clerk.com') && method === 'POST') {
+    // Clerk token introspection / revocation endpoint.
+    // revocation.ts calls POST https://api.clerk.com/oauth_applications/access_tokens/verify
+    // on every MCP request (cache miss). Return verified_active so assertNotRevoked passes.
+    if (url.includes('api.clerk.com/oauth_applications/access_tokens/verify') && method === 'POST') {
       return new Response(
-        JSON.stringify({ id: 'test-grant-id', revoked: false, expired: false }),
+        JSON.stringify({ id: 'oat_test_clerk_access_token', revoked: false, expired: false }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       )
     }
@@ -111,38 +90,82 @@ function buildFetchSpy() {
 }
 
 /**
- * Produce a signed JWT that the Worker's verifyClerkToken() will accept.
- * Requires setupFetchMock() to be active (the JWKS intercept must be in place
- * before jose attempts to fetch the public key).
+ * Produce an OAuthProvider opaque access token that the Worker's OAuthProvider will accept.
  *
- * @param env - Worker env bindings (from vitest.config.ts miniflare bindings)
- * @returns "Bearer <jwt>" string ready for use as an Authorization header
+ * The flow bypasses the Clerk redirect — we call getOAuthApi() directly to register
+ * a client and complete authorization, then exchange the code for a token via
+ * POST /oauth/token on the real Worker.
+ *
+ * @param worker - The exported default Worker (from 'cloudflare:workers' exports.default)
+ * @param env    - Worker env bindings (from vitest.config.ts miniflare bindings)
+ * @returns "Bearer <opaque-token>" string ready for use as an Authorization header
  */
-export async function mintAccessToken(env: TokenMintEnv): Promise<string> {
-  const { privateKey, publicKey } = await getKeyPair()
-  const publicJwk = await exportJWK(publicKey)
+export async function mintAccessToken(
+  worker: { fetch: (req: Request) => Promise<Response> },
+  env: Env,
+): Promise<string> {
+  const helpers = getOAuthApi(oauthOptions, env)
 
-  // Update the in-memory JWKS with the generated public key.
-  // The fetch spy reads _jwksPayload on every JWKS request.
-  _jwksPayload = JSON.stringify({
-    keys: [{ ...publicJwk, use: 'sig', alg: 'PS256' }],
+  // 1. Register a test OAuth client (public client — no secret needed)
+  const client = await helpers.createClient({
+    redirectUris: ['http://mcp.test/callback'],
+    tokenEndpointAuthMethod: 'none',
+    clientName: 'test-client',
   })
 
-  const now = Math.floor(Date.now() / 1000)
-  const token = await new SignJWT({
-    scope: 'openid email profile',
-    // sid is used as grantId by clerk-verifier.ts
-    sid: 'test-grant-id',
-  })
-    .setProtectedHeader({ alg: 'PS256' })
-    .setSubject('test-user-id')
-    .setIssuer(env.CLERK_ISSUER_URL)
-    .setAudience(env.MCP_OAUTH_AUDIENCE)
-    .setIssuedAt(now)
-    .setExpirationTime(now + 3600)
-    .sign(privateKey)
+  // 2. Parse a fabricated AuthRequest by calling the authorize endpoint
+  //    with a minimal query string. parseAuthRequest reads from the URL params.
+  const authorizeUrl = new URL('http://mcp.test/oauth/authorize')
+  authorizeUrl.searchParams.set('response_type', 'code')
+  authorizeUrl.searchParams.set('client_id', client.clientId)
+  authorizeUrl.searchParams.set('redirect_uri', 'http://mcp.test/callback')
+  authorizeUrl.searchParams.set('scope', 'openid email profile')
+  authorizeUrl.searchParams.set('state', crypto.randomUUID())
 
-  return `Bearer ${token}`
+  const authRequest = await helpers.parseAuthRequest(new Request(authorizeUrl.toString()))
+
+  // 3. Complete authorization directly — store clerkUserId + fake Clerk accessToken as props.
+  //    This is the step that normally happens after Clerk authenticates the user.
+  const { redirectTo } = await helpers.completeAuthorization({
+    request: authRequest,
+    userId: 'test-user-id',
+    metadata: { clerkUserId: 'test-user-id' },
+    scope: ['openid', 'email', 'profile'],
+    props: {
+      clerkUserId: 'test-user-id',
+      // Fake Clerk access token stored in props — used by McpApiHandler for backend calls
+      // and checked by assertNotRevoked() (intercepted by setupFetchMock).
+      accessToken: 'oat_test_clerk_access_token',
+    },
+  })
+
+  // 4. Extract the authorization code from the redirect URL
+  const redirectUrl = new URL(redirectTo)
+  const code = redirectUrl.searchParams.get('code')
+  if (!code) throw new Error(`No code in redirectTo: ${redirectTo}`)
+
+  // 5. Exchange code for opaque OAuthProvider access token via the Worker
+  const tokenRes = await worker.fetch(
+    new Request('http://mcp.test/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: client.clientId,
+        code,
+        redirect_uri: 'http://mcp.test/callback',
+      }).toString(),
+    }),
+  )
+
+  if (!tokenRes.ok) {
+    const body = await tokenRes.text()
+    throw new Error(`Token exchange failed ${tokenRes.status}: ${body}`)
+  }
+
+  const { access_token } = (await tokenRes.json()) as { access_token: string }
+  if (!access_token) throw new Error('No access_token in token response')
+  return `Bearer ${access_token}`
 }
 
 /**
@@ -151,8 +174,7 @@ export async function mintAccessToken(env: TokenMintEnv): Promise<string> {
  * Must be called inside a describe() block (or at the top level of a test file).
  *
  * The spy intercepts:
- *   - JWKS (required for JWT signature verification on every authenticated request)
- *   - Clerk token introspection / revocation (defensive)
+ *   - Clerk token introspection / revocation (POST api.clerk.com/oauth_applications/access_tokens/verify)
  *   - Backend audit endpoint (fire-and-forget after tool calls)
  *
  * Per-tool backend API mocks should use vi.spyOn(globalThis, 'fetch') per-test,
