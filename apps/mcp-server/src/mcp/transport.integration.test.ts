@@ -19,7 +19,7 @@ import { describe, it, expect, beforeAll, vi, afterEach } from 'vitest'
 import { env } from 'cloudflare:test'
 import { exports } from 'cloudflare:workers'
 import type { Env } from '../env'
-import { mintAccessToken, setupFetchMock } from '../test/helpers/mint-token'
+import { mintAccessToken, setupFetchMock, handleBaseUrls } from '../test/helpers/mint-token'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -40,6 +40,9 @@ interface SendMcpResult {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Auto-incrementing JSON-RPC request ID — ensures each call gets a unique ID. */
+let _rpcId = 0
 
 /**
  * Send a single JSON-RPC request to the Worker's /mcp endpoint.
@@ -66,7 +69,7 @@ async function sendMcp(
 
   const body = JSON.stringify({
     jsonrpc: '2.0',
-    id: 1,
+    id: ++_rpcId,
     method,
     params,
   })
@@ -178,17 +181,9 @@ function makeExtendedFetchSpy(interceptors: BackendInterceptor[]) {
       }
     }
 
-    // Delegate to base mock handlers (Clerk revocation, audit)
-    if (url.includes('api.clerk.com/oauth_applications/access_tokens/verify') && method === 'POST') {
-      return new Response(
-        JSON.stringify({ id: 'oat_test_clerk_access_token', revoked: false, expired: false }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      )
-    }
-
-    if (url.includes('backend.test') && url.includes('/api/v1/mcp/audit') && method === 'POST') {
-      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
-    }
+    // Delegate to shared base handlers (Clerk revocation, audit, JWKS)
+    const baseResponse = handleBaseUrls(url, method)
+    if (baseResponse !== null) return baseResponse
 
     throw new TypeError(
       `[extendedFetchSpy] Unintercepted fetch: ${method} ${url}\n` +
@@ -298,7 +293,7 @@ describe('MCP transport integration', () => {
     expect(callContent![0]?.text).toContain('getCashFlowSummary')
 
     // Backend was called exactly once for the tool execution
-    expect(backendInterceptors[0]!.callCount).toBeGreaterThanOrEqual(1)
+    expect(backendInterceptors[0]!.callCount).toBe(1)
   })
 
   // ── Test 2 (Scenario 4): write-confirmation round trip ────────────────────
@@ -319,15 +314,13 @@ describe('MCP transport integration', () => {
       },
     ]
 
-    let savedRequestHeaders: Headers | undefined
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url =
         input instanceof Request ? input.url : input instanceof URL ? input.href : String(input)
 
-      // Capture headers on backend recipe creation calls
+      // Capture Idempotency-Key on backend recipe creation calls
       if (url.includes('/api/v1/mcp/recipes')) {
         const headers = input instanceof Request ? input.headers : new Headers(init?.headers as HeadersInit | undefined)
-        savedRequestHeaders = headers
         capturedIdempotencyKey = headers.get('Idempotency-Key') ?? undefined
       }
 
@@ -367,7 +360,8 @@ describe('MCP transport integration', () => {
 
     expect(Array.isArray(challengeContent)).toBe(true)
     const challengeText = challengeContent![0]?.text ?? ''
-    expect(challengeText).toContain('confirmation')
+    // Assert the confirmation token is embedded in the challenge text (extractable below)
+    expect(challengeText).toMatch(/confirmationToken: "[^"]+"/)
 
     // Backend must NOT have been called on the challenge (no confirmed write yet)
     expect(backendInterceptors[0]!.callCount).toBe(0)
@@ -378,7 +372,11 @@ describe('MCP transport integration', () => {
     expect(tokenMatch).not.toBeNull()
     const confirmationToken = tokenMatch![1]!
 
-    // Step 3: confirm the write with the extracted token
+    // Step 3: confirm the write with the extracted token.
+    // Use the session ID from the challenge response if available — the agents SDK
+    // may assign a session ID on the first non-initialize call, so the challenge
+    // response is the authoritative source for routing subsequent requests to the
+    // same Durable Object instance.
     const confirmResult = await sendMcp(
       worker,
       bearerToken,
@@ -398,7 +396,7 @@ describe('MCP transport integration', () => {
           confirmationToken,
         },
       },
-      sessionId,
+      challengeResult.sessionId ?? sessionId,
     )
 
     expect(confirmResult.status).not.toBe(401)
@@ -420,8 +418,16 @@ describe('MCP transport integration', () => {
   })
 
   // ── Test 3 (Scenario 3): header injection safety ─────────────────────────
+  // Validates mutator-level credential injection: the env value reaches the backend
+  // (captured via fetch spy) and the attacker-supplied value does NOT.
+  // Handler-level stripping of X-MCP-Worker-Secret is tested at unit level in
+  // mcp-api-handler.test.ts.
+  //
+  // Note: X-MCP-Origin is an internal Worker header and is NOT forwarded to the
+  // backend — it cannot be captured via the fetch spy (the DO consumes it before
+  // any outbound request is made). Its stripping is therefore not asserted here.
 
-  it('Scenario 3: attacker-injected X-MCP-Worker-Secret and X-MCP-Origin are stripped', async () => {
+  it('Scenario 3: env-sourced X-MCP-Worker-Secret reaches backend; attacker value is NOT forwarded', async () => {
     let capturedWorkerSecret: string | undefined
     let capturedAuthorization: string | undefined
 

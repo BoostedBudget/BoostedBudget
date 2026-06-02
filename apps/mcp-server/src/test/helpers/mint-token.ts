@@ -56,6 +56,43 @@ import type { Env } from '../../env'
 type FetchInput = RequestInfo | URL
 type FetchInit = RequestInit | undefined
 
+/**
+ * Handle the shared base URLs (Clerk introspection, audit, JWKS) that every
+ * integration test needs intercepted. Returns a `Response` if the URL was
+ * handled, or `null` if the caller should continue to its own interceptors.
+ *
+ * Exported so that per-test extended fetch spies (e.g. in transport.integration.test.ts)
+ * can delegate their fallback path here instead of duplicating the conditionals.
+ */
+export function handleBaseUrls(url: string, method: string): Response | null {
+  // JWKS endpoint — clerk-verifier.ts fetches this during the Clerk redirect flow.
+  // NOT called on the API path (OAuthProvider validates opaque tokens, not JWTs).
+  // Intercept here so an accidental JWKS call fails immediately with a clear message
+  // instead of a cryptic signature-verification error from an empty keyset.
+  if (url.includes('/.well-known/jwks.json')) {
+    throw new TypeError(
+      `[setupFetchMock] Unexpected JWKS fetch — clerk-verifier.ts should not be called in integration tests (OAuthProvider uses opaque tokens). URL: ${url}`,
+    )
+  }
+
+  // Clerk token introspection / revocation endpoint.
+  // revocation.ts calls POST https://api.clerk.com/oauth_applications/access_tokens/verify
+  // on every MCP request (cache miss). Return verified_active so assertNotRevoked passes.
+  if (url.includes('api.clerk.com/oauth_applications/access_tokens/verify') && method === 'POST') {
+    return new Response(
+      JSON.stringify({ id: 'oat_test_clerk_access_token', revoked: false, expired: false }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )
+  }
+
+  // Backend audit endpoint — fire-and-forget; must not block or error.
+  if (url.includes('backend.test') && url.includes('/api/v1/mcp/audit') && method === 'POST') {
+    return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }
+
+  return null
+}
+
 function buildFetchSpy() {
   // Build a response factory for test URLs.
   async function mockFetch(input: FetchInput, init?: FetchInit): Promise<Response> {
@@ -63,30 +100,8 @@ function buildFetchSpy() {
       input instanceof Request ? input.url : input instanceof URL ? input.href : String(input)
     const method = (input instanceof Request ? input.method : init?.method ?? 'GET').toUpperCase()
 
-    // JWKS endpoint — clerk-verifier.ts fetches this during the Clerk redirect flow.
-    // NOT called on the API path (OAuthProvider validates opaque tokens, not JWTs).
-    // Intercept here so an accidental JWKS call fails immediately with a clear message
-    // instead of a cryptic signature-verification error from an empty keyset.
-    if (url.includes('/.well-known/jwks.json')) {
-      throw new TypeError(
-        `[setupFetchMock] Unexpected JWKS fetch — clerk-verifier.ts should not be called in integration tests (OAuthProvider uses opaque tokens). URL: ${url}`,
-      )
-    }
-
-    // Clerk token introspection / revocation endpoint.
-    // revocation.ts calls POST https://api.clerk.com/oauth_applications/access_tokens/verify
-    // on every MCP request (cache miss). Return verified_active so assertNotRevoked passes.
-    if (url.includes('api.clerk.com/oauth_applications/access_tokens/verify') && method === 'POST') {
-      return new Response(
-        JSON.stringify({ id: 'oat_test_clerk_access_token', revoked: false, expired: false }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      )
-    }
-
-    // Backend audit endpoint — fire-and-forget; must not block or error.
-    if (url.includes('backend.test') && url.includes('/api/v1/mcp/audit') && method === 'POST') {
-      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
-    }
+    const baseResponse = handleBaseUrls(url, method)
+    if (baseResponse !== null) return baseResponse
 
     // Unintercepted request — throw so tests fail loudly if a new outbound call
     // is added without a corresponding interceptor.
