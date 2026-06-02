@@ -72,53 +72,39 @@ export default defineConfig({
           includeDependenciesRecursively: false,
           groups: [
             // ── node_modules splits ──────────────────────────────────────────
-            // tanstack: all @tanstack/* packages + @dnd-kit isolated into a
-            // dedicated chunk, budgeted separately in .size-limit.json.
-            // Broad regex avoids silent omissions if new @tanstack packages are
-            // added. Higher priority wins over the vendor catch-all below.
+            // Higher priority groups prevent lower-priority (vendor) catch-all from
+            // vacuuming them. Each is budgeted independently in .size-limit.json.
             {
               name: 'tanstack',
               test: /node_modules\/(@tanstack\/|@dnd-kit\/)/,
-              priority: 20,
+              priority: 20, // @tanstack/* + @dnd-kit/* excluded from vendor
             },
-            // echarts: ~500 KB raw; isolated so dashboard chunk stays lean and
-            // size-limit can budget it independently from general vendor code.
             {
               name: 'charts',
               test: /node_modules\/(echarts|zrender|echarts-for-react)\//,
-              priority: 15,
+              priority: 15, // echarts (~500 KB raw) isolated from vendor
             },
-            // vendor: stable catch-all bucket for all remaining node_modules.
-            // Lower priority than tanstack / charts so those win first.
             {
               name: 'vendor',
               test: /node_modules\//,
-              priority: 10,
+              priority: 10, // Stable catch-all for remaining node_modules
             },
 
             // ── shared source splits ─────────────────────────────────────────
-            // api-client: all generated React Query hooks + shared-types live in
-            // workspace packages. Consolidate into one chunk so the many small
-            // per-endpoint files don't each get their own orphan chunk.
+            // Consolidate cross-module code to avoid orphan chunks.
             {
               name: 'api-client',
               test: /\/packages\/(api-client|shared-types)\//,
-              priority: 8,
+              priority: 8, // Generated React Query hooks + types
             },
-            // shared: app-wide utilities, hooks, UI primitives, and components
-            // under src/shared/, src/components/, src/lib/, and cross-feature
-            // utilities (src/features/categories/utils). These are imported by
-            // multiple feature chunks so Rolldown would otherwise auto-split them
-            // into many small unnamed orphan chunks.
             {
               name: 'shared',
               test: /\/apps\/web\/src\/(shared|components|lib)\/|\/apps\/web\/src\/features\/categories\/utils\//,
-              priority: 7,
+              priority: 7, // App-wide utilities, hooks, UI primitives
             },
 
             // ── per-feature route splits ─────────────────────────────────────
-            // Mirror the old manualChunks branches so lazy routes keep their own
-            // chunk and don't inflate the shared vendor bucket.
+            // Lazy-loaded features get dedicated chunks; all at priority 5.
             {
               name: 'legal',
               test: /\/apps\/web\/src\/legal\//,
