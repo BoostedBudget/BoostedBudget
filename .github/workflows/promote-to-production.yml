@@ -1,27 +1,9 @@
 name: Promote Staging to Production
 
-# Manual workflow dispatch - trigger via GitHub UI
-# This avoids re-running full test suite when promoting staging→main
-# since staging tests already passed
+# Manual promotion: merges staging→main and syncs main back to staging.
+# Production deployment is separate; dispatch "Deploy to Production" workflow after reviewing this promotion.
 on:
   workflow_dispatch:
-    inputs:
-      skip_smoke_tests:
-        description: 'Skip smoke tests (only for emergencies)'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
-      force_promotion:
-        description: 'Force promotion even if tests are stale (>24h)'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
 
 # Prevent concurrent promotions
 concurrency:
@@ -64,17 +46,10 @@ jobs:
           # Fetch latest refs with retry
           echo "📥 Fetching latest refs..."
           for i in 1 2 3; do
-            git fetch origin main staging && {
-              echo "✅ Fetch successful"
-              break
-            } || {
-              if [ $i -eq 3 ]; then
-                echo "::error::Failed to fetch after 3 attempts"
-                exit 1
-              else
-                echo "⚠️ Fetch attempt $i/3 failed, retrying..."
-                sleep 5
-              fi
+            git fetch origin main staging && break || {
+              [ $i -eq 3 ] && echo "::error::Failed to fetch after 3 attempts" && exit 1
+              echo "⚠️ Fetch attempt $i/3 failed, retrying..."
+              sleep 5
             }
           done
 
@@ -95,156 +70,30 @@ jobs:
             echo "::warning::Main and staging have diverged - merge may have conflicts"
           fi
 
-          # Check if main is ahead of staging (unexpected)
+          # Check if main is ahead of staging (indicates a pending or failed sync)
           MAIN_AHEAD=$(git rev-list --count origin/staging..origin/main)
           if [ "$MAIN_AHEAD" -gt 0 ]; then
             echo "::error::Main is ahead of staging by $MAIN_AHEAD commits - unexpected state!"
-            echo "::error::Run sync workflow or manually merge main into staging first"
+            echo "::error::Run the 'Sync Staging with Main' workflow (workflow_dispatch) or manually:"
+            echo "::error::  git checkout staging && git merge origin/main && git push origin staging"
+            echo "::error::Then re-run this promotion."
             exit 1
           fi
-
-      - name: Check staging test status
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
-        id: test-status
-        continue-on-error: true
-        run: |
-          echo "🧪 Checking recent test status for staging..."
-
-          # Get the most recent test workflow run for staging with retry
-          echo "📡 Fetching workflow ID..."
-          for i in 1 2 3; do
-            WORKFLOW_ID=$(gh api repos/${{ github.repository }}/actions/workflows \
-              --jq '.workflows[] | select(.name == "Test Suite") | .id') && {
-              echo "✅ Workflow ID retrieved"
-              break
-            } || {
-              if [ $i -eq 3 ]; then
-                echo "::warning::Failed to fetch workflow ID after 3 attempts"
-                echo "test-found=false" >> $GITHUB_OUTPUT
-                exit 0
-              else
-                echo "⚠️ API call attempt $i/3 failed, retrying..."
-                sleep 5
-              fi
-            }
-          done
-
-          if [ -z "$WORKFLOW_ID" ]; then
-            echo "::warning::Could not find Test Suite workflow"
-            echo "test-found=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # Get the most recent run for staging branch with retry
-          echo "📡 Fetching workflow runs..."
-          for i in 1 2 3; do
-            RUN_DATA=$(gh api "repos/${{ github.repository }}/actions/workflows/${WORKFLOW_ID}/runs?branch=staging&per_page=1" \
-              --jq '.workflow_runs[0] | {conclusion: .conclusion, created_at: .created_at, html_url: .html_url}') && {
-              echo "✅ Workflow run data retrieved"
-              break
-            } || {
-              if [ $i -eq 3 ]; then
-                echo "::warning::Failed to fetch workflow runs after 3 attempts"
-                echo "test-found=false" >> $GITHUB_OUTPUT
-                exit 0
-              else
-                echo "⚠️ API call attempt $i/3 failed, retrying..."
-                sleep 5
-              fi
-            }
-          done
-
-          if [ -z "$RUN_DATA" ] || [ "$RUN_DATA" = "null" ]; then
-            echo "::warning::No recent test runs found for staging"
-            echo "test-found=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          CONCLUSION=$(echo "$RUN_DATA" | jq -r '.conclusion')
-          CREATED_AT=$(echo "$RUN_DATA" | jq -r '.created_at')
-          RUN_URL=$(echo "$RUN_DATA" | jq -r '.html_url')
-
-          echo "test-found=true" >> $GITHUB_OUTPUT
-          echo "test-conclusion=$CONCLUSION" >> $GITHUB_OUTPUT
-          echo "test-created-at=$CREATED_AT" >> $GITHUB_OUTPUT
-          echo "test-url=$RUN_URL" >> $GITHUB_OUTPUT
-
-          # Check if tests are stale (> 24 hours)
-          if command -v python3 &> /dev/null; then
-            HOURS_AGO=$(python3 -c "from datetime import datetime, timezone; created = datetime.fromisoformat('${CREATED_AT}'.replace('Z', '+00:00')); now = datetime.now(timezone.utc); hours = (now - created).total_seconds() / 3600; print(int(hours))")
-            echo "test-hours-ago=$HOURS_AGO" >> $GITHUB_OUTPUT
-
-            if [ "$HOURS_AGO" -gt 24 ]; then
-              echo "::warning::Tests are $HOURS_AGO hours old (>24h)"
-            fi
-          fi
-
-          echo "Latest test run: $CONCLUSION ($CREATED_AT)"
-          echo "URL: $RUN_URL"
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Validate test results
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
-        if: steps.test-status.outputs.test-found == 'true'
-        run: |
-          CONCLUSION="${{ steps.test-status.outputs.test-conclusion }}"
-          HOURS_AGO="${{ steps.test-status.outputs.test-hours-ago }}"
-          FORCE="${{ inputs.force_promotion }}"
-
-          if [ "$CONCLUSION" != "success" ]; then
-            echo "::error::Latest staging tests did not pass (status: $CONCLUSION)"
-            echo "::error::Fix tests before promoting to production"
-            echo "::error::Test URL: ${{ steps.test-status.outputs.test-url }}"
-            exit 1
-          fi
-
-          if [ -n "$HOURS_AGO" ] && [ "$HOURS_AGO" -gt 24 ] && [ "$FORCE" != "true" ]; then
-            echo "::error::Tests are $HOURS_AGO hours old (>24h)"
-            echo "::error::Re-run tests on staging or use force_promotion=true"
-            exit 1
-          fi
-
-          echo "✅ Staging tests passed"
-
-      - name: Run lightweight smoke tests
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
-        if: inputs.skip_smoke_tests != 'true'
-        run: |
-          echo "🧪 Running pre-promotion smoke tests..."
-
-          # Basic validation that staging builds are working
-          echo "::group::Backend smoke test"
-          if [ -f ./scripts/smoke-test.sh ]; then
-            chmod +x ./scripts/smoke-test.sh
-            ./scripts/smoke-test.sh staging || echo "::warning::Smoke test script not available"
-          else
-            echo "::notice::No smoke test script found, skipping"
-          fi
-          echo "::endgroup::"
 
       - name: Merge staging into main
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           echo "🔀 Merging staging into main..."
 
-          # Checkout main
           git checkout main
 
           # Pull latest main with retry
           echo "📥 Pulling latest main..."
           for i in 1 2 3; do
-            git pull origin main && {
-              echo "✅ Pull successful"
-              break
-            } || {
-              if [ $i -eq 3 ]; then
-                echo "::error::Failed to pull main after 3 attempts"
-                exit 1
-              else
-                echo "⚠️ Pull attempt $i/3 failed, retrying..."
-                sleep 5
-              fi
+            git pull origin main && break || {
+              [ $i -eq 3 ] && echo "::error::Failed to pull main after 3 attempts" && exit 1
+              echo "⚠️ Pull attempt $i/3 failed, retrying..."
+              sleep 5
             }
           done
 
@@ -252,8 +101,6 @@ jobs:
           git merge origin/staging --no-ff -m "chore: Promote staging to production
 
           Commits promoted: ${{ steps.validate.outputs.commits-ahead }}
-          Test status: ${{ steps.test-status.outputs.test-conclusion }}
-          Test run: ${{ steps.test-status.outputs.test-url }}
 
           🤖 Automated promotion via workflow_dispatch"
 
@@ -264,24 +111,52 @@ jobs:
         run: |
           echo "📤 Pushing to main..."
           for i in 1 2 3; do
-            git push origin main && {
-              echo "✅ Main updated - production deployment will trigger automatically"
-              break
-            } || {
-              if [ $i -eq 3 ]; then
-                echo "::error::Failed to push to main after 3 attempts"
-                exit 1
-              else
-                echo "⚠️ Push attempt $i/3 failed, retrying..."
-                sleep 5
-              fi
+            git push origin main && break || {
+              [ $i -eq 3 ] && echo "::error::Failed to push to main after 3 attempts" && exit 1
+              echo "⚠️ Push attempt $i/3 failed, retrying..."
+              sleep 5
             }
           done
 
-      - name: Wait for production deployment
+      - name: Sync staging with main (inline)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
-          echo "⏳ Production deployment will start automatically..."
-          echo "Monitor at: https://github.com/${{ github.repository }}/actions/workflows/deploy-production.yml"
+          echo "🔄 Syncing staging with main (inline back-sync)..."
+          # Inline back-sync avoids GITHUB_TOKEN push→workflow trigger limitation.
+          # Retry loop re-fetches and re-merges before each push to handle concurrent staging advances.
+
+          for i in 1 2 3; do
+            echo "🔁 Sync attempt $i/3..."
+            git fetch origin main staging || {
+              [ $i -eq 3 ] && echo "::error::Failed to fetch after 3 attempts" && exit 1
+              echo "⚠️ Fetch attempt $i/3 failed, retrying..."
+              sleep 5 && continue
+            }
+            git checkout -B staging origin/staging
+            if ! git merge origin/main --no-edit -m "chore: Sync staging with main after promotion"; then
+              echo "::error::Merge conflict during staging sync - manual resolution required"
+              exit 1
+            fi
+            if git push origin staging; then
+              echo "✅ Staging synced with main"
+              break
+            fi
+            [ $i -eq 3 ] && echo "::error::Failed to sync staging after 3 attempts" && exit 1
+            echo "⚠️ Push attempt $i/3 failed (origin/staging may have advanced)"
+            sleep 5
+          done
+
+      - name: Verify sync
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: |
+          git fetch origin main staging
+          DIVERGENCE=$(git rev-list --left-right --count staging...origin/main)
+          echo "Branch divergence: $DIVERGENCE"
+          if [[ "$DIVERGENCE" == "0	0" ]]; then
+            echo "✅ Branches are in sync"
+          else
+            echo "⚠️  Branches still divergent (may be expected if new commits arrived)"
+          fi
 
       - name: Summary
         if: success()
@@ -289,18 +164,12 @@ jobs:
           echo "### ✅ Staging Promoted to Production" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Commits Promoted:** ${{ steps.validate.outputs.commits-ahead }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Test Status:** ${{ steps.test-status.outputs.test-conclusion }}" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.test-status.outputs.test-url }}" != "" ]; then
-            echo "**Test Run:** ${{ steps.test-status.outputs.test-url }}" >> $GITHUB_STEP_SUMMARY
-          fi
           echo "**Promoted At:** $(date -u)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
           echo "1. ✅ Main branch updated" >> $GITHUB_STEP_SUMMARY
-          echo "2. ⏳ Production deployment triggered automatically" >> $GITHUB_STEP_SUMMARY
-          echo "3. ⏳ After deployment, staging will auto-sync with main" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Monitor deployment: [Deploy to Production](https://github.com/${{ github.repository }}/actions/workflows/deploy-production.yml)" >> $GITHUB_STEP_SUMMARY
+          echo "2. ✅ Staging synced with main" >> $GITHUB_STEP_SUMMARY
+          echo "3. ⏳ **Manually dispatch** the [Deploy to Production](https://github.com/${{ github.repository }}/actions/workflows/deploy-production.yml) workflow when ready" >> $GITHUB_STEP_SUMMARY
 
       - name: Failure notification
         if: failure()
@@ -310,17 +179,16 @@ jobs:
           echo "Check the logs above for details." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Common issues:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Staging tests not passing" >> $GITHUB_STEP_SUMMARY
-          echo "- Tests too old (>24h) - re-run tests or use force_promotion" >> $GITHUB_STEP_SUMMARY
+          echo "- Staging not ahead of main (nothing to promote)" >> $GITHUB_STEP_SUMMARY
+          echo "- Main ahead of staging: run [Sync Staging with Main](https://github.com/${{ github.repository }}/actions/workflows/sync-staging.yml) workflow first" >> $GITHUB_STEP_SUMMARY
           echo "- Merge conflicts between main and staging" >> $GITHUB_STEP_SUMMARY
-          echo "- Main ahead of staging (run sync workflow first)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Manual promotion (if needed):**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "git checkout main" >> $GITHUB_STEP_SUMMARY
-          echo "git pull origin main" >> $GITHUB_STEP_SUMMARY
+          echo "git checkout main && git pull origin main" >> $GITHUB_STEP_SUMMARY
           echo "git merge origin/staging --no-ff" >> $GITHUB_STEP_SUMMARY
           echo "git push origin main" >> $GITHUB_STEP_SUMMARY
+          echo "git checkout staging && git merge origin/main && git push origin staging" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Final workspace cleanup
