@@ -27,11 +27,10 @@
  *     streams may survive up to the remaining session lifetime after revocation.
  *   - Effective revocation SLA ≈ max(30 s, request-arrival skew across isolates).
  *
- * ⚠️ IMPORTANT: the response-mapping for Clerk's verify endpoint is provisional.
- * Run the Step-0 staging spike (issue #1224 plan) to validate that calling
- * POST https://api.clerk.com/oauth_applications/access_tokens/verify after
- * revoking an OAuth grant actually returns { active: false } (not just at exp).
- * If the spike fails, switch to opaque tokens (Approach C).
+ * Spike results (2026-06-02, Step-0 of issue #1224 plan):
+ *   Active token  → HTTP 200, { id, revoked: false, expired: false, ... }
+ *   Revoked token → HTTP 404, { errors: [{ code: "oauth_access_token_not_found" }] }
+ * Revocation is reflected immediately (not at token expiry). Approach A is confirmed.
  */
 
 import { TokenVerificationError } from './clerk-verifier'
@@ -82,10 +81,17 @@ export async function computeCacheKey(accessToken: string): Promise<string> {
 /**
  * Call Clerk's token introspection endpoint and return a tri-state result.
  *
- * Explicit { active: false } → 'revoked'.
- * Everything else (5xx, network error, missing secret) → 'unknown_fail_open'.
+ * Verified response contract (from Step-0 staging spike, 2026-06-02):
  *
- * ⚠️ Response mapping is provisional: validate against Step-0 staging spike.
+ *   Active token  → HTTP 200, body: { id: "oat_...", revoked: false, expired: false, ... }
+ *   Revoked token → HTTP 404, body: { errors: [{ code: "oauth_access_token_not_found" }] }
+ *
+ * Mapping:
+ *   HTTP 200 + id present + revoked:false + expired:false → 'verified_active'
+ *   HTTP 200 + revoked:true OR expired:true              → 'revoked'
+ *   HTTP 404 + oauth_access_token_not_found              → 'revoked' (deleted after revocation)
+ *   5xx / network error / timeout / missing secret       → 'unknown_fail_open'
+ *   Other 4xx or unexpected shape                        → 'unknown_fail_open'
  */
 async function introspectClerkToken(
   accessToken: string,
@@ -117,18 +123,32 @@ async function introspectClerkToken(
     clearTimeout(timeout)
 
     if (res.ok) {
-      const body = (await res.json()) as { active?: boolean }
-      // Only an explicit { active: true } is treated as verified — any other shape
-      // (including missing or unexpected values) triggers a re-check next request.
-      if (body.active === true) return 'verified_active'
-      if (body.active === false) return 'revoked'
+      const body = (await res.json()) as {
+        id?: string
+        revoked?: boolean
+        expired?: boolean
+      }
+      if (body.id && body.revoked === false && body.expired === false) return 'verified_active'
+      if (body.revoked === true || body.expired === true) return 'revoked'
       // Unexpected shape (schema drift, partial response) → fail-open; no caching.
       console.warn('[revocation] Clerk verify: unexpected response body shape — fail-open')
       return 'unknown_fail_open'
     }
 
-    // 4xx/5xx → fail-open (Clerk errors, rate-limits, etc.).
-    // If Clerk uses a non-2xx status to signal revocation, the staging spike will catch it.
+    // HTTP 404 "oauth_access_token_not_found" = token was revoked and deleted by Clerk.
+    // By the time we reach assertNotRevoked, layer-1 (workers-oauth-provider) has validated
+    // the MCP token, so ctx.props.accessToken is a genuine Clerk OAuth token. A 404 means
+    // Clerk no longer recognises it — treat as revoked, not as a transient error.
+    if (res.status === 404) {
+      const body = (await res.json().catch(() => ({}))) as {
+        errors?: Array<{ code?: string }>
+      }
+      if (body.errors?.some(e => e.code === 'oauth_access_token_not_found')) {
+        return 'revoked'
+      }
+    }
+
+    // Other 4xx (rate-limits, auth errors on our secret, etc.) or 5xx → fail-open.
     console.warn('[revocation] Clerk verify returned non-2xx status', res.status, '— fail-open')
     return 'unknown_fail_open'
   } catch {

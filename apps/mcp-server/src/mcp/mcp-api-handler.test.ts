@@ -30,18 +30,19 @@ function asFetch(m: ReturnType<typeof mock>) {
   return m as unknown as typeof globalThis.fetch
 }
 
+// Real Clerk BAPI response shapes (spike-verified 2026-06-02)
 function activeResponse(): Response {
-  return new Response(JSON.stringify({ active: true }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  })
+  return new Response(
+    JSON.stringify({ id: 'oat_test123', revoked: false, expired: false }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  )
 }
 
-function inactiveResponse(): Response {
-  return new Response(JSON.stringify({ active: false }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  })
+function revokedResponse(): Response {
+  return new Response(
+    JSON.stringify({ errors: [{ code: 'oauth_access_token_not_found' }] }),
+    { status: 404, headers: { 'Content-Type': 'application/json' } },
+  )
 }
 
 beforeEach(() => {
@@ -57,21 +58,21 @@ describe('checkRevocationOrRespond', () => {
   })
 
   it('returns 401 response when Clerk confirms token is revoked', async () => {
-    globalThis.fetch = asFetch(mock(() => Promise.resolve(inactiveResponse())))
+    globalThis.fetch = asFetch(mock(() => Promise.resolve(revokedResponse())))
     const result = await checkRevocationOrRespond({ accessToken: TEST_TOKEN, clerkUserId: TEST_USER }, TEST_ENV)
     expect(result).not.toBeNull()
     expect(result?.status).toBe(401)
   })
 
   it('401 response body has error field', async () => {
-    globalThis.fetch = asFetch(mock(() => Promise.resolve(inactiveResponse())))
+    globalThis.fetch = asFetch(mock(() => Promise.resolve(revokedResponse())))
     const result = await checkRevocationOrRespond({ accessToken: TEST_TOKEN, clerkUserId: TEST_USER }, TEST_ENV)
     const body = (await result?.json()) as { error?: string }
     expect(body?.error).toBeTruthy()
   })
 
   it('401 response includes WWW-Authenticate header with invalid_token', async () => {
-    globalThis.fetch = asFetch(mock(() => Promise.resolve(inactiveResponse())))
+    globalThis.fetch = asFetch(mock(() => Promise.resolve(revokedResponse())))
     const result = await checkRevocationOrRespond({ accessToken: TEST_TOKEN, clerkUserId: TEST_USER }, TEST_ENV)
     const wwwAuth = result?.headers.get('WWW-Authenticate')
     expect(wwwAuth).toContain('invalid_token')
@@ -98,7 +99,7 @@ describe('checkRevocationOrRespond — audit on revoked 401', () => {
     // The mock distinguishes calls by URL (Clerk vs boostedbudget audit).
     const fetchSpy = mock((url: string) => {
       if ((url as string).includes('clerk.com')) {
-        return Promise.resolve(inactiveResponse())
+        return Promise.resolve(revokedResponse())
       }
       return Promise.resolve(new Response(null, { status: 204 }))
     })
@@ -140,7 +141,7 @@ describe('checkRevocationOrRespond — audit on revoked 401', () => {
   it('still returns 401 when audit env is not configured (audit is no-op)', async () => {
     // createAuditClient returns a no-op when audit fields are empty/absent.
     // The revoked 401 must still be returned regardless.
-    globalThis.fetch = asFetch(mock(() => Promise.resolve(inactiveResponse())))
+    globalThis.fetch = asFetch(mock(() => Promise.resolve(revokedResponse())))
     const noAuditEnv = { ...TEST_ENV, BOOSTEDBUDGET_API_URL: '', BOOSTEDBUDGET_ORIGIN_SECRET: '', MCP_WORKER_SECRET: '' }
     const result = await checkRevocationOrRespond({ accessToken: TEST_TOKEN, clerkUserId: TEST_USER }, noAuditEnv)
     expect(result?.status).toBe(401)
@@ -148,7 +149,7 @@ describe('checkRevocationOrRespond — audit on revoked 401', () => {
 
   it('audit failure does not affect the 401 response (fire-and-forget)', async () => {
     const fetchSpy = mock((url: string) => {
-      if ((url as string).includes('clerk.com')) return Promise.resolve(inactiveResponse())
+      if ((url as string).includes('clerk.com')) return Promise.resolve(revokedResponse())
       // Audit endpoint fails
       return Promise.reject(new Error('audit failure'))
     })
