@@ -1,6 +1,6 @@
 module github.com/maxnussbaum/BoostedBudget
 
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/PaddleHQ/paddle-go-sdk/v4 v4.2.0
