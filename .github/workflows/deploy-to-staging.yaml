@@ -246,6 +246,10 @@ jobs:
           ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
 
+      - name: Resolve BUILD_DATE
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: echo "BUILD_DATE=$(git show -s --format=%cI HEAD)" >> "$GITHUB_ENV"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -304,7 +308,7 @@ jobs:
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
             VERSION=staging-${{ env.DEPLOY_SHA }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
           provenance: false
 
       - name: Image build summary

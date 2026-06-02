@@ -68,18 +68,10 @@ jobs:
           fetch-tags: true
 
       - id: resolve-sha
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          GITHUB_SHA_VALUE: ${{ github.sha }}
         run: |
           set -euo pipefail
-          # push: github.sha is the pushed commit — that's exactly what triggered the deploy.
-          # workflow_dispatch: pin to origin/main tip so the operator deploys current main.
-          if [ "$EVENT_NAME" = "push" ]; then
-            DEPLOY_SHA="$GITHUB_SHA_VALUE"
-          else
-            DEPLOY_SHA="$(git rev-parse origin/main)"
-          fi
+          # Always workflow_dispatch — pin to origin/main tip so the operator deploys current main.
+          DEPLOY_SHA="$(git rev-parse origin/main)"
           echo "deploy_sha=${DEPLOY_SHA}" >> "$GITHUB_OUTPUT"
           echo "Pinned deploy_sha=${DEPLOY_SHA}"
 
@@ -762,7 +754,6 @@ jobs:
       - name: Smoke tests summary
         if: success()
         env:
-          EVENT_NAME: ${{ github.event_name }}
           FORCE_DEPLOY: ${{ inputs.force_deploy }}
         run: |
           echo "### Production Smoke Tests Passed" >> $GITHUB_STEP_SUMMARY
@@ -770,13 +761,8 @@ jobs:
           echo "- Backend health check" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend accessibility" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "**Deployment Trigger:** Manual workflow_dispatch" >> $GITHUB_STEP_SUMMARY
-            echo "**Force Deploy:** ${FORCE_DEPLOY:-false}" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "**Deployment Trigger:** Automatic (push to main)" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "**Deployment Trigger:** Manual workflow_dispatch" >> $GITHUB_STEP_SUMMARY
+          echo "**Force Deploy:** ${FORCE_DEPLOY:-false}" >> $GITHUB_STEP_SUMMARY
 
       - name: Final workspace cleanup
         if: always()
