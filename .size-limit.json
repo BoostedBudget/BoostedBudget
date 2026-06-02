@@ -6,45 +6,57 @@
     "gzip": true
   },
   {
+    "name": "preload-helper",
+    "path": "apps/web/dist/assets/preload-helper-*.js",
+    "limit": "3 KB",
+    "gzip": true
+  },
+  {
     "name": "entry",
     "path": "apps/web/dist/assets/entry-*.js",
-    "limit": "18 KB",
+    "limit": "20 KB",
     "gzip": true
   },
   {
     "name": "vendor",
     "path": "apps/web/dist/assets/vendor-*.js",
-    "limit": "700 KB",
+    "limit": "400 KB",
     "gzip": true
   },
   {
-    "name": "dashboard",
-    "path": "apps/web/dist/assets/dashboard-*.js",
-    "limit": "280 KB",
+    "name": "tanstack",
+    "path": "apps/web/dist/assets/tanstack-*.js",
+    "limit": "55 KB",
     "gzip": true
   },
   {
-    "name": "transactions",
-    "path": "apps/web/dist/assets/transactions-*.js",
-    "limit": "22 KB",
+    "name": "charts",
+    "path": "apps/web/dist/assets/charts-*.js",
+    "limit": "230 KB",
+    "gzip": true
+  },
+  {
+    "name": "api-client",
+    "path": "apps/web/dist/assets/api-client-*.js",
+    "limit": "10 KB",
+    "gzip": true
+  },
+  {
+    "name": "shared",
+    "path": "apps/web/dist/assets/shared-*.js",
+    "limit": "40 KB",
+    "gzip": true
+  },
+  {
+    "name": "admin",
+    "path": "apps/web/dist/assets/admin-*.js",
+    "limit": "20 KB",
     "gzip": true
   },
   {
     "name": "accounts",
     "path": "apps/web/dist/assets/accounts-*.js",
-    "limit": "320 KB",
-    "gzip": true
-  },
-  {
-    "name": "budgets",
-    "path": "apps/web/dist/assets/budgets-*.js",
-    "limit": "38 KB",
-    "gzip": true
-  },
-  {
-    "name": "rules",
-    "path": "apps/web/dist/assets/rules-*.js",
-    "limit": "16 KB",
+    "limit": "20 KB",
     "gzip": true
   },
   {
@@ -54,9 +66,27 @@
     "gzip": true
   },
   {
-    "name": "reports",
-    "path": "apps/web/dist/assets/reports-*.js",
-    "limit": "5 KB",
+    "name": "billing",
+    "path": "apps/web/dist/assets/billing-*.js",
+    "limit": "15 KB",
+    "gzip": true
+  },
+  {
+    "name": "budgets",
+    "path": "apps/web/dist/assets/budgets-*.js",
+    "limit": "25 KB",
+    "gzip": true
+  },
+  {
+    "name": "dashboard",
+    "path": "apps/web/dist/assets/dashboard-*.js",
+    "limit": "20 KB",
+    "gzip": true
+  },
+  {
+    "name": "legal",
+    "path": "apps/web/dist/assets/legal-*.js",
+    "limit": "20 KB",
     "gzip": true
   },
   {
@@ -66,45 +96,51 @@
     "gzip": true
   },
   {
-    "name": "savings",
-    "path": "apps/web/dist/assets/savings-*.js",
-    "limit": "9 KB",
-    "gzip": true
-  },
-  {
     "name": "profile",
     "path": "apps/web/dist/assets/profile-*.js",
     "limit": "12 KB",
     "gzip": true
   },
   {
-    "name": "billing",
-    "path": "apps/web/dist/assets/billing-*.js",
-    "limit": "15 KB",
+    "name": "reports",
+    "path": "apps/web/dist/assets/reports-*.js",
+    "limit": "6 KB",
     "gzip": true
   },
   {
-    "name": "admin",
-    "path": "apps/web/dist/assets/admin-*.js",
-    "limit": "60 KB",
-    "gzip": true
-  },
-  {
-    "name": "legal",
-    "path": "apps/web/dist/assets/legal-*.js",
+    "name": "rules",
+    "path": "apps/web/dist/assets/rules-*.js",
     "limit": "16 KB",
     "gzip": true
   },
   {
-    "name": "css",
-    "path": "apps/web/dist/assets/*.css",
-    "limit": "68 KB",
+    "name": "savings",
+    "path": "apps/web/dist/assets/savings-*.js",
+    "limit": "9 KB",
+    "gzip": true
+  },
+  {
+    "name": "transactions",
+    "path": "apps/web/dist/assets/transactions-*.js",
+    "limit": "22 KB",
+    "gzip": true
+  },
+  {
+    "name": "TransactionsPage",
+    "path": "apps/web/dist/assets/TransactionsPage-*.js",
+    "limit": "5 KB",
     "gzip": true
   },
   {
     "name": "custom-category-manager",
     "path": "apps/web/dist/assets/CustomCategoryManager-*.js",
     "limit": "7 KB",
+    "gzip": true
+  },
+  {
+    "name": "css",
+    "path": "apps/web/dist/assets/*.css",
+    "limit": "68 KB",
     "gzip": true
   }
 ]
