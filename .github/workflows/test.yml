@@ -209,6 +209,9 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: go mod download
 
+      - name: Clear Go build cache (prevents stale cross-runner cache corruption)
+        run: go clean -cache
+
       - name: Generate OpenAPI spec
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: go run scripts/generate-openapi/main.go
