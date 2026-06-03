@@ -28,14 +28,17 @@ export default defineConfig({
     }),
   ],
   test: {
-    // Exclude the transport test — it requires --no-isolate --max-workers=1 (DO-backed
-    // WebSocket sessions need a shared isolate). Run it via vitest.transport.config.ts.
-    include: [
-      'integration/**/*.integration.test.ts',
-      '!integration/mcp/transport.integration.test.ts',
-    ],
-    // On CI the Workers runtime (workerd) cold-compiles the Worker bundle on first use.
-    // This can take >5s on shared runners. Raise timeouts to prevent false failures.
+    // All integration tests run in a SINGLE workerd process (--no-isolate --max-workers=1
+    // in the test:integration script). Running multiple workerd processes concurrently on
+    // the CI runner causes "Failed to start cloudflare-pool worker" / TCP.onStreamRead
+    // failures due to resource exhaustion — the macOS runner can't start 3+ workerd
+    // JIT-compilation sessions simultaneously.
+    //
+    // State safety: verified across all test files — revocationCache cleared by Scenario 6,
+    // OAUTH_KV creates fresh random IDs per run, fetch spy is beforeEach/afterEach scoped,
+    // OAuthProvider is stateless read-only config. No cross-test contamination.
+    include: ['integration/**/*.integration.test.ts'],
+    // Generous timeouts for Workers runtime cold-start on CI runners.
     testTimeout: 30000,
     hookTimeout: 60000,
     coverage: {
