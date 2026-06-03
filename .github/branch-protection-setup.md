@@ -139,19 +139,13 @@ Click **Create** or **Save changes**.
 
 ### Test Environment Protection
 
-1. Merge a PR to main
-2. Watch the workflow run
-3. When `deploy-production` job starts:
-   - ✅ Should show "Waiting for review"
-   - ✅ Notification sent to required reviewers
-   - ✅ Cannot proceed without approval
-
-4. Approve deployment:
-   - Click "Review deployments" button
-   - Select "production" environment
-   - Click "Approve and deploy"
-
-5. Verify deployment completes
+1. Promote staging to main: dispatch the **Promote Staging to Production** workflow
+2. Confirm `main` is updated and staging is back in sync (check the workflow summary)
+3. Dispatch **Deploy to Production** workflow manually
+4. When the deploy job runs:
+   - ✅ Smoke tests pass
+   - ✅ Release tags updated (`backend-prod-latest`, `frontend-prod-latest`)
+5. Verify the deployment via Fly.io logs or the production URL
 
 ## Troubleshooting
 
@@ -258,9 +252,10 @@ For critical production bugs:
 5. Request expedited review
 
 6. After CI passes and approval:
-   - Merge immediately
-   - Monitor deployment closely
-   - Verify fix in production
+   - Merge to `main` immediately
+   - `sync-staging.yml` will fire automatically (human push triggers it), keeping staging in sync
+   - Dispatch **Deploy to Production** workflow manually
+   - Monitor deployment closely and verify fix in production
 
 ### Rollback Procedure
 
@@ -308,7 +303,7 @@ Update branch protection when:
 
 - [GitHub Branch Protection Docs](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/defining-the-mergeability-of-pull-requests/about-protected-branches)
 - [GitHub Environments Docs](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
-- [Workflow Documentation](.github/workflows/README.md)
+- [Workflow Documentation](workflows/README.md)
 - [CLAUDE.md](../CLAUDE.md) - Development guidelines
 
 ## Support
