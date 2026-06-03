@@ -193,7 +193,15 @@ get_transaction_user_notes() {
 }
 
 get_transaction_category() {
+  # Returns the user-facing category label from a scenario YAML.
+  # Reads `pfc_primary` (PFC v2, preferred) first, then falls back to legacy `category[0]`
+  # so older scenarios keep working until they're migrated.
   local index=$1
+  local pfc=$(yq e ".setup.transactions[$index].pfc_primary" "$SCENARIO_FILE")
+  if [ "$pfc" != "null" ] && [ -n "$pfc" ]; then
+    echo "$pfc"
+    return
+  fi
   local category=$(yq e ".setup.transactions[$index].category[0]" "$SCENARIO_FILE")
   if [ "$category" = "null" ]; then
     echo "Shopping"

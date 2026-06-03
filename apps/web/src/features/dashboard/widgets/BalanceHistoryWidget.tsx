@@ -66,7 +66,7 @@ function BalanceHistoryWidget(_props: WidgetProps) {
       <div className="absolute top-0 right-0">
         <button
           onClick={() => setShowTypeBreakdown(!showTypeBreakdown)}
-          className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+          className="px-2 py-1 text-xs bg-muted text-muted-foreground rounded hover:bg-muted/80 transition-colors"
         >
           {showTypeBreakdown ? 'Total' : 'Breakdown'}
         </button>

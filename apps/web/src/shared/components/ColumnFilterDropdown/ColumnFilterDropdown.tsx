@@ -4,15 +4,20 @@
  *
  * A reusable popover filter dropdown for table column filtering.
  * Supports single-select, multi-select, and range filtering modes.
+ *
+ * Uses Radix Popover so the panel portals to document.body, escaping
+ * the sticky thead CSS stacking context (issue #1132).
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { Filter, Check, X } from 'lucide-react'
-import './ColumnFilterDropdown.css'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 
 export interface FilterOption {
   value: string
   label: string
+  /** When true, wraps the label in data-ph-mask for PostHog session replay */
+  masked?: boolean
 }
 
 export interface RangeValue {
@@ -59,35 +64,6 @@ export function ColumnFilterDropdown({
   const [searchQuery, setSearchQuery] = useState('')
   const [localMin, setLocalMin] = useState<string>(rangeValue?.min?.toString() ?? '')
   const [localMax, setLocalMax] = useState<string>(rangeValue?.max?.toString() ?? '')
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  // Close on outside click
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false)
-      }
-    }
-
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
-      return () => document.removeEventListener('mousedown', handleClickOutside)
-    }
-  }, [isOpen])
-
-  // Close on Escape
-  useEffect(() => {
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setIsOpen(false)
-      }
-    }
-
-    if (isOpen) {
-      document.addEventListener('keydown', handleEscape)
-      return () => document.removeEventListener('keydown', handleEscape)
-    }
-  }, [isOpen])
 
   const isActive = type === 'range'
     ? rangeValue !== null && rangeValue !== undefined && (rangeValue.min !== undefined || rangeValue.max !== undefined)
@@ -99,18 +75,20 @@ export function ColumnFilterDropdown({
       )
     : options
 
-  const handleToggle = useCallback(() => {
-    if (!disabled) {
-      const newIsOpen = !isOpen
-      setIsOpen(newIsOpen)
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      if (disabled && open) return
+      setIsOpen(open)
+      // Reset search when opening or closing
       setSearchQuery('')
-      // Reset range inputs when opening
-      if (newIsOpen && type === 'range') {
+      // Seed range inputs from current rangeValue when opening
+      if (open && type === 'range') {
         setLocalMin(rangeValue?.min?.toString() ?? '')
         setLocalMax(rangeValue?.max?.toString() ?? '')
       }
-    }
-  }, [disabled, isOpen, type, rangeValue])
+    },
+    [disabled, type, rangeValue]
+  )
 
   const handleSelectOption = useCallback(
     (optionValue: string) => {
@@ -158,182 +136,204 @@ export function ColumnFilterDropdown({
   }, [onChange])
 
   return (
-    <div
-      ref={containerRef}
-      className={`column-filter ${className}`.trim()}
-    >
-      <button
-        type="button"
-        onClick={handleToggle}
-        disabled={disabled}
-        aria-label={ariaLabel}
-        aria-expanded={isOpen}
-        aria-haspopup="listbox"
-        className={`column-filter__trigger ${isActive ? 'column-filter__trigger--active' : ''}`}
+    <Popover open={isOpen} onOpenChange={handleOpenChange}>
+      <div className={`relative inline-block ${className}`}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            disabled={disabled}
+            aria-label={ariaLabel}
+            aria-expanded={isOpen}
+            aria-haspopup={type === 'select' ? 'listbox' : undefined}
+            className={`flex items-center justify-center w-6 h-6 p-1 border-none rounded cursor-pointer bg-transparent transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
+              isActive
+                ? 'column-filter__trigger--active text-primary bg-primary/10 hover:bg-primary/20 hover:text-primary'
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+          >
+            <Filter className="w-4 h-4" aria-hidden="true" />
+          </button>
+        </PopoverTrigger>
+      </div>
+      <PopoverContent
+        role={type === 'select' ? 'listbox' : undefined}
+        className="min-w-[180px] max-w-[280px] py-2 bg-card border border-border rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.15)]"
+        align="start"
+        sideOffset={4}
+        onOpenAutoFocus={(e) => {
+          // Let autoFocus on the search input handle focus in searchable multi-select;
+          // otherwise prevent Radix from stealing focus unexpectedly.
+          if (!searchable || !multiSelect) e.preventDefault()
+        }}
       >
-        <Filter className="column-filter__icon" aria-hidden="true" />
-      </button>
+        {type === 'select' ? (
+          <>
+            {/* Search input for searchable multi-select */}
+            {searchable && multiSelect && (
+              <div className="px-2 pb-2 border-b border-border">
+                <input
+                  type="text"
+                  placeholder="Search..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full px-2.5 py-1.5 text-sm border border-border rounded bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
+                  autoFocus
+                />
+              </div>
+            )}
 
-      {isOpen && (
-        <div className="column-filter__dropdown" role="listbox">
-          {type === 'select' ? (
-            <>
-              {/* Search input for searchable multi-select */}
-              {searchable && multiSelect && (
-                <div className="column-filter__search">
-                  <input
-                    type="text"
-                    placeholder="Search..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="column-filter__search-input"
-                    autoFocus
-                  />
-                </div>
+            {/* Multi-select actions */}
+            {multiSelect && (
+              <div className="flex gap-2 px-2 py-2 border-b border-border">
+                {[
+                  { label: 'Select All', onClick: handleSelectAll },
+                  { label: 'Clear', onClick: handleClearAll },
+                ].map((action) => (
+                  <button
+                    key={action.label}
+                    type="button"
+                    onClick={action.onClick}
+                    className="flex-1 px-2 py-1 text-xs font-medium border-none rounded bg-muted text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-border"
+                  >
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Options list */}
+            <div className="max-h-60 overflow-y-auto">
+              {/* "All" option for single select */}
+              {!multiSelect && (
+                <button
+                  type="button"
+                  onClick={handleClearAll}
+                  className={`flex items-center w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
+                    value.length === 0
+                      ? 'bg-primary/10 text-primary'
+                      : 'bg-transparent text-foreground hover:bg-muted'
+                  }`}
+                >
+                  All
+                </button>
               )}
 
-              {/* Multi-select actions */}
-              {multiSelect && (
-                <div className="column-filter__actions">
-                  <button
-                    type="button"
-                    onClick={handleSelectAll}
-                    className="column-filter__action-btn"
-                  >
-                    Select All
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleClearAll}
-                    className="column-filter__action-btn"
-                  >
-                    Clear
-                  </button>
-                </div>
-              )}
+              {filteredOptions.map((option) => {
+                const isSelected = value.includes(option.value)
 
-              {/* Options list */}
-              <div className="column-filter__options">
-                {/* "All" option for single select */}
-                {!multiSelect && (
-                  <button
-                    type="button"
-                    onClick={handleClearAll}
-                    className={`column-filter__option ${value.length === 0 ? 'column-filter__option--selected' : ''}`}
-                  >
-                    All
-                  </button>
-                )}
-
-                {filteredOptions.map((option) => {
-                  const isSelected = value.includes(option.value)
-
-                  if (multiSelect) {
-                    return (
-                      <label
-                        key={option.value}
-                        className={`column-filter__option column-filter__option--checkbox ${isSelected ? 'column-filter__option--selected' : ''}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => handleSelectOption(option.value)}
-                          className="column-filter__checkbox"
-                        />
-                        <span className="column-filter__option-label">
-                          {option.label}
-                        </span>
-                        {isSelected && (
-                          <Check
-                            className="column-filter__check-icon"
-                            aria-hidden="true"
-                          />
-                        )}
-                      </label>
-                    )
-                  }
-
+                if (multiSelect) {
                   return (
-                    <button
+                    <label
                       key={option.value}
-                      type="button"
-                      onClick={() => handleSelectOption(option.value)}
-                      className={`column-filter__option ${isSelected ? 'column-filter__option--selected' : ''}`}
+                      className={`flex items-center gap-2 w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
+                        isSelected
+                          ? 'bg-primary/10 text-primary'
+                          : 'bg-transparent text-foreground hover:bg-muted'
+                      }`}
                     >
-                      {option.label}
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => handleSelectOption(option.value)}
+                        className="w-4 h-4 m-0 cursor-pointer"
+                      />
+                      <span className="flex-1">
+                        {option.masked ? <span data-ph-mask>{option.label}</span> : option.label}
+                      </span>
                       {isSelected && (
                         <Check
-                          className="column-filter__check-icon"
+                          className="w-3.5 h-3.5 ml-auto text-primary"
                           aria-hidden="true"
                         />
                       )}
-                    </button>
+                    </label>
                   )
-                })}
+                }
 
-                {filteredOptions.length === 0 && (
-                  <div className="column-filter__no-results">
-                    No matching options
-                  </div>
-                )}
-              </div>
-            </>
-          ) : (
-            /* Range filter mode */
-            <div className="column-filter__range">
-              <div className="column-filter__range-inputs">
-                <div className="column-filter__range-field">
-                  <label htmlFor="filter-min" className="column-filter__range-label">
-                    Min
-                  </label>
-                  <input
-                    id="filter-min"
-                    type="number"
-                    value={localMin}
-                    onChange={(e) => setLocalMin(e.target.value)}
-                    placeholder="0"
-                    className="column-filter__range-input"
-                  />
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => handleSelectOption(option.value)}
+                    className={`flex items-center w-full px-3 py-2 text-sm text-left border-none cursor-pointer transition-colors duration-100 ${
+                      isSelected
+                        ? 'column-filter__option--selected bg-primary/10 text-primary hover:bg-primary/20'
+                        : 'bg-transparent text-foreground hover:bg-muted'
+                    }`}
+                  >
+                    {option.masked ? <span data-ph-mask>{option.label}</span> : option.label}
+                    {isSelected && (
+                      <Check
+                        className="w-3.5 h-3.5 ml-auto text-primary"
+                        aria-hidden="true"
+                      />
+                    )}
+                  </button>
+                )
+              })}
+
+              {filteredOptions.length === 0 && (
+                <div className="px-4 py-4 text-sm text-muted-foreground text-center">
+                  No matching options
                 </div>
-                <div className="column-filter__range-separator">-</div>
-                <div className="column-filter__range-field">
-                  <label htmlFor="filter-max" className="column-filter__range-label">
-                    Max
-                  </label>
-                  <input
-                    id="filter-max"
-                    type="number"
-                    value={localMax}
-                    onChange={(e) => setLocalMax(e.target.value)}
-                    placeholder="999"
-                    className="column-filter__range-input"
-                  />
-                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          /* Range filter mode */
+          <div className="p-3">
+            <div className="flex items-end gap-2 mb-3">
+              <div className="flex-1">
+                <label htmlFor="filter-min" className="block mb-1 text-xs font-medium text-muted-foreground">
+                  Min
+                </label>
+                <input
+                  id="filter-min"
+                  type="number"
+                  value={localMin}
+                  onChange={(e) => setLocalMin(e.target.value)}
+                  placeholder="0"
+                  className="w-full px-2 py-1.5 text-sm border border-border rounded bg-card text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
+                />
               </div>
-              <div className="column-filter__range-actions">
-                <button
-                  type="button"
-                  onClick={handleClearRange}
-                  className="column-filter__action-btn column-filter__action-btn--secondary"
-                  aria-label="Clear"
-                >
-                  <X className="column-filter__btn-icon" aria-hidden="true" />
-                  Clear
-                </button>
-                <button
-                  type="button"
-                  onClick={handleApplyRange}
-                  className="column-filter__action-btn column-filter__action-btn--primary"
-                  aria-label="Apply"
-                >
-                  <Check className="column-filter__btn-icon" aria-hidden="true" />
-                  Apply
-                </button>
+              <div className="pb-2 text-muted-foreground">-</div>
+              <div className="flex-1">
+                <label htmlFor="filter-max" className="block mb-1 text-xs font-medium text-muted-foreground">
+                  Max
+                </label>
+                <input
+                  id="filter-max"
+                  type="number"
+                  value={localMax}
+                  onChange={(e) => setLocalMax(e.target.value)}
+                  placeholder="999"
+                  className="w-full px-2 py-1.5 text-sm border border-border rounded bg-card text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
+                />
               </div>
             </div>
-          )}
-        </div>
-      )}
-    </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleClearRange}
+                className="flex-1 px-2 py-1 text-xs font-medium border border-border rounded bg-transparent text-muted-foreground cursor-pointer transition-colors duration-150 hover:bg-muted"
+                aria-label="Clear"
+              >
+                <X className="w-3 h-3 mr-1 align-middle inline" aria-hidden="true" />
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={handleApplyRange}
+                className="flex-1 px-2 py-1 text-xs font-medium border-none rounded bg-primary text-white cursor-pointer transition-colors duration-150 hover:bg-primary/90"
+                aria-label="Apply"
+              >
+                <Check className="w-3 h-3 mr-1 align-middle inline" aria-hidden="true" />
+                Apply
+              </button>
+            </div>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
   )
 }

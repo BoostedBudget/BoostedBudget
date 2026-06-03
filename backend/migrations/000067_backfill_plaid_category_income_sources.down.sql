@@ -1,0 +1,19 @@
+-- Down migration: intentional no-op (data preservation).
+--
+-- Reverting "plaid_category" → "pfc_primary" is not safe: the backend
+-- no longer accepts "plaid_category" writes (rejected since #1073), so
+-- restoring the old token would produce rows the application cannot process.
+--
+-- If you need to undo this backfill manually in a specific environment:
+--   UPDATE budgets
+--   SET income_sources = (
+--       SELECT jsonb_agg(
+--           CASE
+--               WHEN element->>'type' = 'pfc_primary' AND element->>'value' IS NOT NULL
+--               THEN jsonb_set(element, '{type}', '"plaid_category"')
+--               ELSE element
+--           END
+--       )
+--       FROM jsonb_array_elements(income_sources) AS element
+--   )
+--   WHERE income_sources::text LIKE '%pfc_primary%';

@@ -8,15 +8,15 @@ interface AdminRouteProps {
 
 function LoadingSkeleton() {
   return (
-    <div data-testid="admin-loading" className="flex justify-center items-center min-h-screen bg-gray-50">
+    <div data-testid="admin-loading" className="flex justify-center items-center min-h-screen bg-muted">
       <div className="w-full max-w-md p-6 space-y-4">
-        <div className="h-6 bg-gray-200 rounded animate-pulse w-1/3"></div>
+        <div className="h-6 bg-skeleton rounded animate-pulse w-1/3"></div>
         <div className="space-y-3">
-          <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
-          <div className="h-4 bg-gray-200 rounded animate-pulse w-5/6"></div>
-          <div className="h-4 bg-gray-200 rounded animate-pulse w-4/6"></div>
+          <div className="h-4 bg-skeleton rounded animate-pulse"></div>
+          <div className="h-4 bg-skeleton rounded animate-pulse w-5/6"></div>
+          <div className="h-4 bg-skeleton rounded animate-pulse w-4/6"></div>
         </div>
-        <div className="h-32 bg-gray-200 rounded-lg animate-pulse mt-4"></div>
+        <div className="h-32 bg-skeleton rounded-lg animate-pulse mt-4"></div>
       </div>
     </div>
   )
@@ -28,13 +28,13 @@ function AdminError({ error }: { error: Error | null }) {
   }
 
   return (
-    <div data-testid="admin-error" className="flex justify-center items-center min-h-screen bg-gray-50 dark:bg-gray-900">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 max-w-md text-center">
+    <div data-testid="admin-error" className="flex justify-center items-center min-h-screen bg-background">
+      <div className="bg-card rounded-lg shadow-lg p-8 max-w-md text-center">
         <div className="text-red-600 text-5xl mb-4" aria-hidden="true">⚠️</div>
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+        <h2 className="text-xl font-semibold text-foreground mb-2">
           Unable to Check Admin Status
         </h2>
-        <p className="text-gray-600 dark:text-gray-400 mb-6">
+        <p className="text-muted-foreground mb-6">
           Please try refreshing the page. If the problem persists, try signing out and back in.
         </p>
         {error && (

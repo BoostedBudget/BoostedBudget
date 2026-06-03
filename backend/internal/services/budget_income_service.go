@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -27,8 +26,8 @@ type IncomeTransactionGetter interface {
 type BudgetIncomeService interface {
 	// CalculateBudgetIncome calculates total income for a budget from all configured income sources.
 	// Returns the sum of:
-	// - plaid_category sources: Sum of positive transactions matching the category
-	// - tag sources: Sum of positive transactions with the matching tag
+	// - pfc_primary sources: Sum of inflow (negative amount under PFCv2) transactions matching the category
+	// - tag sources: Sum of inflow transactions with the matching tag
 	// - manual sources: Parsed float value from IncomeSource.Value
 	//
 	// Note: Overlapping sources (same transaction matching multiple sources) may result in double-counting.
@@ -61,7 +60,7 @@ func (s *budgetIncomeService) CalculateBudgetIncome(ctx context.Context, budget 
 
 	for _, source := range budget.IncomeSources {
 		switch source.Type {
-		case domain.IncomeSourceTypePlaidCategory:
+		case domain.IncomeSourceTypePFCPrimary:
 			sum, err := s.transactionRepo.GetIncomeSumByCategory(ctx, budget.UserID, source.Value, startDate, endDate)
 			if err != nil {
 				s.logger.Error("failed to get income by category",
@@ -134,8 +133,8 @@ func (s *budgetIncomeService) GetMatchingIncomeTransactions(ctx context.Context,
 	transactionMap := make(map[string]domain.Transaction)
 
 	for _, tx := range transactions {
-		// Only consider income transactions (positive amounts)
-		if tx.Amount <= 0 {
+		// Only consider inflow transactions (negative amounts under PFCv2)
+		if !tx.IsInflow() {
 			continue
 		}
 
@@ -157,16 +156,17 @@ func (s *budgetIncomeService) GetMatchingIncomeTransactions(ctx context.Context,
 	return result, nil
 }
 
-// transactionMatchesSource checks if a transaction matches an income source
+// transactionMatchesSource checks if a transaction matches an income source.
 func (s *budgetIncomeService) transactionMatchesSource(tx domain.Transaction, source domain.IncomeSource) bool {
 	switch source.Type {
-	case domain.IncomeSourceTypePlaidCategory:
-		// Check if transaction category contains the source value
-		return s.categoryContains(tx.Category, source.Value) ||
-			s.categoryContains(tx.CategoryOverride, source.Value)
+	case domain.IncomeSourceTypePFCPrimary:
+		effective := tx.GetEffectiveCategory()
+		if effective == nil || effective.Kind != domain.EffectiveCategoryKindPFC || effective.PFCPrimary == nil {
+			return false
+		}
+		return *effective.PFCPrimary == source.Value
 
 	case domain.IncomeSourceTypeTag:
-		// Check if transaction has the tag
 		for _, tag := range tx.Tags {
 			if tag == source.Value {
 				return true
@@ -175,27 +175,9 @@ func (s *budgetIncomeService) transactionMatchesSource(tx domain.Transaction, so
 		return false
 
 	case domain.IncomeSourceTypeManual:
-		// Manual sources don't match transactions
 		return false
 
 	default:
 		return false
 	}
-}
-
-// categoryContains checks if a JSON category array contains the given value
-func (s *budgetIncomeService) categoryContains(categoryJSON *string, value string) bool {
-	if categoryJSON == nil {
-		return false
-	}
-	var categories []string
-	if err := json.Unmarshal([]byte(*categoryJSON), &categories); err != nil {
-		return false
-	}
-	for _, cat := range categories {
-		if cat == value {
-			return true
-		}
-	}
-	return false
 }

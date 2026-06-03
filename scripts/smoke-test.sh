@@ -25,14 +25,17 @@ RETRY_INTERVAL=10
 if [ "$ENVIRONMENT" == "production" ]; then
   API_URL="https://api.boostedbudget.com"
   WEB_URL="https://boostedbudget.com"
+  MCP_URL="https://mcp.boostedbudget.com"
 elif [ "$ENVIRONMENT" == "staging" ]; then
   API_URL="https://staging-api.boostedbudget.com"
   # Skip frontend checks - Cloudflare Zero Trust blocks automated requests
   WEB_URL=""
+  MCP_URL="https://staging-mcp.boostedbudget.com"
 elif [ "$ENVIRONMENT" == "qa" ]; then
   # QA runs on Mac Mini - use localhost or Tailscale URL
   API_URL="${QA_API_URL:-http://localhost:8080}"
   WEB_URL="${QA_WEB_URL:-http://localhost:3000}"
+  MCP_URL=""  # MCP Worker not deployed in QA environment
 else
   echo -e "${RED}❌ Unknown environment: $ENVIRONMENT${NC}"
   echo "Usage: $0 [production|staging|qa]"
@@ -46,6 +49,7 @@ echo ""
 echo -e "${BLUE}Environment:${NC} $ENVIRONMENT"
 echo -e "${BLUE}API URL:${NC} $API_URL"
 echo -e "${BLUE}Web URL:${NC} $WEB_URL"
+echo -e "${BLUE}MCP URL:${NC} ${MCP_URL:-"(not configured)"}"
 echo ""
 
 # Function to print test status
@@ -136,6 +140,56 @@ if check_endpoint "$API_URL/version" "200" 3 2; then
   print_test "pass" "API version endpoint is responding"
 else
   print_test "warn" "API version endpoint not found (may not exist yet)"
+fi
+
+# =============================================================================
+# MCP Worker Checks (skip if MCP_URL is empty)
+# =============================================================================
+if [ -n "$MCP_URL" ]; then
+  echo ""
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${BLUE}  MCP Worker Checks${NC}"
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+  # MCP Health endpoint — Workers start instantly; 3 retries × 5s is plenty
+  if check_endpoint "$MCP_URL/health" "200" 3 5; then
+    if check_json_response "$MCP_URL/health" ".status" "ok"; then
+      print_test "pass" "MCP Worker health endpoint is responding"
+    else
+      print_test "fail" "MCP Worker health status is not 'ok'"
+      exit 1
+    fi
+  else
+    print_test "fail" "MCP Worker health endpoint not responding ($MCP_URL/health)"
+    exit 1
+  fi
+
+  # OAuth protected-resource metadata (RFC 9728) — must be reachable unauthenticated
+  if check_endpoint "$MCP_URL/.well-known/oauth-protected-resource" "200" 3 5; then
+    if check_json_response "$MCP_URL/.well-known/oauth-protected-resource" ".resource" "$MCP_URL"; then
+      print_test "pass" "MCP OAuth protected-resource metadata is serving correctly"
+    else
+      print_test "warn" "MCP OAuth metadata resource field may not match expected URL"
+    fi
+  else
+    print_test "fail" "MCP OAuth protected-resource metadata endpoint not responding"
+    exit 1
+  fi
+
+  # MCP endpoint must return 401 without a token (fail-closed check)
+  mcp_unauth_status=$(curl -s -o /dev/null -w "%{http_code}" "$MCP_URL/mcp" --max-time 10 || echo "000")
+  if [ "$mcp_unauth_status" == "401" ]; then
+    print_test "pass" "MCP endpoint correctly returns 401 without authentication"
+  else
+    print_test "fail" "MCP endpoint returned HTTP $mcp_unauth_status without auth (expected 401)"
+    exit 1
+  fi
+else
+  echo ""
+  echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${YELLOW}  MCP Worker Checks (SKIPPED - not configured for $ENVIRONMENT)${NC}"
+  echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  print_test "warn" "MCP_URL not configured - skipping MCP Worker checks"
 fi
 
 # =============================================================================

@@ -64,6 +64,7 @@ export function useMilestoneTracking(goalId: string): UseMilestoneTrackingResult
 
   // Reload if goalId changes
   useEffect(() => {
+     
     setSeenMilestones(loadSeenMilestones(goalId));
   }, [goalId]);
 

@@ -2,12 +2,12 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
@@ -39,7 +39,7 @@ type TransactionSyncService interface {
 	// If sync fails on page N, cursor is already at page N-1, so retry continues from there.
 	//
 	// Process:
-	// 1. Decrypt access token using EncryptionService
+	// 1. Get plaintext access token (decrypted by repository layer on read)
 	// 2. Loop: call PlaidService.TransactionsSync with cursor
 	// 3. Aggregate Added/Modified/Removed from each page
 	// 4. Update cursor in database IMMEDIATELY after each page
@@ -64,8 +64,8 @@ type transactionSyncService struct {
 	accountRepo               repository.AccountRepository          // Issue #261: For account mapping (Plaid account_id -> internal UUID)
 	profileRepo               repository.ProfileRepository          // For fetching user subscription tier (historical depth)
 	balanceSnapshotRepo       repository.BalanceSnapshotRepository  // Issue #353: For storing balance snapshots
+	merchantRepo              repository.MerchantRepo               // Issue #1163: Batch-upsert merchants before CreateBatch
 	plaidService              PlaidService
-	encryptionService         EncryptionService
 	subscriptionService       *SubscriptionService          // For tier-based historical depth limit
 	ruleApplicationService    RuleApplicationService        // Issue #346: Apply categorization rules to new transactions
 	budgetSyncService         BudgetSyncService             // Issue #494: Sync budget amounts after transaction sync
@@ -81,11 +81,11 @@ func NewTransactionSyncService(
 	profileRepo repository.ProfileRepository,
 	balanceSnapshotRepo repository.BalanceSnapshotRepository,
 	plaidService PlaidService,
-	encryptionService EncryptionService,
 	subscriptionService *SubscriptionService,
 	ruleApplicationService RuleApplicationService,
 	budgetSyncService BudgetSyncService,               // Issue #494: Sync budget amounts
 	transactionMonitorService TransactionMonitorService, // Issue #36: Auto-detect completed transfers
+	merchantRepo repository.MerchantRepo,              // Issue #1163: Merchant batch-upsert
 	logger *slog.Logger,
 ) TransactionSyncService {
 	if logger == nil {
@@ -99,8 +99,8 @@ func NewTransactionSyncService(
 		accountRepo:               accountRepo,
 		profileRepo:               profileRepo,
 		balanceSnapshotRepo:       balanceSnapshotRepo,
+		merchantRepo:              merchantRepo,
 		plaidService:              plaidService,
-		encryptionService:         encryptionService,
 		subscriptionService:       subscriptionService,
 		ruleApplicationService:    ruleApplicationService,
 		budgetSyncService:         budgetSyncService,
@@ -110,7 +110,6 @@ func NewTransactionSyncService(
 
 // ProcessWebhook processes a single TRANSACTIONS webhook event
 func (s *transactionSyncService) ProcessWebhook(ctx context.Context, webhook *domain.WebhookEvent) error {
-	// Validate webhook is not nil
 	if webhook == nil {
 		return errors.New("webhook event is nil")
 	}
@@ -215,11 +214,8 @@ func (s *transactionSyncService) SyncTransactions(
 		s.logger.Info("re-sync using cursor", "item_id", linkedItem.ID)
 	}
 
-	// Step 3: Decrypt access token
-	accessToken, err := s.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt access token: %w", err)
-	}
+	// Step 3: Get plaintext access token (populated by repo layer on read)
+	accessToken := linkedItem.AccessToken
 
 	// Step 4: Initialize result aggregation
 	result := &domain.TransactionSyncResult{
@@ -366,6 +362,40 @@ func (s *transactionSyncService) SyncTransactions(
 // Issue #261: Transaction Storage Logic - Helper Methods
 // ============================================================================
 
+// upsertMerchants deduplicates and batch-upserts merchant names, returning a map
+// of merchant_name -> merchant UUID. Returns nil if upserting fails or no merchants found.
+// Non-blocking: logs warnings but doesn't fail the sync.
+func (s *transactionSyncService) upsertMerchants(ctx context.Context, transactions []domain.Transaction) map[string]string {
+	if s.merchantRepo == nil {
+		return nil
+	}
+
+	// Deduplicate merchant names
+	nameSet := make(map[string]struct{})
+	for _, txn := range transactions {
+		if txn.MerchantName != nil && *txn.MerchantName != "" {
+			nameSet[*txn.MerchantName] = struct{}{}
+		}
+	}
+
+	if len(nameSet) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(nameSet))
+	for name := range nameSet {
+		names = append(names, name)
+	}
+
+	merchantIDs, err := s.merchantRepo.GetOrCreateMerchants(ctx, names)
+	if err != nil {
+		s.logger.Warn("failed to upsert merchants, continuing without merchant_id", "err", err)
+		return nil
+	}
+
+	return merchantIDs
+}
+
 // buildAccountMaps builds both accountMap and userAccountMap for transaction mapping.
 // Issue #171: userAccountMap provides stable UserAccountID that survives re-links.
 // Returns:
@@ -404,13 +434,11 @@ func (s *transactionSyncService) mapPlaidTransaction(
 	accountMap map[string]string,
 	userAccountMap map[string]string,
 ) (*domain.Transaction, error) {
-	// Map Plaid account_id to internal account UUID
 	internalAccountID, found := accountMap[plaidTxn.AccountId]
 	if !found {
 		return nil, fmt.Errorf("account not found for plaid_account_id %s", plaidTxn.AccountId)
 	}
 
-	// Map to stable UserAccountID if available
 	var userAccountID *string
 	if len(userAccountMap) > 0 {
 		if uaID, found := userAccountMap[plaidTxn.AccountId]; found {
@@ -418,112 +446,19 @@ func (s *transactionSyncService) mapPlaidTransaction(
 		}
 	}
 
-	// Parse transaction date (required)
-	date, err := time.Parse("2006-01-02", plaidTxn.Date)
+	tx, err := MapPlaidTransactionBase(plaidTxn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse transaction date %s: %w", plaidTxn.Date, err)
-	}
-
-	// Parse authorized_date (optional)
-	var authorizedDate *time.Time
-	if plaidTxn.AuthorizedDate.Get() != nil {
-		ad, err := time.Parse("2006-01-02", *plaidTxn.AuthorizedDate.Get())
-		if err == nil { // Ignore parse errors for optional field
-			authorizedDate = &ad
-		}
-	}
-
-	// Serialize external metadata (Plaid-specific fields)
-	externalMetadata, err := s.buildExternalMetadata(plaidTxn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize external metadata: %w", err)
-	}
-
-	// Serialize category array as JSON
-	var categoryJSON *string
-	if len(plaidTxn.Category) > 0 {
-		catBytes, _ := json.Marshal(plaidTxn.Category)
-		catStr := string(catBytes)
-		categoryJSON = &catStr
-	}
-
-	// Serialize personal finance category as JSON
-	var pfCategoryJSON *string
-	if plaidTxn.PersonalFinanceCategory.IsSet() {
-		pfBytes, _ := json.Marshal(plaidTxn.PersonalFinanceCategory.Get())
-		pfStr := string(pfBytes)
-		pfCategoryJSON = &pfStr
-	}
-
-	// Extract optional fields
-	var paymentChannel *string
-	if plaidTxn.PaymentChannel != "" {
-		paymentChannel = &plaidTxn.PaymentChannel
-	}
-
-	var merchantName *string
-	if plaidTxn.MerchantName.Get() != nil {
-		merchantName = plaidTxn.MerchantName.Get()
+		return nil, fmt.Errorf("failed to map plaid transaction %s: %w", plaidTxn.GetTransactionId(), err)
 	}
 
 	externalID := plaidTxn.GetTransactionId()
+	tx.UserID = userID
+	tx.AccountID = internalAccountID
+	tx.LinkedItemID = linkedItemID
+	tx.UserAccountID = userAccountID
+	tx.ExternalTransactionID = &externalID
 
-	return &domain.Transaction{
-		UserID:                  userID,
-		AccountID:               internalAccountID,
-		LinkedItemID:            linkedItemID,
-		UserAccountID:           userAccountID,
-		Source:                  domain.SourcePlaid,
-		ExternalTransactionID:   &externalID,
-		ExternalMetadata:        externalMetadata,
-		Amount:                  plaidTxn.Amount,
-		Date:                    date,
-		AuthorizedDate:          authorizedDate,
-		Name:                    plaidTxn.Name,
-		MerchantName:            merchantName,
-		Category:                categoryJSON,
-		OriginalCategory:        categoryJSON,
-		PersonalFinanceCategory: pfCategoryJSON,
-		PaymentChannel:          paymentChannel,
-		Pending:                 plaidTxn.GetPending(),
-		UserNotes:               nil,
-	}, nil
-}
-
-// buildExternalMetadata creates JSON metadata from Plaid-specific fields
-// that don't have direct domain equivalents.
-func (s *transactionSyncService) buildExternalMetadata(plaidTxn plaid.Transaction) (*string, error) {
-	metadata := make(map[string]interface{})
-
-	// Include Plaid-specific fields
-	if plaidTxn.Website.Get() != nil {
-		metadata["website"] = *plaidTxn.Website.Get()
-	}
-
-	// Location data
-	location := plaidTxn.Location
-	if location.City.Get() != nil || location.Region.Get() != nil {
-		metadata["location"] = location
-	}
-
-	// Payment metadata
-	paymentMeta := plaidTxn.PaymentMeta
-	if paymentMeta.ReferenceNumber.Get() != nil || paymentMeta.PpdId.Get() != nil {
-		metadata["payment_meta"] = paymentMeta
-	}
-
-	// Only serialize if we have data
-	if len(metadata) == 0 {
-		return nil, nil
-	}
-
-	bytes, err := json.Marshal(metadata)
-	if err != nil {
-		return nil, err
-	}
-
-	metadataStr := string(bytes)
-	return &metadataStr, nil
+	return tx, nil
 }
 
 // processAddedTransactions stores newly added transactions in the database.
@@ -564,27 +499,60 @@ func (s *transactionSyncService) processAddedTransactions(
 		return nil
 	}
 
-	// Issue #346: Apply categorization rules to transactions before storing
-	// This applies user-defined rules to automatically categorize and tag transactions.
-	// Rules are applied in-place, modifying the transaction slice.
-	if s.ruleApplicationService != nil {
-		if err := s.ruleApplicationService.ApplyRulesToBatch(ctx, transactions, linkedItem.UserID); err != nil {
-			// Log but don't fail - rule application is non-critical
-			s.logger.Warn("failed to apply categorization rules", "error", err)
+	// Issue #1213: Pre-assign UUIDs before rule application so that the IDs used
+	// to key BatchRuleApplication records match the ids returned by CreateBatch's
+	// RETURNING clause.  CreateBatch preserves pre-assigned IDs via its
+	// `if tx.ID == ""` guard, so this is safe.
+	for i := range transactions {
+		if transactions[i].ID == "" {
+			transactions[i].ID = uuid.New().String()
 		}
 	}
 
-	// Store in database (ON CONFLICT DO NOTHING handles deduplication)
-	if err := s.transactionRepo.CreateBatch(ctx, transactions); err != nil {
+	// Issue #346: Apply categorization rules to transactions before storing.
+	// Rules are applied in-place.  Side-effects (analytics/match-count) are
+	// deferred to EmitBatchSideEffects after CreateBatch so they are gated on
+	// genuine inserts only (Issue #1213).
+	var ruleApplications []BatchRuleApplication
+	if s.ruleApplicationService != nil {
+		apps, err := s.ruleApplicationService.ApplyRulesToBatch(ctx, transactions, linkedItem.UserID)
+		if err != nil {
+			// Log but don't fail - rule application is non-critical
+			s.logger.Warn("failed to apply categorization rules", "error", err)
+		} else {
+			ruleApplications = apps
+		}
+	}
+
+	// Issue #1163: Batch-upsert merchants and stamp merchant_id (one DB round-trip, best-effort)
+	merchantIDs := s.upsertMerchants(ctx, transactions)
+	if merchantIDs != nil {
+		for i := range transactions {
+			if transactions[i].MerchantName != nil {
+				if id, ok := merchantIDs[*transactions[i].MerchantName]; ok {
+					transactions[i].MerchantID = &id
+				}
+			}
+		}
+	}
+
+	// Store in database (ON CONFLICT DO UPDATE preserves user enrichments on conflict).
+	insertedIDs, err := s.transactionRepo.CreateBatch(ctx, transactions)
+	if err != nil {
 		return fmt.Errorf("failed to create batch of %d transactions: %w", len(transactions), err)
 	}
 
 	s.logger.Info("stored added transactions", "stored", len(transactions), "skipped", len(added)-len(transactions))
 
-	// Issue #36: Monitor for transfer suggestion matches (non-blocking)
-	// Auto-accept pending suggestions that match newly synced transactions.
+	// Issue #1213: Emit analytics/match-count side-effects only for genuinely inserted rows.
+	if s.ruleApplicationService != nil && len(ruleApplications) > 0 {
+		s.ruleApplicationService.EmitBatchSideEffects(ctx, linkedItem.UserID, ruleApplications, insertedIDs)
+	}
+
+	// Issue #36: Monitor for transfer suggestion matches (non-blocking).
+	// All persisted transactions are passed (inserted + conflict-updated), because the
+	// monitor has intentional post-relink matching semantics via stable UserAccountID.
 	if s.transactionMonitorService != nil {
-		// Convert to pointer slice for monitor service
 		txnPtrs := make([]*domain.Transaction, len(transactions))
 		for i := range transactions {
 			txnPtrs[i] = &transactions[i]
@@ -626,6 +594,16 @@ func (s *transactionSyncService) processModifiedTransactions(
 	successCount := 0
 	skippedCount := 0
 
+	// Issue #1163: Batch-upsert merchants for modified transactions (best-effort)
+	// Build domain txns temporarily just to use shared upsertMerchants helper
+	modifiedDomainTxns := make([]domain.Transaction, len(modified))
+	for i, plaidTxn := range modified {
+		if mn := plaidTxn.MerchantName.Get(); mn != nil {
+			modifiedDomainTxns[i].MerchantName = mn
+		}
+	}
+	merchantIDs := s.upsertMerchants(ctx, modifiedDomainTxns)
+
 	for _, plaidTxn := range modified {
 		// Map Plaid transaction to domain.Transaction (new data from Plaid)
 		newTxn, err := s.mapPlaidTransaction(ctx, plaidTxn, linkedItem.ID, linkedItem.UserID, accountMap, userAccountMap)
@@ -648,6 +626,13 @@ func (s *transactionSyncService) processModifiedTransactions(
 
 		// Copy ID from existing transaction (required for Update)
 		newTxn.ID = existingTxn.ID
+
+		// Issue #1163: Stamp merchant_id from the pre-computed map (best-effort)
+		if newTxn.MerchantName != nil && merchantIDs != nil {
+			if id, ok := merchantIDs[*newTxn.MerchantName]; ok {
+				newTxn.MerchantID = &id
+			}
+		}
 
 		// Update transaction with new data but preserved user_notes
 		if err := s.transactionRepo.Update(ctx, newTxn); err != nil {

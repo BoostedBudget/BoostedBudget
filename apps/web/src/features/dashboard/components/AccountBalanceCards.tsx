@@ -29,29 +29,29 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
   // Color scheme for account types
   const typeColors: Record<string, { bg: string; border: string; text: string }> = {
     depository: {
-      bg: 'bg-green-50',
-      border: 'border-green-200',
-      text: 'text-green-900',
+      bg: 'bg-green-50 dark:bg-green-950',
+      border: 'border-green-200 dark:border-green-800',
+      text: 'text-green-900 dark:text-green-100',
     },
     credit: {
-      bg: 'bg-red-50',
-      border: 'border-red-200',
-      text: 'text-red-900',
+      bg: 'bg-red-50 dark:bg-red-950',
+      border: 'border-red-200 dark:border-red-800',
+      text: 'text-red-900 dark:text-red-100',
     },
     investment: {
-      bg: 'bg-purple-50',
-      border: 'border-purple-200',
-      text: 'text-purple-900',
+      bg: 'bg-purple-50 dark:bg-purple-950',
+      border: 'border-purple-200 dark:border-purple-800',
+      text: 'text-purple-900 dark:text-purple-100',
     },
     loan: {
-      bg: 'bg-amber-50',
-      border: 'border-amber-200',
-      text: 'text-amber-900',
+      bg: 'bg-amber-50 dark:bg-amber-950',
+      border: 'border-amber-200 dark:border-amber-800',
+      text: 'text-amber-900 dark:text-amber-100',
     },
     other: {
-      bg: 'bg-gray-50',
-      border: 'border-gray-200',
-      text: 'text-gray-900',
+      bg: 'bg-muted',
+      border: 'border-border',
+      text: 'text-foreground',
     },
   }
 
@@ -69,7 +69,7 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
   if (accountTypes.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
-        <p className="text-center text-gray-500 dark:text-gray-400">No accounts found</p>
+        <p className="text-center text-muted-foreground">No accounts found</p>
       </div>
     )
   }
@@ -95,7 +95,7 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
                 <p className={`text-xl font-bold ${colors.text}`}>
                   {formatCurrency(typeData.balance)}
                 </p>
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-muted-foreground">
                   {typeData.account_count} account{typeData.account_count !== 1 ? 's' : ''}
                 </p>
               </div>
@@ -106,12 +106,12 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
               {typeData.accounts.map((account) => (
                 <div
                   key={account.id}
-                  className="flex items-center justify-between bg-white dark:bg-gray-800 rounded-lg px-4 py-3 shadow-sm"
+                  className="flex items-center justify-between bg-card rounded-lg px-4 py-3 shadow-sm"
                 >
-                  <span className="text-sm font-medium text-gray-900 dark:text-white">
+                  <span className="text-sm font-medium text-foreground">
                     {account.name}
                   </span>
-                  <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  <span className="text-sm font-semibold text-foreground">
                     {formatCurrency(account.balance)}
                   </span>
                 </div>

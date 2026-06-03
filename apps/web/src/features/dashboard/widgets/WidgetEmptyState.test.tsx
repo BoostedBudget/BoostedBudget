@@ -49,7 +49,7 @@ describe('WidgetEmptyState', () => {
       mockUseDashboardContext.mockReturnValue({
         filters: { startDate: '2024-01-01', endDate: '2024-01-31' },
         setFilters: mock(() => {}),
-        timeframe: 'month' as const,
+        timeframe: 'this_month' as const,
         setTimeframe: mock(() => {}),
         isEditing: false,
         setIsEditing: mock(() => {}),
@@ -81,7 +81,7 @@ describe('WidgetEmptyState', () => {
       mockUseDashboardContext.mockReturnValue({
         filters: { startDate: '2024-01-01', endDate: '2024-01-31' },
         setFilters: mock(() => {}),
-        timeframe: 'month' as const,
+        timeframe: 'this_month' as const,
         setTimeframe: mock(() => {}),
         isEditing: false,
         setIsEditing: mock(() => {}),
@@ -106,7 +106,7 @@ describe('WidgetEmptyState', () => {
       mockUseDashboardContext.mockReturnValue({
         filters: { startDate: '2024-01-01', endDate: '2024-01-31' },
         setFilters: mock(() => {}),
-        timeframe: 'month' as const,
+        timeframe: 'this_month' as const,
         setTimeframe: mock(() => {}),
         isEditing: false,
         setIsEditing: mock(() => {}),
@@ -126,7 +126,7 @@ describe('WidgetEmptyState', () => {
       mockUseDashboardContext.mockReturnValue({
         filters: { startDate: '2024-01-01', endDate: '2024-01-31' },
         setFilters: mock(() => {}),
-        timeframe: 'month' as const,
+        timeframe: 'this_month' as const,
         setTimeframe: mock(() => {}),
         isEditing: false,
         setIsEditing: mock(() => {}),

@@ -8,9 +8,14 @@
 import { useClerk } from '@clerk/react-router'
 import { Button } from '@/components/ui/button'
 import { Rocket, CreditCard, Calendar, X } from 'lucide-react'
+import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '../../../shared/analytics'
+import { useLoginEnabled } from '@/shared/hooks'
 
 export function FinalCTA() {
   const { openSignUp } = useClerk()
+  const trackEvent = useTrackEvent()
+  const { enabled: loginEnabled } = useLoginEnabled()
 
   return (
     <section
@@ -42,13 +47,23 @@ export function FinalCTA() {
 
         {/* CTA Button */}
         <div className="mt-10">
-          <Button
-            size="lg"
-            onClick={() => openSignUp()}
-            className="bg-white px-12 py-7 text-lg font-semibold text-blue-600 shadow-lg shadow-blue-900/20 hover:bg-blue-50 hover:shadow-xl"
-          >
-            Start Free Today
-          </Button>
+          {loginEnabled ? (
+            <Button
+              size="lg"
+              onClick={() => { trackEvent(ANALYTICS_EVENTS.LANDING_CTA_CLICKED); openSignUp() }}
+              className="bg-white px-12 py-7 text-lg font-semibold text-blue-600 shadow-lg shadow-blue-900/20 hover:bg-blue-50 hover:shadow-xl"
+            >
+              Start Free Today
+            </Button>
+          ) : (
+            <Button
+              disabled
+              size="lg"
+              className="bg-white/60 px-12 py-7 text-lg font-semibold text-blue-600/60 opacity-60"
+            >
+              Coming Soon
+            </Button>
+          )}
         </div>
 
         {/* Trust/Risk Reversal Points */}

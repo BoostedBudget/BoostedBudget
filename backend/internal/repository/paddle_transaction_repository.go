@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -40,12 +41,13 @@ type PaddleTransactionRepository interface {
 
 // paddleTransactionRepository implements PaddleTransactionRepository using PostgreSQL.
 type paddleTransactionRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewPaddleTransactionRepository creates a new PaddleTransactionRepository instance.
-func NewPaddleTransactionRepository(db DB) PaddleTransactionRepository {
-	return &paddleTransactionRepository{db: db}
+func NewPaddleTransactionRepository(db DB, enc *appcrypto.FieldEncryptor) PaddleTransactionRepository {
+	return &paddleTransactionRepository{db: db, enc: enc}
 }
 
 const paddleTransactionSelectFields = `
@@ -55,16 +57,42 @@ const paddleTransactionSelectFields = `
 	created_at, updated_at
 `
 
-// scanPaddleTransaction scans a row into a PaddleTransaction struct.
-func scanPaddleTransaction(row interface {
+// scanPaddleTransaction scans a row into a PaddleTransaction struct and decrypts sensitive fields.
+func (r *paddleTransactionRepository) scanPaddleTransaction(row interface {
 	Scan(...interface{}) error
 }, txn *domain.PaddleTransaction) error {
-	return row.Scan(
+	var rawPayload string
+	if err := row.Scan(
 		&txn.ID, &txn.UserID, &txn.TransactionID, &txn.SubscriptionID, &txn.CustomerID,
 		&txn.Amount, &txn.Currency, &txn.Status, &txn.PaymentMethodType,
-		&txn.BillingPeriodStart, &txn.BillingPeriodEnd, &txn.Payload,
+		&txn.BillingPeriodStart, &txn.BillingPeriodEnd, &rawPayload,
 		&txn.CreatedAt, &txn.UpdatedAt,
-	)
+	); err != nil {
+		return err
+	}
+
+	var err error
+	txn.Payload, err = r.enc.DecryptJSON(rawPayload)
+	if err != nil {
+		return fmt.Errorf("decrypt payload: %w", err)
+	}
+
+	txn.TransactionID, err = r.enc.DecryptString(txn.TransactionID)
+	if err != nil {
+		return fmt.Errorf("decrypt transaction_id: %w", err)
+	}
+
+	txn.SubscriptionID, err = r.enc.DecryptNullableString(txn.SubscriptionID)
+	if err != nil {
+		return fmt.Errorf("decrypt subscription_id: %w", err)
+	}
+
+	txn.CustomerID, err = r.enc.DecryptNullableString(txn.CustomerID)
+	if err != nil {
+		return fmt.Errorf("decrypt customer_id: %w", err)
+	}
+
+	return nil
 }
 
 // Create stores a new Paddle transaction in the database.
@@ -73,28 +101,50 @@ func (r *paddleTransactionRepository) Create(ctx context.Context, txn *domain.Pa
 		txn.ID = uuid.New().String()
 	}
 
+	encPayload, err := r.enc.EncryptJSON(txn.Payload)
+	if err != nil {
+		return fmt.Errorf("encrypt payload: %w", err)
+	}
+
+	encTransactionID, err := r.enc.EncryptString(txn.TransactionID)
+	if err != nil {
+		return fmt.Errorf("encrypt transaction_id: %w", err)
+	}
+	transactionIDBlindIdx := r.enc.BlindIndex(txn.TransactionID)
+
+	encSubscriptionID, err := r.enc.EncryptNullableString(txn.SubscriptionID)
+	if err != nil {
+		return fmt.Errorf("encrypt subscription_id: %w", err)
+	}
+
+	encCustomerID, err := r.enc.EncryptNullableString(txn.CustomerID)
+	if err != nil {
+		return fmt.Errorf("encrypt customer_id: %w", err)
+	}
+
 	query := `
 		INSERT INTO paddle_transactions (
-			id, user_id, transaction_id, subscription_id, customer_id,
+			id, user_id, transaction_id, transaction_id_blind_idx, subscription_id, customer_id,
 			amount, currency, status, payment_method_type,
 			billing_period_start, billing_period_end, payload
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING created_at, updated_at
 	`
 
-	err := r.db.QueryRow(ctx, query,
+	err = r.db.QueryRow(ctx, query,
 		txn.ID,
 		txn.UserID,
-		txn.TransactionID,
-		txn.SubscriptionID,
-		txn.CustomerID,
+		encTransactionID,
+		transactionIDBlindIdx,
+		encSubscriptionID,
+		encCustomerID,
 		txn.Amount,
 		txn.Currency,
 		txn.Status,
 		txn.PaymentMethodType,
 		txn.BillingPeriodStart,
 		txn.BillingPeriodEnd,
-		txn.Payload,
+		encPayload,
 	).Scan(&txn.CreatedAt, &txn.UpdatedAt)
 
 	if err != nil {
@@ -109,10 +159,10 @@ func (r *paddleTransactionRepository) Create(ctx context.Context, txn *domain.Pa
 
 // GetByTransactionID retrieves a transaction by Paddle's transaction ID.
 func (r *paddleTransactionRepository) GetByTransactionID(ctx context.Context, transactionID string) (*domain.PaddleTransaction, error) {
-	query := `SELECT ` + paddleTransactionSelectFields + ` FROM paddle_transactions WHERE transaction_id = $1`
+	query := `SELECT ` + paddleTransactionSelectFields + ` FROM paddle_transactions WHERE transaction_id_blind_idx = $1`
 
 	var txn domain.PaddleTransaction
-	err := scanPaddleTransaction(r.db.QueryRow(ctx, query, transactionID), &txn)
+	err := r.scanPaddleTransaction(r.db.QueryRow(ctx, query, r.enc.BlindIndex(transactionID)), &txn)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrPaddleTransactionNotFound
@@ -136,7 +186,7 @@ func (r *paddleTransactionRepository) GetByUserID(ctx context.Context, userID st
 	var txns []domain.PaddleTransaction
 	for rows.Next() {
 		var txn domain.PaddleTransaction
-		if err := scanPaddleTransaction(rows, &txn); err != nil {
+		if err := r.scanPaddleTransaction(rows, &txn); err != nil {
 			return nil, fmt.Errorf("failed to scan paddle transaction: %w", err)
 		}
 		txns = append(txns, txn)
@@ -167,7 +217,7 @@ func (r *paddleTransactionRepository) GetFailedTransactions(ctx context.Context,
 	var txns []domain.PaddleTransaction
 	for rows.Next() {
 		var txn domain.PaddleTransaction
-		if err := scanPaddleTransaction(rows, &txn); err != nil {
+		if err := r.scanPaddleTransaction(rows, &txn); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan failed transaction: %w", err)
 		}
 		txns = append(txns, txn)

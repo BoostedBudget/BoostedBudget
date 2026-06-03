@@ -43,6 +43,8 @@ func (m *mockDeletionService) SetPlaidCleanupService(svc services.PlaidItemClean
 	// No-op for mock
 }
 
+func (m *mockDeletionService) SetPaddleCleanupService(svc services.PaddleDeletionCleaner) {}
+
 func (m *mockDeletionService) SetAnalytics(a phclient.Analytics) {
 	// No-op for mock
 }

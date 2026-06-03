@@ -23,6 +23,8 @@ type mockNotificationRepository struct {
 	getErr         error
 	markReadErr    error
 	countErr       error
+	markAllCount   int64
+	markAllErr     error
 }
 
 func (m *mockNotificationRepository) GetByUserID(ctx context.Context, userID string, limit int) ([]domain.Notification, error) {
@@ -53,6 +55,13 @@ func (m *mockNotificationRepository) Update(ctx context.Context, notification *d
 
 func (m *mockNotificationRepository) GetUnsentEmails(ctx context.Context, limit int) ([]domain.Notification, error) {
 	return nil, errors.New("not implemented")
+}
+
+func (m *mockNotificationRepository) MarkAllAsRead(ctx context.Context, userID string) (int64, error) {
+	if m.markAllErr != nil {
+		return 0, m.markAllErr
+	}
+	return m.markAllCount, nil
 }
 
 // Helper to create a test notification
@@ -292,4 +301,42 @@ func TestNotificationResponseJSON(t *testing.T) {
 	var errorResp map[string]interface{}
 	err := json.Unmarshal(resp.Body.Bytes(), &errorResp)
 	require.NoError(t, err, "Error response should be valid JSON")
+}
+
+// TestMarkAllNotificationsRead_Success tests that marking all notifications as read returns 200 with count.
+func TestMarkAllNotificationsRead_Success(t *testing.T) {
+	mockRepo := &mockNotificationRepository{
+		markAllCount: 5,
+	}
+
+	handler := NewNotificationHandler(mockRepo)
+
+	input := &MarkAllNotificationsReadInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+
+	output, err := handler.MarkAllNotificationsRead(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "All notifications marked as read", output.Body.Message)
+	assert.Equal(t, int64(5), output.Body.Count)
+}
+
+// TestMarkAllNotificationsRead_RepoError tests that a repo error returns 500.
+func TestMarkAllNotificationsRead_RepoError(t *testing.T) {
+	mockRepo := &mockNotificationRepository{
+		markAllErr: errors.New("database error"),
+	}
+
+	handler := NewNotificationHandler(mockRepo)
+
+	input := &MarkAllNotificationsReadInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+
+	output, err := handler.MarkAllNotificationsRead(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
 }

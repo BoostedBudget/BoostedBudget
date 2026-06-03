@@ -606,25 +606,12 @@ func TestProcessEventTrigger(t *testing.T) {
 			},
 		}
 
-		userGetter := &mockUserGetterSimple{
-			userID: userID,
-		}
-
-		subChecker := &mockSubscriptionCheckerSimple{
-			limits: domain.SubscriptionLimits{
-				ExecutionsPerDay:            10,
-				TransactionHistoryDays: 240, // Premium tier
-			},
-		}
-
 		service := NewRuleExecutionService(
 			execRepo,
 			suggestionRepo,
 			ruleRepo,
 			nil,
 		)
-		service.SetUserGetter(userGetter)
-		service.SetSubscriptionChecker(subChecker)
 
 		eventData := map[string]interface{}{
 			"amount": 100.0,
@@ -663,7 +650,7 @@ func TestProcessEventTrigger(t *testing.T) {
 		assert.Empty(t, suggestionRepo.suggestions)
 	})
 
-	t.Run("unlimited executions with -1 limit", func(t *testing.T) {
+	t.Run("executes rule regardless of high execution count", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{
 			todayExecutionCount: 1000, // High count
 		}
@@ -698,25 +685,12 @@ func TestProcessEventTrigger(t *testing.T) {
 			},
 		}
 
-		userGetter := &mockUserGetterSimple{
-			userID: userID,
-		}
-
-		subChecker := &mockSubscriptionCheckerSimple{
-			limits: domain.SubscriptionLimits{
-				ExecutionsPerDay:            -1, // Unlimited
-				TransactionHistoryDays: 10, // Premium+
-			},
-		}
-
 		service := NewRuleExecutionService(
 			execRepo,
 			suggestionRepo,
 			ruleRepo,
 			nil,
 		)
-		service.SetUserGetter(userGetter)
-		service.SetSubscriptionChecker(subChecker)
 
 		eventData := map[string]interface{}{
 			"amount": 100.0,
@@ -892,27 +866,6 @@ func (m *mockAutomationRulesRepository) GetRulesByScheduleTrigger(ctx context.Co
 		}
 	}
 	return result, nil
-}
-
-// Simple mock implementations for UserGetter and SubscriptionChecker interfaces.
-
-type mockUserGetterSimple struct {
-	userID string
-}
-
-func (m *mockUserGetterSimple) GetUserByID(ctx context.Context, userID string) (*domain.User, error) {
-	return &domain.User{ID: m.userID}, nil
-}
-
-type mockSubscriptionCheckerSimple struct {
-	limits domain.SubscriptionLimits
-}
-
-func (m *mockSubscriptionCheckerSimple) GetEffectiveSubscription(ctx context.Context, user *domain.User) (*domain.EffectiveSubscription, error) {
-	return &domain.EffectiveSubscription{
-		UserID: user.ID,
-		Limits: m.limits,
-	}, nil
 }
 
 // ============================================================================
@@ -1630,4 +1583,36 @@ func TestTestRule(t *testing.T) {
 		assert.True(t, result.ConditionsMet) // OR logic - at least one matches
 		assert.Len(t, result.ConditionResults, 2)
 	})
+}
+
+// TestTestRule_PFCConditionPopulatesDisplay verifies that TestRule wires up
+// PopulatePFCDisplay so value_display and actual_display appear in the response.
+func TestTestRule_PFCConditionPopulatesDisplay(t *testing.T) {
+	ctx := context.Background()
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	actions, _ := json.Marshal(RuleActions{})
+	rule := &domain.AutomationRule{
+		ID:   "rule-pfc-test",
+		Name: "PFC dry-run",
+		Conditions: []domain.AutomationRuleCondition{
+			{Field: "transaction.pfc_primary", Operator: domain.ConditionOperatorEq, Value: "FOOD_AND_DRINK"},
+		},
+		ConditionLogic: "AND",
+		Actions:        actions,
+	}
+	triggerData := map[string]interface{}{
+		"transaction.pfc_primary": "FOOD_AND_DRINK",
+	}
+
+	result, err := service.TestRule(ctx, rule, triggerData)
+	require.NoError(t, err)
+	require.Len(t, result.ConditionResults, 1)
+	assert.Equal(t, "Food And Drink", result.ConditionResults[0].ValueDisplay)
+	assert.Equal(t, "Food And Drink", result.ConditionResults[0].ActualDisplay)
 }

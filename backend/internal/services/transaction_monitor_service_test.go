@@ -79,14 +79,14 @@ func TestTransactionMonitorService_MonitorForMatches_MatchFound(t *testing.T) {
 
 	userID := "user-123"
 	accountID := "savings-account"
-	amount := 100.00
+	suggestionAmount := 100.00
 	now := time.Now()
 
 	// Create suggestion that was created recently
-	suggestion := createTestSuggestionForMonitor(userID, accountID, amount, now.Add(-1*time.Hour))
+	suggestion := createTestSuggestionForMonitor(userID, accountID, suggestionAmount, now.Add(-1*time.Hour))
 
-	// Create matching transaction (same account, same amount, positive)
-	transaction := createTestTransactionForMonitor(userID, accountID, amount, now)
+	// Create matching transaction (same account, inflow = negative amount under PFCv2)
+	transaction := createTestTransactionForMonitor(userID, accountID, -suggestionAmount, now)
 
 	// Mock: Get pending suggestions
 	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
@@ -114,8 +114,8 @@ func TestTransactionMonitorService_MonitorForMatches_NoMatch_DifferentAmount(t *
 	// Suggestion for $100
 	suggestion := createTestSuggestionForMonitor(userID, accountID, 100.00, now.Add(-1*time.Hour))
 
-	// Transaction for $50 (different amount)
-	transaction := createTestTransactionForMonitor(userID, accountID, 50.00, now)
+	// Transaction for -$50 inflow (different magnitude than suggestion's $100)
+	transaction := createTestTransactionForMonitor(userID, accountID, -50.00, now)
 
 	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
 
@@ -140,8 +140,8 @@ func TestTransactionMonitorService_MonitorForMatches_NoMatch_DifferentAccount(t 
 	// Suggestion to transfer to "savings-account"
 	suggestion := createTestSuggestionForMonitor(userID, "savings-account", 100.00, now.Add(-1*time.Hour))
 
-	// Transaction in "checking-account" (different account)
-	transaction := createTestTransactionForMonitor(userID, "checking-account", 100.00, now)
+	// Transaction in "checking-account" (different account), inflow under PFCv2
+	transaction := createTestTransactionForMonitor(userID, "checking-account", -100.00, now)
 
 	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
 
@@ -165,8 +165,8 @@ func TestTransactionMonitorService_MonitorForMatches_NoMatch_NegativeAmount(t *t
 	// Suggestion for $100 deposit
 	suggestion := createTestSuggestionForMonitor(userID, accountID, 100.00, now.Add(-1*time.Hour))
 
-	// Transaction is negative (debit/withdrawal) - should not match
-	transaction := createTestTransactionForMonitor(userID, accountID, -100.00, now)
+	// Transaction is positive (outflow/spending under PFCv2) - should not match a deposit suggestion
+	transaction := createTestTransactionForMonitor(userID, accountID, 100.00, now)
 
 	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
 
@@ -190,8 +190,8 @@ func TestTransactionMonitorService_MonitorForMatches_NoMatch_OutsideDateRange(t 
 	// Suggestion created 10 days ago (outside 7-day window)
 	suggestion := createTestSuggestionForMonitor(userID, accountID, 100.00, now.Add(-10*24*time.Hour))
 
-	// Transaction today (too far from suggestion creation)
-	transaction := createTestTransactionForMonitor(userID, accountID, 100.00, now)
+	// Transaction today (too far from suggestion creation), inflow under PFCv2
+	transaction := createTestTransactionForMonitor(userID, accountID, -100.00, now)
 
 	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
 
@@ -215,8 +215,8 @@ func TestTransactionMonitorService_MonitorForMatches_AmountWithinTolerance(t *te
 	// Suggestion for $100.00
 	suggestion := createTestSuggestionForMonitor(userID, accountID, 100.00, now.Add(-1*time.Hour))
 
-	// Transaction for $100.005 (within 1 cent tolerance)
-	transaction := createTestTransactionForMonitor(userID, accountID, 100.005, now)
+	// Transaction for -$100.005 inflow (within 1 cent tolerance of suggestion's $100)
+	transaction := createTestTransactionForMonitor(userID, accountID, -100.005, now)
 
 	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
 
@@ -238,7 +238,7 @@ func TestTransactionMonitorService_MonitorForMatches_NoPendingSuggestions(t *tes
 	userID := "user-123"
 	now := time.Now()
 
-	transaction := createTestTransactionForMonitor(userID, "any-account", 100.00, now)
+	transaction := createTestTransactionForMonitor(userID, "any-account", -100.00, now)
 
 	// No pending suggestions
 	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{}, nil)
@@ -273,7 +273,7 @@ func TestTransactionMonitorService_MonitorForMatches_RepoError(t *testing.T) {
 	userID := "user-123"
 	now := time.Now()
 
-	transaction := createTestTransactionForMonitor(userID, "any-account", 100.00, now)
+	transaction := createTestTransactionForMonitor(userID, "any-account", -100.00, now)
 
 	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return(nil, errors.New("database error"))
 
@@ -305,7 +305,7 @@ func TestTransactionMonitorService_MonitorForMatches_NilToAccountID(t *testing.T
 		CreatedAt:     now.Add(-1 * time.Hour),
 	}
 
-	transaction := createTestTransactionForMonitor(userID, "any-account", 100.00, now)
+	transaction := createTestTransactionForMonitor(userID, "any-account", -100.00, now)
 
 	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
 
@@ -330,9 +330,9 @@ func TestTransactionMonitorService_MonitorForMatches_MultipleTransactionsOneMatc
 
 	// Multiple transactions - only one matches
 	transactions := []*domain.Transaction{
-		createTestTransactionForMonitor(userID, "checking-account", 50.00, now),   // wrong account
-		createTestTransactionForMonitor(userID, "savings-account", -100.00, now),  // negative
-		createTestTransactionForMonitor(userID, "savings-account", 100.00, now),   // MATCH
+		createTestTransactionForMonitor(userID, "checking-account", -50.00, now),  // wrong account
+		createTestTransactionForMonitor(userID, "savings-account", -100.00, now),  // MATCH - inflow, right account and amount
+		createTestTransactionForMonitor(userID, "savings-account", 100.00, now),   // outflow (positive), excluded by IsInflow check
 	}
 
 	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)

@@ -17,6 +17,7 @@ type SavingsGoal struct {
 	CurrentAmount float64    `json:"current_amount" db:"current_amount"` // Synced from account balance
 	CurrencyCode  string     `json:"currency_code" db:"currency_code"`
 	AccountID     string     `json:"account_id" db:"account_id"` // Required linked account
+	UserAccountID *string    `json:"user_account_id,omitempty" db:"user_account_id"` // Stable reference surviving re-links (Issue #1109)
 	Deadline      *time.Time `json:"deadline,omitempty" db:"deadline"`
 	IsCompleted   bool       `json:"is_completed" db:"is_completed"`
 	CompletedAt   *time.Time `json:"completed_at,omitempty" db:"completed_at"`

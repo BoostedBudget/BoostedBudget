@@ -1,6 +1,5 @@
 /**
  * Chart Formatters Tests
- * Issue #445: Recharts to Plotly Migration
  */
 
 import { describe, it, expect } from 'bun:test'
@@ -8,10 +7,6 @@ import {
   formatCurrency,
   formatCurrencyCompact,
   formatCurrencyFull,
-  getCurrencyTickFormat,
-  getCurrencyCompactTickFormat,
-  createCurrencyHoverTemplate,
-  createTimeSeriesHoverTemplate,
 } from './formatters'
 
 describe('formatCurrency', () => {
@@ -75,31 +70,5 @@ describe('formatCurrencyFull', () => {
 
   it('formats zero with cents', () => {
     expect(formatCurrencyFull(0)).toBe('$0.00')
-  })
-})
-
-describe('getCurrencyTickFormat', () => {
-  it('returns Plotly d3-format for currency', () => {
-    expect(getCurrencyTickFormat()).toBe('$,.0f')
-  })
-})
-
-describe('getCurrencyCompactTickFormat', () => {
-  it('returns Plotly d3-format for compact currency', () => {
-    expect(getCurrencyCompactTickFormat()).toBe('$.2s')
-  })
-})
-
-describe('createCurrencyHoverTemplate', () => {
-  it('creates hover template with label', () => {
-    const template = createCurrencyHoverTemplate('Balance')
-    expect(template).toBe('<b>Balance</b>: %{customdata}<extra></extra>')
-  })
-})
-
-describe('createTimeSeriesHoverTemplate', () => {
-  it('creates hover template for time series', () => {
-    const template = createTimeSeriesHoverTemplate('Total Balance')
-    expect(template).toBe('<b>%{x}</b><br>Total Balance: %{customdata}<extra></extra>')
   })
 })

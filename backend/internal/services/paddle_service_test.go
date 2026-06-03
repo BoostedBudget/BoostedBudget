@@ -22,13 +22,29 @@ type mockPaddleSDK struct {
 
 func (m *mockPaddleSDK) CreateCustomer(ctx context.Context, req *paddle.CreateCustomerRequest) (*paddle.Customer, error) {
 	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	if customer, ok := args.Get(0).(*paddle.Customer); ok {
+		return customer, args.Error(1)
 	}
-	return args.Get(0).(*paddle.Customer), args.Error(1)
+	return nil, args.Error(1)
+}
+
+func (m *mockPaddleSDK) ListCustomersByEmail(ctx context.Context, email string) ([]*paddle.Customer, error) {
+	args := m.Called(ctx, email)
+	if customers, ok := args.Get(0).([]*paddle.Customer); ok {
+		return customers, args.Error(1)
+	}
+	return nil, args.Error(1)
 }
 
 func (m *mockPaddleSDK) GetCustomer(ctx context.Context, req *paddle.GetCustomerRequest) (*paddle.Customer, error) {
+	args := m.Called(ctx, req)
+	if customer, ok := args.Get(0).(*paddle.Customer); ok {
+		return customer, args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *mockPaddleSDK) UpdateCustomer(ctx context.Context, req *paddle.UpdateCustomerRequest) (*paddle.Customer, error) {
 	args := m.Called(ctx, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -38,42 +54,42 @@ func (m *mockPaddleSDK) GetCustomer(ctx context.Context, req *paddle.GetCustomer
 
 func (m *mockPaddleSDK) CreateTransaction(ctx context.Context, req *paddle.CreateTransactionRequest) (*paddle.Transaction, error) {
 	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	if transaction, ok := args.Get(0).(*paddle.Transaction); ok {
+		return transaction, args.Error(1)
 	}
-	return args.Get(0).(*paddle.Transaction), args.Error(1)
+	return nil, args.Error(1)
 }
 
 func (m *mockPaddleSDK) GetSubscription(ctx context.Context, req *paddle.GetSubscriptionRequest) (*paddle.Subscription, error) {
 	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	if subscription, ok := args.Get(0).(*paddle.Subscription); ok {
+		return subscription, args.Error(1)
 	}
-	return args.Get(0).(*paddle.Subscription), args.Error(1)
+	return nil, args.Error(1)
 }
 
 func (m *mockPaddleSDK) UpdateSubscription(ctx context.Context, req *paddle.UpdateSubscriptionRequest) (*paddle.Subscription, error) {
 	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	if subscription, ok := args.Get(0).(*paddle.Subscription); ok {
+		return subscription, args.Error(1)
 	}
-	return args.Get(0).(*paddle.Subscription), args.Error(1)
+	return nil, args.Error(1)
 }
 
 func (m *mockPaddleSDK) CancelSubscription(ctx context.Context, req *paddle.CancelSubscriptionRequest) (*paddle.Subscription, error) {
 	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	if subscription, ok := args.Get(0).(*paddle.Subscription); ok {
+		return subscription, args.Error(1)
 	}
-	return args.Get(0).(*paddle.Subscription), args.Error(1)
+	return nil, args.Error(1)
 }
 
 func (m *mockPaddleSDK) PreviewSubscriptionUpdate(ctx context.Context, req *paddle.PreviewSubscriptionUpdateRequest) (*paddle.SubscriptionPreview, error) {
 	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+	if preview, ok := args.Get(0).(*paddle.SubscriptionPreview); ok {
+		return preview, args.Error(1)
 	}
-	return args.Get(0).(*paddle.SubscriptionPreview), args.Error(1)
+	return nil, args.Error(1)
 }
 
 // setupPaddleServiceWithMock creates a PaddleService with a mock SDK
@@ -82,7 +98,7 @@ func setupPaddleServiceWithMock(t *testing.T) (*paddleService, *mockPaddleSDK) {
 
 	mockSDK := new(mockPaddleSDK)
 	cfg := &config.Config{
-		PaddleAPIKey:     "test_api_key",
+		PaddleAPIKey:      "test_api_key",
 		PaddleEnvironment: "sandbox",
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -90,16 +106,98 @@ func setupPaddleServiceWithMock(t *testing.T) (*paddleService, *mockPaddleSDK) {
 	}))
 
 	service := &paddleService{
-		client: (*paddle.SDK)(nil), // Will use mock instead
-		config: cfg,
-		logger: logger,
+		client:    mockSDK,
+		rawClient: nil, // Mock tests don't use this; real tests use GetClient()
+		config:    cfg,
+		logger:    logger,
 	}
 
-	// We'll manually inject the mock for testing
-	// Note: This requires the service to expose a way to inject the client
-	// or we refactor to use an interface
-
 	return service, mockSDK
+}
+
+func TestEnsureCustomer_CreatesNewCustomer(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.MatchedBy(func(req *paddle.CreateCustomerRequest) bool {
+		return req.Email == "test@example.com" && req.CustomData["user_id"] == "user_123"
+	})).Return(&paddle.Customer{ID: "ctm_new_customer"}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ctm_new_customer", customerID)
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ReusesActiveSameOwnerCustomerAfterConflict(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_existing_customer", Email: "test@example.com", Status: paddle.StatusActive, CustomData: paddle.CustomData{"user_id": "user_123"}}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ctm_existing_customer", customerID)
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ReturnsLookupErrorWhenConflictLookupFails(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return(nil, errors.New("lookup failed"))
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.Contains(t, err.Error(), "failed to look up existing Paddle customer by email")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ReturnsErrorWhenConflictLookupIsAmbiguous(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{
+			{ID: "ctm_one", Email: "test@example.com"},
+			{ID: "ctm_two", Email: "test@example.com"},
+		}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.Contains(t, err.Error(), "expected exactly 1 Paddle customer")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ReturnsErrorWhenNoCustomersFound(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.Contains(t, err.Error(), "expected exactly 1 Paddle customer")
+	mockSDK.AssertExpectations(t)
 }
 
 // TestNewPaddleService_Success tests successful service initialization
@@ -496,6 +594,32 @@ func TestUpdateSubscription_ProrationModes(t *testing.T) {
 	}
 }
 
+func TestPaddleService_UpdateCustomerEmail_Success(t *testing.T) {
+	mockSDK := new(mockPaddleSDK)
+	svc := &paddleService{client: mockSDK}
+
+	mockSDK.On("UpdateCustomer", mock.Anything, &paddle.UpdateCustomerRequest{
+		CustomerID: "ctm_abc123",
+		Email:      paddle.NewPatchField("new@example.com"),
+	}).Return(&paddle.Customer{ID: "ctm_abc123"}, nil)
+
+	err := svc.UpdateCustomerEmail(context.Background(), "ctm_abc123", "new@example.com")
+	assert.NoError(t, err)
+	mockSDK.AssertExpectations(t)
+}
+
+func TestPaddleService_UpdateCustomerEmail_Error(t *testing.T) {
+	mockSDK := new(mockPaddleSDK)
+	svc := &paddleService{client: mockSDK}
+
+	mockSDK.On("UpdateCustomer", mock.Anything, mock.Anything).
+		Return(nil, errors.New("paddle api error"))
+
+	err := svc.UpdateCustomerEmail(context.Background(), "ctm_abc123", "new@example.com")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to update Paddle customer email")
+}
+
 // Documentation test: Verify that all public methods are present
 
 func TestPaddleService_ImplementsInterface(t *testing.T) {
@@ -515,12 +639,14 @@ func TestPaddleService_ImplementsInterface(t *testing.T) {
 	ctx := context.Background()
 
 	_ = func() { _, _ = service.CreateCustomer(ctx, "u", "e@e.com") }
+	_ = func() { _, _ = service.EnsureCustomer(ctx, "u", "e@e.com") }
 	_ = func() { _, _ = service.GetCustomer(ctx, "c") }
 	_ = func() { _, _, _ = service.CreateCheckoutSession(ctx, "c", "p", "e@e.com", "url", "u") }
 	_ = func() { _, _ = service.GetSubscription(ctx, "s") }
 	_ = func() { _, _ = service.UpdateSubscription(ctx, "s", "p", "prorated") }
 	_ = func() { _ = service.CancelSubscription(ctx, "s") }
 	_ = func() { _, _, _, _ = service.PreviewUpdate(ctx, "s", "p") }
+	_ = func() { _ = service.UpdateCustomerEmail(ctx, "c", "e@e.com") }
 	_ = func() { _ = service.GetClient() }
 }
 
@@ -585,4 +711,355 @@ func TestGetBillingPortalURL_PaddleAPIError(t *testing.T) {
 	// 1. Simulates Paddle API failure (network error, rate limit, etc.)
 	// 2. Returns wrapped error with context
 	// 3. Logs error appropriately
+}
+
+// TestCancelSubscriptionImmediately_Success verifies the subscription is cancelled
+// with EffectiveFromImmediately (not next billing period). Issue #1006.
+func TestCancelSubscriptionImmediately_Success(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_01abc123"
+
+	cancelledSub := &paddle.Subscription{
+		ID:     subscriptionID,
+		Status: paddle.SubscriptionStatusCanceled,
+	}
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID &&
+			req.EffectiveFrom != nil &&
+			*req.EffectiveFrom == paddle.EffectiveFromImmediately
+	})).Return(cancelledSub, nil)
+
+	err := svc.CancelSubscriptionImmediately(ctx, subscriptionID)
+
+	assert.NoError(t, err)
+	mockSDK.AssertExpectations(t)
+}
+
+// TestCancelSubscriptionImmediately_SDKError verifies errors are propagated.
+func TestCancelSubscriptionImmediately_SDKError(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_01abc123"
+
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID
+	})).Return(nil, errors.New("paddle API error"))
+
+	err := svc.CancelSubscriptionImmediately(ctx, subscriptionID)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to cancel Paddle subscription immediately")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestCancelSubscriptionImmediately_AlreadyCancelled verifies already-cancelled
+// subscriptions are treated as success (Paddle returns the sub with no error).
+func TestCancelSubscriptionImmediately_AlreadyCancelled(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_01abc123"
+
+	alreadyCancelledSub := &paddle.Subscription{
+		ID:     subscriptionID,
+		Status: paddle.SubscriptionStatusCanceled,
+	}
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID
+	})).Return(alreadyCancelledSub, nil)
+
+	err := svc.CancelSubscriptionImmediately(ctx, subscriptionID)
+
+	assert.NoError(t, err)
+}
+
+// TestCancelSubscriptionImmediately_AlreadyCancelled_ErrorForm verifies that when Paddle
+// returns ErrSubscriptionIsCanceledActionInvalid, the method treats it as success (idempotent).
+// Issue #1006: Paddle returns this error when cancelling an already-cancelled subscription.
+func TestCancelSubscriptionImmediately_AlreadyCancelled_ErrorForm(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_01abc123"
+
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID
+	})).Return(nil, paddle.ErrSubscriptionIsCanceledActionInvalid)
+
+	err := svc.CancelSubscriptionImmediately(ctx, subscriptionID)
+	assert.NoError(t, err, "already-cancelled error must be treated as success")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestArchiveAndAnonymizeCustomer_Success verifies the SDK is called with both Email
+// and Status fields set (single PATCH for GDPR PII erasure). Issue #1006.
+func TestArchiveAndAnonymizeCustomer_Success(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	customerID := "ctm_01abc123"
+	anonymizedEmail := "deleted_user-123@deleted.local"
+
+	var capturedReq *paddle.UpdateCustomerRequest
+	mockSDK.On("UpdateCustomer", ctx, mock.MatchedBy(func(req *paddle.UpdateCustomerRequest) bool {
+		capturedReq = req
+		return req.CustomerID == customerID
+	})).Return(&paddle.Customer{ID: customerID, Status: paddle.StatusArchived}, nil)
+
+	err := svc.ArchiveAndAnonymizeCustomer(ctx, customerID, anonymizedEmail)
+	assert.NoError(t, err)
+	require.NotNil(t, capturedReq)
+	assert.NotNil(t, capturedReq.Email, "Email field must be set")
+	assert.NotNil(t, capturedReq.Status, "Status field must be set")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestArchiveAndAnonymizeCustomer_SDKError verifies errors are propagated.
+func TestArchiveAndAnonymizeCustomer_SDKError(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	customerID := "ctm_01abc123"
+
+	mockSDK.On("UpdateCustomer", ctx, mock.MatchedBy(func(req *paddle.UpdateCustomerRequest) bool {
+		return req.CustomerID == customerID
+	})).Return(nil, errors.New("paddle API error"))
+
+	err := svc.ArchiveAndAnonymizeCustomer(ctx, customerID, "deleted_user-123@deleted.local")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to archive and anonymize Paddle customer")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestArchiveAndAnonymizeCustomer_AlreadyArchived verifies that an already-archived
+// customer (Paddle returns success with archived status) is treated as success (idempotent).
+func TestArchiveAndAnonymizeCustomer_AlreadyArchived(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	customerID := "ctm_01abc123"
+
+	mockSDK.On("UpdateCustomer", ctx, mock.MatchedBy(func(req *paddle.UpdateCustomerRequest) bool {
+		return req.CustomerID == customerID
+	})).Return(&paddle.Customer{ID: customerID, Status: paddle.StatusArchived}, nil)
+
+	err := svc.ArchiveAndAnonymizeCustomer(ctx, customerID, "deleted_user-123@deleted.local")
+	assert.NoError(t, err)
+	mockSDK.AssertExpectations(t)
+}
+
+// TestArchiveAndAnonymizeCustomer_AlreadyArchived_ErrorForm verifies that when Paddle
+// returns ErrEntityArchived, the method treats it as success (idempotent).
+// Issue #1006: Paddle returns this error when archiving an already-archived customer.
+func TestArchiveAndAnonymizeCustomer_AlreadyArchived_ErrorForm(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	customerID := "ctm_01abc123"
+
+	mockSDK.On("UpdateCustomer", ctx, mock.MatchedBy(func(req *paddle.UpdateCustomerRequest) bool {
+		return req.CustomerID == customerID
+	})).Return(nil, paddle.ErrEntityArchived)
+
+	err := svc.ArchiveAndAnonymizeCustomer(ctx, customerID, "deleted_user-123@deleted.local")
+	assert.NoError(t, err, "already-archived error must be treated as success")
+	mockSDK.AssertExpectations(t)
+}
+
+// Tests for archived-customer handling in EnsureCustomer (issue #1039)
+
+func TestEnsureCustomer_ActiveMatch_Reuses(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_active", Status: paddle.StatusActive, CustomData: paddle.CustomData{"user_id": "user_123"}}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ctm_active", customerID)
+	mockSDK.AssertNotCalled(t, "UpdateCustomer")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ArchivedSameOwner_Unarchives(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_archived", Status: paddle.StatusArchived, CustomData: paddle.CustomData{"user_id": "user_123"}}}, nil)
+	mockSDK.On("UpdateCustomer", ctx, mock.MatchedBy(func(req *paddle.UpdateCustomerRequest) bool {
+		return req.CustomerID == "ctm_archived" && req.Status != nil && req.Status.Value() != nil && *req.Status.Value() == paddle.StatusActive
+	})).Return(&paddle.Customer{ID: "ctm_archived", Status: paddle.StatusActive}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ctm_archived", customerID)
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ArchivedDifferentOwner_FailsClosed(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_archived", Status: paddle.StatusArchived, CustomData: paddle.CustomData{"user_id": "other_user"}}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.ErrorIs(t, err, ErrPaddleCustomerOwnershipMismatch)
+	mockSDK.AssertNotCalled(t, "UpdateCustomer")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ArchivedMissingCustomData_FailsClosed(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_archived", Status: paddle.StatusArchived, CustomData: nil}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.ErrorIs(t, err, ErrPaddleCustomerOwnershipMismatch)
+	mockSDK.AssertNotCalled(t, "UpdateCustomer")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ArchivedNonStringCustomData_FailsClosed(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_archived", Status: paddle.StatusArchived, CustomData: paddle.CustomData{"user_id": 12345}}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.ErrorIs(t, err, ErrPaddleCustomerOwnershipMismatch)
+	mockSDK.AssertNotCalled(t, "UpdateCustomer")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ArchivedSameOwner_UnarchiveFails_Propagates(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_archived", Status: paddle.StatusArchived, CustomData: paddle.CustomData{"user_id": "user_123"}}}, nil)
+	mockSDK.On("UpdateCustomer", ctx, mock.AnythingOfType("*paddle.UpdateCustomerRequest")).
+		Return(nil, errors.New("paddle API error"))
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.Contains(t, err.Error(), "paddle API error")
+	mockSDK.AssertExpectations(t)
+}
+
+// Tests for active-customer ownership check in EnsureCustomer (issue #1043)
+
+func TestEnsureCustomer_ActiveDifferentOwner_FailsClosed(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_active", Status: paddle.StatusActive, CustomData: paddle.CustomData{"user_id": "other_user"}}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.ErrorIs(t, err, ErrPaddleCustomerOwnershipMismatch)
+	mockSDK.AssertNotCalled(t, "UpdateCustomer")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ActiveMissingCustomData_FailsClosed(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_active", Status: paddle.StatusActive, CustomData: nil}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.ErrorIs(t, err, ErrPaddleCustomerOwnershipMismatch)
+	mockSDK.AssertNotCalled(t, "UpdateCustomer")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ActiveNonStringCustomData_FailsClosed(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_active", Status: paddle.StatusActive, CustomData: paddle.CustomData{"user_id": 12345}}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.ErrorIs(t, err, ErrPaddleCustomerOwnershipMismatch)
+	mockSDK.AssertNotCalled(t, "UpdateCustomer")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ActiveEmptyStringCustomData_FailsClosed(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_active", Status: paddle.StatusActive, CustomData: paddle.CustomData{"user_id": ""}}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.ErrorIs(t, err, ErrPaddleCustomerOwnershipMismatch)
+	mockSDK.AssertNotCalled(t, "UpdateCustomer")
+	mockSDK.AssertExpectations(t)
+}
+
+func TestEnsureCustomer_ActiveWhitespaceUserIdCustomData_FailsClosed(t *testing.T) {
+	service, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.AnythingOfType("*paddle.CreateCustomerRequest")).
+		Return(nil, paddle.ErrCustomerAlreadyExists)
+	mockSDK.On("ListCustomersByEmail", ctx, "test@example.com").
+		Return([]*paddle.Customer{{ID: "ctm_active", Status: paddle.StatusActive, CustomData: paddle.CustomData{"user_id": "  "}}}, nil)
+
+	customerID, err := service.EnsureCustomer(ctx, "user_123", "test@example.com")
+
+	require.Error(t, err)
+	assert.Empty(t, customerID)
+	assert.ErrorIs(t, err, ErrPaddleCustomerOwnershipMismatch)
+	mockSDK.AssertNotCalled(t, "UpdateCustomer")
+	mockSDK.AssertExpectations(t)
 }

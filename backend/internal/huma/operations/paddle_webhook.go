@@ -106,7 +106,7 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 			EventID:            payload.EventID,
 			EventType:          payload.EventType,
 			Payload:            json.RawMessage(input.RawBody),
-			Signature:          stringPtr(input.PaddleSignature),
+			Signature:          ptrIfNotEmpty(input.PaddleSignature),
 			SignatureValid:     signatureValid,
 			Processed:          false,
 			ProcessingAttempts: 0,

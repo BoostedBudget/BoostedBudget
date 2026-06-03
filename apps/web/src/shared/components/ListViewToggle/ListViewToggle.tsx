@@ -8,7 +8,6 @@
 
 import { useCallback } from 'react'
 import { LayoutGrid, List } from 'lucide-react'
-import './ListViewToggle.css'
 
 export type ListView = 'cards' | 'table'
 
@@ -75,33 +74,43 @@ export function ListViewToggle({
     <div
       role="group"
       aria-label="View toggle"
-      className={`list-view-toggle ${className}`.trim()}
+      className={`inline-flex gap-0 rounded-lg bg-muted p-1 ${className}`.trim()}
     >
       <button
         type="button"
         onClick={() => handleChange('cards')}
         aria-pressed={view === 'cards'}
         disabled={disabled}
-        className={`list-view-toggle__button ${
-          view === 'cards' ? 'list-view-toggle__button--active' : ''
-        }`}
+        className={[
+          'inline-flex items-center gap-1.5 px-3 py-2 border-none rounded-md text-sm font-medium cursor-pointer transition-all duration-150',
+          'focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2',
+          'disabled:opacity-50 disabled:cursor-not-allowed',
+          view === 'cards'
+            ? 'bg-card text-foreground shadow-sm'
+            : 'bg-transparent text-muted-foreground hover:text-foreground',
+        ].join(' ')}
         title="Cards view"
       >
-        <LayoutGrid className="list-view-toggle__icon" aria-hidden="true" />
-        <span className="list-view-toggle__label">Cards</span>
+        <LayoutGrid className="w-4 h-4 shrink-0" aria-hidden="true" />
+        <span className="max-sm:hidden">Cards</span>
       </button>
       <button
         type="button"
         onClick={() => handleChange('table')}
         aria-pressed={view === 'table'}
         disabled={disabled}
-        className={`list-view-toggle__button ${
-          view === 'table' ? 'list-view-toggle__button--active' : ''
-        }`}
+        className={[
+          'inline-flex items-center gap-1.5 px-3 py-2 max-sm:px-2 border-none rounded-md text-sm font-medium cursor-pointer transition-all duration-150',
+          'focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2',
+          'disabled:opacity-50 disabled:cursor-not-allowed',
+          view === 'table'
+            ? 'bg-card text-foreground shadow-sm'
+            : 'bg-transparent text-muted-foreground hover:text-foreground',
+        ].join(' ')}
         title="Table view"
       >
-        <List className="list-view-toggle__icon" aria-hidden="true" />
-        <span className="list-view-toggle__label">Table</span>
+        <List className="w-4 h-4 shrink-0" aria-hidden="true" />
+        <span className="max-sm:hidden">Table</span>
       </button>
     </div>
   )

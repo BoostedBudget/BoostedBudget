@@ -60,6 +60,19 @@ type GetUnreadCountOutput struct {
 	}
 }
 
+// MarkAllNotificationsReadInput is the input for marking all notifications as read.
+type MarkAllNotificationsReadInput struct {
+	inputs.AuthenticatedInput
+}
+
+// MarkAllNotificationsReadOutput is the response for marking all notifications as read.
+type MarkAllNotificationsReadOutput struct {
+	Body struct {
+		Message string `json:"message"`
+		Count   int64  `json:"count"`
+	}
+}
+
 // --- Handler Methods ---
 
 // GetNotifications handles GET /api/v1/notifications requests.
@@ -109,6 +122,19 @@ func (h *NotificationHandler) GetUnreadCount(ctx context.Context, input *GetUnre
 	return output, nil
 }
 
+// MarkAllNotificationsRead handles PATCH /api/v1/notifications/read-all requests.
+// Marks all unread notifications as read for the authenticated user.
+func (h *NotificationHandler) MarkAllNotificationsRead(ctx context.Context, input *MarkAllNotificationsReadInput) (*MarkAllNotificationsReadOutput, error) {
+	count, err := h.repo.MarkAllAsRead(ctx, input.UserID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	output := &MarkAllNotificationsReadOutput{}
+	output.Body.Message = "All notifications marked as read"
+	output.Body.Count = count
+	return output, nil
+}
+
 // RegisterNotificationRoutes registers notification routes with the Huma API.
 // Note: These routes require the Clerk middleware to be applied.
 func RegisterNotificationRoutes(api huma.API, handler *NotificationHandler) {
@@ -134,6 +160,18 @@ func RegisterNotificationRoutes(api huma.API, handler *NotificationHandler) {
 		Tags:        []string{"Notifications"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetUnreadCount)
+
+	// PATCH /api/v1/notifications/read-all - Mark all notifications as read
+	// Note: This route must be registered BEFORE the /{id}/read route to avoid path conflict
+	huma.Register(api, huma.Operation{
+		OperationID: "markAllNotificationsAsRead",
+		Method:      http.MethodPatch,
+		Path:        "/api/v1/notifications/read-all",
+		Summary:     "Mark all notifications as read",
+		Description: "Marks all unread notifications as read for the authenticated user.",
+		Tags:        []string{"Notifications"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.MarkAllNotificationsRead)
 
 	// PATCH /api/v1/notifications/{id}/read - Mark notification as read
 	huma.Register(api, huma.Operation{

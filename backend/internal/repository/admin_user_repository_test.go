@@ -19,7 +19,7 @@ func setupAdminMockDB(t *testing.T) (pgxmock.PgxPoolIface, AdminUserRepository) 
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewAdminUserRepository(mock)
+	repo := NewAdminUserRepository(mock, newTestFieldEncryptor(t))
 	return mock, repo
 }
 
@@ -46,7 +46,7 @@ func TestListUsers_Success(t *testing.T) {
 		"linked_accounts_count", "automation_rules_count", "referrals_count",
 	}).
 		AddRow(user1ID, "user1@example.com", "premium", "active", nil, nil, "iad", now, &now, true, 3, 5, 2).
-		AddRow(user2ID, "user2@example.com", "free", "trial", nil, nil, "lhr", now, nil, true, 1, 2, 0)
+		AddRow(user2ID, "user2@example.com", "free", "trial", nil, nil, "iad", now, nil, true, 1, 2, 0)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
 		WithArgs(20, 0).
@@ -77,10 +77,10 @@ func TestListUsers_WithEmailSearch(t *testing.T) {
 	now := time.Now()
 	userID := uuid.New().String()
 
-	// Expect count query with search filter
+	// Expect count query with search filter — now uses EXISTS prefix subquery
 	countRows := pgxmock.NewRows([]string{"count"}).AddRow(1)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM users u WHERE u.is_deleted = FALSE AND u.email ILIKE $1`)).
-		WithArgs("%test@%").
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM users u WHERE u.is_deleted = FALSE AND EXISTS (SELECT 1 FROM user_email_prefix_indices p WHERE p.user_id = u.id AND p.prefix_blind_idx = $1)`)).
+		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(countRows)
 
 	// Expect main query with search filter
@@ -92,7 +92,7 @@ func TestListUsers_WithEmailSearch(t *testing.T) {
 	}).AddRow(userID, "test@example.com", "premium", "active", nil, nil, "iad", now, &now, true, 2, 3, 0)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
-		WithArgs("%test@%", 20, 0).
+		WithArgs(pgxmock.AnyArg(), 20, 0).
 		WillReturnRows(rows)
 
 	// Execute
@@ -155,10 +155,10 @@ func TestListUsers_WithBothFilters(t *testing.T) {
 	now := time.Now()
 	userID := uuid.New().String()
 
-	// Expect count query with both filters
+	// Expect count query with both filters — email uses EXISTS prefix subquery
 	countRows := pgxmock.NewRows([]string{"count"}).AddRow(1)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM users u WHERE u.is_deleted = FALSE AND u.email ILIKE $1 AND u.subscription_tier = $2`)).
-		WithArgs("%test@%", "premium").
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM users u WHERE u.is_deleted = FALSE AND EXISTS (SELECT 1 FROM user_email_prefix_indices p WHERE p.user_id = u.id AND p.prefix_blind_idx = $1) AND u.subscription_tier = $2`)).
+		WithArgs(pgxmock.AnyArg(), "premium").
 		WillReturnRows(countRows)
 
 	// Expect main query with both filters
@@ -170,7 +170,7 @@ func TestListUsers_WithBothFilters(t *testing.T) {
 	}).AddRow(userID, "test@example.com", "premium", "active", nil, nil, "iad", now, &now, true, 2, 3, 0)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
-		WithArgs("%test@%", "premium", 20, 0).
+		WithArgs(pgxmock.AnyArg(), "premium", 20, 0).
 		WillReturnRows(rows)
 
 	// Execute
@@ -191,10 +191,10 @@ func TestListUsers_EmptyResult(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Expect count query returning 0
+	// Expect count query returning 0 — now uses EXISTS prefix subquery
 	countRows := pgxmock.NewRows([]string{"count"}).AddRow(0)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM users u WHERE u.is_deleted = FALSE AND u.email ILIKE $1`)).
-		WithArgs("%nonexistent@%").
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM users u WHERE u.is_deleted = FALSE AND EXISTS (SELECT 1 FROM user_email_prefix_indices p WHERE p.user_id = u.id AND p.prefix_blind_idx = $1)`)).
+		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(countRows)
 
 	// Expect main query returning no rows
@@ -206,7 +206,7 @@ func TestListUsers_EmptyResult(t *testing.T) {
 	})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
-		WithArgs("%nonexistent@%", 20, 0).
+		WithArgs(pgxmock.AnyArg(), 20, 0).
 		WillReturnRows(rows)
 
 	// Execute
@@ -379,7 +379,7 @@ func TestGetUserDetail_ZeroCounts(t *testing.T) {
 		"transactions_count", "budgets_count",
 	}).AddRow(
 		userID, "newuser@example.com", "free", "trial",
-		nil, nil, "lhr",
+		nil, nil, "iad",
 		now, nil, true,
 		0, 0, 0, 0, 0,
 	)
@@ -473,6 +473,92 @@ func TestGetUserDetail_NilManualTierOverride(t *testing.T) {
 	assert.Nil(t, detail.ManualTierOverride)
 	assert.Nil(t, detail.ManualTierEndsAt)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestListUsersSort tests that sort_by and sort_dir parameters produce the correct ORDER BY clause
+func TestListUsersSort(t *testing.T) {
+	tests := []struct {
+		name        string
+		sortBy      string
+		sortDir     string
+		expectOrder string // substring that must appear in the SQL
+	}{
+		{
+			name:        "default sort created_at desc",
+			sortBy:      "created_at",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY u.created_at DESC",
+		},
+		{
+			name:        "last_login_at asc with NULLS LAST",
+			sortBy:      "last_login_at",
+			sortDir:     "asc",
+			expectOrder: "ORDER BY u.last_login_at ASC NULLS LAST",
+		},
+		{
+			name:        "subscription_tier desc",
+			sortBy:      "subscription_tier",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY u.subscription_tier DESC",
+		},
+		{
+			name:        "subscription_status asc",
+			sortBy:      "subscription_status",
+			sortDir:     "asc",
+			expectOrder: "ORDER BY u.subscription_status ASC",
+		},
+		// Fallback cases — Huma enum prevents these in production, but repos are defense-in-depth
+		{
+			name:        "empty sort_by falls back to created_at desc",
+			sortBy:      "",
+			sortDir:     "",
+			expectOrder: "ORDER BY u.created_at DESC",
+		},
+		{
+			name:        "unknown sort_by falls back to created_at desc",
+			sortBy:      "nonexistent_column",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY u.created_at DESC",
+		},
+		{
+			name:        "unknown sort_dir falls back to DESC",
+			sortBy:      "created_at",
+			sortDir:     "invalid",
+			expectOrder: "ORDER BY u.created_at DESC",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock, err := pgxmock.NewPool()
+			require.NoError(t, err)
+			defer mock.Close()
+
+			repo := NewAdminUserRepository(mock, newTestFieldEncryptor(t))
+			filters := domain.AdminUserFilters{
+				SortBy:  tt.sortBy,
+				SortDir: tt.sortDir,
+			}
+
+			ctx := context.Background()
+
+			mock.ExpectQuery(`SELECT COUNT`).
+				WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(0))
+
+			mock.ExpectQuery(regexp.QuoteMeta(tt.expectOrder)).
+				WithArgs(20, 0).
+				WillReturnRows(pgxmock.NewRows([]string{
+					"id", "email", "subscription_tier", "subscription_status",
+					"manual_tier_override", "manual_tier_ends_at", "primary_region",
+					"created_at", "last_login_at", "is_active",
+					"linked_accounts_count", "automation_rules_count", "referrals_count",
+				}))
+
+			_, _, err = repo.ListUsers(ctx, filters, 20, 0)
+			require.NoError(t, err)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 // TestUpdateUserTier_AuditLogWithSpecialChars tests that special chars in reason don't break JSON

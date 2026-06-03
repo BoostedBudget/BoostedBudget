@@ -10,6 +10,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockBudgetRepository is a mock implementation of repository.BudgetRepository
@@ -97,8 +98,8 @@ func (m *MockBudgetRepository) DeleteCategory(ctx context.Context, id, budgetID 
 	return args.Error(0)
 }
 
-func (m *MockBudgetRepository) GetCategoriesMatchingTransaction(ctx context.Context, userID string, transactionCategory []string) ([]domain.BudgetCategory, error) {
-	args := m.Called(ctx, userID, transactionCategory)
+func (m *MockBudgetRepository) GetCategoriesMatchingTransaction(ctx context.Context, userID string, effective *domain.EffectiveCategory) ([]domain.BudgetCategory, error) {
+	args := m.Called(ctx, userID, effective)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -567,22 +568,13 @@ func TestBudgetService_AddCategory_Success(t *testing.T) {
 	existingBudget := createTestBudgetForService(userID)
 
 	req := &domain.CreateBudgetCategoryRequest{
-		Category:        []string{"Food And Drink"},
+		CategoryKind:    "pfc",
+		PFCPrimary:      strPtr("FOOD_AND_DRINK"),
 		AllocatedAmount: 300.00,
 	}
 
-	// Custom category with same name exists
-	customCats := []*domain.CustomCategory{
-		{ID: "cat-1", UserID: userID, Name: "Groceries"},
-	}
-
-	// Plaid categories include Food And Drink
-	plaidCats := []string{"FOOD_AND_DRINK", "TRANSPORTATION"}
-
-	// Setup mocks
+	// Setup mocks — category validation is deferred to domain so only GetByID and CreateCategory are called.
 	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-	mockCategoryRepo.On("GetByUserID", ctx, userID).Return(customCats, nil)
-	mockTransactionRepo.On("GetDistinctPlaidCategories", ctx, userID).Return(plaidCats, nil)
 	mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
 
 	// Execute
@@ -594,8 +586,6 @@ func TestBudgetService_AddCategory_Success(t *testing.T) {
 	assert.Equal(t, budgetID, category.BudgetID)
 	assert.Equal(t, req.AllocatedAmount, category.AllocatedAmount)
 	mockBudgetRepo.AssertExpectations(t)
-	mockCategoryRepo.AssertExpectations(t)
-	mockTransactionRepo.AssertExpectations(t)
 }
 
 func TestBudgetService_UpdateCategory_Success(t *testing.T) {
@@ -616,7 +606,8 @@ func TestBudgetService_UpdateCategory_Success(t *testing.T) {
 		{
 			ID:              categoryID,
 			BudgetID:        budgetID,
-			Category:        []string{"Food And Drink"},
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
 			AllocatedAmount: 300.00,
 		},
 	}
@@ -654,9 +645,9 @@ func TestBudgetService_DeleteCategory_Success(t *testing.T) {
 	existingBudget := createTestBudgetForService(userID)
 	existingBudget.Categories = []domain.BudgetCategory{
 		{
-			ID:       categoryID,
-			BudgetID: budgetID,
-			Category: []string{"Food And Drink"},
+			ID:           categoryID,
+			BudgetID:     budgetID,
+			CategoryKind: "pfc",
 		},
 	}
 
@@ -689,15 +680,11 @@ func TestBudgetService_GetAvailableCategories_Success(t *testing.T) {
 	// Custom categories
 	customCats := []*domain.CustomCategory{
 		{ID: "cat-1", UserID: userID, Name: "Groceries"},
-		{ID: "cat-2", UserID: userID, Name: "Dining", ParentCategory: strPtr("Food")},
+		{ID: "cat-2", UserID: userID, Name: "Dining", ParentPFCPrimary: strPtr("FOOD_AND_DRINK")},
 	}
 
-	// Plaid categories
-	plaidCats := []string{"FOOD_AND_DRINK", "TRANSPORTATION", "ENTERTAINMENT"}
-
-	// Setup mocks
+	// Setup mocks — no GetDistinctPlaidCategories call expected (replaced by pfc.AllPrimaries())
 	mockCategoryRepo.On("GetByUserID", ctx, userID).Return(customCats, nil)
-	mockTransactionRepo.On("GetDistinctPlaidCategories", ctx, userID).Return(plaidCats, nil)
 
 	// Execute
 	categories, err := service.GetAvailableCategories(ctx, userID)
@@ -705,14 +692,345 @@ func TestBudgetService_GetAvailableCategories_Success(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, categories)
-	// Should contain merged categories (custom + plaid formatted)
+	// Custom categories returned as-is (user-entered names)
 	assert.Contains(t, categories, "Groceries")
-	assert.Contains(t, categories, "Food > Dining")
-	assert.Contains(t, categories, "Food And Drink")
-	assert.Contains(t, categories, "Transportation")
-	assert.Contains(t, categories, "Entertainment")
+	assert.Contains(t, categories, "Dining")
+	// Curated PFCv2 primaries returned as enum values, not display strings
+	assert.Contains(t, categories, "FOOD_AND_DRINK")
+	assert.Contains(t, categories, "TRANSPORTATION")
+	assert.Contains(t, categories, "ENTERTAINMENT")
+	assert.NotContains(t, categories, "Food And Drink")
 	mockCategoryRepo.AssertExpectations(t)
-	mockTransactionRepo.AssertExpectations(t)
+}
+
+func TestGetAvailableCategories_IncludesCuratedPrimariesEvenWithoutObserved(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-new"
+
+	// Brand-new user with no custom categories
+	mockCategoryRepo.On("GetByUserID", ctx, userID).Return([]*domain.CustomCategory{}, nil)
+
+	categories, err := service.GetAvailableCategories(ctx, userID)
+
+	assert.NoError(t, err)
+	// All 18 PFCv2 primaries must be present as enum values
+	assert.Contains(t, categories, "FOOD_AND_DRINK")
+	assert.Contains(t, categories, "INCOME")
+	assert.Contains(t, categories, "LOAN_DISBURSEMENTS")
+	assert.Contains(t, categories, "OTHER")
+	assert.GreaterOrEqual(t, len(categories), 18)
+}
+
+func TestGetAvailableCategories_DedupesCustomVsCuratedCaseInsensitive(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	// Custom category with same name as curated primary (different case)
+	customCats := []*domain.CustomCategory{
+		{ID: "cat-1", UserID: userID, Name: "food and drink"},
+	}
+	mockCategoryRepo.On("GetByUserID", ctx, userID).Return(customCats, nil)
+
+	categories, err := service.GetAvailableCategories(ctx, userID)
+
+	assert.NoError(t, err)
+	// Custom entry wins — curated enum version dropped (deduped by display-name match)
+	assert.Contains(t, categories, "food and drink")
+	// Curated "FOOD_AND_DRINK" enum must NOT appear (deduped by custom's display match)
+	assert.NotContains(t, categories, "FOOD_AND_DRINK")
+}
+
+func TestGetAvailableCategories_DedupesCustomVsCuratedByEnumName(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	// Custom category named exactly like the PFC enum string
+	customCats := []*domain.CustomCategory{
+		{ID: "cat-1", UserID: userID, Name: "FOOD_AND_DRINK"},
+	}
+	mockCategoryRepo.On("GetByUserID", ctx, userID).Return(customCats, nil)
+
+	categories, err := service.GetAvailableCategories(ctx, userID)
+
+	assert.NoError(t, err)
+	// Custom entry stays
+	assert.Contains(t, categories, "FOOD_AND_DRINK")
+	// Curated enum must NOT appear as a second entry
+	occurrences := 0
+	for _, c := range categories {
+		if c == "FOOD_AND_DRINK" {
+			occurrences++
+		}
+	}
+	assert.Equal(t, 1, occurrences, "FOOD_AND_DRINK should appear exactly once")
+}
+
+// ============================================================================
+// ExpectedIncome / Amount Reconciliation Tests (Issue #1048)
+// ============================================================================
+
+func TestBudgetService_CreateBudget_ExpectedIncomeWins(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	expectedIncome := 2000.0
+	req := &domain.CreateBudgetRequest{
+		Name:           "Monthly Budget",
+		Period:         domain.BudgetPeriodMonthly,
+		StartDate:      time.Now(),
+		Amount:         1000.0,
+		CurrencyCode:   "USD",
+		ExpectedIncome: &expectedIncome,
+	}
+
+	mockBudgetRepo.On("Create", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, budget)
+	assert.Equal(t, 2000.0, budget.ExpectedIncome, "expected_income should win over amount")
+	assert.Equal(t, 2000.0, budget.Amount, "amount should mirror expected_income")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+func TestBudgetService_CreateBudget_AmountFallback(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	req := &domain.CreateBudgetRequest{
+		Name:         "Monthly Budget",
+		Period:       domain.BudgetPeriodMonthly,
+		StartDate:    time.Now(),
+		Amount:       1000.0,
+		CurrencyCode: "USD",
+		// ExpectedIncome is nil
+	}
+
+	mockBudgetRepo.On("Create", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, budget)
+	assert.Equal(t, 1000.0, budget.ExpectedIncome, "expected_income should fall back to amount")
+	assert.Equal(t, 1000.0, budget.Amount, "amount should remain unchanged")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+func TestBudgetService_CreateBudget_ExpectedIncomeOnly(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	expectedIncome := 3000.0
+	req := &domain.CreateBudgetRequest{
+		Name:           "Monthly Budget",
+		Period:         domain.BudgetPeriodMonthly,
+		StartDate:      time.Now(),
+		Amount:         3000.0, // must be positive to pass validation
+		CurrencyCode:   "USD",
+		ExpectedIncome: &expectedIncome,
+	}
+
+	mockBudgetRepo.On("Create", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, budget)
+	assert.Equal(t, 3000.0, budget.ExpectedIncome)
+	assert.Equal(t, 3000.0, budget.Amount)
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_CreateBudget_RejectsZeroAmount tests that amount=0 (which
+// also results in expected_income=0 after reconciliation) is rejected by Validate() (R19b).
+func TestBudgetService_CreateBudget_RejectsZeroAmount(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	req := &domain.CreateBudgetRequest{
+		Name:         "Budget",
+		Period:       domain.BudgetPeriodMonthly,
+		StartDate:    time.Now(),
+		Amount:       0, // triggers "amount must be positive"
+		CurrencyCode: "USD",
+	}
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	assert.Error(t, err, "zero amount must be rejected by Validate()")
+	assert.Nil(t, budget)
+	assert.Contains(t, err.Error(), "amount must be positive")
+}
+
+func TestBudgetService_UpdateBudget_ExpectedIncomeUpdates(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+
+	expectedIncome := 4000.0
+	req := &domain.UpdateBudgetRequest{
+		ExpectedIncome: &expectedIncome,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockBudgetRepo.On("Update", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+
+	budget, err := service.UpdateBudget(ctx, userID, budgetID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, budget)
+	assert.Equal(t, 4000.0, budget.ExpectedIncome, "expected_income should be updated")
+	assert.Equal(t, 4000.0, budget.Amount, "amount should mirror expected_income")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+func TestBudgetService_UpdateBudget_AmountFallback(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+
+	newAmount := 500.0
+	req := &domain.UpdateBudgetRequest{
+		Amount: &newAmount,
+		// ExpectedIncome is nil
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockBudgetRepo.On("Update", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+
+	budget, err := service.UpdateBudget(ctx, userID, budgetID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, budget)
+	assert.Equal(t, 500.0, budget.Amount, "amount should be updated")
+	assert.Equal(t, 500.0, budget.ExpectedIncome, "expected_income should mirror amount")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// ============================================================================
+// PFC Display Enrichment Tests
+// ============================================================================
+
+// TestBudgetService_GetBudget_PopulatesPFCDisplay asserts that GetBudget enriches
+// BudgetCategory PFC display names before returning.
+func TestBudgetService_GetBudget_PopulatesPFCDisplay(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-pfc"
+
+	budget := createTestBudgetForService(userID)
+	budget.ID = budgetID
+	budget.Categories = []domain.BudgetCategory{
+		{ID: "cat-1", BudgetID: budgetID, CategoryKind: "pfc", PFCPrimary: strPtr("FOOD_AND_DRINK")},
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(budget, nil)
+
+	result, err := service.GetBudget(ctx, userID, budgetID)
+
+	require.NoError(t, err)
+	require.Len(t, result.Categories, 1)
+	require.NotNil(t, result.Categories[0].PFCPrimaryDisplay, "PFCPrimaryDisplay should be populated")
+	assert.Equal(t, "Food And Drink", *result.Categories[0].PFCPrimaryDisplay)
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_AddCategory_PopulatesPFCDisplay asserts that AddCategory enriches
+// the returned BudgetCategory with PFC display names.
+func TestBudgetService_AddCategory_PopulatesPFCDisplay(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+
+	req := &domain.CreateBudgetCategoryRequest{
+		CategoryKind:    "pfc",
+		PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+		AllocatedAmount: 200.00,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+
+	category, err := service.AddCategory(ctx, userID, budgetID, req)
+
+	require.NoError(t, err)
+	require.NotNil(t, category.PFCPrimaryDisplay, "PFCPrimaryDisplay should be populated")
+	assert.Equal(t, "Food And Drink", *category.PFCPrimaryDisplay)
+	mockBudgetRepo.AssertExpectations(t)
 }
 
 // strPtr helper is defined in rule_application_service_test.go

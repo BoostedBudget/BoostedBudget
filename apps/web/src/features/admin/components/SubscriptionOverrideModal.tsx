@@ -29,9 +29,9 @@ import {
     TrendingUp,
     Layers,
 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import type { AdminSubscriptionTierInputBodyTier } from '@boostedbudget/api-client/models'
 import { useAdminSubscriptionDetail, useUpdateUserTier } from '../hooks/useAdminSubscription'
-import './SubscriptionOverrideModal.css'
 
 const TIER_DISPLAY: Record<string, string> = {
     premium: 'Premium',
@@ -122,11 +122,13 @@ function SubscriptionOverrideForm({
     const isExpired =
         sub?.manual_tier_ends_at && new Date(sub.manual_tier_ends_at) < new Date()
 
+    const inputClass = 'w-full px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm font-[inherit] transition-colors focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:opacity-60 disabled:cursor-not-allowed'
+
     return (
         <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-            <DialogContent className="subscription-override-modal" aria-describedby="sub-override-desc">
+            <DialogContent className="max-w-[540px]" aria-describedby="sub-override-desc">
                 <DialogHeader>
-                    <DialogTitle className="subscription-override-modal__title">
+                    <DialogTitle className="flex items-center gap-2">
                         <CreditCard size={20} />
                         Subscription Override
                     </DialogTitle>
@@ -142,33 +144,38 @@ function SubscriptionOverrideForm({
                 </DialogHeader>
 
                 {isLoading ? (
-                    <div className="subscription-override-modal__loading">
-                        <Loader2 className="subscription-override-modal__spinner" />
+                    <div className="flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground">
+                        <Loader2 className="w-8 h-8 animate-spin" />
                         <span>Loading subscription details…</span>
                     </div>
                 ) : sub ? (
-                    <div className="subscription-override-modal__body">
+                    <div className="flex flex-col gap-5 my-2">
                         {/* Current state hero */}
-                        <div className="subscription-override-modal__current">
-                            <div className="subscription-override-modal__current-tier">
-                                <span className="subscription-override-modal__current-label">Effective tier</span>
-                                <span className="subscription-override-modal__tier-badge subscription-override-modal__tier-badge--active">
+                        <div className="bg-muted border border-border rounded-[0.625rem] p-4 flex flex-col gap-2.5">
+                            <div className="flex items-center justify-between flex-wrap gap-2">
+                                <span className="text-[0.8125rem] text-muted-foreground font-medium">Effective tier</span>
+                                <span className="inline-flex items-center px-3 py-1 rounded-full text-[0.8125rem] font-semibold tracking-wide bg-primary text-primary-foreground shadow-sm">
                                     {TIER_DISPLAY[sub.effective_tier] ?? sub.effective_tier}
                                 </span>
                             </div>
 
-                            <div className="subscription-override-modal__meta">
-                                <span>
+                            <div className="flex gap-4 flex-wrap text-[0.8125rem] text-muted-foreground">
+                                <span className="inline-flex items-center gap-1">
                                     <Shield size={14} /> Base: {TIER_DISPLAY[sub.base_tier] ?? sub.base_tier}
                                 </span>
-                                <span>
+                                <span className="inline-flex items-center gap-1">
                                     <TrendingUp size={14} /> Status: {sub.subscription_status}
                                 </span>
                             </div>
 
                             {hasOverride && (
                                 <div
-                                    className={`subscription-override-modal__override-badge ${isExpired ? 'subscription-override-modal__override-badge--expired' : ''}`}
+                                    className={cn(
+                                        'inline-flex items-center gap-1.5 flex-wrap text-[0.8rem] font-medium px-2.5 py-1.5 rounded-md border',
+                                        isExpired
+                                            ? 'bg-warning/10 text-warning border-warning/20'
+                                            : 'bg-success/10 text-success border-success/20'
+                                    )}
                                 >
                                     {isExpired ? (
                                         <AlertTriangle size={14} />
@@ -177,7 +184,7 @@ function SubscriptionOverrideForm({
                                     )}
                                     Manual override active{isExpired ? ' (expired)' : ''}
                                     {sub.manual_tier_ends_at && (
-                                        <span className="subscription-override-modal__override-expiry">
+                                        <span className="inline-flex items-center gap-1 font-normal opacity-85">
                                             <Clock size={12} />
                                             {isExpired ? 'Expired' : 'Expires'}: {formatDate(sub.manual_tier_ends_at)}
                                         </span>
@@ -188,44 +195,46 @@ function SubscriptionOverrideForm({
 
                         {/* Limits summary */}
                         {sub.limits && (
-                            <div className="subscription-override-modal__limits">
-                                <h4 className="subscription-override-modal__section-title">
+                            <div className="flex flex-col gap-2.5">
+                                <h4 className="text-[0.8rem] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 m-0 pb-1.5 border-b border-border">
                                     <Layers size={14} /> Effective Limits
                                 </h4>
-                                <div className="subscription-override-modal__limits-grid">
-                                    <div className="subscription-override-modal__limit">
-                                        <span className="subscription-override-modal__limit-val">
+                                <div className="grid grid-cols-3 gap-3">
+                                    <div className="flex flex-col items-center py-3 px-2 bg-muted border border-border rounded-lg text-center">
+                                        <span className="text-xl font-bold text-primary tabular-nums">
                                             {sub.limits.accounts === -1 ? '∞' : sub.limits.accounts}
                                         </span>
-                                        <span className="subscription-override-modal__limit-key">Accounts</span>
+                                        <span className="text-[0.7rem] text-muted-foreground mt-0.5 uppercase tracking-wider">Accounts</span>
                                     </div>
-                                    <div className="subscription-override-modal__limit">
-                                        <span className="subscription-override-modal__limit-val">
+                                    <div className="flex flex-col items-center py-3 px-2 bg-muted border border-border rounded-lg text-center">
+                                        <span className="text-xl font-bold text-primary tabular-nums">
                                             {sub.limits.transaction_history_days === -1
                                                 ? '∞'
                                                 : `${sub.limits.transaction_history_days}d`}
                                         </span>
-                                        <span className="subscription-override-modal__limit-key">History</span>
+                                        <span className="text-[0.7rem] text-muted-foreground mt-0.5 uppercase tracking-wider">History</span>
                                     </div>
-                                    <div className="subscription-override-modal__limit">
-                                        <span className="subscription-override-modal__limit-val">
+                                    <div className="flex flex-col items-center py-3 px-2 bg-muted border border-border rounded-lg text-center">
+                                        <span className="text-xl font-bold text-primary tabular-nums">
                                             {sub.limits.executions_per_day === -1 ? '∞' : sub.limits.executions_per_day}
                                         </span>
-                                        <span className="subscription-override-modal__limit-key">Runs/day</span>
+                                        <span className="text-[0.7rem] text-muted-foreground mt-0.5 uppercase tracking-wider">Runs/day</span>
                                     </div>
                                 </div>
                             </div>
                         )}
 
                         {/* Form */}
-                        <div className="subscription-override-modal__form">
-                            <h4 className="subscription-override-modal__section-title">Set Override</h4>
+                        <div className="flex flex-col gap-3.5">
+                            <h4 className="text-[0.8rem] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 m-0 pb-1.5 border-b border-border">
+                                Set Override
+                            </h4>
 
-                            <label className="subscription-override-modal__field">
-                                <span className="subscription-override-modal__field-label">New Tier *</span>
+                            <label className="flex flex-col gap-1.5 cursor-text">
+                                <span className="text-[0.8125rem] font-medium text-foreground">New Tier *</span>
                                 <select
                                     id="override-tier-select"
-                                    className="subscription-override-modal__select"
+                                    className={inputClass}
                                     value={selectedTier}
                                     onChange={(e) => setSelectedTier(e.target.value)}
                                     disabled={isSaving}
@@ -239,11 +248,11 @@ function SubscriptionOverrideForm({
                                 </select>
                             </label>
 
-                            <label className="subscription-override-modal__field">
-                                <span className="subscription-override-modal__field-label">Reason *</span>
+                            <label className="flex flex-col gap-1.5 cursor-text">
+                                <span className="text-[0.8125rem] font-medium text-foreground">Reason *</span>
                                 <textarea
                                     id="override-reason-input"
-                                    className="subscription-override-modal__textarea"
+                                    className={cn(inputClass, 'resize-y min-h-[4rem]')}
                                     value={reason}
                                     onChange={(e) => setReason(e.target.value)}
                                     placeholder="e.g. Gifted upgrade, trial extension, support case #123..."
@@ -252,9 +261,9 @@ function SubscriptionOverrideForm({
                                 />
                             </label>
 
-                            <label className="subscription-override-modal__field">
-                                <span className="subscription-override-modal__field-label">
-                                    Expires at <em>(optional — leave blank for permanent)</em>
+                            <label className="flex flex-col gap-1.5 cursor-text">
+                                <span className="text-[0.8125rem] font-medium text-foreground">
+                                    Expires at <span className="font-normal text-muted-foreground">(optional — leave blank for permanent)</span>
                                 </span>
                                 <DatePicker
                                     selected={expiresAt}
@@ -263,7 +272,7 @@ function SubscriptionOverrideForm({
                                     timeIntervals={15}
                                     dateFormat="MMM d, yyyy h:mm aa"
                                     placeholderText="Select expiry date…"
-                                    className="subscription-override-modal__input"
+                                    className={inputClass}
                                     disabled={isSaving}
                                     isClearable
                                     minDate={new Date()}
@@ -272,7 +281,7 @@ function SubscriptionOverrideForm({
                         </div>
                     </div>
                 ) : (
-                    <div className="subscription-override-modal__loading">
+                    <div className="flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground">
                         <span>No subscription data found for this user.</span>
                     </div>
                 )}
@@ -288,7 +297,7 @@ function SubscriptionOverrideForm({
                     >
                         {isSaving ? (
                             <>
-                                <Loader2 size={16} className="subscription-override-modal__spinner-inline" />
+                                <Loader2 size={16} className="mr-1.5 animate-spin" />
                                 Saving…
                             </>
                         ) : (

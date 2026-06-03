@@ -236,3 +236,156 @@ func TestFillMissingPeriods(t *testing.T) {
 		})
 	}
 }
+
+// TestEffectiveCategoryExpr_OverrideBranchFires_Primary verifies the PFC v2 discriminated
+// effective-category expression for primary grouping.
+func TestEffectiveCategoryExpr_OverrideBranchFires_Primary(t *testing.T) {
+	expr := effectiveCategoryExpr(false)
+	if expr == "" {
+		t.Fatal("effectiveCategoryExpr returned empty string")
+	}
+	// Must use category_override_kind discriminator
+	if !contains(expr, "category_override_kind") {
+		t.Errorf("primary expr should use 'category_override_kind' discriminator, got: %s", expr)
+	}
+	// Must use pfc_primary_override for pfc overrides
+	if !contains(expr, "pfc_primary_override") {
+		t.Errorf("primary expr must reference 'pfc_primary_override', got: %s", expr)
+	}
+	// Must fall through to pfc_primary
+	if !contains(expr, "pfc_primary") {
+		t.Errorf("primary expr must fall through to 'pfc_primary', got: %s", expr)
+	}
+	// Must NOT reference dropped legacy columns
+	if contains(expr, "personal_finance_category") {
+		t.Errorf("primary expr must NOT reference legacy 'personal_finance_category', got: %s", expr)
+	}
+	if contains(expr, "category_override->>") {
+		t.Errorf("primary expr must NOT reference legacy 'category_override' JSON array, got: %s", expr)
+	}
+}
+
+// TestEffectiveCategoryExpr_OverrideBranchFires_Subcategory verifies the PFC v2 discriminated
+// effective-category expression for detailed (subcategory) grouping.
+func TestEffectiveCategoryExpr_OverrideBranchFires_Subcategory(t *testing.T) {
+	expr := effectiveCategoryExpr(true)
+	// Must use category_override_kind discriminator
+	if !contains(expr, "category_override_kind") {
+		t.Errorf("subcategory expr should use 'category_override_kind' discriminator, got: %s", expr)
+	}
+	// Must use pfc_detailed_override for pfc overrides
+	if !contains(expr, "pfc_detailed_override") {
+		t.Errorf("subcategory expr must reference 'pfc_detailed_override', got: %s", expr)
+	}
+	// Must fall through to pfc_detailed
+	if !contains(expr, "pfc_detailed") {
+		t.Errorf("subcategory expr must fall through to 'pfc_detailed', got: %s", expr)
+	}
+	// Must NOT reference dropped legacy columns
+	if contains(expr, "personal_finance_category") {
+		t.Errorf("subcategory expr must NOT reference legacy 'personal_finance_category', got: %s", expr)
+	}
+	if contains(expr, "category_override->>") {
+		t.Errorf("subcategory expr must NOT reference legacy 'category_override' JSON array, got: %s", expr)
+	}
+}
+
+// TestEffectiveCategoryExpr_IncludesUncategorizedFallback verifies that the category_token
+// grouping expression falls back to 'UNCATEGORIZED' when no category is present.
+// The PFCv2 discriminated-union model means custom kind uses 'custom:<id>' and pfc kind
+// uses the PFC column values. When none match, COALESCE provides 'UNCATEGORIZED'.
+func TestEffectiveCategoryExpr_IncludesUncategorizedFallback(t *testing.T) {
+	expr := effectiveCategoryExpr(true)
+	if !contains(expr, "COALESCE") {
+		t.Errorf("expr must use COALESCE for fallback: %s", expr)
+	}
+	if !contains(expr, "'UNCATEGORIZED'") {
+		t.Errorf("expr must fall back to 'UNCATEGORIZED': %s", expr)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		func() bool {
+			for i := 0; i <= len(s)-len(substr); i++ {
+				if s[i:i+len(substr)] == substr {
+					return true
+				}
+			}
+			return false
+		}())
+}
+
+// TestEffectiveCategoryDisplayExpr_UsesEffectiveCategoryNameColumn verifies that the
+// display expression reads from the denormalized effective_category_name column
+// instead of performing a JOIN on custom_categories.
+func TestEffectiveCategoryDisplayExpr_UsesEffectiveCategoryNameColumn(t *testing.T) {
+	expr := effectiveCategoryDisplayExpr()
+	// Must reference the denormalized column directly
+	if !contains(expr, "effective_category_name") {
+		t.Errorf("display expr must reference effective_category_name column, got: %s", expr)
+	}
+	// Must NOT require a JOIN on custom_categories (no cc. alias)
+	if contains(expr, "cc.name") {
+		t.Errorf("display expr must NOT reference cc.name (JOIN removed), got: %s", expr)
+	}
+	if contains(expr, "category_override_kind") {
+		t.Errorf("display expr must NOT branch on category_override_kind (column is pre-computed), got: %s", expr)
+	}
+}
+
+// TestEffectiveTransferExpr_UsesEffectivePfcPrimaryColumn verifies that the transfer
+// filter expression reads from the denormalized effective_pfc_primary column.
+func TestEffectiveTransferExpr_UsesEffectivePfcPrimaryColumn(t *testing.T) {
+	expr := effectiveTransferExpr()
+	// Must reference the denormalized column
+	if !contains(expr, "effective_pfc_primary") {
+		t.Errorf("transfer expr must reference effective_pfc_primary column, got: %s", expr)
+	}
+	// Must NOT use the old CASE/override pattern
+	if contains(expr, "pfc_primary_override") {
+		t.Errorf("transfer expr must NOT reference pfc_primary_override directly, got: %s", expr)
+	}
+	if contains(expr, "category_override_kind") {
+		t.Errorf("transfer expr must NOT branch on category_override_kind (column is pre-computed), got: %s", expr)
+	}
+}
+
+// TestBuildSpendingFilter_CustomCategoryRollup verifies the custom-category scope
+// clause and roll-up behavior (Issue #1203).
+func TestBuildSpendingFilter_CustomCategoryRollup(t *testing.T) {
+	base := []interface{}{"user-1", time.Now(), time.Now()}
+
+	t.Run("rollup includes children via parent_id", func(t *testing.T) {
+		filters := domain.SpendingFilters{
+			IncludeTransfers:  true, // suppress the transfer clause for a focused assertion
+			CustomCategoryIDs: []string{"id1", "id2"},
+			RollUpChildren:    true,
+		}
+		clause, args, _ := buildSpendingFilter(filters, base)
+		if !contains(clause, "custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1") {
+			t.Errorf("expected rollup subquery, got: %s", clause)
+		}
+		if !contains(clause, "parent_id::text IN") {
+			t.Errorf("expected parent_id rollup, got: %s", clause)
+		}
+		if len(args) != 5 { // 3 base + 2 ids
+			t.Errorf("expected 5 args, got %d", len(args))
+		}
+	})
+
+	t.Run("no rollup matches exact ids only", func(t *testing.T) {
+		filters := domain.SpendingFilters{
+			IncludeTransfers:  true,
+			CustomCategoryIDs: []string{"id1"},
+			RollUpChildren:    false,
+		}
+		clause, _, _ := buildSpendingFilter(filters, base)
+		if !contains(clause, "custom_category_override_id::text IN") {
+			t.Errorf("expected exact-id match, got: %s", clause)
+		}
+		if contains(clause, "parent_id::text IN") {
+			t.Errorf("did not expect rollup subquery, got: %s", clause)
+		}
+	})
+}

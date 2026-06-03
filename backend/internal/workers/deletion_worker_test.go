@@ -39,6 +39,8 @@ func (m *MockDeletionServiceForWorker) SetPlaidCleanupService(svc services.Plaid
 	m.Called(svc)
 }
 
+func (m *MockDeletionServiceForWorker) SetPaddleCleanupService(svc services.PaddleDeletionCleaner) {}
+
 func (m *MockDeletionServiceForWorker) SetAnalytics(a phclient.Analytics) {
 	m.Called(a)
 }
@@ -117,6 +119,41 @@ func (m *MockProfileRepoForWorker) GetUsersWithActivePaddleSubscriptions(ctx con
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+// Retention tracking stubs (#930)
+func (m *MockProfileRepoForWorker) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+	return "", nil
+}
+func (m *MockProfileRepoForWorker) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
+	return nil
+}
+func (m *MockProfileRepoForWorker) ClearRetentionDates(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepoForWorker) SetRetentionNotice30dSent(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepoForWorker) SetRetentionNotice7dSent(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepoForWorker) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+func (m *MockProfileRepoForWorker) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+func (m *MockProfileRepoForWorker) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+
+func (m *MockProfileRepoForWorker) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	return nil, nil
+}
+
+func (m *MockProfileRepoForWorker) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	args := m.Called(ctx, tx, userID, plainEmail)
+	return args.Error(0)
 }
 
 // TestWorker_FindsScheduledUsers tests that worker finds users scheduled for deletion

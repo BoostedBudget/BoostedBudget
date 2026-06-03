@@ -233,14 +233,13 @@ END $$;
 -- Revert constraint
 ALTER TABLE users DROP CONSTRAINT IF EXISTS valid_primary_region;
 
--- Reverse data transformation
+-- Reverse data transformation (example uses historical region codes)
 UPDATE users SET primary_region = 'us-east-1' WHERE primary_region = 'iad';
-UPDATE users SET primary_region = 'eu-west-1' WHERE primary_region = 'lhr';
 
 -- Restore old constraint
 ALTER TABLE users
 ADD CONSTRAINT valid_primary_region
-    CHECK (primary_region IN ('us-east-1', 'eu-west-1', 'ap-southeast-1'));
+    CHECK (primary_region IN ('us-east-1'));
 ```
 
 ## Troubleshooting

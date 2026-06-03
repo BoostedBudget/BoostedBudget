@@ -1,7 +1,8 @@
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { AccountTable } from './AccountTable'
 import type { Account } from '@boostedbudget/api-client/models'
+import { mockUseUser, mockClerkUser } from '@/test/mocks/clerk'
 
 // Mock account factory for reusable test data
 function createMockAccount(overrides?: Partial<Account>): Account {
@@ -227,53 +228,60 @@ describe('AccountTable', () => {
   })
 
   describe('Sorting', () => {
-    it('should make name column sortable', () => {
-      render(<AccountTable accounts={mockAccounts} sortable />)
+    it('makes name column sortable when onSortChange is provided', () => {
+      render(<AccountTable accounts={mockAccounts} onSortChange={mock(() => {})} />)
 
       const nameHeader = screen.getByText('Account')
       expect(nameHeader.closest('button')).toBeInTheDocument()
     })
 
-    it('should call onSort when clicking sortable header', () => {
-      const onSort = mock(() => {})
-      render(<AccountTable accounts={mockAccounts} sortable onSort={onSort} />)
+    it('calls onSortChange with asc on first click', () => {
+      const onSortChange = mock(() => {})
+      render(<AccountTable accounts={mockAccounts} onSortChange={onSortChange} />)
 
-      const nameHeader = screen.getByText('Account').closest('button')!
-      fireEvent.click(nameHeader)
-
-      expect(onSort).toHaveBeenCalledWith('name', 'asc')
+      fireEvent.click(screen.getByText('Account').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith({ columnId: 'name', direction: 'asc' })
     })
 
-    it('should toggle sort direction on second click', () => {
-      const onSort = mock(() => {})
+    it('calls onSortChange with desc when sorted asc and clicked', () => {
+      const onSortChange = mock(() => {})
       render(
         <AccountTable
           accounts={mockAccounts}
-          sortable
-          onSort={onSort}
-          sortColumn="name"
-          sortDirection="asc"
+          onSortChange={onSortChange}
+          sort={{ columnId: 'name', direction: 'asc' }}
         />
       )
 
-      const nameHeader = screen.getByText('Account').closest('button')!
-      fireEvent.click(nameHeader)
-
-      expect(onSort).toHaveBeenCalledWith('name', 'desc')
+      fireEvent.click(screen.getByText('Account').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith({ columnId: 'name', direction: 'desc' })
     })
 
-    it('should show sort indicator on sorted column', () => {
+    it('calls onSortChange(null) on third click — clears sort', () => {
+      const onSortChange = mock(() => {})
       render(
         <AccountTable
           accounts={mockAccounts}
-          sortable
-          sortColumn="name"
-          sortDirection="asc"
+          onSortChange={onSortChange}
+          sort={{ columnId: 'name', direction: 'desc' }}
         />
       )
 
-      const nameHeader = screen.getByText('Account').closest('button')!
-      expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
+      fireEvent.click(screen.getByText('Account').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith(null)
+    })
+
+    it('shows sort indicator on sorted column', () => {
+      render(
+        <AccountTable
+          accounts={mockAccounts}
+          onSortChange={mock(() => {})}
+          sort={{ columnId: 'name', direction: 'asc' }}
+        />
+      )
+
+      const nameTh = screen.getByRole('columnheader', { name: /account/i })
+      expect(nameTh).toHaveAttribute('aria-sort', 'ascending')
     })
   })
 
@@ -307,6 +315,50 @@ describe('AccountTable', () => {
 
       expect(editButtons.length).toBe(3)
       expect(deleteButtons.length).toBe(3)
+    })
+  })
+
+  describe('Phase 5 – DataTable opt-in features', () => {
+    beforeEach(() => {
+      mockUseUser.mockReturnValue({ user: mockClerkUser, isLoaded: true, isSignedIn: true })
+    })
+
+    it('renders data-ph-mask on institution, name, mask, and balance columns', () => {
+      const { container } = render(<AccountTable accounts={mockAccounts} />)
+      const maskedTds = container.querySelectorAll('td[data-ph-mask]')
+      // institution + name + mask + balance = 4 masked cells per row
+      expect(maskedTds.length).toBe(mockAccounts.length * 4)
+    })
+
+    it('renders resize handles when resizable is true', () => {
+      const { container } = render(<AccountTable accounts={mockAccounts} />)
+      expect(container.querySelectorAll('[data-testid="resize-handle"]').length).toBeGreaterThan(0)
+    })
+
+    it('renders drag handles when reorderable is true', () => {
+      const { container } = render(<AccountTable accounts={mockAccounts} />)
+      expect(container.querySelectorAll('[data-testid="drag-handle"]').length).toBeGreaterThan(0)
+    })
+
+    it('balance column th has data-pinned="right"', () => {
+      render(<AccountTable accounts={mockAccounts} />)
+      const balanceTh = screen.getByRole('columnheader', { name: /balance/i })
+      expect(balanceTh).toHaveAttribute('data-pinned', 'right')
+    })
+
+    it('mask column appears in visibility menu', () => {
+      render(<AccountTable accounts={mockAccounts} />)
+      const columnsButton = screen.getByRole('button', { name: /columns/i })
+      fireEvent.click(columnsButton)
+      expect(screen.getByRole('menuitemcheckbox', { name: /acct #/i })).toBeInTheDocument()
+    })
+
+    it('thead has sticky class and 4rem top offset for global header clearance', () => {
+      const { container } = render(<AccountTable accounts={mockAccounts} />)
+      const thead = container.querySelector('thead')
+      expect(thead).not.toBeNull()
+      expect(thead!.className).toContain('sticky')
+      expect(thead!.style.top).toBe('4rem')
     })
   })
 

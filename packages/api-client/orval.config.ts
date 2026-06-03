@@ -1,12 +1,19 @@
 import { defineConfig } from 'orval';
 
+// orval generates the correct per-verb React Query hooks from its defaults:
+//   - GET     → useQuery    (UseQueryResult)
+//   - non-GET → useMutation (UseMutationResult, with .mutateAsync())
+// Do NOT set a global `override.query.useQuery: true`. Since orval 8.13 that flag applies
+// to ALL operations (POST/PUT/PATCH/DELETE), emitting UseQueryResult and breaking every
+// `.mutateAsync()` callsite. See issue #1252 / PR #1251.
+
 export default defineConfig({
   api: {
     input: {
       target: '../../api/openapi.yaml',
-      // Disable spectral validation - already validated in openapi-validate CI job
-      // Fixes Node.js 22 compatibility issue with @stoplight/spectral-core's Ajv version
-      validation: false,
+      // Skip spectral validation here — the spec is validated in the openapi-validate CI
+      // job, and spectral's bundled Ajv has a Node.js 22 incompatibility.
+      unsafeDisableValidation: true,
     },
     output: {
       mode: 'tags-split',
@@ -14,7 +21,11 @@ export default defineConfig({
       schemas: 'src/models',
       client: 'react-query',
       httpClient: 'axios',
-      mock: true,
+      // MSW-only mocks. In orval v8 `mock: true` emits BOTH msw and faker outputs, so we
+      // pin the generator list to msw to keep the generated tree stable.
+      mock: {
+        generators: [{ type: 'msw', delay: 500 }],
+      },
       clean: true,
       prettier: true,
       override: {
@@ -23,14 +34,9 @@ export default defineConfig({
           name: 'customInstance',
         },
         query: {
-          useQuery: true,
           useSuspenseQuery: false,
           useInfinite: false,
           signal: true,
-        },
-        mock: {
-          type: 'msw',
-          delay: 500,
         },
       },
     },

@@ -14,7 +14,6 @@ type Config struct {
 	Port               string
 	Environment        string
 	Version            string
-	PrimaryRegion      string
 	CORSAllowedOrigins string
 
 	// HTTP server timeouts and limits
@@ -71,6 +70,12 @@ type Config struct {
 	DeletionWorkerInterval  string
 	DeletionTokenSecret     string
 
+	// Retention Configuration (#930: 6-month read-only period before auto-deletion)
+	RetentionPeriodMonths int // env: RETENTION_PERIOD_MONTHS, default: 6
+
+	// DLQ Configuration (#633: Dead Letter Queue admin UI + cleanup)
+	DLQRetentionDays int // env: DLQ_RETENTION_DAYS, default: 30
+
 	// Frontend URL (for cancellation links)
 	FrontendURL string
 
@@ -87,6 +92,13 @@ type Config struct {
 	// Paddle Reconciliation
 	PaddleReconciliationEnabled bool // from PADDLE_RECONCILIATION_ENABLED, default true
 	PaddleReconciliationAutoFix bool // from PADDLE_RECONCILIATION_AUTO_FIX, default false
+
+	// Cloudflare Origin Secret (CF_ORIGIN_SECRET) — required in prod/staging
+	CFOriginSecret string
+
+	// MCP Worker Secret (MCP_WORKER_SECRET) — shared secret between MCP Cloudflare Worker
+	// and backend; used to verify X-MCP-Worker-Secret header; fail-closed when empty.
+	MCPWorkerSecret string // env: MCP_WORKER_SECRET, default: ""
 }
 
 // Load loads configuration from environment variables
@@ -96,7 +108,6 @@ func Load() (*Config, error) {
 		Port:               getEnv("PORT", "8080"),
 		Environment:        getEnv("ENVIRONMENT", "development"),
 		Version:            getEnv("VERSION", "0.1.0"),
-		PrimaryRegion:      getEnv("PRIMARY_REGION", "iad"),
 		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "*"),
 
 		// HTTP server timeouts and limits
@@ -153,6 +164,12 @@ func Load() (*Config, error) {
 		DeletionWorkerInterval:  getEnv("DELETION_WORKER_INTERVAL", "1h"),
 		DeletionTokenSecret:     getEnv("DELETION_TOKEN_SECRET", ""),
 
+		// Retention Configuration (#930)
+		RetentionPeriodMonths: getEnvAsInt("RETENTION_PERIOD_MONTHS", 6),
+
+		// DLQ Configuration (#633)
+		DLQRetentionDays: getEnvAsInt("DLQ_RETENTION_DAYS", 30),
+
 		// Frontend URL
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 
@@ -169,6 +186,12 @@ func Load() (*Config, error) {
 		// Paddle Reconciliation
 		PaddleReconciliationEnabled: getEnvBool("PADDLE_RECONCILIATION_ENABLED", true),
 		PaddleReconciliationAutoFix: getEnvBool("PADDLE_RECONCILIATION_AUTO_FIX", false),
+
+		// Cloudflare Origin Secret
+		CFOriginSecret: getEnv("CF_ORIGIN_SECRET", ""),
+
+		// MCP Worker Secret (fail-closed when empty — IsMCPOrigin returns false)
+		MCPWorkerSecret: getEnv("MCP_WORKER_SECRET", ""),
 	}
 
 	// Validate required fields for production
@@ -213,6 +236,11 @@ func (c *Config) validate() error {
 	// Paddle (both required together)
 	if c.PaddleAPIKey == "" || c.PaddleWebhookSecret == "" {
 		errs = append(errs, fmt.Errorf("PADDLE_API_KEY and PADDLE_WEBHOOK_SECRET are both required"))
+	}
+
+	// Cloudflare Origin Secret (required so direct *.fly.dev access is blocked)
+	if c.CFOriginSecret == "" {
+		errs = append(errs, fmt.Errorf("CF_ORIGIN_SECRET is required — set it to the value in the Cloudflare Transform Rule (see docs/FLYIO_SETUP.md)"))
 	}
 
 	return errors.Join(errs...)

@@ -1,12 +1,15 @@
 // Issue #575: Centralized analytics API mock for hook implementation tests
 // This file mocks at the API level so wrapper hooks can be tested with real implementation
-// Used by: useCashFlowData.test.tsx
+// Used by: useCashFlowData.test.tsx, useSpendingByCategory.test.ts, useSpendingByMerchant.test.ts, useSpendingTrends.test.ts
 
 import { mock } from 'bun:test'
 import * as RealAnalyticsModule from '@boostedbudget/api-client/endpoints/analytics/analytics'
 
+// Shared mock refetch factory
+const createMockRefetch = () => mock(() => Promise.resolve({}))
+
 // === useGetCashFlowSummary ===
-export const mockRefetchCashFlowSummary = mock(() => Promise.resolve({}))
+export const mockRefetchCashFlowSummary = createMockRefetch()
 export const mockUseGetCashFlowSummary = mock(() => ({
   data: undefined,
   isLoading: true,
@@ -15,7 +18,7 @@ export const mockUseGetCashFlowSummary = mock(() => ({
 }))
 
 // === useGetCashFlowHistory ===
-export const mockRefetchCashFlowHistory = mock(() => Promise.resolve({}))
+export const mockRefetchCashFlowHistory = createMockRefetch()
 export const mockUseGetCashFlowHistory = mock(() => ({
   data: undefined,
   isLoading: true,
@@ -33,6 +36,34 @@ export const mockGetCashFlowHistoryQueryKey = mock((params: unknown) => [
   params,
 ])
 
+// === useGetSpendingByCategory ===
+export const mockUseGetSpendingByCategory = mock(() => ({
+  data: null,
+  isLoading: false,
+  error: null,
+  refetch: createMockRefetch(),
+}))
+export const mockGetSpendingByCategoryQueryKey = mock((params: unknown) => [
+  'spending-by-category',
+  params,
+])
+
+// === useGetSpendingByMerchant ===
+export const mockUseGetSpendingByMerchant = mock(() => ({
+  data: null,
+  isLoading: false,
+  error: null,
+  refetch: createMockRefetch(),
+}))
+
+// === useGetSpendingTrends ===
+export const mockUseGetSpendingTrends = mock(() => ({
+  data: null,
+  isLoading: false,
+  error: null,
+  refetch: createMockRefetch(),
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/analytics/analytics', () => ({
   ...RealAnalyticsModule,
@@ -40,4 +71,8 @@ mock.module('@boostedbudget/api-client/endpoints/analytics/analytics', () => ({
   useGetCashFlowHistory: mockUseGetCashFlowHistory,
   getGetCashFlowSummaryQueryKey: mockGetCashFlowSummaryQueryKey,
   getGetCashFlowHistoryQueryKey: mockGetCashFlowHistoryQueryKey,
+  useGetSpendingByCategory: mockUseGetSpendingByCategory,
+  getGetSpendingByCategoryQueryKey: mockGetSpendingByCategoryQueryKey,
+  useGetSpendingByMerchant: mockUseGetSpendingByMerchant,
+  useGetSpendingTrends: mockUseGetSpendingTrends,
 }))

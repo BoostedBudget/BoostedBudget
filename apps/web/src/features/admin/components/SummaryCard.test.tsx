@@ -65,8 +65,9 @@ describe('SummaryCard', () => {
       <SummaryCard title="Status" value="OK" icon={<Users />} status="success" />
     )
 
-    const card = document.querySelector('.summary-card')
-    expect(card).toHaveClass('summary-card--success')
+    // Success status applies border-l-success via Tailwind
+    const card = screen.getByText('OK').closest('div[class*="border-l-4"]')
+    expect(card).toHaveClass('border-l-success')
   })
 
   it('should apply warning status styling', () => {
@@ -79,8 +80,9 @@ describe('SummaryCard', () => {
       />
     )
 
-    const card = document.querySelector('.summary-card')
-    expect(card).toHaveClass('summary-card--warning')
+    // Warning status applies border-l-warning via Tailwind
+    const card = screen.getByText('Warning').closest('div[class*="border-l-4"]')
+    expect(card).toHaveClass('border-l-warning')
   })
 
   it('should apply error status styling', () => {
@@ -88,7 +90,8 @@ describe('SummaryCard', () => {
       <SummaryCard title="Status" value="Error" icon={<Users />} status="error" />
     )
 
-    const card = document.querySelector('.summary-card')
-    expect(card).toHaveClass('summary-card--error')
+    // Error status applies border-l-destructive via Tailwind
+    const card = screen.getByText('Error').closest('div[class*="border-l-4"]')
+    expect(card).toHaveClass('border-l-destructive')
   })
 })

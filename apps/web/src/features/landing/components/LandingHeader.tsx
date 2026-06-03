@@ -10,6 +10,7 @@ import { useClerk } from '@clerk/react-router'
 import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Menu, X, Rocket } from 'lucide-react'
+import { useLoginEnabled } from '@/shared/hooks'
 
 const navLinks = [
   { label: 'Features', href: '#features' },
@@ -55,6 +56,7 @@ function NavLink({
 
 export function LandingHeader() {
   const { openSignUp, openSignIn } = useClerk()
+  const { enabled: loginEnabled } = useLoginEnabled()
   const [isScrolled, setIsScrolled] = useState(false)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
 
@@ -103,24 +105,36 @@ export function LandingHeader() {
 
         {/* Desktop CTA */}
         <div className="hidden items-center gap-3 md:flex">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => openSignIn()}
-            className={isScrolled
-              ? 'text-slate-600 hover:text-slate-900 dark:text-slate-300'
-              : 'text-white/80 hover:bg-white/10 hover:text-white'
-            }
-          >
-            Log In
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => openSignUp()}
-            className="bg-blue-600 hover:bg-blue-500"
-          >
-            Start Free
-          </Button>
+          {loginEnabled ? (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => openSignIn()}
+                className={isScrolled
+                  ? 'text-slate-600 hover:text-slate-900 dark:text-slate-300'
+                  : 'text-white/80 hover:bg-white/10 hover:text-white'
+                }
+              >
+                Log In
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => openSignUp()}
+                className="bg-blue-600 hover:bg-blue-500"
+              >
+                Start Free
+              </Button>
+            </>
+          ) : (
+            <span className={`rounded-full px-4 py-1.5 text-sm font-medium ring-1 ${
+              isScrolled
+                ? 'bg-slate-100 text-slate-500 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700'
+                : 'bg-white/10 text-white/70 ring-white/20'
+            }`}>
+              Coming Soon
+            </span>
+          )}
         </div>
 
         {/* Mobile Menu Button */}
@@ -150,27 +164,35 @@ export function LandingHeader() {
               />
             ))}
             <div className="flex flex-col gap-2 border-t border-slate-200 pt-4 dark:border-slate-700">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setIsMobileMenuOpen(false)
-                  openSignIn()
-                }}
-                className="w-full"
-              >
-                Log In
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => {
-                  setIsMobileMenuOpen(false)
-                  openSignUp()
-                }}
-                className="w-full bg-blue-600 hover:bg-blue-500"
-              >
-                Start Free
-              </Button>
+              {loginEnabled ? (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setIsMobileMenuOpen(false)
+                      openSignIn()
+                    }}
+                    className="w-full"
+                  >
+                    Log In
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setIsMobileMenuOpen(false)
+                      openSignUp()
+                    }}
+                    className="w-full bg-blue-600 hover:bg-blue-500"
+                  >
+                    Start Free
+                  </Button>
+                </>
+              ) : (
+                <span className="rounded-full bg-slate-100 px-4 py-1.5 text-sm font-medium text-slate-500 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700">
+                  Coming Soon
+                </span>
+              )}
             </div>
           </div>
         </div>

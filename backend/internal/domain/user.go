@@ -42,7 +42,7 @@ type User struct {
 	PaddleSubscriptionID *string `json:"paddle_subscription_id,omitempty" db:"paddle_subscription_id"`
 
 	// GDPR: Primary region for data residency (Fly.io IATA codes)
-	PrimaryRegion string `json:"primary_region" db:"primary_region"` // iad, lhr, syd
+	PrimaryRegion string `json:"primary_region" db:"primary_region"` // see config/regions.yaml
 
 	// Account status
 	IsActive  bool `json:"is_active" db:"is_active"`
@@ -51,6 +51,12 @@ type User struct {
 	// GDPR: Account deletion (30-day grace period)
 	DeletionRequestedAt *time.Time `json:"deletion_requested_at,omitempty" db:"deletion_requested_at"`
 	DeletionScheduledAt *time.Time `json:"deletion_scheduled_at,omitempty" db:"deletion_scheduled_at"`
+
+	// GDPR: Retention tracking - 6 months read-only, then auto-delete (Issue #930)
+	RetentionStartedAt       *time.Time `json:"retention_started_at,omitempty" db:"retention_started_at"`
+	RetentionExpiresAt       *time.Time `json:"retention_expires_at,omitempty" db:"retention_expires_at"`
+	RetentionNotice30dSentAt *time.Time `json:"retention_notice_30d_sent_at,omitempty" db:"retention_notice_30d_sent_at"`
+	RetentionNotice7dSentAt  *time.Time `json:"retention_notice_7d_sent_at,omitempty" db:"retention_notice_7d_sent_at"`
 
 	// Timestamps
 	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
@@ -93,7 +99,7 @@ func (u *User) ComputeEffectiveTier() string {
 	return u.SubscriptionTier
 }
 
-// NewUser creates a new user with default values (premium trial, iad region)
+// NewUser creates a new user with default values (premium trial, default region)
 // Used when a user logs in for the first time via Clerk
 func NewUser(clerkUserID, email string, emailVerified bool) *User {
 	now := time.Now()
@@ -104,7 +110,7 @@ func NewUser(clerkUserID, email string, emailVerified bool) *User {
 		EmailVerified:      emailVerified,
 		SubscriptionTier:   "premium",
 		SubscriptionStatus: "trial",
-		PrimaryRegion:      DefaultRegion, // iad - uses constant from regions.go
+		PrimaryRegion:      DefaultRegionCode(),
 		IsActive:           true,
 		IsDeleted:          false,
 		CreatedAt:          now,

@@ -23,7 +23,7 @@ export interface TagSource {
 
 /**
  * Transaction record from any provider
- * Matches backend domain.Transaction schema
+ * Matches backend domain.Transaction schema (PFC v2 canonical)
  */
 export interface Transaction {
   id: string
@@ -33,22 +33,35 @@ export interface Transaction {
   source: TransactionSource
   external_transaction_id?: string | null
   external_metadata?: string | null
-  amount: number // Positive=credit, Negative=debit
+  amount: number // PFCv2: Positive=outflow (spending), Negative=inflow (refund/income)
   date: string // ISO 8601 date (YYYY-MM-DD)
   authorized_date?: string | null // ISO 8601 date
   name: string
   merchant_name?: string | null
-  category?: string | null // JSON array of category strings
-  personal_finance_category?: string | null // JSON object with detailed categorization
+  // PFC v2 canonical fields
+  pfc_primary?: string | null
+  pfc_detailed?: string | null
+  pfc_primary_display?: string | null
+  pfc_detailed_display?: string | null
+  pfc_confidence_level?: string | null
+  pfc_category_icon_url?: string | null
   payment_channel?: string | null // 'online', 'in store', 'other'
   pending: boolean
   user_notes?: string | null
-  // Issue #345: Category override fields
-  category_override?: string | null // JSON array of user's chosen category
+  // Category override (discriminated union)
+  category_override_kind?: string | null // null | 'pfc' | 'custom'
+  pfc_primary_override?: string | null
+  pfc_detailed_override?: string | null
+  pfc_primary_override_display?: string | null
+  pfc_detailed_override_display?: string | null
+  custom_category_override_id?: string | null
+  custom_category_override_display?: string | null
   category_source?: CategorySource
   category_override_date?: string | null // ISO 8601 date-time
-  original_category?: string | null // Preserved Plaid category
-  // Issue #345: Tags fields
+  // Review state (#1203)
+  reviewed?: boolean
+  reviewed_at?: string | null // ISO 8601 date-time
+  // Tags
   tags?: string[] // Array of tag names
   tags_source?: TagSource[] // Source tracking for each tag
   created_at: string // ISO 8601 date-time
@@ -60,27 +73,28 @@ export interface Transaction {
  * All fields are optional - null/undefined means no filter
  */
 export interface TransactionFilters {
-  // Existing (deprecated single-value filters)
   account_id?: string
   start_date?: string // ISO 8601 date (YYYY-MM-DD)
   end_date?: string // ISO 8601 date (YYYY-MM-DD)
-  category?: string // Partial match, case-insensitive (deprecated: use categories)
   search?: string // Search in name or merchant_name, case-insensitive
   pending?: boolean // Filter by pending status
-
-  // Issue #529: Extended filter support
+  reviewed?: boolean // Filter by review state (#1203): true=reviewed, false=unreviewed inbox
   account_ids?: string[] // Multiple account IDs
-  categories?: string[] // Multiple categories
+  pfc_primaries?: string[] // PFC primary enum values
+  pfc_detaileds?: string[] // PFC detailed enum values (OR with pfc_primaries)
+  custom_category_ids?: string[] // Custom category UUIDs (#1203); parents roll up children
   min_amount?: number // Minimum absolute transaction amount
   max_amount?: number // Maximum absolute transaction amount
   amount_type?: 'income' | 'expense' | 'all' // Transaction type filter
+  merchant_id?: string // Filter by merchant UUID
 }
 
 /**
  * Date range preset options for quick filtering
  * Issue #529: Transaction page filtering
+ * Issue #953: Standardized — now uses shared DatePreset from shared/dates
  */
-export type DatePreset = '7d' | '30d' | '90d' | '1y' | 'all' | 'custom'
+export type { DatePreset } from '@/shared/dates'
 
 /**
  * Status filter options
@@ -119,9 +133,12 @@ export interface UpdateTransactionTagsRequest {
 }
 
 /**
- * Request to update transaction category
- * Issue #345: Manual category editing
+ * Request to update transaction category (PFC v2)
+ * Discriminated union: kind determines which fields are required
  */
 export interface UpdateTransactionCategoryRequest {
-  category: string[]
+  kind: 'pfc' | 'custom' | 'clear'
+  pfc_primary?: string // required when kind='pfc'
+  pfc_detailed?: string // optional when kind='pfc'
+  custom_category_id?: string // required when kind='custom'
 }

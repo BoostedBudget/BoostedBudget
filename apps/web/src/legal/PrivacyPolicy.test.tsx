@@ -29,10 +29,10 @@ describe('PrivacyPolicy', () => {
     expect(screen.getAllByText(/legal obligation/i).length).toBeGreaterThan(0)
   })
 
-  it('renders 24-month passive retention for cancelled accounts (Section 8.4)', () => {
+  it('renders 6-month passive retention for cancelled accounts (Section 8.4)', () => {
     renderWithRouter(<PrivacyPolicy />)
     expect(screen.getByText(/cancelled accounts/i)).toBeInTheDocument()
-    expect(screen.getAllByText(/24 months/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/6 months/i).length).toBeGreaterThan(0)
   })
 
   it('renders household member deletion cross-reference (Section 8.5)', () => {
@@ -104,5 +104,28 @@ describe('PrivacyPolicy', () => {
     const cookieLinks = screen.getAllByRole('link', { name: /cookie policy/i })
     expect(cookieLinks.length).toBeGreaterThan(0)
     expect(cookieLinks.some((link) => link.getAttribute('href') === '/legal/cookie-policy')).toBe(true)
+  })
+
+  it('renders application-level encryption details (Section 4.2)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    // Algorithm name
+    expect(screen.getByText(/AES-256-GCM/i)).toBeInTheDocument()
+    // Section 2.1 forward-reference
+    expect(screen.getByText(/sensitive personal and financial fields.*encrypted at the application level/i)).toBeInTheDocument()
+    // Section 4.2 headings and content
+    expect(screen.getAllByText(/application.level encryption/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/display masking/i).length).toBeGreaterThan(0)
+    // Masking examples
+    expect(screen.getByText(/u\*\*\*@example\.com/)).toBeInTheDocument()
+    expect(screen.getByText(/\*\*\*\*9012/)).toBeInTheDocument()
+    // Blind indexes disclosure
+    expect(screen.getAllByText(/blind index/i).length).toBeGreaterThan(0)
+    // Key management
+    expect(screen.getAllByText(/cryptographically derived/i).length).toBeGreaterThan(0)
+  })
+
+  it('renders correct Last Updated date (April 4, 2026)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    expect(screen.getByText(/april 4, 2026/i)).toBeInTheDocument()
   })
 })

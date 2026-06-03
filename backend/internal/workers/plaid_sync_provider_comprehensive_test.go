@@ -64,7 +64,7 @@ func TestPlaidSyncProvider_SyncForLinkedItem_WithAddedTransactions(t *testing.T)
 			txns[0].UserID == "user-123" &&
 			txns[0].Source == domain.SourcePlaid &&
 			*txns[0].ExternalTransactionID == txnID
-	})).Return(nil)
+	})).Return(nil, nil)
 	emitter.On("Emit", ctx, mock.MatchedBy(func(e events.TransactionEvent) bool {
 		return e.Type == events.EventTypeAdded && e.UserID == "user-123"
 	})).Return(nil)
@@ -210,12 +210,12 @@ func TestPlaidSyncProvider_SyncForLinkedItem_WithPagination(t *testing.T) {
 
 	// First page call
 	plaidClient.On("TransactionsSync", ctx, "encrypted-token", (*string)(nil)).Return(syncResp1, nil).Once()
-	txnRepo.On("CreateBatch", ctx, mock.Anything).Return(nil).Once()
+	txnRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, nil).Once()
 	emitter.On("Emit", ctx, mock.Anything).Return(nil).Once()
 
 	// Second page call
 	plaidClient.On("TransactionsSync", ctx, "encrypted-token", &cursor1).Return(syncResp2, nil).Once()
-	txnRepo.On("CreateBatch", ctx, mock.Anything).Return(nil).Once()
+	txnRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, nil).Once()
 	emitter.On("Emit", ctx, mock.Anything).Return(nil).Once()
 
 	linkedItemRepo.On("UpdateCursor", ctx, linkedItemID, finalCursor).Return(nil)
@@ -312,7 +312,7 @@ func TestPlaidSyncProvider_SyncForLinkedItem_CreateBatchError(t *testing.T) {
 	// Setup expectations
 	linkedItemRepo.On("GetByID", ctx, linkedItemID).Return(linkedItem, nil)
 	plaidClient.On("TransactionsSync", ctx, "encrypted-token", (*string)(nil)).Return(syncResp, nil)
-	txnRepo.On("CreateBatch", ctx, mock.Anything).Return(errors.New("database error"))
+	txnRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, errors.New("database error"))
 
 	// Execute
 	count, err := provider.SyncForLinkedItem(ctx, linkedItemID)
@@ -505,7 +505,7 @@ func TestPlaidSyncProvider_ConvertPlaidTransaction_InvalidDate(t *testing.T) {
 	// Assert
 	assert.Error(t, err)
 	assert.Nil(t, domainTxn)
-	assert.Contains(t, err.Error(), "failed to parse transaction date")
+	assert.Contains(t, err.Error(), "failed to map plaid transaction")
 }
 
 // TestPlaidSyncProvider_SyncForLinkedItem_TenPagePagination tests 10+ page sync
@@ -588,7 +588,7 @@ func TestPlaidSyncProvider_SyncForLinkedItem_TenPagePagination(t *testing.T) {
 		// Mock CreateBatch for each page
 		txnRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
 			return len(txns) == transactionsPerPage
-		})).Return(nil).Once()
+		})).Return(nil, nil).Once()
 
 		// Mock Emit for each transaction in this page (one event per transaction)
 		for i := 0; i < transactionsPerPage; i++ {
@@ -666,7 +666,7 @@ func TestPlaidSyncProvider_Analytics_CapturesOnSuccess(t *testing.T) {
 
 	linkedItemRepo.On("GetByID", ctx, linkedItemID).Return(linkedItem, nil)
 	plaidClient.On("TransactionsSync", ctx, "encrypted-token", &cursor).Return(syncResp, nil)
-	txnRepo.On("CreateBatch", ctx, mock.Anything).Return(nil)
+	txnRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, nil)
 	emitter.On("Emit", ctx, mock.Anything).Return(nil)
 	linkedItemRepo.On("UpdateCursor", ctx, linkedItemID, nextCursor).Return(nil)
 

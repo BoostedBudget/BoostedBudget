@@ -18,7 +18,7 @@ import { describe, it, expect, mock, beforeEach } from 'bun:test'
 // - IconSelector and EmojiInput work directly in happy-dom
 // - AccountIconDisplay renders Lucide SVGs which work in happy-dom
 
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AccountCustomizationModal } from './AccountCustomizationModal'
 import type { Account } from '../types'
@@ -453,7 +453,7 @@ describe('AccountCustomizationModal', () => {
       expect(screen.queryByText('Hidden')).not.toBeInTheDocument()
     })
 
-    it('toggles hidden state when clicked', async () => {
+    it('toggles hidden state when clicked (via confirmation)', async () => {
       const user = userEvent.setup()
 
       render(
@@ -469,11 +469,14 @@ describe('AccountCustomizationModal', () => {
       expect(toggle).toHaveAttribute('aria-checked', 'false')
 
       await user.click(toggle)
+      // Dialog opens; confirm to proceed
+      const dialog = screen.getByRole('alertdialog')
+      await user.click(within(dialog).getByRole('button', { name: 'Hide Account' }))
 
       expect(toggle).toHaveAttribute('aria-checked', 'true')
     })
 
-    it('shows hidden badge after toggle', async () => {
+    it('shows hidden badge after confirming hide', async () => {
       const user = userEvent.setup()
 
       render(
@@ -487,6 +490,8 @@ describe('AccountCustomizationModal', () => {
 
       const toggle = screen.getByRole('switch')
       await user.click(toggle)
+      const dialog = screen.getByRole('alertdialog')
+      await user.click(within(dialog).getByRole('button', { name: 'Hide Account' }))
 
       expect(screen.getByText('Hidden')).toBeInTheDocument()
     })
@@ -632,6 +637,116 @@ describe('AccountCustomizationModal', () => {
 
       // Real ColorPicker renders hex-color-picker from mocked react-colorful
       expect(screen.getByTestId('hex-color-picker')).toBeInTheDocument()
+    })
+  })
+
+  describe('Hide Account Confirmation', () => {
+    it('opens confirmation dialog when toggling visible account to hidden', async () => {
+      const user = userEvent.setup()
+
+      render(
+        <AccountCustomizationModal
+          account={mockAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.click(screen.getByRole('switch'))
+
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+      expect(screen.getByText('Hide Account?')).toBeInTheDocument()
+    })
+
+    it('does not open confirmation dialog when unhiding a hidden account', async () => {
+      const user = userEvent.setup()
+      const hiddenAccount: Account = { ...mockAccount, is_hidden: true }
+
+      render(
+        <AccountCustomizationModal
+          account={hiddenAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.click(screen.getByRole('switch'))
+
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
+
+    it('cancelling the dialog leaves the account visible', async () => {
+      const user = userEvent.setup()
+
+      render(
+        <AccountCustomizationModal
+          account={mockAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      const toggle = screen.getByRole('switch')
+      await user.click(toggle)
+
+      const dialog = screen.getByRole('alertdialog')
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+      expect(toggle).toHaveAttribute('aria-checked', 'false')
+      expect(screen.queryByText('Hidden')).not.toBeInTheDocument()
+    })
+
+    it('confirming the dialog marks the account as hidden', async () => {
+      const user = userEvent.setup()
+
+      render(
+        <AccountCustomizationModal
+          account={mockAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      const toggle = screen.getByRole('switch')
+      await user.click(toggle)
+
+      const dialog = screen.getByRole('alertdialog')
+      await user.click(within(dialog).getByRole('button', { name: 'Hide Account' }))
+
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+      expect(toggle).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByText('Hidden')).toBeInTheDocument()
+    })
+
+    it('saving after confirming hide calls onSave with is_hidden: true', async () => {
+      const user = userEvent.setup()
+
+      render(
+        <AccountCustomizationModal
+          account={mockAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.click(screen.getByRole('switch'))
+      const dialog = screen.getByRole('alertdialog')
+      await user.click(within(dialog).getByRole('button', { name: 'Hide Account' }))
+
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalledWith(
+          mockAccount,
+          expect.objectContaining({ is_hidden: true }),
+        )
+      })
     })
   })
 })

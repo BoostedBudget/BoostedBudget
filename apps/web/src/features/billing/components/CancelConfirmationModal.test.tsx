@@ -241,6 +241,44 @@ describe('CancelConfirmationModal', () => {
     expect(screen.getByRole('button', { name: /Go Back/i })).toBeDefined()
   })
 
+  it('should call onConfirm when Enter is pressed with CANCEL typed', () => {
+    render(
+      <CancelConfirmationModal
+        open={true}
+        subscription={subscription}
+        onConfirm={mockOnConfirm}
+        onClose={mockOnClose}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Yes, Cancel/i }))
+
+    const input = screen.getByPlaceholderText(/Type CANCEL/i)
+    fireEvent.change(input, { target: { value: 'CANCEL' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    expect(mockOnConfirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('should not call onConfirm when Enter is pressed with wrong text', () => {
+    render(
+      <CancelConfirmationModal
+        open={true}
+        subscription={subscription}
+        onConfirm={mockOnConfirm}
+        onClose={mockOnClose}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Yes, Cancel/i }))
+
+    const input = screen.getByPlaceholderText(/Type CANCEL/i)
+    fireEvent.change(input, { target: { value: 'cancel' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    expect(mockOnConfirm).not.toHaveBeenCalled()
+  })
+
   it('should go back to first dialog when Go Back clicked', () => {
     render(
       <CancelConfirmationModal

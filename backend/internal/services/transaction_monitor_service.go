@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // Default matching parameters.
@@ -34,7 +35,7 @@ type TransactionMonitorService interface {
 	// - Transaction account matches suggestion's ToAccountID
 	// - Amount within tolerance (default 1 cent)
 	// - Transaction date within range of suggestion creation (default 7 days)
-	// - Positive transaction amount (credit/deposit)
+	// - Negative transaction amount (inflow/credit/deposit under PFCv2)
 	MonitorForMatches(ctx context.Context, userID string, newTransactions []*domain.Transaction) error
 }
 
@@ -77,6 +78,9 @@ func (s *transactionMonitorService) MonitorForMatches(
 	}
 
 	// Check each transaction against each suggestion
+	// Canary counter: each call that resolves suggestions uses chain-aware account matching (Issue #1109).
+	observability.AccountsReplacedFiltered.WithLabelValues("transaction_match").Inc()
+
 	for _, txn := range newTransactions {
 		for _, suggestion := range suggestions {
 			if s.isMatch(txn, suggestion) {
@@ -99,10 +103,23 @@ func (s *transactionMonitorService) MonitorForMatches(
 	return nil
 }
 
+// accountsMatch returns true when the transaction account matches the suggestion
+// destination. Prefers stable UserAccountID comparison when both sides have one
+// (post-relink scenario); falls back to raw account_id for legacy data. (Issue #1109)
+func accountsMatch(txnAccountID string, txnUserAccountID *string, suggAccountID *string, suggUserAccountID *string) bool {
+	if suggUserAccountID != nil && txnUserAccountID != nil {
+		return *txnUserAccountID == *suggUserAccountID
+	}
+	if suggAccountID != nil {
+		return txnAccountID == *suggAccountID
+	}
+	return false
+}
+
 // isMatch checks if a transaction matches a suggestion.
 func (s *transactionMonitorService) isMatch(txn *domain.Transaction, suggestion *domain.TransferSuggestion) bool {
-	// Skip if suggestion has no ToAccountID
-	if suggestion.ToAccountID == nil {
+	// Skip if suggestion has no destination reference at all
+	if suggestion.ToAccountID == nil && suggestion.ToUserAccountID == nil {
 		return false
 	}
 
@@ -111,30 +128,24 @@ func (s *transactionMonitorService) isMatch(txn *domain.Transaction, suggestion 
 		return false
 	}
 
-	// 1. Check account match
-	if txn.AccountID != *suggestion.ToAccountID {
+	// 1. Check account match — chain-aware: prefer UserAccountID when available
+	if !accountsMatch(txn.AccountID, txn.UserAccountID, suggestion.ToAccountID, suggestion.ToUserAccountID) {
 		return false
 	}
 
-	// 2. Check positive amount (credit/deposit)
-	if txn.Amount <= 0 {
+	// 2. Check inflow (negative amount = credit/deposit under PFCv2)
+	if !txn.IsInflow() {
 		return false
 	}
 
-	// 3. Check amount within tolerance
-	if math.Abs(txn.Amount-suggestion.Amount) > s.amountTolerance {
+	// 3. Check amount magnitude within tolerance (txn.Amount is negative for inflows under PFCv2)
+	if math.Abs(math.Abs(txn.Amount)-suggestion.Amount) > s.amountTolerance {
 		return false
 	}
 
-	// 4. Check date range
-	// Transaction should be within dateRangeDays of suggestion creation
+	// 4. Check date range (within dateRangeDays of suggestion creation)
 	dateLimit := suggestion.CreatedAt.Add(time.Duration(s.dateRangeDays) * 24 * time.Hour)
-	if txn.Date.After(dateLimit) {
-		return false
-	}
-
-	// Transaction should not be before suggestion was created
-	if txn.Date.Before(suggestion.CreatedAt) {
+	if txn.Date.After(dateLimit) || txn.Date.Before(suggestion.CreatedAt) {
 		return false
 	}
 

@@ -229,53 +229,60 @@ describe('RuleTable', () => {
   })
 
   describe('Sorting', () => {
-    it('should make name column sortable', () => {
-      render(<RuleTable rules={mockRules} sortable />)
+    it('makes name column sortable when onSortChange is provided', () => {
+      render(<RuleTable rules={mockRules} onSortChange={mock(() => {})} />)
 
       const nameHeader = screen.getByText('Name')
       expect(nameHeader.closest('button')).toBeInTheDocument()
     })
 
-    it('should call onSort when clicking sortable header', () => {
-      const onSort = mock(() => {})
-      render(<RuleTable rules={mockRules} sortable onSort={onSort} />)
+    it('calls onSortChange with asc on first click', () => {
+      const onSortChange = mock(() => {})
+      render(<RuleTable rules={mockRules} onSortChange={onSortChange} />)
 
-      const nameHeader = screen.getByText('Name').closest('button')!
-      fireEvent.click(nameHeader)
-
-      expect(onSort).toHaveBeenCalledWith('name', 'asc')
+      fireEvent.click(screen.getByText('Name').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith({ columnId: 'name', direction: 'asc' })
     })
 
-    it('should toggle sort direction on second click', () => {
-      const onSort = mock(() => {})
+    it('calls onSortChange with desc when sorted asc and clicked', () => {
+      const onSortChange = mock(() => {})
       render(
         <RuleTable
           rules={mockRules}
-          sortable
-          onSort={onSort}
-          sortColumn="name"
-          sortDirection="asc"
+          onSortChange={onSortChange}
+          sort={{ columnId: 'name', direction: 'asc' }}
         />
       )
 
-      const nameHeader = screen.getByText('Name').closest('button')!
-      fireEvent.click(nameHeader)
-
-      expect(onSort).toHaveBeenCalledWith('name', 'desc')
+      fireEvent.click(screen.getByText('Name').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith({ columnId: 'name', direction: 'desc' })
     })
 
-    it('should show sort indicator on sorted column', () => {
+    it('calls onSortChange(null) on third click — clears sort', () => {
+      const onSortChange = mock(() => {})
       render(
         <RuleTable
           rules={mockRules}
-          sortable
-          sortColumn="name"
-          sortDirection="asc"
+          onSortChange={onSortChange}
+          sort={{ columnId: 'name', direction: 'desc' }}
         />
       )
 
-      const nameHeader = screen.getByText('Name').closest('button')!
-      expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
+      fireEvent.click(screen.getByText('Name').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith(null)
+    })
+
+    it('shows sort indicator on sorted column', () => {
+      render(
+        <RuleTable
+          rules={mockRules}
+          onSortChange={mock(() => {})}
+          sort={{ columnId: 'name', direction: 'asc' }}
+        />
+      )
+
+      const nameTh = screen.getByRole('columnheader', { name: /name/i })
+      expect(nameTh).toHaveAttribute('aria-sort', 'ascending')
     })
   })
 

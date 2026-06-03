@@ -2,12 +2,15 @@ import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { AllocationBreakdown } from './AllocationBreakdown'
 import type { BudgetCategory } from '../../types'
+import type { CustomCategoryMap } from '../../utils/groupBudgetCategoriesByPrimary'
 
 describe('AllocationBreakdown', () => {
   const createMockCategory = (overrides?: Partial<BudgetCategory>): BudgetCategory => ({
     id: 'cat-1',
     budget_id: 'budget-1',
-    category: ['Food and Drink', 'Restaurants'],
+    category_kind: 'pfc',
+    pfc_primary: 'FOOD_AND_DRINK',
+    pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
     allocated_amount: 500,
     spent_amount: 250,
     tags: [],
@@ -20,8 +23,8 @@ describe('AllocationBreakdown', () => {
   describe('Rendering', () => {
     it('should render segmented bar with proportional widths', () => {
       const categories = [
-        createMockCategory({ id: 'cat-1', category: ['Food'], allocated_amount: 1000 }),
-        createMockCategory({ id: 'cat-2', category: ['Transport'], allocated_amount: 500 }),
+        createMockCategory({ id: 'cat-1', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: undefined, allocated_amount: 1000 }),
+        createMockCategory({ id: 'cat-2', pfc_primary: 'TRANSPORTATION', pfc_detailed: undefined, allocated_amount: 500 }),
       ];
 
       render(
@@ -57,12 +60,16 @@ describe('AllocationBreakdown', () => {
       const categories = [
         createMockCategory({
           id: 'cat-1',
-          category: ['Food and Drink', 'Restaurants'],
+          category_kind: 'pfc',
+          pfc_primary: 'FOOD_AND_DRINK',
+          pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
           allocated_amount: 500,
         }),
         createMockCategory({
           id: 'cat-2',
-          category: ['Transportation', 'Gas'],
+          category_kind: 'pfc',
+          pfc_primary: 'TRANSPORTATION',
+          pfc_detailed: 'TRANSPORTATION_GAS',
           allocated_amount: 300,
         }),
       ];
@@ -75,9 +82,9 @@ describe('AllocationBreakdown', () => {
         />
       );
 
-      // Check legend items exist
-      expect(screen.getByText(/food and drink.*restaurants/i)).toBeInTheDocument();
-      expect(screen.getByText(/transportation.*gas/i)).toBeInTheDocument();
+      // Check legend items exist — no display fields so formatPFCEnum fallback is used
+      expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument();
+      expect(screen.getByText('Transportation › Gas')).toBeInTheDocument();
       expect(screen.getByText('$500.00')).toBeInTheDocument();
       expect(screen.getByText('$300.00')).toBeInTheDocument();
     });
@@ -98,7 +105,8 @@ describe('AllocationBreakdown', () => {
       // Unallocated now appears in multiple places (legend, stats section)
       const unallocatedElements = screen.getAllByText(/unallocated/i);
       expect(unallocatedElements.length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('$200.00')).toBeInTheDocument();
+      // $200.00 appears in both legend and stats section spans, so use getAllByText
+      expect(screen.getAllByText('$200.00').length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -172,7 +180,8 @@ describe('AllocationBreakdown', () => {
       const categories = [
         createMockCategory({
           id: 'cat-1',
-          category: ['Food'],
+          pfc_primary: 'FOOD_AND_DRINK',
+          pfc_detailed: undefined,
           allocated_amount: 500,
         }),
       ];
@@ -306,6 +315,42 @@ describe('AllocationBreakdown', () => {
     });
   });
 
+  describe('Soft Warning — over-income amber banner', () => {
+    it('should show amber income warning when total allocated exceeds expected income', () => {
+      const categories = [
+        createMockCategory({ id: 'cat-1', allocated_amount: 800 }),
+        createMockCategory({ id: 'cat-2', allocated_amount: 400 }),
+      ];
+
+      render(
+        <AllocationBreakdown
+          categories={categories}
+          totalIncome={1000}
+          unallocated={-200}
+        />
+      );
+
+      // The visible (non-sr-only) warning text should mention exceeding income
+      expect(screen.getByText(/exceed.*expected income/i)).toBeInTheDocument();
+    });
+
+    it('should not show amber income warning when allocations are within income', () => {
+      const categories = [
+        createMockCategory({ id: 'cat-1', allocated_amount: 500 }),
+      ];
+
+      render(
+        <AllocationBreakdown
+          categories={categories}
+          totalIncome={1000}
+          unallocated={500}
+        />
+      );
+
+      expect(screen.queryByText(/exceed.*expected income/i)).not.toBeInTheDocument();
+    });
+  });
+
   describe('Allocation Display Fixes (Phase 5)', () => {
     it('should show "Total Budget" label instead of "Total Income"', () => {
       render(
@@ -352,8 +397,10 @@ describe('AllocationBreakdown', () => {
         />
       );
 
-      // Should show unallocated amount
-      const unallocatedElements = screen.getAllByText(/unallocated.*\$500/i);
+      // Amount is split across element nodes so use textContent-based matcher
+      const unallocatedElements = screen.getAllByText(
+        (_, element) => Boolean(element?.textContent?.match(/unallocated.*\$500/i))
+      );
       expect(unallocatedElements.length).toBeGreaterThanOrEqual(1);
     });
 
@@ -374,5 +421,75 @@ describe('AllocationBreakdown', () => {
       const overElements = screen.getAllByText(/over-allocated.*\$200/i);
       expect(overElements.length).toBeGreaterThanOrEqual(1);
     });
+  });
+
+  describe('Custom category label resolution (Codex gap fix)', () => {
+    const makeCustomCategory = (id: string, customCategoryId: string): BudgetCategory => ({
+      id,
+      budget_id: 'budget-1',
+      category_kind: 'custom',
+      custom_category_id: customCategoryId,
+      allocated_amount: 400,
+      spent_amount: 0,
+      tags: [],
+      match_logic: 'category_only',
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    })
+
+    it('shows resolved name in legend when customCategoryMap is provided', () => {
+      const cat = makeCustomCategory('cat-custom', 'uuid-abc')
+      const customCategoryMap: CustomCategoryMap = new Map([
+        ['uuid-abc', { name: 'My Dining', parent_pfc_primary: null }],
+      ])
+
+      render(
+        <AllocationBreakdown
+          categories={[cat]}
+          totalIncome={1000}
+          unallocated={600}
+          customCategoryMap={customCategoryMap}
+        />
+      )
+
+      expect(screen.getByText('My Dining')).toBeInTheDocument()
+      expect(screen.queryByText('uuid-abc')).not.toBeInTheDocument()
+    })
+
+    it('falls back to "Custom category" in legend when name not in map', () => {
+      const cat = makeCustomCategory('cat-custom', 'unknown-uuid')
+      const customCategoryMap: CustomCategoryMap = new Map()
+
+      render(
+        <AllocationBreakdown
+          categories={[cat]}
+          totalIncome={1000}
+          unallocated={600}
+          customCategoryMap={customCategoryMap}
+        />
+      )
+
+      expect(screen.queryByText('unknown-uuid')).not.toBeInTheDocument()
+      expect(screen.getByText('Custom category')).toBeInTheDocument()
+    })
+
+    it('falls back to formatBudgetCategoryLabel when no customCategoryMap prop (backward compat)', () => {
+      // Without customCategoryMap, PFC categories still display normally
+      const pfcCat = createMockCategory({
+        id: 'pfc-cat',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: undefined,
+      })
+
+      render(
+        <AllocationBreakdown
+          categories={[pfcCat]}
+          totalIncome={1000}
+          unallocated={500}
+        />
+      )
+
+      expect(screen.getByText('Food And Drink')).toBeInTheDocument()
+    })
   });
 });

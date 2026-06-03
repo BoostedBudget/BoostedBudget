@@ -1,134 +1,74 @@
-/**
- * TransactionTable Component
- * Issue #584: Unified Card/Table View System
- * Issue #590: Enhanced Table Sorting and Inline Column Filtering
- *
- * Displays transactions in a table format for the Transactions page.
- * This is the table-only view (no card/table toggle for transactions).
- */
-
-import { useCallback } from 'react'
-import { Edit, Tag, ChevronUp, ChevronDown, Clock } from 'lucide-react'
+import { useCallback, useMemo } from 'react'
+import { Edit, Tag, Clock } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { ReadOnlyGuard } from '@/auth'
 import type { Transaction } from '../types'
 import type { Account } from '../../accounts/types'
 import { getCategoryColor } from '@/lib/category-colors'
-import {
-  ColumnFilterDropdown,
-  type FilterOption,
-  type RangeValue,
-} from '@/shared/components/ColumnFilterDropdown'
-import './TransactionTable.css'
+import { getEffectiveCategory, getEffectiveCategoryLabel, getEffectiveDetailedCategory } from '@/shared/categories/getEffectiveCategory'
+import { getDetailedLabel, getPfcDetailedFilterOptions } from '@/shared/categories/pfcOptions'
+import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect'
+import type { CustomCategoryOption } from '@/shared/components/HierarchicalCategoryTreeSelect/HierarchicalCategoryTreeSelect'
+import { CategoryIcon } from '@/shared/components/IconPicker'
+import { formatTransactionAmount, isOutflow } from '@/shared/transactions/amount'
+import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
+import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
+import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
+
+const TRANSACTION_COLUMN_IDS = ['date', 'merchant', 'account', 'category', 'sub_category', 'amount'] as const
 
 export type TransactionSortColumn = 'date' | 'merchant' | 'amount' | 'category'
 export type SortDirection = 'asc' | 'desc'
 
+// eslint-disable-next-line react-refresh/only-export-components
+export const TRANSACTION_SORTABLE_COLUMNS = new Set([
+  'date',
+  'merchant',
+  'amount',
+  'category',
+] as const)
+
 export interface TransactionTableProps {
-  /** Transactions to display */
   transactions: Transaction[]
-  /** Account lookup map for displaying account info */
   accountsMap: Record<string, Account>
-  /** Called when edit button clicked */
   onEdit?: (transaction: Transaction) => void
-  /** Called when categorize button clicked */
   onCategorize?: (transaction: Transaction) => void
-  /** Called when a row is clicked */
   onRowClick?: (transaction: Transaction) => void
-  /** Show loading state */
   loading?: boolean
-  /** Enable sorting */
-  sortable?: boolean
-  /** Currently sorted column */
-  sortColumn?: TransactionSortColumn
-  /** Current sort direction */
-  sortDirection?: SortDirection
-  /** Called when sort changes */
-  onSort?: (column: TransactionSortColumn, direction: SortDirection) => void
-  /** Additional CSS class */
+  sort?: SortState
+  onSortChange?: (sort: SortState) => void
   className?: string
-
-  // Issue #590: Inline filter props
-  /** Available account options for filtering */
   accountOptions?: FilterOption[]
-  /** Current account filter value */
   accountFilter?: string[]
-  /** Called when account filter changes */
   onAccountFilterChange?: (value: string[]) => void
-
-  /** Available category options for filtering */
-  categoryOptions?: FilterOption[]
-  /** Current category filter value */
-  categoryFilter?: string[]
-  /** Called when category filter changes */
-  onCategoryFilterChange?: (value: string[]) => void
-
-  /** Current amount range filter value */
   amountRange?: RangeValue | null
-  /** Called when amount range filter changes */
   onAmountRangeChange?: (value: RangeValue | null) => void
+  /** Selected PFC primary enum values (hierarchical category filter) */
+  selectedPrimaries?: string[]
+  onPrimariesChange?: (values: string[]) => void
+  /** Selected PFC detailed sub-category enum values (hierarchical category filter) */
+  selectedDetaileds?: string[]
+  onDetailedsChange?: (values: string[]) => void
+  /** Custom categories + selection for the hierarchical category filter (#1203) */
+  customCategories?: CustomCategoryOption[]
+  selectedCustomIds?: string[]
+  onCustomIdsChange?: (ids: string[]) => void
+  /** Infinite scroll: called when user scrolls near the bottom */
+  onScrollEnd?: () => void
+  /** Infinite scroll: whether more pages exist */
+  hasMore?: boolean
+  /** Infinite scroll: whether a fetch is in progress */
+  isFetchingMore?: boolean
 }
 
-/**
- * Format transaction amount with sign and currency
- */
-function formatAmount(amount: number): string {
-  const absAmount = Math.abs(amount)
-  const formatted = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(absAmount)
-
-  if (amount === 0) return formatted
-  if (amount > 0) return `+${formatted}`
-  return `-${formatted}`
-}
-
-/**
- * Parse category from JSON string
- * Uses primary category (index 0) for consistency
- */
-function parseCategory(categoryJson: string | null | undefined): string {
-  if (!categoryJson) return 'Uncategorized'
-
-  try {
-    const categories = JSON.parse(categoryJson)
-    if (Array.isArray(categories) && categories.length > 0) {
-      return categories[0]
-    }
-    return 'Uncategorized'
-  } catch {
-    return 'Uncategorized'
-  }
-}
-
-/**
- * Format date for display
- */
 function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr || typeof dateStr !== 'string') {
-    return 'Invalid Date'
-  }
-
-  // Extract date portion from RFC3339 format
+  if (!dateStr || typeof dateStr !== 'string') return 'Invalid Date'
   const datePortion = dateStr.split('T')[0]
-
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePortion)) {
-    return 'Invalid Date'
-  }
-
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePortion)) return 'Invalid Date'
   const [year, month, day] = datePortion.split('-').map(Number)
-
-  if (isNaN(year) || isNaN(month) || isNaN(day)) {
-    return 'Invalid Date'
-  }
-
+  if (isNaN(year) || isNaN(month) || isNaN(day)) return 'Invalid Date'
   const transactionDate = new Date(year, month - 1, day)
-
-  if (isNaN(transactionDate.getTime())) {
-    return 'Invalid Date'
-  }
-
+  if (isNaN(transactionDate.getTime())) return 'Invalid Date'
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',
     day: 'numeric',
@@ -136,9 +76,6 @@ function formatDate(dateStr: string | null | undefined): string {
   }).format(transactionDate)
 }
 
-/**
- * TransactionTable displays transactions in a sortable table format.
- */
 export function TransactionTable({
   transactions,
   accountsMap,
@@ -146,258 +83,326 @@ export function TransactionTable({
   onCategorize,
   onRowClick,
   loading = false,
-  sortable = false,
-  sortColumn,
-  sortDirection = 'asc',
-  onSort,
+  sort = null,
+  onSortChange,
   className = '',
-  // Issue #590: Inline filter props
   accountOptions,
   accountFilter,
   onAccountFilterChange,
-  categoryOptions,
-  categoryFilter,
-  onCategoryFilterChange,
   amountRange,
   onAmountRangeChange,
+  selectedPrimaries,
+  onPrimariesChange,
+  selectedDetaileds,
+  onDetailedsChange,
+  customCategories,
+  selectedCustomIds,
+  onCustomIdsChange,
+  onScrollEnd,
+  hasMore,
+  isFetchingMore,
 }: TransactionTableProps) {
   const hasActions = !!(onEdit || onCategorize)
 
-  const handleSort = useCallback(
-    (column: TransactionSortColumn) => {
-      if (!sortable || !onSort) return
-      const newDirection =
-        sortColumn === column && sortDirection === 'asc' ? 'desc' : 'asc'
-      onSort(column, newDirection)
+  const {
+    sizing,
+    onSizingChange,
+    columnOrder,
+    onColumnOrderChange,
+    columnVisibility,
+    onColumnVisibilityChange,
+  } = useTablePreferences('transactions', [...TRANSACTION_COLUMN_IDS])
+
+  const pfcDetailedOptions = useMemo(() => getPfcDetailedFilterOptions(), [])
+
+  const filters: FilterState = {
+    account: accountFilter ?? [],
+    amount: amountRange ?? null,
+    sub_category: selectedDetaileds ?? [],
+  }
+
+  const handleFiltersChange = useCallback(
+    (newFilters: FilterState) => {
+      if (newFilters.account !== filters.account) onAccountFilterChange?.(newFilters.account as string[])
+      if (newFilters.amount !== filters.amount) onAmountRangeChange?.(newFilters.amount as RangeValue | null)
+      if (newFilters.sub_category !== filters.sub_category) onDetailedsChange?.(newFilters.sub_category as string[])
     },
-    [sortable, onSort, sortColumn, sortDirection]
+    [filters.account, filters.amount, filters.sub_category, onAccountFilterChange, onAmountRangeChange, onDetailedsChange]
   )
 
-  const renderSortableHeader = (
-    label: string,
-    column: TransactionSortColumn
-  ) => {
-    if (!sortable) {
-      return label
-    }
-
-    const isActive = sortColumn === column
-    const ariaSort = isActive
-      ? sortDirection === 'asc'
-        ? 'ascending'
-        : 'descending'
-      : undefined
-
-    return (
-      <button
-        type="button"
-        onClick={() => handleSort(column)}
-        aria-sort={ariaSort}
-        className="transaction-table__sort-btn"
-      >
-        {label}
-        <span className="transaction-table__sort-icon">
-          {isActive && sortDirection === 'asc' && (
-            <ChevronUp aria-hidden="true" />
-          )}
-          {isActive && sortDirection === 'desc' && (
-            <ChevronDown aria-hidden="true" />
-          )}
+  const columns: ColumnDef<Transaction>[] = [
+    {
+      id: 'date',
+      header: 'Date',
+      sortable: !!onSortChange,
+      resizable: true,
+      reorderable: true,
+      defaultSize: 110,
+      minSize: 90,
+      maxSize: 160,
+      render: (row) => (
+        <span className="whitespace-nowrap text-muted-foreground">
+          {formatDate(row.authorized_date || row.date)}
         </span>
-      </button>
-    )
-  }
-
-  if (transactions.length === 0) {
-    return (
-      <div className={`transaction-table__empty ${className}`.trim()}>
-        <p>No transactions found.</p>
-      </div>
-    )
-  }
+      ),
+    },
+    {
+      id: 'merchant',
+      header: 'Description',
+      sortable: !!onSortChange,
+      resizable: true,
+      reorderable: true,
+      defaultSize: 240,
+      minSize: 160,
+      render: (row) => (
+        <div>
+          <div className="font-medium text-foreground">
+            {row.merchant_name || row.name}
+          </div>
+          {row.tags && row.tags.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {row.tags.map((tag) => (
+                <span
+                  key={`${row.id}-${tag}`}
+                  className="inline-flex items-center rounded bg-blue-50 px-1.5 py-0.5 text-[0.625rem] font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      id: 'account',
+      header: 'Account',
+      resizable: true,
+      reorderable: true,
+      hideable: true,
+      defaultSize: 160,
+      minSize: 120,
+      maxSize: 280,
+      render: (row) => {
+        const account = accountsMap[row.account_id]
+        const accentColor = account?.custom_color
+        return (
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-1 text-xs font-medium text-foreground">
+            {accentColor && (
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{ backgroundColor: accentColor }}
+                aria-hidden="true"
+              />
+            )}
+            {account?.custom_emoji && <span>{account.custom_emoji}</span>}
+            {account ? account.nickname || account.name : 'Unknown'}
+          </span>
+        )
+      },
+      filter:
+        accountOptions && onAccountFilterChange
+          ? { type: 'select', options: accountOptions, multiSelect: true, searchable: true }
+          : undefined,
+    },
+    {
+      id: 'category',
+      header: 'Category',
+      sortable: !!onSortChange,
+      resizable: true,
+      reorderable: true,
+      hideable: true,
+      defaultSize: 160,
+      minSize: 120,
+      maxSize: 280,
+      render: (row) => {
+        const eff = getEffectiveCategory(row)
+        const categoryLabel = getEffectiveCategoryLabel(eff)
+        // For a custom category, show its icon + color (Issue #1203) when we can
+        // resolve it from the loaded custom categories; otherwise fall back to the
+        // generic color dot.
+        const customMatch =
+          eff?.kind === 'custom'
+            ? customCategories?.find((c) => c.id === eff.custom_category_id)
+            : undefined
+        if (customMatch) {
+          return (
+            <span className="inline-flex items-center gap-1.5">
+              <span
+                className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full"
+                style={{ backgroundColor: customMatch.color ?? '#6B7280', color: '#fff' }}
+                aria-hidden
+              >
+                <CategoryIcon name={customMatch.icon} className="h-2.5 w-2.5" />
+              </span>
+              {categoryLabel}
+            </span>
+          )
+        }
+        return (
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="h-2 w-2 shrink-0 rounded-full"
+              style={{ backgroundColor: getCategoryColor(categoryLabel) }}
+            />
+            {categoryLabel}
+          </span>
+        )
+      },
+      customFilter: onPrimariesChange ? (
+        <HierarchicalCategoryTreeSelect
+          selectedPrimaries={selectedPrimaries ?? []}
+          onPrimariesChange={onPrimariesChange}
+          selectedDetaileds={selectedDetaileds ?? []}
+          onDetailedsChange={onDetailedsChange}
+          customCategories={customCategories}
+          selectedCustomIds={selectedCustomIds ?? []}
+          onCustomIdsChange={onCustomIdsChange}
+          aria-label="Filter by category"
+        />
+      ) : undefined,
+      isFilterActive:
+        (selectedPrimaries?.length ?? 0) +
+          (selectedDetaileds?.length ?? 0) +
+          (selectedCustomIds?.length ?? 0) >
+        0,
+    },
+    {
+      id: 'sub_category',
+      header: 'Sub-category',
+      resizable: true,
+      reorderable: true,
+      hideable: true,
+      defaultSize: 140,
+      minSize: 100,
+      maxSize: 260,
+      render: (row) => {
+        const detailed = getEffectiveDetailedCategory(row)
+        if (!detailed) return <span className="text-sm text-muted-foreground/40">—</span>
+        const label = getDetailedLabel(detailed) ?? detailed
+        return <span className="text-sm text-muted-foreground">{label}</span>
+      },
+      filter: onDetailedsChange
+        ? { type: 'select', options: pfcDetailedOptions, multiSelect: true, searchable: true }
+        : undefined,
+    },
+    {
+      id: 'amount',
+      header: 'Amount',
+      sortable: !!onSortChange,
+      resizable: true,
+      reorderable: true,
+      defaultPinned: 'right',
+      align: 'right',
+      numeric: true,
+      defaultSize: 140,
+      minSize: 110,
+      maxSize: 200,
+      render: (row) => (
+        <div className="flex flex-col items-end gap-1">
+          <span
+            className={cn(
+              'font-semibold tabular-nums',
+              isOutflow(row.amount)
+                ? 'transaction-table__amount--debit text-red-600 dark:text-red-400'
+                : row.amount < 0
+                  ? 'transaction-table__amount--credit text-green-600 dark:text-green-400'
+                  : 'text-foreground'
+            )}
+          >
+            {formatTransactionAmount(row.amount).text}
+          </span>
+          {row.pending && (
+            <span className="inline-flex items-center gap-1 rounded bg-yellow-100 px-1.5 py-0.5 text-[0.625rem] font-medium text-yellow-800 dark:bg-yellow-800 dark:text-yellow-200">
+              <Clock className="h-2.5 w-2.5" aria-hidden="true" />
+              Pending
+            </span>
+          )}
+        </div>
+      ),
+      filter: onAmountRangeChange ? { type: 'range', unit: 'currency' } : undefined,
+    },
+  ]
 
   return (
-    <table
-      className={`transaction-table ${loading ? 'transaction-table--loading' : ''} ${className}`.trim()}
-    >
-      <thead>
-        <tr className="transaction-table__header-row">
-          <th className="transaction-table__th">
-            {renderSortableHeader('Date', 'date')}
-          </th>
-          <th className="transaction-table__th">
-            {renderSortableHeader('Description', 'merchant')}
-          </th>
-          <th className="transaction-table__th">
-            <div className="transaction-table__header-content">
-              <span>Account</span>
-              {accountOptions && onAccountFilterChange && (
-                <ColumnFilterDropdown
-                  type="select"
-                  options={accountOptions}
-                  value={accountFilter}
-                  onChange={(val) => onAccountFilterChange(val as string[])}
-                  multiSelect
-                  searchable
-                  ariaLabel="Filter by account"
-                />
-              )}
-            </div>
-          </th>
-          <th className="transaction-table__th">
-            <div className="transaction-table__header-content">
-              {renderSortableHeader('Category', 'category')}
-              {categoryOptions && onCategoryFilterChange && (
-                <ColumnFilterDropdown
-                  type="select"
-                  options={categoryOptions}
-                  value={categoryFilter}
-                  onChange={(val) => onCategoryFilterChange(val as string[])}
-                  multiSelect
-                  searchable
-                  ariaLabel="Filter by category"
-                />
-              )}
-            </div>
-          </th>
-          <th className="transaction-table__th transaction-table__th--amount">
-            <div className="transaction-table__header-content">
-              {renderSortableHeader('Amount', 'amount')}
-              {onAmountRangeChange && (
-                <ColumnFilterDropdown
-                  type="range"
-                  rangeValue={amountRange}
-                  onChange={(val) => onAmountRangeChange(val as RangeValue | null)}
-                  ariaLabel="Filter by amount"
-                />
-              )}
-            </div>
-          </th>
-          {hasActions && (
-            <th className="transaction-table__th transaction-table__th--actions">
-              Actions
-            </th>
-          )}
-        </tr>
-      </thead>
-      <tbody>
-        {transactions.map((transaction) => {
-          const account = accountsMap[transaction.account_id]
-          const displayDate = formatDate(
-            transaction.authorized_date || transaction.date
-          )
-          const displayName = transaction.merchant_name || transaction.name
-          const categoryToDisplay =
-            transaction.category_override || transaction.category
-          const categoryLabel = parseCategory(categoryToDisplay)
-          const categoryColor = getCategoryColor(categoryLabel)
-          const accountDisplayName = account
-            ? account.nickname || account.name
-            : 'Unknown'
-          const accountBackgroundColor = account?.custom_color || '#E5E7EB'
-          const amountFormatted = formatAmount(transaction.amount)
-
-          return (
-            <tr
-              key={transaction.id}
-              className={`transaction-table__row ${onRowClick ? 'transaction-table__row--clickable' : ''} ${transaction.pending ? 'transaction-table__row--pending' : ''}`}
-              onClick={onRowClick ? () => onRowClick(transaction) : undefined}
-            >
-              <td className="transaction-table__td transaction-table__td--date">
-                {displayDate}
-              </td>
-              <td className="transaction-table__td transaction-table__td--description">
-                <div className="transaction-table__name">{displayName}</div>
-                {transaction.tags && transaction.tags.length > 0 && (
-                  <div className="transaction-table__tags">
-                    {transaction.tags.map((tag) => (
-                      <span key={tag} className="transaction-table__tag">
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
+    <DataTable<Transaction>
+      data={transactions}
+      columns={columns}
+      rowKey={(row) => row.id}
+      sort={sort}
+      onSortChange={onSortChange!}
+      filters={filters}
+      onFiltersChange={handleFiltersChange}
+      loading={loading}
+      skeletonRows={10}
+      onRowClick={onRowClick}
+      columnSizing={sizing}
+      onColumnSizingChange={onSizingChange}
+      columnOrder={columnOrder}
+      onColumnOrderChange={onColumnOrderChange}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
+      rowClassName={(row) =>
+        cn(
+          onRowClick && 'transaction-table__row--clickable',
+          row.pending &&
+            'bg-yellow-50 hover:bg-yellow-100 dark:bg-yellow-900 dark:hover:bg-yellow-800'
+        )
+      }
+      className={cn(loading && 'transaction-table--loading', className)}
+      maskedColumnIds={['amount', 'merchant', 'account']}
+      virtualization={onScrollEnd ? {
+        enabled: true,
+        estimateRowHeight: 56,
+        overscan: 8,
+        dynamicRowHeight: true,
+        scrollContainerHeight: 'calc(100dvh - 240px)',
+        onScrollEnd,
+        hasMore,
+        isFetchingMore,
+        prefetchRows: 5,
+      } : undefined}
+      emptyState={
+        <p className="py-12 px-6 text-center text-muted-foreground">
+          No transactions found.
+        </p>
+      }
+      rowActions={
+        hasActions
+          ? (row) => (
+              <div className="flex items-center justify-end gap-2">
+                {onEdit && (
+                  <ReadOnlyGuard message="Resubscribe to edit transactions">
+                    <button
+                      type="button"
+                      onClick={() => onEdit(row)}
+                      disabled={loading}
+                      className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
+                      aria-label="Edit transaction"
+                      title="Edit transaction"
+                    >
+                      <Edit aria-hidden="true" />
+                    </button>
+                  </ReadOnlyGuard>
                 )}
-              </td>
-              <td className="transaction-table__td transaction-table__td--account">
-                <span
-                  className="transaction-table__account-badge"
-                  style={{ backgroundColor: accountBackgroundColor }}
-                >
-                  {account?.custom_emoji && <span>{account.custom_emoji}</span>}
-                  {accountDisplayName}
-                </span>
-              </td>
-              <td className="transaction-table__td transaction-table__td--category">
-                <span className="transaction-table__category">
-                  <span
-                    className="transaction-table__category-dot"
-                    style={{ backgroundColor: categoryColor }}
-                  />
-                  {categoryLabel}
-                </span>
-              </td>
-              <td className="transaction-table__td transaction-table__td--amount">
-                <div className="transaction-table__amount-container">
-                  <span
-                    className={`transaction-table__amount ${
-                      transaction.amount > 0
-                        ? 'transaction-table__amount--credit'
-                        : transaction.amount < 0
-                          ? 'transaction-table__amount--debit'
-                          : ''
-                    }`}
-                    data-ph-mask
-                  >
-                    {amountFormatted}
-                  </span>
-                  {transaction.pending && (
-                    <span className="transaction-table__pending-badge">
-                      <Clock
-                        className="transaction-table__pending-icon"
-                        aria-hidden="true"
-                      />
-                      Pending
-                    </span>
-                  )}
-                </div>
-              </td>
-              {hasActions && (
-                <td
-                  className="transaction-table__td transaction-table__td--actions"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="transaction-table__actions">
-                    {onEdit && (
-                      <button
-                        type="button"
-                        onClick={() => onEdit(transaction)}
-                        disabled={loading}
-                        className="transaction-table__action-btn"
-                        aria-label="Edit transaction"
-                        title="Edit transaction"
-                      >
-                        <Edit aria-hidden="true" />
-                      </button>
-                    )}
-                    {onCategorize && (
-                      <button
-                        type="button"
-                        onClick={() => onCategorize(transaction)}
-                        disabled={loading}
-                        className="transaction-table__action-btn"
-                        aria-label="Categorize transaction"
-                        title="Categorize transaction"
-                      >
-                        <Tag aria-hidden="true" />
-                      </button>
-                    )}
-                  </div>
-                </td>
-              )}
-            </tr>
-          )
-        })}
-      </tbody>
-    </table>
+                {onCategorize && (
+                  <ReadOnlyGuard message="Resubscribe to categorize transactions">
+                    <button
+                      type="button"
+                      onClick={() => onCategorize(row)}
+                      disabled={loading}
+                      className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
+                      aria-label="Categorize transaction"
+                      title="Categorize transaction"
+                    >
+                      <Tag aria-hidden="true" />
+                    </button>
+                  </ReadOnlyGuard>
+                )}
+              </div>
+            )
+          : undefined
+      }
+    />
   )
 }

@@ -32,7 +32,7 @@ func TestPreviewCategoryMatches_Success(t *testing.T) {
 	mockService := &mockCategoryPreviewService{
 		response: &domain.CategoryPreviewResponse{
 			TransactionCount: 15,
-			TotalAmount:      -250.50,
+			TotalAmount:      250.50,
 		},
 	}
 
@@ -42,10 +42,11 @@ func TestPreviewCategoryMatches_Success(t *testing.T) {
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 	}
 	input.Body = domain.CategoryPreviewRequest{
-		Categories: [][]string{{"Food and Drink", "Restaurants"}},
-		MatchLogic: domain.MatchLogicCategoryOnly,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
 	output, err := handler.PreviewCategoryMatches(context.Background(), input)
@@ -53,7 +54,7 @@ func TestPreviewCategoryMatches_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	assert.Equal(t, 15, output.Body.TransactionCount)
-	assert.Equal(t, -250.50, output.Body.TotalAmount)
+	assert.Equal(t, 250.50, output.Body.TotalAmount)
 }
 
 // TestPreviewCategoryMatches_WithTags tests category preview with tags.
@@ -61,7 +62,7 @@ func TestPreviewCategoryMatches_WithTags(t *testing.T) {
 	mockService := &mockCategoryPreviewService{
 		response: &domain.CategoryPreviewResponse{
 			TransactionCount: 5,
-			TotalAmount:      -100.00,
+			TotalAmount:      100.00,
 		},
 	}
 
@@ -71,11 +72,12 @@ func TestPreviewCategoryMatches_WithTags(t *testing.T) {
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 	}
 	input.Body = domain.CategoryPreviewRequest{
-		Categories: [][]string{{"Food and Drink"}},
-		Tags:       []string{"business-expense"},
-		MatchLogic: domain.MatchLogicAnd,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{"business-expense"},
+		MatchLogic:   domain.MatchLogicAnd,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
 	output, err := handler.PreviewCategoryMatches(context.Background(), input)
@@ -97,10 +99,11 @@ func TestPreviewCategoryMatches_ValidationError(t *testing.T) {
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 	}
 	input.Body = domain.CategoryPreviewRequest{
-		Categories: [][]string{{"Food and Drink"}},
-		MatchLogic: domain.MatchLogicCategoryOnly,
-		StartDate:  "2024-01-31",
-		EndDate:    "2024-01-01", // End before start
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+		StartDate:    "2024-01-31",
+		EndDate:      "2024-01-01", // End before start
 	}
 
 	output, err := handler.PreviewCategoryMatches(context.Background(), input)
@@ -122,10 +125,10 @@ func TestPreviewCategoryMatches_EmptyCategories(t *testing.T) {
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 	}
 	input.Body = domain.CategoryPreviewRequest{
-		Categories: [][]string{},
-		MatchLogic: domain.MatchLogicCategoryOnly,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "pfc",
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
 	output, err := handler.PreviewCategoryMatches(context.Background(), input)
@@ -150,10 +153,11 @@ func TestPreviewCategoryMatches_ZeroResults(t *testing.T) {
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 	}
 	input.Body = domain.CategoryPreviewRequest{
-		Categories: [][]string{{"Rare Category"}},
-		MatchLogic: domain.MatchLogicCategoryOnly,
-		StartDate:  "2024-01-01",
-		EndDate:    "2024-01-31",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("TRANSFER_IN"),
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
 	}
 
 	output, err := handler.PreviewCategoryMatches(context.Background(), input)
@@ -169,7 +173,7 @@ func TestCategoryPreviewRouteRegistration(t *testing.T) {
 	mockService := &mockCategoryPreviewService{
 		response: &domain.CategoryPreviewResponse{
 			TransactionCount: 10,
-			TotalAmount:      -150.00,
+			TotalAmount:      150.00,
 		},
 	}
 

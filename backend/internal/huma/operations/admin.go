@@ -30,7 +30,6 @@ type TrialGranter interface {
 type AdminHandler struct {
 	plaidService          services.PlaidService
 	linkedItemRepo        repository.LinkedItemRepository
-	encryptionService     services.EncryptionService
 	trialService          TrialGranter
 	adminService          services.AdminService
 	adminUserService      services.AdminUserService
@@ -38,16 +37,15 @@ type AdminHandler struct {
 	subService            *services.SubscriptionService
 	paddleTransactionRepo repository.PaddleTransactionRepository
 	paddleWebhookRepo     repository.PaddleWebhookRepository
+	deadLetterService     services.DeadLetterService
 	jobQueue              queue.JobQueue
 	config                *config.Config
 }
 
 // NewAdminHandler creates a new AdminHandler with required dependencies.
-// The trialService, adminService, adminUserService, and systemHealthService parameters can be nil if not needed.
 func NewAdminHandler(
 	plaidService services.PlaidService,
 	linkedItemRepo repository.LinkedItemRepository,
-	encryptionService services.EncryptionService,
 	trialService TrialGranter,
 	adminService services.AdminService,
 	adminUserService services.AdminUserService,
@@ -58,7 +56,6 @@ func NewAdminHandler(
 	return &AdminHandler{
 		plaidService:        plaidService,
 		linkedItemRepo:      linkedItemRepo,
-		encryptionService:   encryptionService,
 		trialService:        trialService,
 		adminService:        adminService,
 		adminUserService:    adminUserService,
@@ -84,6 +81,12 @@ func (h *AdminHandler) WithPaddleWebhookRepo(repo repository.PaddleWebhookReposi
 // WithJobQueue sets the JobQueue on the handler (builder pattern).
 func (h *AdminHandler) WithJobQueue(q queue.JobQueue) *AdminHandler {
 	h.jobQueue = q
+	return h
+}
+
+// WithDeadLetterService sets the DeadLetterService on the handler (builder pattern).
+func (h *AdminHandler) WithDeadLetterService(svc services.DeadLetterService) *AdminHandler {
+	h.deadLetterService = svc
 	return h
 }
 
@@ -193,8 +196,10 @@ type CheckRoleResponseBody struct {
 type ListUsersInput struct {
 	inputs.AdminAuthenticatedInput
 	inputs.PagePaginationInput
-	Search string `query:"search" doc:"Search by email (partial match)"`
-	Tier   string `query:"tier" doc:"Filter by subscription tier"`
+	Search  string `query:"search"   doc:"Search by email prefix, starts-with match (min 3 chars)"`
+	Tier    string `query:"tier"     doc:"Filter by subscription tier"`
+	SortBy  string `query:"sort_by"  enum:"created_at,last_login_at,subscription_tier,subscription_status" default:"created_at"  doc:"Column to sort by"`
+	SortDir string `query:"sort_dir" enum:"asc,desc"                                                      default:"desc"         doc:"Sort direction"`
 }
 
 // ListUsersOutput represents the response for user listing.
@@ -248,14 +253,8 @@ func (h *AdminHandler) FireWebhook(ctx context.Context, input *FireWebhookInput)
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to fetch linked item: %w", err))
 	}
 
-	// 2. Decrypt access token
-	accessToken, err := h.encryptionService.Decrypt(linkedItem.AccessTokenEncrypted)
-	if err != nil {
-		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to decrypt access token: %w", err))
-	}
-
-	// 3. Fire webhook via Plaid service
-	response, err := h.plaidService.FireWebhook(ctx, accessToken, input.Body.WebhookCode)
+	// 2. Fire webhook via Plaid service using plaintext access token from repo layer
+	response, err := h.plaidService.FireWebhook(ctx, linkedItem.AccessToken, input.Body.WebhookCode)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to fire webhook: %w", err))
 	}
@@ -369,10 +368,19 @@ func (h *AdminHandler) ListUsers(ctx context.Context, input *ListUsersInput) (*L
 		return nil, huma.Error503ServiceUnavailable("Admin user service not configured")
 	}
 
+	// Validate search length: min 3 runes (matches prefix index minimum).
+	// Frontend suppresses API calls for search.length < 3, but defend server-side too.
+	search := strings.TrimSpace(input.Search)
+	if search != "" && len([]rune(search)) < 3 {
+		return nil, huma.Error400BadRequest("search must be at least 3 characters")
+	}
+
 	// Build filters from input
 	filters := domain.AdminUserFilters{
-		Search: input.Search,
-		Tier:   input.Tier,
+		Search:  search,
+		Tier:    input.Tier,
+		SortBy:  input.SortBy,
+		SortDir: input.SortDir,
 	}
 
 	// Get users from service
@@ -519,4 +527,7 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 
 	// --- Admin Paddle Webhooks Routes (Issue #762) ---
 	RegisterAdminPaddleWebhooksOperations(api, handler)
+
+	// --- Admin Dead Letter Queue Routes (Issue #633) ---
+	RegisterAdminDeadLetterOperations(api, handler)
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -189,7 +190,7 @@ func TestTransferSuggestionService_AcceptSuggestion_AlreadyProcessed(t *testing.
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "already processed")
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
 	suggestionRepo.AssertExpectations(t)
 }
 
@@ -295,5 +296,169 @@ func TestTransferSuggestionService_GetPendingSuggestions_Error(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
+	suggestionRepo.AssertExpectations(t)
+}
+
+// =============================================================================
+// Mock Analytics for TransferSuggestionService Tests
+// =============================================================================
+
+// mockGDPRAnalytics is a minimal mock for phclient.GDPRAnalytics.
+type mockGDPRAnalytics struct {
+	mock.Mock
+}
+
+func (m *mockGDPRAnalytics) CaptureIfConsented(ctx context.Context, userID, event string, properties map[string]interface{}) {
+	m.Called(ctx, userID, event, properties)
+}
+
+// Ensure mockGDPRAnalytics satisfies the interface at compile time.
+var _ phclient.GDPRAnalytics = (*mockGDPRAnalytics)(nil)
+
+// =============================================================================
+// AlreadyActioned Tests
+// =============================================================================
+
+func TestTransferSuggestionService_AcceptSuggestion_AlreadyActioned(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-123"
+	suggestionID := "suggestion-123"
+
+	suggestion := createTestTransferSuggestion(userID)
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("UpdateStatus", ctx, suggestionID, domain.SuggestionStatusAccepted, (*string)(nil)).
+		Return(domain.ErrTransferSuggestionAlreadyActioned)
+
+	result, err := svc.AcceptSuggestion(ctx, userID, suggestionID, nil)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_RejectSuggestion_AlreadyActioned(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-123"
+	suggestionID := "suggestion-123"
+
+	suggestion := createTestTransferSuggestion(userID)
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("UpdateStatus", ctx, suggestionID, domain.SuggestionStatusRejected, (*string)(nil)).
+		Return(domain.ErrTransferSuggestionAlreadyActioned)
+
+	result, err := svc.RejectSuggestion(ctx, userID, suggestionID, nil)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
+	suggestionRepo.AssertExpectations(t)
+}
+
+// =============================================================================
+// Analytics Tests
+// =============================================================================
+
+func TestTransferSuggestionService_AcceptSuggestion_FiresAnalytics(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	analytics := new(mockGDPRAnalytics)
+
+	svc := NewTransferSuggestionService(suggestionRepo)
+	svc.SetGDPRAnalytics(analytics)
+
+	userID := "user-123"
+	suggestionID := "suggestion-123"
+
+	suggestion := createTestTransferSuggestion(userID)
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("UpdateStatus", ctx, suggestionID, domain.SuggestionStatusAccepted, (*string)(nil)).Return(nil)
+	analytics.On("CaptureIfConsented", mock.Anything, userID, phclient.TransferSuggestionAccepted, mock.AnythingOfType("map[string]interface {}")).Return()
+
+	result, err := svc.AcceptSuggestion(ctx, userID, suggestionID, nil)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	analytics.AssertExpectations(t)
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_RejectSuggestion_FiresAnalytics(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	analytics := new(mockGDPRAnalytics)
+
+	svc := NewTransferSuggestionService(suggestionRepo)
+	svc.SetGDPRAnalytics(analytics)
+
+	userID := "user-123"
+	suggestionID := "suggestion-123"
+
+	suggestion := createTestTransferSuggestion(userID)
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("UpdateStatus", ctx, suggestionID, domain.SuggestionStatusRejected, (*string)(nil)).Return(nil)
+	analytics.On("CaptureIfConsented", mock.Anything, userID, phclient.TransferSuggestionRejected, mock.AnythingOfType("map[string]interface {}")).Return()
+
+	result, err := svc.RejectSuggestion(ctx, userID, suggestionID, nil)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	analytics.AssertExpectations(t)
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_AcceptSuggestion_NoAnalyticsWhenNil(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+
+	// No analytics set — should not panic.
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-123"
+	suggestionID := "suggestion-123"
+
+	suggestion := createTestTransferSuggestion(userID)
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("UpdateStatus", ctx, suggestionID, domain.SuggestionStatusAccepted, (*string)(nil)).Return(nil)
+
+	result, err := svc.AcceptSuggestion(ctx, userID, suggestionID, nil)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_RejectSuggestion_NoAnalyticsWhenNil(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+
+	// No analytics set — should not panic.
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-123"
+	suggestionID := "suggestion-123"
+
+	suggestion := createTestTransferSuggestion(userID)
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("UpdateStatus", ctx, suggestionID, domain.SuggestionStatusRejected, (*string)(nil)).Return(nil)
+
+	result, err := svc.RejectSuggestion(ctx, userID, suggestionID, nil)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
 	suggestionRepo.AssertExpectations(t)
 }

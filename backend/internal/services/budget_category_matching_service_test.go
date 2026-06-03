@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -22,8 +21,8 @@ type MockSpentAmountCalculator struct {
 	mock.Mock
 }
 
-func (m *MockSpentAmountCalculator) GetSpentSumForBudgetCategory(ctx context.Context, userID string, category []string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (float64, error) {
-	args := m.Called(ctx, userID, category, tags, matchLogic, startDate, endDate)
+func (m *MockSpentAmountCalculator) GetSpentSumForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time) (float64, error) {
+	args := m.Called(ctx, userID, budgetCat, startDate, endDate)
 	return args.Get(0).(float64), args.Error(1)
 }
 
@@ -39,17 +38,18 @@ func TestCalculateCategorySpent_CategoryOnly(t *testing.T) {
 
 	userID := "user-123"
 	category := &domain.BudgetCategory{
-		ID:         "cat-123",
-		BudgetID:   "budget-123",
-		Category:   []string{"Food and Drink"},
-		Tags:       []string{},
-		MatchLogic: domain.MatchLogicCategoryOnly,
+		ID:           "cat-123",
+		BudgetID:     "budget-123",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{},
+		MatchLogic:   domain.MatchLogicCategoryOnly,
 	}
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 250.50
 
-	mockCalculator.On("GetSpentSumForBudgetCategory", ctx, userID, category.Category, category.Tags, domain.MatchLogicCategoryOnly, startDate, endDate).Return(expectedSum, nil)
+	mockCalculator.On("GetSpentSumForBudgetCategory", ctx, userID, category, startDate, endDate).Return(expectedSum, nil)
 
 	sum, err := service.CalculateCategorySpent(ctx, userID, category, startDate, endDate)
 	require.NoError(t, err)
@@ -68,7 +68,6 @@ func TestCalculateCategorySpent_TagOnly(t *testing.T) {
 	category := &domain.BudgetCategory{
 		ID:         "cat-123",
 		BudgetID:   "budget-123",
-		Category:   []string{},
 		Tags:       []string{"groceries", "food"},
 		MatchLogic: domain.MatchLogicTagOnly,
 	}
@@ -76,7 +75,7 @@ func TestCalculateCategorySpent_TagOnly(t *testing.T) {
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 175.25
 
-	mockCalculator.On("GetSpentSumForBudgetCategory", ctx, userID, category.Category, category.Tags, domain.MatchLogicTagOnly, startDate, endDate).Return(expectedSum, nil)
+	mockCalculator.On("GetSpentSumForBudgetCategory", ctx, userID, category, startDate, endDate).Return(expectedSum, nil)
 
 	sum, err := service.CalculateCategorySpent(ctx, userID, category, startDate, endDate)
 	require.NoError(t, err)
@@ -93,17 +92,18 @@ func TestCalculateCategorySpent_And(t *testing.T) {
 
 	userID := "user-123"
 	category := &domain.BudgetCategory{
-		ID:         "cat-123",
-		BudgetID:   "budget-123",
-		Category:   []string{"Food and Drink", "Restaurants"},
-		Tags:       []string{"dinner", "date-night"},
-		MatchLogic: domain.MatchLogicAnd,
+		ID:           "cat-123",
+		BudgetID:     "budget-123",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{"dinner", "date-night"},
+		MatchLogic:   domain.MatchLogicAnd,
 	}
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 125.00
 
-	mockCalculator.On("GetSpentSumForBudgetCategory", ctx, userID, category.Category, category.Tags, domain.MatchLogicAnd, startDate, endDate).Return(expectedSum, nil)
+	mockCalculator.On("GetSpentSumForBudgetCategory", ctx, userID, category, startDate, endDate).Return(expectedSum, nil)
 
 	sum, err := service.CalculateCategorySpent(ctx, userID, category, startDate, endDate)
 	require.NoError(t, err)
@@ -120,17 +120,18 @@ func TestCalculateCategorySpent_Or(t *testing.T) {
 
 	userID := "user-123"
 	category := &domain.BudgetCategory{
-		ID:         "cat-123",
-		BudgetID:   "budget-123",
-		Category:   []string{"Entertainment"},
-		Tags:       []string{"streaming", "subscriptions"},
-		MatchLogic: domain.MatchLogicOr,
+		ID:           "cat-123",
+		BudgetID:     "budget-123",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("ENTERTAINMENT"),
+		Tags:         []string{"streaming", "subscriptions"},
+		MatchLogic:   domain.MatchLogicOr,
 	}
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 89.97
 
-	mockCalculator.On("GetSpentSumForBudgetCategory", ctx, userID, category.Category, category.Tags, domain.MatchLogicOr, startDate, endDate).Return(expectedSum, nil)
+	mockCalculator.On("GetSpentSumForBudgetCategory", ctx, userID, category, startDate, endDate).Return(expectedSum, nil)
 
 	sum, err := service.CalculateCategorySpent(ctx, userID, category, startDate, endDate)
 	require.NoError(t, err)
@@ -147,18 +148,19 @@ func TestCalculateCategorySpent_EmptyMatchLogic(t *testing.T) {
 
 	userID := "user-123"
 	category := &domain.BudgetCategory{
-		ID:         "cat-123",
-		BudgetID:   "budget-123",
-		Category:   []string{"Shopping"},
-		Tags:       []string{},
-		MatchLogic: "", // Empty defaults to category_only
+		ID:           "cat-123",
+		BudgetID:     "budget-123",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("GENERAL_MERCHANDISE"),
+		Tags:         []string{},
+		MatchLogic:   "", // Empty defaults to category_only
 	}
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 500.00
 
 	// Expect category_only to be used
-	mockCalculator.On("GetSpentSumForBudgetCategory", ctx, userID, category.Category, category.Tags, domain.MatchLogicCategoryOnly, startDate, endDate).Return(expectedSum, nil)
+	mockCalculator.On("GetSpentSumForBudgetCategory", ctx, userID, category, startDate, endDate).Return(expectedSum, nil)
 
 	sum, err := service.CalculateCategorySpent(ctx, userID, category, startDate, endDate)
 	require.NoError(t, err)
@@ -194,16 +196,17 @@ func TestCalculateCategorySpent_RepositoryError(t *testing.T) {
 
 	userID := "user-123"
 	category := &domain.BudgetCategory{
-		ID:         "cat-123",
-		BudgetID:   "budget-123",
-		Category:   []string{"Food and Drink"},
-		Tags:       []string{},
-		MatchLogic: domain.MatchLogicCategoryOnly,
+		ID:           "cat-123",
+		BudgetID:     "budget-123",
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{},
+		MatchLogic:   domain.MatchLogicCategoryOnly,
 	}
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	mockCalculator.On("GetSpentSumForBudgetCategory", ctx, userID, category.Category, category.Tags, domain.MatchLogicCategoryOnly, startDate, endDate).Return(0.0, errors.New("database connection failed"))
+	mockCalculator.On("GetSpentSumForBudgetCategory", ctx, userID, category, startDate, endDate).Return(0.0, errors.New("database connection failed"))
 
 	sum, err := service.CalculateCategorySpent(ctx, userID, category, startDate, endDate)
 	assert.Error(t, err)
@@ -216,63 +219,62 @@ func TestCalculateCategorySpent_RepositoryError(t *testing.T) {
 // DoesTransactionMatchCategory Tests
 // =============================================================================
 
-// Helper function to create a category JSON string pointer
-func categoryJSON(cats []string) *string {
-	b, _ := json.Marshal(cats)
-	s := string(b)
-	return &s
-}
-
-// TestDoesTransactionMatchCategory_CategoryOnly_MatchesPrimaryCategory tests category_only with primary category match
-func TestDoesTransactionMatchCategory_CategoryOnly_MatchesPrimaryCategory(t *testing.T) {
+// TestDoesTransactionMatchCategory_CategoryOnly_MatchesPFCPrimary tests category_only with PFC primary match
+func TestDoesTransactionMatchCategory_CategoryOnly_MatchesPFCPrimary(t *testing.T) {
 	mockCalculator := new(MockSpentAmountCalculator)
 	service := NewBudgetCategoryMatchingService(mockCalculator)
 
 	transaction := &domain.Transaction{
-		ID:       "tx-123",
-		Category: categoryJSON([]string{"Food and Drink", "Restaurants"}),
+		ID:         "tx-123",
+		PFCPrimary: ptrStr("FOOD_AND_DRINK"),
 	}
 	budgetCategory := &domain.BudgetCategory{
-		Category:   []string{"Food and Drink"},
-		MatchLogic: domain.MatchLogicCategoryOnly,
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		MatchLogic:   domain.MatchLogicCategoryOnly,
 	}
 
 	matches := service.DoesTransactionMatchCategory(transaction, budgetCategory)
 	assert.True(t, matches)
 }
 
-// TestDoesTransactionMatchCategory_CategoryOnly_MatchesFullHierarchy tests exact hierarchy match
-func TestDoesTransactionMatchCategory_CategoryOnly_MatchesFullHierarchy(t *testing.T) {
+// TestDoesTransactionMatchCategory_CategoryOnly_MatchesPFCDetailed tests category_only with PFC detailed match
+func TestDoesTransactionMatchCategory_CategoryOnly_MatchesPFCDetailed(t *testing.T) {
 	mockCalculator := new(MockSpentAmountCalculator)
 	service := NewBudgetCategoryMatchingService(mockCalculator)
 
 	transaction := &domain.Transaction{
-		ID:       "tx-123",
-		Category: categoryJSON([]string{"Food and Drink", "Restaurants"}),
+		ID:          "tx-123",
+		PFCPrimary:  ptrStr("FOOD_AND_DRINK"),
+		PFCDetailed: ptrStr("FOOD_AND_DRINK_RESTAURANTS"),
 	}
 	budgetCategory := &domain.BudgetCategory{
-		Category:   []string{"Food and Drink", "Restaurants"},
-		MatchLogic: domain.MatchLogicCategoryOnly,
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		PFCDetailed:  ptrStr("FOOD_AND_DRINK_RESTAURANTS"),
+		MatchLogic:   domain.MatchLogicCategoryOnly,
 	}
 
 	matches := service.DoesTransactionMatchCategory(transaction, budgetCategory)
 	assert.True(t, matches)
 }
 
-// TestDoesTransactionMatchCategory_CategoryOnly_UsesCategoryOverride tests override takes precedence
-func TestDoesTransactionMatchCategory_CategoryOnly_UsesCategoryOverride(t *testing.T) {
+// TestDoesTransactionMatchCategory_CategoryOnly_UsesPFCOverride tests PFC override takes precedence
+func TestDoesTransactionMatchCategory_CategoryOnly_UsesPFCOverride(t *testing.T) {
 	mockCalculator := new(MockSpentAmountCalculator)
 	service := NewBudgetCategoryMatchingService(mockCalculator)
 
-	// Original category doesn't match, but override does
+	// Original PFC doesn't match, but override does
 	transaction := &domain.Transaction{
-		ID:               "tx-123",
-		Category:         categoryJSON([]string{"Shopping", "Electronics"}),
-		CategoryOverride: categoryJSON([]string{"Food and Drink", "Coffee"}),
+		ID:                   "tx-123",
+		PFCPrimary:           ptrStr("GENERAL_MERCHANDISE"),
+		CategoryOverrideKind: ptrStr("pfc"),
+		PFCPrimaryOverride:   ptrStr("FOOD_AND_DRINK"),
 	}
 	budgetCategory := &domain.BudgetCategory{
-		Category:   []string{"Food and Drink"},
-		MatchLogic: domain.MatchLogicCategoryOnly,
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		MatchLogic:   domain.MatchLogicCategoryOnly,
 	}
 
 	matches := service.DoesTransactionMatchCategory(transaction, budgetCategory)
@@ -285,12 +287,13 @@ func TestDoesTransactionMatchCategory_CategoryOnly_NoMatch(t *testing.T) {
 	service := NewBudgetCategoryMatchingService(mockCalculator)
 
 	transaction := &domain.Transaction{
-		ID:       "tx-123",
-		Category: categoryJSON([]string{"Shopping", "Electronics"}),
+		ID:         "tx-123",
+		PFCPrimary: ptrStr("GENERAL_MERCHANDISE"),
 	}
 	budgetCategory := &domain.BudgetCategory{
-		Category:   []string{"Food and Drink"},
-		MatchLogic: domain.MatchLogicCategoryOnly,
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		MatchLogic:   domain.MatchLogicCategoryOnly,
 	}
 
 	matches := service.DoesTransactionMatchCategory(transaction, budgetCategory)
@@ -375,14 +378,15 @@ func TestDoesTransactionMatchCategory_And_RequiresBoth(t *testing.T) {
 	service := NewBudgetCategoryMatchingService(mockCalculator)
 
 	transaction := &domain.Transaction{
-		ID:       "tx-123",
-		Category: categoryJSON([]string{"Food and Drink", "Restaurants"}),
-		Tags:     []string{"dinner", "date-night"},
+		ID:         "tx-123",
+		PFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		Tags:       []string{"dinner", "date-night"},
 	}
 	budgetCategory := &domain.BudgetCategory{
-		Category:   []string{"Food and Drink"},
-		Tags:       []string{"dinner"},
-		MatchLogic: domain.MatchLogicAnd,
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{"dinner"},
+		MatchLogic:   domain.MatchLogicAnd,
 	}
 
 	matches := service.DoesTransactionMatchCategory(transaction, budgetCategory)
@@ -395,14 +399,15 @@ func TestDoesTransactionMatchCategory_And_FailsOnMissingCategory(t *testing.T) {
 	service := NewBudgetCategoryMatchingService(mockCalculator)
 
 	transaction := &domain.Transaction{
-		ID:       "tx-123",
-		Category: categoryJSON([]string{"Shopping"}),
-		Tags:     []string{"dinner"},
+		ID:         "tx-123",
+		PFCPrimary: ptrStr("GENERAL_MERCHANDISE"),
+		Tags:       []string{"dinner"},
 	}
 	budgetCategory := &domain.BudgetCategory{
-		Category:   []string{"Food and Drink"},
-		Tags:       []string{"dinner"},
-		MatchLogic: domain.MatchLogicAnd,
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{"dinner"},
+		MatchLogic:   domain.MatchLogicAnd,
 	}
 
 	matches := service.DoesTransactionMatchCategory(transaction, budgetCategory)
@@ -415,14 +420,15 @@ func TestDoesTransactionMatchCategory_And_FailsOnMissingTag(t *testing.T) {
 	service := NewBudgetCategoryMatchingService(mockCalculator)
 
 	transaction := &domain.Transaction{
-		ID:       "tx-123",
-		Category: categoryJSON([]string{"Food and Drink", "Restaurants"}),
-		Tags:     []string{"lunch"},
+		ID:         "tx-123",
+		PFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		Tags:       []string{"lunch"},
 	}
 	budgetCategory := &domain.BudgetCategory{
-		Category:   []string{"Food and Drink"},
-		Tags:       []string{"dinner"},
-		MatchLogic: domain.MatchLogicAnd,
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{"dinner"},
+		MatchLogic:   domain.MatchLogicAnd,
 	}
 
 	matches := service.DoesTransactionMatchCategory(transaction, budgetCategory)
@@ -435,14 +441,15 @@ func TestDoesTransactionMatchCategory_Or_MatchesCategoryOnly(t *testing.T) {
 	service := NewBudgetCategoryMatchingService(mockCalculator)
 
 	transaction := &domain.Transaction{
-		ID:       "tx-123",
-		Category: categoryJSON([]string{"Food and Drink", "Restaurants"}),
-		Tags:     []string{"unrelated"},
+		ID:         "tx-123",
+		PFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		Tags:       []string{"unrelated"},
 	}
 	budgetCategory := &domain.BudgetCategory{
-		Category:   []string{"Food and Drink"},
-		Tags:       []string{"dinner"},
-		MatchLogic: domain.MatchLogicOr,
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{"dinner"},
+		MatchLogic:   domain.MatchLogicOr,
 	}
 
 	matches := service.DoesTransactionMatchCategory(transaction, budgetCategory)
@@ -455,14 +462,15 @@ func TestDoesTransactionMatchCategory_Or_MatchesTagOnly(t *testing.T) {
 	service := NewBudgetCategoryMatchingService(mockCalculator)
 
 	transaction := &domain.Transaction{
-		ID:       "tx-123",
-		Category: categoryJSON([]string{"Shopping"}),
-		Tags:     []string{"dinner"},
+		ID:         "tx-123",
+		PFCPrimary: ptrStr("GENERAL_MERCHANDISE"),
+		Tags:       []string{"dinner"},
 	}
 	budgetCategory := &domain.BudgetCategory{
-		Category:   []string{"Food and Drink"},
-		Tags:       []string{"dinner"},
-		MatchLogic: domain.MatchLogicOr,
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{"dinner"},
+		MatchLogic:   domain.MatchLogicOr,
 	}
 
 	matches := service.DoesTransactionMatchCategory(transaction, budgetCategory)
@@ -475,14 +483,15 @@ func TestDoesTransactionMatchCategory_Or_NoMatch(t *testing.T) {
 	service := NewBudgetCategoryMatchingService(mockCalculator)
 
 	transaction := &domain.Transaction{
-		ID:       "tx-123",
-		Category: categoryJSON([]string{"Shopping"}),
-		Tags:     []string{"electronics"},
+		ID:         "tx-123",
+		PFCPrimary: ptrStr("GENERAL_MERCHANDISE"),
+		Tags:       []string{"electronics"},
 	}
 	budgetCategory := &domain.BudgetCategory{
-		Category:   []string{"Food and Drink"},
-		Tags:       []string{"dinner"},
-		MatchLogic: domain.MatchLogicOr,
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{"dinner"},
+		MatchLogic:   domain.MatchLogicOr,
 	}
 
 	matches := service.DoesTransactionMatchCategory(transaction, budgetCategory)
@@ -495,8 +504,9 @@ func TestDoesTransactionMatchCategory_NilTransaction(t *testing.T) {
 	service := NewBudgetCategoryMatchingService(mockCalculator)
 
 	budgetCategory := &domain.BudgetCategory{
-		Category:   []string{"Food and Drink"},
-		MatchLogic: domain.MatchLogicCategoryOnly,
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		MatchLogic:   domain.MatchLogicCategoryOnly,
 	}
 
 	matches := service.DoesTransactionMatchCategory(nil, budgetCategory)
@@ -509,8 +519,8 @@ func TestDoesTransactionMatchCategory_NilCategory(t *testing.T) {
 	service := NewBudgetCategoryMatchingService(mockCalculator)
 
 	transaction := &domain.Transaction{
-		ID:       "tx-123",
-		Category: categoryJSON([]string{"Food and Drink"}),
+		ID:         "tx-123",
+		PFCPrimary: ptrStr("FOOD_AND_DRINK"),
 	}
 
 	matches := service.DoesTransactionMatchCategory(transaction, nil)
@@ -523,30 +533,32 @@ func TestDoesTransactionMatchCategory_EmptyMatchLogic(t *testing.T) {
 	service := NewBudgetCategoryMatchingService(mockCalculator)
 
 	transaction := &domain.Transaction{
-		ID:       "tx-123",
-		Category: categoryJSON([]string{"Food and Drink", "Restaurants"}),
+		ID:         "tx-123",
+		PFCPrimary: ptrStr("FOOD_AND_DRINK"),
 	}
 	budgetCategory := &domain.BudgetCategory{
-		Category:   []string{"Food and Drink"},
-		MatchLogic: "", // Empty defaults to category_only
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		MatchLogic:   "", // Empty defaults to category_only
 	}
 
 	matches := service.DoesTransactionMatchCategory(transaction, budgetCategory)
 	assert.True(t, matches)
 }
 
-// TestDoesTransactionMatchCategory_NilTransactionCategory tests transaction with nil category
-func TestDoesTransactionMatchCategory_NilTransactionCategory(t *testing.T) {
+// TestDoesTransactionMatchCategory_NilTransactionPFC tests transaction with nil PFC (uncategorized)
+func TestDoesTransactionMatchCategory_NilTransactionPFC(t *testing.T) {
 	mockCalculator := new(MockSpentAmountCalculator)
 	service := NewBudgetCategoryMatchingService(mockCalculator)
 
 	transaction := &domain.Transaction{
-		ID:       "tx-123",
-		Category: nil,
+		ID:         "tx-123",
+		PFCPrimary: nil, // uncategorized transaction
 	}
 	budgetCategory := &domain.BudgetCategory{
-		Category:   []string{"Food and Drink"},
-		MatchLogic: domain.MatchLogicCategoryOnly,
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		MatchLogic:   domain.MatchLogicCategoryOnly,
 	}
 
 	matches := service.DoesTransactionMatchCategory(transaction, budgetCategory)

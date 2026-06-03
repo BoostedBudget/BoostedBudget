@@ -117,10 +117,23 @@ export default [
       ...js.configs.recommended.rules,
       ...tseslint.configs.recommended.rules,
       ...reactHooks.configs.recommended.rules,
+      // New rules added in react-hooks 7.1.1 — flag many existing patterns across the codebase.
+      // Disabled until codebase is updated; tracked via GitHub issues for gradual remediation.
+      // TODO: re-enable once all call sites are addressed.
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/use-memo': 'off',
+      'react-hooks/refs': 'off',
+      'react-hooks/hooks': 'off',
       'react-refresh/only-export-components': [
         'warn',
-        { allowConstantExport: true, extraHOCs: ['createPlotlyComponent'] },
+        { allowConstantExport: true },
       ],
+      '@typescript-eslint/no-restricted-imports': ['error', {
+        paths: [
+          { name: 'echarts', message: "Import from 'echarts/core' + per-feature paths to keep the bundle tree-shaken.", allowTypeImports: true },
+          { name: 'echarts-for-react', message: "Import ReactEChartsCore from 'echarts-for-react/lib/core' instead.", allowTypeImports: true },
+        ],
+      }],
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/no-explicit-any': 'warn',
     },

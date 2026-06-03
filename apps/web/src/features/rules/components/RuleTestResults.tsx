@@ -10,7 +10,6 @@ import { CheckCircle, XCircle, AlertTriangle, X, Loader2 } from 'lucide-react'
 import type { RuleTestResult, ConditionEvalResult } from '@boostedbudget/api-client/models'
 import { RULE_TYPE_LABELS } from '../constants'
 import type { RuleType } from '../types'
-import './RuleTestResults.css'
 
 export interface RuleTestResultsProps {
   /** Test result data */
@@ -37,14 +36,14 @@ export function RuleTestResults({
   if (isLoading) {
     return (
       <div
-        className={`rule-test-results ${className}`.trim()}
+        className={`fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 ${className}`.trim()}
         role="dialog"
         aria-modal="true"
         aria-labelledby="test-results-title"
       >
-        <div className="rule-test-results__content">
-          <div className="rule-test-results__loading">
-            <Loader2 className="rule-test-results__spinner" />
+        <div className="max-w-lg w-full max-h-[80vh] overflow-y-auto bg-background border border-border rounded-lg shadow-xl">
+          <div className="flex flex-col items-center justify-center py-12 px-8 text-center gap-4">
+            <Loader2 className="w-8 h-8 animate-spin text-primary" />
             <h2 id="test-results-title">Running Backtest...</h2>
             <p>Analyzing your recent data to show what this rule would have done.</p>
           </div>
@@ -67,45 +66,45 @@ export function RuleTestResults({
 
   return (
     <div
-      className={`rule-test-results ${className}`.trim()}
+      className={`fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 ${className}`.trim()}
       role="dialog"
       aria-modal="true"
       aria-labelledby="test-results-title"
     >
-      <div className="rule-test-results__content">
+      <div className="max-w-lg w-full max-h-[80vh] overflow-y-auto bg-background border border-border rounded-lg shadow-xl">
         {/* Header */}
-        <div className="rule-test-results__header">
-          <div className="rule-test-results__title-row">
-            <h2 id="test-results-title" className="rule-test-results__title">
+        <div className="px-6 py-4 border-b border-border">
+          <div className="flex items-start justify-between gap-4">
+            <h2 id="test-results-title" className="m-0 text-lg font-semibold text-foreground">
               {result.rule_name}
             </h2>
             <button
               type="button"
               onClick={onClose}
-              className="rule-test-results__close-btn"
+              className="flex items-center justify-center w-7 h-7 p-0 border-none bg-transparent text-muted-foreground cursor-pointer rounded hover:bg-muted hover:text-foreground transition-colors"
               aria-label="Close"
             >
-              <X aria-hidden="true" />
+              <X aria-hidden="true" className="w-4 h-4" />
             </button>
           </div>
-          <span className="rule-test-results__type">{typeLabel}</span>
+          <span className="inline-block mt-1 text-xs text-muted-foreground capitalize">{typeLabel}</span>
         </div>
 
         {/* Status */}
-        <div className="rule-test-results__status">
+        <div className="px-6 py-4 border-b border-border">
           {hasError ? (
-            <div className="rule-test-results__status-error">
-              <AlertTriangle className="rule-test-results__status-icon" />
+            <div className="flex items-center gap-2 text-sm font-medium text-warning">
+              <AlertTriangle className="w-5 h-5" />
               <span>Error</span>
             </div>
           ) : conditionsPassed ? (
-            <div className="rule-test-results__status-success">
-              <CheckCircle className="rule-test-results__status-icon" />
+            <div className="flex items-center gap-2 text-sm font-medium text-success">
+              <CheckCircle className="w-5 h-5" />
               <span>Conditions Met</span>
             </div>
           ) : (
-            <div className="rule-test-results__status-failure">
-              <XCircle className="rule-test-results__status-icon" />
+            <div className="flex items-center gap-2 text-sm font-medium text-destructive">
+              <XCircle className="w-5 h-5" />
               <span>Conditions Not Met</span>
             </div>
           )}
@@ -113,42 +112,42 @@ export function RuleTestResults({
 
         {/* Error Message */}
         {hasError && (
-          <div className="rule-test-results__error">
-            <p>{result.error}</p>
+          <div className="px-6 py-3 bg-destructive/10 border-b border-border">
+            <p className="m-0 text-sm text-destructive">{result.error}</p>
           </div>
         )}
 
         {/* Condition Results */}
         {conditions.length > 0 && (
-          <div className="rule-test-results__section">
-            <h3 className="rule-test-results__section-title">Condition Results</h3>
-            <div className="rule-test-results__conditions">
+          <div className="px-6 py-4 border-b border-border last:border-b-0">
+            <h3 className="m-0 mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Condition Results</h3>
+            <div className="flex flex-col gap-2">
               {conditions.map((condition, index) => (
                 <div
                   key={index}
-                  className={`rule-test-results__condition ${condition.met ? 'rule-test-results__condition--passed' : 'rule-test-results__condition--failed'}`}
+                  className={`flex items-start gap-3 p-3 rounded-md ${condition.met ? 'bg-success/10' : 'bg-destructive/10'}`}
                 >
-                  <div className="rule-test-results__condition-status">
+                  <div className="flex-shrink-0">
                     {condition.met ? (
                       <CheckCircle
-                        className="rule-test-results__condition-icon"
+                        className="w-4 h-4 text-success"
                         data-testid="condition-passed"
                       />
                     ) : (
                       <XCircle
-                        className="rule-test-results__condition-icon"
+                        className="w-4 h-4 text-destructive"
                         data-testid="condition-failed"
                       />
                     )}
                   </div>
-                  <div className="rule-test-results__condition-details">
-                    <code className="rule-test-results__condition-field">
+                  <div className="flex flex-col gap-1 flex-1 min-w-0">
+                    <code className="text-sm font-mono text-foreground">
                       {condition.field}
                     </code>
-                    <span className="rule-test-results__condition-comparison">
+                    <span className="text-xs text-muted-foreground">
                       {condition.operator} {String(condition.value)}
                     </span>
-                    <span className="rule-test-results__condition-actual">
+                    <span className="text-xs text-muted-foreground">
                       Actual: {String(condition.actual)}
                     </span>
                   </div>
@@ -160,23 +159,23 @@ export function RuleTestResults({
 
         {/* Simulated Action */}
         {conditionsPassed && simulatedAction && (
-          <div className="rule-test-results__section">
-            <h3 className="rule-test-results__section-title">Simulated Action</h3>
-            <div className="rule-test-results__action">
+          <div className="px-6 py-4 border-b border-border last:border-b-0">
+            <h3 className="m-0 mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Simulated Action</h3>
+            <div className="flex flex-col gap-2">
               {!!simulatedAction.type && (
-                <div className="rule-test-results__action-row">
-                  <span className="rule-test-results__action-label">Type:</span>
-                  <span className="rule-test-results__action-value">
+                <div className="flex items-start gap-2">
+                  <span className="flex-shrink-0 text-xs font-medium text-muted-foreground">Type:</span>
+                  <span className="text-sm text-foreground">
                     {String(simulatedAction.type)}
                   </span>
                 </div>
               )}
               {Array.isArray(simulatedAction.channels) && (
-                <div className="rule-test-results__action-row">
-                  <span className="rule-test-results__action-label">Channels:</span>
-                  <span className="rule-test-results__action-value">
+                <div className="flex items-start gap-2">
+                  <span className="flex-shrink-0 text-xs font-medium text-muted-foreground">Channels:</span>
+                  <span className="text-sm text-foreground">
                     {simulatedAction.channels.map((c: string) => (
-                      <span key={c} className="rule-test-results__channel-badge">
+                      <span key={c} className="inline-block px-2 py-0.5 mr-1 text-xs bg-muted rounded-full">
                         {c}
                       </span>
                     ))}
@@ -184,9 +183,9 @@ export function RuleTestResults({
                 </div>
               )}
               {!!simulatedAction.message && (
-                <div className="rule-test-results__action-row">
-                  <span className="rule-test-results__action-label">Message:</span>
-                  <span className="rule-test-results__action-value">
+                <div className="flex items-start gap-2">
+                  <span className="flex-shrink-0 text-xs font-medium text-muted-foreground">Message:</span>
+                  <span className="text-sm text-foreground">
                     {String(simulatedAction.message)}
                   </span>
                 </div>
@@ -196,11 +195,11 @@ export function RuleTestResults({
         )}
 
         {/* Footer */}
-        <div className="rule-test-results__footer">
+        <div className="px-6 py-4 flex justify-end">
           <button
             type="button"
             onClick={onClose}
-            className="rule-test-results__close-action"
+            className="px-4 py-2 text-sm font-medium text-foreground bg-muted border border-border rounded-md cursor-pointer hover:bg-accent transition-colors"
           >
             Close
           </button>

@@ -27,8 +27,8 @@ export function TransactionStatusFilter({
 }: TransactionStatusFilterProps) {
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-sm font-medium text-gray-700">Status</label>
-      <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1">
+      <label className="text-sm font-medium text-foreground">Status</label>
+      <div className="inline-flex rounded-lg border border-border bg-muted p-1">
         {options.map((option) => (
           <button
             key={option.value}
@@ -39,8 +39,8 @@ export function TransactionStatusFilter({
               px-3 py-1.5 text-sm font-medium rounded-md transition-colors relative
               ${
                 value === option.value
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-600 hover:text-gray-900'
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
               }
               ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
             `}

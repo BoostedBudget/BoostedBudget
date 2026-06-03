@@ -63,8 +63,6 @@ describe('usePostHogIdentify', () => {
       rerender()
 
       expect(mockIdentify).toHaveBeenCalledWith('user_123', {
-        email: 'test@example.com',
-        name: 'Test User',
         subscription_tier: 'premium',
         primary_region: 'us-east-1',
       })
@@ -170,13 +168,13 @@ describe('usePostHogIdentify', () => {
       rerender()
 
       expect(mockIdentify).toHaveBeenCalledWith('user_456', {
-        name: null,
         subscription_tier: undefined,
         primary_region: undefined,
       })
-      // email should NOT be in the properties object
+      // email and name should NOT be in the properties object (PII policy)
       const callArgs = mockIdentify.mock.calls[0][1]
       expect('email' in callArgs).toBe(false)
+      expect('name' in callArgs).toBe(false)
     })
 
     it('should handle user with null createdAt (no sign_up_completed)', () => {

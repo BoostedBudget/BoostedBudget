@@ -12,6 +12,8 @@ import { test, expect } from '@playwright/test'
  */
 
 test.describe('Account Deletion - Public Endpoints', () => {
+  test.setTimeout(30000)
+
   test.beforeEach(async ({ context }) => {
     // Clear cookies and storage before each test
     await context.clearCookies()
@@ -20,14 +22,14 @@ test.describe('Account Deletion - Public Endpoints', () => {
   test('should show invalid link message when accessing cancellation page without token', async ({ page }) => {
     // No Clerk auth token - cancellation pages are public endpoints
     await page.goto('/cancel-deletion/')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Verify invalid link message is displayed
-    await expect(page.getByText(/invalid cancellation link/i)).toBeVisible()
-    await expect(page.getByText(/this cancellation link is invalid/i)).toBeVisible()
+    await expect(page.getByText(/invalid cancellation link/i)).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(/this cancellation link is invalid/i)).toBeVisible({ timeout: 10000 })
 
     // Verify "Go to Login" button is present
-    await expect(page.getByRole('button', { name: /go to login/i })).toBeVisible()
+    await expect(page.getByRole('button', { name: /go to login/i })).toBeVisible({ timeout: 10000 })
   })
 
   test('should display processing state on cancellation page load', async ({ page }) => {
@@ -63,22 +65,19 @@ test.describe('Account Deletion - Public Endpoints', () => {
     })
 
     await page.goto(`/cancel-deletion/${invalidToken}`)
-    await page.waitForLoadState('networkidle')
-
-    // Wait for error state to appear
-    await page.waitForTimeout(500)
+    await page.waitForLoadState('domcontentloaded')
 
     // Verify error icon and message
-    await expect(page.getByText('✗')).toBeVisible()
-    await expect(page.getByText(/cancellation failed/i)).toBeVisible()
+    await expect(page.getByText('✗')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(/cancellation failed/i)).toBeVisible({ timeout: 10000 })
 
     // Verify error reasons are listed
-    await expect(page.getByText(/the cancellation link has expired/i)).toBeVisible()
-    await expect(page.getByText(/the link has already been used/i)).toBeVisible()
+    await expect(page.getByText(/the cancellation link has expired/i)).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(/the link has already been used/i)).toBeVisible({ timeout: 10000 })
 
     // Verify action buttons
-    await expect(page.getByRole('button', { name: /go to login/i })).toBeVisible()
-    await expect(page.getByRole('button', { name: /try again/i })).toBeVisible()
+    await expect(page.getByRole('button', { name: /go to login/i })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByRole('button', { name: /try again/i })).toBeVisible({ timeout: 10000 })
   })
 
   test('should show success state for valid cancellation token', async ({ page }) => {
@@ -94,22 +93,19 @@ test.describe('Account Deletion - Public Endpoints', () => {
     })
 
     await page.goto(`/cancel-deletion/${validToken}`)
-    await page.waitForLoadState('networkidle')
-
-    // Wait for success state
-    await page.waitForTimeout(500)
+    await page.waitForLoadState('domcontentloaded')
 
     // Verify success icon and heading
-    await expect(page.getByText('✓')).toBeVisible()
-    await expect(page.getByText('Account Deletion Canceled')).toBeVisible()
+    await expect(page.getByText('✓')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('Account Deletion Canceled')).toBeVisible({ timeout: 10000 })
 
     // Verify confirmation message
-    await expect(page.getByText(/your account and all your data are safe/i)).toBeVisible()
-    await expect(page.getByText(/you can continue using BoostedBudget normally/i)).toBeVisible()
+    await expect(page.getByText(/your account and all your data are safe/i)).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(/you can continue using BoostedBudget normally/i)).toBeVisible({ timeout: 10000 })
 
     // Verify "Go to Profile" button
     const profileButton = page.getByRole('button', { name: /go to profile/i })
-    await expect(profileButton).toBeVisible()
+    await expect(profileButton).toBeVisible({ timeout: 10000 })
   })
 
   test('should navigate to profile when "Go to Profile" clicked after successful cancellation', async ({ page }) => {
@@ -132,7 +128,7 @@ test.describe('Account Deletion - Public Endpoints', () => {
     await profileButton.click()
 
     // Verify navigation (will redirect to login if not authenticated)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     const url = page.url()
 
     // Should either be at profile or redirected to login

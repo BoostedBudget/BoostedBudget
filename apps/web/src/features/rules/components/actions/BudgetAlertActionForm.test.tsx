@@ -29,7 +29,9 @@ const mockBudgets: Budget[] = [
       {
         id: 'cat-1',
         budget_id: 'budget-1',
-        category: ['Food and Drink', 'Restaurants'],
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
         allocated_amount: 500,
         spent_amount: 200,
         created_at: '2024-01-01',
@@ -40,7 +42,9 @@ const mockBudgets: Budget[] = [
       {
         id: 'cat-2',
         budget_id: 'budget-1',
-        category: ['Transportation', 'Gas'],
+        category_kind: 'pfc',
+        pfc_primary: 'TRANSPORTATION',
+        pfc_detailed: 'TRANSPORTATION_GAS',
         allocated_amount: 300,
         spent_amount: 150,
         created_at: '2024-01-01',
@@ -175,8 +179,8 @@ describe('BudgetAlertActionForm', () => {
       )
 
       const categorySelect = screen.getByLabelText(/category/i)
-      expect(categorySelect).toContainHTML('Food and Drink')
-      expect(categorySelect).toContainHTML('Transportation')
+      expect(categorySelect).toContainHTML('Food And Drink › Restaurants')
+      expect(categorySelect).toContainHTML('Transportation › Gas')
     })
 
     it('should show "All Categories" option', () => {

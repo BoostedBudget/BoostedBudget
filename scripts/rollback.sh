@@ -37,9 +37,11 @@ fi
 if [ "$ENVIRONMENT" = "production" ]; then
   BACKEND_APP="boostedbudget-api"
   FRONTEND_APP="boostedbudget-web"
+  MCP_WORKER_ENV=""  # wrangler deploy without --env = production
 else
   BACKEND_APP="boostedbudget-api-staging"
   FRONTEND_APP="boostedbudget-web-staging"
+  MCP_WORKER_ENV="staging"  # wrangler deploy/rollback --env staging
 fi
 
 # Function to print section headers
@@ -123,6 +125,58 @@ rollback_app() {
   fi
 }
 
+# Function to check if wrangler is installed
+check_wrangler() {
+  if ! command -v wrangler &> /dev/null && ! command -v npx &> /dev/null; then
+    echo -e "${YELLOW}⚠ wrangler not in PATH — MCP Worker rollback requires wrangler CLI${NC}"
+    echo -e "${YELLOW}Install: npm install -g wrangler${NC}"
+    return 1
+  fi
+  return 0
+}
+
+# Function to rollback MCP Worker using wrangler rollback
+# wrangler rollback reverts to the prior deployment of the Worker.
+# https://developers.cloudflare.com/workers/configuration/versions-and-deployments/rollbacks/
+rollback_mcp_worker() {
+  print_section "Rolling Back MCP Worker"
+
+  if ! check_wrangler; then
+    echo -e "${YELLOW}⚠ Skipping MCP Worker rollback (wrangler not available)${NC}"
+    return 0
+  fi
+
+  local wrangler_cmd
+  if command -v wrangler &> /dev/null; then
+    wrangler_cmd="wrangler"
+  else
+    wrangler_cmd="npx wrangler"
+  fi
+
+  echo -e "${BLUE}Worker:${NC}      boostedbudget-mcp (${ENVIRONMENT})"
+  echo -e "${BLUE}Directory:${NC}   apps/mcp-server"
+  echo ""
+
+  # Change to mcp-server dir so wrangler picks up wrangler.toml
+  pushd "$(dirname "$0")/../apps/mcp-server" > /dev/null
+
+  local rollback_args="rollback"
+  if [ -n "$MCP_WORKER_ENV" ]; then
+    rollback_args="$rollback_args --env $MCP_WORKER_ENV"
+  fi
+
+  if $wrangler_cmd $rollback_args --yes; then
+    echo -e "${GREEN}✓ MCP Worker rolled back successfully${NC}"
+    popd > /dev/null
+    return 0
+  else
+    echo -e "${RED}✗ MCP Worker rollback failed${NC}"
+    echo -e "${YELLOW}Manual rollback: cd apps/mcp-server && wrangler rollback${MCP_WORKER_ENV:+ --env $MCP_WORKER_ENV}${NC}"
+    popd > /dev/null
+    return 1
+  fi
+}
+
 # Function to verify rollback
 verify_rollback() {
   print_section "Verifying Rollback"
@@ -201,6 +255,13 @@ main() {
     exit 1
   fi
 
+  # Rollback MCP Worker (Cloudflare Worker — uses wrangler rollback, not flyctl)
+  if ! rollback_mcp_worker; then
+    echo -e "${YELLOW}⚠ MCP Worker rollback failed or skipped — backend/frontend were rolled back${NC}"
+    echo -e "${YELLOW}Manual: cd apps/mcp-server && wrangler rollback${MCP_WORKER_ENV:+ --env $MCP_WORKER_ENV}${NC}"
+    # Non-fatal: MCP Worker is stateless; backend/frontend rollback is the critical path
+  fi
+
   # Verify rollback
   echo ""
   if ! verify_rollback; then
@@ -216,23 +277,28 @@ main() {
   if [ "$ENVIRONMENT" = "production" ]; then
     backend_url="https://api.boostedbudget.com"
     frontend_url="https://boostedbudget.com"
+    mcp_url="https://mcp.boostedbudget.com"
   else
     backend_url="https://boostedbudget-api-staging.fly.dev"
     frontend_url="https://boostedbudget-web-staging.fly.dev"
+    mcp_url="https://staging-mcp.boostedbudget.com"
   fi
 
   echo -e "${GREEN}✓ Successfully rolled back ${ENVIRONMENT}!${NC}"
   echo ""
-  echo -e "${BLUE}Backend:${NC}  ${backend_url}"
-  echo -e "${BLUE}Frontend:${NC} ${frontend_url}"
+  echo -e "${BLUE}Backend:${NC}     ${backend_url}"
+  echo -e "${BLUE}Frontend:${NC}    ${frontend_url}"
+  echo -e "${BLUE}MCP Worker:${NC}  ${mcp_url}"
   echo ""
   echo -e "${BLUE}Monitor status:${NC}"
   echo -e "  flyctl status --app ${BACKEND_APP}"
   echo -e "  flyctl status --app ${FRONTEND_APP}"
+  echo -e "  cd apps/mcp-server && wrangler deployments list${MCP_WORKER_ENV:+ --env $MCP_WORKER_ENV}"
   echo ""
   echo -e "${BLUE}View logs:${NC}"
   echo -e "  flyctl logs --app ${BACKEND_APP}"
   echo -e "  flyctl logs --app ${FRONTEND_APP}"
+  echo -e "  cd apps/mcp-server && wrangler tail${MCP_WORKER_ENV:+ --env $MCP_WORKER_ENV}"
 }
 
 main "$@"

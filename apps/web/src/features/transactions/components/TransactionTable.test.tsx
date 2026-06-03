@@ -4,6 +4,11 @@ import { TransactionTable } from './TransactionTable'
 import type { Transaction } from '../types'
 import type { Account } from '../../accounts/types'
 
+// NOTE: Do NOT mock HierarchicalCategoryTreeSelect with mock.module() here.
+// bun:test mock.module() is process-global — it would leak into HierarchicalCategoryTreeSelect.test.tsx
+// and break those tests. The real component renders fine in tests; useCuratedPfcDetailed()
+// returns a static constant and Radix Popover works in jsdom.
+
 const mockAccounts: Record<string, Account> = {
   'acc-1': {
     id: 'acc-1',
@@ -55,12 +60,13 @@ const mockTransactions: Transaction[] = [
     account_id: 'acc-1',
     linked_item_id: 'item-1',
     source: 'plaid',
-    amount: -45.99,
+    amount: 45.99, // PFCv2: positive = outflow (spending)
     date: '2025-01-15',
     authorized_date: '2025-01-14',
     name: 'AMAZON.COM',
     merchant_name: 'Amazon',
-    category: '["Shopping", "Online"]',
+    pfc_primary: 'SHOPPING',
+    pfc_detailed: 'SHOPPING_GENERAL_MERCHANDISE',
     pending: false,
     tags: ['subscription', 'household'],
     created_at: '2025-01-15T00:00:00Z',
@@ -72,11 +78,12 @@ const mockTransactions: Transaction[] = [
     account_id: 'acc-2',
     linked_item_id: 'item-1',
     source: 'plaid',
-    amount: 2500.0,
+    amount: -2500.0, // PFCv2: negative = inflow (payroll income)
     date: '2025-01-10',
     name: 'DIRECT DEPOSIT - PAYROLL',
     merchant_name: null,
-    category: '["Income", "Salary"]',
+    pfc_primary: 'INCOME',
+    pfc_detailed: 'INCOME_WAGES',
     pending: false,
     created_at: '2025-01-10T00:00:00Z',
     updated_at: '2025-01-10T00:00:00Z',
@@ -87,11 +94,12 @@ const mockTransactions: Transaction[] = [
     account_id: 'acc-1',
     linked_item_id: 'item-1',
     source: 'plaid',
-    amount: -12.5,
+    amount: 12.5, // PFCv2: positive = outflow (food purchase)
     date: '2025-01-12',
     name: 'UBER EATS',
     merchant_name: 'Uber Eats',
-    category: '["Food and Drink", "Restaurants"]',
+    pfc_primary: 'FOOD_AND_DRINK',
+    pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
     pending: true,
     created_at: '2025-01-12T00:00:00Z',
     updated_at: '2025-01-12T00:00:00Z',
@@ -156,9 +164,10 @@ describe('TransactionTable', () => {
     it('should display category labels', () => {
       renderTable()
 
-      expect(screen.getByText('Shopping')).toBeInTheDocument()
-      expect(screen.getByText('Income')).toBeInTheDocument()
-      expect(screen.getByText('Food and Drink')).toBeInTheDocument()
+      // No display fields on these test transactions — formatPFCEnum fallback is used
+      expect(screen.getByText('Shopping › General Merchandise')).toBeInTheDocument()
+      expect(screen.getByText('Income › Wages')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument()
     })
 
     it('should display pending badge for pending transactions', () => {
@@ -200,14 +209,39 @@ describe('TransactionTable', () => {
   })
 
   describe('Amount Styling', () => {
-    it('should apply credit class to positive amounts', () => {
+    it('should apply debit class to outflows (positive amounts under PFCv2)', () => {
       renderTable()
-      expect(screen.getByText('+$2,500.00')).toHaveClass('transaction-table__amount--credit')
+      // txn-1 amount=45.99 is an outflow: displays as '-$45.99' with debit styling
+      expect(screen.getByText('-$45.99')).toHaveClass('transaction-table__amount--debit')
     })
 
-    it('should apply debit class to negative amounts', () => {
+    it('should apply credit class to inflows (negative amounts under PFCv2)', () => {
       renderTable()
-      expect(screen.getByText('-$45.99')).toHaveClass('transaction-table__amount--debit')
+      // txn-2 amount=-2500.0 is an inflow: displays as '+$2,500.00' with credit styling
+      expect(screen.getByText('+$2,500.00')).toHaveClass('transaction-table__amount--credit')
+    })
+  })
+
+  describe('PII Masking', () => {
+    it('should apply data-ph-mask to amount, merchant, and account <td>s via maskedColumnIds', () => {
+      const { container } = renderTable()
+      // maskedColumnIds={['amount', 'merchant', 'account']} — 3 columns × 3 rows = 9 masked tds
+      const maskedTds = container.querySelectorAll('td[data-ph-mask]')
+      expect(maskedTds.length).toBe(9)
+    })
+
+    it('should NOT apply data-ph-mask to date and category columns', () => {
+      const { container } = renderTable()
+      // date and category are MAY-leave-unmasked per PII policy; verify they have no mask
+      const ths = Array.from(container.querySelectorAll('th'))
+      const dateColIdx = ths.findIndex((th) => th.textContent?.includes('Date'))
+      const categoryColIdx = ths.findIndex((th) => th.textContent?.includes('Category'))
+      const rows = Array.from(container.querySelectorAll('tbody tr'))
+      rows.forEach((row) => {
+        const tds = Array.from(row.querySelectorAll('td'))
+        if (dateColIdx >= 0) expect(tds[dateColIdx]?.hasAttribute('data-ph-mask')).toBe(false)
+        if (categoryColIdx >= 0) expect(tds[categoryColIdx]?.hasAttribute('data-ph-mask')).toBe(false)
+      })
     })
   })
 
@@ -270,47 +304,58 @@ describe('TransactionTable', () => {
   })
 
   describe('Sorting', () => {
-    it('should make date column sortable', () => {
-      renderTable({ sortable: true })
+    it('should make date column sortable when onSortChange is provided', () => {
+      renderTable({ onSortChange: mock(() => {}) })
 
       const dateHeader = screen.getByText('Date')
       expect(dateHeader.closest('button')).toBeInTheDocument()
     })
 
-    it('should call onSort when clicking sortable header', () => {
-      const onSort = mock(() => {})
-      renderTable({ sortable: true, onSort })
+    it('calls onSortChange with asc on first click of an unsorted column', () => {
+      const onSortChange = mock(() => {})
+      renderTable({ onSortChange })
 
       const dateHeader = screen.getByText('Date').closest('button')!
       fireEvent.click(dateHeader)
 
-      expect(onSort).toHaveBeenCalledWith('date', 'asc')
+      expect(onSortChange).toHaveBeenCalledWith({ columnId: 'date', direction: 'asc' })
     })
 
-    it('should toggle sort direction on second click', () => {
-      const onSort = mock(() => {})
+    it('calls onSortChange with desc on second click (currently sorted asc)', () => {
+      const onSortChange = mock(() => {})
       renderTable({
-        sortable: true,
-        onSort,
-        sortColumn: 'date',
-        sortDirection: 'asc',
+        onSortChange,
+        sort: { columnId: 'date', direction: 'asc' },
       })
 
       const dateHeader = screen.getByText('Date').closest('button')!
       fireEvent.click(dateHeader)
 
-      expect(onSort).toHaveBeenCalledWith('date', 'desc')
+      expect(onSortChange).toHaveBeenCalledWith({ columnId: 'date', direction: 'desc' })
+    })
+
+    it('calls onSortChange(null) on third click (currently sorted desc) — clears sort', () => {
+      const onSortChange = mock(() => {})
+      renderTable({
+        onSortChange,
+        sort: { columnId: 'date', direction: 'desc' },
+      })
+
+      const dateHeader = screen.getByText('Date').closest('button')!
+      fireEvent.click(dateHeader)
+
+      expect(onSortChange).toHaveBeenCalledWith(null)
     })
 
     it('should show sort indicator on sorted column', () => {
       renderTable({
-        sortable: true,
-        sortColumn: 'date',
-        sortDirection: 'asc',
+        onSortChange: mock(() => {}),
+        sort: { columnId: 'date', direction: 'asc' },
       })
 
-      const dateHeader = screen.getByText('Date').closest('button')!
-      expect(dateHeader).toHaveAttribute('aria-sort', 'ascending')
+      // aria-sort lives on <th> (correct HTML semantics), not the sort button
+      const dateTh = screen.getByRole('columnheader', { name: /date/i })
+      expect(dateTh).toHaveAttribute('aria-sort', 'ascending')
     })
   })
 
@@ -359,29 +404,61 @@ describe('TransactionTable', () => {
     })
   })
 
+  describe('Phase 5 – DataTable opt-in features', () => {
+    it('PII mask retention: amount, merchant, account columns have data-ph-mask after feature wiring', () => {
+      const { container } = renderTable()
+      const maskedTds = container.querySelectorAll('td[data-ph-mask]')
+      // maskedColumnIds={['amount', 'merchant', 'account']} — 3 columns × 3 rows = 9
+      expect(maskedTds.length).toBe(9)
+    })
+
+    it('Resize handles render on columns with resizable:true', () => {
+      const { container } = renderTable()
+      const resizeHandles = container.querySelectorAll('[data-testid="resize-handle"]')
+      // date, merchant, account, category, amount all have resizable:true → 5 handles
+      expect(resizeHandles.length).toBeGreaterThan(0)
+    })
+
+    it('Drag handles render on columns with reorderable:true', () => {
+      const { container } = renderTable()
+      const dragHandles = container.querySelectorAll('[data-testid="drag-handle"]')
+      // date, merchant, account, category, amount are reorderable (not actions) → 5 handles
+      expect(dragHandles.length).toBeGreaterThan(0)
+    })
+
+    it('Amount td has data-pinned="right" because amount column has defaultPinned:right', () => {
+      const { container } = renderTable()
+      const pinnedTds = container.querySelectorAll('td[data-pinned="right"]')
+      // One per data row (3 transactions)
+      expect(pinnedTds.length).toBe(3)
+    })
+
+    it('Hideable columns (account, category, sub_category) appear in ColumnVisibilityMenu', async () => {
+      const userEvent = await import('@testing-library/user-event')
+      const user = userEvent.default.setup()
+      renderTable()
+
+      // The "Columns" button is rendered when hideable columns exist and onColumnVisibilityChange is provided
+      const columnsButton = screen.getByRole('button', { name: /columns/i })
+      await user.click(columnsButton)
+
+      // account, category, and sub_category should appear as menu items
+      expect(screen.getByRole('menuitemcheckbox', { name: /^account$/i })).toBeInTheDocument()
+      expect(screen.getByRole('menuitemcheckbox', { name: /^category$/i })).toBeInTheDocument()
+      expect(screen.getByRole('menuitemcheckbox', { name: /^sub-category$/i })).toBeInTheDocument()
+    })
+  })
+
   describe('Inline Filtering', () => {
     const accountOptions = [
       { value: 'acc-1', label: 'My Checking' },
       { value: 'acc-2', label: 'Savings' },
     ]
 
-    const categoryOptions = [
-      { value: 'Shopping', label: 'Shopping' },
-      { value: 'Income', label: 'Income' },
-      { value: 'Food and Drink', label: 'Food and Drink' },
-    ]
-
     it('should render account filter when accountOptions provided', () => {
       renderTable({ accountOptions, onAccountFilterChange: () => {} })
 
       const filterButtons = screen.getAllByRole('button', { name: /filter by account/i })
-      expect(filterButtons.length).toBeGreaterThan(0)
-    })
-
-    it('should render category filter when categoryOptions provided', () => {
-      renderTable({ categoryOptions, onCategoryFilterChange: () => {} })
-
-      const filterButtons = screen.getAllByRole('button', { name: /filter by category/i })
       expect(filterButtons.length).toBeGreaterThan(0)
     })
 
@@ -411,25 +488,6 @@ describe('TransactionTable', () => {
       expect(onAccountFilterChange).toHaveBeenCalledWith(['acc-1'])
     })
 
-    it('should call onCategoryFilterChange when category filter changed', async () => {
-      const onCategoryFilterChange = mock(() => {})
-      const userEvent = await import('@testing-library/user-event')
-      const user = userEvent.default.setup()
-
-      renderTable({
-        categoryOptions,
-        onCategoryFilterChange,
-      })
-
-      const filterButton = screen.getByRole('button', { name: /filter by category/i })
-      await user.click(filterButton)
-
-      const checkbox = screen.getByRole('checkbox', { name: /shopping/i })
-      await user.click(checkbox)
-
-      expect(onCategoryFilterChange).toHaveBeenCalledWith(['Shopping'])
-    })
-
     it('should show active filter indicator when account filter has value', () => {
       renderTable({
         accountOptions,
@@ -441,23 +499,107 @@ describe('TransactionTable', () => {
       expect(filterButton).toHaveClass('column-filter__trigger--active')
     })
 
-    it('should show active filter indicator when category filter has value', () => {
-      renderTable({
-        categoryOptions,
-        categoryFilter: ['Shopping'],
-        onCategoryFilterChange: () => {},
-      })
-
-      const filterButton = screen.getByRole('button', { name: /filter by category/i })
-      expect(filterButton).toHaveClass('column-filter__trigger--active')
-    })
-
     it('should not show filter icons when filter props not provided', () => {
       renderTable()
 
       expect(screen.queryByRole('button', { name: /filter by account/i })).not.toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: /filter by category/i })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /filter by amount/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /filter by sub-category/i })).not.toBeInTheDocument()
+    })
+
+    it('renders sub-category filter button when onDetailedsChange is provided', () => {
+      renderTable({ selectedDetaileds: [], onDetailedsChange: mock(() => {}) })
+
+      expect(screen.getByRole('button', { name: /filter by sub-category/i })).toBeInTheDocument()
+    })
+
+    it('calls onDetailedsChange when a sub-category filter option is selected', async () => {
+      const onDetailedsChange = mock(() => {})
+      const userEvent = await import('@testing-library/user-event')
+      const user = userEvent.default.setup()
+
+      renderTable({ selectedDetaileds: [], onDetailedsChange })
+
+      await user.click(screen.getByRole('button', { name: /filter by sub-category/i }))
+      await user.click(screen.getByText('Coffee'))
+      expect(onDetailedsChange).toHaveBeenCalledWith(['FOOD_AND_DRINK_COFFEE'])
+    })
+
+    it('shows sub-category filter button as active when selectedDetaileds is non-empty', () => {
+      renderTable({
+        selectedDetaileds: ['FOOD_AND_DRINK_COFFEE'],
+        onDetailedsChange: mock(() => {}),
+      })
+
+      const btn = screen.getByRole('button', { name: /filter by sub-category/i })
+      expect(btn).toHaveClass('column-filter__trigger--active')
+    })
+  })
+
+  describe('Sub-category column', () => {
+    it('renders detailed label for a transaction with a known detailed PFC value', () => {
+      const txnWithDetailed: Transaction = {
+        ...mockTransactions[1], // INCOME, INCOME_WAGES
+        id: 'txn-detailed',
+        pfc_primary: 'INCOME',
+        pfc_detailed: 'INCOME_WAGES',
+        category_override_kind: null,
+      }
+      render(
+        <TransactionTable
+          transactions={[txnWithDetailed]}
+          accountsMap={mockAccounts}
+        />
+      )
+      // getDetailedLabel('INCOME_WAGES') = 'Wages'
+      expect(screen.getByText('Wages')).toBeInTheDocument()
+    })
+
+    it('renders "—" placeholder when transaction has no detailed category', () => {
+      const txnNoDetailed: Transaction = {
+        ...mockTransactions[0],
+        id: 'txn-no-detailed',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: null,
+        pfc_detailed_override: null,
+        category_override_kind: null,
+      }
+      render(
+        <TransactionTable
+          transactions={[txnNoDetailed]}
+          accountsMap={mockAccounts}
+        />
+      )
+      expect(screen.getByText('—')).toBeInTheDocument()
+    })
+  })
+
+  describe('Hierarchical category filter', () => {
+    it('renders HierarchicalCategoryTreeSelect when selectedPrimaries and onPrimariesChange are provided', () => {
+      renderTable({
+        selectedPrimaries: [],
+        onPrimariesChange: () => {},
+        selectedDetaileds: [],
+        onDetailedsChange: () => {},
+      })
+      // The mocked component renders a button with accessible name "Filter by category"
+      expect(screen.getByRole('button', { name: /filter by category/i })).toBeInTheDocument()
+    })
+
+    it('does not render HierarchicalCategoryTreeSelect when hierarchical props are absent', () => {
+      renderTable()
+      expect(screen.queryByRole('button', { name: /filter by category/i })).not.toBeInTheDocument()
+    })
+
+    it('shows active-dot indicator when selectedPrimaries is non-empty', () => {
+      renderTable({
+        selectedPrimaries: ['FOOD_AND_DRINK'],
+        onPrimariesChange: () => {},
+        selectedDetaileds: [],
+        onDetailedsChange: () => {},
+      })
+      // Real HierarchicalCategoryTreeSelect renders a span[data-testid="active-dot"] inside the trigger
+      expect(screen.getByTestId('active-dot')).toBeInTheDocument()
     })
   })
 })

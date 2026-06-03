@@ -12,7 +12,6 @@ kill_timeout = 30
 
 [env]
   PORT = "8080"
-  PRIMARY_REGION = "iad"
   ENVIRONMENT = "staging"
   LOG_LEVEL = "debug"
   ENABLE_METRICS = "true"

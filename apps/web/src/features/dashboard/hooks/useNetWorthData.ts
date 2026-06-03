@@ -3,7 +3,7 @@
  */
 
 import { useMemo, useCallback } from 'react';
-import { format, eachDayOfInterval, parseISO } from 'date-fns';
+import { historyDateKey, calendarDateRange } from '@/shared/dates';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useGetNetWorth,
@@ -138,26 +138,20 @@ export function useNetWorthData(filters?: DashboardFilters): UseNetWorthDataResu
 function fillNetWorthHistoryGaps(history: NetWorthHistory): NetWorthHistory {
   const { start_date, end_date, snapshots } = history;
 
-  // Parse dates
-  const startDate = parseISO(start_date);
-  const endDate = parseISO(end_date);
+  // Generate all calendar-date keys in range (UTC-safe, no TZ shift)
+  const allDays = calendarDateRange(start_date, end_date);
 
-  // Generate all days in range
-  const allDays = eachDayOfInterval({ start: startDate, end: endDate });
-
-  // Create a map of existing snapshots by date
+  // Create a map of existing snapshots by UTC calendar date key
   const snapshotMap = new Map<string, NetWorthHistorySnapshot>();
   snapshots.forEach((snapshot) => {
-    const dateKey = format(parseISO(snapshot.date), 'yyyy-MM-dd');
-    snapshotMap.set(dateKey, snapshot);
+    snapshotMap.set(historyDateKey(snapshot.date), snapshot);
   });
 
   // Fill gaps with forward-filled values
   const filledSnapshots: NetWorthHistorySnapshot[] = [];
   let lastSnapshot: NetWorthHistorySnapshot | null = null;
 
-  allDays.forEach((day) => {
-    const dateKey = format(day, 'yyyy-MM-dd');
+  allDays.forEach((dateKey) => {
     const existingSnapshot = snapshotMap.get(dateKey);
 
     if (existingSnapshot) {

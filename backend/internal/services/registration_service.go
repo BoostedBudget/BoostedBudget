@@ -4,7 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
+	"log/slog"
+	"net/mail"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -17,9 +18,6 @@ import (
 type TxBeginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
-
-// Email validation regex (basic RFC 5322 compliant)
-var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 
 // TrialGranter defines the interface for granting trials to users
 // Issue #679: Used to auto-grant trial during registration
@@ -151,7 +149,7 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 	}
 
 	// Validate email format
-	if !emailRegex.MatchString(email) {
+	if _, err := mail.ParseAddress(email); err != nil {
 		return nil, fmt.Errorf("invalid email format: %s", email)
 	}
 
@@ -169,6 +167,16 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 			return nil, fmt.Errorf("failed to get existing user: %w", err)
 		}
 		return user, nil
+	}
+
+	// #1001: Fallback — blind-index lookup misses rows that were created before encryption
+	// was deployed (they have NULL clerk_user_id_blind_idx). Check by plaintext email to
+	// prevent creating a duplicate account for the same person.
+	existingUser, _ := s.profileRepo.GetUserByEmail(ctx, email)
+	if existingUser != nil {
+		slog.WarnContext(ctx, "found unmigrated pre-encryption user via email fallback — skipping duplicate creation",
+			"clerk_user_id", clerkUserID)
+		return existingUser, nil
 	}
 
 	// New user - create user, identity, and privacy settings

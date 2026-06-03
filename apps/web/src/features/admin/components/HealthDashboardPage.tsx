@@ -4,12 +4,18 @@ import { useTrackEvent } from '../../../shared/hooks/useTrackEvent';
 import { ANALYTICS_EVENTS } from '../../../shared/analytics';
 import { SummaryCard } from '@/features/admin';
 import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle } from 'lucide-react';
-import './HealthDashboardPage.css';
+import { cn } from '@/lib/utils';
 
 const statusToVariant = (status: string): 'success' | 'warning' | 'error' => {
   if (status === 'up' || status === 'healthy') return 'success';
   if (status === 'degraded') return 'warning';
   return 'error';
+};
+
+const statusTextClass = (status: string) => {
+  if (status === 'healthy') return 'text-success';
+  if (status === 'degraded') return 'text-warning';
+  return 'text-destructive';
 };
 
 export function HealthDashboardPage() {
@@ -29,18 +35,20 @@ export function HealthDashboardPage() {
 
   if (isLoading) {
     return (
-      <div className="health-dashboard">
-        <h1>System Health</h1>
-        <p>Loading system health metrics...</p>
+      <div className="p-8 max-w-[1400px] mx-auto">
+        <h1 className="text-2xl font-semibold">System Health</h1>
+        <p className="text-muted-foreground">Loading system health metrics...</p>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="health-dashboard">
-        <h1>System Health</h1>
-        <p className="error-message">Error loading system health: {error.message}</p>
+      <div className="p-8 max-w-[1400px] mx-auto">
+        <h1 className="text-2xl font-semibold">System Health</h1>
+        <p className="text-destructive bg-destructive/10 border border-destructive/20 rounded-lg p-4">
+          Error loading system health: {error.message}
+        </p>
       </div>
     );
   }
@@ -50,23 +58,27 @@ export function HealthDashboardPage() {
   }
 
   return (
-    <div className="health-dashboard">
-      <header className="health-dashboard__header">
-        <div className="health-dashboard__title-group">
-          <h1>System Health</h1>
-          <span className="health-dashboard__overall-status">
-            Status: <strong className={`status-${data.status}`}>{data.status.toUpperCase()}</strong>
+    <div className="p-8 max-w-[1400px] mx-auto max-md:p-4">
+      <header className="flex justify-between items-center mb-8 flex-wrap gap-4 max-md:flex-col max-md:items-start">
+        <div className="flex flex-col gap-2">
+          <h1 className="m-0 text-3xl font-semibold text-foreground">System Health</h1>
+          <span className="text-sm text-muted-foreground">
+            Status:{' '}
+            <strong className={statusTextClass(data.status)}>{data.status.toUpperCase()}</strong>
           </span>
         </div>
-        <div className="health-dashboard__controls">
+        <div className="flex gap-2 max-md:w-full">
           <button
             onClick={() => setAutoRefresh(!autoRefresh)}
-            className="health-dashboard__button"
+            className="flex items-center gap-2 px-4 py-2 border border-border rounded-md bg-card text-foreground text-sm cursor-pointer hover:bg-accent transition-colors max-md:flex-1 max-md:justify-center"
           >
-            <RefreshCw className={autoRefresh ? 'spinning' : ''} size={16} />
+            <RefreshCw className={cn('w-4 h-4', autoRefresh && 'animate-spin')} size={16} />
             Auto-refresh: {autoRefresh ? 'ON' : 'OFF'}
           </button>
-          <button onClick={() => refetch()} className="health-dashboard__button">
+          <button
+            onClick={() => refetch()}
+            className="flex items-center gap-2 px-4 py-2 border border-border rounded-md bg-card text-foreground text-sm cursor-pointer hover:bg-accent transition-colors max-md:flex-1 max-md:justify-center"
+          >
             <RefreshCw size={16} />
             Refresh
           </button>
@@ -75,9 +87,9 @@ export function HealthDashboardPage() {
 
       {/* Dead Letter Alert */}
       {data.dead_letter_queue.count > 0 && (
-        <div className="dead-letter-alert">
+        <div className="flex items-center gap-4 p-4 mb-8 bg-warning/10 border border-warning/20 rounded-lg text-warning">
           <AlertTriangle size={20} />
-          <div className="dead-letter-alert__content">
+          <div className="flex-1">
             <strong>Dead Letter Queue Alert:</strong> {data.dead_letter_queue.count} failed jobs
             (oldest: {data.dead_letter_queue.oldest_job_age_hours}h ago)
           </div>
@@ -85,9 +97,9 @@ export function HealthDashboardPage() {
       )}
 
       {/* Service Status Section */}
-      <section className="health-dashboard__section">
-        <h2>Services</h2>
-        <div className="health-dashboard__grid">
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Services</h2>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
           <SummaryCard
             title="Database"
             value={`${data.services.database.connections.active}/${data.services.database.connections.max} connections`}
@@ -110,9 +122,9 @@ export function HealthDashboardPage() {
       </section>
 
       {/* Sync Status Section */}
-      <section className="health-dashboard__section">
-        <h2>Plaid Sync Status</h2>
-        <div className="health-dashboard__grid">
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Plaid Sync Status</h2>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
           <SummaryCard
             title="Active Syncs"
             value={data.sync_status.active_syncs.toString()}
@@ -135,9 +147,9 @@ export function HealthDashboardPage() {
       </section>
 
       {/* Paddle Status Section */}
-      <section className="health-dashboard__section">
-        <h2>Paddle Status</h2>
-        <div className="health-dashboard__grid">
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Paddle Status</h2>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
           <SummaryCard
             title="Active Subscriptions"
             value={data.paddle_status.active_subscriptions.toString()}
@@ -170,32 +182,30 @@ export function HealthDashboardPage() {
       </section>
 
       {/* Job Queues Section */}
-      <section className="health-dashboard__section">
-        <h2>Job Queues</h2>
-        <div className="health-dashboard__queue-grid">
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Job Queues</h2>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))] max-md:[grid-template-columns:1fr]">
           {Object.entries(data.job_queues).map(([queueName, metrics]) => (
-            <div key={queueName} className="queue-card">
-              <h3 className="queue-card__name">{queueName}</h3>
-              <div className="queue-card__metrics">
-                <div className="queue-card__metric">
-                  <span className="queue-card__label">Pending:</span>
-                  <span className="queue-card__value">{metrics.pending}</span>
+            <div key={queueName} className="p-4 bg-card border border-border rounded-lg">
+              <h3 className="m-0 mb-3 text-base font-semibold text-foreground">{queueName}</h3>
+              <div className="flex flex-col gap-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">Pending:</span>
+                  <span className="text-sm font-semibold text-foreground">{metrics.pending}</span>
                 </div>
-                <div className="queue-card__metric">
-                  <span className="queue-card__label">Running:</span>
-                  <span className="queue-card__value queue-card__value--running">
-                    {metrics.running}
-                  </span>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">Running:</span>
+                  <span className="text-sm font-semibold text-info">{metrics.running}</span>
                 </div>
-                <div className="queue-card__metric">
-                  <span className="queue-card__label">Failed:</span>
-                  <span className={`queue-card__value${metrics.failed > 0 ? ' queue-card__value--error' : ''}`}>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">Failed:</span>
+                  <span className={cn('text-sm font-semibold', metrics.failed > 0 ? 'text-destructive' : 'text-foreground')}>
                     {metrics.failed}
                   </span>
                 </div>
-                <div className="queue-card__metric">
-                  <span className="queue-card__label">Completed (1h):</span>
-                  <span className="queue-card__value">{metrics.completed_last_hour}</span>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">Completed (1h):</span>
+                  <span className="text-sm font-semibold text-foreground">{metrics.completed_last_hour}</span>
                 </div>
               </div>
             </div>
