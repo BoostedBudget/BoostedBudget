@@ -470,13 +470,12 @@ jobs:
           fi
           ls -la node_modules/.bin/vitest
 
-      - name: Run MCP non-transport integration tests (isolated)
+      - name: Run MCP integration tests (all, --no-isolate --max-workers=1)
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        # All tests run in a single workerd process to prevent "Failed to start
+        # cloudflare-pool worker" / TCP.onStreamRead failures caused by the CI runner
+        # failing to start multiple simultaneous workerd JIT-compilation sessions.
         run: bun run test:integration
-
-      - name: Run MCP transport integration tests (serial, --no-isolate --max-workers=1)
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
-        run: bun run test:integration:transport
 
       - name: Final workspace cleanup
         if: always()
