@@ -182,13 +182,13 @@ describe('useProfile', () => {
     })
 
     it('should handle user with different region', () => {
-      const lhrUser: User = {
+      const ewrUser: User = {
         ...mockUser,
-        primary_region: 'lhr',
+        primary_region: 'ewr',
       }
 
       mockUseGetUserProfile.mockReturnValue({
-        data: lhrUser,
+        data: ewrUser,
         isLoading: false,
         error: null,
         refetch: mockRefetchUserProfile,
@@ -198,7 +198,7 @@ describe('useProfile', () => {
         wrapper: createWrapper(),
       })
 
-      expect(result.current.user?.primary_region).toBe('lhr')
+      expect(result.current.user?.primary_region).toBe('ewr')
     })
 
     it('should handle unverified email user', () => {

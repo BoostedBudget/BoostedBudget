@@ -1,0 +1,308 @@
+import { useCallback } from 'react'
+import { TrendingUp } from 'lucide-react'
+import { EmptyState } from '@/components/ui/empty-state'
+import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
+import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
+import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
+import type { AccountBreakdownRow } from '../types'
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const NET_WORTH_BREAKDOWN_COLUMN_IDS = ['institution', 'name', 'type', 'balance', 'percent'] as const
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const NET_WORTH_SORTABLE_COLUMNS = new Set([
+  'institution',
+  'name',
+  'type',
+  'balance',
+  'percent',
+] as const)
+
+interface AccountBreakdownTableProps {
+  assets: AccountBreakdownRow[]
+  liabilities: AccountBreakdownRow[]
+  assetsTotal: number
+  liabilitiesTotal: number
+  loading: boolean
+  error: Error | null
+  sort?: SortState
+  onSortChange?: (sort: SortState) => void
+  institutionOptions?: FilterOption[]
+  typeOptions?: FilterOption[]
+  institutionFilter?: string[]
+  typeFilter?: string[]
+  onInstitutionFilterChange?: (value: string[]) => void
+  onTypeFilterChange?: (value: string[]) => void
+  balanceRange?: RangeValue | null
+  onBalanceRangeChange?: (value: RangeValue | null) => void
+}
+
+function formatCurrency(value: number, currencyCode = 'USD'): string {
+  return Math.abs(value).toLocaleString('en-US', {
+    style: 'currency',
+    currency: currencyCode,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  })
+}
+
+interface AccountSectionProps extends Pick<
+  AccountBreakdownTableProps,
+  | 'loading'
+  | 'sort'
+  | 'onSortChange'
+  | 'institutionOptions'
+  | 'typeOptions'
+  | 'institutionFilter'
+  | 'typeFilter'
+  | 'onInstitutionFilterChange'
+  | 'onTypeFilterChange'
+  | 'balanceRange'
+  | 'onBalanceRangeChange'
+> {
+  title: string
+  rows: AccountBreakdownRow[]
+  total: number
+  percentLabel: string
+  tableId: string
+}
+
+function AccountSection({
+  title,
+  rows,
+  total,
+  percentLabel,
+  tableId,
+  loading,
+  sort = null,
+  onSortChange,
+  institutionOptions,
+  typeOptions,
+  institutionFilter,
+  typeFilter,
+  onInstitutionFilterChange,
+  onTypeFilterChange,
+  balanceRange,
+  onBalanceRangeChange,
+}: AccountSectionProps) {
+  const {
+    sizing,
+    onSizingChange,
+    columnOrder,
+    onColumnOrderChange,
+    columnVisibility,
+    onColumnVisibilityChange,
+  } = useTablePreferences(tableId, [...NET_WORTH_BREAKDOWN_COLUMN_IDS])
+
+  const emptyLabel = title === 'Assets' ? 'asset' : 'liability'
+
+  const filters: FilterState = {
+    institution: institutionFilter ?? [],
+    type: typeFilter ?? [],
+    balance: balanceRange ?? null,
+  }
+
+  const handleFiltersChange = useCallback(
+    (newFilters: FilterState) => {
+      if (newFilters.institution !== filters.institution) {
+        onInstitutionFilterChange?.(newFilters.institution as string[])
+      }
+      if (newFilters.type !== filters.type) {
+        onTypeFilterChange?.(newFilters.type as string[])
+      }
+      if (newFilters.balance !== filters.balance) {
+        onBalanceRangeChange?.(newFilters.balance as RangeValue | null)
+      }
+    },
+    [
+      filters.institution,
+      filters.type,
+      filters.balance,
+      onInstitutionFilterChange,
+      onTypeFilterChange,
+      onBalanceRangeChange,
+    ]
+  )
+
+  if (!loading && total === 0 && rows.length === 0) return null
+
+  const columns: ColumnDef<AccountBreakdownRow>[] = [
+    {
+      id: 'institution',
+      header: 'Institution',
+      sortable: !!onSortChange,
+      resizable: true,
+      reorderable: true,
+      defaultSize: 220,
+      minSize: 140,
+      key: 'institutionName',
+      filter:
+        institutionOptions && onInstitutionFilterChange
+          ? {
+              type: 'select',
+              options: institutionOptions,
+              multiSelect: true,
+              searchable: true,
+            }
+          : undefined,
+    },
+    {
+      id: 'name',
+      header: 'Account',
+      sortable: !!onSortChange,
+      resizable: true,
+      reorderable: true,
+      defaultSize: 240,
+      minSize: 160,
+      key: 'name',
+    },
+    {
+      id: 'type',
+      header: 'Type',
+      sortable: !!onSortChange,
+      resizable: true,
+      reorderable: true,
+      hideable: true,
+      defaultSize: 140,
+      minSize: 100,
+      maxSize: 200,
+      render: (row) => (
+        <span className="text-muted-foreground capitalize">{row.type}</span>
+      ),
+      filter:
+        typeOptions && onTypeFilterChange
+          ? { type: 'select', options: typeOptions, multiSelect: true }
+          : undefined,
+    },
+    {
+      id: 'balance',
+      header: 'Balance',
+      sortable: !!onSortChange,
+      resizable: true,
+      reorderable: true,
+      align: 'right',
+      numeric: true,
+      defaultSize: 160,
+      minSize: 120,
+      maxSize: 220,
+      render: (row) => formatCurrency(row.currentBalance, row.currencyCode),
+      filter: onBalanceRangeChange ? { type: 'range' } : undefined,
+    },
+    {
+      id: 'percent',
+      header: percentLabel,
+      sortable: !!onSortChange,
+      resizable: true,
+      reorderable: true,
+      align: 'right',
+      numeric: true,
+      defaultSize: 110,
+      minSize: 90,
+      maxSize: 140,
+      render: (row) => (
+        <span
+          data-testid={`breakdown-percent-${row.id}`}
+          aria-label={`${row.percentOfSide.toFixed(1)}% of ${title.toLowerCase()}`}
+        >
+          {row.percentOfSide.toFixed(1)}%
+        </span>
+      ),
+    },
+  ]
+
+  return (
+    <DataTable<AccountBreakdownRow>
+      data={rows}
+      columns={columns}
+      rowKey={(row) => row.id}
+      sort={sort}
+      onSortChange={onSortChange!}
+      filters={filters}
+      onFiltersChange={handleFiltersChange}
+      loading={loading}
+      skeletonRows={3}
+      caption={<>{title} — <span data-ph-mask>{formatCurrency(total)}</span></>}
+      maskedColumnIds={['institution', 'name', 'balance']}
+      tableId={tableId}
+      columnSizing={sizing}
+      onColumnSizingChange={onSizingChange}
+      columnOrder={columnOrder}
+      onColumnOrderChange={onColumnOrderChange}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
+      emptyState={
+        <span className="block px-4 py-6 text-sm text-muted-foreground text-center">
+          No {emptyLabel} accounts match the current filters.
+        </span>
+      }
+    />
+  )
+}
+
+export function AccountBreakdownTable({
+  assets,
+  liabilities,
+  assetsTotal,
+  liabilitiesTotal,
+  loading,
+  error,
+  sort = null,
+  onSortChange,
+  institutionOptions,
+  typeOptions,
+  institutionFilter,
+  typeFilter,
+  onInstitutionFilterChange,
+  onTypeFilterChange,
+  balanceRange,
+  onBalanceRangeChange,
+}: AccountBreakdownTableProps) {
+  if (error) {
+    return <p className="text-sm text-destructive py-4">{error.message}</p>
+  }
+
+  if (!loading && assetsTotal === 0 && liabilitiesTotal === 0 && assets.length === 0 && liabilities.length === 0) {
+    return (
+      <EmptyState
+        icon={<TrendingUp />}
+        title="No accounts found"
+        description="Connect a bank account to see your breakdown."
+      />
+    )
+  }
+
+  const sectionProps = {
+    loading,
+    sort,
+    onSortChange,
+    institutionOptions,
+    typeOptions,
+    institutionFilter,
+    typeFilter,
+    onInstitutionFilterChange,
+    onTypeFilterChange,
+    balanceRange,
+    onBalanceRangeChange,
+  }
+
+  return (
+    <div className="overflow-x-auto space-y-6">
+      <AccountSection
+        title="Assets"
+        rows={assets}
+        total={assetsTotal}
+        percentLabel="% of Assets"
+        tableId="net-worth-breakdown-assets"
+        {...sectionProps}
+      />
+      <AccountSection
+        title="Liabilities"
+        rows={liabilities}
+        total={liabilitiesTotal}
+        percentLabel="% of Liabilities"
+        tableId="net-worth-breakdown-liabilities"
+        {...sectionProps}
+      />
+    </div>
+  )
+}

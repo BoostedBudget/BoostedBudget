@@ -651,10 +651,6 @@ func TestErrorConstants(t *testing.T) {
 	errors := []error{
 		ErrAutomationRuleNotFound,
 		ErrAutomationRuleAlreadyExists,
-		ErrAutomationRuleLimitExceeded,
-		ErrExecutionLimitExceeded,
-		ErrExecutionIntervalNotMet,
-		ErrEventTriggersNotAllowed,
 		ErrTransferSuggestionNotFound,
 	}
 

@@ -31,13 +31,16 @@ const (
 	SubscriptionStatusCancelled SubscriptionStatus = "cancelled"
 	// SubscriptionStatusPastDue indicates payment is overdue
 	SubscriptionStatusPastDue SubscriptionStatus = "past_due"
-	// SubscriptionStatusPaused indicates a temporarily paused subscription
-	SubscriptionStatusPaused SubscriptionStatus = "paused"
 )
 
 // IsActiveSubscription returns true if the status allows access to the app
 func (s SubscriptionStatus) IsActiveSubscription() bool {
 	return s == SubscriptionStatusActive || s == SubscriptionStatusTrial || s == SubscriptionStatusTrialing
+}
+
+// IsReadOnlySubscription returns true if the status grants read-only access (view data, no mutations)
+func (s SubscriptionStatus) IsReadOnlySubscription() bool {
+	return s == SubscriptionStatusInactive || s == SubscriptionStatusCancelled
 }
 
 // Unlimited represents unlimited resources (stored as -1 in config)

@@ -5,10 +5,8 @@ import type { BalanceHistory } from '../types'
 // Issue #575: Use centralized @/shared/charts mock to prevent pollution
 import '@/test/mocks/shared-charts'
 import {
-  MockPlot as mockPlot,
+  MockEChartsChart as mockEChartsChart,
   mockUseDarkMode,
-  mockGetBaseLayout,
-  mockFormatCurrency,
 } from '@/test/mocks/shared-charts'
 
 import { BalanceHistoryChart } from './BalanceHistoryChart'
@@ -86,111 +84,83 @@ describe('BalanceHistoryChart', () => {
   };
 
   beforeEach(() => {
-    mockPlot.mockClear()
+    mockEChartsChart.mockClear()
     mockUseDarkMode.mockClear()
-    mockGetBaseLayout.mockClear()
-    mockFormatCurrency.mockClear()
   })
 
   describe('Rendering', () => {
     it('should render chart with balance history data', () => {
-      render(<BalanceHistoryChart history={mockHistory} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
-    });
+      render(<BalanceHistoryChart history={mockHistory} />)
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument()
+    })
 
     it('should not render a title (WidgetWrapper provides it)', () => {
-      render(<BalanceHistoryChart history={mockHistory} />);
-      expect(screen.queryByRole('heading')).not.toBeInTheDocument();
-    });
+      render(<BalanceHistoryChart history={mockHistory} />)
+      expect(screen.queryByRole('heading')).not.toBeInTheDocument()
+    })
 
     it('should render chart even with empty snapshots (parent handles empty state)', () => {
-      render(<BalanceHistoryChart history={mockEmptyHistory} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
-    });
-  });
+      render(<BalanceHistoryChart history={mockEmptyHistory} />)
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument()
+    })
+  })
 
-  describe('Plotly Chart Configuration', () => {
-    it('should render with responsive config and resize handler', () => {
-      render(<BalanceHistoryChart history={mockHistory} />);
-      const chart = screen.getByTestId('plotly-chart');
-      expect(chart).toBeInTheDocument();
-      expect(chart.getAttribute('data-responsive')).toBe('true');
-      expect(chart.getAttribute('data-use-resize-handler')).toBe('true');
-      expect(chart).toHaveStyle({ width: '100%', height: '100%' });
-    });
-  });
+  describe('ECharts Chart Configuration', () => {
+    it('should render with SVG renderer', () => {
+      render(<BalanceHistoryChart history={mockHistory} />)
+      const chart = screen.getByTestId('echarts-chart')
+      expect(chart.dataset.renderer).toBe('svg')
+      expect(chart).toHaveStyle({ width: '100%', height: '100%' })
+    })
+  })
 
   describe('showTypeBreakdown Prop', () => {
-    it('should default to total balance (single trace)', () => {
-      render(<BalanceHistoryChart history={mockHistory} />);
-      const chart = screen.getByTestId('plotly-chart');
-      expect(chart.getAttribute('data-trace-count')).toBe('1');
-    });
+    it('should default to total balance (single series)', () => {
+      render(<BalanceHistoryChart history={mockHistory} />)
+      expect(screen.getByTestId('echarts-chart').dataset.seriesCount).toBe('1')
+    })
 
-    it('should display type breakdown with multiple traces when enabled', () => {
-      render(
-        <BalanceHistoryChart history={mockHistory} showTypeBreakdown={true} />
-      );
-      const chart = screen.getByTestId('plotly-chart');
-      expect(chart.getAttribute('data-trace-count')).toBe('3');
-      const traceNames = JSON.parse(
-        chart.getAttribute('data-trace-names') || '[]'
-      );
-      expect(traceNames).toContain('Depository');
-      expect(traceNames).toContain('Credit');
-      expect(traceNames).toContain('Investment');
-    });
-  });
+    it('should display type breakdown with multiple series when enabled', () => {
+      render(<BalanceHistoryChart history={mockHistory} showTypeBreakdown={true} />)
+      const chart = screen.getByTestId('echarts-chart')
+      expect(chart.dataset.seriesCount).toBe('3')
+      const seriesNames = JSON.parse(chart.dataset.seriesNames ?? '[]') as string[]
+      expect(seriesNames).toEqual(expect.arrayContaining(['Depository', 'Credit', 'Investment']))
+    })
+  })
 
   describe('Edge Cases', () => {
     it('should handle single snapshot', () => {
-      const singleSnapshot: BalanceHistory = {
+      render(<BalanceHistoryChart history={{
         start_date: '2025-11-01',
         end_date: '2025-11-01',
         granularity: 'daily',
         snapshots: [{ date: '2025-11-01', balance: 10000.0 }],
-      };
-
-      render(<BalanceHistoryChart history={singleSnapshot} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
-    });
+      }} />)
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument()
+    })
 
     it('should handle missing by_type data', () => {
-      render(<BalanceHistoryChart history={mockHistoryWithoutByType} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
-    });
+      render(<BalanceHistoryChart history={mockHistoryWithoutByType} />)
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument()
+    })
 
     it('should handle mixed data (some snapshots with by_type, some without)', () => {
-      const mixedHistory: BalanceHistory = {
+      render(<BalanceHistoryChart history={{
         start_date: '2025-11-01',
         end_date: '2025-11-03',
         granularity: 'daily',
         snapshots: [
-          {
-            date: '2025-11-01',
-            balance: 10000.0,
-            by_type: { depository: 7000.0 },
-          },
-          {
-            date: '2025-11-02',
-            balance: 10500.0,
-          },
-          {
-            date: '2025-11-03',
-            balance: 9800.0,
-            by_type: { depository: 6800.0 },
-          },
+          { date: '2025-11-01', balance: 10000.0, by_type: { depository: 7000.0 } },
+          { date: '2025-11-02', balance: 10500.0 },
+          { date: '2025-11-03', balance: 9800.0, by_type: { depository: 6800.0 } },
         ],
-      };
-
-      render(
-        <BalanceHistoryChart history={mixedHistory} showTypeBreakdown={true} />
-      );
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
-    });
+      }} showTypeBreakdown={true} />)
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument()
+    })
 
     it('should handle large balance amounts', () => {
-      const largeBalances: BalanceHistory = {
+      render(<BalanceHistoryChart history={{
         start_date: '2025-11-01',
         end_date: '2025-11-02',
         granularity: 'daily',
@@ -198,14 +168,12 @@ describe('BalanceHistoryChart', () => {
           { date: '2025-11-01', balance: 1000000.0 },
           { date: '2025-11-02', balance: 2500000.5 },
         ],
-      };
-
-      render(<BalanceHistoryChart history={largeBalances} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
-    });
+      }} />)
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument()
+    })
 
     it('should handle negative balances', () => {
-      const negativeBalances: BalanceHistory = {
+      render(<BalanceHistoryChart history={{
         start_date: '2025-11-01',
         end_date: '2025-11-02',
         granularity: 'daily',
@@ -213,14 +181,12 @@ describe('BalanceHistoryChart', () => {
           { date: '2025-11-01', balance: -5000.0 },
           { date: '2025-11-02', balance: -3000.0 },
         ],
-      };
-
-      render(<BalanceHistoryChart history={negativeBalances} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
-    });
+      }} />)
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument()
+    })
 
     it('should handle zero balance', () => {
-      const zeroBalance: BalanceHistory = {
+      render(<BalanceHistoryChart history={{
         start_date: '2025-11-01',
         end_date: '2025-11-02',
         granularity: 'daily',
@@ -228,30 +194,86 @@ describe('BalanceHistoryChart', () => {
           { date: '2025-11-01', balance: 0.0 },
           { date: '2025-11-02', balance: 100.0 },
         ],
-      };
+      }} />)
+      expect(screen.getByTestId('echarts-chart')).toBeInTheDocument()
+    })
+  })
 
-      render(<BalanceHistoryChart history={zeroBalance} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
-    });
-  });
   describe('Styling', () => {
     it('should apply h-full and responsive dimensions without wrapper styling', () => {
-      const { container } = render(
-        <BalanceHistoryChart history={mockHistory} />
-      );
-      const outerDiv = container.firstChild as HTMLElement;
-      expect(outerDiv).toHaveClass('h-full');
+      const { container } = render(<BalanceHistoryChart history={mockHistory} />)
+      const outerDiv = container.firstChild as HTMLElement
+      expect(outerDiv).toHaveClass('h-full')
+      const chart = screen.getByTestId('echarts-chart')
+      expect(chart).toHaveStyle({ height: '100%', minHeight: '200px' })
+      expect(outerDiv).not.toHaveClass('bg-white', 'shadow', 'p-6', 'rounded-lg')
+    })
+  })
 
-      const chart = screen.getByTestId('plotly-chart');
-      expect(chart).toHaveStyle({ height: '100%', minHeight: '200px' });
-      expect(outerDiv).not.toHaveClass('bg-white', 'shadow', 'p-6', 'rounded-lg');
-    });
-  });
+  describe('Dark Mode', () => {
+    it('reflects dark mode state in isDark prop', () => {
+      mockUseDarkMode.mockReturnValue(true)
+      const { unmount } = render(<BalanceHistoryChart history={mockHistory} />)
+      expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
+      unmount()
 
-  describe('Empty Snapshots', () => {
-    it('should render chart with empty data (parent BalanceHistoryWidget handles empty state)', () => {
-      render(<BalanceHistoryChart history={mockEmptyHistory} />);
-      expect(screen.getByTestId('plotly-chart')).toBeInTheDocument();
-    });
-  });
+      mockUseDarkMode.mockReturnValue(false)
+      render(<BalanceHistoryChart history={mockHistory} />)
+      expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
+    })
+  })
+
+  it('tooltip formatter escapes malicious series names (XSS regression — #1169)', () => {
+    render(<BalanceHistoryChart history={mockHistory} />)
+    const option = mockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+      tooltip?: { formatter?: (p: unknown) => string }
+    }
+    const formatted = option.tooltip!.formatter!([{ seriesName: '<img src=x onerror=alert(1)>', value: 100, dataIndex: 0 }])
+    expect(formatted).not.toMatch(/<(img|script|svg)/i)
+    expect(formatted).toContain('&lt;img')
+  })
+
+  // Bug C regression — Issue #1173: midnight-UTC RFC3339 dates must not shift back one
+  // day in negative-offset timezones. Old code used format(parseISO()), new code uses
+  // formatHistoryLabel() which anchors to noon UTC.
+  describe('TZ-safe date labels (Bug C — Issue #1173)', () => {
+    it('x-axis labels use UTC calendar date for midnight-UTC RFC3339 snapshots', () => {
+      const aprilHistory: BalanceHistory = {
+        start_date: '2024-04-28T00:00:00Z',
+        end_date: '2024-04-29T00:00:00Z',
+        granularity: 'daily',
+        snapshots: [
+          { date: '2024-04-28T00:00:00Z', balance: 4000 },
+          { date: '2024-04-29T00:00:00Z', balance: 4100 },
+        ],
+      }
+      render(<BalanceHistoryChart history={aprilHistory} />)
+      const option = mockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+        xAxis?: { data?: string[] }
+      }
+      const labels = option.xAxis?.data ?? []
+      expect(labels).toContain('Apr 28')
+      expect(labels).toContain('Apr 29')
+      expect(labels).not.toContain('Apr 27') // Old code would have shifted back one day
+    })
+
+    it('tooltip header uses UTC calendar date for midnight-UTC RFC3339 snapshots', () => {
+      const aprilHistory: BalanceHistory = {
+        start_date: '2024-04-29T00:00:00Z',
+        end_date: '2024-04-29T00:00:00Z',
+        granularity: 'daily',
+        snapshots: [
+          { date: '2024-04-29T00:00:00Z', balance: 4100 },
+          { date: '2024-04-30T00:00:00Z', balance: 4200 },
+        ],
+      }
+      render(<BalanceHistoryChart history={aprilHistory} />)
+      const option = mockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+        tooltip?: { formatter?: (p: unknown) => string }
+      }
+      const formatted = option.tooltip!.formatter!([{ seriesName: 'Total Balance', value: 4100, dataIndex: 0 }])
+      expect(formatted).toContain('April 29, 2024')
+      expect(formatted).not.toContain('April 28, 2024') // Old code would have shifted back one day
+    })
+  })
 });

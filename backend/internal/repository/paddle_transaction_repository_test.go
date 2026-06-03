@@ -19,7 +19,8 @@ func setupPaddleTransactionMockDB(t *testing.T) (pgxmock.PgxPoolIface, PaddleTra
 	t.Helper()
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
-	return mock, NewPaddleTransactionRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	return mock, NewPaddleTransactionRepository(mock, enc)
 }
 
 func newTestPaddleTransaction() *domain.PaddleTransaction {
@@ -56,16 +57,17 @@ func TestPaddleTransactionCreate_Success(t *testing.T) {
 		WithArgs(
 			pgxmock.AnyArg(), // id (generated UUID)
 			txn.UserID,
-			txn.TransactionID,
-			txn.SubscriptionID,
-			txn.CustomerID,
+			pgxmock.AnyArg(), // encrypted transaction_id
+			pgxmock.AnyArg(), // transaction_id_blind_idx
+			pgxmock.AnyArg(), // encrypted subscription_id
+			pgxmock.AnyArg(), // encrypted customer_id
 			txn.Amount,
 			txn.Currency,
 			txn.Status,
 			txn.PaymentMethodType,
 			txn.BillingPeriodStart,
 			txn.BillingPeriodEnd,
-			txn.Payload,
+			pgxmock.AnyArg(), // encrypted payload
 		).
 		WillReturnRows(pgxmock.NewRows([]string{"created_at", "updated_at"}).AddRow(now, now))
 
@@ -89,7 +91,7 @@ func TestPaddleTransactionCreate_GeneratesID(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO paddle_transactions`)).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
 			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-			pgxmock.AnyArg(), pgxmock.AnyArg()).
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"created_at", "updated_at"}).AddRow(now, now))
 
 	err := repo.Create(ctx, txn)
@@ -111,7 +113,7 @@ func TestPaddleTransactionCreate_Duplicate(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO paddle_transactions`)).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
 			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-			pgxmock.AnyArg(), pgxmock.AnyArg()).
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(&pgconn.PgError{Code: "23505"})
 
 	err := repo.Create(ctx, txn)
@@ -131,27 +133,32 @@ func TestPaddleTransactionGetByTransactionID_Success(t *testing.T) {
 	txn := newTestPaddleTransaction()
 	txn.ID = uuid.New().String()
 
+	// DB stores encrypted values; repo decrypts on read
+	encTransactionID := "ENC$TENC[" + txn.TransactionID + "]"
+	encSubscriptionID := "ENC$TENC[" + *txn.SubscriptionID + "]"
+	encCustomerID := "ENC$TENC[" + *txn.CustomerID + "]"
+
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "transaction_id", "subscription_id", "customer_id",
 		"amount", "currency", "status", "payment_method_type",
 		"billing_period_start", "billing_period_end", "payload",
 		"created_at", "updated_at",
 	}).AddRow(
-		txn.ID, txn.UserID, txn.TransactionID, txn.SubscriptionID, txn.CustomerID,
+		txn.ID, txn.UserID, encTransactionID, &encSubscriptionID, &encCustomerID,
 		txn.Amount, txn.Currency, txn.Status, txn.PaymentMethodType,
-		txn.BillingPeriodStart, txn.BillingPeriodEnd, txn.Payload,
+		txn.BillingPeriodStart, txn.BillingPeriodEnd, `ENC$TENC[{"id":"txn_01h1234567890completed"}]`,
 		now, now,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, transaction_id`)).
-		WithArgs(txn.TransactionID).
+		WithArgs(pgxmock.AnyArg()). // blind index value
 		WillReturnRows(rows)
 
 	result, err := repo.GetByTransactionID(ctx, txn.TransactionID)
 
 	require.NoError(t, err)
 	assert.Equal(t, txn.ID, result.ID)
-	assert.Equal(t, txn.TransactionID, result.TransactionID)
+	assert.Equal(t, txn.TransactionID, result.TransactionID) // decrypted
 	assert.Equal(t, txn.Amount, result.Amount)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -164,7 +171,7 @@ func TestPaddleTransactionGetByTransactionID_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, transaction_id`)).
-		WithArgs("txn_nonexistent").
+		WithArgs(pgxmock.AnyArg()). // blind index value
 		WillReturnRows(pgxmock.NewRows([]string{})) // empty result set triggers ErrNoRows
 
 	result, err := repo.GetByTransactionID(ctx, "txn_nonexistent")
@@ -185,15 +192,19 @@ func TestPaddleTransactionGetByUserID_Success(t *testing.T) {
 	txn := newTestPaddleTransaction()
 	txn.ID = uuid.New().String()
 
+	encTransactionID := "ENC$TENC[" + txn.TransactionID + "]"
+	encSubscriptionID := "ENC$TENC[" + *txn.SubscriptionID + "]"
+	encCustomerID := "ENC$TENC[" + *txn.CustomerID + "]"
+
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "transaction_id", "subscription_id", "customer_id",
 		"amount", "currency", "status", "payment_method_type",
 		"billing_period_start", "billing_period_end", "payload",
 		"created_at", "updated_at",
 	}).AddRow(
-		txn.ID, txn.UserID, txn.TransactionID, txn.SubscriptionID, txn.CustomerID,
+		txn.ID, txn.UserID, encTransactionID, &encSubscriptionID, &encCustomerID,
 		txn.Amount, txn.Currency, txn.Status, txn.PaymentMethodType,
-		txn.BillingPeriodStart, txn.BillingPeriodEnd, txn.Payload,
+		txn.BillingPeriodStart, txn.BillingPeriodEnd, `ENC$TENC[{"id":"txn_01h1234567890completed"}]`,
 		now, now,
 	)
 
@@ -205,7 +216,7 @@ func TestPaddleTransactionGetByUserID_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	assert.Equal(t, txn.TransactionID, results[0].TransactionID)
+	assert.Equal(t, txn.TransactionID, results[0].TransactionID) // decrypted
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -223,7 +234,7 @@ func TestPaddleTransactionGetByUserID_Empty(t *testing.T) {
 			"amount", "currency", "status", "payment_method_type",
 			"billing_period_start", "billing_period_end", "payload",
 			"created_at", "updated_at",
-		}))
+		})) // empty rows
 
 	results, err := repo.GetByUserID(ctx, "user_no_transactions")
 
@@ -243,15 +254,19 @@ func TestGetFailedTransactions_Success(t *testing.T) {
 	txn.ID = uuid.New().String()
 	txn.Status = "failed"
 
+	encTransactionID := "ENC$TENC[" + txn.TransactionID + "]"
+	encSubscriptionID := "ENC$TENC[" + *txn.SubscriptionID + "]"
+	encCustomerID := "ENC$TENC[" + *txn.CustomerID + "]"
+
 	dataRows := pgxmock.NewRows([]string{
 		"id", "user_id", "transaction_id", "subscription_id", "customer_id",
 		"amount", "currency", "status", "payment_method_type",
 		"billing_period_start", "billing_period_end", "payload",
 		"created_at", "updated_at",
 	}).AddRow(
-		txn.ID, txn.UserID, txn.TransactionID, txn.SubscriptionID, txn.CustomerID,
+		txn.ID, txn.UserID, encTransactionID, &encSubscriptionID, &encCustomerID,
 		txn.Amount, txn.Currency, txn.Status, txn.PaymentMethodType,
-		txn.BillingPeriodStart, txn.BillingPeriodEnd, txn.Payload,
+		txn.BillingPeriodStart, txn.BillingPeriodEnd, `ENC$TENC[{"id":"txn_01h1234567890completed"}]`,
 		now, now,
 	)
 
@@ -285,7 +300,7 @@ func TestGetFailedTransactions_Empty(t *testing.T) {
 		"amount", "currency", "status", "payment_method_type",
 		"billing_period_start", "billing_period_end", "payload",
 		"created_at", "updated_at",
-	})
+	}) // empty — no rows
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT count(*) FROM paddle_transactions`)).
 		WillReturnRows(countRows)

@@ -1,6 +1,26 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import type { BudgetCategory } from '../../types'
 import type { UserTag } from '@/features/tags/types'
+import type { CustomCategory } from '@boostedbudget/api-client/models/customCategory'
+
+// Mock useGetUserCategories so BudgetCategoryManager can resolve custom category names.
+// Also stub the category mutation/usage hooks so the embedded CustomCategoryManager
+// (opened via the "Manage categories" launcher, #1203) can mount.
+const mockUseGetUserCategories = mock(() => ({
+  data: [] as CustomCategory[],
+  isLoading: false,
+  error: null,
+  refetch: mock(() => Promise.resolve()),
+}))
+const mockMutation = () => ({ mutateAsync: mock(() => Promise.resolve()), isPending: false })
+mock.module('@boostedbudget/api-client/endpoints/categories/categories', () => ({
+  useGetUserCategories: mockUseGetUserCategories,
+  useCreateCategory: mock(mockMutation),
+  useUpdateCategory: mock(mockMutation),
+  useDeleteCategory: mock(mockMutation),
+  useGetCategoryUsage: mock(() => ({ data: undefined, isLoading: false, error: null })),
+  getGetUserCategoriesQueryKey: mock(() => ['user-categories']),
+}))
 
 mock.module('./AllocationBreakdown', () => ({
   AllocationBreakdown: ({
@@ -71,7 +91,9 @@ const mockAvailableTags: UserTag[] = [
 const createMockCategory = (overrides?: Partial<BudgetCategory>): BudgetCategory => ({
   id: 'cat-1',
   budget_id: 'budget-1',
-  category: ['Food and Drink', 'Restaurants'],
+  category_kind: 'pfc',
+  pfc_primary: 'FOOD_AND_DRINK',
+  pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
   allocated_amount: 500,
   spent_amount: 250,
   tags: [],
@@ -113,15 +135,27 @@ describe('BudgetCategoryManager', () => {
     expect(screen.getByText(/no.*categories/i)).toBeInTheDocument()
   })
 
+  it('opens the custom category manager from the "Manage categories" launcher (#1203)', async () => {
+    const user = userEvent.setup()
+    renderManager()
+
+    await user.click(screen.getByRole('button', { name: /manage categories/i }))
+
+    // The embedded CustomCategoryManager renders its own "Custom categories" heading.
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /^custom categories$/i })).toBeInTheDocument()
+    })
+  })
+
   it('should render BudgetCategoryCard for each category', () => {
     const categories = [
-      createMockCategory({ id: 'cat-1', category: ['Food and Drink', 'Restaurants'] }),
-      createMockCategory({ id: 'cat-2', category: ['Transportation', 'Gas'] }),
+      createMockCategory({ id: 'cat-1', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS' }),
+      createMockCategory({ id: 'cat-2', pfc_primary: 'TRANSPORTATION', pfc_detailed: 'TRANSPORTATION_GAS' }),
     ]
     renderManager({ categories })
-    // Issue #575: Using real component - query by heading text
-    expect(screen.getByRole('heading', { name: 'Food and Drink > Restaurants' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Transportation > Gas' })).toBeInTheDocument()
+    // No display fields — formatPFCEnum fallback is used
+    expect(screen.getByRole('heading', { name: 'Food And Drink › Restaurants' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Transportation › Gas' })).toBeInTheDocument()
   })
 
   it('should render add category button', () => {
@@ -169,8 +203,7 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    // Issue #575: Real component uses aria-label like "Edit Food and Drink > Restaurants"
-    await user.click(screen.getByRole('button', { name: /^Edit Food and Drink > Restaurants$/i }))
+    await user.click(screen.getByRole('button', { name: /^Edit category$/i }))
 
     // Issue #575: Real form uses dialog role and title
     await waitFor(() => {
@@ -190,10 +223,10 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    await user.click(screen.getByRole('button', { name: /^Delete Food and Drink > Restaurants$/i }))
+    await user.click(screen.getByRole('button', { name: /^Delete category$/i }))
 
     await waitFor(() => {
-      expect(screen.getByText(/confirm.*delete/i)).toBeInTheDocument()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     })
   })
 
@@ -202,7 +235,7 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    await user.click(screen.getByRole('button', { name: /^Delete Food and Drink > Restaurants$/i }))
+    await user.click(screen.getByRole('button', { name: /^Delete category$/i }))
     await user.click(screen.getByRole('button', { name: /^delete$/i }))
 
     await waitFor(() => {
@@ -215,11 +248,11 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
 
     renderManager({ categories })
-    await user.click(screen.getByRole('button', { name: /^Delete Food and Drink > Restaurants$/i }))
+    await user.click(screen.getByRole('button', { name: /^Delete category$/i }))
     await user.click(screen.getByRole('button', { name: /cancel/i }))
 
     await waitFor(() => {
-      expect(screen.queryByText(/confirm.*delete/i)).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     expect(mockOnDeleteCategory).not.toHaveBeenCalled()
@@ -234,8 +267,8 @@ describe('BudgetCategoryManager', () => {
     const categories = [createMockCategory({ id: 'cat-1' })]
     renderManager({ categories, disabled: true })
     // Issue #575: Real component uses aria-label for buttons
-    expect(screen.getByRole('button', { name: /^Edit Food and Drink > Restaurants$/i })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /^Delete Food and Drink > Restaurants$/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Edit category$/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Delete category$/i })).toBeDisabled()
   })
 
   it('should pass correct props to AllocationBreakdown', () => {
@@ -342,7 +375,7 @@ describe('BudgetCategoryManager', () => {
     await user.keyboard('{Delete}')
 
     await waitFor(() => {
-      expect(screen.getByText(/confirm.*delete/i)).toBeInTheDocument()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     })
   })
 
@@ -364,5 +397,97 @@ describe('BudgetCategoryManager', () => {
     items[1].focus()
     await user.keyboard('{ArrowDown}')
     expect(document.activeElement).toBe(items[1])
+  })
+})
+
+describe('BudgetCategoryManager — custom category name resolution (Codex gap fixes)', () => {
+  const makeCustomBudgetCategory = (id: string, customCategoryId: string): BudgetCategory => ({
+    id,
+    budget_id: 'budget-1',
+    category_kind: 'custom',
+    custom_category_id: customCategoryId,
+    allocated_amount: 200,
+    spent_amount: 100,
+    tags: [],
+    match_logic: 'category_only',
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-01T00:00:00Z',
+  })
+
+  const mockCustomCategory: CustomCategory = {
+    id: 'custom-uuid-1',
+    user_id: 'user-1',
+    name: 'My Restaurants',
+    usage_count: 0,
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-01T00:00:00Z',
+  }
+
+  let mockOnAddCategory: ReturnType<typeof mock>
+  let mockOnUpdateCategory: ReturnType<typeof mock>
+  let mockOnDeleteCategory: ReturnType<typeof mock>
+
+  const renderManager = (props: Partial<Parameters<typeof BudgetCategoryManager>[0]> = {}) =>
+    render(
+      <BudgetCategoryManager
+        budgetId="budget-1"
+        categories={[]}
+        totalIncome={3000}
+        onAddCategory={mockOnAddCategory}
+        onUpdateCategory={mockOnUpdateCategory}
+        onDeleteCategory={mockOnDeleteCategory}
+        availableTags={[]}
+        {...props}
+      />,
+      { wrapper: TestWrapper }
+    )
+
+  beforeEach(() => {
+    mockOnAddCategory = mock(() => Promise.resolve({} as BudgetCategory))
+    mockOnUpdateCategory = mock(() => Promise.resolve({} as BudgetCategory))
+    mockOnDeleteCategory = mock(() => Promise.resolve(undefined))
+    mockUseGetUserCategories.mockReturnValue({
+      data: [mockCustomCategory],
+      isLoading: false,
+      error: null,
+    })
+  })
+
+  it('delete confirmation shows resolved custom category name (not UUID)', async () => {
+    const user = userEvent.setup({ delay: null })
+    const categories = [makeCustomBudgetCategory('cat-custom', 'custom-uuid-1')]
+    renderManager({ categories })
+
+    await user.click(screen.getByRole('button', { name: /^Delete category$/i }))
+
+    const dialog = await screen.findByRole('alertdialog')
+    // UUID must not appear anywhere in the dialog
+    expect(within(dialog).queryByText(/custom-uuid-1/)).not.toBeInTheDocument()
+    // Resolved name must appear in the dialog description
+    expect(within(dialog).getByText(/My Restaurants/)).toBeInTheDocument()
+  })
+
+  it('delete confirmation falls back to "Custom category" when name not in map', async () => {
+    mockUseGetUserCategories.mockReturnValue({ data: [], isLoading: false, error: null })
+    const user = userEvent.setup({ delay: null })
+    const categories = [makeCustomBudgetCategory('cat-custom', 'unknown-uuid')]
+    renderManager({ categories })
+
+    await user.click(screen.getByRole('button', { name: /^Delete category$/i }))
+
+    const dialog = await screen.findByRole('alertdialog')
+    // Must NOT show raw UUID in the dialog
+    expect(within(dialog).queryByText(/unknown-uuid/)).not.toBeInTheDocument()
+  })
+
+  it('category card shows "Custom category" when data is still loading', async () => {
+    mockUseGetUserCategories.mockReturnValue({ data: undefined, isLoading: true, error: null })
+    const categories = [makeCustomBudgetCategory('cat-custom', 'custom-uuid-1')]
+    renderManager({ categories })
+
+    // During loading, should show placeholder name (not the UUID) in the card heading
+    const cardHeading = screen.getByRole('heading', { level: 3 })
+    expect(cardHeading.textContent).not.toMatch(/custom-uuid-1/)
+    expect(cardHeading).toHaveTextContent('Custom category')
   })
 })

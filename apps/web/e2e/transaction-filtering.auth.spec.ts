@@ -13,6 +13,7 @@
 
 import { test, expect, type Page } from '@playwright/test'
 import { acceptCookieConsent } from './helpers/auth'
+import { mockAuthDependencies } from './helpers/api-mocks'
 
 // Mock data for transactions
 const mockTransactions = {
@@ -24,11 +25,12 @@ const mockTransactions = {
       linked_item_id: 'item-1',
       source: 'plaid',
       external_transaction_id: 'plaid-txn-1',
-      amount: -25.50,
+      amount: 25.50,
       date: '2025-11-15',
       name: 'Coffee Shop',
       merchant_name: 'Starbucks',
-      category: '["Food and Drink", "Coffee"]',
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
       pending: false,
       tags: ['Food'],
       created_at: '2025-11-15T10:00:00Z',
@@ -41,11 +43,12 @@ const mockTransactions = {
       linked_item_id: 'item-1',
       source: 'plaid',
       external_transaction_id: 'plaid-txn-2',
-      amount: -150.00,
+      amount: 150.00,
       date: '2025-11-14',
       name: 'Grocery Store',
       merchant_name: 'Whole Foods',
-      category: '["Shopping", "Groceries"]',
+      pfc_primary: 'GENERAL_MERCHANDISE',
+      pfc_detailed: 'GENERAL_MERCHANDISE_GROCERIES',
       pending: false,
       tags: [],
       created_at: '2025-11-14T10:00:00Z',
@@ -58,11 +61,12 @@ const mockTransactions = {
       linked_item_id: 'item-1',
       source: 'plaid',
       external_transaction_id: 'plaid-txn-3',
-      amount: 2500.00,
+      amount: -2500.00,
       date: '2025-11-10',
       name: 'Salary',
       merchant_name: null,
-      category: '["Income", "Payroll"]',
+      pfc_primary: 'INCOME',
+      pfc_detailed: 'INCOME_WAGES',
       pending: false,
       tags: [],
       created_at: '2025-11-10T10:00:00Z',
@@ -75,11 +79,12 @@ const mockTransactions = {
       linked_item_id: 'item-1',
       source: 'plaid',
       external_transaction_id: 'plaid-txn-4',
-      amount: -50.00,
+      amount: 50.00,
       date: '2025-11-16',
       name: 'Pending Transaction',
       merchant_name: 'Amazon',
-      category: '["Shopping", "Online"]',
+      pfc_primary: 'GENERAL_MERCHANDISE',
+      pfc_detailed: 'GENERAL_MERCHANDISE_ONLINE_MARKETPLACES',
       pending: true,
       tags: [],
       created_at: '2025-11-16T10:00:00Z',
@@ -177,6 +182,9 @@ async function mockFilteringAPIs(
     transactionsStatus = 200,
   } = overrides
 
+  // Mock auth-dependent endpoints (PremiumRoute blocks rendering until /user/profile resolves)
+  await mockAuthDependencies(page)
+
   // Mock transactions endpoint with filter handling
   await page.route('**/api/v1/transactions**', (route) => {
     if (route.request().method() === 'GET') {
@@ -193,9 +201,9 @@ async function mockFilteringAPIs(
       // Apply amount_type filter
       const amountType = url.searchParams.get('amount_type')
       if (amountType === 'income') {
-        filteredTransactions = filteredTransactions.filter((t) => t.amount > 0)
-      } else if (amountType === 'expense') {
         filteredTransactions = filteredTransactions.filter((t) => t.amount < 0)
+      } else if (amountType === 'expense') {
+        filteredTransactions = filteredTransactions.filter((t) => t.amount > 0)
       }
 
       // Apply pending filter
@@ -310,7 +318,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should show filter panel with expand toggle', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Issue #615: Panel renamed to "Date & Status" (Account/Category/Type/Amount moved to table headers)
       await expect(page.getByText('Date & Status')).toBeVisible()
@@ -319,7 +327,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should expand filter panel when clicking toggle', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Click to expand (Issue #615: renamed from "Filters")
       await page.getByText('Date & Status').click()
@@ -332,7 +340,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should collapse filter panel when clicking toggle again', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Expand
       await page.getByText('Date & Status').click()
@@ -343,16 +351,6 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await expect(page.getByText('Date Range')).not.toBeVisible()
     })
 
-    // SKIPPED: Amount type filter moved to inline table headers (Issue #615)
-    test.skip('should show active filter count badge', async ({ page }) => {
-      await mockFilteringAPIs(page)
-      await page.goto('/transactions?amount_type=income')
-      await page.waitForLoadState('networkidle')
-
-      // Should show badge with count
-      const badge = page.locator('text=Filters').locator('..').getByText('1')
-      await expect(badge).toBeVisible()
-    })
   })
 
   // ==========================================================================
@@ -419,7 +417,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should filter to pending only', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
@@ -435,7 +433,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should filter to posted only', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
@@ -457,7 +455,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should update URL when status filter is applied', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
@@ -469,21 +467,10 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await expect(page).toHaveURL(/pending=false/)
     })
 
-    // SKIPPED: amount_type filter moved to inline table headers (Issue #615)
-    test.skip('should restore filters from URL on page load', async ({ page }) => {
-      await mockFilteringAPIs(page)
-      await page.goto('/transactions?amount_type=income')
-      await page.waitForLoadState('networkidle')
-
-      // Should show only income transactions
-      await expect(page.getByText('Salary')).toBeVisible()
-      await expect(page.getByText('Starbucks')).not.toBeVisible()
-    })
-
     test('should persist status filter after page reload', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Expand and apply status filter (Issue #615: Type filter moved inline)
       await page.getByText('Date & Status').click()
@@ -491,7 +478,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
 
       // Reload page
       await page.reload()
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Filter should still be applied - Posted transactions visible
       await expect(page.getByText('Starbucks')).toBeVisible()
@@ -509,7 +496,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await mockFilteringAPIs(page)
       // Use status filter which is still in panel (Issue #615: amount_type moved inline)
       await page.goto('/transactions?pending=false')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Panel should show "Clear all" link when filters active and collapsed
       await expect(page.getByText(/clear all/i)).toBeVisible()
@@ -519,7 +506,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await mockFilteringAPIs(page)
       // Use status filter which is still in panel (Issue #615: amount_type moved inline)
       await page.goto('/transactions?pending=false')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Click clear
       await page.getByText(/clear all/i).first().click()
@@ -613,7 +600,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
         },
       })
       await page.goto('/transactions?amount_type=income')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Should show empty state with filter hint
       await expect(page.getByText(/no transactions found/i)).toBeVisible()
@@ -631,7 +618,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
         },
       })
       await page.goto('/transactions?amount_type=income')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Should have clear filters button
       await expect(page.getByRole('button', { name: /clear all filters/i })).toBeVisible()
@@ -646,7 +633,7 @@ test.describe('Transaction Filtering - Authenticated User', () => {
     test('should show date preset options', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Dismiss cookie consent if it reappears after navigation
       await acceptCookieConsent(page)
@@ -654,19 +641,20 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
 
-      // Date presets should be visible
-      await expect(page.getByRole('button', { name: '7 days' })).toBeVisible()
-      await expect(page.getByRole('button', { name: '30 days' })).toBeVisible()
-      await expect(page.getByRole('button', { name: '90 days' })).toBeVisible()
-      await expect(page.getByRole('button', { name: '1 year' })).toBeVisible()
-      await expect(page.getByRole('button', { name: 'All time' })).toBeVisible()
-      await expect(page.getByRole('button', { name: 'Custom' })).toBeVisible()
+      // Date presets should be visible (Issue #953: migrated to shared calendar-aligned presets)
+      // ToggleGroup renders radio items (Radix single toggle group), not buttons
+      await expect(page.getByRole('radio', { name: 'This Week' })).toBeVisible()
+      await expect(page.getByRole('radio', { name: 'This Month' })).toBeVisible()
+      await expect(page.getByRole('radio', { name: 'Last Month' })).toBeVisible()
+      await expect(page.getByRole('radio', { name: 'Last 3 Months' })).toBeVisible()
+      await expect(page.getByRole('radio', { name: 'All Time' })).toBeVisible()
+      await expect(page.getByRole('radio', { name: 'Custom', exact: true })).toBeVisible()
     })
 
     test('should apply date preset and update URL', async ({ page }) => {
       await mockFilteringAPIs(page)
       await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Dismiss cookie consent if it reappears after navigation
       await acceptCookieConsent(page)
@@ -674,8 +662,8 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
 
-      // Click 30 days preset
-      await page.getByRole('button', { name: '30 days' }).click()
+      // Click This Month preset (Issue #953: migrated from '30 days' to calendar-aligned presets)
+      await page.getByRole('radio', { name: 'This Month' }).click()
 
       // URL should contain date params
       await expect(page).toHaveURL(/start_date=/)
@@ -684,8 +672,13 @@ test.describe('Transaction Filtering - Authenticated User', () => {
 
     test('should show custom date inputs when Custom is selected', async ({ page }) => {
       await mockFilteringAPIs(page)
-      await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
+      // Navigate with arbitrary dates that don't match any known preset.
+      // inferPreset() returns 'custom' when start_date/end_date are set but don't match
+      // a standard range, which causes DateRangePicker to render Start/End Date inputs.
+      // Note: clicking the "Custom" ToggleGroupItem alone cannot trigger this — setDatePreset('custom')
+      // in useTransactionFilters is intentionally a no-op (the user sets dates manually).
+      await page.goto('/transactions?start_date=2020-01-01&end_date=2020-12-31')
+      await expect(page.getByText('Starbucks')).toBeVisible()
 
       // Dismiss cookie consent if it reappears after navigation
       await acceptCookieConsent(page)
@@ -693,12 +686,9 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       // Expand filters (Issue #615: renamed to "Date & Status")
       await page.getByText('Date & Status').click()
 
-      // Click Custom (exact match to avoid cookie banner "Customize" button)
-      await page.getByRole('button', { name: 'Custom', exact: true }).click()
-
-      // Custom date inputs should appear
-      await expect(page.getByText('Start date')).toBeVisible()
-      await expect(page.getByText('End date')).toBeVisible()
+      // Custom date inputs should appear because the inferred preset is 'custom'
+      await expect(page.getByText('Start Date')).toBeVisible()
+      await expect(page.getByText('End Date')).toBeVisible()
     })
   })
 
@@ -706,27 +696,6 @@ test.describe('Transaction Filtering - Authenticated User', () => {
   // Transaction Count Display Tests
   // ==========================================================================
 
-  test.describe('Transaction Count Display', () => {
-    // SKIPPED: amount_type filter moved to inline table headers (Issue #615)
-    test.skip('should show filtered count when filters active', async ({ page }) => {
-      await mockFilteringAPIs(page)
-      await page.goto('/transactions?amount_type=income')
-      await page.waitForLoadState('networkidle')
-
-      // Should show "Showing X of Y transactions" format
-      await expect(page.getByText(/showing.*of.*transaction/i)).toBeVisible()
-    })
-
-    // SKIPPED: Transaction count display format may vary based on implementation
-    test.skip('should show total count when no filters active', async ({ page }) => {
-      await mockFilteringAPIs(page)
-      await page.goto('/transactions')
-      await page.waitForLoadState('networkidle')
-
-      // Should show "X transactions total" format
-      await expect(page.getByText(/4.*transactions.*total/i)).toBeVisible()
-    })
-  })
 
   // ==========================================================================
   // Performance Tests (SKIPPED: Issue #615 - Tests use Type filter moved to inline headers)
@@ -748,11 +717,11 @@ test.describe('Transaction Filtering - Authenticated User', () => {
           linked_item_id: 'item-1',
           source: 'plaid',
           external_transaction_id: `plaid-txn-${i}`,
-          amount: i % 3 === 0 ? 100 + i : -(50 + i),
+          amount: i % 3 === 0 ? -(100 + i) : 50 + i,
           date: `2025-${String((i % 12) + 1).padStart(2, '0')}-15`,
           name: `Transaction ${i}`,
           merchant_name: `Merchant ${i}`,
-          category: i % 2 === 0 ? '["Food and Drink"]' : '["Shopping"]',
+          pfc_primary: i % 2 === 0 ? 'FOOD_AND_DRINK' : 'GENERAL_MERCHANDISE',
           pending: i % 5 === 0,
           tags: [],
           created_at: '2025-01-01T00:00:00Z',
@@ -774,9 +743,9 @@ test.describe('Transaction Filtering - Authenticated User', () => {
         // Filter based on amount_type if provided
         let filtered = largeTransactionSet
         if (amountType === 'expense') {
-          filtered = largeTransactionSet.filter((t) => t.amount < 0)
-        } else if (amountType === 'income') {
           filtered = largeTransactionSet.filter((t) => t.amount > 0)
+        } else if (amountType === 'income') {
+          filtered = largeTransactionSet.filter((t) => t.amount < 0)
         }
 
         await route.fulfill({

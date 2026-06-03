@@ -36,7 +36,7 @@ func createTestRule(userID string) *domain.CategorizationRule {
 		Priority:       10,
 		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "starbucks"}},
 		ConditionLogic: "AND",
-		TargetCategory: []string{"Food & Drink", "Coffee"},
+		TargetKind: func() *string { s := "pfc"; return &s }(),
 		TargetTags:     []string{"recurring"},
 		TagBehavior:    "add",
 		Source:         "manual",
@@ -63,8 +63,11 @@ func TestCategorizationRuleRepository_Create(t *testing.T) {
 		rule.Priority,
 		pgxmock.AnyArg(), // conditions (JSON)
 		rule.ConditionLogic,
-		pgxmock.AnyArg(), // target_category (JSON)
-		pgxmock.AnyArg(), // target_tags (JSON)
+		rule.TargetKind,          // target_kind
+		pgxmock.AnyArg(),         // target_pfc_primary
+		pgxmock.AnyArg(),         // target_pfc_detailed
+		pgxmock.AnyArg(),         // target_custom_category_id
+		pgxmock.AnyArg(),         // target_tags (JSON)
 		rule.TagBehavior,
 		rule.Source,
 		rule.MatchCount,
@@ -108,6 +111,9 @@ func TestCategorizationRuleRepository_Create_DuplicateName(t *testing.T) {
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
 	).WillReturnError(pgx.ErrNoRows) // Simulating constraint violation
 
 	err := repo.Create(ctx, rule)
@@ -129,10 +135,13 @@ func TestCategorizationRuleRepository_GetByID(t *testing.T) {
 	// Helper for nullable string
 	desc := "Test description"
 
+	targetKind := "pfc"
+	targetPFCPrimary := "FOOD_AND_DRINK"
 	columns := []string{
 		"id", "user_id", "name", "description", "enabled", "priority",
-		"conditions", "condition_logic", "target_category", "target_tags",
-		"tag_behavior", "source", "match_count", "override_count",
+		"conditions", "condition_logic",
+		"target_kind", "target_pfc_primary", "target_pfc_detailed", "target_custom_category_id",
+		"target_tags", "tag_behavior", "source", "match_count", "override_count",
 		"last_matched_at", "created_at", "updated_at",
 	}
 
@@ -142,18 +151,21 @@ func TestCategorizationRuleRepository_GetByID(t *testing.T) {
 			ruleID,
 			userID,
 			"Coffee Shops",
-			&desc, // Use pointer for nullable description
+			&desc,
 			true,
 			10,
 			`[{"type":"merchant_contains","value":"starbucks"}]`,
 			"AND",
-			`["Food & Drink","Coffee"]`,
+			&targetKind,
+			&targetPFCPrimary,
+			nil, // target_pfc_detailed
+			nil, // target_custom_category_id
 			`["recurring"]`,
 			"add",
 			"manual",
 			5,
 			1,
-			&now, // Use pointer for nullable last_matched_at
+			&now,
 			now,
 			now,
 		))
@@ -200,10 +212,14 @@ func TestCategorizationRuleRepository_GetByUserID(t *testing.T) {
 	// Helper for nullable strings
 	desc1, desc2 := "Desc 1", "Desc 2"
 
+	pfcPrimary1 := "FOOD_AND_DRINK"
+	pfcPrimary2 := "GENERAL_MERCHANDISE"
+	targetKind1, targetKind2 := "pfc", "pfc"
 	columns := []string{
 		"id", "user_id", "name", "description", "enabled", "priority",
-		"conditions", "condition_logic", "target_category", "target_tags",
-		"tag_behavior", "source", "match_count", "override_count",
+		"conditions", "condition_logic",
+		"target_kind", "target_pfc_primary", "target_pfc_detailed", "target_custom_category_id",
+		"target_tags", "tag_behavior", "source", "match_count", "override_count",
 		"last_matched_at", "created_at", "updated_at",
 	}
 
@@ -214,12 +230,15 @@ func TestCategorizationRuleRepository_GetByUserID(t *testing.T) {
 				uuid.New().String(),
 				userID,
 				"Rule 1",
-				&desc1, // Use pointer for nullable description
+				&desc1,
 				true,
 				10,
 				`[]`,
 				"AND",
-				`["Cat1"]`,
+				&targetKind1,
+				&pfcPrimary1,
+				nil, // target_pfc_detailed
+				nil, // target_custom_category_id
 				`[]`,
 				"add",
 				"manual",
@@ -233,12 +252,15 @@ func TestCategorizationRuleRepository_GetByUserID(t *testing.T) {
 				uuid.New().String(),
 				userID,
 				"Rule 2",
-				&desc2, // Use pointer for nullable description
+				&desc2,
 				true,
 				5,
 				`[]`,
 				"AND",
-				`["Cat2"]`,
+				&targetKind2,
+				&pfcPrimary2,
+				nil, // target_pfc_detailed
+				nil, // target_custom_category_id
 				`[]`,
 				"add",
 				"manual",
@@ -268,10 +290,13 @@ func TestCategorizationRuleRepository_GetEnabledByUserID(t *testing.T) {
 	// Helper for nullable string
 	desc := "Desc"
 
+	pfcPrimary := "FOOD_AND_DRINK"
+	targetKind := "pfc"
 	columns := []string{
 		"id", "user_id", "name", "description", "enabled", "priority",
-		"conditions", "condition_logic", "target_category", "target_tags",
-		"tag_behavior", "source", "match_count", "override_count",
+		"conditions", "condition_logic",
+		"target_kind", "target_pfc_primary", "target_pfc_detailed", "target_custom_category_id",
+		"target_tags", "tag_behavior", "source", "match_count", "override_count",
 		"last_matched_at", "created_at", "updated_at",
 	}
 
@@ -281,12 +306,15 @@ func TestCategorizationRuleRepository_GetEnabledByUserID(t *testing.T) {
 			uuid.New().String(),
 			userID,
 			"Enabled Rule",
-			&desc, // Use pointer for nullable description
+			&desc,
 			true,
 			10,
 			`[]`,
 			"AND",
-			`["Cat"]`,
+			&targetKind,
+			&pfcPrimary,
+			nil, // target_pfc_detailed
+			nil, // target_custom_category_id
 			`[]`,
 			"add",
 			"manual",
@@ -318,15 +346,18 @@ func TestCategorizationRuleRepository_Update(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE categorization_rules`)).
 		WithArgs(
 			rule.Name,
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // description
+			pgxmock.AnyArg(), // enabled
+			pgxmock.AnyArg(), // priority
+			pgxmock.AnyArg(), // conditions JSON
+			pgxmock.AnyArg(), // condition_logic
+			pgxmock.AnyArg(), // target_kind
+			pgxmock.AnyArg(), // target_pfc_primary
+			pgxmock.AnyArg(), // target_pfc_detailed
+			pgxmock.AnyArg(), // target_custom_category_id
+			pgxmock.AnyArg(), // target_tags JSON
+			pgxmock.AnyArg(), // tag_behavior
+			pgxmock.AnyArg(), // updated_at
 			rule.ID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
@@ -347,16 +378,19 @@ func TestCategorizationRuleRepository_Update_NotFound(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE categorization_rules`)).
 		WithArgs(
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // name
+			pgxmock.AnyArg(), // description
+			pgxmock.AnyArg(), // enabled
+			pgxmock.AnyArg(), // priority
+			pgxmock.AnyArg(), // conditions JSON
+			pgxmock.AnyArg(), // condition_logic
+			pgxmock.AnyArg(), // target_kind
+			pgxmock.AnyArg(), // target_pfc_primary
+			pgxmock.AnyArg(), // target_pfc_detailed
+			pgxmock.AnyArg(), // target_custom_category_id
+			pgxmock.AnyArg(), // target_tags JSON
+			pgxmock.AnyArg(), // tag_behavior
+			pgxmock.AnyArg(), // updated_at
 			rule.ID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 

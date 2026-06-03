@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -84,14 +85,23 @@ type PaddleWebhookRepository interface {
 	ResetProcessingStatus(ctx context.Context, id string) error
 }
 
+// webhooksOrderByAllowlist maps frontend sort_by values to safe SQL column names.
+// No NULLS LAST needed because none of these columns are nullable.
+var webhooksOrderByAllowlist = map[string]orderByEntry{
+	"created_at": {col: "created_at"},
+	"attempts":   {col: "processing_attempts"},
+	"status":     {col: "processed"},
+}
+
 // paddleWebhookRepository implements PaddleWebhookRepository using PostgreSQL
 type paddleWebhookRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewPaddleWebhookRepository creates a new PaddleWebhookRepository instance
-func NewPaddleWebhookRepository(db DB) PaddleWebhookRepository {
-	return &paddleWebhookRepository{db: db}
+func NewPaddleWebhookRepository(db DB, enc *appcrypto.FieldEncryptor) PaddleWebhookRepository {
+	return &paddleWebhookRepository{db: db, enc: enc}
 }
 
 // Create stores a new Paddle webhook event in the database
@@ -99,6 +109,11 @@ func (r *paddleWebhookRepository) Create(ctx context.Context, event *domain.Padd
 	// Generate UUID if not already set
 	if event.ID == "" {
 		event.ID = uuid.New().String()
+	}
+
+	encPayload, err := r.enc.EncryptJSON(event.Payload)
+	if err != nil {
+		return fmt.Errorf("encrypt paddle webhook payload: %w", err)
 	}
 
 	query := `
@@ -110,11 +125,11 @@ func (r *paddleWebhookRepository) Create(ctx context.Context, event *domain.Padd
 		RETURNING created_at, updated_at
 	`
 
-	err := r.db.QueryRow(ctx, query,
+	err = r.db.QueryRow(ctx, query,
 		event.ID,
 		event.EventID,
 		event.EventType,
-		event.Payload,
+		encPayload,
 		event.Signature,
 		event.SignatureValid,
 		event.Processed,
@@ -152,11 +167,12 @@ func (r *paddleWebhookRepository) GetByEventID(ctx context.Context, eventID stri
 // scanSingleWebhook is a helper that scans a single webhook from a query row
 func (r *paddleWebhookRepository) scanSingleWebhook(ctx context.Context, query string, arg interface{}, context string) (*domain.PaddleWebhookEvent, error) {
 	var event domain.PaddleWebhookEvent
+	var rawPayload string
 	err := r.db.QueryRow(ctx, query, arg).Scan(
 		&event.ID,
 		&event.EventID,
 		&event.EventType,
-		&event.Payload,
+		&rawPayload,
 		&event.Signature,
 		&event.SignatureValid,
 		&event.Processed,
@@ -172,6 +188,11 @@ func (r *paddleWebhookRepository) scanSingleWebhook(ctx context.Context, query s
 			return nil, ErrPaddleWebhookNotFound
 		}
 		return nil, fmt.Errorf("failed to get paddle webhook event %s: %w", context, err)
+	}
+
+	event.Payload, err = r.enc.DecryptJSON(rawPayload)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt paddle webhook payload: %w", err)
 	}
 
 	return &event, nil
@@ -228,11 +249,12 @@ func (r *paddleWebhookRepository) scanPaddleWebhookEvents(rows pgx.Rows) ([]doma
 	var events []domain.PaddleWebhookEvent
 	for rows.Next() {
 		var event domain.PaddleWebhookEvent
+		var rawPayload string
 		err := rows.Scan(
 			&event.ID,
 			&event.EventID,
 			&event.EventType,
-			&event.Payload,
+			&rawPayload,
 			&event.Signature,
 			&event.SignatureValid,
 			&event.Processed,
@@ -244,6 +266,10 @@ func (r *paddleWebhookRepository) scanPaddleWebhookEvents(rows pgx.Rows) ([]doma
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan paddle webhook event: %w", err)
+		}
+		event.Payload, err = r.enc.DecryptJSON(rawPayload)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt paddle webhook payload: %w", err)
 		}
 		events = append(events, event)
 	}
@@ -385,9 +411,18 @@ func (r *paddleWebhookRepository) ListWebhookEvents(ctx context.Context, filters
 		return nil, 0, fmt.Errorf("failed to count paddle webhook events: %w", err)
 	}
 
+	entry := webhooksOrderByAllowlist[filters.SortBy]
+	if entry.col == "" {
+		entry = orderByEntry{col: "created_at"} // fallback
+	}
+	orderDir := strings.ToUpper(filters.SortDir)
+	if orderDir != "ASC" && orderDir != "DESC" {
+		orderDir = "DESC"
+	}
+
 	listQuery := fmt.Sprintf(
-		`SELECT id, event_id, event_type, payload, signature, signature_valid, processed, processed_at, processing_error, processing_attempts, created_at, updated_at FROM paddle_webhook_events %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`,
-		whereClause, argIdx, argIdx+1,
+		`SELECT id, event_id, event_type, payload, signature, signature_valid, processed, processed_at, processing_error, processing_attempts, created_at, updated_at FROM paddle_webhook_events %s ORDER BY %s %s LIMIT $%d OFFSET $%d`,
+		whereClause, entry.col, orderDir, argIdx, argIdx+1,
 	)
 	listArgs := append(args, limit, offset)
 

@@ -24,12 +24,6 @@ type RuleExecutorInterface interface {
 	ExecuteRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleExecution, error)
 }
 
-// SubscriptionLimitChecker defines the interface for checking subscription limits.
-type SubscriptionLimitChecker interface {
-	CheckDailyExecutionLimit(ctx context.Context, userID string) (allowed bool, remaining int, err error)
-	IncrementDailyExecutions(ctx context.Context, userID string) error
-}
-
 // RuleRepositoryInterface defines the subset of repository methods needed by CronTriggerProvider.
 type RuleRepositoryInterface interface {
 	GetRulesByScheduleTrigger(ctx context.Context) ([]*domain.AutomationRule, error)
@@ -52,7 +46,6 @@ type CronTriggerProvider struct {
 	logger          *slog.Logger
 	repo            RuleRepositoryInterface
 	executor        RuleExecutorInterface
-	subscriptionSvc SubscriptionLimitChecker
 	refreshInterval time.Duration
 
 	cron           *cron.Cron
@@ -67,7 +60,6 @@ type CronTriggerProvider struct {
 func NewCronTriggerProvider(
 	repo RuleRepositoryInterface,
 	executor RuleExecutorInterface,
-	subscriptionSvc SubscriptionLimitChecker,
 	refreshInterval time.Duration,
 	logger *slog.Logger,
 ) *CronTriggerProvider {
@@ -78,7 +70,6 @@ func NewCronTriggerProvider(
 		logger:          logger,
 		repo:            repo,
 		executor:        executor,
-		subscriptionSvc: subscriptionSvc,
 		refreshInterval: refreshInterval,
 		scheduledRules:  make(map[string]*scheduledRule),
 		stopCh:          make(chan struct{}),
@@ -91,11 +82,10 @@ func NewCronTriggerProvider(
 func NewCronTriggerProviderWithSeconds(
 	repo RuleRepositoryInterface,
 	executor RuleExecutorInterface,
-	subscriptionSvc SubscriptionLimitChecker,
 	refreshInterval time.Duration,
 	logger *slog.Logger,
 ) *CronTriggerProvider {
-	p := NewCronTriggerProvider(repo, executor, subscriptionSvc, refreshInterval, logger)
+	p := NewCronTriggerProvider(repo, executor, refreshInterval, logger)
 	p.useSeconds = true
 	return p
 }
@@ -332,25 +322,7 @@ func (p *CronTriggerProvider) executeRule(ctx context.Context, ruleID, userID st
 		return
 	}
 
-	// Check daily execution limit
-	allowed, remaining, err := p.subscriptionSvc.CheckDailyExecutionLimit(ctx, userID)
-	if err != nil {
-		p.logger.Error("error checking execution limit", "user_id", userID, "error", err)
-		return
-	}
-
-	if !allowed {
-		p.logger.Warn("user exceeded daily execution limit, skipping rule", "user_id", userID, "rule_id", ruleID)
-		return
-	}
-
-	p.logger.Info("executing rule", "rule_id", ruleID, "user_id", userID, "remaining", remaining)
-
-	// Increment daily executions
-	if err := p.subscriptionSvc.IncrementDailyExecutions(ctx, userID); err != nil {
-		p.logger.Error("error incrementing daily executions", "user_id", userID, "error", err)
-		// Continue with execution anyway
-	}
+	p.logger.Info("executing rule", "rule_id", ruleID, "user_id", userID)
 
 	// Execute the rule
 	triggerData := map[string]interface{}{

@@ -98,7 +98,7 @@ describe('UserDetailModal', () => {
     // Subscription tier and status are displayed together as "Premium (active)"
     expect(screen.getByText(/premium/i)).toBeInTheDocument()
     expect(screen.getByText(/active/i)).toBeInTheDocument()
-    expect(screen.getByText('iad')).toBeInTheDocument()
+    expect(screen.getByText(/USA \(Virginia\)/i)).toBeInTheDocument()
   })
 
   it('should display user statistics', () => {

@@ -37,13 +37,34 @@ EXCLUDE_PATTERNS=(
     "src/features/budgets/hooks/useSavingsGoals.test.tsx"
     "src/features/budgets/hooks/useBudgetDetail.test.tsx"
     "src/features/budgets/hooks/useAvailableCategories.test.tsx"
-    "src/features/rules/hooks/useRuleTierLimits.test.ts"
+    # Hook implementation tests (need API-level mocks, not wrapper mocks)
+    "src/features/dashboard/hooks/useGettingStarted.test.ts"
     # Isolated tests polluted by other tests (run via test-isolated.sh)
     "src/features/dashboard/widgets/DashboardGrid.test.tsx"
     "src/features/dashboard/widgets/WidgetCatalog.test.tsx"
     "src/features/rules/components/RulesPage.test.tsx"
     # AccountsPage uses local component mocks that can pollute AccountTable etc. (#839)
     "src/features/accounts/AccountsPage.test.tsx"
+    # ToggleGroup component test needs real implementation but TimeframeSelector/DateRangePicker
+    # tests mock @/components/ui/toggle-group globally, polluting it in the full suite (#953)
+    "src/components/ui/toggle-group.test.tsx"
+    # setSystemTime pollution: date mocks from other test files leak into these, causing
+    # date mismatch failures in the full suite (#952)
+    "src/features/dashboard/components/TimeframeSelector.test.tsx"
+    "src/features/transactions/components/TransactionCard.test.tsx"
+    # usePricingContext: mock state pollution from full suite causes tiers to appear loading (#1038)
+    "src/features/pricing/hooks/usePricingContext.test.tsx"
+    # usePostSignInCheckoutIntent: mockUseCreatePaddleCheckout state leaks from prior tests (#1038)
+    "src/features/pricing/hooks/usePostSignInCheckoutIntent.test.tsx"
+    # CustomCategoryManager: relies on the shared useGetUserCategories mock state, which
+    # other test files clobber via global mock.module() in the full suite (#1203)
+    "src/features/categories/components/CustomCategoryManager.test.tsx"
+    # These depend on the centralized categories/transactions API mocks, which the budgets
+    # tests clobber via inline global mock.module() in the full suite (#1203)
+    "src/features/categories/hooks/useCustomCategories.test.tsx"
+    "src/features/categories/hooks/useCategoryMutations.test.tsx"
+    "src/features/transactions/hooks/useReviewMutations.test.tsx"
+    "src/features/reports/components/CustomCategoryFilter.test.tsx"
 )
 
 echo "Running regular tests (excluding real-implementation tests)..."

@@ -139,6 +139,82 @@ func TestTransaction_Validate_MissingName(t *testing.T) {
 	assert.Contains(t, err.Error(), "name is required")
 }
 
+// TestTransaction_IsOutflow tests the IsOutflow helper (PFCv2: positive = outflow/spending).
+func TestTransaction_IsOutflow(t *testing.T) {
+	tests := []struct {
+		name     string
+		amount   float64
+		want     bool
+	}{
+		{"positive amount is outflow", 25.50, true},
+		{"zero is not outflow", 0, false},
+		{"negative amount is not outflow", -25.50, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := &Transaction{Amount: tt.amount}
+			assert.Equal(t, tt.want, tx.IsOutflow())
+		})
+	}
+}
+
+// TestTransaction_IsInflow tests the IsInflow helper (PFCv2: negative = inflow/refund).
+func TestTransaction_IsInflow(t *testing.T) {
+	tests := []struct {
+		name   string
+		amount float64
+		want   bool
+	}{
+		{"negative amount is inflow", -25.50, true},
+		{"zero is not inflow", 0, false},
+		{"positive amount is not inflow", 25.50, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := &Transaction{Amount: tt.amount}
+			assert.Equal(t, tt.want, tx.IsInflow())
+		})
+	}
+}
+
+// TestTransaction_ExpenseAmount tests the ExpenseAmount helper.
+func TestTransaction_ExpenseAmount(t *testing.T) {
+	tests := []struct {
+		name   string
+		amount float64
+		want   float64
+	}{
+		{"outflow returns positive amount", 25.50, 25.50},
+		{"zero returns zero", 0, 0},
+		{"inflow returns zero", -25.50, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := &Transaction{Amount: tt.amount}
+			assert.Equal(t, tt.want, tx.ExpenseAmount())
+		})
+	}
+}
+
+// TestTransaction_IncomeAmount tests the IncomeAmount helper.
+func TestTransaction_IncomeAmount(t *testing.T) {
+	tests := []struct {
+		name   string
+		amount float64
+		want   float64
+	}{
+		{"inflow returns absolute amount", -25.50, 25.50},
+		{"zero returns zero", 0, 0},
+		{"outflow returns zero", 25.50, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := &Transaction{Amount: tt.amount}
+			assert.Equal(t, tt.want, tx.IncomeAmount())
+		})
+	}
+}
+
 // TestTransaction_Validate_AllSources tests validation for all supported sources
 func TestTransaction_Validate_AllSources(t *testing.T) {
 	sources := []TransactionSource{

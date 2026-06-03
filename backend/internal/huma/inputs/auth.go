@@ -17,6 +17,9 @@ const (
 	ClerkUserIDKey ContextKey = "clerk_user_id"
 	// ClerkClaimsKey is the context key for Clerk session claims.
 	ClerkClaimsKey ContextKey = "clerk_claims"
+	// SubscriptionStatusKey is the context key for the user's subscription status.
+	// Set by Clerk middleware; read by read-only enforcement middleware (#930).
+	SubscriptionStatusKey ContextKey = "subscription_status"
 )
 
 // AuthenticatedInput provides user authentication resolution for all protected endpoints.

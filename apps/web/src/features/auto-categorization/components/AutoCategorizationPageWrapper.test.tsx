@@ -55,8 +55,8 @@ function createWrapper() {
 
 describe('AutoCategorizationPageWrapper', () => {
   const mockCategories: CustomCategory[] = [
-    { id: '1', user_id: 'user-1', name: 'Coffee', parent_category: 'Food & Drink', color: null, icon: null, usage_count: 5, created_at: '2025-01-01', updated_at: '2025-01-01' },
-    { id: '2', user_id: 'user-1', name: 'Groceries', parent_category: null, color: null, icon: null, usage_count: 10, created_at: '2025-01-01', updated_at: '2025-01-01' },
+    { id: '1', user_id: 'user-1', name: 'Coffee', parent_pfc_primary: 'FOOD_AND_DRINK', color: null, icon: null, usage_count: 5, created_at: '2025-01-01', updated_at: '2025-01-01' },
+    { id: '2', user_id: 'user-1', name: 'Groceries', parent_pfc_primary: null, color: null, icon: null, usage_count: 10, created_at: '2025-01-01', updated_at: '2025-01-01' },
   ]
 
   const mockAccounts: Account[] = [
@@ -244,5 +244,31 @@ describe('AutoCategorizationPageWrapper', () => {
       expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
     })
     expect(screen.getByTestId('max-rules')).toHaveTextContent('undefined')
+  })
+
+  it('should exclude replaced accounts from the accounts list (Issue #1109)', async () => {
+    const replacedAccount: Account = {
+      id: 'acc-old',
+      name: 'Old Checking',
+      type: 'depository',
+      mask: '9999',
+      linked_item_id: 'item-1',
+      user_id: 'user-1',
+      plaid_account_id: 'plaid-old',
+      currency_code: 'USD',
+      is_hidden: false,
+      status: 'replaced',
+      created_at: '2025-01-01',
+      updated_at: '2025-01-01',
+    }
+    configureHooks({ accounts: [...mockAccounts, replacedAccount] })
+    render(<AutoCategorizationPageWrapper />, { wrapper: createWrapper() })
+    await waitFor(() => {
+      expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
+    })
+    // Only the 2 active accounts should be passed through; replaced is excluded
+    await waitFor(() => {
+      expect(screen.getByTestId('accounts-count')).toHaveTextContent('2')
+    })
   })
 })

@@ -4,6 +4,10 @@
  *
  * Tests for the auto-categorization rule table display component.
  * TDD RED: Writing tests before implementation.
+ *
+ * PII Audit: No columns in this table contain PII requiring data-ph-mask.
+ * Audit: name (non-financial), status, priority (integer), conditions (count string),
+ * category (label string), matches (integer count).
  */
 
 import { describe, it, expect, mock } from 'bun:test'
@@ -21,7 +25,9 @@ const mockRules: CategorizationRule[] = [
     priority: 1,
     conditions: [{ type: 'merchant_contains', value: 'coffee' }],
     condition_logic: 'AND',
-    target_category: ['Food and Drink', 'Coffee'],
+    target_kind: 'pfc',
+    target_pfc_primary: 'FOOD_AND_DRINK',
+    target_pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
     target_tags: ['daily', 'caffeine'],
     tag_behavior: 'add',
     source: 'manual',
@@ -43,7 +49,9 @@ const mockRules: CategorizationRule[] = [
       { type: 'amount_less_than', value: 200 },
     ],
     condition_logic: 'OR',
-    target_category: ['Shopping', 'Groceries'],
+    target_kind: 'pfc',
+    target_pfc_primary: 'GENERAL_MERCHANDISE',
+    target_pfc_detailed: 'GENERAL_MERCHANDISE_GROCERIES',
     target_tags: null,
     tag_behavior: 'add',
     source: 'ai',
@@ -61,7 +69,9 @@ const mockRules: CategorizationRule[] = [
     priority: 3,
     conditions: [{ type: 'amount_equals', value: 9.99 }],
     condition_logic: 'AND',
-    target_category: ['Bills', 'Subscription'],
+    target_kind: 'pfc',
+    target_pfc_primary: 'RENT_AND_UTILITIES',
+    target_pfc_detailed: 'RENT_AND_UTILITIES_TELEPHONE',
     tag_behavior: 'replace',
     source: 'template',
     match_count: 0,
@@ -132,12 +142,13 @@ describe('AutoCategorizationRuleTable', () => {
       expect(screen.getByText('2 conditions (OR)')).toBeInTheDocument()
     })
 
-    it('should display target category', () => {
+    it('should display target category using display fields (fallback to formatPFCEnum)', () => {
+      // These mock rules have no display fields, so formatPFCEnum fallback is used
       render(<AutoCategorizationRuleTable rules={mockRules} />)
 
-      expect(screen.getByText('Food and Drink')).toBeInTheDocument()
-      expect(screen.getByText('Shopping')).toBeInTheDocument()
-      expect(screen.getByText('Bills')).toBeInTheDocument()
+      expect(screen.getByText('Food And Drink › Coffee')).toBeInTheDocument()
+      expect(screen.getByText('General Merchandise › Groceries')).toBeInTheDocument()
+      expect(screen.getByText('Rent And Utilities › Telephone')).toBeInTheDocument()
     })
 
     it('should display match count', () => {
@@ -277,58 +288,60 @@ describe('AutoCategorizationRuleTable', () => {
   })
 
   describe('Sorting', () => {
-    it('should make name column sortable', () => {
-      render(<AutoCategorizationRuleTable rules={mockRules} sortable />)
+    it('makes name column sortable when onSortChange is provided', () => {
+      render(<AutoCategorizationRuleTable rules={mockRules} onSortChange={mock(() => {})} />)
 
       const nameHeader = screen.getByText('Name')
       expect(nameHeader.closest('button')).toBeInTheDocument()
     })
 
-    it('should call onSort when clicking sortable header', () => {
-      const onSort = mock(() => {})
-      render(
-        <AutoCategorizationRuleTable
-          rules={mockRules}
-          sortable
-          onSort={onSort}
-        />
-      )
+    it('calls onSortChange with asc on first click', () => {
+      const onSortChange = mock(() => {})
+      render(<AutoCategorizationRuleTable rules={mockRules} onSortChange={onSortChange} />)
 
-      const nameHeader = screen.getByText('Name').closest('button')!
-      fireEvent.click(nameHeader)
-
-      expect(onSort).toHaveBeenCalledWith('name', 'asc')
+      fireEvent.click(screen.getByText('Name').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith({ columnId: 'name', direction: 'asc' })
     })
 
-    it('should toggle sort direction on second click', () => {
-      const onSort = mock(() => {})
+    it('calls onSortChange with desc when sorted asc and clicked', () => {
+      const onSortChange = mock(() => {})
       render(
         <AutoCategorizationRuleTable
           rules={mockRules}
-          sortable
-          onSort={onSort}
-          sortColumn="name"
-          sortDirection="asc"
+          onSortChange={onSortChange}
+          sort={{ columnId: 'name', direction: 'asc' }}
         />
       )
 
-      const nameHeader = screen.getByText('Name').closest('button')!
-      fireEvent.click(nameHeader)
-
-      expect(onSort).toHaveBeenCalledWith('name', 'desc')
+      fireEvent.click(screen.getByText('Name').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith({ columnId: 'name', direction: 'desc' })
     })
 
-    it('should show sort indicator on sorted column', () => {
+    it('calls onSortChange(null) on third click — clears sort', () => {
+      const onSortChange = mock(() => {})
       render(
         <AutoCategorizationRuleTable
           rules={mockRules}
-          sortable
-          sortColumn="name"
-          sortDirection="asc"
+          onSortChange={onSortChange}
+          sort={{ columnId: 'name', direction: 'desc' }}
         />
       )
 
-      const nameHeader = screen.getByText('Name').closest('button')!
+      fireEvent.click(screen.getByText('Name').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith(null)
+    })
+
+    it('shows sort indicator on sorted column', () => {
+      render(
+        <AutoCategorizationRuleTable
+          rules={mockRules}
+          onSortChange={mock(() => {})}
+          sort={{ columnId: 'name', direction: 'asc' }}
+        />
+      )
+
+      const columnHeaders = screen.getAllByRole('columnheader')
+      const nameHeader = columnHeaders.find((h) => h.textContent?.includes('Name'))!
       expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
     })
   })
@@ -417,4 +430,107 @@ describe('AutoCategorizationRuleTable', () => {
       expect(toggleButtons[1]).toHaveAttribute('title', 'Enable rule')
     })
   })
+
+  // --- RED tests added for DataTable migration (#1143) ---
+
+  describe('Filter callbacks', () => {
+    it('should render filter button when statusOptions are passed', () => {
+      render(
+        <AutoCategorizationRuleTable
+          rules={mockRules}
+          statusOptions={[{ label: 'Enabled', value: 'enabled' }, { label: 'Disabled', value: 'disabled' }]}
+          statusFilter={['enabled']}
+          onStatusFilterChange={() => {}}
+        />
+      )
+      // Filter button for status column should be present
+      expect(screen.getByRole('button', { name: /filter by status/i })).toBeInTheDocument()
+    })
+
+    it('should render filter button when categoryOptions are passed', () => {
+      render(
+        <AutoCategorizationRuleTable
+          rules={mockRules}
+          categoryOptions={[{ label: 'Food', value: 'FOOD' }]}
+          categoryFilter={['FOOD']}
+          onCategoryFilterChange={() => {}}
+        />
+      )
+      expect(screen.getByRole('button', { name: /filter by category/i })).toBeInTheDocument()
+    })
+
+    it('should render filter button for priority range when onPriorityRangeChange is passed', () => {
+      render(
+        <AutoCategorizationRuleTable
+          rules={mockRules}
+          priorityRange={{ min: 1, max: 5 }}
+          onPriorityRangeChange={() => {}}
+        />
+      )
+      expect(screen.getByRole('button', { name: /filter by priority/i })).toBeInTheDocument()
+    })
+
+    it('should call onStatusFilterChange when status filter changes', () => {
+      const onStatusFilterChange = mock(() => {})
+      render(
+        <AutoCategorizationRuleTable
+          rules={mockRules}
+          statusOptions={[{ label: 'Enabled', value: 'enabled' }, { label: 'Disabled', value: 'disabled' }]}
+          statusFilter={[]}
+          onStatusFilterChange={onStatusFilterChange}
+        />
+      )
+      const filterBtn = screen.getByRole('button', { name: /filter by status/i })
+      fireEvent.click(filterBtn)
+      // Use checkbox role to target the filter option, not the status badge
+      const enabledCheckbox = screen.getByRole('checkbox', { name: /enabled/i })
+      fireEvent.click(enabledCheckbox)
+      expect(onStatusFilterChange).toHaveBeenCalled()
+    })
+
+    it('should render table (not external empty div) when rules empty but filters active', () => {
+      render(
+        <AutoCategorizationRuleTable
+          rules={[]}
+          statusFilter={['enabled']}
+          onStatusFilterChange={() => {}}
+        />
+      )
+      // Should render the table (with empty state row), not the "no rules found" div
+      expect(screen.getByRole('table')).toBeInTheDocument()
+      expect(screen.queryByText(/no rules found/i)).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Sorting — tri-state clear', () => {
+    it('calls onSortChange(null) on third click (clear) when column is already desc', () => {
+      const onSortChange = mock(() => {})
+      render(
+        <AutoCategorizationRuleTable
+          rules={mockRules}
+          onSortChange={onSortChange}
+          sort={{ columnId: 'name', direction: 'desc' }}
+        />
+      )
+
+      fireEvent.click(screen.getByText('Name').closest('button')!)
+      expect(onSortChange).toHaveBeenCalledWith(null)
+    })
+  })
+
+  describe('Accessibility — keyboard toggle', () => {
+    it('should fire onToggle with correct args when toggle switch is activated', () => {
+      const onToggle = mock(() => {})
+      render(
+        <AutoCategorizationRuleTable rules={mockRules} onToggle={onToggle} />
+      )
+
+      const toggleButtons = screen.getAllByRole('switch')
+      // First rule is enabled; clicking (or pressing Space, which browsers synthesize as click) fires onToggle(rule, false)
+      fireEvent.click(toggleButtons[0])
+
+      expect(onToggle).toHaveBeenCalledWith(mockRules[0], false)
+    })
+  })
 })
+

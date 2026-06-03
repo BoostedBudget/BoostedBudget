@@ -11,6 +11,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { initSentry } from './shared/lib/sentry'
 import { initPostHog, posthog } from './shared/lib/posthog'
 import { PostHogProvider } from 'posthog-js/react'
+import { ThemeProvider } from './shared/theme'
 import './index.css'
 
 initSentry()
@@ -98,6 +99,7 @@ const AuthReadyGate = ({ children }: { children: React.ReactNode }) => {
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
+      <ThemeProvider defaultTheme="system">
       <ClerkProvider publishableKey={clerkPublishableKey}>
         <PostHogProvider client={posthog}>
           <ErrorBoundary>
@@ -111,6 +113,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           </ErrorBoundary>
         </PostHogProvider>
       </ClerkProvider>
+      </ThemeProvider>
     </BrowserRouter>
   </StrictMode>,
 )

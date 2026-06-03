@@ -1,0 +1,77 @@
+name = "boostedbudget-mcp"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Production environment routes (must be before any [section] headers in TOML)
+routes = [
+  { pattern = "mcp.boostedbudget.com/*", zone_name = "boostedbudget.com" }
+]
+
+# Workers Logs — stream logs to the Cloudflare dashboard (Observability tab).
+# Captures console.log/error from Worker code and all uncaught exceptions.
+[observability]
+enabled = true
+
+[[durable_objects.bindings]]
+name = "MCP_AGENT"
+class_name = "BoostedBudgetMcpAgent"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BoostedBudgetMcpAgent"]
+
+# Dynamic Worker Loader for sandbox isolates (configured in Phase 4)
+# Requires Workers for Platforms dispatch namespace on paid plan
+# [[dispatch_namespaces]]
+# binding = "DISPATCHER"
+# namespace = "mcp-sandbox"
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "02ac4a0117734620a09972b7dd2d78ff"
+
+[vars]
+ENVIRONMENT = "production"
+MCP_RESOURCE_URL = "https://mcp.boostedbudget.com"
+BOOSTEDBUDGET_API_URL = "https://api.boostedbudget.com"
+
+# Secrets (set via `wrangler secret put`):
+#   CLERK_SECRET_KEY
+#   CLERK_PUBLISHABLE_KEY
+#   CLERK_JWKS_URL           e.g. https://clerk.boostedbudget.com/.well-known/jwks.json
+#   CLERK_ISSUER_URL         e.g. https://clerk.boostedbudget.com  (Clerk Frontend API URL)
+#   MCP_OAUTH_AUDIENCE          the OAuth client_id from Clerk dashboard → Configure → OAuth Applications
+#   CLERK_OAUTH_CLIENT_SECRET   the OAuth client_secret from the same Clerk OAuth Application
+#   BOOSTEDBUDGET_ORIGIN_SECRET
+#   MCP_WORKER_SECRET        shared secret between this Worker and the Go backend;
+#                            generate: openssl rand -hex 32
+#                            set on backend:  MCP_WORKER_SECRET=<value>
+#   BOOSTEDBUDGET_API_URL    (override per env; defaults to https://api.boostedbudget.com)
+#   POSTHOG_API_KEY          (optional) PostHog API key for MCP analytics; Worker is a no-op if unset
+
+[env.staging]
+name = "boostedbudget-mcp-staging"
+routes = [
+  { pattern = "staging-mcp.boostedbudget.com/*", zone_name = "boostedbudget.com" }
+]
+
+[env.staging.observability]
+enabled = true
+
+[[env.staging.kv_namespaces]]
+binding = "OAUTH_KV"
+id = "cf8557252388405a9cdf2857c5573e1c"
+
+[[env.staging.durable_objects.bindings]]
+name = "MCP_AGENT"
+class_name = "BoostedBudgetMcpAgent"
+
+[[env.staging.migrations]]
+tag = "v1"
+new_sqlite_classes = ["BoostedBudgetMcpAgent"]
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+MCP_RESOURCE_URL = "https://staging-mcp.boostedbudget.com"
+BOOSTEDBUDGET_API_URL = "https://staging-api.boostedbudget.com"

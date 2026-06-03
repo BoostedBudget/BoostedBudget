@@ -7,8 +7,6 @@
  * TDD REFACTOR: Extracted during account limit enforcement implementation.
  */
 
-import './UpgradeBanner.css'
-
 export interface UpgradeBannerProps {
   /** Message to display in the banner */
   message?: string
@@ -36,9 +34,9 @@ export function UpgradeBanner({ message }: UpgradeBannerProps) {
   const defaultMessage = 'Upgrade to a higher tier to connect more accounts.'
 
   return (
-    <div className="upgrade-banner">
-      <p>
-        <strong>Account limit reached.</strong> {message || defaultMessage}
+    <div className="bg-warning/10 border border-warning/30 rounded-lg px-6 py-4 mb-6">
+      <p className="m-0 text-warning-foreground text-[0.9375rem]">
+        <strong className="text-warning">Account limit reached.</strong> {message || defaultMessage}
       </p>
     </div>
   )

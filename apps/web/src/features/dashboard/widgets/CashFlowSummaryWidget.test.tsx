@@ -37,7 +37,7 @@ describe('CashFlowSummaryWidget', () => {
       endDate: '2024-01-31',
     },
     setFilters: mock(() => {}),
-    timeframe: 'month',
+    timeframe: 'this_month',
     setTimeframe: mock(() => {}),
     isEditing: false,
     setIsEditing: mock(() => {}),

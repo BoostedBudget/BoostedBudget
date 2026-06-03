@@ -20,25 +20,25 @@ describe('MilestoneIndicator', () => {
       expect(markers).toHaveLength(4);
     });
 
-    it('applies reached class to passed milestones', () => {
+    it('applies reached state to passed milestones', () => {
       render(<MilestoneIndicator progress={60} milestones={[25, 50, 75, 100]} />);
 
       // 25% and 50% should be reached
-      expect(screen.getByTestId('milestone-marker-25')).toHaveClass('milestone-indicator__marker--reached');
-      expect(screen.getByTestId('milestone-marker-50')).toHaveClass('milestone-indicator__marker--reached');
+      expect(screen.getByTestId('milestone-marker-25')).toHaveAttribute('data-reached', 'true');
+      expect(screen.getByTestId('milestone-marker-50')).toHaveAttribute('data-reached', 'true');
       // 75% and 100% should NOT be reached
-      expect(screen.getByTestId('milestone-marker-75')).not.toHaveClass('milestone-indicator__marker--reached');
-      expect(screen.getByTestId('milestone-marker-100')).not.toHaveClass('milestone-indicator__marker--reached');
+      expect(screen.getByTestId('milestone-marker-75')).not.toHaveAttribute('data-reached');
+      expect(screen.getByTestId('milestone-marker-100')).not.toHaveAttribute('data-reached');
     });
 
-    it('applies next-milestone class to the next upcoming milestone', () => {
+    it('applies next-milestone state to the next upcoming milestone', () => {
       render(<MilestoneIndicator progress={30} milestones={[25, 50, 75, 100]} />);
 
       // 50% is the next milestone
-      expect(screen.getByTestId('milestone-marker-50')).toHaveClass('milestone-indicator__marker--next');
-      // Others should not have this class
-      expect(screen.getByTestId('milestone-marker-25')).not.toHaveClass('milestone-indicator__marker--next');
-      expect(screen.getByTestId('milestone-marker-75')).not.toHaveClass('milestone-indicator__marker--next');
+      expect(screen.getByTestId('milestone-marker-50')).toHaveAttribute('data-next', 'true');
+      // Others should not have this attribute
+      expect(screen.getByTestId('milestone-marker-25')).not.toHaveAttribute('data-next');
+      expect(screen.getByTestId('milestone-marker-75')).not.toHaveAttribute('data-next');
     });
 
     it('positions markers based on percentage', () => {
@@ -80,11 +80,11 @@ describe('MilestoneIndicator', () => {
       // No milestone should be reached
       const markers = screen.getAllByTestId(/milestone-marker-/);
       markers.forEach((marker) => {
-        expect(marker).not.toHaveClass('milestone-indicator__marker--reached');
+        expect(marker).not.toHaveAttribute('data-reached');
       });
 
       // 25% should be next
-      expect(screen.getByTestId('milestone-marker-25')).toHaveClass('milestone-indicator__marker--next');
+      expect(screen.getByTestId('milestone-marker-25')).toHaveAttribute('data-next', 'true');
     });
 
     it('handles 100% progress correctly', () => {
@@ -93,12 +93,12 @@ describe('MilestoneIndicator', () => {
       // All milestones should be reached
       const markers = screen.getAllByTestId(/milestone-marker-/);
       markers.forEach((marker) => {
-        expect(marker).toHaveClass('milestone-indicator__marker--reached');
+        expect(marker).toHaveAttribute('data-reached', 'true');
       });
 
       // No next milestone
       markers.forEach((marker) => {
-        expect(marker).not.toHaveClass('milestone-indicator__marker--next');
+        expect(marker).not.toHaveAttribute('data-next');
       });
     });
 
@@ -106,9 +106,9 @@ describe('MilestoneIndicator', () => {
       render(<MilestoneIndicator progress={37} milestones={[25, 50, 75, 100]} />);
 
       // 25% reached, 50% is next
-      expect(screen.getByTestId('milestone-marker-25')).toHaveClass('milestone-indicator__marker--reached');
-      expect(screen.getByTestId('milestone-marker-50')).toHaveClass('milestone-indicator__marker--next');
-      expect(screen.getByTestId('milestone-marker-50')).not.toHaveClass('milestone-indicator__marker--reached');
+      expect(screen.getByTestId('milestone-marker-25')).toHaveAttribute('data-reached', 'true');
+      expect(screen.getByTestId('milestone-marker-50')).toHaveAttribute('data-next', 'true');
+      expect(screen.getByTestId('milestone-marker-50')).not.toHaveAttribute('data-reached');
     });
   });
 
@@ -127,7 +127,7 @@ describe('MilestoneIndicator', () => {
 
       const markers = screen.getAllByTestId(/milestone-marker-/);
       expect(markers).toHaveLength(1);
-      expect(screen.getByTestId('milestone-marker-50')).toHaveClass('milestone-indicator__marker--reached');
+      expect(screen.getByTestId('milestone-marker-50')).toHaveAttribute('data-reached', 'true');
     });
 
     it('handles empty milestones array', () => {

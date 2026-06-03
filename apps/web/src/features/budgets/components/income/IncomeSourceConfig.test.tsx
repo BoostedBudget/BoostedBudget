@@ -4,18 +4,23 @@ import userEvent from '@testing-library/user-event'
 import { IncomeSourceConfig } from './IncomeSourceConfig'
 import type { IncomeSource } from '../../types'
 import type { UserTag } from '@/features/tags/types'
+import type { Primary } from '@boostedbudget/api-client/models/primary'
 
 describe('IncomeSourceConfig', () => {
   const mockOnChange = mock(() => {})
 
-  const mockCategories = ['INCOME', 'TRANSFER_IN', 'LOAN_PAYMENTS']
+  const mockCategories: Primary[] = [
+    { enum: 'INCOME', display: 'Income' },
+    { enum: 'TRANSFER_IN', display: 'Transfer In' },
+    { enum: 'LOAN_PAYMENTS', display: 'Loan Payments' },
+  ]
   const mockTags: UserTag[] = [
     { id: '1', user_id: 'user-1', name: 'Salary', color: '#22c55e', usage_count: 5, created_at: '', updated_at: '' },
     { id: '2', user_id: 'user-1', name: 'Freelance', color: '#3b82f6', usage_count: 3, created_at: '', updated_at: '' },
   ]
 
   const mockSources: IncomeSource[] = [
-    { type: 'plaid_category', value: 'INCOME' },
+    { type: 'pfc_primary', value: 'INCOME' },
     { type: 'tag', value: 'Freelance' },
     { type: 'manual', value: '500', description: 'Side gig' },
   ]
@@ -94,7 +99,7 @@ describe('IncomeSourceConfig', () => {
 
       // Should call onChange with the new source
       expect(mockOnChange).toHaveBeenCalledWith([
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
       ]);
     });
 
@@ -123,7 +128,7 @@ describe('IncomeSourceConfig', () => {
       // Should append to existing sources
       expect(mockOnChange).toHaveBeenCalledWith([
         { type: 'tag', value: 'Salary' },
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
       ]);
     });
   });
@@ -136,7 +141,7 @@ describe('IncomeSourceConfig', () => {
     it('removes source from list when item remove clicked', async () => {
       const user = userEvent.setup({ delay: null });
       const sources: IncomeSource[] = [
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
         { type: 'tag', value: 'Freelance' },
       ];
 
@@ -159,12 +164,12 @@ describe('IncomeSourceConfig', () => {
       ]);
     });
 
-    it('calls onChange with filtered sources array', async () => {
+    it('calls onChange with filtered sources array when non-manual sources are removed', async () => {
       const user = userEvent.setup({ delay: null });
       const sources: IncomeSource[] = [
-        { type: 'manual', value: '1000', description: 'First' },
-        { type: 'manual', value: '2000', description: 'Second' },
-        { type: 'manual', value: '3000', description: 'Third' },
+        { type: 'pfc_primary', value: 'INCOME' },
+        { type: 'tag', value: 'Salary' },
+        { type: 'tag', value: 'Freelance' },
       ];
 
       render(
@@ -176,15 +181,34 @@ describe('IncomeSourceConfig', () => {
         />
       );
 
-      // Remove the middle one (Second)
+      // Remove the middle one (Salary)
       const removeButtons = screen.getAllByRole('button', { name: /remove/i });
       await user.click(removeButtons[1]);
 
       // Should have first and third
       expect(mockOnChange).toHaveBeenCalledWith([
-        { type: 'manual', value: '1000', description: 'First' },
-        { type: 'manual', value: '3000', description: 'Third' },
+        { type: 'pfc_primary', value: 'INCOME' },
+        { type: 'tag', value: 'Freelance' },
       ]);
+    });
+
+    it('manual sources show legacy pill instead of remove button', () => {
+      const sources: IncomeSource[] = [
+        { type: 'manual', value: '1000', description: 'Legacy entry' },
+      ];
+
+      render(
+        <IncomeSourceConfig
+          sources={sources}
+          onChange={mockOnChange}
+          availableCategories={mockCategories}
+          availableTags={mockTags}
+        />
+      );
+
+      // No remove button for manual (legacy) sources
+      expect(screen.queryByRole('button', { name: /remove/i })).not.toBeInTheDocument();
+      expect(screen.getByText('legacy')).toBeInTheDocument();
     });
   });
 
@@ -214,7 +238,7 @@ describe('IncomeSourceConfig', () => {
 
     it('calculates total from manual sources only', () => {
       const sources: IncomeSource[] = [
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
         { type: 'tag', value: 'Freelance' },
         { type: 'manual', value: '1000' },
         { type: 'manual', value: '500.50' },
@@ -256,7 +280,7 @@ describe('IncomeSourceConfig', () => {
 
     it('shows $0.00 when no manual sources', () => {
       const sources: IncomeSource[] = [
-        { type: 'plaid_category', value: 'INCOME' },
+        { type: 'pfc_primary', value: 'INCOME' },
         { type: 'tag', value: 'Freelance' },
       ];
 

@@ -16,7 +16,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { GridStack } from 'gridstack';
 import 'gridstack/dist/gridstack.min.css';
-import './DashboardGrid.css';
 
 import { WidgetWrapper } from './WidgetWrapper';
 import { getWidget } from './registry';
@@ -55,9 +54,12 @@ export function DashboardGrid({
   const onLayoutChangeRef = useRef(onLayoutChange);
   const onDropWidgetRef = useRef(onDropWidget);
 
-  // Keep refs updated
+  // Keep refs updated — intentional mutable ref writes during render (React escape hatch pattern)
+   
   layoutRef.current = layout;
+   
   onLayoutChangeRef.current = onLayoutChange;
+   
   onDropWidgetRef.current = onDropWidget;
 
   // Callback ref for widget elements - called by React when elements mount/unmount

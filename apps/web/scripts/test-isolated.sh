@@ -36,6 +36,28 @@ TEST_FILES=(
     "src/features/rules/components/RulesPage.test.tsx"
     # AccountsPage uses local component mocks that can pollute AccountTable etc. (#839)
     "src/features/accounts/AccountsPage.test.tsx"
+    # useGettingStarted needs centralized mocks (dashboard-context, budgets-api, etc.)
+    # but can't run in regular suite: DashboardPage.test.tsx mocks useGettingStarted globally (#848)
+    "src/features/dashboard/hooks/useGettingStarted.test.ts"
+    # ToggleGroup component test needs real module, but TimeframeSelector/DateRangePicker
+    # tests mock @/components/ui/toggle-group globally in the regular suite (#953)
+    "src/components/ui/toggle-group.test.tsx"
+    # setSystemTime pollution: Bun's setSystemTime leaks across test files in the full suite.
+    # These tests pass individually but fail when other date-mocking tests run first (#952)
+    "src/features/dashboard/components/TimeframeSelector.test.tsx"
+    "src/features/transactions/components/TransactionCard.test.tsx"
+    # usePricingContext: mock state pollution from full suite causes tiers to appear loading (#1038)
+    "src/features/pricing/hooks/usePricingContext.test.tsx"
+    # usePostSignInCheckoutIntent: mockUseCreatePaddleCheckout state leaks from prior tests (#1038)
+    "src/features/pricing/hooks/usePostSignInCheckoutIntent.test.tsx"
+    # CustomCategoryManager: shared useGetUserCategories mock clobbered in full suite (#1203)
+    "src/features/categories/components/CustomCategoryManager.test.tsx"
+    # These need the centralized categories/transactions API mocks but the budgets tests
+    # clobber them via inline global mock.module() in the full suite (#1203)
+    "src/features/categories/hooks/useCustomCategories.test.tsx"
+    "src/features/categories/hooks/useCategoryMutations.test.tsx"
+    "src/features/transactions/hooks/useReviewMutations.test.tsx"
+    "src/features/reports/components/CustomCategoryFilter.test.tsx"
 )
 
 # Build test command

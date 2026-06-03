@@ -263,8 +263,6 @@ func (h *AutomationRuleHandler) TriggerAutomationRule(ctx context.Context, input
 			return nil, huma.Error503ServiceUnavailable("Rule scheduler is not running")
 		case workers.ErrRuleDisabled:
 			return nil, huma.Error400BadRequest("Rule is disabled")
-		case workers.ErrExecutionLimitExceeded:
-			return nil, huma.Error429TooManyRequests("Daily execution limit exceeded")
 		default:
 			return nil, humaerrors.LoggingMapError(ctx, err)
 		}

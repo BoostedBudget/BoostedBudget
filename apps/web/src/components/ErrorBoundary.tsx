@@ -68,12 +68,12 @@ export class ErrorBoundary extends Component<Props, State> {
           <h1 className="text-red-600 mb-4 text-2xl font-semibold">
             Something went wrong
           </h1>
-          <p className="text-lg text-gray-500 dark:text-gray-400 mb-6">
+          <p className="text-lg text-muted-foreground mb-6">
             We encountered an unexpected error. Please try refreshing the page.
           </p>
 
           {this.state.errorId && (
-            <p className="text-sm text-gray-500 mb-6">Error ID: {this.state.errorId}</p>
+            <p className="text-sm text-muted-foreground mb-6">Error ID: {this.state.errorId}</p>
           )}
 
           <div className="flex gap-3 mb-8">
@@ -85,7 +85,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </button>
             <button
               onClick={this.handleReset}
-              className="px-6 py-3 bg-gray-500 text-white border-none rounded-lg text-base cursor-pointer font-medium hover:bg-gray-600 transition-colors"
+              className="px-6 py-3 bg-secondary text-secondary-foreground border-none rounded-lg text-base cursor-pointer font-medium hover:bg-secondary/80 transition-colors"
             >
               Try Again
             </button>
@@ -96,7 +96,7 @@ export class ErrorBoundary extends Component<Props, State> {
               <summary className="cursor-pointer font-bold text-red-600 dark:text-red-400 mb-3">
                 Error Details (Development/QA Only)
               </summary>
-              <pre className="p-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded overflow-auto text-xs leading-relaxed">
+              <pre className="p-3 bg-background border border-border rounded overflow-auto text-xs leading-relaxed">
                 <code>
                   {this.state.error.toString()}
                   {'\n\n'}

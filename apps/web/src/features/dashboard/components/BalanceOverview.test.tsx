@@ -415,26 +415,26 @@ describe('BalanceOverview', () => {
    * Component must support dark mode since it's used in dashboard widgets.
    */
   describe('Dark Mode Support - Issue #422', () => {
-    it('should have dark mode class on Total Balance heading', () => {
+    it('should use semantic muted token on Total Balance heading', () => {
       render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
 
       const heading = screen.getByText('Total Balance')
-      expect(heading).toHaveClass('dark:text-gray-400')
+      expect(heading).toHaveClass('text-muted-foreground')
     })
 
-    it('should have dark mode class on balance amount', () => {
+    it('should use semantic foreground token on balance amount', () => {
       render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
 
       // Balance is the large text element
       const balanceElement = screen.getByText('$15,000.50')
-      expect(balanceElement).toHaveClass('dark:text-white')
+      expect(balanceElement).toHaveClass('text-foreground')
     })
 
-    it('should have dark mode class on date text', () => {
+    it('should use semantic muted token on date text', () => {
       render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
 
       const dateText = screen.getByText(/as of Nov 15, 2025/)
-      expect(dateText).toHaveClass('dark:text-gray-500')
+      expect(dateText).toHaveClass('text-muted-foreground')
     })
   })
 })

@@ -12,6 +12,7 @@ import type {
 interface UpdateOptions {
   newTier: string
   billingInterval: 'month' | 'year'
+  currentBillingInterval?: 'month' | 'year'
   prorationBillingMode?: 'prorated_immediately' | 'full_immediately' | 'full_next_billing_period'
 }
 
@@ -27,25 +28,21 @@ function getErrorStatus(error: unknown): number | undefined {
   return err.status ?? err.response?.status
 }
 
-function is404Error(error: unknown): boolean {
-  return getErrorStatus(error) === 404
-}
-
 export function useSubscriptionManagement() {
   // Query hooks
   const subscriptionQuery = useGetCurrentSubscription({
     query: {
       retry: (failureCount: number, error: unknown) => {
-        if (is404Error(error)) return false
+        if (getErrorStatus(error) === 404) return false
         return failureCount < 1
       },
     },
   })
   const billingPortalQuery = useGetBillingPortalUrl({
     query: {
-      enabled:
-        subscriptionQuery.data?.status === 'active' ||
-        subscriptionQuery.data?.status === 'trialing',
+      enabled: ['active', 'trialing', 'cancelled', 'past_due'].includes(
+        subscriptionQuery.data?.status ?? '',
+      ),
     },
   })
 
@@ -59,6 +56,7 @@ export function useSubscriptionManagement() {
       data: {
         new_tier: options.newTier,
         billing_interval: options.billingInterval,
+        current_billing_interval: options.currentBillingInterval,
         proration_billing_mode: options.prorationBillingMode,
       } as UpdateSubscriptionInputBody,
     })
@@ -93,7 +91,7 @@ export function useSubscriptionManagement() {
     return { status, message: err.message || 'Failed to update subscription. Please try again.' }
   }
 
-  const noSubscription = is404Error(subscriptionQuery.error)
+  const noSubscription = getErrorStatus(subscriptionQuery.error) === 404
 
   return {
     // Current subscription data

@@ -1,8 +1,10 @@
 /**
  * LandingPage Styles
  *
- * Styles for the marketing landing page.
+ * Minimal styles for the marketing landing page.
+ * Most styles have been migrated to Tailwind utility classes.
  * Issue #699: Create Marketing Landing Page for First-Time Visitors
+ * Issue #835: Dark mode / Tailwind v4 migration
  */
 
 /* Smooth scrolling for anchor links */
@@ -14,11 +16,6 @@
 .landing-page .mx-auto {
   margin-left: auto;
   margin-right: auto;
-}
-
-/* Account for fixed header */
-.landing-page main {
-  padding-top: 0; /* Hero handles its own padding */
 }
 
 /* Reduce motion for accessibility */
@@ -47,11 +44,6 @@
 
 .wave-divider svg {
   display: block;
-}
-
-/* Ensure FAQ answers have smooth height transitions */
-.faq-section [id^="faq-answer-"] {
-  transition: max-height 0.3s ease-out;
 }
 
 /* Hero section gradient animation (subtle) */
@@ -95,48 +87,4 @@
   .hero-blob-2 {
     animation: float 10s ease-in-out infinite reverse;
   }
-}
-
-/* Trust bar tooltip styles */
-.trust-tooltip {
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%) translateY(-8px);
-  padding: 0.75rem 1rem;
-  background: white;
-  border-radius: 0.75rem;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.2s ease, visibility 0.2s ease, transform 0.2s ease;
-  pointer-events: none;
-  white-space: nowrap;
-  z-index: 50;
-}
-
-.trust-tooltip::after {
-  content: '';
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  border: 8px solid transparent;
-  border-top-color: white;
-}
-
-.trust-item:hover .trust-tooltip {
-  opacity: 1;
-  visibility: visible;
-  transform: translateX(-50%) translateY(-12px);
-}
-
-/* Dark mode tooltip */
-.dark .trust-tooltip {
-  background: #1e293b;
-  color: white;
-}
-
-.dark .trust-tooltip::after {
-  border-top-color: #1e293b;
 }

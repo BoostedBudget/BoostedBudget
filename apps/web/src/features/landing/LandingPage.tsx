@@ -18,7 +18,6 @@
 
 import { useRef, useCallback } from 'react'
 import { LandingHeader } from './components/LandingHeader'
-import { LandingFooter } from './components/LandingFooter'
 import { HeroSection } from './components/HeroSection'
 import { FeaturesSection } from './components/FeaturesSection'
 import { SocialProof } from './components/SocialProof'
@@ -99,8 +98,6 @@ export function LandingPage() {
         <FinalCTA />
       </main>
 
-      {/* Footer */}
-      <LandingFooter />
     </div>
   )
 }

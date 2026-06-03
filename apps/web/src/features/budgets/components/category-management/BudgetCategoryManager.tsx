@@ -1,31 +1,38 @@
 /**
  * BudgetCategoryManager
  * Issue #497: Budget Category Manager + Match Config UI
+ * Issue #1200: Multi-level category hierarchy — grouped visual layout
  *
  * Container component for managing budget categories with CRUD operations.
  * Includes add/edit form dialog, delete confirmation, and allocation breakdown.
+ * Categories are rendered in a primary→children hierarchy using groupBudgetCategoriesByPrimary.
  */
 
-import { useState, useCallback, useMemo, useRef } from 'react';
-import { PlusIcon } from 'lucide-react';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
+import { useState, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
+import { PlusIcon, SettingsIcon } from 'lucide-react';
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+
+// Lazy-loaded so the manager (and its form/icon-picker deps) stays in its own chunk and
+// doesn't bloat the budgets route bundle — it only loads when the dialog opens (#1203).
+const CustomCategoryManager = lazy(() =>
+  import('@/features/categories/components/CustomCategoryManager').then((m) => ({
+    default: m.CustomCategoryManager,
+  }))
+);
 import type {
   BudgetCategory,
   CreateBudgetCategoryRequest,
   UpdateBudgetCategoryRequest,
 } from '../../types';
-import { formatCategoryPath } from '../../types';
+import { formatBudgetCategoryLabel } from '../../types';
 import type { UserTag } from '@/features/tags/types';
 import { BudgetCategoryCard } from './BudgetCategoryCard';
 import { BudgetCategoryForm } from './BudgetCategoryForm';
 import { AllocationBreakdown } from './AllocationBreakdown';
-import './BudgetCategoryManager.css';
+import { groupBudgetCategoriesByPrimary } from '../../utils/groupBudgetCategoriesByPrimary';
+import type { CustomCategoryMap } from '../../utils/groupBudgetCategoriesByPrimary';
+import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 
 export interface BudgetCategoryManagerProps {
   /** Budget ID for API calls */
@@ -40,8 +47,11 @@ export interface BudgetCategoryManagerProps {
   onUpdateCategory: (id: string, req: UpdateBudgetCategoryRequest) => Promise<BudgetCategory>;
   /** Callback when a category is deleted */
   onDeleteCategory: (id: string) => Promise<void>;
-  /** Available Plaid categories for selection */
-  availableCategories: string[][];
+  /**
+   * @deprecated No longer used — BudgetCategoryForm fetches custom categories internally
+   * via useGetUserCategories. Kept for backward compatibility; will be removed in a future cleanup.
+   */
+  availableCategories?: string[][];
   /** Available user tags for selection */
   availableTags: UserTag[];
   /** Whether all interactions are disabled */
@@ -65,7 +75,6 @@ export function BudgetCategoryManager({
   onAddCategory,
   onUpdateCategory,
   onDeleteCategory,
-  availableCategories,
   availableTags,
   disabled = false,
 }: BudgetCategoryManagerProps) {
@@ -82,8 +91,25 @@ export function BudgetCategoryManager({
 
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Refs for keyboard navigation (Phase 4 Accessibility)
+  // "Manage categories" launcher → opens the full custom category manager (#1203)
+  const [manageOpen, setManageOpen] = useState(false);
+
+  // Refs for keyboard navigation — indexed by flat order position
   const categoryRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  // Fetch user custom categories for display name resolution and parent nesting
+  const { data: userCategories } = useGetUserCategories();
+
+  const customCategoryMap = useMemo<CustomCategoryMap>(
+    () => new Map(
+      // Guard against a non-array query value (e.g. under a mocked/errored query).
+      (Array.isArray(userCategories) ? userCategories : []).map(cat => [
+        cat.id,
+        { name: cat.name, parent_pfc_primary: cat.parent_pfc_primary ?? null },
+      ])
+    ),
+    [userCategories]
+  );
 
   // Calculate unallocated funds
   const unallocatedFunds = useMemo(() => {
@@ -91,15 +117,17 @@ export function BudgetCategoryManager({
     return totalIncome - totalAllocated;
   }, [categories, totalIncome]);
 
-  // Filter out already-used categories for the form dropdown
-  const filteredAvailableCategories = useMemo(() => {
-    const usedCategoryPaths = new Set(
-      categories.map((cat) => formatCategoryPath(cat.category))
-    );
-    return availableCategories.filter(
-      (cat) => !usedCategoryPaths.has(formatCategoryPath(cat))
-    );
-  }, [availableCategories, categories]);
+  // Grouped hierarchy for visual layout (custom categories nest under PFC parents when possible)
+  const groups = useMemo(
+    () => groupBudgetCategoriesByPrimary(categories, customCategoryMap),
+    [categories, customCategoryMap]
+  );
+
+  // Flat order of all categories in render order — for keyboard navigation
+  const flatOrder = useMemo(
+    () => groups.flatMap(({ group, children }) => (group ? [group, ...children] : children)),
+    [groups]
+  );
 
   // Handlers for form dialog
   const handleOpenAddForm = useCallback(() => {
@@ -119,11 +147,7 @@ export function BudgetCategoryManager({
   }, []);
 
   const handleCloseForm = useCallback(() => {
-    setFormDialog({
-      isOpen: false,
-      mode: 'create',
-      category: null,
-    });
+    setFormDialog({ isOpen: false, mode: 'create', category: null });
   }, []);
 
   const handleFormSubmit = useCallback(
@@ -147,10 +171,7 @@ export function BudgetCategoryManager({
   }, []);
 
   const handleCloseDeleteDialog = useCallback(() => {
-    setDeleteDialog({
-      isOpen: false,
-      category: null,
-    });
+    setDeleteDialog({ isOpen: false, category: null });
   }, []);
 
   const handleConfirmDelete = useCallback(async () => {
@@ -165,13 +186,15 @@ export function BudgetCategoryManager({
     }
   }, [deleteDialog.category, onDeleteCategory, handleCloseDeleteDialog]);
 
-  // Keyboard navigation handler (Phase 4 Accessibility)
+  // Keyboard navigation handler — uses flat index into flatOrder
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent, index: number, category: BudgetCategory) => {
+    (e: React.KeyboardEvent, category: BudgetCategory) => {
+      const index = flatOrder.findIndex(c => c.id === category.id);
+      if (index === -1) return;
       switch (e.key) {
         case 'ArrowDown':
           e.preventDefault();
-          if (index < categories.length - 1) {
+          if (index < flatOrder.length - 1) {
             categoryRefs.current[index + 1]?.focus();
           }
           break;
@@ -192,26 +215,113 @@ export function BudgetCategoryManager({
           break;
       }
     },
-    [categories.length, handleOpenEditForm, handleOpenDeleteDialog]
+    [flatOrder, handleOpenEditForm, handleOpenDeleteDialog]
   );
 
   const hasCategories = categories.length > 0;
 
-  return (
-    <div className="budget-category-manager">
-      {/* Header with add button */}
-      <div className="budget-category-manager__header">
-        <h2 className="budget-category-manager__title">Budget Categories</h2>
-        <button
-          type="button"
-          onClick={handleOpenAddForm}
-          disabled={disabled}
-          className="budget-category-manager__add-btn"
+  const totalAllocatedExcludingCurrent = useMemo(() => {
+    if (formDialog.mode === 'create' || !formDialog.category) {
+      return categories.reduce((sum, c) => sum + c.allocated_amount, 0);
+    }
+    return categories
+      .filter((c) => c.id !== formDialog.category!.id)
+      .reduce((sum, c) => sum + c.allocated_amount, 0);
+  }, [formDialog.mode, formDialog.category, categories])
+
+  // Resolve a custom category's display name, with a placeholder during loading/error
+  // so a raw UUID is never shown (#1203).
+  const getCustomCategoryName = useCallback(
+    (customId: string | undefined) =>
+      customId ? (customCategoryMap.get(customId)?.name ?? 'Custom category') : undefined,
+    [customCategoryMap]
+  );
+
+  // Display label for a budget category (custom name or PFC label), used as the parent
+  // label on earmarked sub-allocation children (#1203).
+  const categoryDisplayLabel = useCallback(
+    (category: BudgetCategory): string =>
+      category.category_kind === 'custom' && category.custom_category_id
+        ? (getCustomCategoryName(category.custom_category_id) ?? formatBudgetCategoryLabel(category))
+        : formatBudgetCategoryLabel(category),
+    [getCustomCategoryName]
+  );
+
+  const renderCategoryItem = useCallback(
+    (
+      category: BudgetCategory,
+      variant: 'standalone' | 'parent' | 'child',
+      flatIndex: number,
+      parentLabel?: string
+    ) => {
+      const customCategoryName = getCustomCategoryName(category.custom_category_id);
+      return (
+        <div
+          key={category.id}
+          role="listitem"
+          tabIndex={0}
+          onKeyDown={(e) => handleKeyDown(e, category)}
+          ref={(el) => {
+            categoryRefs.current[flatIndex] = el;
+          }}
         >
-          <PlusIcon className="budget-category-manager__add-icon" />
-          Add Category
-        </button>
+          <BudgetCategoryCard
+            category={category}
+            variant={variant}
+            customCategoryName={customCategoryName}
+            parentLabel={variant === 'child' ? parentLabel : undefined}
+            onEdit={() => handleOpenEditForm(category)}
+            onDelete={() => handleOpenDeleteDialog(category)}
+            disabled={disabled}
+          />
+        </div>
+      );
+    },
+    [handleKeyDown, handleOpenEditForm, handleOpenDeleteDialog, disabled, getCustomCategoryName]
+  );
+
+  return (
+    <div className="flex flex-col gap-6">
+      {/* Header with add button */}
+      <div className="flex justify-between items-center gap-4">
+        <h2 className="text-lg font-semibold text-foreground m-0">Budget Categories</h2>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setManageOpen(true)}
+            disabled={disabled}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-foreground bg-transparent border border-border rounded-lg cursor-pointer transition-colors duration-150 hover:enabled:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <SettingsIcon className="w-4 h-4" />
+            Manage categories
+          </button>
+          <button
+            type="button"
+            onClick={handleOpenAddForm}
+            disabled={disabled}
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-primary border-none rounded-lg cursor-pointer transition-colors duration-150 hover:enabled:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <PlusIcon className="w-4 h-4" />
+            Add Category
+          </button>
+        </div>
       </div>
+
+      {/* Custom category manager launcher dialog (#1203) */}
+      <Dialog open={manageOpen} onOpenChange={setManageOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Manage custom categories</DialogTitle>
+            <DialogDescription>
+              Create, rename, recolor, nest, and delete your custom categories. Changes apply
+              everywhere they&apos;re used.
+            </DialogDescription>
+          </DialogHeader>
+          <Suspense fallback={<p className="text-sm text-muted-foreground">Loading categories…</p>}>
+            <CustomCategoryManager />
+          </Suspense>
+        </DialogContent>
+      </Dialog>
 
       {/* Allocation breakdown */}
       {hasCategories && (
@@ -219,35 +329,39 @@ export function BudgetCategoryManager({
           categories={categories}
           totalIncome={totalIncome}
           unallocated={unallocatedFunds}
+          customCategoryMap={customCategoryMap}
         />
       )}
 
       {/* Categories list or empty state */}
       {hasCategories ? (
-        <div className="budget-category-manager__list" role="list">
-          {categories.map((category, index) => (
-            <div
-              key={category.id}
-              role="listitem"
-              tabIndex={0}
-              onKeyDown={(e) => handleKeyDown(e, index, category)}
-              ref={(el) => {
-                categoryRefs.current[index] = el;
-              }}
-              className="budget-category-manager__list-item"
-            >
-              <BudgetCategoryCard
-                category={category}
-                onEdit={() => handleOpenEditForm(category)}
-                onDelete={() => handleOpenDeleteDialog(category)}
-                disabled={disabled}
-              />
-            </div>
-          ))}
+        <div className="flex flex-col gap-4" role="list">
+          {groups.map(({ group, children }) => {
+            const hasChildren = children.length > 0;
+            const groupKey = group?.id ?? `orphan-${children[0]?.id}`;
+
+            if (!group) {
+              return children.map((child) =>
+                renderCategoryItem(child, 'standalone', flatOrder.findIndex(c => c.id === child.id))
+              );
+            }
+
+            const parentVariant = hasChildren ? 'parent' : 'standalone';
+            const parentIdx = flatOrder.findIndex(c => c.id === group.id);
+            return (
+              <div key={groupKey}>
+                {renderCategoryItem(group, parentVariant, parentIdx)}
+                {children.map((child) => {
+                  const childIdx = flatOrder.findIndex(c => c.id === child.id);
+                  return renderCategoryItem(child, 'child', childIdx, categoryDisplayLabel(group));
+                })}
+              </div>
+            );
+          })}
         </div>
       ) : (
-        <div className="budget-category-manager__empty">
-          <p className="budget-category-manager__empty-text">
+        <div className="p-8 text-center bg-muted border border-dashed border-border rounded-lg">
+          <p className="text-sm text-muted-foreground m-0">
             No categories yet. Add a category to start tracking your budget allocations.
           </p>
         </div>
@@ -260,43 +374,21 @@ export function BudgetCategoryManager({
         onSubmit={handleFormSubmit}
         mode={formDialog.mode}
         initialData={formDialog.category || undefined}
-        availableCategories={
-          formDialog.mode === 'edit' ? availableCategories : filteredAvailableCategories
-        }
         availableTags={availableTags}
+        expectedIncome={totalIncome}
+        totalAllocatedExcludingCurrent={totalAllocatedExcludingCurrent}
       />
 
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialog.isOpen} onOpenChange={(open) => !open && handleCloseDeleteDialog()}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Confirm Delete</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to delete the category "
-              {deleteDialog.category ? formatCategoryPath(deleteDialog.category.category) : ''}"?
-              This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-3 mt-4">
-            <button
-              type="button"
-              onClick={handleCloseDeleteDialog}
-              disabled={isDeleting}
-              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleConfirmDelete}
-              disabled={isDeleting}
-              className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {isDeleting ? 'Deleting...' : 'Delete'}
-            </button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Delete Confirmation Dialog — Issue #960 */}
+      <ConfirmationDialog
+        open={deleteDialog.isOpen}
+        onOpenChange={(open) => !open && handleCloseDeleteDialog()}
+        onConfirm={handleConfirmDelete}
+        title="Delete Category"
+        description={deleteDialog.category ? `Are you sure you want to delete the category "${categoryDisplayLabel(deleteDialog.category)}"? This action cannot be undone.` : ''}
+        variant="destructive"
+        loading={isDeleting}
+      />
     </div>
   );
 }

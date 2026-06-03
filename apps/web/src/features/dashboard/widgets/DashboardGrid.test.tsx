@@ -61,7 +61,7 @@ mock.module('gridstack', () => ({
 // Issue #575: Using real WidgetWrapper to avoid mock.module() pollution
 // WidgetWrapper uses centralized registry mock which provides widget titles
 
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 import { DashboardGrid } from './DashboardGrid'
 
 describe('DashboardGrid', () => {
@@ -267,7 +267,7 @@ describe('DashboardGrid', () => {
   })
 
   describe('Widget Removal', () => {
-    it('should call onRemoveWidget when remove button clicked and confirmed', () => {
+    it('should call onRemoveWidget when remove button clicked and confirmed', async () => {
       const { container } = render(
         <DashboardGrid
           layout={mockLayout}
@@ -277,18 +277,19 @@ describe('DashboardGrid', () => {
         />
       )
 
-      // Find widget-1 container and its remove button
       const widget1Container = container.querySelector('[gs-id="widget-1"]')!
       const removeButton = within(widget1Container as HTMLElement).getByLabelText('Remove widget')
       fireEvent.click(removeButton)
 
-      // Confirm in the dialog
-      fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+      const confirm = await screen.findByRole('button', { name: 'Remove' })
+      fireEvent.click(confirm)
 
-      expect(mockOnRemoveWidget).toHaveBeenCalledWith('widget-1')
+      await waitFor(() => {
+        expect(mockOnRemoveWidget).toHaveBeenCalledWith('widget-1')
+      })
     })
 
-    it('should call onRemoveWidget with correct widget id for each widget', () => {
+    it('should call onRemoveWidget with correct widget id for each widget', async () => {
       const { container } = render(
         <DashboardGrid
           layout={mockLayout}
@@ -298,15 +299,16 @@ describe('DashboardGrid', () => {
         />
       )
 
-      // Find widget-2 container and its remove button
       const widget2Container = container.querySelector('[gs-id="widget-2"]')!
       const removeButton = within(widget2Container as HTMLElement).getByLabelText('Remove widget')
       fireEvent.click(removeButton)
 
-      // Confirm in the dialog
-      fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+      const confirm = await screen.findByRole('button', { name: 'Remove' })
+      fireEvent.click(confirm)
 
-      expect(mockOnRemoveWidget).toHaveBeenCalledWith('widget-2')
+      await waitFor(() => {
+        expect(mockOnRemoveWidget).toHaveBeenCalledWith('widget-2')
+      })
     })
   })
 

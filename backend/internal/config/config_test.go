@@ -67,9 +67,27 @@ func TestLoad_ProductionValidation_PassesWithAllRequiredFields(t *testing.T) {
 	t.Setenv("PLAID_SECRET", "test-secret")
 	t.Setenv("PADDLE_API_KEY", "test-api-key")
 	t.Setenv("PADDLE_WEBHOOK_SECRET", "test-webhook-secret")
+	t.Setenv("CF_ORIGIN_SECRET", "a3f9e2c1b0d84726f5e3a1c0b9d87264a3f9e2c1b0d84726f5e3a1c0b9d87264")
 
 	_, err := Load()
 	assert.NoError(t, err)
+}
+
+func TestLoad_ProductionValidation_RequiresCFOriginSecret(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost/db")
+	t.Setenv("CLERK_SECRET_KEY", "sk_live_test")
+	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://boostedbudget.com")
+	t.Setenv("PLAID_CLIENT_ID", "test-client-id")
+	t.Setenv("PLAID_SECRET", "test-secret")
+	t.Setenv("PADDLE_API_KEY", "test-api-key")
+	t.Setenv("PADDLE_WEBHOOK_SECRET", "test-webhook-secret")
+	// Intentionally NOT setting CF_ORIGIN_SECRET
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CF_ORIGIN_SECRET")
 }
 
 func TestLoad_DevelopmentPassesWithMinimalConfig(t *testing.T) {
@@ -175,6 +193,7 @@ func TestLoad_ProductionValidation_AggregatesErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "CORS_ALLOWED_ORIGINS")
 	assert.Contains(t, err.Error(), "PLAID")
 	assert.Contains(t, err.Error(), "PADDLE")
+	assert.Contains(t, err.Error(), "CF_ORIGIN_SECRET")
 }
 
 func TestLoad_DevelopmentSkipsValidation(t *testing.T) {
@@ -199,4 +218,20 @@ func TestLoad_DatabaseMaxConnsConfigurable(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, int32(50), cfg.DatabaseMaxConns)
+}
+
+func TestLoad_MCPWorkerSecretDefaultsEmpty(t *testing.T) {
+	cfg, err := Load()
+	require.NoError(t, err)
+	// Default is empty — IsMCPOrigin() returns false (fail-closed) in dev.
+	assert.Equal(t, "", cfg.MCPWorkerSecret)
+}
+
+func TestLoad_MCPWorkerSecretConfigurable(t *testing.T) {
+	t.Setenv("MCP_WORKER_SECRET", "test-mcp-worker-secret")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "test-mcp-worker-secret", cfg.MCPWorkerSecret)
 }

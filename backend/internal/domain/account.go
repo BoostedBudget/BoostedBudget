@@ -34,9 +34,14 @@ type Account struct {
 	UserAccountID *string `json:"user_account_id,omitempty" db:"user_account_id"` // FK to user_accounts
 
 	// Soft-delete fields for re-link handling (Issue #171)
-	Status       AccountStatus `json:"status" db:"status"`                       // 'active' or 'replaced'
+	Status       AccountStatus `json:"status" db:"status"`                       // 'active', 'replaced', or 'expired'
 	ReplacedAt   *time.Time    `json:"replaced_at,omitempty" db:"replaced_at"`   // When this account was replaced
 	ReplacedByID *string       `json:"replaced_by_id,omitempty" db:"replaced_by_id"` // UUID of replacement account
+
+	// Cross-user fingerprint fields (Issue #1010: enforce Plaid item uniqueness across users)
+	PersistentAccountID         *string `json:"-" db:"persistent_account_id"`          // Plaid's stable cross-session ID (encrypted)
+	PersistentAccountIDBlindIdx *string `json:"-" db:"persistent_account_id_blind_idx"` // Blind index for UNIQUE constraint
+	FallbackFingerprintBlindIdx *string `json:"-" db:"fallback_fingerprint_blind_idx"`  // Blind index: institution_id|mask|type|subtype
 
 	// Customization fields (Issue #307)
 	// Note: Customizations are moving to user_accounts table for stability across re-links
@@ -60,6 +65,9 @@ const (
 	AccountStatusActive AccountStatus = "active"
 	// AccountStatusReplaced indicates the account was replaced by a re-link
 	AccountStatusReplaced AccountStatus = "replaced"
+	// AccountStatusExpired indicates the fingerprint hold was released after the 90-day TTL
+	// (Issue #1010: applies when a disconnected item's grace period expires and another user links)
+	AccountStatusExpired AccountStatus = "expired"
 )
 
 // Validate checks that the Account has all required fields and valid types

@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
-	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
@@ -58,14 +57,6 @@ func (m *MockRuleExecutionService) TestRule(ctx context.Context, rule *domain.Au
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.RuleTestResult), args.Error(1)
-}
-
-func (m *MockRuleExecutionService) SetUserGetter(getter services.UserGetter) {
-	m.Called(getter)
-}
-
-func (m *MockRuleExecutionService) SetSubscriptionChecker(checker services.SubscriptionChecker) {
-	m.Called(checker)
 }
 
 func newTestRuleEvaluationJob(args RuleEvaluationArgs) *river.Job[RuleEvaluationArgs] {

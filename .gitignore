@@ -319,7 +319,8 @@ apps/web/dist/
 # Package manager lockfiles - Bun only
 package-lock.json
 # Bun workspace lockfiles (only root bun.lock should exist)
-apps/*/bun.lock
+# Binary lockfile variant bun may create locally (not the canonical text bun.lock)
+/bun.lockbapps/*/bun.lock
 packages/*/bun.lock
 
 # Turborepo
@@ -361,6 +362,9 @@ apps/web/test-results/
 apps/web/e2e/.env.test
 .playwright-mcp/
 
+# Wrangler
+.wrangler/
+
 # Fly.io
 .fly/
 fly.toml.bakmigration-performance.json
@@ -373,3 +377,12 @@ dogfood-output/
 # Git worktrees
 .worktrees/
 .worktrees/
+.worktrees
+
+# Plans/docs (local only)
+docs/plans/
+
+# Issue-prefixed screenshots (local debugging artifacts, not committed)
+[0-9][0-9][0-9][0-9]-*.png
+[0-9][0-9][0-9][0-9]-*.jpg
+bun.lockb

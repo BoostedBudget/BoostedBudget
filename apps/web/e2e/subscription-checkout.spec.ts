@@ -58,43 +58,6 @@ test.describe('Subscription Checkout - Paddle Integration', () => {
     expect(count).toBeGreaterThanOrEqual(5)
   })
 
-  test.skip('should open Paddle checkout overlay when clicking subscribe (requires auth)', async ({
-    page: _page,
-  }) => {
-    // This test would require authentication setup
-    // For now, documenting the expected flow:
-    // 1. User navigates to /pricing
-    // 2. User clicks subscribe button
-    // 3. API call creates checkout session
-    // 4. Paddle.Checkout.open is called with checkout URL
-    // 5. Paddle overlay appears with payment form
-  })
-
-  test.skip('should handle checkout for different tiers (requires auth)', async ({ page: _page }) => {
-    // Would test clicking subscribe on different tiers
-    // Verify correct tier and price_id sent to API
-  })
-
-  test.skip('should handle monthly vs yearly billing (requires auth)', async ({ page: _page }) => {
-    // Would test toggling between monthly/yearly
-    // Verify correct billing_interval sent to API
-  })
-
-  test.skip('should show error toast on checkout failure (requires auth)', async ({ page: _page }) => {
-    // Would test error handling:
-    // 1. Mock API to return error
-    // 2. Click subscribe
-    // 3. Verify error toast appears with user-friendly message
-  })
-
-  test.skip('should disable button while checkout is loading (requires auth)', async ({ page: _page }) => {
-    // Would test loading state:
-    // 1. Click subscribe
-    // 2. Verify button disabled
-    // 3. Verify "Loading..." text appears
-    // 4. Wait for API response
-    // 5. Verify button re-enabled
-  })
 })
 
 test.describe('Paddle.js Integration (Mocked)', () => {

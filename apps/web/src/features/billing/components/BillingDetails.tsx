@@ -45,8 +45,8 @@ export function BillingDetails({
 
           <div className="info-row">
             <dt className="info-label">Amount:</dt>
-            <dd className="info-value" aria-label={`Amount: ${formattedAmount}`}>
-              {formattedAmount}
+            <dd className="info-value">
+              <span data-ph-mask>{formattedAmount}</span>
             </dd>
           </div>
 
@@ -55,9 +55,7 @@ export function BillingDetails({
               <dt className="info-label">Payment Method:</dt>
               <dd className="info-value">
                 <CreditCard className="payment-icon" aria-hidden="true" size={16} />
-                <span aria-label={`Card ending in ${paymentMethod.replace(/•/g, '')}`}>
-                  {paymentMethod}
-                </span>
+                <span data-ph-mask>{paymentMethod}</span>
               </dd>
             </div>
           )}

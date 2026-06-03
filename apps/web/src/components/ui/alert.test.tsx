@@ -56,6 +56,12 @@ describe('Alert', () => {
       const alert = screen.getByTestId('alert')
       expect(alert.className).toContain('info')
     })
+
+    it('should render warning variant', () => {
+      render(<Alert variant="warning" data-testid="alert">Content</Alert>)
+      const alert = screen.getByTestId('alert')
+      expect(alert.className).toContain('warning')
+    })
   })
 
   describe('Dismissible', () => {

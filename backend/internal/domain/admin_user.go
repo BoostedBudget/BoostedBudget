@@ -31,10 +31,13 @@ type AdminUserDetail struct {
 
 // AdminUserFilters contains filter parameters for the admin user list.
 type AdminUserFilters struct {
-	// Search is a partial email match (ILIKE search)
-	Search string
+	Search string // Prefix email match (starts-with, min 3 chars, case-insensitive)
 	// Tier filters by subscription_tier
 	Tier string
+	// SortBy is the column to sort by; validated enum: created_at|last_login_at|subscription_tier|subscription_status
+	SortBy string
+	// SortDir is the sort direction; validated enum: asc|desc
+	SortDir string
 }
 
 // AdminUserListResponse contains paginated user list results for admin view.

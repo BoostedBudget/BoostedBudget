@@ -12,9 +12,9 @@ describe('IncomeSourceItem', () => {
   })
 
   describe('Rendering', () => {
-    it('renders plaid_category source with category icon and value', () => {
+    it('renders pfc_primary source with category icon and formatted value', () => {
       const source: IncomeSource = {
-        type: 'plaid_category',
+        type: 'pfc_primary',
         value: 'INCOME',
       };
 
@@ -23,6 +23,21 @@ describe('IncomeSourceItem', () => {
       expect(screen.getByText('Income')).toBeInTheDocument();
       expect(screen.getByTestId('income-source-icon')).toBeInTheDocument();
     });
+
+    it('prefers server-supplied value_display over local formatter for pfc_primary', () => {
+      const source: IncomeSource = {
+        type: 'pfc_primary',
+        value: 'INCOME_WAGES',
+        value_display: 'Wages',
+      };
+
+      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
+
+      expect(screen.getByText('Wages')).toBeInTheDocument();
+      expect(screen.queryByText('Income Wages')).not.toBeInTheDocument();
+    });
+
+
 
     it('renders tag source with tag icon and value', () => {
       const source: IncomeSource = {
@@ -62,7 +77,7 @@ describe('IncomeSourceItem', () => {
 
     it('does not render description when not provided', () => {
       const source: IncomeSource = {
-        type: 'plaid_category',
+        type: 'pfc_primary',
         value: 'INCOME',
       };
 
@@ -105,8 +120,8 @@ describe('IncomeSourceItem', () => {
 
     it('disables remove button when disabled prop is true', () => {
       const source: IncomeSource = {
-        type: 'manual',
-        value: '1000',
+        type: 'tag',
+        value: 'Salary',
       };
 
       render(<IncomeSourceItem source={source} onRemove={mockOnRemove} disabled />);
@@ -118,8 +133,8 @@ describe('IncomeSourceItem', () => {
     it('does not call onRemove when button is disabled and clicked', async () => {
       const user = userEvent.setup({ delay: null });
       const source: IncomeSource = {
-        type: 'manual',
-        value: '1000',
+        type: 'tag',
+        value: 'Salary',
       };
 
       render(<IncomeSourceItem source={source} onRemove={mockOnRemove} disabled />);
@@ -148,9 +163,9 @@ describe('IncomeSourceItem', () => {
       expect(removeButton).toBeInTheDocument();
     });
 
-    it('has accessible remove button for plaid_category with formatted name', () => {
+    it('has accessible remove button for pfc_primary with formatted name', () => {
       const source: IncomeSource = {
-        type: 'plaid_category',
+        type: 'pfc_primary',
         value: 'INCOME',
       };
 
@@ -160,7 +175,8 @@ describe('IncomeSourceItem', () => {
       expect(removeButton).toBeInTheDocument();
     });
 
-    it('has accessible remove button for manual amount', () => {
+
+    it('manual source has no remove button (legacy read-only, tested in Legacy manual read-only suite)', () => {
       const source: IncomeSource = {
         type: 'manual',
         value: '2500',
@@ -168,9 +184,51 @@ describe('IncomeSourceItem', () => {
 
       render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
 
-      // For manual, aria-label should include the formatted amount
-      const removeButton = screen.getByRole('button', { name: /remove.*2,500/i });
-      expect(removeButton).toBeInTheDocument();
+      // Manual sources are read-only — no remove button, only a "legacy" pill
+      expect(screen.queryByRole('button', { name: /remove/i })).not.toBeInTheDocument();
+      expect(screen.getByText('legacy')).toBeInTheDocument();
+    });
+  });
+
+  // ==========================================================================
+  // Issue #1048: Legacy manual entries are read-only (R8)
+  // ==========================================================================
+
+  describe('Legacy manual read-only', () => {
+    it('does not render remove button for manual source type', () => {
+      const source: IncomeSource = {
+        type: 'manual',
+        value: '500',
+        description: 'Side gig',
+      };
+
+      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
+
+      expect(screen.queryByRole('button', { name: /remove/i })).not.toBeInTheDocument();
+    });
+
+    it('still renders value and description for manual source', () => {
+      const source: IncomeSource = {
+        type: 'manual',
+        value: '500',
+        description: 'Side gig',
+      };
+
+      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
+
+      expect(screen.getByText('$500.00')).toBeInTheDocument();
+      expect(screen.getByText('Side gig')).toBeInTheDocument();
+    });
+
+    it('shows legacy pill for manual source', () => {
+      const source: IncomeSource = {
+        type: 'manual',
+        value: '1000',
+      };
+
+      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
+
+      expect(screen.getByText('legacy')).toBeInTheDocument();
     });
   });
 
@@ -215,3 +273,17 @@ describe('IncomeSourceItem', () => {
     });
   });
 });
+
+describe('Unknown type fallback', () => {
+  const mockOnRemove = mock(() => {})
+
+  it('renders "Unknown source type" label for unrecognized type', () => {
+    const source = {
+      type: 'stale_unknown_type' as never,
+      value: 'some_value',
+    } as IncomeSource
+
+    render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />)
+    expect(screen.getByText('Unknown source type')).toBeDefined()
+  })
+})

@@ -2,6 +2,7 @@ package operations
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -15,18 +16,38 @@ import (
 // BudgetHandler handles budget-related HTTP requests.
 // Issue #28: Budget management
 type BudgetHandler struct {
-	service         services.BudgetService
-	syncService     services.BudgetSyncService
-	transactionRepo repository.TransactionRepository
+	service            services.BudgetService
+	syncService        services.BudgetSyncService
+	transactionService services.TransactionService
+	idempotencyRepo    repository.IdempotencyRepository // optional; nil disables dedup
+	db                 repository.DB
+	mcpAuditRepo       repository.MCPAuditRepository
+	mcpWorkerSecret    string
+}
+
+type BudgetHandlerDeps struct {
+	IdempotencyRepo repository.IdempotencyRepository
+	DB              repository.DB
+	MCPAuditRepo    repository.MCPAuditRepository
+	MCPWorkerSecret string
 }
 
 // NewBudgetHandler creates a new BudgetHandler instance.
-func NewBudgetHandler(service services.BudgetService, syncService services.BudgetSyncService, transactionRepo repository.TransactionRepository) *BudgetHandler {
-	return &BudgetHandler{
-		service:         service,
-		syncService:     syncService,
-		transactionRepo: transactionRepo,
+// deps are optional (pass nil/omit for spec-gen nil-stubs); when non-nil,
+// createBudget requests with an Idempotency-Key header are deduplicated.
+func NewBudgetHandler(service services.BudgetService, syncService services.BudgetSyncService, transactionService services.TransactionService, deps ...BudgetHandlerDeps) *BudgetHandler {
+	h := &BudgetHandler{
+		service:            service,
+		syncService:        syncService,
+		transactionService: transactionService,
 	}
+	if len(deps) > 0 {
+		h.idempotencyRepo = deps[0].IdempotencyRepo
+		h.db = deps[0].DB
+		h.mcpAuditRepo = deps[0].MCPAuditRepo
+		h.mcpWorkerSecret = deps[0].MCPWorkerSecret
+	}
+	return h
 }
 
 // --- Input/Output Types ---
@@ -34,6 +55,8 @@ func NewBudgetHandler(service services.BudgetService, syncService services.Budge
 // CreateBudgetInput represents the input for creating a budget.
 type CreateBudgetInput struct {
 	inputs.AuthenticatedInput
+	inputs.IdempotencyInput // reads Idempotency-Key header; empty = no deduplication
+	inputs.MCPContextInput
 	Body domain.CreateBudgetRequest
 }
 
@@ -163,11 +186,75 @@ type GetCategoryTransactionsOutput struct {
 // CreateBudget handles POST /api/v1/budgets requests.
 // Creates a new budget for the authenticated user.
 func (h *BudgetHandler) CreateBudget(ctx context.Context, input *CreateBudgetInput) (*CreateBudgetOutput, error) {
+	// MCP origin: use transactional audit with atomic idempotency (R8-1 — mirrors tags/categories pattern).
+	// This ensures the advisory lock in GetOrCreateInTx is effective (inside an explicit tx) and the
+	// audit row is atomic with the budget write. The non-tx GetOrCreate path had a lock that was
+	// immediately released (ineffective for mutual exclusion).
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.db != nil && h.mcpAuditRepo != nil {
+		tx, err := h.db.Begin(ctx)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		defer rollbackMCPAuditTx(ctx, tx)
+
+		// CreateBudget only uses budgetRepo; other service deps (customCategoryRepo, plaidCategoryRepo)
+		// are not called during a create and can be left as-is from the outer service.
+		txBudgetRepo := repository.NewBudgetRepository(tx)
+		txBudgetService := services.NewBudgetService(txBudgetRepo, nil, nil, slog.Default())
+
+		if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+			var budget *domain.Budget
+			cacheHit, err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, input.IdempotencyKey, input.UserID, "createBudget",
+				func() (interface{}, error) {
+					return txBudgetService.CreateBudget(ctx, input.UserID, &input.Body)
+				}, &budget)
+			if err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if cacheHit {
+				return &CreateBudgetOutput{Body: budget}, nil // deferred rollback runs
+			}
+			if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createBudget", input.IdempotencyKey); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			return &CreateBudgetOutput{Body: budget}, nil
+		}
+
+		// No idempotency key: still use the tx for atomic audit
+		budget, err := txBudgetService.CreateBudget(ctx, input.UserID, &input.Body)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createBudget", input.IdempotencyKey); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		return &CreateBudgetOutput{Body: budget}, nil
+	}
+
+	// Non-MCP: idempotency dedup without audit
+	if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+		var budget *domain.Budget
+		_, err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createBudget",
+			func() (interface{}, error) {
+				return h.service.CreateBudget(ctx, input.UserID, &input.Body)
+			}, &budget)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		return &CreateBudgetOutput{Body: budget}, nil
+	}
+
+	// No dedup
 	budget, err := h.service.CreateBudget(ctx, input.UserID, &input.Body)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
-
 	return &CreateBudgetOutput{Body: budget}, nil
 }
 
@@ -331,22 +418,20 @@ func (h *BudgetHandler) GetCategoryTransactions(ctx context.Context, input *GetC
 	}
 
 	// Get transactions matching the category
-	transactions, totalCount, totalAmount, err := h.transactionRepo.GetTransactionsForBudgetCategory(
+	transactions, totalCount, totalAmount, err := h.transactionService.ListByBudgetCategory(
 		ctx,
 		input.UserID,
-		category.Category,
-		category.Tags,
-		category.MatchLogic,
+		category,
 		budget.StartDate,
 		endDate,
 		input.Limit,
 		input.Offset,
 	)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("Failed to get transactions")
+		return nil, huma.Error500InternalServerError("failed to get category transactions")
 	}
 
-	// Convert to pointer slice for response
+	// Convert to pointer slice (enrichment done by service)
 	transactionPtrs := make([]*domain.Transaction, len(transactions))
 	for i := range transactions {
 		transactionPtrs[i] = &transactions[i]

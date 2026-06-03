@@ -19,7 +19,3 @@ import type { TierName } from '../subscription/types'
 // For backwards compatibility, export as SubscriptionTier
 export type SubscriptionTier = TierName
 
-// Note: Region validation now uses Fly.io IATA codes (iad, lhr, syd)
-// See src/config/regions.ts for full region configuration
-export const VALID_REGIONS = ['iad', 'lhr', 'syd'] as const
-export type ValidRegion = typeof VALID_REGIONS[number]

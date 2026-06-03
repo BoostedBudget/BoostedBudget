@@ -35,7 +35,7 @@ test.describe('Privacy Settings - Public', () => {
   test('should show Privacy Policy page without authentication', async ({ page }) => {
     // No Clerk auth token - Privacy Policy is a public page
     await page.goto('/legal/privacy-policy')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Verify Privacy Policy page loads
     await expect(page.locator('h1:has-text("Privacy Policy")')).toBeVisible()

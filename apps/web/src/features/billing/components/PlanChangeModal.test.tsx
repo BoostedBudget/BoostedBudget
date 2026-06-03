@@ -518,4 +518,128 @@ describe('PlanChangeModal', () => {
 
     expect(mockOnClose).toHaveBeenCalled()
   })
+
+  describe('Pre-fill props (initialTier / initialInterval)', () => {
+    it('pre-selects initialTier when provided', async () => {
+      render(
+        <PlanChangeModal
+          open={true}
+          currentTier="premium"
+          currentBillingInterval="month"
+          tiers={mockTiers}
+          isUpdating={false}
+          onChangePlan={mockOnChangePlan}
+          onClose={mockOnClose}
+          initialTier="household_2"
+        />
+      )
+
+      await waitFor(() => {
+        expect(mockPreviewUpdateMutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ new_tier: 'household_2' }) })
+        )
+      })
+    })
+
+    it('pre-selects initialInterval when provided', async () => {
+      render(
+        <PlanChangeModal
+          open={true}
+          currentTier="premium"
+          currentBillingInterval="month"
+          tiers={mockTiers}
+          isUpdating={false}
+          onChangePlan={mockOnChangePlan}
+          onClose={mockOnClose}
+          initialTier="household_2"
+          initialInterval="year"
+        />
+      )
+
+      await waitFor(() => {
+        expect(mockPreviewUpdateMutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ billing_interval: 'year' }) })
+        )
+      })
+    })
+
+    it('applies initialTier when opened from a closed state (real PricingPage lifecycle)', async () => {
+      // PricingPage keeps modal mounted but closed; initialTier changes when a tier card is clicked
+      const { rerender } = render(
+        <PlanChangeModal
+          open={false}
+          currentTier="premium"
+          currentBillingInterval="month"
+          tiers={mockTiers}
+          isUpdating={false}
+          onChangePlan={mockOnChangePlan}
+          onClose={mockOnClose}
+        />
+      )
+
+      // Simulate clicking "Upgrade to household_2" which opens modal with initialTier
+      rerender(
+        <PlanChangeModal
+          open={true}
+          currentTier="premium"
+          currentBillingInterval="month"
+          tiers={mockTiers}
+          isUpdating={false}
+          onChangePlan={mockOnChangePlan}
+          onClose={mockOnClose}
+          initialTier="household_2"
+        />
+      )
+
+      await waitFor(() => {
+        expect(mockPreviewUpdateMutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ new_tier: 'household_2' }) })
+        )
+      })
+    })
+
+    it('clears pre-selection on close', () => {
+      const { rerender } = render(
+        <PlanChangeModal
+          open={true}
+          currentTier="premium"
+          currentBillingInterval="month"
+          tiers={mockTiers}
+          isUpdating={false}
+          onChangePlan={mockOnChangePlan}
+          onClose={mockOnClose}
+          initialTier="household_2"
+        />
+      )
+
+      rerender(
+        <PlanChangeModal
+          open={false}
+          currentTier="premium"
+          currentBillingInterval="month"
+          tiers={mockTiers}
+          isUpdating={false}
+          onChangePlan={mockOnChangePlan}
+          onClose={mockOnClose}
+          initialTier="household_2"
+        />
+      )
+
+      mockPreviewUpdateMutateAsync.mockClear()
+
+      rerender(
+        <PlanChangeModal
+          open={true}
+          currentTier="premium"
+          currentBillingInterval="month"
+          tiers={mockTiers}
+          isUpdating={false}
+          onChangePlan={mockOnChangePlan}
+          onClose={mockOnClose}
+        />
+      )
+
+      expect(mockPreviewUpdateMutateAsync).not.toHaveBeenCalled()
+    })
+  })
 })

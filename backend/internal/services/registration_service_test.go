@@ -52,6 +52,11 @@ func (m *MockUserIdentityRepository) UpdateLastUsed(ctx context.Context, clerkUs
 	return args.Error(0)
 }
 
+func (m *MockUserIdentityRepository) UpdatePrimaryIdentityEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
+	args := m.Called(ctx, tx, userID, plainEmail)
+	return args.Error(0)
+}
+
 func (m *MockUserIdentityRepository) SetPrimary(ctx context.Context, identityID string) error {
 	args := m.Called(ctx, identityID)
 	return args.Error(0)
@@ -91,6 +96,8 @@ func TestRegisterUser_Success(t *testing.T) {
 
 	// Identity doesn't exist (new user)
 	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
+	// Plaintext email fallback also finds nothing (#1001: no pre-encryption row exists)
+	mockProfileRepo.On("GetUserByEmail", ctx, email).Return(nil, repository.ErrUserNotFound)
 
 	// Expect user creation (new users get premium trial, not free tier)
 	mockProfileRepo.On("CreateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
@@ -850,4 +857,94 @@ type MockTrialGranter struct {
 func (m *MockTrialGranter) GrantTrial(ctx context.Context, userID string) error {
 	args := m.Called(ctx, userID)
 	return args.Error(0)
+}
+
+// #1001: Plaintext email fallback prevents duplicate accounts for unmigrated pre-encryption users.
+// Scenario: clerk_user_id_blind_idx is NULL (unmigrated row), so GetByClerkID returns ErrIdentityNotFound,
+// but GetUserByEmail finds the plaintext row — registration should return existing user, not create duplicate.
+
+func TestRegisterUser_PlaintextEmailFallback_PreventsaDuplicate(t *testing.T) {
+	ctx := context.Background()
+	clerkUserID := "user_37a3Q6ZvNSpsQsbrsnGSCccN3cP"
+	email := "mbnuss27@gmail.com"
+	existingUserID := "466b7577-537c-4317-ac7b-63d24efe1e13"
+
+	mockProfileRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockPrivacyRepo := new(MockPrivacyRepository)
+
+	// Blind-index lookup fails — simulates unmigrated row (NULL clerk_user_id_blind_idx)
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
+
+	// Fallback: GetUserByEmail finds the plaintext pre-encryption user
+	existingUser := &domain.User{
+		ID:                 existingUserID,
+		ClerkUserID:        clerkUserID,
+		Email:              email,
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "trial",
+		PrimaryRegion:      "iad",
+	}
+	mockProfileRepo.On("GetUserByEmail", ctx, email).Return(existingUser, nil)
+
+	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, nil)
+
+	user, err := service.RegisterUser(ctx, clerkUserID, email, true)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.Equal(t, existingUserID, user.ID, "should return existing user, not create duplicate")
+
+	// Must NOT create a new user
+	mockProfileRepo.AssertNotCalled(t, "CreateUser")
+	mockIdentityRepo.AssertNotCalled(t, "Create")
+	mockPrivacyRepo.AssertNotCalled(t, "Create")
+
+	mockIdentityRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+}
+
+// TestRegisterUser_RejectsInvalidEmail_NetMail tests that "user@" (incomplete domain) is rejected
+func TestRegisterUser_RejectsInvalidEmail_NetMail(t *testing.T) {
+	mockProfileRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockPrivacyRepo := new(MockPrivacyRepository)
+
+	svc := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, nil)
+
+	_, err := svc.RegisterUser(context.Background(), "user_abc", "user@", false)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid email format")
+}
+
+func TestRegisterUser_PlaintextEmailFallback_NewUserIfNotFound(t *testing.T) {
+	ctx := context.Background()
+	clerkUserID := "user_newclerk123"
+	email := "brandnew@example.com"
+
+	mockProfileRepo := new(MockProfileRepository)
+	mockIdentityRepo := new(MockUserIdentityRepository)
+	mockPrivacyRepo := new(MockPrivacyRepository)
+
+	// Both lookups fail — truly new user
+	mockIdentityRepo.On("GetByClerkID", ctx, clerkUserID).Return(nil, repository.ErrIdentityNotFound)
+	mockProfileRepo.On("GetUserByEmail", ctx, email).Return(nil, repository.ErrUserNotFound)
+
+	mockProfileRepo.On("CreateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
+		return u.ClerkUserID == clerkUserID && u.Email == email
+	})).Return(nil)
+	mockIdentityRepo.On("Create", ctx, mock.Anything).Return(nil)
+	mockPrivacyRepo.On("Create", ctx, mock.Anything).Return(nil)
+
+	service := NewRegistrationService(mockProfileRepo, mockIdentityRepo, mockPrivacyRepo, nil, nil)
+
+	user, err := service.RegisterUser(ctx, clerkUserID, email, true)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.Equal(t, clerkUserID, user.ClerkUserID)
+
+	mockIdentityRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+	mockPrivacyRepo.AssertExpectations(t)
 }

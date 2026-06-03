@@ -6,7 +6,6 @@
 
 export { TransactionAccountFilter } from './TransactionAccountFilter'
 export { TransactionAmountFilter } from './TransactionAmountFilter'
-export { TransactionCategoryFilter } from './TransactionCategoryFilter'
 export { TransactionDateFilter } from './TransactionDateFilter'
 export { TransactionStatusFilter } from './TransactionStatusFilter'
 export { TransactionTypeFilter } from './TransactionTypeFilter'

@@ -9,7 +9,7 @@ const emptyStateVariants = cva(
     variants: {
       size: {
         default:
-          "rounded-xl border border-dashed border-gray-200 bg-gray-50/50 dark:border-gray-700 dark:bg-gray-800/50 px-6 py-12",
+          "rounded-xl border border-dashed border-border bg-muted/50 px-6 py-12",
         compact: "px-4 py-6",
       },
     },
@@ -19,7 +19,7 @@ const emptyStateVariants = cva(
   }
 )
 
-const iconVariants = cva("text-gray-400 dark:text-gray-500 mb-3", {
+const iconVariants = cva("text-muted-foreground mb-3", {
   variants: {
     size: {
       default: "[&>svg]:h-12 [&>svg]:w-12",
@@ -57,9 +57,9 @@ function EmptyState({
       <div className={cn(iconVariants({ size }))} aria-hidden="true">
         {icon}
       </div>
-      <h3 className="text-base font-medium text-gray-700 dark:text-gray-300">{title}</h3>
+      <h3 className="text-base font-medium text-foreground">{title}</h3>
       {description && (
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 max-w-sm">{description}</p>
+        <p className="mt-1 text-sm text-muted-foreground max-w-sm">{description}</p>
       )}
       {action && <div className="mt-4">{action}</div>}
     </div>

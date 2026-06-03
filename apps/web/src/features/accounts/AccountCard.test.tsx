@@ -7,8 +7,8 @@
  * Issue #575: Hybrid test framework migration (Vitest + bun:test)
  */
 
-import { describe, it, expect } from 'bun:test'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, mock, spyOn, beforeEach, afterEach } from 'bun:test'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { AccountCard } from './AccountCard'
 import type { Account } from './types'
 
@@ -175,5 +175,36 @@ describe('AccountCard', () => {
 
     // EUR symbol should be present
     expect(screen.getByText(/€1,500.75/)).toBeInTheDocument()
+  })
+
+  describe('onDelete behavior (Task 8: remove window.confirm)', () => {
+    let confirmSpy: ReturnType<typeof spyOn>
+
+    beforeEach(() => {
+      confirmSpy = spyOn(window, 'confirm').mockImplementation(() => true)
+    })
+
+    afterEach(() => {
+      confirmSpy.mockRestore()
+    })
+
+    it('calls onDelete with the full account object when Delete Account is clicked', () => {
+      const onDelete = mock(() => {})
+      render(<AccountCard account={mockAccount} onDelete={onDelete} />)
+
+      fireEvent.click(screen.getByText('Delete Account'))
+
+      expect(onDelete).toHaveBeenCalledTimes(1)
+      expect(onDelete).toHaveBeenCalledWith(mockAccount)
+    })
+
+    it('does NOT call window.confirm when Delete Account is clicked', () => {
+      const onDelete = mock(() => {})
+      render(<AccountCard account={mockAccount} onDelete={onDelete} />)
+
+      fireEvent.click(screen.getByText('Delete Account'))
+
+      expect(confirmSpy).not.toHaveBeenCalled()
+    })
   })
 })

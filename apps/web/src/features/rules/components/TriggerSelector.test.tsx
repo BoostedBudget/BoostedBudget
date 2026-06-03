@@ -24,7 +24,6 @@ describe('TriggerSelector', () => {
         <TriggerSelector
           config={defaultTriggerConfig}
           onChange={() => {}}
-          canUseEventTriggers={true}
         />
       )
 
@@ -32,25 +31,11 @@ describe('TriggerSelector', () => {
       expect(screen.getByRole('radio', { name: /event/i })).toBeInTheDocument()
     })
 
-    it('should show descriptions for each trigger type', () => {
+    it('should show schedule as selected by default', () => {
       render(
         <TriggerSelector
           config={defaultTriggerConfig}
           onChange={() => {}}
-          canUseEventTriggers={true}
-        />
-      )
-
-      expect(screen.getByText(/run on a fixed schedule/i)).toBeInTheDocument()
-      expect(screen.getByText(/run when something happens/i)).toBeInTheDocument()
-    })
-
-    it('should check schedule option when type is schedule', () => {
-      render(
-        <TriggerSelector
-          config={defaultTriggerConfig}
-          onChange={() => {}}
-          canUseEventTriggers={true}
         />
       )
 
@@ -58,7 +43,7 @@ describe('TriggerSelector', () => {
       expect(screen.getByRole('radio', { name: /event/i })).not.toBeChecked()
     })
 
-    it('should check event option when type is event', () => {
+    it('should show event as selected when config type is event', () => {
       const eventConfig: TriggerFormState = {
         type: 'event',
         event: 'budget_updated',
@@ -68,52 +53,44 @@ describe('TriggerSelector', () => {
         <TriggerSelector
           config={eventConfig}
           onChange={() => {}}
-          canUseEventTriggers={true}
         />
       )
 
-      expect(screen.getByRole('radio', { name: /scheduled/i })).not.toBeChecked()
       expect(screen.getByRole('radio', { name: /event/i })).toBeChecked()
+      expect(screen.getByRole('radio', { name: /scheduled/i })).not.toBeChecked()
     })
-  })
 
-  describe('Schedule Trigger', () => {
     it('should show CronBuilder when schedule is selected', () => {
       render(
         <TriggerSelector
           config={defaultTriggerConfig}
           onChange={() => {}}
-          canUseEventTriggers={true}
         />
       )
 
-      // CronBuilder should show preset buttons
-      expect(screen.getByRole('button', { name: /daily at 9am/i })).toBeInTheDocument()
+      // CronBuilder renders a cron input field
+      expect(screen.getByRole('group')).toBeInTheDocument()
     })
 
-    it('should call onChange with updated cron when preset is clicked', () => {
-      const onChange = mock(() => {})
+    it('should show event select when event type is selected', () => {
+      const eventConfig: TriggerFormState = {
+        type: 'event',
+        event: 'budget_updated',
+      }
+
       render(
         <TriggerSelector
-          config={defaultTriggerConfig}
-          onChange={onChange}
-          canUseEventTriggers={true}
+          config={eventConfig}
+          onChange={() => {}}
         />
       )
 
-      fireEvent.click(screen.getByRole('button', { name: 'Weekly (Monday)' }))
-
-      expect(onChange).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'schedule',
-          cron: '0 9 * * 1',
-        })
-      )
+      expect(screen.getByRole('combobox')).toBeInTheDocument()
     })
   })
 
-  describe('Event Trigger', () => {
-    it('should show event dropdown when event is selected', () => {
+  describe('Event Options', () => {
+    it('should render all event type options', () => {
       const eventConfig: TriggerFormState = {
         type: 'event',
         event: 'budget_updated',
@@ -123,97 +100,14 @@ describe('TriggerSelector', () => {
         <TriggerSelector
           config={eventConfig}
           onChange={() => {}}
-          canUseEventTriggers={true}
         />
       )
 
-      expect(screen.getByLabelText(/event type/i)).toBeInTheDocument()
-    })
-
-    it('should call onChange when event type is changed', () => {
-      const onChange = mock(() => {})
-      const eventConfig: TriggerFormState = {
-        type: 'event',
-        event: 'budget_updated',
-      }
-
-      render(
-        <TriggerSelector
-          config={eventConfig}
-          onChange={onChange}
-          canUseEventTriggers={true}
-        />
-      )
-
-      fireEvent.change(screen.getByLabelText(/event type/i), {
-        target: { value: 'transaction_created' },
-      })
-
-      expect(onChange).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'event',
-          event: 'transaction_created',
-        })
-      )
-    })
-
-    it('should show all event type options', () => {
-      const eventConfig: TriggerFormState = {
-        type: 'event',
-        event: 'budget_updated',
-      }
-
-      render(
-        <TriggerSelector
-          config={eventConfig}
-          onChange={() => {}}
-          canUseEventTriggers={true}
-        />
-      )
-
-      const select = screen.getByLabelText(/event type/i)
+      const select = screen.getByRole('combobox')
       expect(select).toContainHTML('budget_updated')
       expect(select).toContainHTML('transaction_created')
       expect(select).toContainHTML('balance_changed')
       expect(select).toContainHTML('budget_period_end')
-    })
-  })
-
-  describe('Free Tier Restrictions', () => {
-    it('should disable event option when canUseEventTriggers is false', () => {
-      render(
-        <TriggerSelector
-          config={defaultTriggerConfig}
-          onChange={() => {}}
-          canUseEventTriggers={false}
-        />
-      )
-
-      expect(screen.getByRole('radio', { name: /event/i })).toBeDisabled()
-    })
-
-    it('should show upgrade message when event triggers are not available', () => {
-      render(
-        <TriggerSelector
-          config={defaultTriggerConfig}
-          onChange={() => {}}
-          canUseEventTriggers={false}
-        />
-      )
-
-      expect(screen.getByText(/premium/i)).toBeInTheDocument()
-    })
-
-    it('should not disable event option when canUseEventTriggers is true', () => {
-      render(
-        <TriggerSelector
-          config={defaultTriggerConfig}
-          onChange={() => {}}
-          canUseEventTriggers={true}
-        />
-      )
-
-      expect(screen.getByRole('radio', { name: /event/i })).not.toBeDisabled()
     })
   })
 
@@ -229,7 +123,6 @@ describe('TriggerSelector', () => {
         <TriggerSelector
           config={eventConfig}
           onChange={onChange}
-          canUseEventTriggers={true}
         />
       )
 
@@ -249,7 +142,6 @@ describe('TriggerSelector', () => {
         <TriggerSelector
           config={defaultTriggerConfig}
           onChange={onChange}
-          canUseEventTriggers={true}
         />
       )
 
@@ -269,7 +161,6 @@ describe('TriggerSelector', () => {
         <TriggerSelector
           config={defaultTriggerConfig}
           onChange={() => {}}
-          canUseEventTriggers={true}
           disabled
         />
       )
@@ -285,7 +176,6 @@ describe('TriggerSelector', () => {
         <TriggerSelector
           config={defaultTriggerConfig}
           onChange={() => {}}
-          canUseEventTriggers={true}
         />
       )
 

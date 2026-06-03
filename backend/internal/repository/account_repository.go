@@ -8,15 +8,33 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 var (
-	// ErrAccountNotFound is returned when an account is not found in the database
-	ErrAccountNotFound = errors.New("account not found")
-	// ErrDuplicateAccount is returned when attempting to create an account that already exists
-	ErrDuplicateAccount = errors.New("account already exists for this user")
+	ErrAccountNotFound          = errors.New("account not found")
+	ErrDuplicateAccount         = errors.New("account already exists for this user")
+	ErrAccountOwnedByAnotherUser = errors.New("one or more accounts are already linked by another user")
 )
+
+// FingerprintOwnership holds information about who owns a fingerprint and the state of their linked item.
+// Used during cross-user uniqueness check in LinkAccounts (Issue #1010).
+type FingerprintOwnership struct {
+	UserID          string
+	LinkedItemID    string
+	ItemStatus      domain.LinkedItemStatus
+	StatusChangedAt *time.Time
+}
+
+// AccountFilterOptions configures filtering for GetAccountsWithInstitutionFiltered (Issue #1109).
+type AccountFilterOptions struct {
+	IncludeHidden   bool   // if true, includes hidden accounts
+	IncludeReplaced bool   // if true, returns all accounts regardless of status (active + replaced)
+	ReplacedOnly    bool   // if true, returns only replaced accounts (status=replaced)
+	UserAccountID   string // if non-empty, filters to accounts sharing this user_account_id
+}
 
 // AccountRepository defines the interface for account data access
 type AccountRepository interface {
@@ -67,10 +85,9 @@ type AccountRepository interface {
 	// Returns ErrAccountNotFound if any account doesn't exist or user doesn't own it.
 	UpdateDisplayOrders(ctx context.Context, userID string, orders []domain.AccountOrder) error
 
-	// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and hidden filtering.
-	// If includeHidden is false, only returns accounts where is_hidden = false.
+	// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and flexible filtering.
 	// Results are sorted by display_order ASC (nulls last), then created_at ASC.
-	GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error)
+	GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error)
 
 	// GetByUserAccountAndStatus retrieves accounts by user_account_id and status.
 	// This is used for querying accounts across re-links using stable user_account reference.
@@ -90,16 +107,111 @@ type AccountRepository interface {
 	//
 	// Returns ErrAccountNotFound if account doesn't exist or user doesn't own it.
 	UpdateStatus(ctx context.Context, accountID, userID string, status domain.AccountStatus, replacedByID *string) error
+
+	// CheckFingerprintOwnership checks if a fingerprint blind index is already held by a different user.
+	// Returns ownership info (user, linked item, item status) if another user owns the fingerprint.
+	// Returns nil, nil if the fingerprint is unclaimed or only claimed by the requesting user.
+	// Issue #1010: Enforce Plaid item uniqueness across all users.
+	CheckFingerprintOwnership(ctx context.Context, fingerprintBlindIdx, excludeUserID string) (*FingerprintOwnership, error)
+
+	// ExpireAccountsByFingerprint marks all active accounts matching a fingerprint as 'expired'.
+	// This releases the partial UNIQUE index constraint so a new user can link the same account.
+	// Called when the 90-day TTL expires for a disconnected/revoked item.
+	// Issue #1010: Enforce Plaid item uniqueness across all users.
+	ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) error
 }
 
 // accountRepository implements AccountRepository using PostgreSQL
 type accountRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewAccountRepository creates a new AccountRepository instance
-func NewAccountRepository(db DB) AccountRepository {
-	return &accountRepository{db: db}
+func NewAccountRepository(db DB, enc *appcrypto.FieldEncryptor) AccountRepository {
+	return &accountRepository{db: db, enc: enc}
+}
+
+// mapConstraintError maps database constraint violation errors to domain errors
+func mapConstraintError(err error) error {
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "duplicate key") || strings.Contains(errMsg, "unique constraint") {
+		if strings.Contains(errMsg, "unique_user_account") || strings.Contains(errMsg, "unique_accounts_plaid_id_blind") {
+			return ErrDuplicateAccount
+		}
+		if strings.Contains(errMsg, "unique_persistent_account_id_active") || strings.Contains(errMsg, "unique_fallback_fingerprint_active") {
+			return ErrAccountOwnedByAnotherUser
+		}
+	}
+	return err
+}
+
+// encryptAccountPIIFields encrypts PII fields on an account before writing to the database.
+// Blind indexes must be computed from plaintext BEFORE calling this function.
+func (r *accountRepository) encryptAccountPIIFields(a *domain.Account) error {
+	encryptedPlaidAccountID, err := r.enc.EncryptString(a.PlaidAccountID)
+	if err != nil {
+		return err
+	}
+	a.PlaidAccountID = encryptedPlaidAccountID
+
+	encryptedName, err := r.enc.EncryptString(a.Name)
+	if err != nil {
+		return err
+	}
+	a.Name = encryptedName
+
+	encryptedOfficialName, err := r.enc.EncryptNullableString(a.OfficialName)
+	if err != nil {
+		return err
+	}
+	a.OfficialName = encryptedOfficialName
+
+	encryptedMask, err := r.enc.EncryptNullableString(a.Mask)
+	if err != nil {
+		return err
+	}
+	a.Mask = encryptedMask
+
+	return nil
+}
+
+// decryptAccountPIIFields decrypts PII fields on an account after reading from the database.
+func (r *accountRepository) decryptAccountPIIFields(a *domain.Account) error {
+	decryptedPlaidAccountID, err := r.enc.DecryptString(a.PlaidAccountID)
+	if err != nil {
+		return err
+	}
+	a.PlaidAccountID = decryptedPlaidAccountID
+
+	decryptedName, err := r.enc.DecryptString(a.Name)
+	if err != nil {
+		return err
+	}
+	a.Name = decryptedName
+
+	decryptedOfficialName, err := r.enc.DecryptNullableString(a.OfficialName)
+	if err != nil {
+		return err
+	}
+	a.OfficialName = decryptedOfficialName
+
+	decryptedMask, err := r.enc.DecryptNullableString(a.Mask)
+	if err != nil {
+		return err
+	}
+	a.Mask = decryptedMask
+
+	// InstitutionName is only populated by JOIN queries; decrypt when present
+	if a.InstitutionName != "" {
+		decryptedInstitutionName, err := r.enc.DecryptString(a.InstitutionName)
+		if err != nil {
+			return err
+		}
+		a.InstitutionName = decryptedInstitutionName
+	}
+
+	return nil
 }
 
 // Create creates a new account in the database
@@ -114,12 +226,20 @@ func (r *accountRepository) Create(ctx context.Context, account *domain.Account)
 	account.CreatedAt = now
 	account.UpdatedAt = now
 
+	// Compute blind index from plaintext before encrypting
+	plaidAccountIDBlindIdx := r.enc.BlindIndex(account.PlaidAccountID)
+
+	if err := r.encryptAccountPIIFields(account); err != nil {
+		return err
+	}
+
 	query := `
 		INSERT INTO accounts
-		(id, linked_item_id, user_id, plaid_account_id, name, official_name,
+		(id, linked_item_id, user_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
 		 type, subtype, mask, current_balance, available_balance, currency_code,
+		 persistent_account_id_blind_idx, fallback_fingerprint_blind_idx,
 		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`
 
 	_, err := r.db.Exec(ctx, query,
@@ -127,6 +247,7 @@ func (r *accountRepository) Create(ctx context.Context, account *domain.Account)
 		account.LinkedItemID,
 		account.UserID,
 		account.PlaidAccountID,
+		plaidAccountIDBlindIdx,
 		account.Name,
 		account.OfficialName,
 		account.Type,
@@ -135,18 +256,14 @@ func (r *accountRepository) Create(ctx context.Context, account *domain.Account)
 		account.CurrentBalance,
 		account.AvailableBalance,
 		account.CurrencyCode,
+		account.PersistentAccountIDBlindIdx,
+		account.FallbackFingerprintBlindIdx,
 		account.CreatedAt,
 		account.UpdatedAt,
 	)
 
 	if err != nil {
-		// Check for unique constraint violations
-		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			if strings.Contains(err.Error(), "unique_user_account") {
-				return ErrDuplicateAccount
-			}
-		}
-		return err
+		return mapConstraintError(err)
 	}
 
 	return nil
@@ -167,10 +284,11 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 
 	query := `
 		INSERT INTO accounts
-		(id, linked_item_id, user_id, plaid_account_id, name, official_name,
+		(id, linked_item_id, user_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
 		 type, subtype, mask, current_balance, available_balance, currency_code,
+		 persistent_account_id_blind_idx, fallback_fingerprint_blind_idx,
 		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`
 
 	now := time.Now()
@@ -187,11 +305,19 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 		account.CreatedAt = now
 		account.UpdatedAt = now
 
+		// Compute blind index from plaintext before encrypting
+		plaidAccountIDBlindIdx := r.enc.BlindIndex(account.PlaidAccountID)
+
+		if err := r.encryptAccountPIIFields(account); err != nil {
+			return err
+		}
+
 		_, err := tx.Exec(ctx, query,
 			account.ID,
 			account.LinkedItemID,
 			account.UserID,
 			account.PlaidAccountID,
+			plaidAccountIDBlindIdx,
 			account.Name,
 			account.OfficialName,
 			account.Type,
@@ -200,18 +326,14 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 			account.CurrentBalance,
 			account.AvailableBalance,
 			account.CurrencyCode,
+			account.PersistentAccountIDBlindIdx,
+			account.FallbackFingerprintBlindIdx,
 			account.CreatedAt,
 			account.UpdatedAt,
 		)
 
 		if err != nil {
-			// Check for unique constraint violations
-			if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-				if strings.Contains(err.Error(), "unique_user_account") {
-					return ErrDuplicateAccount
-				}
-			}
-			return err
+			return mapConstraintError(err)
 		}
 	}
 
@@ -225,9 +347,10 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
 		       current_balance, available_balance, currency_code,
+		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
-		WHERE linked_item_id = $1
+		WHERE linked_item_id = $1 AND status = 'active'
 		ORDER BY created_at ASC
 	`
 
@@ -253,10 +376,17 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 			&account.CurrentBalance,
 			&account.AvailableBalance,
 			&account.CurrencyCode,
+			&account.Status,
+			&account.UserAccountID,
+			&account.ReplacedByID,
+			&account.ReplacedAt,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 		)
 		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptAccountPIIFields(&account); err != nil {
 			return nil, err
 		}
 		accounts = append(accounts, account)
@@ -269,15 +399,19 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 	return accounts, nil
 }
 
-// GetByUserID retrieves all accounts for a specific user
+// GetByUserID retrieves active-only accounts for a specific user, including status and re-link fields.
+// Returns ONLY accounts with status='active' (excludes replaced and expired).
+// Callers that need all chain members (active + replaced) should use GetAccountsWithInstitutionFiltered
+// with IncludeReplaced=true or StatusFilter="all".
 func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
 		       current_balance, available_balance, currency_code,
+		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
-		WHERE user_id = $1
+		WHERE user_id = $1 AND status = 'active'
 		ORDER BY created_at ASC
 	`
 
@@ -303,10 +437,17 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 			&account.CurrentBalance,
 			&account.AvailableBalance,
 			&account.CurrencyCode,
+			&account.Status,
+			&account.UserAccountID,
+			&account.ReplacedByID,
+			&account.ReplacedAt,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 		)
 		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptAccountPIIFields(&account); err != nil {
 			return nil, err
 		}
 		accounts = append(accounts, account)
@@ -319,16 +460,18 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 	return accounts, nil
 }
 
-// GetAccountsWithInstitution retrieves all accounts for a user with institution names from linked_items
+// GetAccountsWithInstitution retrieves all accounts for a user with institution names from linked_items.
+// Includes status and re-link fields so callers can distinguish active vs. replaced accounts.
 func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, a.currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
 		       a.created_at, a.updated_at, l.institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1
+		WHERE a.user_id = $1 AND a.status = 'active'
 		ORDER BY a.created_at ASC
 	`
 
@@ -354,11 +497,18 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 			&account.CurrentBalance,
 			&account.AvailableBalance,
 			&account.CurrencyCode,
+			&account.Status,
+			&account.UserAccountID,
+			&account.ReplacedByID,
+			&account.ReplacedAt,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 			&account.InstitutionName,
 		)
 		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptAccountPIIFields(&account); err != nil {
 			return nil, err
 		}
 		accounts = append(accounts, account)
@@ -371,12 +521,14 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 	return accounts, nil
 }
 
-// CountByUserID counts the total number of accounts for a user
+// CountByUserID counts the total number of accounts for a user.
+// Excludes accounts with status='expired' (Issue #1010: TTL-released fingerprints).
 func (r *accountRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
 	query := `
 		SELECT COUNT(*)
 		FROM accounts
 		WHERE user_id = $1
+		AND status != 'expired'
 	`
 
 	var count int
@@ -425,13 +577,9 @@ func (r *accountRepository) Delete(ctx context.Context, accountID, userID string
 	if err != nil {
 		return err
 	}
-
-	// Check if any rows were affected (validates ownership and existence)
 	if ct.RowsAffected() == 0 {
-		// Account not found OR user doesn't own it (both cases return same error for security)
 		return ErrAccountNotFound
 	}
-
 	return nil
 }
 
@@ -443,6 +591,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		       current_balance, available_balance, currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
+		       user_account_id,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -455,6 +604,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
 		&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 		&account.DisplayOrder, &account.IsHidden,
+		&account.UserAccountID,
 		&account.CreatedAt, &account.UpdatedAt,
 	)
 
@@ -462,6 +612,10 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrAccountNotFound
 		}
+		return nil, err
+	}
+
+	if err := r.decryptAccountPIIFields(&account); err != nil {
 		return nil, err
 	}
 
@@ -487,11 +641,9 @@ func (r *accountRepository) Update(ctx context.Context, account *domain.Account,
 	if err != nil {
 		return err
 	}
-
 	if ct.RowsAffected() == 0 {
 		return ErrAccountNotFound
 	}
-
 	return nil
 }
 
@@ -529,12 +681,34 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 	return tx.Commit(ctx)
 }
 
-// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and hidden filtering.
+// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and flexible filtering.
 // Issue #679, #680: Also includes linked_item status to show 'disconnected' when subscription expires.
-func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, includeHidden bool) ([]domain.Account, error) {
+// Issue #1109: Added IncludeReplaced and UserAccountID filter options.
+func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error) {
+	// Canary counter: every active-only call filters out replaced accounts (Issue #1109).
+	if !opts.IncludeReplaced {
+		observability.AccountsReplacedFiltered.WithLabelValues("accounts_list").Inc()
+	}
 	hiddenClause := ""
-	if !includeHidden {
+	if !opts.IncludeHidden {
 		hiddenClause = " AND a.is_hidden = FALSE"
+	}
+
+	var statusClause string
+	switch {
+	case opts.ReplacedOnly:
+		statusClause = " AND a.status = 'replaced'"
+	case opts.IncludeReplaced:
+		statusClause = " AND a.status IN ('active', 'replaced')"
+	default:
+		statusClause = " AND a.status = 'active'"
+	}
+
+	userAccountClause := ""
+	args := []any{userID}
+	if opts.UserAccountID != "" {
+		args = append(args, opts.UserAccountID)
+		userAccountClause = " AND a.user_account_id = $2"
 	}
 
 	query := `
@@ -547,10 +721,10 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1` + hiddenClause + `
+		WHERE a.user_id = $1` + statusClause + hiddenClause + userAccountClause + `
 		ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC`
 
-	rows, err := r.db.Query(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -569,6 +743,9 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 			&account.CreatedAt, &account.UpdatedAt, &account.InstitutionName, &account.LinkedItemStatus,
 		)
 		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptAccountPIIFields(&account); err != nil {
 			return nil, err
 		}
 		accounts = append(accounts, account)
@@ -617,6 +794,9 @@ func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userA
 		if err != nil {
 			return nil, err
 		}
+		if err := r.decryptAccountPIIFields(&account); err != nil {
+			return nil, err
+		}
 		accounts = append(accounts, account)
 	}
 
@@ -663,6 +843,9 @@ func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountI
 		if err != nil {
 			return nil, err
 		}
+		if err := r.decryptAccountPIIFields(&account); err != nil {
+			return nil, err
+		}
 		accounts = append(accounts, account)
 	}
 
@@ -694,10 +877,53 @@ func (r *accountRepository) UpdateStatus(ctx context.Context, accountID, userID 
 	if err != nil {
 		return err
 	}
-
 	if result.RowsAffected() == 0 {
 		return ErrAccountNotFound
 	}
-
 	return nil
+}
+
+// CheckFingerprintOwnership checks if a fingerprint blind index is already held by a different user.
+// Returns ownership info if another active account (owned by a different user) matches the fingerprint.
+// Returns nil, nil if the fingerprint is unclaimed or only claimed by the requesting user.
+// Issue #1010: Enforce Plaid item uniqueness across all users.
+func (r *accountRepository) CheckFingerprintOwnership(ctx context.Context, fingerprintBlindIdx, excludeUserID string) (*FingerprintOwnership, error) {
+	query := `
+		SELECT a.user_id, a.linked_item_id, li.status, li.status_changed_at
+		FROM accounts a
+		JOIN linked_items li ON a.linked_item_id = li.id
+		WHERE (a.persistent_account_id_blind_idx = $1 OR a.fallback_fingerprint_blind_idx = $1)
+		  AND a.status = 'active'
+		  AND a.user_id != $2
+		LIMIT 1
+	`
+
+	var ownership FingerprintOwnership
+	err := r.db.QueryRow(ctx, query, fingerprintBlindIdx, excludeUserID).Scan(
+		&ownership.UserID,
+		&ownership.LinkedItemID,
+		&ownership.ItemStatus,
+		&ownership.StatusChangedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &ownership, nil
+}
+
+// ExpireAccountsByFingerprint marks all active accounts matching a fingerprint as 'expired'.
+// This releases the partial UNIQUE index constraint so a new user can link the same account.
+// Issue #1010: Enforce Plaid item uniqueness across all users.
+func (r *accountRepository) ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) error {
+	query := `
+		UPDATE accounts
+		SET status = 'expired', updated_at = NOW()
+		WHERE (persistent_account_id_blind_idx = $1 OR fallback_fingerprint_blind_idx = $1)
+		  AND status = 'active'
+	`
+	_, err := r.db.Exec(ctx, query, fingerprintBlindIdx)
+	return err
 }

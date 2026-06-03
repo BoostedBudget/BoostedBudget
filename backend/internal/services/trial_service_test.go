@@ -51,6 +51,11 @@ func (m *mockTrialRepository) GetUsersWithExpiringTrials(ctx context.Context, wi
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
+// #930: SetRetentionDates stub — allows mock to satisfy updated TrialRepository interface
+func (m *mockTrialRepository) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
+	return m.Called(ctx, userID, startedAt, expiresAt).Error(0)
+}
+
 // mockPlaidCleanupService is a mock for Plaid cleanup
 type mockPlaidCleanupService struct {
 	mock.Mock
@@ -215,6 +220,7 @@ func TestTrialService_ExpireTrial_Success(t *testing.T) {
 
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
 	repo.On("UpdateSubscriptionStatus", ctx, userID, "inactive").Return(nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
 	plaidCleanup.On("DisconnectAllUserItems", ctx, userID).Return(nil)
 
 	err := service.ExpireTrial(ctx, userID)
@@ -238,6 +244,7 @@ func TestTrialService_ExpireTrial_DisconnectsPlaidItems(t *testing.T) {
 
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
 	repo.On("UpdateSubscriptionStatus", ctx, userID, "inactive").Return(nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
 	plaidCleanup.On("DisconnectAllUserItems", ctx, userID).Return(nil)
 
 	err := service.ExpireTrial(ctx, userID)
@@ -271,4 +278,50 @@ func TestTrialService_CanGrantTrial_False(t *testing.T) {
 	canGrant := service.CanGrantTrial(user)
 
 	assert.False(t, canGrant)
+}
+
+// Issue #1015: TrialService must be constructable with nil plaidCleanup and wirable via setter.
+// This enables River initialization to be decoupled from Plaid configuration.
+
+func TestTrialService_SetPlaidCleanup(t *testing.T) {
+	tierConfig, err := config.NewTierConfig("")
+	require.NoError(t, err)
+	repo := new(mockTrialRepository)
+
+	// Create with nil plaidCleanup — valid when Plaid not configured
+	svc := NewTrialService(tierConfig, repo, nil)
+
+	// Wire cleanup after Plaid initializes via setter
+	cleanup := new(mockPlaidCleanupService)
+	svc.SetPlaidCleanup(cleanup)
+	assert.Equal(t, cleanup, svc.plaidCleanup, "plaidCleanup should be set after SetPlaidCleanup")
+}
+
+func TestTrialService_ExpireTrial_NilPlaidCleanup(t *testing.T) {
+	tierConfig, err := config.NewTierConfig("")
+	require.NoError(t, err)
+	repo := new(mockTrialRepository)
+
+	// Create with nil plaidCleanup (no Plaid configured)
+	svc := NewTrialService(tierConfig, repo, nil)
+
+	ctx := context.Background()
+	userID := "user-456"
+	trialEndsAt := time.Now().Add(-1 * time.Hour)
+	user := &domain.User{
+		ID:                 userID,
+		SubscriptionStatus: "trial",
+		TrialEndsAt:        &trialEndsAt,
+	}
+
+	repo.On("GetUserByID", ctx, userID).Return(user, nil)
+	repo.On("UpdateSubscriptionStatus", ctx, userID, "inactive").Return(nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
+
+	// Should not panic and should succeed — plaidCleanup nil-guard in ExpireTrial
+	err = svc.ExpireTrial(ctx, userID)
+
+	require.NoError(t, err)
+	repo.AssertExpectations(t)
+	// No DisconnectAllUserItems call expected since plaidCleanup is nil
 }

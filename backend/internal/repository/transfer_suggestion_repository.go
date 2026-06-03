@@ -76,10 +76,12 @@ func (r *transferSuggestionRepository) Create(ctx context.Context, suggestion *d
 	query := `
 		INSERT INTO transfer_suggestions (
 			id, user_id, rule_id, rule_execution_id,
-			from_account_id, to_account_id, amount, currency_code,
+			from_account_id, to_account_id,
+			from_user_account_id, to_user_account_id,
+			amount, currency_code,
 			reason, source, status, expires_at,
 			user_action_at, user_notes, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`
 
 	_, err := r.db.Exec(ctx, query,
@@ -89,6 +91,8 @@ func (r *transferSuggestionRepository) Create(ctx context.Context, suggestion *d
 		suggestion.RuleExecutionID,
 		suggestion.FromAccountID,
 		suggestion.ToAccountID,
+		suggestion.FromUserAccountID,
+		suggestion.ToUserAccountID,
 		suggestion.Amount,
 		suggestion.CurrencyCode,
 		suggestion.Reason,
@@ -108,7 +112,8 @@ func (r *transferSuggestionRepository) Create(ctx context.Context, suggestion *d
 func (r *transferSuggestionRepository) GetByID(ctx context.Context, id string) (*domain.TransferSuggestion, error) {
 	query := `
 		SELECT id, user_id, rule_id, rule_execution_id,
-			from_account_id, to_account_id, amount, currency_code,
+			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
+			amount, currency_code,
 			reason, source, status, expires_at,
 			user_action_at, user_notes, created_at, updated_at
 		FROM transfer_suggestions
@@ -120,28 +125,27 @@ func (r *transferSuggestionRepository) GetByID(ctx context.Context, id string) (
 
 // GetByUserID retrieves suggestions for a user with optional status filter and pagination.
 func (r *transferSuggestionRepository) GetByUserID(ctx context.Context, userID string, status *domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, error) {
+	const selectClause = `
+		SELECT id, user_id, rule_id, rule_execution_id,
+			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
+			amount, currency_code,
+			reason, source, status, expires_at,
+			user_action_at, user_notes, created_at, updated_at
+		FROM transfer_suggestions
+	`
+
 	var query string
 	var args []interface{}
 
 	if status != nil {
-		query = `
-			SELECT id, user_id, rule_id, rule_execution_id,
-				from_account_id, to_account_id, amount, currency_code,
-				reason, source, status, expires_at,
-				user_action_at, user_notes, created_at, updated_at
-			FROM transfer_suggestions
+		query = selectClause + `
 			WHERE user_id = $1 AND status = $2
 			ORDER BY created_at DESC
 			LIMIT $3 OFFSET $4
 		`
 		args = []interface{}{userID, *status, limit, offset}
 	} else {
-		query = `
-			SELECT id, user_id, rule_id, rule_execution_id,
-				from_account_id, to_account_id, amount, currency_code,
-				reason, source, status, expires_at,
-				user_action_at, user_notes, created_at, updated_at
-			FROM transfer_suggestions
+		query = selectClause + `
 			WHERE user_id = $1
 			ORDER BY created_at DESC
 			LIMIT $2 OFFSET $3
@@ -156,7 +160,8 @@ func (r *transferSuggestionRepository) GetByUserID(ctx context.Context, userID s
 func (r *transferSuggestionRepository) GetPendingByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error) {
 	query := `
 		SELECT id, user_id, rule_id, rule_execution_id,
-			from_account_id, to_account_id, amount, currency_code,
+			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
+			amount, currency_code,
 			reason, source, status, expires_at,
 			user_action_at, user_notes, created_at, updated_at
 		FROM transfer_suggestions
@@ -167,14 +172,16 @@ func (r *transferSuggestionRepository) GetPendingByUserID(ctx context.Context, u
 	return r.querySuggestions(ctx, query, userID)
 }
 
-// UpdateStatus updates the status of a suggestion.
+// UpdateStatus updates the status of a pending suggestion.
+// The AND status = 'pending' guard prevents concurrent accept+reject race conditions.
+// If no rows are affected, it distinguishes between "not found" and "already actioned".
 func (r *transferSuggestionRepository) UpdateStatus(ctx context.Context, id string, status domain.SuggestionStatus, userNotes *string) error {
 	now := time.Now()
 
 	query := `
 		UPDATE transfer_suggestions
 		SET status = $1, user_action_at = $2, user_notes = $3, updated_at = $4
-		WHERE id = $5
+		WHERE id = $5 AND status = 'pending'
 	`
 
 	ct, err := r.db.Exec(ctx, query, status, now, userNotes, now, id)
@@ -183,7 +190,14 @@ func (r *transferSuggestionRepository) UpdateStatus(ctx context.Context, id stri
 	}
 
 	if ct.RowsAffected() == 0 {
-		return domain.ErrTransferSuggestionNotFound
+		// Distinguish: does the row exist but was already actioned, or does it not exist at all?
+		_, getErr := r.GetByID(ctx, id)
+		if getErr != nil {
+			// Not found (or other DB error): return not found.
+			return domain.ErrTransferSuggestionNotFound
+		}
+		// Row exists but status != 'pending' — a concurrent action already processed it.
+		return domain.ErrTransferSuggestionAlreadyActioned
 	}
 
 	return nil
@@ -252,7 +266,8 @@ func (r *transferSuggestionRepository) CountPendingByUserID(ctx context.Context,
 func (r *transferSuggestionRepository) GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.TransferSuggestion, error) {
 	query := `
 		SELECT id, user_id, rule_id, rule_execution_id,
-			from_account_id, to_account_id, amount, currency_code,
+			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
+			amount, currency_code,
 			reason, source, status, expires_at,
 			user_action_at, user_notes, created_at, updated_at
 		FROM transfer_suggestions
@@ -275,6 +290,8 @@ func (r *transferSuggestionRepository) scanSuggestion(row pgx.Row) (*domain.Tran
 		&suggestion.RuleExecutionID,
 		&suggestion.FromAccountID,
 		&suggestion.ToAccountID,
+		&suggestion.FromUserAccountID,
+		&suggestion.ToUserAccountID,
 		&suggestion.Amount,
 		&suggestion.CurrencyCode,
 		&suggestion.Reason,
@@ -316,6 +333,8 @@ func (r *transferSuggestionRepository) querySuggestions(ctx context.Context, que
 			&suggestion.RuleExecutionID,
 			&suggestion.FromAccountID,
 			&suggestion.ToAccountID,
+			&suggestion.FromUserAccountID,
+			&suggestion.ToUserAccountID,
 			&suggestion.Amount,
 			&suggestion.CurrencyCode,
 			&suggestion.Reason,

@@ -7,6 +7,12 @@ import fs from 'fs'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  optimizeDeps: {
+    // Include echarts ESM modules to ensure esbuild pre-bundles them correctly.
+    // Note: We use echarts-for-react/esm/core (not /lib/core) to avoid Vite 8 CJS→ESM
+    // interop issues where esbuild 0.25 no longer auto-unwraps exports.__esModule = true.
+    include: ['echarts-for-react/esm/core', 'echarts/core'],
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -52,5 +58,121 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
+    // Vite 8 uses Rolldown internally; rolldownOptions is the preferred API.
+    rolldownOptions: {
+      output: {
+        entryFileNames: 'assets/entry-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]',
+        // Rolldown 1.0.x: manualChunks function form is a no-op for node_modules;
+        // use codeSplitting.groups (the non-deprecated API) instead.
+        // includeDependenciesRecursively:false prevents the tanstack group from
+        // vacuuming React / Clerk subtrees via recursive dep capture.
+        codeSplitting: {
+          includeDependenciesRecursively: false,
+          groups: [
+            // ── node_modules splits ──────────────────────────────────────────
+            // Higher priority groups prevent lower-priority (vendor) catch-all from
+            // vacuuming them. Each is budgeted independently in .size-limit.json.
+            {
+              name: 'tanstack',
+              test: /node_modules\/(@tanstack\/|@dnd-kit\/)/,
+              priority: 20, // @tanstack/* + @dnd-kit/* excluded from vendor
+            },
+            {
+              name: 'charts',
+              test: /node_modules\/(echarts|zrender|echarts-for-react)\//,
+              priority: 15, // echarts (~500 KB raw) isolated from vendor
+            },
+            {
+              name: 'vendor',
+              test: /node_modules\//,
+              priority: 10, // Stable catch-all for remaining node_modules
+            },
+
+            // ── shared source splits ─────────────────────────────────────────
+            // Consolidate cross-module code to avoid orphan chunks.
+            {
+              name: 'api-client',
+              test: /\/packages\/(api-client|shared-types)\//,
+              priority: 8, // Generated React Query hooks + types
+            },
+            {
+              name: 'shared',
+              test: /\/apps\/web\/src\/(shared|components|lib)\/|\/apps\/web\/src\/features\/categories\/utils\//,
+              priority: 7, // App-wide utilities, hooks, UI primitives
+            },
+
+            // ── per-feature route splits ─────────────────────────────────────
+            // Lazy-loaded features get dedicated chunks; all at priority 5.
+            {
+              name: 'legal',
+              test: /\/apps\/web\/src\/legal\//,
+              priority: 5,
+            },
+            {
+              name: 'admin',
+              test: /\/apps\/web\/src\/features\/admin\//,
+              priority: 5,
+            },
+            {
+              name: 'billing',
+              test: /\/apps\/web\/src\/features\/(billing|pricing|subscription)\//,
+              priority: 5,
+            },
+            {
+              name: 'transactions',
+              test: /\/apps\/web\/src\/features\/transactions\//,
+              priority: 5,
+            },
+            {
+              name: 'accounts',
+              test: /\/apps\/web\/src\/features\/accounts\//,
+              priority: 5,
+            },
+            {
+              name: 'budgets',
+              test: /\/apps\/web\/src\/features\/budgets\//,
+              priority: 5,
+            },
+            {
+              name: 'rules',
+              test: /\/apps\/web\/src\/features\/rules\//,
+              priority: 5,
+            },
+            {
+              name: 'dashboard',
+              test: /\/apps\/web\/src\/features\/dashboard\//,
+              priority: 5,
+            },
+            {
+              name: 'reports',
+              test: /\/apps\/web\/src\/features\/reports\//,
+              priority: 5,
+            },
+            {
+              name: 'net-worth',
+              test: /\/apps\/web\/src\/features\/net-worth\//,
+              priority: 5,
+            },
+            {
+              name: 'savings',
+              test: /\/apps\/web\/src\/features\/savings\//,
+              priority: 5,
+            },
+            {
+              name: 'auto-categorization',
+              test: /\/apps\/web\/src\/features\/auto-categorization\//,
+              priority: 5,
+            },
+            {
+              name: 'profile',
+              test: /\/apps\/web\/src\/features\/(profile|deletion)\//,
+              priority: 5,
+            },
+          ],
+        },
+      },
+    },
   },
 })

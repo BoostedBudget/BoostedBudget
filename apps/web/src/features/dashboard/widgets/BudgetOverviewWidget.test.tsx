@@ -135,6 +135,37 @@ describe('BudgetOverviewWidget', () => {
     })
   })
 
+  describe('expected_income as progress denominator', () => {
+    it('uses expected_income instead of amount when present', () => {
+      const budgetWithExpectedIncome: Budget = {
+        ...mockBudget,
+        amount: 2000,
+        expected_income: 5000,
+        categories: [
+          {
+            id: 'cat-1',
+            budget_id: 'budget-1',
+            category: ['Food and Drink'],
+            allocated_amount: 500,
+            spent_amount: 500,
+            created_at: '2025-01-01T00:00:00Z',
+            updated_at: '2025-01-01T00:00:00Z',
+            tags: [],
+            match_logic: 'category_only',
+          },
+        ],
+      }
+      setMockState({ budget: budgetWithExpectedIncome })
+
+      render(<BudgetOverviewWidget {...defaultProps} />, { wrapper: createWrapper() })
+
+      // Total displayed should be expected_income (5000), not amount (2000)
+      expect(screen.getByText('$5,000.00')).toBeInTheDocument()
+      // spent = 500, total = 5000 → 10% (not 25% if using amount=2000)
+      expect(screen.getByText('10%')).toBeInTheDocument()
+    })
+  })
+
   describe('No Budget State', () => {
     beforeEach(() => {
       // 404 error indicates no budget

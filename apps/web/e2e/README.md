@@ -204,9 +204,10 @@ bun run test:e2e:debug
 - Use `test.beforeEach()` for common setup
 
 ### 2. Waiting Strategies
-- Use `waitForLoadState('networkidle')` for page loads
+- Use `waitForLoadState('domcontentloaded')` for page loads — NOT `networkidle` (hangs on Clerk polling/React Query background requests)
+- Use `expect(locator).toBeVisible()` after navigation instead of fixed timeouts — Playwright auto-retries
 - Use `waitForURL()` for navigation
-- Use `waitForTimeout()` sparingly (prefer explicit waits)
+- Avoid `waitForTimeout()` — it is always a fixed delay and always flaky
 
 ### 3. Selectors
 - Prefer text-based selectors: `button:has-text("Log In")`

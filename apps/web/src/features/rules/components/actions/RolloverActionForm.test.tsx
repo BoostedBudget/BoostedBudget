@@ -29,7 +29,9 @@ const mockBudgets: Budget[] = [
       {
         id: 'cat-1',
         budget_id: 'budget-1',
-        category: ['Food and Drink', 'Restaurants'],
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
         allocated_amount: 500,
         spent_amount: 200,
         created_at: '2024-01-01',
@@ -40,7 +42,9 @@ const mockBudgets: Budget[] = [
       {
         id: 'cat-2',
         budget_id: 'budget-1',
-        category: ['Transportation', 'Gas'],
+        category_kind: 'pfc',
+        pfc_primary: 'TRANSPORTATION',
+        pfc_detailed: 'TRANSPORTATION_GAS',
         allocated_amount: 300,
         spent_amount: 150,
         created_at: '2024-01-01',
@@ -51,7 +55,9 @@ const mockBudgets: Budget[] = [
       {
         id: 'cat-3',
         budget_id: 'budget-1',
-        category: ['Shopping', 'Clothing'],
+        category_kind: 'pfc',
+        pfc_primary: 'SHOPPING',
+        pfc_detailed: 'SHOPPING_CLOTHING',
         allocated_amount: 200,
         spent_amount: 100,
         created_at: '2024-01-01',
@@ -78,7 +84,9 @@ const mockBudgets: Budget[] = [
       {
         id: 'cat-4',
         budget_id: 'budget-2',
-        category: ['Savings', 'Emergency Fund'],
+        category_kind: 'pfc',
+        pfc_primary: 'SAVINGS',
+        pfc_detailed: 'SAVINGS_EMERGENCY_FUND',
         allocated_amount: 1000,
         spent_amount: 0,
         created_at: '2024-01-01',
@@ -190,8 +198,8 @@ describe('RolloverActionForm', () => {
       )
 
       const select = screen.getByLabelText(/source category/i)
-      expect(select).toContainHTML('Food and Drink')
-      expect(select).toContainHTML('Transportation')
+      expect(select).toContainHTML('Food And Drink › Restaurants')
+      expect(select).toContainHTML('Transportation › Gas')
     })
 
     it('should update source category when source budget changes', () => {
@@ -265,7 +273,7 @@ describe('RolloverActionForm', () => {
 
       // When target is in budget-2, should show budget-2 categories
       const select = screen.getByLabelText(/target category/i)
-      expect(select).toContainHTML('Savings')
+      expect(select).toContainHTML('Savings › Emergency Fund')
     })
 
     it('should call onChange when target is set to Unallocated Funds', () => {

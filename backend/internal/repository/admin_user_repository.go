@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -26,12 +28,24 @@ type AdminUserRepository interface {
 
 // adminUserRepository implements AdminUserRepository using PostgreSQL
 type adminUserRepository struct {
-	db DB
+	db  DB
+	enc *appcrypto.FieldEncryptor
 }
 
 // NewAdminUserRepository creates a new AdminUserRepository instance
-func NewAdminUserRepository(db DB) AdminUserRepository {
-	return &adminUserRepository{db: db}
+func NewAdminUserRepository(db DB, enc *appcrypto.FieldEncryptor) AdminUserRepository {
+	return &adminUserRepository{db: db, enc: enc}
+}
+
+// usersOrderByAllowlist maps frontend sort_by values to safe SQL expressions.
+// The u. prefix is required because of the LEFT JOINs in the query.
+// NULLS LAST is applied to nullable columns so nulls always sort to the bottom
+// regardless of direction (must appear AFTER the sort direction in PostgreSQL).
+var usersOrderByAllowlist = map[string]orderByEntry{
+	"created_at":          {"u.created_at", false},
+	"last_login_at":       {"u.last_login_at", true},
+	"subscription_tier":   {"u.subscription_tier", false},
+	"subscription_status": {"u.subscription_status", false},
 }
 
 // ListUsers returns a paginated list of users with aggregated counts
@@ -46,6 +60,20 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 	err := r.db.QueryRow(ctx, countQuery, args...).Scan(&totalCount)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to count users: %w", err)
+	}
+
+	// Resolve ORDER BY from allowlist; fallback to created_at if not provided or invalid
+	entry := usersOrderByAllowlist[filters.SortBy]
+	if entry.col == "" {
+		entry = orderByEntry{"u.created_at", false} // fallback (Huma enum prevents this in normal operation)
+	}
+	orderDir := strings.ToUpper(filters.SortDir)
+	if orderDir != "ASC" && orderDir != "DESC" {
+		orderDir = "DESC"
+	}
+	nullsClause := ""
+	if entry.nullsLast {
+		nullsClause = " NULLS LAST"
 	}
 
 	// Main query with counts via subqueries
@@ -75,7 +103,7 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 			GROUP BY referrer_id
 		) ref ON ref.referrer_id = u.id
 		WHERE u.is_deleted = FALSE%s
-		ORDER BY u.created_at DESC LIMIT $%d OFFSET $%d`, whereClause, argIndex, argIndex+1)
+		ORDER BY %s %s%s LIMIT $%d OFFSET $%d`, whereClause, entry.col, orderDir, nullsClause, argIndex, argIndex+1)
 	args = append(args, limit, offset)
 
 	// Execute main query
@@ -106,6 +134,13 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan user: %w", err)
 		}
+
+		decryptedEmail, err := r.enc.DecryptString(user.Email)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to decrypt email: %w", err)
+		}
+		user.Email = decryptedEmail
+
 		users = append(users, user)
 	}
 
@@ -184,6 +219,12 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 		return nil, fmt.Errorf("failed to get user detail: %w", err)
 	}
 
+	decryptedEmail, err := r.enc.DecryptString(detail.Email)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt email: %w", err)
+	}
+	detail.Email = decryptedEmail
+
 	return &detail, nil
 }
 
@@ -198,8 +239,8 @@ func (r *adminUserRepository) UpdateUserTier(ctx context.Context, userID string,
 
 	// Update the user table and retrieve clerk_user_id for the Clerk metadata sync
 	updateQuery := `
-		UPDATE users 
-		SET manual_tier_override = $1, manual_tier_ends_at = $2, updated_at = NOW() 
+		UPDATE users
+		SET manual_tier_override = $1, manual_tier_ends_at = $2, updated_at = NOW()
 		WHERE id = $3 AND is_deleted = FALSE
 		RETURNING clerk_user_id
 	`
@@ -210,6 +251,12 @@ func (r *adminUserRepository) UpdateUserTier(ctx context.Context, userID string,
 			return "", ErrUserNotFound
 		}
 		return "", fmt.Errorf("failed to update user tier: %w", err)
+	}
+
+	// Decrypt the returned clerk_user_id (it is encrypted in the DB)
+	clerkUserID, err = r.enc.DecryptString(clerkUserID)
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
 	}
 
 	// Insert into audit_logs using the correct column names
@@ -230,7 +277,12 @@ func (r *adminUserRepository) UpdateUserTier(ctx context.Context, userID string,
 		return "", fmt.Errorf("failed to marshal audit details: %w", err)
 	}
 
-	_, err = tx.Exec(ctx, auditQuery, userID, detailsBytes)
+	encryptedChanges, err := r.enc.EncryptJSON(json.RawMessage(detailsBytes))
+	if err != nil {
+		return "", fmt.Errorf("failed to encrypt audit changes: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, auditQuery, userID, encryptedChanges)
 	if err != nil {
 		return "", fmt.Errorf("failed to create audit log: %w", err)
 	}
@@ -249,8 +301,11 @@ func (r *adminUserRepository) buildFilterClause(filters domain.AdminUserFilters)
 	argIndex := 1
 
 	if filters.Search != "" {
-		clause += fmt.Sprintf(" AND u.email ILIKE $%d", argIndex)
-		args = append(args, "%"+filters.Search+"%")
+		clause += fmt.Sprintf(
+			" AND EXISTS (SELECT 1 FROM user_email_prefix_indices p"+
+				" WHERE p.user_id = u.id AND p.prefix_blind_idx = $%d)", argIndex)
+		args = append(args, r.enc.BlindIndexWithLabel(appcrypto.LabelEmailPrefix,
+			appcrypto.NormalizeAndCapSearchPrefix(filters.Search)))
 		argIndex++
 	}
 

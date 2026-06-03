@@ -40,6 +40,45 @@ export const mockUseGetPlaidCategories = mock(() => ({
   refetch: mockRefetchPlaidCategories,
 }))
 
+// === useGetPlaidPrimaryCategories ===
+export const mockUseGetPlaidPrimaryCategories = mock(() => ({
+  data: [],
+  isLoading: false,
+  error: null,
+}))
+
+// === useGetPlaidDetailedCategories ===
+export const mockUseGetPlaidDetailedCategories = mock(() => ({
+  data: [],
+  isLoading: false,
+  error: null,
+}))
+
+// === useUpdateCategory (#1203) ===
+export const mockUpdateCategoryMutateAsync = mock(() => Promise.resolve())
+export const mockUseUpdateCategory = mock(() => ({
+  mutateAsync: mockUpdateCategoryMutateAsync,
+  isPending: false,
+  isError: false,
+  error: null,
+}))
+
+// === useDeleteCategory (#1203) ===
+export const mockDeleteCategoryMutateAsync = mock(() => Promise.resolve())
+export const mockUseDeleteCategory = mock(() => ({
+  mutateAsync: mockDeleteCategoryMutateAsync,
+  isPending: false,
+  isError: false,
+  error: null,
+}))
+
+// === useGetCategoryUsage (#1203) ===
+export const mockUseGetCategoryUsage = mock(() => ({
+  data: undefined,
+  isLoading: false,
+  error: null,
+}))
+
 // Query key mock
 export const mockGetUserCategoriesQueryKey = mock(() => ['user-categories'])
 
@@ -47,8 +86,13 @@ export const mockGetUserCategoriesQueryKey = mock(() => ['user-categories'])
 mock.module('@boostedbudget/api-client/endpoints/categories/categories', () => ({
   ...RealCategoriesModule,
   useCreateCategory: mockUseCreateCategory,
+  useUpdateCategory: mockUseUpdateCategory,
+  useDeleteCategory: mockUseDeleteCategory,
   useGetCategories: mockUseGetCategories,
   useGetUserCategories: mockUseGetUserCategories,
+  useGetCategoryUsage: mockUseGetCategoryUsage,
   useGetPlaidCategories: mockUseGetPlaidCategories,
+  useGetPlaidPrimaryCategories: mockUseGetPlaidPrimaryCategories,
+  useGetPlaidDetailedCategories: mockUseGetPlaidDetailedCategories,
   getGetUserCategoriesQueryKey: mockGetUserCategoriesQueryKey,
 }))

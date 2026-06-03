@@ -93,3 +93,16 @@ export const mockUseDashboardOnboarding = mock(() => ({
   showHint: false,
   dismissHint: mockDismissHint,
 }))
+
+// === useGettingStarted mock ===
+export const mockDismissGettingStarted = mock(() => {})
+export const mockUseGettingStarted = mock(() => ({
+  steps: [],
+  completedCount: 0,
+  totalSteps: 5,
+  allComplete: false,
+  shouldShow: false,
+  isLoading: false,
+  isCelebrating: false,
+  dismiss: mockDismissGettingStarted,
+}))

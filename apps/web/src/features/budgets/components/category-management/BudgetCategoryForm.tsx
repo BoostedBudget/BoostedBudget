@@ -1,53 +1,59 @@
 /**
  * BudgetCategoryForm
  * Issue #497: Budget Category Manager + Match Config UI
+ * Issue #1073: Updated for PFC v2 canonical schema
+ * Issue #1200: Replace flat category select with hierarchical picker
  *
  * Modal dialog for creating and editing budget categories with match configuration.
- * Uses shadcn/ui Dialog for accessibility.
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { XIcon, Loader2Icon } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Alert } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import type { BudgetCategory, CreateBudgetCategoryRequest, UpdateBudgetCategoryRequest } from '../../types';
-import { formatCategoryPath } from '../../types';
 import type { MatchLogic } from '@boostedbudget/shared-types/matching';
 import { DEFAULT_MATCH_LOGIC } from '@boostedbudget/shared-types/matching';
 import type { UserTag } from '@/features/tags/types';
 import { CategoryMatchConfig } from './CategoryMatchConfig';
 import { usePreviewCategories } from '../../hooks/usePreviewCategories';
-import './BudgetCategoryForm.css';
+import { formatPFCPrimary } from '@/shared/categories/formatPfc';
+import { getDetailedLabel, getPrimaryLabel } from '@/shared/categories/pfcOptions';
+import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect';
+import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
+import { buildCategoryHierarchy } from '@/features/categories/utils/buildCategoryHierarchy';
 
 export interface BudgetCategoryFormProps {
-  /** Whether the dialog is open */
   isOpen: boolean;
-  /** Callback when dialog should close */
   onClose: () => void;
-  /** Callback when form is submitted */
   onSubmit: (data: CreateBudgetCategoryRequest | UpdateBudgetCategoryRequest) => Promise<void>;
-  /** Whether in create or edit mode */
   mode: 'create' | 'edit';
-  /** Initial data for edit mode */
   initialData?: BudgetCategory;
-  /** Available Plaid categories for selection */
-  availableCategories: string[][];
-  /** Available user tags for selection */
+  /**
+   * @deprecated No longer used — PFC picker fetches its own data; custom categories
+   * are fetched via useGetUserCategories(). Kept for backward compatibility with callers.
+   */
+  availableCategories?: string[][];
   availableTags: UserTag[];
-  /** Categories already used in this budget (to filter from dropdown) */
   existingCategories?: string[][];
-  /** Budget start date for preview (YYYY-MM-DD) */
   budgetStartDate?: string;
-  /** Budget end date for preview (YYYY-MM-DD) */
   budgetEndDate?: string;
+  expectedIncome?: number;
+  totalAllocatedExcludingCurrent?: number;
 }
 
 interface FormData {
-  category: string[];
+  category_kind: string;
+  pfc_primary: string;
+  pfc_detailed: string;
+  custom_category_id: string;
   allocated_amount: string;
   tags: string[];
   match_logic: MatchLogic;
@@ -60,7 +66,10 @@ interface FormErrors {
 }
 
 const initialFormData: FormData = {
-  category: [],
+  category_kind: 'pfc',
+  pfc_primary: '',
+  pfc_detailed: '',
+  custom_category_id: '',
   allocated_amount: '',
   tags: [],
   match_logic: DEFAULT_MATCH_LOGIC,
@@ -72,22 +81,29 @@ export function BudgetCategoryForm({
   onSubmit,
   mode,
   initialData,
-  availableCategories,
   availableTags,
   budgetStartDate,
   budgetEndDate,
+  expectedIncome,
+  totalAllocatedExcludingCurrent = 0,
 }: BudgetCategoryFormProps) {
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [errors, setErrors] = useState<FormErrors>({});
   const [apiError, setApiError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Reset/initialize form when dialog opens or mode changes
+  // Fetch user's custom categories to get real UUIDs for the select
+  const { data: userCategories } = useGetUserCategories();
+
   useEffect(() => {
     if (isOpen) {
       if (mode === 'edit' && initialData) {
+         
         setFormData({
-          category: initialData.category,
+          category_kind: initialData.category_kind || 'pfc',
+          pfc_primary: initialData.pfc_primary || '',
+          pfc_detailed: initialData.pfc_detailed || '',
+          custom_category_id: initialData.custom_category_id || '',
           allocated_amount: initialData.allocated_amount.toString(),
           tags: initialData.tags || [],
           match_logic: initialData.match_logic || DEFAULT_MATCH_LOGIC,
@@ -100,31 +116,60 @@ export function BudgetCategoryForm({
     }
   }, [isOpen, mode, initialData]);
 
-  // Format categories for dropdown
-  const categoryOptions = useMemo(() => {
-    return availableCategories.map((cat) => ({
-      value: cat.join(' > '),
-      label: formatCategoryPath(cat),
-      category: cat,
-    }));
-  }, [availableCategories]);
+  // Build <optgroup> sections for the custom category select, reflecting the full custom
+  // hierarchy (#1203): childless top-level customs, custom parents with their custom
+  // children nested under the parent's name, then customs nested under a PFC primary.
+  const customCategoryOptionGroups = useMemo(() => {
+    const cats = (Array.isArray(userCategories) ? userCategories : []) as Parameters<typeof buildCategoryHierarchy>[0];
+    const { topLevel, pfcGroups } = buildCategoryHierarchy(cats);
+    const groups: { key: string; label: string; options: { id: string; label: string }[] }[] = [];
 
-  // Check if tags should be shown based on match_logic
-  const showTagPicker = useMemo(() => {
-    return formData.match_logic !== 'category_only';
-  }, [formData.match_logic]);
+    const childless = topLevel.filter((g) => g.children.length === 0).map((g) => g.parent);
+    if (childless.length > 0) {
+      groups.push({
+        key: '__none__',
+        label: 'Custom (no parent)',
+        options: childless.map((c) => ({ id: c.id, label: c.name })),
+      });
+    }
 
-  // Issue #497: Category preview - show matching transaction count and total
+    for (const g of topLevel.filter((g) => g.children.length > 0)) {
+      groups.push({
+        key: g.parent.id,
+        label: g.parent.name,
+        options: [
+          { id: g.parent.id, label: g.parent.name },
+          ...g.children.map((c) => ({ id: c.id, label: `— ${c.name}` })),
+        ],
+      });
+    }
+
+    for (const pg of pfcGroups) {
+      groups.push({
+        key: `pfc:${pg.pfcPrimary}`,
+        label: getPrimaryLabel(pg.pfcPrimary) ?? formatPFCPrimary(pg.pfcPrimary),
+        options: pg.categories.map((c) => ({ id: c.id, label: c.name })),
+      });
+    }
+
+    return groups;
+  }, [userCategories]);
+
+  const showTagPicker = formData.match_logic !== 'category_only';
+
+  const hasCategory = formData.category_kind === 'pfc'
+    ? !!formData.pfc_primary
+    : !!formData.custom_category_id;
+
   const previewEnabled = useMemo(() => {
-    return isOpen && formData.category.length > 0 && !!budgetStartDate && !!budgetEndDate;
-  }, [isOpen, formData.category, budgetStartDate, budgetEndDate]);
-
-  const previewCategories = useMemo(() => {
-    return formData.category.length > 0 ? [formData.category] : [];
-  }, [formData.category]);
+    return isOpen && hasCategory && !!budgetStartDate && !!budgetEndDate;
+  }, [isOpen, hasCategory, budgetStartDate, budgetEndDate]);
 
   const { preview, loading: previewLoading, error: previewError } = usePreviewCategories(
-    previewCategories,
+    formData.category_kind,
+    formData.pfc_primary || undefined,
+    formData.pfc_detailed || undefined,
+    formData.custom_category_id || undefined,
     formData.tags,
     formData.match_logic,
     budgetStartDate || '',
@@ -132,35 +177,73 @@ export function BudgetCategoryForm({
     previewEnabled
   );
 
-  // Format currency for preview display
-  const formatCurrency = (amount: number): string => {
-    return new Intl.NumberFormat('en-US', {
+  const allocationOverage = useMemo(() => {
+    if (expectedIncome == null || expectedIncome <= 0) return null;
+    const newAmount = parseFloat(formData.allocated_amount);
+    if (isNaN(newAmount) || newAmount <= 0) return null;
+    const projected = totalAllocatedExcludingCurrent + newAmount;
+    return projected > expectedIncome ? projected - expectedIncome : null;
+  }, [expectedIncome, totalAllocatedExcludingCurrent, formData.allocated_amount]);
+
+  const formatCurrency = (amount: number): string =>
+    new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
     }).format(amount);
-  };
 
-  const handleCategoryChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
-      const selectedValue = e.target.value;
-      const selectedOption = categoryOptions.find((opt) => opt.value === selectedValue);
+  // Clear error on category change (category_kind, PFC, or custom selection)
+  const clearCategoryError = useCallback(
+    () => errors.category && setErrors((prev) => ({ ...prev, category: undefined })),
+    [errors.category]
+  );
+
+  const handleCategoryKindChange = useCallback(
+    (kind: 'pfc' | 'custom') => {
       setFormData((prev) => ({
         ...prev,
-        category: selectedOption ? selectedOption.category : [],
+        category_kind: kind,
+        ...(kind === 'pfc'
+          ? { custom_category_id: '' }
+          : { pfc_primary: '', pfc_detailed: '' }),
       }));
-      // Clear error for this field
-      if (errors.category) {
-        setErrors((prev) => ({ ...prev, category: undefined }));
-      }
+      clearCategoryError();
     },
-    [categoryOptions, errors.category]
+    [clearCategoryError]
+  );
+
+  // PFC single-select value for the tree picker
+  const pfcSingleSelectValue = useMemo(
+    () =>
+      formData.pfc_primary
+        ? { primary: formData.pfc_primary, detailed: formData.pfc_detailed || undefined }
+        : null,
+    [formData.pfc_primary, formData.pfc_detailed]
+  );
+
+  const handlePFCSingleSelectChange = useCallback(
+    (value: { primary: string; detailed?: string } | null) => {
+      setFormData((prev) => ({
+        ...prev,
+        pfc_primary: value?.primary ?? '',
+        pfc_detailed: value?.detailed ?? '',
+      }));
+      clearCategoryError();
+    },
+    [clearCategoryError]
+  );
+
+  const handleCustomCategoryChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      setFormData((prev) => ({ ...prev, custom_category_id: e.target.value }));
+      clearCategoryError();
+    },
+    [clearCategoryError]
   );
 
   const handleAmountChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const value = e.target.value;
       setFormData((prev) => ({ ...prev, allocated_amount: value }));
-      // Clear error for this field
       if (errors.allocated_amount) {
         setErrors((prev) => ({ ...prev, allocated_amount: undefined }));
       }
@@ -170,7 +253,6 @@ export function BudgetCategoryForm({
 
   const handleMatchLogicChange = useCallback((logic: MatchLogic) => {
     setFormData((prev) => ({ ...prev, match_logic: logic }));
-    // Clear tag error when switching away from tag-required modes
     if (logic === 'category_only') {
       setErrors((prev) => ({ ...prev, tags: undefined }));
     }
@@ -185,7 +267,6 @@ export function BudgetCategoryForm({
           : [...prev.tags, tagName];
         return { ...prev, tags: newTags };
       });
-      // Clear error for tags
       if (errors.tags) {
         setErrors((prev) => ({ ...prev, tags: undefined }));
       }
@@ -196,18 +277,15 @@ export function BudgetCategoryForm({
   const validate = useCallback((): boolean => {
     const newErrors: FormErrors = {};
 
-    // Validate category selection
-    if (formData.category.length === 0) {
+    if (!hasCategory) {
       newErrors.category = 'Category is required';
     }
 
-    // Validate amount
     const amount = parseFloat(formData.allocated_amount);
     if (isNaN(amount) || amount <= 0) {
       newErrors.allocated_amount = 'Amount must be greater than 0';
     }
 
-    // Validate tags when match_logic requires them
     if (
       (formData.match_logic === 'tag_only' ||
         formData.match_logic === 'and' ||
@@ -219,7 +297,7 @@ export function BudgetCategoryForm({
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
-  }, [formData]);
+  }, [formData, hasCategory]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -237,7 +315,10 @@ export function BudgetCategoryForm({
 
         if (mode === 'create') {
           const request: CreateBudgetCategoryRequest = {
-            category: formData.category,
+            category_kind: formData.category_kind,
+            pfc_primary: formData.pfc_primary || undefined,
+            pfc_detailed: formData.pfc_detailed || undefined,
+            custom_category_id: formData.custom_category_id || undefined,
             allocated_amount: amount,
             tags: formData.tags.length > 0 ? formData.tags : undefined,
             match_logic: formData.match_logic,
@@ -262,35 +343,33 @@ export function BudgetCategoryForm({
     [formData, mode, validate, onSubmit, onClose]
   );
 
-  // Handle dialog open state changes
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      if (!open) {
-        onClose();
-      }
-    },
-    [onClose]
-  );
+  const isEditMode = mode === 'edit';
+  const dialogTitle = isEditMode ? 'Edit Category' : 'Add Category';
+  const submitButtonText = isEditMode ? 'Save' : 'Add';
 
-  const dialogTitle = mode === 'create' ? 'Add Category' : 'Edit Category';
-  const submitButtonText = mode === 'create' ? 'Add' : 'Save';
+  const inputBase = 'w-full py-2.5 px-3 text-sm border border-input rounded-lg bg-card text-foreground transition-[border-color,box-shadow] duration-150 focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-ring/15 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed';
+  const inputError = 'border-destructive focus:ring-destructive/15';
+
+  // PFC primary and detailed display labels
+  const pfcPrimaryLabel = formData.pfc_primary && formatPFCPrimary(formData.pfc_primary);
+  const pfcDetailedLabel = formData.pfc_detailed && (getDetailedLabel(formData.pfc_detailed) ?? formData.pfc_detailed);
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className="budget-category-form w-full max-w-md p-6 bg-white dark:bg-gray-900 rounded-2xl"
+        className="budget-category-form w-full max-w-md p-6 bg-card rounded-2xl"
         onInteractOutside={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => e.preventDefault()}
         showCloseButton={false}
       >
         <DialogHeader className="flex flex-row items-center justify-between mb-6">
-          <DialogTitle className="text-xl font-semibold text-gray-900 dark:text-white">
+          <DialogTitle className="text-xl font-semibold text-foreground">
             {dialogTitle}
           </DialogTitle>
           <button
             type="button"
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            className="text-muted-foreground hover:text-foreground"
           >
             <XIcon className="h-6 w-6" />
           </button>
@@ -299,30 +378,90 @@ export function BudgetCategoryForm({
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Category Field */}
           <div>
-            <label
-              htmlFor="category"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
-            >
+            <label className="block text-sm font-medium text-foreground mb-2">
               Category
             </label>
-            <select
-              id="category"
-              value={formData.category.join(' > ')}
-              onChange={handleCategoryChange}
-              disabled={mode === 'edit'}
-              className={`budget-category-form__input ${
-                errors.category ? 'budget-category-form__input--error' : ''
-              }`}
-            >
-              <option value="">Select a category...</option>
-              {categoryOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+
+            {/* Category kind toggle */}
+            <div className="flex rounded-md border border-border overflow-hidden mb-3">
+              <button
+                type="button"
+                onClick={() => handleCategoryKindChange('pfc')}
+                className={cn(
+                  'flex-1 px-3 py-1.5 text-sm font-medium transition-colors',
+                  formData.category_kind === 'pfc'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                )}
+                disabled={isEditMode}
+              >
+                Plaid Categories
+              </button>
+              {(userCategories?.length ?? 0) > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handleCategoryKindChange('custom')}
+                  className={cn(
+                    'flex-1 px-3 py-1.5 text-sm font-medium transition-colors border-l border-border',
+                    formData.category_kind === 'custom'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                  )}
+                  disabled={isEditMode}
+                >
+                  Custom Categories
+                </button>
+              )}
+            </div>
+
+            {/* PFC section: hierarchical tree picker */}
+            {formData.category_kind === 'pfc' && (
+              <div>
+                <HierarchicalCategoryTreeSelect
+                  singleSelectValue={pfcSingleSelectValue}
+                  onSingleSelectChange={handlePFCSingleSelectChange}
+                  disabled={isEditMode}
+                  aria-label="Select PFC category"
+                />
+                {pfcSingleSelectValue && (
+                  <div className="mt-1.5 flex items-center gap-1.5 text-sm text-foreground">
+                    <span>{pfcPrimaryLabel}</span>
+                    {pfcDetailedLabel && (
+                      <>
+                        <span className="text-muted-foreground">›</span>
+                        <span>{pfcDetailedLabel}</span>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Custom section: select grouped by parent_pfc_primary */}
+            {formData.category_kind === 'custom' && (
+              <select
+                id="category"
+                value={formData.custom_category_id}
+                onChange={handleCustomCategoryChange}
+                disabled={isEditMode}
+                aria-label="Category"
+                className={cn(inputBase, errors.category && inputError)}
+              >
+                <option value="">Select a category...</option>
+                {customCategoryOptionGroups.map((grp) => (
+                  <optgroup key={grp.key} label={grp.label}>
+                    {grp.options.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            )}
+
             {errors.category && (
-              <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+              <p className="mt-1 text-sm text-destructive">
                 {errors.category}
               </p>
             )}
@@ -332,12 +471,12 @@ export function BudgetCategoryForm({
           <div>
             <label
               htmlFor="amount"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+              className="block text-sm font-medium text-foreground"
             >
               Amount
             </label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
                 $
               </span>
               <input
@@ -347,14 +486,12 @@ export function BudgetCategoryForm({
                 onChange={handleAmountChange}
                 min="0"
                 step="0.01"
-                className={`budget-category-form__input pl-7 ${
-                  errors.allocated_amount ? 'budget-category-form__input--error' : ''
-                }`}
+                className={cn(inputBase, 'pl-7', errors.allocated_amount && inputError)}
                 placeholder="0.00"
               />
             </div>
             {errors.allocated_amount && (
-              <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+              <p className="mt-1 text-sm text-destructive">
                 {errors.allocated_amount}
               </p>
             )}
@@ -367,49 +504,54 @@ export function BudgetCategoryForm({
             disabled={isSubmitting}
           />
 
-          {/* Tags Field - shown based on match_logic */}
+          {/* Tags Field */}
           {showTagPicker && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              <label className="block text-sm font-medium text-foreground mb-2">
                 Tags
               </label>
-              <div className="budget-category-form__tags">
-                {availableTags.map((tag) => (
-                  <button
-                    key={tag.id}
-                    type="button"
-                    onClick={() => handleTagToggle(tag.name)}
-                    disabled={isSubmitting}
-                    className={`budget-category-form__tag ${
-                      formData.tags.includes(tag.name)
-                        ? 'budget-category-form__tag--selected'
-                        : ''
-                    }`}
-                    style={
-                      formData.tags.includes(tag.name)
-                        ? { backgroundColor: tag.color ?? undefined, borderColor: tag.color ?? undefined }
-                        : undefined
-                    }
-                  >
-                    {tag.name}
-                  </button>
-                ))}
+              <div className="flex flex-wrap gap-2">
+                {availableTags.map((tag) => {
+                  const isSelected = formData.tags.includes(tag.name);
+                  return (
+                    <button
+                      key={tag.id}
+                      type="button"
+                      onClick={() => handleTagToggle(tag.name)}
+                      disabled={isSubmitting}
+                      className={cn(
+                        'budget-category-form__tag py-1.5 px-3 text-[0.8125rem] font-medium rounded-full cursor-pointer transition-all duration-150 border disabled:opacity-50 disabled:cursor-not-allowed',
+                        isSelected
+                          ? 'budget-category-form__tag--selected text-white border-transparent hover:enabled:opacity-90'
+                          : 'text-muted-foreground bg-muted border-border hover:enabled:bg-accent'
+                      )}
+                      style={
+                        isSelected
+                          ? { backgroundColor: tag.color ?? undefined, borderColor: tag.color ?? undefined }
+                          : undefined
+                      }
+                    >
+                      {tag.name}
+                    </button>
+                  );
+                })}
               </div>
               {errors.tags && (
-                <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+                <p className="mt-1 text-sm text-destructive">
                   {errors.tags}
                 </p>
               )}
             </div>
           )}
 
-          {/* Issue #497: Transaction Preview */}
+          {/* Transaction Preview */}
           {previewEnabled && (
-            <div
-              className="budget-category-form__preview p-3 rounded-lg bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-sm"
-              data-testid="category-preview"
+            <Alert
+              variant="info"
               role="status"
               aria-live="polite"
+              data-testid="category-preview"
+              className="budget-category-form__preview"
             >
               {previewLoading ? (
                 <span className="flex items-center gap-2">
@@ -417,41 +559,40 @@ export function BudgetCategoryForm({
                   <span>Calculating matches...</span>
                 </span>
               ) : previewError ? (
-                <span className="text-amber-600 dark:text-amber-400">
+                <span className="text-warning">
                   Unable to load preview
                 </span>
               ) : preview ? (
                 <span>
                   Matches <strong>{preview.transaction_count}</strong> transaction{preview.transaction_count !== 1 ? 's' : ''} totaling{' '}
-                  <strong>{formatCurrency(preview.total_amount)}</strong>
+                  <strong data-ph-mask>{formatCurrency(preview.total_amount)}</strong>
                 </span>
               ) : null}
-            </div>
+            </Alert>
           )}
 
-          {/* API Error */}
+          {/* Soft over-allocation warning */}
+          {allocationOverage != null && (
+            <Alert
+              variant="warning"
+              role="status"
+              aria-live="polite"
+            >
+              Allocations exceed expected income by ${allocationOverage.toFixed(2)}. You&apos;ll be dipping into savings or going over budget.
+            </Alert>
+          )}
+
           {apiError && (
-            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 text-sm">
-              {apiError}
-            </div>
+            <Alert variant="destructive">{apiError}</Alert>
           )}
 
-          {/* Actions */}
           <div className="flex justify-end gap-3 pt-4">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-            >
+            <Button variant="outline" type="button" onClick={onClose}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
+            </Button>
+            <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? 'Saving...' : submitButtonText}
-            </button>
+            </Button>
           </div>
         </form>
       </DialogContent>

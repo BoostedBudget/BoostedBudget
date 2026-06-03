@@ -75,9 +75,9 @@ test.describe('Clerk Authentication - Login Flow', () => {
       await expect(emailInput).toBeVisible();
     });
 
-    // SKIPPED: Issue #615 - User button selector needs verification after Clerk login
+    // FIXME: Issue #615 - User button selector needs verification after Clerk login
     // The test logs in successfully but can't find the logged-in state selector.
-    test.skip('should successfully log in with valid credentials', async ({ page }) => {
+    test.fixme('should successfully log in with valid credentials', async ({ page }) => {
       // Skip if no credentials available
       test.skip(!process.env.TEST_CLERK_EMAIL || !process.env.TEST_CLERK_PASSWORD, 'Requires TEST_CLERK_EMAIL and TEST_CLERK_PASSWORD');
       await setupClerkTestingToken({ page });
@@ -163,7 +163,7 @@ test.describe('Clerk Authentication - Login Flow', () => {
 
     test('should successfully create account with valid details', async ({ page: _page }) => {
       // Skip: Creating users in Clerk requires special cleanup automation
-      test.skip(true, 'Requires automated Clerk user cleanup to avoid test pollution');
+      test.fixme(true, 'Requires automated Clerk user cleanup to avoid test pollution');
 
       // This is a placeholder for signup flow testing
       // Actual implementation would:

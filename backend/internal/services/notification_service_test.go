@@ -57,6 +57,11 @@ func (m *mockNotifRepo) GetUnsentEmails(ctx context.Context, limit int) ([]domai
 	return args.Get(0).([]domain.Notification), args.Error(1)
 }
 
+func (m *mockNotifRepo) MarkAllAsRead(ctx context.Context, userID string) (int64, error) {
+	args := m.Called(ctx, userID)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 // mockUserRepo is a mock implementation for getting user info.
 type mockUserRepo struct {
 	mock.Mock

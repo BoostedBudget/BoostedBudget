@@ -4,7 +4,8 @@
 // for component tests that need to test in isolation from hook implementation.
 
 import { mock } from 'bun:test'
-import type { Budget, SavingsGoal } from '@/features/budgets/types'
+import type { Budget } from '@/features/budgets/types'
+import type { SavingsGoal } from '@/features/savings/types'
 
 // === useBudgets wrapper hook mock ===
 export const mockRefetchBudgets = mock(() => Promise.resolve())

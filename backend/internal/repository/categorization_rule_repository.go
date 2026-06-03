@@ -73,11 +73,6 @@ func (r *categorizationRuleRepository) Create(ctx context.Context, rule *domain.
 		return err
 	}
 
-	categoryJSON, err := json.Marshal(rule.TargetCategory)
-	if err != nil {
-		return err
-	}
-
 	tagsJSON, err := json.Marshal(rule.TargetTags)
 	if err != nil {
 		return err
@@ -86,10 +81,11 @@ func (r *categorizationRuleRepository) Create(ctx context.Context, rule *domain.
 	query := `
 		INSERT INTO categorization_rules (
 			id, user_id, name, description, enabled, priority,
-			conditions, condition_logic, target_category, target_tags,
-			tag_behavior, source, match_count, override_count,
+			conditions, condition_logic,
+			target_kind, target_pfc_primary, target_pfc_detailed, target_custom_category_id,
+			target_tags, tag_behavior, source, match_count, override_count,
 			last_matched_at, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 	`
 
 	_, err = r.db.Exec(ctx, query,
@@ -101,7 +97,10 @@ func (r *categorizationRuleRepository) Create(ctx context.Context, rule *domain.
 		rule.Priority,
 		conditionsJSON,
 		rule.ConditionLogic,
-		categoryJSON,
+		rule.TargetKind,
+		rule.TargetPFCPrimary,
+		rule.TargetPFCDetailed,
+		rule.TargetCustomCategoryID,
 		tagsJSON,
 		rule.TagBehavior,
 		rule.Source,
@@ -128,15 +127,16 @@ func (r *categorizationRuleRepository) Create(ctx context.Context, rule *domain.
 func (r *categorizationRuleRepository) GetByID(ctx context.Context, id string) (*domain.CategorizationRule, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
-			conditions, condition_logic, target_category, target_tags,
-			tag_behavior, source, match_count, override_count,
+			conditions, condition_logic,
+			target_kind, target_pfc_primary, target_pfc_detailed, target_custom_category_id,
+			target_tags, tag_behavior, source, match_count, override_count,
 			last_matched_at, created_at, updated_at
 		FROM categorization_rules
 		WHERE id = $1
 	`
 
 	rule := &domain.CategorizationRule{}
-	var conditionsJSON, categoryJSON, tagsJSON []byte
+	var conditionsJSON, tagsJSON []byte
 
 	err := r.db.QueryRow(ctx, query, id).Scan(
 		&rule.ID,
@@ -147,7 +147,10 @@ func (r *categorizationRuleRepository) GetByID(ctx context.Context, id string) (
 		&rule.Priority,
 		&conditionsJSON,
 		&rule.ConditionLogic,
-		&categoryJSON,
+		&rule.TargetKind,
+		&rule.TargetPFCPrimary,
+		&rule.TargetPFCDetailed,
+		&rule.TargetCustomCategoryID,
 		&tagsJSON,
 		&rule.TagBehavior,
 		&rule.Source,
@@ -167,9 +170,6 @@ func (r *categorizationRuleRepository) GetByID(ctx context.Context, id string) (
 
 	// Unmarshal JSON fields
 	if err := json.Unmarshal(conditionsJSON, &rule.Conditions); err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(categoryJSON, &rule.TargetCategory); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(tagsJSON, &rule.TargetTags); err != nil {
@@ -183,8 +183,9 @@ func (r *categorizationRuleRepository) GetByID(ctx context.Context, id string) (
 func (r *categorizationRuleRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.CategorizationRule, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
-			conditions, condition_logic, target_category, target_tags,
-			tag_behavior, source, match_count, override_count,
+			conditions, condition_logic,
+			target_kind, target_pfc_primary, target_pfc_detailed, target_custom_category_id,
+			target_tags, tag_behavior, source, match_count, override_count,
 			last_matched_at, created_at, updated_at
 		FROM categorization_rules
 		WHERE user_id = $1
@@ -198,8 +199,9 @@ func (r *categorizationRuleRepository) GetByUserID(ctx context.Context, userID s
 func (r *categorizationRuleRepository) GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.CategorizationRule, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
-			conditions, condition_logic, target_category, target_tags,
-			tag_behavior, source, match_count, override_count,
+			conditions, condition_logic,
+			target_kind, target_pfc_primary, target_pfc_detailed, target_custom_category_id,
+			target_tags, tag_behavior, source, match_count, override_count,
 			last_matched_at, created_at, updated_at
 		FROM categorization_rules
 		WHERE user_id = $1 AND enabled = true
@@ -213,15 +215,16 @@ func (r *categorizationRuleRepository) GetEnabledByUserID(ctx context.Context, u
 func (r *categorizationRuleRepository) GetByName(ctx context.Context, userID, name string) (*domain.CategorizationRule, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
-			conditions, condition_logic, target_category, target_tags,
-			tag_behavior, source, match_count, override_count,
+			conditions, condition_logic,
+			target_kind, target_pfc_primary, target_pfc_detailed, target_custom_category_id,
+			target_tags, tag_behavior, source, match_count, override_count,
 			last_matched_at, created_at, updated_at
 		FROM categorization_rules
 		WHERE user_id = $1 AND name = $2
 	`
 
 	rule := &domain.CategorizationRule{}
-	var conditionsJSON, categoryJSON, tagsJSON []byte
+	var conditionsJSON, tagsJSON []byte
 
 	err := r.db.QueryRow(ctx, query, userID, name).Scan(
 		&rule.ID,
@@ -232,7 +235,10 @@ func (r *categorizationRuleRepository) GetByName(ctx context.Context, userID, na
 		&rule.Priority,
 		&conditionsJSON,
 		&rule.ConditionLogic,
-		&categoryJSON,
+		&rule.TargetKind,
+		&rule.TargetPFCPrimary,
+		&rule.TargetPFCDetailed,
+		&rule.TargetCustomCategoryID,
 		&tagsJSON,
 		&rule.TagBehavior,
 		&rule.Source,
@@ -252,9 +258,6 @@ func (r *categorizationRuleRepository) GetByName(ctx context.Context, userID, na
 
 	// Unmarshal JSON fields
 	if err := json.Unmarshal(conditionsJSON, &rule.Conditions); err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(categoryJSON, &rule.TargetCategory); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(tagsJSON, &rule.TargetTags); err != nil {
@@ -274,11 +277,6 @@ func (r *categorizationRuleRepository) Update(ctx context.Context, rule *domain.
 		return err
 	}
 
-	categoryJSON, err := json.Marshal(rule.TargetCategory)
-	if err != nil {
-		return err
-	}
-
 	tagsJSON, err := json.Marshal(rule.TargetTags)
 	if err != nil {
 		return err
@@ -287,9 +285,11 @@ func (r *categorizationRuleRepository) Update(ctx context.Context, rule *domain.
 	query := `
 		UPDATE categorization_rules
 		SET name = $1, description = $2, enabled = $3, priority = $4,
-			conditions = $5, condition_logic = $6, target_category = $7,
-			target_tags = $8, tag_behavior = $9, updated_at = $10
-		WHERE id = $11
+			conditions = $5, condition_logic = $6,
+			target_kind = $7, target_pfc_primary = $8, target_pfc_detailed = $9,
+			target_custom_category_id = $10,
+			target_tags = $11, tag_behavior = $12, updated_at = $13
+		WHERE id = $14
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -299,7 +299,10 @@ func (r *categorizationRuleRepository) Update(ctx context.Context, rule *domain.
 		rule.Priority,
 		conditionsJSON,
 		rule.ConditionLogic,
-		categoryJSON,
+		rule.TargetKind,
+		rule.TargetPFCPrimary,
+		rule.TargetPFCDetailed,
+		rule.TargetCustomCategoryID,
 		tagsJSON,
 		rule.TagBehavior,
 		rule.UpdatedAt,
@@ -401,7 +404,7 @@ func (r *categorizationRuleRepository) queryRules(ctx context.Context, query str
 	var rules []*domain.CategorizationRule
 	for rows.Next() {
 		rule := &domain.CategorizationRule{}
-		var conditionsJSON, categoryJSON, tagsJSON []byte
+		var conditionsJSON, tagsJSON []byte
 
 		err := rows.Scan(
 			&rule.ID,
@@ -412,7 +415,10 @@ func (r *categorizationRuleRepository) queryRules(ctx context.Context, query str
 			&rule.Priority,
 			&conditionsJSON,
 			&rule.ConditionLogic,
-			&categoryJSON,
+			&rule.TargetKind,
+			&rule.TargetPFCPrimary,
+			&rule.TargetPFCDetailed,
+			&rule.TargetCustomCategoryID,
 			&tagsJSON,
 			&rule.TagBehavior,
 			&rule.Source,
@@ -428,9 +434,6 @@ func (r *categorizationRuleRepository) queryRules(ctx context.Context, query str
 
 		// Unmarshal JSON fields
 		if err := json.Unmarshal(conditionsJSON, &rule.Conditions); err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(categoryJSON, &rule.TargetCategory); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(tagsJSON, &rule.TargetTags); err != nil {

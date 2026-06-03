@@ -9,9 +9,9 @@
 import { useCallback, useMemo } from 'react';
 import type { IncomeSource } from '../../types';
 import type { UserTag } from '@/features/tags/types';
+import type { Primary } from '@boostedbudget/api-client/models/primary';
 import { IncomeSourceItem } from './IncomeSourceItem';
 import { IncomeSourcePicker } from './IncomeSourcePicker';
-import './IncomeSourceConfig.css';
 
 export interface IncomeSourceConfigProps {
   /** Currently configured income sources */
@@ -19,7 +19,7 @@ export interface IncomeSourceConfigProps {
   /** Callback when sources change (add/remove) */
   onChange: (sources: IncomeSource[]) => void;
   /** Available Plaid categories for the picker */
-  availableCategories: string[];
+  availableCategories: Primary[];
   /** Available user tags for the picker */
   availableTags: UserTag[];
   /** Whether the component is disabled */
@@ -74,15 +74,15 @@ export function IncomeSourceConfig({
   );
 
   return (
-    <div className="income-source-config">
+    <div className="flex flex-col gap-4">
       {/* Source List */}
       {sources.length === 0 ? (
-        <div className="income-source-config__empty">
+        <div className="p-6 text-center text-sm text-muted-foreground bg-muted border border-dashed border-border rounded-lg">
           No income sources configured. Add sources below to track your income.
         </div>
       ) : (
         <ul
-          className="income-source-config__list"
+          className="flex flex-col gap-2 list-none m-0 p-0"
           role="list"
           aria-label="Income sources"
         >
@@ -109,11 +109,11 @@ export function IncomeSourceConfig({
 
       {/* Expected Total */}
       {showTotal && (
-        <div className="income-source-config__total">
-          <span className="income-source-config__total-label">
+        <div className="flex items-center justify-between px-4 py-3 bg-success/10 border border-success/30 rounded-lg">
+          <span className="text-sm font-medium text-success">
             Expected Income:
           </span>
-          <span className="income-source-config__total-value" role="status">
+          <span className="text-base font-semibold text-success" role="status">
             {formatCurrency(expectedTotal)}
           </span>
         </div>

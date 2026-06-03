@@ -35,7 +35,7 @@ WORKDIR /build/apps/web
 RUN npm run build
 
 # Stage 2: Runtime with Nginx (Debian-based)
-FROM nginx:stable@sha256:d9911e5ac94c1905ffd34a582d01430224aed6954cb4a788b7877114bf0c1cb1
+FROM nginx:stable@sha256:42ff6c6704359b80306f35a0c7bb0bbc9b65a058e63f0cc1e91a48fd22e3e1e5
 
 # Install runtime dependencies
 RUN for i in 1 2 3; do \

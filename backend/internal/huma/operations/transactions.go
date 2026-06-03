@@ -2,26 +2,44 @@ package operations
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/maxnussbaum/BoostedBudget/internal/dateutil"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
 // TransactionHandler handles transaction-related HTTP requests.
 type TransactionHandler struct {
-	service services.TransactionService
+	service         services.TransactionService
+	db              repository.DB
+	mcpAuditRepo    repository.MCPAuditRepository
+	mcpWorkerSecret string
+}
+
+type TransactionHandlerDeps struct {
+	DB              repository.DB
+	MCPAuditRepo    repository.MCPAuditRepository
+	MCPWorkerSecret string
 }
 
 // NewTransactionHandler creates a new TransactionHandler instance.
-func NewTransactionHandler(service services.TransactionService) *TransactionHandler {
-	return &TransactionHandler{service: service}
+func NewTransactionHandler(service services.TransactionService, deps ...TransactionHandlerDeps) *TransactionHandler {
+	h := &TransactionHandler{service: service}
+	if len(deps) > 0 {
+		h.db = deps[0].DB
+		h.mcpAuditRepo = deps[0].MCPAuditRepo
+		h.mcpWorkerSecret = deps[0].MCPWorkerSecret
+	}
+	return h
 }
 
 // --- Input/Output Types ---
@@ -29,25 +47,37 @@ func NewTransactionHandler(service services.TransactionService) *TransactionHand
 // GetTransactionsInput represents the input for listing transactions.
 type GetTransactionsInput struct {
 	inputs.AuthenticatedInput
-	inputs.PaginationInput
+	inputs.CursorPaginationInput
 
 	// Filter parameters (all optional - empty string means not set)
-	AccountID  string `query:"account_id" doc:"Filter by specific account ID (deprecated: use account_ids)"`
-	AccountIDs string `query:"account_ids" doc:"Filter by multiple account IDs (comma-separated UUIDs)"`
-	StartDate  string `query:"start_date" doc:"Filter transactions on or after this date (YYYY-MM-DD)"`
-	EndDate    string `query:"end_date" doc:"Filter transactions on or before this date (YYYY-MM-DD)"`
-	Category   string `query:"category" doc:"Filter by category (deprecated: use categories)"`
-	Categories string `query:"categories" doc:"Filter by multiple categories (comma-separated)"`
-	Search     string `query:"search" doc:"Search in merchant name or transaction name"`
-	Pending    string `query:"pending" doc:"Filter by pending status (true/false)"`
-	MinAmount  string `query:"min_amount" doc:"Filter by minimum absolute amount"`
-	MaxAmount  string `query:"max_amount" doc:"Filter by maximum absolute amount"`
-	AmountType string `query:"amount_type" enum:"income,expense,all" doc:"Filter by transaction type"`
+	AccountID         string `query:"account_id" doc:"Filter by specific account ID (deprecated: use account_ids)"`
+	AccountIDs        string `query:"account_ids" doc:"Filter by multiple account IDs (comma-separated UUIDs)"`
+	StartDate         string `query:"start_date" doc:"Filter transactions on or after this date (YYYY-MM-DD)"`
+	EndDate           string `query:"end_date" doc:"Filter transactions on or before this date (YYYY-MM-DD)"`
+	PFCPrimaries      string `query:"pfc_primaries" doc:"Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)"`
+	PFCDetaileds      string `query:"pfc_detaileds" doc:"Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). Combined with pfc_primaries using OR logic."`
+	CustomCategoryIDs string `query:"custom_category_ids" doc:"Filter by custom category UUIDs (comma-separated)"`
+	Search            string `query:"search" doc:"Search in merchant name or transaction name"`
+	Pending           string `query:"pending" doc:"Filter by pending status (true/false)"`
+	Reviewed          string `query:"reviewed" doc:"Filter by review state: true (reviewed), false (unreviewed inbox), omit for both"`
+	MinAmount         string `query:"min_amount" doc:"Filter by minimum absolute amount"`
+	MaxAmount         string `query:"max_amount" doc:"Filter by maximum absolute amount"`
+	AmountType        string `query:"amount_type" enum:"income,expense,all" doc:"Filter by transaction type"`
+	UserAccountID     string `query:"user_account_id" doc:"Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members"`
+	MerchantID        string `query:"merchant_id" doc:"Filter transactions by merchant UUID" example:"550e8400-e29b-41d4-a716-446655440000"`
+
+	// Sort parameters
+	SortBy  string `query:"sort_by"  enum:"date,merchant,amount,category" default:"date"  doc:"Column to sort by"`
+	SortDir string `query:"sort_dir" enum:"asc,desc"                      default:"desc" doc:"Sort direction"`
 }
 
 // GetTransactionsOutput represents the response for listing transactions.
 type GetTransactionsOutput struct {
-	Body *services.TransactionListResponse
+	Body struct {
+		Transactions []*domain.Transaction `json:"transactions"`
+		NextCursor   *string               `json:"next_cursor,omitempty"`
+		Limit        int                   `json:"limit"`
+	}
 }
 
 // GetTransactionByIDInput represents the input for getting a transaction by ID.
@@ -64,7 +94,7 @@ type GetTransactionByIDOutput struct {
 // UpdateTransactionTagsInput represents the input for updating transaction tags.
 type UpdateTransactionTagsInput struct {
 	inputs.AuthenticatedInput
-	ID   string                     `path:"id" doc:"Transaction UUID"`
+	ID   string                    `path:"id" doc:"Transaction UUID"`
 	Body UpdateTransactionTagsBody `json:"body"`
 }
 
@@ -81,18 +111,51 @@ type UpdateTransactionTagsOutput struct {
 // UpdateTransactionCategoryInput represents the input for updating transaction category.
 type UpdateTransactionCategoryInput struct {
 	inputs.AuthenticatedInput
-	ID   string                          `path:"id" doc:"Transaction UUID"`
+	inputs.MCPContextInput
+	ID   string                        `path:"id" doc:"Transaction UUID"`
 	Body UpdateTransactionCategoryBody `json:"body"`
 }
 
 // UpdateTransactionCategoryBody represents the request body for updating category.
+// kind must be "pfc", "custom", or "clear".
+// When kind=pfc: pfc_primary is required, pfc_detailed is optional.
+// When kind=custom: custom_category_id is required.
+// When kind=clear: all override fields are removed.
 type UpdateTransactionCategoryBody struct {
-	Category []string `json:"category" doc:"Category hierarchy as string array"`
+	Kind             string  `json:"kind" enum:"pfc,custom,clear" doc:"Category override kind"`
+	PFCPrimary       *string `json:"pfc_primary,omitempty" doc:"PFC primary enum (required when kind=pfc)"`
+	PFCDetailed      *string `json:"pfc_detailed,omitempty" doc:"PFC detailed enum (optional when kind=pfc)"`
+	CustomCategoryID *string `json:"custom_category_id,omitempty" doc:"Custom category UUID (required when kind=custom)"`
 }
 
 // UpdateTransactionCategoryOutput represents the response for updating category.
 type UpdateTransactionCategoryOutput struct {
 	Body *domain.Transaction
+}
+
+// SetTransactionReviewedInput updates the review state of a single transaction (Issue #1203).
+type SetTransactionReviewedInput struct {
+	inputs.AuthenticatedInput
+	ID   string `path:"id" doc:"Transaction UUID"`
+	Body struct {
+		Reviewed bool `json:"reviewed" doc:"true to mark reviewed, false to move back to the unreviewed inbox"`
+	} `json:"body"`
+}
+
+// BulkSetTransactionReviewedInput updates the review state of many transactions (Issue #1203).
+type BulkSetTransactionReviewedInput struct {
+	inputs.AuthenticatedInput
+	Body struct {
+		TransactionIDs []string `json:"transaction_ids" doc:"Transaction UUIDs to update (owned by the caller)"`
+		Reviewed       bool     `json:"reviewed" doc:"true to mark reviewed, false to move back to the unreviewed inbox"`
+	} `json:"body"`
+}
+
+// SetTransactionReviewedOutput reports how many transactions were updated.
+type SetTransactionReviewedOutput struct {
+	Body struct {
+		Updated int64 `json:"updated" doc:"Number of transactions whose review state changed"`
+	}
 }
 
 // GetPlaidCategoriesInput represents the input for getting Plaid categories.
@@ -108,8 +171,33 @@ type GetPlaidCategoriesOutput struct {
 // --- Handler Methods ---
 
 // GetTransactions handles GET /api/v1/transactions requests.
-// Retrieves transactions for the authenticated user with optional filters and pagination.
+// Retrieves transactions for the authenticated user with optional filters and cursor-based pagination.
 func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTransactionsInput) (*GetTransactionsOutput, error) {
+	// Decode cursor if present
+	var cursor *domain.TransactionCursor
+	if input.Cursor != "" {
+		c, err := domain.DecodeTransactionCursor(input.Cursor)
+		if err != nil {
+			if errors.Is(err, domain.ErrCursorVersionUnsupported) {
+				return nil, huma.Error400BadRequest("cursor version not supported")
+			}
+			return nil, huma.Error400BadRequest("invalid cursor")
+		}
+		// Validate cursor matches current sort params
+		sortBy := input.SortBy
+		if sortBy == "" {
+			sortBy = "date"
+		}
+		sortDir := input.SortDir
+		if sortDir == "" {
+			sortDir = "desc"
+		}
+		if c.K != sortBy || c.D != sortDir {
+			return nil, huma.Error400BadRequest("cursor does not match sort_by/sort_dir")
+		}
+		cursor = c
+	}
+
 	// Build filters from query parameters
 	filters := domain.TransactionFilters{}
 
@@ -127,32 +215,34 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 	}
 
 	// Date range filters
-	if input.StartDate != "" {
-		startDate, err := time.Parse("2006-01-02", input.StartDate)
-		if err != nil {
-			return nil, huma.Error400BadRequest("Invalid start_date format (expected YYYY-MM-DD)")
+	startDate, endDate, err := dateutil.ParseOptionalDateRange(input.StartDate, input.EndDate)
+	if err != nil {
+		return nil, err
+	}
+	filters.StartDate = startDate
+	filters.EndDate = endDate
+
+	// PFC primary filter (comma-separated enum values)
+	if input.PFCPrimaries != "" {
+		primaries := parseCommaSeparated(input.PFCPrimaries)
+		if len(primaries) > 0 {
+			filters.PFCPrimaries = primaries
 		}
-		filters.StartDate = &startDate
 	}
 
-	if input.EndDate != "" {
-		endDate, err := time.Parse("2006-01-02", input.EndDate)
-		if err != nil {
-			return nil, huma.Error400BadRequest("Invalid end_date format (expected YYYY-MM-DD)")
+	// PFC detailed sub-category filter (comma-separated enum values)
+	if input.PFCDetaileds != "" {
+		detaileds := parseCommaSeparated(input.PFCDetaileds)
+		if len(detaileds) > 0 {
+			filters.PFCDetaileds = detaileds
 		}
-		filters.EndDate = &endDate
 	}
 
-	// Category filter (single, deprecated)
-	if input.Category != "" {
-		filters.Category = &input.Category
-	}
-
-	// Categories filter (comma-separated)
-	if input.Categories != "" {
-		cats := parseCommaSeparated(input.Categories)
-		if len(cats) > 0 {
-			filters.Categories = cats
+	// Custom category ID filter (comma-separated UUIDs)
+	if input.CustomCategoryIDs != "" {
+		ids := parseCommaSeparated(input.CustomCategoryIDs)
+		if len(ids) > 0 {
+			filters.CustomCategoryIDs = ids
 		}
 	}
 
@@ -168,6 +258,15 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 			return nil, huma.Error400BadRequest("Invalid pending parameter (expected true or false)")
 		}
 		filters.Pending = &pending
+	}
+
+	// Reviewed filter (Issue #1203)
+	if input.Reviewed != "" {
+		reviewed, err := strconv.ParseBool(input.Reviewed)
+		if err != nil {
+			return nil, huma.Error400BadRequest("Invalid reviewed parameter (expected true or false)")
+		}
+		filters.Reviewed = &reviewed
 	}
 
 	// Min amount filter
@@ -193,13 +292,38 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 		filters.AmountType = &input.AmountType
 	}
 
-	// Call service layer
-	result, err := h.service.ListTransactions(ctx, input.UserID, filters, input.Limit, input.Offset)
+	// User account ID filter (Issue #1109: re-link transparency)
+	// Stable identifier that returns transactions from all chain members
+	if input.UserAccountID != "" {
+		filters.UserAccountID = &input.UserAccountID
+	}
+
+	// Merchant ID filter (Issue #1163: PII URL leak fix)
+	if input.MerchantID != "" {
+		filters.MerchantID = &input.MerchantID
+	}
+
+	// Sort parameters — apply defaults if Huma did not populate them (e.g. direct handler calls)
+	filters.SortBy = input.SortBy
+	if filters.SortBy == "" {
+		filters.SortBy = "date"
+	}
+	filters.SortDir = input.SortDir
+	if filters.SortDir == "" {
+		filters.SortDir = "desc"
+	}
+
+	// Call service layer (cursor-based pagination)
+	result, err := h.service.ListTransactionsByCursor(ctx, input.UserID, filters, cursor, input.Limit)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &GetTransactionsOutput{Body: result}, nil
+	out := &GetTransactionsOutput{}
+	out.Body.Transactions = result.Transactions
+	out.Body.NextCursor = result.NextCursor
+	out.Body.Limit = result.Limit
+	return out, nil
 }
 
 // GetTransactionByID handles GET /api/v1/transactions/:id requests.
@@ -231,20 +355,69 @@ func (h *TransactionHandler) UpdateTransactionTags(ctx context.Context, input *U
 }
 
 // UpdateTransactionCategory handles PUT /api/v1/transactions/:id/category requests.
-// Updates the category override on a specific transaction.
+// Updates the category override on a specific transaction using the PFC v2 discriminated union.
 func (h *TransactionHandler) UpdateTransactionCategory(ctx context.Context, input *UpdateTransactionCategoryInput) (*UpdateTransactionCategoryOutput, error) {
-	// Ensure category is not nil
-	category := input.Body.Category
-	if category == nil {
-		category = []string{}
+	// Validate the discriminated union before hitting the DB so malformed combinations
+	// return 400 rather than tripping a DB CHECK/FK and surfacing as a 500 (#1203).
+	b := input.Body
+	switch b.Kind {
+	case "custom":
+		if b.CustomCategoryID == nil || *b.CustomCategoryID == "" {
+			return nil, huma.Error400BadRequest("custom_category_id is required when kind=custom")
+		}
+		if b.PFCPrimary != nil || b.PFCDetailed != nil {
+			return nil, huma.Error400BadRequest("pfc_primary/pfc_detailed must be omitted when kind=custom")
+		}
+	case "pfc":
+		if b.PFCPrimary == nil || *b.PFCPrimary == "" {
+			return nil, huma.Error400BadRequest("pfc_primary is required when kind=pfc")
+		}
+		if b.CustomCategoryID != nil {
+			return nil, huma.Error400BadRequest("custom_category_id must be omitted when kind=pfc")
+		}
+	case "clear":
+		if (b.PFCPrimary != nil && *b.PFCPrimary != "") || (b.PFCDetailed != nil && *b.PFCDetailed != "") || b.CustomCategoryID != nil {
+			return nil, huma.Error400BadRequest("pfc_primary/pfc_detailed/custom_category_id must be omitted when kind=clear")
+		}
 	}
 
-	tx, err := h.service.UpdateTransactionCategory(ctx, input.UserID, input.ID, category)
+	tx, err := h.service.UpdateTransactionCategory(ctx, input.UserID, input.ID, input.Body.Kind, input.Body.PFCPrimary, input.Body.PFCDetailed, input.Body.CustomCategoryID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
-
+	// MCP audit (fire-and-forget; entity update is value-idempotent so retries are safe,
+	// but each retry still writes an audit row since no idempotency key is available on PATCH).
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.mcpAuditRepo != nil {
+		if auditErr := recordMCPWriteAudit(ctx, h.mcpAuditRepo, input.UserID, input.MCPGrantID, "updateTransactionCategory", ""); auditErr != nil {
+			slog.WarnContext(ctx, "MCP audit write failed (non-atomic post-write)", "operation", "updateTransactionCategory", "error", auditErr)
+		}
+	}
 	return &UpdateTransactionCategoryOutput{Body: tx}, nil
+}
+
+// SetTransactionReviewed handles PATCH /api/v1/transactions/{id}/review (Issue #1203).
+func (h *TransactionHandler) SetTransactionReviewed(ctx context.Context, input *SetTransactionReviewedInput) (*SetTransactionReviewedOutput, error) {
+	n, err := h.service.SetReviewed(ctx, input.UserID, []string{input.ID}, input.Body.Reviewed)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	out := &SetTransactionReviewedOutput{}
+	out.Body.Updated = n
+	return out, nil
+}
+
+// BulkSetTransactionReviewed handles PATCH /api/v1/transactions/review (Issue #1203).
+func (h *TransactionHandler) BulkSetTransactionReviewed(ctx context.Context, input *BulkSetTransactionReviewedInput) (*SetTransactionReviewedOutput, error) {
+	if len(input.Body.TransactionIDs) == 0 {
+		return nil, huma.Error400BadRequest("transaction_ids must not be empty")
+	}
+	n, err := h.service.SetReviewed(ctx, input.UserID, input.Body.TransactionIDs, input.Body.Reviewed)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	out := &SetTransactionReviewedOutput{}
+	out.Body.Updated = n
+	return out, nil
 }
 
 // GetPlaidCategories handles GET /api/v1/categories/plaid requests.
@@ -329,6 +502,29 @@ func RegisterTransactionRoutes(api huma.API, handler *TransactionHandler) {
 		Tags:        []string{"Transactions"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateTransactionCategory)
+
+	// PATCH /api/v1/transactions/review - Bulk set review state (Issue #1203).
+	// Registered before the {id} variant so "review" is not captured as an {id}.
+	huma.Register(api, huma.Operation{
+		OperationID: "bulkSetTransactionReviewed",
+		Method:      http.MethodPatch,
+		Path:        "/api/v1/transactions/review",
+		Summary:     "Bulk update transaction review state",
+		Description: "Marks multiple transactions reviewed or unreviewed for the authenticated user.",
+		Tags:        []string{"Transactions"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.BulkSetTransactionReviewed)
+
+	// PATCH /api/v1/transactions/{id}/review - Set review state for one transaction (Issue #1203).
+	huma.Register(api, huma.Operation{
+		OperationID: "setTransactionReviewed",
+		Method:      http.MethodPatch,
+		Path:        "/api/v1/transactions/{id}/review",
+		Summary:     "Update transaction review state",
+		Description: "Marks a transaction reviewed or unreviewed (moves it out of / into the unreviewed inbox).",
+		Tags:        []string{"Transactions"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.SetTransactionReviewed)
 
 	// GET /api/v1/categories/plaid - Get distinct Plaid categories
 	huma.Register(api, huma.Operation{

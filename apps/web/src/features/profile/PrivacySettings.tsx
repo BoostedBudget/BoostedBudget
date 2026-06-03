@@ -7,7 +7,7 @@ import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import type { PrivacySettings as PrivacySettingsType, UpdatePrivacySettingsRequest } from './types'
 import { DeleteAccountSection } from '../deletion/components/DeleteAccountSection'
-import './PrivacySettings.css'
+import { ConfirmationDialog } from '../../components/ui/confirmation-dialog'
 
 interface PrivacySettingsProps {
   onSettingsChange?: (settings: PrivacySettingsType) => void
@@ -16,6 +16,7 @@ interface PrivacySettingsProps {
 export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [showCriticalConfirm, setShowCriticalConfirm] = useState(false)
   const trackEvent = useTrackEvent()
 
   // Use generated query hook for loading settings
@@ -50,13 +51,9 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
     setSuccessMessage(null)
   }
 
-  async function handleSave() {
-    if (!settings) return
-
-    // Build update request with only changed fields
+  function buildUpdates(): UpdatePrivacySettingsRequest {
     const updates: UpdatePrivacySettingsRequest = {}
-
-    // Compare formState with original settings
+    if (!settings) return updates
     if (formState.gdpr_necessary_consent !== undefined && formState.gdpr_necessary_consent !== settings.gdpr_necessary_consent) {
       updates.gdpr_necessary_consent = formState.gdpr_necessary_consent
     }
@@ -75,27 +72,23 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
     if (formState.data_sharing_enabled !== undefined && formState.data_sharing_enabled !== settings.data_sharing_enabled) {
       updates.data_sharing_enabled = formState.data_sharing_enabled
     }
+    return updates
+  }
 
-    // If no changes, don't make the request
+  async function performSave() {
+    const updates = buildUpdates()
     if (Object.keys(updates).length === 0) {
       setSuccessMessage('No changes to save')
       return
     }
-
     try {
       setSaveError(null)
       setSuccessMessage(null)
-
       const updatedSettings = await updateMutation.mutateAsync({ data: updates })
-
-      // Clear modifications since they're now saved
       setModifications({})
+      await refetch()
       setSuccessMessage('Settings saved successfully!')
-
-      // Track privacy settings change
       trackEvent(ANALYTICS_EVENTS.PRIVACY_SETTINGS_CHANGED)
-
-      // Notify parent component
       onSettingsChange?.(updatedSettings as PrivacySettingsType)
     } catch (err) {
       console.error('Failed to save privacy settings:', err)
@@ -103,22 +96,42 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
     }
   }
 
+  function handleSave() {
+    if (!settings) return
+    const updates = buildUpdates()
+    if (Object.keys(updates).length === 0) {
+      setSuccessMessage('No changes to save')
+      return
+    }
+    // Issue #960: Warn before disabling security alerts
+    if (updates.security_alerts_enabled === false) {
+      setShowCriticalConfirm(true)
+      return
+    }
+    performSave()
+  }
+
   // Derive submitting state from mutation
   const submitting = updateMutation.isPending
 
   if (loading) {
     return (
-      <div className="privacy-settings">
-        <p>Loading privacy settings...</p>
+      <div className="max-w-3xl">
+        <p className="text-muted-foreground">Loading privacy settings...</p>
       </div>
     )
   }
 
   if (error && !settings) {
     return (
-      <div className="privacy-settings">
-        <p className="error">{error}</p>
-        <button onClick={() => refetch()}>Retry</button>
+      <div className="max-w-3xl">
+        <p className="text-destructive bg-destructive/10 px-4 py-3 rounded-md mb-4">{error}</p>
+        <button
+          onClick={() => refetch()}
+          className="bg-primary text-primary-foreground border-none px-6 py-3 rounded-md text-base font-semibold cursor-pointer hover:opacity-90 transition-opacity"
+        >
+          Retry
+        </button>
       </div>
     )
   }
@@ -128,42 +141,44 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
   }
 
   return (
-    <div className="privacy-settings">
-      <h2>Privacy Settings</h2>
+    <div className="max-w-3xl">
+      <h2 className="text-2xl font-bold text-foreground mt-0 mb-6">Privacy Settings</h2>
 
       {/* GDPR Cookie Consent Section */}
-      <section className="privacy-section">
-        <h3>GDPR Cookie Consent</h3>
-        <p className="section-description">
+      <section className="bg-card border border-border rounded-lg p-6 mb-6">
+        <h3 className="text-xl font-semibold text-foreground mt-0 mb-2">GDPR Cookie Consent</h3>
+        <p className="text-muted-foreground mb-6 leading-relaxed">
           Manage your cookie preferences. Necessary cookies are required for the app to function.
         </p>
 
-        <div className="privacy-option">
-          <label>
+        <div className="mb-6 pb-6 border-b border-muted last:border-b-0 last:mb-0 last:pb-0">
+          <label className="flex items-center cursor-pointer font-medium text-foreground">
             <input
               type="checkbox"
+              className="w-5 h-5 mr-3 cursor-not-allowed opacity-60"
               checked={formState.gdpr_necessary_consent ?? false}
               disabled={true}
               aria-label="Necessary cookies"
             />
-            <span className="option-label">Necessary</span>
+            <span className="text-base font-semibold">Necessary</span>
           </label>
-          <p className="option-description">
+          <p className="mt-2 ml-8 text-muted-foreground text-sm leading-relaxed">
             Required for basic app functionality. Cannot be disabled.
           </p>
         </div>
 
-        <div className="privacy-option">
-          <label>
+        <div className="mb-6 pb-6 border-b border-muted last:border-b-0 last:mb-0 last:pb-0">
+          <label className="flex items-center cursor-pointer font-medium text-foreground">
             <input
               type="checkbox"
+              className="w-5 h-5 mr-3 cursor-pointer"
               checked={formState.gdpr_analytics_consent ?? false}
               onChange={() => handleToggle('gdpr_analytics_consent')}
               aria-label="Analytics cookies"
             />
-            <span className="option-label">Analytics</span>
+            <span className="text-base font-semibold">Analytics</span>
           </label>
-          <p className="option-description">
+          <p className="mt-2 ml-8 text-muted-foreground text-sm leading-relaxed">
             Help us improve the app by collecting anonymous usage statistics.
           </p>
         </div>
@@ -171,76 +186,80 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
       </section>
 
       {/* Email Preferences Section */}
-      <section className="privacy-section">
-        <h3>Email Preferences</h3>
-        <p className="section-description">
+      <section className="bg-card border border-border rounded-lg p-6 mb-6">
+        <h3 className="text-xl font-semibold text-foreground mt-0 mb-2">Email Preferences</h3>
+        <p className="text-muted-foreground mb-6 leading-relaxed">
           Choose which emails you'd like to receive from us.
         </p>
 
-        <div className="privacy-option">
-          <label>
+        <div className="mb-6 pb-6 border-b border-muted last:border-b-0 last:mb-0 last:pb-0">
+          <label className="flex items-center cursor-pointer font-medium text-foreground">
             <input
               type="checkbox"
+              className="w-5 h-5 mr-3 cursor-pointer"
               checked={formState.marketing_emails_enabled ?? false}
               onChange={() => handleToggle('marketing_emails_enabled')}
               aria-label="Marketing emails"
             />
-            <span className="option-label">Marketing Emails</span>
+            <span className="text-base font-semibold">Marketing Emails</span>
           </label>
-          <p className="option-description">
+          <p className="mt-2 ml-8 text-muted-foreground text-sm leading-relaxed">
             Receive promotional offers, tips, and feature highlights.
           </p>
         </div>
 
-        <div className="privacy-option">
-          <label>
+        <div className="mb-6 pb-6 border-b border-muted last:border-b-0 last:mb-0 last:pb-0">
+          <label className="flex items-center cursor-pointer font-medium text-foreground">
             <input
               type="checkbox"
+              className="w-5 h-5 mr-3 cursor-pointer"
               checked={formState.product_updates_enabled ?? false}
               onChange={() => handleToggle('product_updates_enabled')}
               aria-label="Product updates"
             />
-            <span className="option-label">Product Updates</span>
+            <span className="text-base font-semibold">Product Updates</span>
           </label>
-          <p className="option-description">
+          <p className="mt-2 ml-8 text-muted-foreground text-sm leading-relaxed">
             Get notified about new features and improvements.
           </p>
         </div>
 
-        <div className="privacy-option">
-          <label>
+        <div className="mb-6 pb-6 border-b border-muted last:border-b-0 last:mb-0 last:pb-0">
+          <label className="flex items-center cursor-pointer font-medium text-foreground">
             <input
               type="checkbox"
+              className="w-5 h-5 mr-3 cursor-pointer"
               checked={formState.security_alerts_enabled ?? false}
               onChange={() => handleToggle('security_alerts_enabled')}
               aria-label="Security alerts"
             />
-            <span className="option-label">Security Alerts</span>
+            <span className="text-base font-semibold">Security Alerts</span>
           </label>
-          <p className="option-description">
+          <p className="mt-2 ml-8 text-muted-foreground text-sm leading-relaxed">
             Important security notifications and account activity.
           </p>
         </div>
       </section>
 
       {/* Data Sharing Section */}
-      <section className="privacy-section">
-        <h3>Data Sharing</h3>
-        <p className="section-description">
+      <section className="bg-card border border-border rounded-lg p-6 mb-6">
+        <h3 className="text-xl font-semibold text-foreground mt-0 mb-2">Data Sharing</h3>
+        <p className="text-muted-foreground mb-6 leading-relaxed">
           Control how your data is shared with third parties.
         </p>
 
-        <div className="privacy-option">
-          <label>
+        <div className="mb-6 pb-6 border-b border-muted last:border-b-0 last:mb-0 last:pb-0">
+          <label className="flex items-center cursor-pointer font-medium text-foreground">
             <input
               type="checkbox"
+              className="w-5 h-5 mr-3 cursor-pointer"
               checked={formState.data_sharing_enabled ?? false}
               onChange={() => handleToggle('data_sharing_enabled')}
               aria-label="Data sharing"
             />
-            <span className="option-label">Third-Party Data Sharing</span>
+            <span className="text-base font-semibold">Third-Party Data Sharing</span>
           </label>
-          <p className="option-description">
+          <p className="mt-2 ml-8 text-muted-foreground text-sm leading-relaxed">
             Share anonymized data with partners to improve financial services.
           </p>
         </div>
@@ -248,18 +267,18 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
 
       {/* Status Messages */}
       {successMessage && (
-        <p className="success-message">{successMessage}</p>
+        <p className="text-success bg-success/10 px-4 py-3 rounded-md mb-4 font-medium">{successMessage}</p>
       )}
       {error && (
-        <p className="error-message">{error}</p>
+        <p className="text-destructive bg-destructive/10 px-4 py-3 rounded-md mb-4 font-medium">{error}</p>
       )}
 
       {/* Save Button */}
-      <div className="privacy-actions">
+      <div className="mt-8">
         <button
           onClick={handleSave}
           disabled={submitting}
-          className="btn-save"
+          className="bg-success text-white border-none px-8 py-3 rounded-md text-base font-semibold cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {submitting ? 'Saving...' : 'Save Privacy Settings'}
         </button>
@@ -267,6 +286,21 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
 
       {/* Account Deletion Section - Issue #18 */}
       <DeleteAccountSection />
+
+      {/* Security alerts disable confirmation — Issue #960 */}
+      <ConfirmationDialog
+        open={showCriticalConfirm}
+        onOpenChange={(open) => !open && setShowCriticalConfirm(false)}
+        onConfirm={() => {
+          setShowCriticalConfirm(false)
+          performSave()
+        }}
+        title="Disable Security Alerts?"
+        description="You are about to disable security alerts. This means you won't receive notifications about unusual account activity or security issues."
+        variant="warning"
+        confirmButtonText="Confirm"
+        loading={submitting}
+      />
     </div>
   )
 }

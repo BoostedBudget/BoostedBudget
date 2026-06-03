@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -41,16 +42,16 @@ type IncomeSourceType string
 
 // Supported income source types.
 const (
-	IncomeSourceTypePlaidCategory IncomeSourceType = "plaid_category"
-	IncomeSourceTypeTag           IncomeSourceType = "tag"
-	IncomeSourceTypeManual        IncomeSourceType = "manual"
+	IncomeSourceTypePFCPrimary IncomeSourceType = "pfc_primary"
+	IncomeSourceTypeTag        IncomeSourceType = "tag"
+	IncomeSourceTypeManual     IncomeSourceType = "manual"
 )
 
 // validIncomeSourceTypes is a set of all valid income source types.
 var validIncomeSourceTypes = map[IncomeSourceType]bool{
-	IncomeSourceTypePlaidCategory: true,
-	IncomeSourceTypeTag:           true,
-	IncomeSourceTypeManual:        true,
+	IncomeSourceTypePFCPrimary: true,
+	IncomeSourceTypeTag:        true,
+	IncomeSourceTypeManual:     true,
 }
 
 // IsValid checks if the income source type is valid.
@@ -60,9 +61,10 @@ func (ist IncomeSourceType) IsValid() bool {
 
 // IncomeSource represents a tracked source of income for envelope budgeting.
 type IncomeSource struct {
-	Type        IncomeSourceType `json:"type"`
-	Value       string           `json:"value"`                 // Category name, tag name, or description
-	Description string           `json:"description,omitempty"` // Optional user-friendly label
+	Type         IncomeSourceType `json:"type"`
+	Value        string           `json:"value"`                   // Category name, tag name, or description
+	Description  string           `json:"description,omitempty"`   // Optional user-friendly label
+	ValueDisplay string           `json:"value_display,omitempty"` // Human-readable display for Value when Type is pfc_primary
 }
 
 // Validate checks that the IncomeSource has valid fields.
@@ -120,6 +122,11 @@ type Budget struct {
 	IncomeAmount  float64        `json:"income_amount" db:"income_amount"`
 	IncomeSources []IncomeSource `json:"income_sources" db:"-"` // JSONB, populated from DB
 
+	// ExpectedIncome is the planned income for the budget period (Issue #1048).
+	// This replaces IncomeAmount as the basis for allocation calculations.
+	// IncomeAmount remains for backward compatibility and tracks actual income received.
+	ExpectedIncome float64 `json:"expected_income" db:"expected_income"`
+
 	// Associated data (populated on demand, not stored in DB)
 	Categories []BudgetCategory `json:"categories,omitempty" db:"-"`
 }
@@ -148,6 +155,10 @@ func (b *Budget) Validate() error {
 
 	if b.Amount <= 0 {
 		return errors.New("amount must be positive")
+	}
+
+	if b.ExpectedIncome <= 0 {
+		return errors.New("expected_income must be positive")
 	}
 
 	if b.CurrencyCode == "" {
@@ -180,22 +191,108 @@ func (b *Budget) Validate() error {
 	return nil
 }
 
-// TotalAllocated returns the sum of all category allocations.
-func (b *Budget) TotalAllocated() float64 {
-	var total float64
+// budgetedParentSets returns lookup sets of the PFC primaries and custom category
+// IDs that are budgeted as top-level rows, used to detect sub-allocations.
+func (b *Budget) budgetedParentSets() (pfcPrimaries, customIDs map[string]bool) {
+	pfcPrimaries = make(map[string]bool)
+	customIDs = make(map[string]bool)
 	for _, cat := range b.Categories {
-		total += cat.AllocatedAmount
+		if cat.CategoryKind == "pfc" && cat.PFCPrimary != nil && cat.PFCDetailed == nil {
+			pfcPrimaries[*cat.PFCPrimary] = true
+		}
+		if cat.CategoryKind == "custom" && cat.CustomCategoryID != nil {
+			customIDs[*cat.CustomCategoryID] = true
+		}
+	}
+	return pfcPrimaries, customIDs
+}
+
+// TotalAllocated returns the sum of TOP-LEVEL category allocations. Sub-allocations
+// (a child whose parent is also budgeted) are excluded because their amount is
+// already accounted for within the parent's allocation (Issue #1203).
+func (b *Budget) TotalAllocated() float64 {
+	pfcPrimaries, customIDs := b.budgetedParentSets()
+	var total float64
+	for i := range b.Categories {
+		if b.Categories[i].IsSubAllocationWithin(pfcPrimaries, customIDs) {
+			continue
+		}
+		total += b.Categories[i].AllocatedAmount
 	}
 	return total
 }
 
-// TotalSpent returns the sum of all category spent amounts.
+// TotalSpent returns the sum of TOP-LEVEL category spent amounts. A parent's
+// SpentAmount already rolls up its children's matched spend, so summing only
+// top-level rows avoids double-counting (Issue #1203). This also fixes the
+// pre-existing PFC primary + detailed double-count.
 func (b *Budget) TotalSpent() float64 {
+	pfcPrimaries, customIDs := b.budgetedParentSets()
 	var total float64
-	for _, cat := range b.Categories {
-		total += cat.SpentAmount
+	for i := range b.Categories {
+		if b.Categories[i].IsSubAllocationWithin(pfcPrimaries, customIDs) {
+			continue
+		}
+		total += b.Categories[i].SpentAmount
 	}
 	return total
+}
+
+// ChildrenAllocatedByParent maps each budgeted parent category's ID to the sum of
+// its budgeted children's allocations (sub-allocations), Issue #1203.
+func (b *Budget) ChildrenAllocatedByParent() map[string]float64 {
+	pfcPrimaryToID := make(map[string]string)
+	customIDToCatID := make(map[string]string)
+	for i := range b.Categories {
+		c := &b.Categories[i]
+		if c.CategoryKind == "pfc" && c.PFCPrimary != nil && c.PFCDetailed == nil {
+			pfcPrimaryToID[*c.PFCPrimary] = c.ID
+		}
+		if c.CategoryKind == "custom" && c.CustomCategoryID != nil {
+			customIDToCatID[*c.CustomCategoryID] = c.ID
+		}
+	}
+
+	sums := make(map[string]float64)
+	for i := range b.Categories {
+		c := &b.Categories[i]
+		var parentID string
+		switch c.CategoryKind {
+		case "pfc":
+			if c.PFCDetailed != nil && c.PFCPrimary != nil {
+				parentID = pfcPrimaryToID[*c.PFCPrimary]
+			}
+		case "custom":
+			if c.CustomParentID != nil {
+				parentID = customIDToCatID[*c.CustomParentID]
+			} else if c.CustomParentPFCPrimary != nil {
+				parentID = pfcPrimaryToID[*c.CustomParentPFCPrimary]
+			}
+		}
+		if parentID != "" {
+			sums[parentID] += c.AllocatedAmount
+		}
+	}
+	return sums
+}
+
+// OverEarmarkedParentIDs returns the IDs of budgeted parent categories whose child
+// sub-allocations exceed the parent's own allocation. Informational only — the app
+// permits over-earmarking (mirrors ExceedsExpectedIncome), Issue #1203.
+func (b *Budget) OverEarmarkedParentIDs() []string {
+	childSums := b.ChildrenAllocatedByParent()
+	byID := make(map[string]float64, len(b.Categories))
+	for i := range b.Categories {
+		byID[b.Categories[i].ID] = b.Categories[i].AllocatedAmount
+	}
+	var over []string
+	for parentID, childSum := range childSums {
+		if allocated, ok := byID[parentID]; ok && childSum > allocated {
+			over = append(over, parentID)
+		}
+	}
+	sort.Strings(over)
+	return over
 }
 
 // RemainingAmount returns the budget amount minus total spent.
@@ -219,33 +316,75 @@ func (b *Budget) PercentUsed() float64 {
 	return (b.TotalSpent() / b.Amount) * 100
 }
 
-// UnallocatedAmount returns the income amount minus total allocated to categories.
+// UnallocatedAmount returns the expected income minus total allocated to categories.
 // This is used for envelope budgeting to show how much income remains to be allocated.
-// Issue #491
+// Uses ExpectedIncome as the basis (Issue #1048; previously used IncomeAmount).
 func (b *Budget) UnallocatedAmount() float64 {
-	return b.IncomeAmount - b.TotalAllocated()
+	return b.ExpectedIncome - b.TotalAllocated()
 }
 
-// IsFullyAllocated returns true if all income has been allocated to categories.
-// Returns true if IncomeAmount is 0 (no income to allocate) or if allocations >= income.
-// Issue #491
+// IsFullyAllocated returns true if all expected income has been allocated to categories.
+// Returns true if ExpectedIncome is 0 (no income to allocate) or if allocations >= expected income.
+// Uses ExpectedIncome as the basis (Issue #1048; previously used IncomeAmount).
 func (b *Budget) IsFullyAllocated() bool {
-	return b.TotalAllocated() >= b.IncomeAmount
+	return b.TotalAllocated() >= b.ExpectedIncome
+}
+
+// ExceedsExpectedIncome returns true if the total allocated to categories exceeds
+// the expected income for the budget period. Issue #1048.
+func (b *Budget) ExceedsExpectedIncome() bool {
+	return b.TotalAllocated() > b.ExpectedIncome
 }
 
 // BudgetCategory represents a category allocation within a budget.
+// Uses a discriminated union: category_kind='pfc' (pfc_primary required) or
+// category_kind='custom' (custom_category_id required).
 type BudgetCategory struct {
-	ID              string    `json:"id" db:"id"`
-	BudgetID        string    `json:"budget_id" db:"budget_id"`
-	Category        []string  `json:"category" db:"category"` // JSONB array matching transaction category format
-	AllocatedAmount float64   `json:"allocated_amount" db:"allocated_amount"`
-	SpentAmount     float64   `json:"spent_amount" db:"spent_amount"` // Denormalized, updated via Issue #451
-	CreatedAt       time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at" db:"updated_at"`
+	ID               string    `json:"id" db:"id"`
+	BudgetID         string    `json:"budget_id" db:"budget_id"`
+	CategoryKind     string    `json:"category_kind" db:"category_kind"` // "pfc" or "custom"
+	PFCPrimary       *string   `json:"pfc_primary,omitempty" db:"pfc_primary"`
+	PFCDetailed      *string   `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
+	CustomCategoryID *string   `json:"custom_category_id,omitempty" db:"custom_category_id"`
+	AllocatedAmount  float64   `json:"allocated_amount" db:"allocated_amount"`
+	SpentAmount      float64   `json:"spent_amount" db:"spent_amount"`
+	CreatedAt        time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at" db:"updated_at"`
+
+	// PFC display names (populated by PopulatePFCDisplay, not stored in DB)
+	PFCPrimaryDisplay  *string `json:"pfc_primary_display,omitempty" db:"-"`
+	PFCDetailedDisplay *string `json:"pfc_detailed_display,omitempty" db:"-"`
+
+	// Parent linkage of the referenced custom category (Issue #1203), populated
+	// from a join when the budget is loaded. Used to detect sub-allocations
+	// (a child whose parent is also budgeted) so totals aren't double-counted.
+	CustomParentID         *string `json:"custom_parent_id,omitempty" db:"-"`
+	CustomParentPFCPrimary *string `json:"custom_parent_pfc_primary,omitempty" db:"-"`
 
 	// Flexible matching fields (Issue #491)
-	Tags       []string   `json:"tags" db:"-"`             // JSONB array of tags to match
-	MatchLogic MatchLogic `json:"match_logic" db:"match_logic"` // How to combine category and tags
+	Tags       []string   `json:"tags" db:"-"`
+	MatchLogic MatchLogic `json:"match_logic" db:"match_logic"`
+}
+
+// IsSubAllocationWithin reports whether this category's hierarchical parent is also
+// present among the given budget categories — i.e. this row is a sub-allocation
+// "within" a budgeted parent and must be excluded from budget totals (Issue #1203).
+func (bc *BudgetCategory) IsSubAllocationWithin(budgetedPFCPrimaries, budgetedCustomIDs map[string]bool) bool {
+	switch bc.CategoryKind {
+	case "pfc":
+		// A PFC detailed is a child of its primary when that primary is also budgeted.
+		if bc.PFCDetailed != nil && bc.PFCPrimary != nil && budgetedPFCPrimaries[*bc.PFCPrimary] {
+			return true
+		}
+	case "custom":
+		if bc.CustomParentID != nil && budgetedCustomIDs[*bc.CustomParentID] {
+			return true
+		}
+		if bc.CustomParentPFCPrimary != nil && budgetedPFCPrimaries[*bc.CustomParentPFCPrimary] {
+			return true
+		}
+	}
+	return false
 }
 
 // Validate checks that the BudgetCategory has all required fields.
@@ -254,22 +393,35 @@ func (bc *BudgetCategory) Validate() error {
 		return errors.New("budget_id is required")
 	}
 
-	// Validate match_logic if set (Issue #491)
-	// Empty match_logic is valid and treated as category_only
 	if bc.MatchLogic != "" && !bc.MatchLogic.IsValid() {
 		return errors.New("invalid match_logic value")
 	}
 
-	// If match_logic is tag_only or and, tags are required
 	if bc.MatchLogic == MatchLogicTagOnly || bc.MatchLogic == MatchLogicAnd {
 		if len(bc.Tags) == 0 {
 			return errors.New("tags are required when match_logic is tag_only or and")
 		}
 	}
 
-	// Category is required unless match_logic is tag_only
-	if len(bc.Category) == 0 && bc.MatchLogic != MatchLogicTagOnly {
-		return errors.New("category is required")
+	switch bc.CategoryKind {
+	case "pfc":
+		if bc.PFCPrimary == nil || *bc.PFCPrimary == "" {
+			return errors.New("pfc_primary is required when category_kind is pfc")
+		}
+		if bc.CustomCategoryID != nil {
+			return errors.New("custom_category_id must not be set when category_kind is pfc")
+		}
+	case "custom":
+		if bc.CustomCategoryID == nil || *bc.CustomCategoryID == "" {
+			return errors.New("custom_category_id is required when category_kind is custom")
+		}
+		if bc.PFCPrimary != nil || bc.PFCDetailed != nil {
+			return errors.New("pfc_primary and pfc_detailed must not be set when category_kind is custom")
+		}
+	default:
+		if bc.MatchLogic != MatchLogicTagOnly {
+			return errors.New("category_kind must be pfc or custom")
+		}
 	}
 
 	if bc.AllocatedAmount < 0 {
@@ -318,16 +470,22 @@ type CreateBudgetRequest struct {
 	// Envelope budgeting fields (Issue #491)
 	IncomeAmount  float64        `json:"income_amount,omitempty"`
 	IncomeSources []IncomeSource `json:"income_sources,omitempty"`
+
+	// ExpectedIncome is optional; when nil the service falls back to Amount (Issue #1048).
+	ExpectedIncome *float64 `json:"expected_income,omitempty" validate:"omitempty,gt=0"`
 }
 
 // CreateBudgetCategoryRequest represents a category allocation in a budget creation request.
 type CreateBudgetCategoryRequest struct {
-	Category        []string `json:"category" validate:"required,min=1"`
-	AllocatedAmount float64  `json:"allocated_amount" validate:"required,gte=0"`
+	CategoryKind     string  `json:"category_kind" validate:"required,oneof=pfc custom"`
+	PFCPrimary       *string `json:"pfc_primary,omitempty"`
+	PFCDetailed      *string `json:"pfc_detailed,omitempty"`
+	CustomCategoryID *string `json:"custom_category_id,omitempty" validate:"omitempty,uuid"`
+	AllocatedAmount  float64 `json:"allocated_amount" validate:"required,gte=0"`
 
 	// Flexible matching fields (Issue #491)
 	Tags       []string   `json:"tags,omitempty"`
-	MatchLogic MatchLogic `json:"match_logic,omitempty"` // defaults to category_only
+	MatchLogic MatchLogic `json:"match_logic,omitempty"`
 }
 
 // UpdateBudgetRequest represents the request to update a budget.
@@ -343,6 +501,9 @@ type UpdateBudgetRequest struct {
 	// Envelope budgeting fields (Issue #491)
 	IncomeAmount  *float64        `json:"income_amount,omitempty" validate:"omitempty,gte=0"`
 	IncomeSources *[]IncomeSource `json:"income_sources,omitempty"`
+
+	// ExpectedIncome is optional; when nil the service leaves the existing value unchanged (Issue #1048).
+	ExpectedIncome *float64 `json:"expected_income,omitempty" validate:"omitempty,gt=0"`
 }
 
 // UpdateBudgetCategoryRequest represents the request to update a budget category.
@@ -357,11 +518,14 @@ type UpdateBudgetCategoryRequest struct {
 // CategoryPreviewRequest represents the request to preview matching transactions for a category config.
 // Issue #497: Transaction preview feature
 type CategoryPreviewRequest struct {
-	Categories [][]string `json:"categories" validate:"required,min=1"`
-	Tags       []string   `json:"tags,omitempty"`
-	MatchLogic MatchLogic `json:"match_logic" validate:"required,oneof=category_only tag_only and or"`
-	StartDate  string     `json:"start_date" validate:"required"`
-	EndDate    string     `json:"end_date" validate:"required"`
+	CategoryKind     string     `json:"category_kind"`
+	PFCPrimary       *string    `json:"pfc_primary,omitempty"`
+	PFCDetailed      *string    `json:"pfc_detailed,omitempty"`
+	CustomCategoryID *string    `json:"custom_category_id,omitempty"`
+	Tags             []string   `json:"tags,omitempty"`
+	MatchLogic       MatchLogic `json:"match_logic" validate:"required,oneof=category_only tag_only and or"`
+	StartDate        string     `json:"start_date" validate:"required"`
+	EndDate          string     `json:"end_date" validate:"required"`
 }
 
 // CategoryPreviewResponse represents the response with matching transaction stats.

@@ -24,7 +24,8 @@ func setupPaddleWebhookMockDB(t *testing.T) (pgxmock.PgxPoolIface, PaddleWebhook
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	repo := NewPaddleWebhookRepository(mock)
+	enc := newTestFieldEncryptor(t)
+	repo := NewPaddleWebhookRepository(mock, enc)
 	return mock, repo
 }
 
@@ -52,7 +53,7 @@ func TestPaddleWebhookCreate_Success(t *testing.T) {
 			pgxmock.AnyArg(), // id (generated UUID)
 			event.EventID,
 			event.EventType,
-			event.Payload,
+			pgxmock.AnyArg(), // encrypted payload
 			event.Signature,
 			event.SignatureValid,
 			event.Processed,
@@ -93,10 +94,10 @@ func TestCreate_DuplicateEventID(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO paddle_webhook_events`)).
 		WithArgs(
-			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // id
 			event.EventID,
 			event.EventType,
-			event.Payload,
+			pgxmock.AnyArg(), // encrypted payload
 			event.Signature,
 			event.SignatureValid,
 			event.Processed,
@@ -131,10 +132,10 @@ func TestCreate_DatabaseError(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO paddle_webhook_events`)).
 		WithArgs(
-			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // id
 			event.EventID,
 			event.EventType,
-			event.Payload,
+			pgxmock.AnyArg(), // encrypted payload
 			event.Signature,
 			event.SignatureValid,
 			event.Processed,
@@ -169,7 +170,7 @@ func TestGetByID_Found(t *testing.T) {
 		id,
 		"evt_01h1234567890",
 		"subscription.created",
-		json.RawMessage(`{"data": {}}`),
+		`ENC$TENC[{"data": {}}]`, // encrypted payload (TEXT column)
 		&signature,
 		true,
 		true,
@@ -256,7 +257,7 @@ func TestGetByEventID_Found(t *testing.T) {
 		uuid.New().String(),
 		eventID,
 		"subscription.created",
-		json.RawMessage(`{"data": {}}`),
+		`ENC$TENC[{"data": {}}]`, // encrypted TEXT payload
 		&signature,
 		true,
 		false,
@@ -452,15 +453,15 @@ func TestGetUnprocessed_ReturnsMultiple(t *testing.T) {
 	}).
 		AddRow(
 			uuid.New().String(), "evt_01h1111", "subscription.created",
-			json.RawMessage(`{}`), &signature, true, false, nil, nil, 0, now, now,
+			`ENC$TENC[{}]`, &signature, true, false, nil, nil, 0, now, now,
 		).
 		AddRow(
 			uuid.New().String(), "evt_01h2222", "subscription.updated",
-			json.RawMessage(`{}`), &signature, true, false, nil, nil, 0, now, now,
+			`ENC$TENC[{}]`, &signature, true, false, nil, nil, 0, now, now,
 		).
 		AddRow(
 			uuid.New().String(), "evt_01h3333", "transaction.completed",
-			json.RawMessage(`{}`), &signature, true, false, nil, nil, 0, now, now,
+			`ENC$TENC[{}]`, &signature, true, false, nil, nil, 0, now, now,
 		)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, event_id, event_type, payload`)).
@@ -542,11 +543,11 @@ func TestGetUnprocessedByType_Success(t *testing.T) {
 	}).
 		AddRow(
 			uuid.New().String(), "evt_01h1111", eventType,
-			json.RawMessage(`{}`), &signature, true, false, nil, nil, 0, now, now,
+			`ENC$TENC[{}]`, &signature, true, false, nil, nil, 0, now, now,
 		).
 		AddRow(
 			uuid.New().String(), "evt_01h2222", eventType,
-			json.RawMessage(`{}`), &signature, true, false, nil, nil, 0, now, now,
+			`ENC$TENC[{}]`, &signature, true, false, nil, nil, 0, now, now,
 		)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, event_id, event_type, payload`)).
@@ -642,11 +643,11 @@ func TestGetRecentWebhooks_Success(t *testing.T) {
 	}).
 		AddRow(
 			uuid.New().String(), "evt_newest", "subscription.created",
-			json.RawMessage(`{}`), &signature, true, true, &now, nil, 0, now, now,
+			`ENC$TENC[{}]`, &signature, true, true, &now, nil, 0, now, now,
 		).
 		AddRow(
 			uuid.New().String(), "evt_older", "transaction.completed",
-			json.RawMessage(`{}`), &signature, true, true, &now, nil, 0, now.Add(-1*time.Hour), now,
+			`ENC$TENC[{}]`, &signature, true, true, &now, nil, 0, now.Add(-1*time.Hour), now,
 		)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, event_id, event_type, payload`)).
@@ -675,7 +676,7 @@ func addWebhookEventRow(rows *pgxmock.Rows, eventID, eventType string, processed
 	sig := "ts=1614280549;h1=abc123"
 	return rows.AddRow(
 		uuid.New().String(), eventID, eventType,
-		json.RawMessage(`{}`), &sig, true, processed, nil, nil, 0, now, now,
+		`ENC$TENC[{}]`, &sig, true, processed, nil, nil, 0, now, now,
 	)
 }
 
@@ -970,4 +971,83 @@ func TestResetProcessingStatus_NotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrPaddleWebhookNotFound)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestListWebhookEventsSort tests that sort_by/sort_dir fields produce the correct ORDER BY clause.
+func TestListWebhookEventsSort(t *testing.T) {
+	tests := []struct {
+		name        string
+		sortBy      string
+		sortDir     string
+		expectOrder string
+	}{
+		{
+			name:        "default sort created_at desc",
+			sortBy:      "created_at",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY created_at DESC",
+		},
+		{
+			name:        "attempts asc maps to processing_attempts",
+			sortBy:      "attempts",
+			sortDir:     "asc",
+			expectOrder: "ORDER BY processing_attempts ASC",
+		},
+		{
+			name:        "status desc maps to processed column",
+			sortBy:      "status",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY processed DESC",
+		},
+		// Fallback cases — Huma enum prevents these in production, but repos are defense-in-depth
+		{
+			name:        "empty sort_by falls back to created_at desc",
+			sortBy:      "",
+			sortDir:     "",
+			expectOrder: "ORDER BY created_at DESC",
+		},
+		{
+			name:        "unknown sort_by falls back to created_at desc",
+			sortBy:      "nonexistent_column",
+			sortDir:     "desc",
+			expectOrder: "ORDER BY created_at DESC",
+		},
+		{
+			name:        "unknown sort_dir falls back to DESC",
+			sortBy:      "created_at",
+			sortDir:     "invalid",
+			expectOrder: "ORDER BY created_at DESC",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock, repo := setupPaddleWebhookMockDB(t)
+			defer mock.Close()
+
+			ctx := context.Background()
+			now := time.Now()
+
+			countRows := pgxmock.NewRows([]string{"count"}).AddRow(int64(1))
+			mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM paddle_webhook_events`)).
+				WillReturnRows(countRows)
+
+			listRows := pgxmock.NewRows(webhookEventColumns)
+			addWebhookEventRow(listRows, "evt_sort_01", "subscription.created", true, now)
+			mock.ExpectQuery(regexp.QuoteMeta(tc.expectOrder)).
+				WithArgs(10, 0).
+				WillReturnRows(listRows)
+
+			filters := domain.WebhookEventFilters{
+				SortBy:  tc.sortBy,
+				SortDir: tc.sortDir,
+			}
+			events, total, err := repo.ListWebhookEvents(ctx, filters, 10, 0)
+
+			require.NoError(t, err)
+			assert.Equal(t, 1, total)
+			assert.Len(t, events, 1)
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }

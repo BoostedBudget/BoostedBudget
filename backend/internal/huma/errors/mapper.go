@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getsentry/sentry-go"
@@ -48,6 +49,12 @@ func MapError(err error) error {
 		return huma.Error404NotFound("Tag not found")
 	case errors.Is(err, domain.ErrCategoryNotFound):
 		return huma.Error404NotFound("Category not found")
+	case errors.Is(err, domain.ErrCategoryHasChildren):
+		return huma.Error409Conflict("Category has subcategories; remove or reparent them first")
+	case errors.Is(err, domain.ErrCategoryParentHasParent):
+		return huma.Error400BadRequest("Parent category must be top-level (categories support only two levels)")
+	case errors.Is(err, domain.ErrCategoryInvalidParent):
+		return huma.Error400BadRequest("Invalid parent category")
 	case errors.Is(err, domain.ErrRuleNotFound):
 		return huma.Error404NotFound("Categorization rule not found")
 	case errors.Is(err, domain.ErrSavingsGoalNotFound):
@@ -56,6 +63,8 @@ func MapError(err error) error {
 		return huma.Error404NotFound("Automation rule not found")
 	case errors.Is(err, domain.ErrTransferSuggestionNotFound):
 		return huma.Error404NotFound("Transfer suggestion not found")
+	case errors.Is(err, domain.ErrTransferSuggestionAlreadyActioned):
+		return huma.Error409Conflict("Transfer suggestion has already been accepted or rejected")
 
 	// Repository errors
 	case errors.Is(err, repository.ErrTransactionNotFound):
@@ -119,6 +128,8 @@ func MapError(err error) error {
 		return huma.Error409Conflict("User account already exists")
 	case errors.Is(err, repository.ErrPaddleWebhookDuplicate):
 		return huma.Error409Conflict("Paddle webhook event already processed")
+	case errors.Is(err, repository.ErrAccountOwnedByAnotherUser):
+		return huma.Error409Conflict("This bank account is already linked by another user. Each physical account may only be connected to one BoostedBudget account at a time.")
 
 	// ================================
 	// 403 Forbidden - Tier limits exceeded
@@ -136,20 +147,6 @@ func MapError(err error) error {
 		return huma.Error403Forbidden("You are not allowed to update this field")
 	case errors.Is(err, repository.ErrNotificationAccessDenied):
 		return huma.Error403Forbidden("Access denied to this notification")
-	case errors.Is(err, domain.ErrAutomationRuleLimitExceeded):
-		return huma.Error403Forbidden("Automation rule limit exceeded for your subscription tier. Upgrade to add more rules.")
-	case errors.Is(err, domain.ErrEventTriggersNotAllowed):
-		return huma.Error403Forbidden("Event-based triggers require a premium subscription. Upgrade to enable real-time rule execution.")
-
-	// ================================
-	// 429 Too Many Requests - Rate/execution limits
-	// ================================
-
-	case errors.Is(err, domain.ErrExecutionLimitExceeded):
-		return huma.NewError(429, "Daily rule execution limit exceeded for your subscription tier. Try again tomorrow or upgrade.")
-	case errors.Is(err, domain.ErrExecutionIntervalNotMet):
-		return huma.NewError(429, "Minimum execution interval not met for your subscription tier.")
-
 	// ================================
 	// 400 Bad Request - Validation errors
 	// ================================
@@ -161,7 +158,9 @@ func MapError(err error) error {
 	case errors.Is(err, services.ErrInvalidEmail):
 		return huma.Error400BadRequest("Invalid email address")
 	case errors.Is(err, services.ErrInvalidRegion):
-		return huma.Error400BadRequest("Invalid primary region. Valid regions: iad, lhr, syd")
+		validCodes := domain.GetValidRegions()
+		msg := fmt.Sprintf("Invalid primary region. Valid regions: %s", strings.Join(validCodes, ", "))
+		return huma.Error400BadRequest(msg)
 	case errors.Is(err, services.ErrInvalidLimit):
 		return huma.Error400BadRequest("Limit must be between 1 and 100")
 	case errors.Is(err, services.ErrInvalidOffset):

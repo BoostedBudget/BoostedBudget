@@ -1,0 +1,23 @@
+# BoostedBudget Region Configuration
+# Single source of truth for available data residency regions.
+#
+# Adding a new region (Phase 7+):
+#   1. Add an entry here with display info and infrastructure env var names
+#   2. Set the corresponding env vars on each Fly.io instance for that region
+#   3. Create a DB migration to widen the CHECK constraint: primary_region IN ('iad', 'newcode')
+#
+# Infrastructure credentials are NOT stored here - only the env var names that hold them.
+
+server_region: "iad"
+default_region: "iad"
+
+regions:
+  iad:
+    display_name: "USA (Virginia)"
+    country: "USA"
+    city: "Virginia"
+    flag: "\U0001F1FA\U0001F1F8"
+    infrastructure:
+      fly_region: "iad"
+      neon_project_env: "NEON_PROJECT_ID"
+      database_url_env: "DATABASE_URL"

@@ -1,12 +1,12 @@
 name: Sync Staging with Main
 
-# Trigger after production deployment completes
-# This prevents staging and main from staying "out of sync" due to merge commits
+# Syncs staging←main on any main push (human hotfixes, reverts) or on-demand dispatch.
+# Note: promote-to-production handles its own inline back-sync (GITHUB_TOKEN pushes
+# don't trigger this push-based workflow); this is the safety net for direct human pushes.
 on:
-  workflow_run:
-    workflows: ["Deploy to Production"]
-    types: [completed]
+  push:
     branches: [main]
+  workflow_dispatch:
 
 # Prevent concurrent syncs (queue them instead)
 concurrency:
@@ -16,8 +16,6 @@ concurrency:
 jobs:
   sync-staging:
     name: Sync staging branch with main
-    # Only run if production deployment succeeded
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, macOS, mac-mini]
     permissions:
       contents: write
@@ -47,22 +45,22 @@ jobs:
           echo "📥 Fetching latest staging..."
           for i in 1 2 3; do
             git fetch origin staging && break || {
-              echo "⚠️ Fetch attempt $i/3 failed"
-              [ $i -lt 3 ] && sleep 5
+              [ $i -eq 3 ] && echo "::error::Failed to fetch after 3 attempts" && exit 1
+              echo "⚠️ Fetch attempt $i/3 failed, retrying..."
+              sleep 5
             }
           done
 
-          echo "🔄 Checking out staging..."
           git checkout staging
-
           echo "🔀 Merging main into staging..."
-          git merge origin/main --no-edit -m "chore: Sync staging with main after production deployment"
+          git merge origin/main --no-edit -m "chore: Sync staging with main"
 
           echo "📤 Pushing to staging..."
           for i in 1 2 3; do
             git push origin staging && break || {
-              echo "⚠️ Push attempt $i/3 failed"
-              [ $i -lt 3 ] && sleep 5
+              [ $i -eq 3 ] && echo "::error::Failed to push after 3 attempts" && exit 1
+              echo "⚠️ Push attempt $i/3 failed, retrying..."
+              sleep 5
             }
           done
 
@@ -81,7 +79,7 @@ jobs:
         run: |
           echo "### ✅ Staging Synced with Main" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Trigger:** Production deployment completed successfully" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** \`${{ github.event_name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Result:** Staging branch updated to match main" >> $GITHUB_STEP_SUMMARY
           echo "**Time:** $(date -u)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

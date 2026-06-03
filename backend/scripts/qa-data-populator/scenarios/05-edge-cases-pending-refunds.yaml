@@ -21,7 +21,7 @@ setup:
 
   transactions:
     - account_index: 0
-      amount: -125.50
+      amount: 125.50
       date: "2025-11-10"
       name: "Amazon Purchase"
       category: ["Shopping", "Online"]
@@ -29,7 +29,7 @@ setup:
       user_notes: ""
 
     - account_index: 0
-      amount: 75.00
+      amount: -75.00
       date: "2025-11-08"
       name: "Amazon Refund"
       category: ["Shopping", "Refund"]
@@ -37,7 +37,7 @@ setup:
       user_notes: "Refund for returned item"
 
     - account_index: 0
-      amount: -45.23
+      amount: 45.23
       date: "2025-11-07"
       name: "Starbucks"
       category: ["Food and Drink", "Coffee Shop"]
@@ -45,7 +45,7 @@ setup:
       user_notes: "Morning coffee - business expense"
 
     - account_index: 0
-      amount: -12.50
+      amount: 12.50
       date: "2025-11-06"
       name: "Netflix Subscription"
       category: ["Entertainment", "Subscription"]
@@ -53,7 +53,7 @@ setup:
       user_notes: ""
 
     - account_index: 0
-      amount: -250.00
+      amount: 250.00
       date: "2025-11-05"
       name: "Hilton Hotel"
       category: ["Travel", "Lodging"]
@@ -61,7 +61,7 @@ setup:
       user_notes: "Business trip - pending checkout"
 
     - account_index: 0
-      amount: 3500.00
+      amount: -3500.00
       date: "2025-11-01"
       name: "Direct Deposit - Salary"
       category: ["Income", "Payroll"]

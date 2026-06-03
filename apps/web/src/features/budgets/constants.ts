@@ -8,3 +8,12 @@
 // =============================================================================
 
 export const STORAGE_KEY_LIST_VIEW = 'budgets-list-view'
+
+// =============================================================================
+// Route Helpers
+// =============================================================================
+
+// Issue #1051: Navigate to the budget detail page
+export function getBudgetDetailPath(id: string): string {
+  return `/budgets/${id}`
+}

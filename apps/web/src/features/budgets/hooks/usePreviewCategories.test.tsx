@@ -39,7 +39,10 @@ describe('usePreviewCategories', () => {
   })
 
   const defaultParams = {
-    categories: [['Food and Drink', 'Restaurants']],
+    categoryKind: 'pfc',
+    pfcPrimary: 'FOOD_AND_DRINK' as const,
+    pfcDetailed: undefined as string | undefined,
+    customCategoryId: undefined as string | undefined,
     tags: [] as string[],
     matchLogic: 'category_only' as const,
     startDate: '2024-01-01',
@@ -53,7 +56,10 @@ describe('usePreviewCategories', () => {
     const { result } = renderHook(
       () =>
         usePreviewCategories(
-          defaultParams.categories,
+          defaultParams.categoryKind,
+          defaultParams.pfcPrimary,
+          defaultParams.pfcDetailed,
+          defaultParams.customCategoryId,
           defaultParams.tags,
           defaultParams.matchLogic,
           defaultParams.startDate,
@@ -71,21 +77,24 @@ describe('usePreviewCategories', () => {
     mockMutateAsync.mockResolvedValue({ transaction_count: 5, total_amount: 250 })
 
     const { rerender } = renderHook(
-      ({ categories }) =>
+      ({ pfcPrimary }: { pfcPrimary: string }) =>
         usePreviewCategories(
-          categories,
+          'pfc',
+          pfcPrimary,
+          undefined,
+          undefined,
           defaultParams.tags,
           defaultParams.matchLogic,
           defaultParams.startDate,
           defaultParams.endDate,
           defaultParams.enabled
         ),
-      { initialProps: { categories: [['Food', 'A']] }, wrapper: createWrapper() }
+      { initialProps: { pfcPrimary: 'FOOD_AND_DRINK' }, wrapper: createWrapper() }
     )
 
-    rerender({ categories: [['Food', 'B']] })
-    rerender({ categories: [['Food', 'C']] })
-    rerender({ categories: [['Food', 'D']] })
+    rerender({ pfcPrimary: 'TRANSPORTATION' })
+    rerender({ pfcPrimary: 'INCOME' })
+    rerender({ pfcPrimary: 'ENTERTAINMENT' })
 
     expect(mockMutateAsync).not.toHaveBeenCalled()
 
@@ -97,7 +106,8 @@ describe('usePreviewCategories', () => {
     expect(mockMutateAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          categories: [['Food', 'D']],
+          category_kind: 'pfc',
+          pfc_primary: 'ENTERTAINMENT',
         }),
       })
     )
@@ -111,7 +121,10 @@ describe('usePreviewCategories', () => {
     const { result } = renderHook(
       () =>
         usePreviewCategories(
-          defaultParams.categories,
+          defaultParams.categoryKind,
+          defaultParams.pfcPrimary,
+          defaultParams.pfcDetailed,
+          defaultParams.customCategoryId,
           defaultParams.tags,
           defaultParams.matchLogic,
           defaultParams.startDate,
@@ -137,7 +150,10 @@ describe('usePreviewCategories', () => {
     const { result } = renderHook(
       () =>
         usePreviewCategories(
-          defaultParams.categories,
+          defaultParams.categoryKind,
+          defaultParams.pfcPrimary,
+          defaultParams.pfcDetailed,
+          defaultParams.customCategoryId,
           defaultParams.tags,
           defaultParams.matchLogic,
           defaultParams.startDate,
@@ -161,7 +177,10 @@ describe('usePreviewCategories', () => {
     renderHook(
       () =>
         usePreviewCategories(
-          defaultParams.categories,
+          defaultParams.categoryKind,
+          defaultParams.pfcPrimary,
+          defaultParams.pfcDetailed,
+          defaultParams.customCategoryId,
           defaultParams.tags,
           defaultParams.matchLogic,
           defaultParams.startDate,
@@ -178,13 +197,16 @@ describe('usePreviewCategories', () => {
     expect(mockMutateAsync).not.toHaveBeenCalled()
   })
 
-  it('should not make API call when categories are empty', async () => {
+  it('should not make API call when pfc_primary is absent for pfc kind', async () => {
     mockMutateAsync.mockResolvedValue({ transaction_count: 5, total_amount: 250 })
 
     renderHook(
       () =>
         usePreviewCategories(
-          [],
+          'pfc',
+          undefined,
+          undefined,
+          undefined,
           defaultParams.tags,
           defaultParams.matchLogic,
           defaultParams.startDate,
@@ -207,23 +229,26 @@ describe('usePreviewCategories', () => {
       .mockResolvedValueOnce({ transaction_count: 20, total_amount: 1000 })
 
     const { result, rerender } = renderHook(
-      ({ categories }) =>
+      ({ pfcPrimary }: { pfcPrimary: string }) =>
         usePreviewCategories(
-          categories,
+          'pfc',
+          pfcPrimary,
+          undefined,
+          undefined,
           defaultParams.tags,
           defaultParams.matchLogic,
           defaultParams.startDate,
           defaultParams.endDate,
           defaultParams.enabled
         ),
-      { initialProps: { categories: [['Food', 'A']] }, wrapper: createWrapper() }
+      { initialProps: { pfcPrimary: 'FOOD_AND_DRINK' }, wrapper: createWrapper() }
     )
 
     await waitFor(() => {
       expect(mockMutateAsync).toHaveBeenCalledTimes(1)
     })
 
-    rerender({ categories: [['Food', 'B']] })
+    rerender({ pfcPrimary: 'TRANSPORTATION' })
 
     await waitFor(() => {
       expect(mockMutateAsync).toHaveBeenCalledTimes(2)
@@ -240,23 +265,26 @@ describe('usePreviewCategories', () => {
       .mockResolvedValueOnce({ transaction_count: 5, total_amount: 250 })
 
     const { result, rerender } = renderHook(
-      ({ categories }) =>
+      ({ pfcPrimary }: { pfcPrimary: string }) =>
         usePreviewCategories(
-          categories,
+          'pfc',
+          pfcPrimary,
+          undefined,
+          undefined,
           defaultParams.tags,
           defaultParams.matchLogic,
           defaultParams.startDate,
           defaultParams.endDate,
           defaultParams.enabled
         ),
-      { initialProps: { categories: [['Food', 'A']] }, wrapper: createWrapper() }
+      { initialProps: { pfcPrimary: 'FOOD_AND_DRINK' }, wrapper: createWrapper() }
     )
 
     await waitFor(() => {
       expect(result.current.error).toBeTruthy()
     }, { timeout: 5000 })
 
-    rerender({ categories: [['Food', 'B']] })
+    rerender({ pfcPrimary: 'TRANSPORTATION' })
 
     await waitFor(() => {
       expect(result.current.error).toBeNull()
@@ -270,10 +298,10 @@ describe('usePreviewCategories', () => {
     renderHook(
       () =>
         usePreviewCategories(
-          [
-            ['Food', 'Restaurants'],
-            ['Shopping', 'Clothing'],
-          ],
+          'pfc',
+          'FOOD_AND_DRINK',
+          'FOOD_AND_DRINK_RESTAURANTS',
+          undefined,
           ['Essential', 'Discretionary'],
           'and',
           '2024-02-01',
@@ -286,10 +314,10 @@ describe('usePreviewCategories', () => {
     await waitFor(() => {
       expect(mockMutateAsync).toHaveBeenCalledWith({
         data: {
-          categories: [
-            ['Food', 'Restaurants'],
-            ['Shopping', 'Clothing'],
-          ],
+          category_kind: 'pfc',
+          pfc_primary: 'FOOD_AND_DRINK',
+          pfc_detailed: 'FOOD_AND_DRINK_RESTAURANTS',
+          custom_category_id: undefined,
           tags: ['Essential', 'Discretionary'],
           match_logic: 'and',
           start_date: '2024-02-01',

@@ -8,17 +8,39 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/pfc"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
 // CategoryHandler handles custom category-related HTTP requests.
 type CategoryHandler struct {
-	service services.CustomCategoryService
+	service         services.CustomCategoryService
+	idempotencyRepo repository.IdempotencyRepository // optional; nil disables dedup
+	db              repository.DB
+	mcpAuditRepo    repository.MCPAuditRepository
+	mcpWorkerSecret string
+}
+
+type CategoryHandlerDeps struct {
+	IdempotencyRepo repository.IdempotencyRepository
+	DB              repository.DB
+	MCPAuditRepo    repository.MCPAuditRepository
+	MCPWorkerSecret string
 }
 
 // NewCategoryHandler creates a new CategoryHandler instance.
-func NewCategoryHandler(service services.CustomCategoryService) *CategoryHandler {
-	return &CategoryHandler{service: service}
+// deps are optional (pass nil/omit for spec-gen nil-stubs); when non-nil,
+// createCustomCategory requests with an Idempotency-Key header are deduplicated.
+func NewCategoryHandler(service services.CustomCategoryService, deps ...CategoryHandlerDeps) *CategoryHandler {
+	h := &CategoryHandler{service: service}
+	if len(deps) > 0 {
+		h.idempotencyRepo = deps[0].IdempotencyRepo
+		h.db = deps[0].DB
+		h.mcpAuditRepo = deps[0].MCPAuditRepo
+		h.mcpWorkerSecret = deps[0].MCPWorkerSecret
+	}
+	return h
 }
 
 // --- Input/Output Types ---
@@ -47,6 +69,8 @@ type GetCategoryByIDOutput struct {
 // CreateCategoryInput represents the input for creating a category.
 type CreateCategoryInput struct {
 	inputs.AuthenticatedInput
+	inputs.IdempotencyInput // reads Idempotency-Key header; empty = no deduplication
+	inputs.MCPContextInput
 	Body domain.CreateCustomCategoryRequest
 }
 
@@ -71,6 +95,37 @@ type UpdateCategoryOutput struct {
 type DeleteCategoryInput struct {
 	inputs.AuthenticatedInput
 	ID string `path:"id" doc:"Category UUID"`
+}
+
+// GetCategoryUsageInput represents the input for fetching a category's usage counts.
+type GetCategoryUsageInput struct {
+	inputs.AuthenticatedInput
+	ID string `path:"id" doc:"Category UUID"`
+}
+
+// GetCategoryUsageOutput represents the response for a category's usage counts.
+type GetCategoryUsageOutput struct {
+	Body *domain.CategoryUsage
+}
+
+// GetPlaidPrimaryCategoriesInput represents the input for listing curated PFC primaries.
+type GetPlaidPrimaryCategoriesInput struct {
+	inputs.AuthenticatedInput
+}
+
+// GetPlaidPrimaryCategoriesOutput represents the response for listing curated PFC primaries.
+type GetPlaidPrimaryCategoriesOutput struct {
+	Body []pfc.Primary
+}
+
+// GetPlaidDetailedCategoriesInput represents the input for listing curated PFC detailed categories.
+type GetPlaidDetailedCategoriesInput struct {
+	inputs.AuthenticatedInput
+}
+
+// GetPlaidDetailedCategoriesOutput represents the response for listing curated PFC detailed categories.
+type GetPlaidDetailedCategoriesOutput struct {
+	Body []pfc.Detailed
 }
 
 // --- Handler Methods ---
@@ -110,11 +165,73 @@ func (h *CategoryHandler) GetCategoryByID(ctx context.Context, input *GetCategor
 // CreateCategory handles POST /api/v1/categories requests.
 // Creates a new custom category for the authenticated user.
 func (h *CategoryHandler) CreateCategory(ctx context.Context, input *CreateCategoryInput) (*CreateCategoryOutput, error) {
+	// MCP origin: use transactional audit with atomic idempotency.
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.db != nil && h.mcpAuditRepo != nil {
+		tx, err := h.db.Begin(ctx)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		defer rollbackMCPAuditTx(ctx, tx)
+
+		// Idempotency check inside the transaction so the reservation is atomic
+		// with the entity write and the audit insert.
+		if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+			var category *domain.CustomCategory
+			cacheHit, err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, input.IdempotencyKey, input.UserID, "createCategory",
+				func() (interface{}, error) {
+					txCategoryRepo := repository.NewCustomCategoryRepository(tx)
+					txCategoryService := services.NewCustomCategoryService(txCategoryRepo)
+					return txCategoryService.CreateCategory(ctx, input.UserID, &input.Body)
+				}, &category)
+			if err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if cacheHit {
+				return &CreateCategoryOutput{Body: category}, nil
+			}
+			if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createCategory", input.IdempotencyKey); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			return &CreateCategoryOutput{Body: category}, nil
+		}
+
+		txCategoryRepo := repository.NewCustomCategoryRepository(tx)
+		txCategoryService := services.NewCustomCategoryService(txCategoryRepo)
+		category, err := txCategoryService.CreateCategory(ctx, input.UserID, &input.Body)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+
+		if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "createCategory", input.IdempotencyKey); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		return &CreateCategoryOutput{Body: category}, nil
+	}
+
+	// Idempotency dedup without MCP audit (non-MCP path)
+	if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+		var category *domain.CustomCategory
+		_, err := h.idempotencyRepo.GetOrCreate(ctx, input.IdempotencyKey, input.UserID, "createCustomCategory",
+			func() (interface{}, error) {
+				return h.service.CreateCategory(ctx, input.UserID, &input.Body)
+			}, &category)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		return &CreateCategoryOutput{Body: category}, nil
+	}
+
+	// No dedup
 	category, err := h.service.CreateCategory(ctx, input.UserID, &input.Body)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
-
 	return &CreateCategoryOutput{Body: category}, nil
 }
 
@@ -138,6 +255,31 @@ func (h *CategoryHandler) DeleteCategory(ctx context.Context, input *DeleteCateg
 	}
 
 	return nil, nil
+}
+
+// GetCategoryUsage handles GET /api/v1/categories/{id}/usage requests.
+// Returns live counts of transactions/budgets/rules/children referencing the category,
+// so the UI can warn the user before deletion (Issue #1203).
+func (h *CategoryHandler) GetCategoryUsage(ctx context.Context, input *GetCategoryUsageInput) (*GetCategoryUsageOutput, error) {
+	usage, err := h.service.GetCategoryUsage(ctx, input.UserID, input.ID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	return &GetCategoryUsageOutput{Body: usage}, nil
+}
+
+// GetPlaidPrimaryCategories handles GET /api/v1/categories/plaid-primaries requests.
+// Returns all 18 PFCv2 curated primary categories, sorted alphabetically by display name.
+// The handler reads the static pfc.AllPrimaries() registry directly — no DB, no service call.
+func (h *CategoryHandler) GetPlaidPrimaryCategories(_ context.Context, _ *GetPlaidPrimaryCategoriesInput) (*GetPlaidPrimaryCategoriesOutput, error) {
+	return &GetPlaidPrimaryCategoriesOutput{Body: pfc.AllPrimaries()}, nil
+}
+
+// GetPlaidDetailedCategories handles GET /api/v1/categories/plaid-detailed requests.
+// Returns the full PFCv2 detailed taxonomy (~120 entries), sorted by primary display then display.
+// The handler reads the static pfc.AllDetailed() registry directly — no DB, no service call.
+func (h *CategoryHandler) GetPlaidDetailedCategories(_ context.Context, _ *GetPlaidDetailedCategoriesInput) (*GetPlaidDetailedCategoriesOutput, error) {
+	return &GetPlaidDetailedCategoriesOutput{Body: pfc.AllDetailed()}, nil
 }
 
 // RegisterCategoryRoutes registers category routes with the Huma API.
@@ -199,4 +341,37 @@ func RegisterCategoryRoutes(api huma.API, handler *CategoryHandler) {
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteCategory)
+
+	// GET /api/v1/categories/{id}/usage - Live reference counts for delete-impact warning
+	huma.Register(api, huma.Operation{
+		OperationID: "getCategoryUsage",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/categories/{id}/usage",
+		Summary:     "Get category usage counts",
+		Description: "Returns counts of transactions, budgets, rules, and child categories referencing the category (for delete-impact warnings).",
+		Tags:        []string{"Categories"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetCategoryUsage)
+
+	// GET /api/v1/categories/plaid-primaries - List curated PFCv2 primary categories
+	huma.Register(api, huma.Operation{
+		OperationID: "getPlaidPrimaryCategories",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/categories/plaid-primaries",
+		Summary:     "List curated Plaid PFC primary categories",
+		Description: "Returns all 18 PFCv2 curated primary categories sorted alphabetically. Used by every PFC selection surface.",
+		Tags:        []string{"Categories"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetPlaidPrimaryCategories)
+
+	// GET /api/v1/categories/plaid-detailed - List curated PFCv2 detailed categories
+	huma.Register(api, huma.Operation{
+		OperationID: "getPlaidDetailedCategories",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/categories/plaid-detailed",
+		Summary:     "List curated Plaid PFC detailed categories",
+		Description: "Returns the full PFCv2 detailed taxonomy (~120 entries) sorted by primary then detailed display name. Used only by the rule editor's existing_pfc_detailed condition.",
+		Tags:        []string{"Categories"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetPlaidDetailedCategories)
 }
