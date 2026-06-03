@@ -418,9 +418,33 @@ jobs:
         with:
           bun-version: "1.1.29"
 
-      - name: Install MCP server dependencies
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+      - name: Install workspace dependencies (from root for workspace bin symlinks)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bun install --frozen-lockfile
+
+      - name: Ensure workspace vitest binary exists
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: |
+          # vitest MUST run from the workspace-level binary (node_modules/.bin/vitest
+          # pointing to ../vitest/vitest.mjs) so it resolves @cloudflare/vitest-pool-workers
+          # from apps/mcp-server/node_modules/ — not from the bun cache's nested
+          # node_modules (which has no exports and breaks the pool workers plugin).
+          # Root bun install creates this symlink on bun 1.3+; create explicitly for
+          # older bun versions or if the install didn't create it.
+          if [ ! -f node_modules/.bin/vitest ]; then
+            mkdir -p node_modules/.bin
+            # Ensure workspace vitest package symlink exists (bun may not create this
+            # when installing from workspace dir with older bun versions)
+            if [ ! -e node_modules/vitest ] && [ -d ../../node_modules/vitest ]; then
+              ln -sf ../../node_modules/vitest node_modules/vitest
+            fi
+            # Use relative path (../vitest/vitest.mjs) so Node.js module resolution
+            # starts from node_modules/vitest/, not the bun cache root. This ensures
+            # @cloudflare/vitest-pool-workers is found in node_modules/ not bun cache.
+            ln -sf ../vitest/vitest.mjs node_modules/.bin/vitest
+            chmod +x node_modules/.bin/vitest
+          fi
+          ls -la node_modules/.bin/vitest
 
       - name: Run MCP server integration tests (vitest-pool-workers)
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
