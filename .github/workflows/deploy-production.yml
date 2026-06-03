@@ -1,11 +1,8 @@
 name: Deploy to Production
 
-# Trigger on pushes to main branch (after PR merge or staging→main merge)
-# Also allow manual triggering for emergency deployments or retries
-# Note: Rotating VITE_* secrets requires force_rebuild=true (VITE_* vars are baked at build time)
+# Manual deployment: dispatch after promoting staging→main.
+# Note: Rotating VITE_* secrets requires force_rebuild=true (baked at build time).
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       force_deploy:
@@ -39,7 +36,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GO_VERSION: '1.26.3'
+  GO_VERSION: '1.26.4'
   REGISTRY: ghcr.io
   BACKEND_IMAGE_NAME: boostedbudget/boostedbudget-backend
 
@@ -71,18 +68,10 @@ jobs:
           fetch-tags: true
 
       - id: resolve-sha
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          GITHUB_SHA_VALUE: ${{ github.sha }}
         run: |
           set -euo pipefail
-          # push: github.sha is the pushed commit — that's exactly what triggered the deploy.
-          # workflow_dispatch: pin to origin/main tip so the operator deploys current main.
-          if [ "$EVENT_NAME" = "push" ]; then
-            DEPLOY_SHA="$GITHUB_SHA_VALUE"
-          else
-            DEPLOY_SHA="$(git rev-parse origin/main)"
-          fi
+          # Always workflow_dispatch — pin to origin/main tip so the operator deploys current main.
+          DEPLOY_SHA="$(git rev-parse origin/main)"
           echo "deploy_sha=${DEPLOY_SHA}" >> "$GITHUB_OUTPUT"
           echo "Pinned deploy_sha=${DEPLOY_SHA}"
 
@@ -117,7 +106,7 @@ jobs:
           FRONTEND_PRIOR: ${{ steps.resolve-tags.outputs.frontend_prior_sha }}
         run: |
           set -euo pipefail
-          # On push events, allow_rollback is not available as an input — default to false.
+          # inputs.allow_rollback is always available (workflow_dispatch-only); :-false is a defensive fallback.
           ALLOW="${ALLOW_ROLLBACK:-false}"
           check() {
             local prior="$1" tag="$2"
@@ -204,7 +193,7 @@ jobs:
           FE_WORKFLOW:      ${{ steps.filter-frontend.outputs.workflow }}
         run: |
           set -euo pipefail
-          # On push events, force_rebuild is not available as an input — default to false.
+          # inputs.force_rebuild is always available (workflow_dispatch-only); :-false is a defensive fallback.
           FORCE="${FORCE_REBUILD:-false}"
 
           # backend_changed: triggers Docker image rebuild + push.
@@ -268,6 +257,10 @@ jobs:
         with:
           ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
+
+      - name: Resolve BUILD_DATE
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: echo "BUILD_DATE=$(git show -s --format=%cI HEAD)" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -353,7 +346,7 @@ jobs:
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
             VERSION=${{ env.DEPLOY_SHA }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
           provenance: false
 
       - name: Image build summary
@@ -761,7 +754,6 @@ jobs:
       - name: Smoke tests summary
         if: success()
         env:
-          EVENT_NAME: ${{ github.event_name }}
           FORCE_DEPLOY: ${{ inputs.force_deploy }}
         run: |
           echo "### Production Smoke Tests Passed" >> $GITHUB_STEP_SUMMARY
@@ -769,13 +761,8 @@ jobs:
           echo "- Backend health check" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend accessibility" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "**Deployment Trigger:** Manual workflow_dispatch" >> $GITHUB_STEP_SUMMARY
-            echo "**Force Deploy:** ${FORCE_DEPLOY:-false}" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "**Deployment Trigger:** Automatic (push to main)" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "**Deployment Trigger:** Manual workflow_dispatch" >> $GITHUB_STEP_SUMMARY
+          echo "**Force Deploy:** ${FORCE_DEPLOY:-false}" >> $GITHUB_STEP_SUMMARY
 
       - name: Final workspace cleanup
         if: always()

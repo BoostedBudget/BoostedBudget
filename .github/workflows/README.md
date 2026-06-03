@@ -2,259 +2,206 @@
 
 This directory contains GitHub Actions workflows for BoostedBudget's CI/CD pipeline.
 
+## Workflow Overview
+
+```
+PR to staging/main ──► test.yml          (CI: backend + frontend + E2E + lint)
+                                          │
+                        promote-to-production.yml  ◄── manual dispatch
+                        (merge staging→main + inline back-sync staging←main)
+                                          │
+                                          ▼
+                        deploy-production.yml      ◄── manual dispatch
+                        (build → Fly.io + Cloudflare + smoke tests)
+                                          │
+                        sync-staging.yml ◄── fires on any push to main
+                        (merges main→staging; safety net for direct hotfixes)
+
+push to staging ──────► deploy-to-staging.yaml     ◄── manual dispatch
+push to QA branch ────► deploy-qa.yml              ◄── manual dispatch
+```
+
+---
+
 ## Workflows
 
-### `ci-cd.yml` - Main CI/CD Pipeline
+### `test.yml` — CI Test Suite
 
-Complete continuous integration and deployment pipeline that runs on all pull requests and pushes to main.
+Runs on pull requests only.
 
-**Trigger Events:**
-- Pull requests (opened, synchronized, reopened)
-- Pushes to `main` branch
+**Trigger:** `pull_request` (opened, synchronize, reopened)
 
 **Jobs:**
-
-#### 1. Test (`test`)
-Runs comprehensive test suite with coverage enforcement.
-
-**Runs on:** All PRs and pushes
-
-**Steps:**
-- Backend tests (Go) with race detection
-- Coverage threshold enforcement (≥60%)
-- Frontend unit tests (Bun) with coverage
-- Linting (ESLint)
+- Backend tests (Go, race detection, ≥60% coverage)
+- Frontend unit tests (Bun, coverage)
+- ESLint
 - E2E tests (Playwright)
-- Upload coverage artifacts
 
-**Duration:** ~3-5 minutes
+**Duration:** ~3–5 min
 
-**Quality Gates:**
-- ✅ All tests must pass
-- ✅ Backend coverage ≥60%
-- ✅ Frontend coverage enforced
-- ✅ Linting passes
-- ✅ No race conditions detected
+---
 
-#### 2. Build Images (`build-images`)
-Builds Docker images and pushes to GitHub Container Registry.
+### `promote-to-production.yml` — Promote Staging to Production
 
-**Runs on:** Pushes to `main` only (after PR merge)
+Merges `staging`→`main` and immediately syncs `main` back to `staging`. **Does not deploy.** Run this first, then dispatch `deploy-production.yml` when ready.
 
-**Dependencies:** Requires `test` job to pass
+**Trigger:** `workflow_dispatch` (manual only)
 
 **Steps:**
-- Build multi-stage backend Docker image
-- Build multi-stage frontend Docker image
-- Tag with git SHA and `latest`
-- Push to GHCR
-- Use GitHub Actions cache for faster builds
+1. Validate staging is ahead of main (hard-fails if not, or if main is already ahead)
+2. Merge `staging`→`main` (no-ff, push to main)
+3. Inline back-sync: merge `main`→`staging` + push (race-robust retry)
+4. Summary: links to `deploy-production.yml` for next step
 
-**Duration:** ~4-6 minutes
+**Why inline back-sync?** The promote job uses the default `GITHUB_TOKEN`, which does not trigger push-based downstream workflows. The inline sync runs in the same job and is unconditional — staging is always kept in sync with main regardless of deploy outcome.
 
-**Images:**
-- `ghcr.io/maxnussbaum/boostedbudget-backend:latest`
-- `ghcr.io/maxnussbaum/boostedbudget-backend:<git-sha>`
-- `ghcr.io/maxnussbaum/boostedbudget-frontend:latest`
-- `ghcr.io/maxnussbaum/boostedbudget-frontend:<git-sha>`
+---
 
-#### 3. Security Scan (`security-scan`)
-Scans Docker images for vulnerabilities using Trivy.
+### `deploy-production.yml` — Deploy to Production
 
-**Runs on:** After images are built (main branch only)
+Builds and deploys the current `main` to Fly.io (backend) and Cloudflare Pages (frontend).
 
-**Dependencies:** Requires `build-images` job
+**Trigger:** `workflow_dispatch` (manual only — dispatch after promoting)
 
-**Steps:**
-- Scan backend image for vulnerabilities
-- Scan frontend image for vulnerabilities
-- Upload SARIF results to GitHub Security tab
-- Fail on CRITICAL vulnerabilities
+**Inputs:** `force_deploy`, `force_rebuild`, `allow_rollback`
 
-**Duration:** ~2-3 minutes
+**Jobs (in order):**
+1. `detect-changes` — resolves `deploy_sha` (always `origin/main` HEAD), diffs against per-component release tags
+2. `build-images` — builds backend Docker image → GHCR (only if backend changed)
+3. `push-to-fly-registry` — pushes image to Fly.io registry
+4. `deploy-to-fly` — deploys backend to Fly.io
+5. `deploy-frontend` — deploys to Cloudflare Pages (only if frontend changed)
+6. `deploy-mcp-worker` — deploys MCP Cloudflare Worker (only if mcp changed)
+7. `smoke-tests` — runs `scripts/smoke-test.sh production`
+8. `update-release-tags` — tags GHCR images with `backend-prod-latest` / `frontend-prod-latest`
 
-**Severity Levels:**
-- CRITICAL: Pipeline fails ❌
-- HIGH: Reported, pipeline continues ⚠️
-- MEDIUM: Reported, pipeline continues ⚠️
+**Duration:** ~8–15 min depending on what changed
 
-#### 4. Deploy Production (`deploy-production`)
-Deploys to production Fly.io environment.
+---
 
-**Runs on:** Pushes to `main` only (manual approval required)
+### `sync-staging.yml` — Sync Staging with Main
 
-**Dependencies:** Requires `build-images` and `security-scan` to pass
+Merges `main`→`staging` and pushes. Safety net for direct human pushes to `main` (hotfixes, reverts). The promote workflow handles its own back-sync inline; this workflow covers everything else.
 
-**Environment:** `production` (manual approval required)
+**Trigger:** `push: branches:[main]`, `workflow_dispatch`
 
-**Steps:**
-- Deploy backend to Fly.io using pre-built image
-- Deploy frontend to Fly.io using pre-built image
-- Verify deployment status
-- Run smoke tests
+**Note:** Only human pushes to `main` fire the `push:` trigger (GITHUB_TOKEN pushes, as used by the promote workflow, do not). Use `workflow_dispatch` for manual reconciliation if staging and main diverge unexpectedly.
 
-**Duration:** ~3-4 minutes
+---
 
-**Approval:** Requires manual approval via GitHub Environment protection
+### `deploy-to-staging.yaml` — Deploy to Staging
 
-## Total Pipeline Duration
+Builds and deploys the current `staging` branch to the staging Fly.io / Cloudflare environment.
 
-**Pull Request:** ~3-5 minutes (test job only)
-**Main Branch:** ~12-15 minutes (all jobs)
+**Trigger:** `workflow_dispatch` (manual only)
+
+**Inputs:** `force_rebuild`, `allow_rollback`
+
+---
+
+### `deploy-qa.yml` — Deploy to QA
+
+Builds and deploys to the QA environment (Mac Mini self-hosted runner).
+
+**Trigger:** `workflow_dispatch` (manual only)
+
+---
+
+## Deployment Flow
+
+### Normal release
+```
+1. Merge feature PRs to staging (tests must pass)
+2. Dispatch: Promote Staging to Production
+   → staging merged to main + staging re-synced
+3. Dispatch: Deploy to Production
+   → build, deploy, smoke tests, release tags updated
+```
+
+### Hotfix to production
+```
+1. Checkout main, create hotfix branch, fix bug
+2. PR → main (bypasses staging; expedited review)
+3. Merge PR to main
+   → sync-staging.yml fires automatically (push to main by human)
+   → staging is kept in sync
+4. Dispatch: Deploy to Production
+```
+
+### Staging-only deploy
+```
+Dispatch: Deploy to Staging  (uses current staging HEAD)
+```
+
+---
 
 ## Environment Variables
 
 ```yaml
-GO_VERSION: '1.26.3'    # Go version for backend tests
+GO_VERSION: '1.26.4'    # Go version for backend builds and tests
+NODE_VERSION: '22'       # Node version (staging/prod); '20' in test/QA
 REGISTRY: 'ghcr.io'     # Container registry
 ```
 
 ## Secrets Required
 
-### GitHub Secrets
-- `GITHUB_TOKEN` - Auto-generated, used for GHCR authentication
-- `FLY_API_TOKEN` - Fly.io API token for production deployments
+- `GITHUB_TOKEN` — auto-generated, used for GHCR authentication
+- `FLY_API_TOKEN` — Fly.io API token for production/staging deployments
+- `CLERK_PUBLISHABLE_KEY`, `VITE_PADDLE_CLIENT_TOKEN`, `VITE_POSTHOG_KEY` — baked into frontend builds
 
-### Future Secrets (not yet required)
-- `SLACK_WEBHOOK_URL` - For deployment notifications
-- `SONAR_TOKEN` - For SonarCloud integration
+## Branch Protection
 
-## GitHub Environments
+See `../branch-protection-setup.md` for configuration instructions.
 
-### Production
-- **Name:** `production`
-- **URL:** https://boostedbudget.com
-- **Protection:** Manual approval required
-- **Reviewers:** 1+ required
-- **Secrets:** `FLY_API_TOKEN`
-
-## Branch Protection Rules
-
-See `.github/branch-protection-setup.md` for detailed configuration instructions.
-
-**Required checks for `main` branch:**
+**Required checks for `staging` / `main` PRs:**
 - ✅ `test` job must pass
-- ✅ `security-scan` must pass (if running)
 - ✅ Branch must be up to date
 
 ## Local Testing
 
-### Run tests locally (without CI)
 ```bash
-# Run all tests with coverage
-make test-ci
+# All tests with coverage
+make test-fast
 
 # Backend only
-cd backend && go test -v -race -coverprofile=coverage.out ./...
+cd backend && go test -v -race ./...
 
 # Frontend only
-cd apps/web && bun run test:ci
+cd apps/web && bun run test
 
 # E2E only
 cd apps/web && bun run test:e2e
-```
 
-### Build Docker images locally
-```bash
-# Build both images
-./scripts/build-and-push.sh
-
-# Build and push to GHCR
-./scripts/build-and-push.sh --push
-```
-
-### Run smoke tests
-```bash
-# Against production
+# Smoke tests
+./scripts/smoke-test.sh staging
 ./scripts/smoke-test.sh production
-
-# Against QA (Mac Mini)
-./scripts/smoke-test.sh qa
 ```
-
-## Coverage Reports
-
-Coverage reports are automatically generated and uploaded as artifacts on every test run.
-
-**Access coverage reports:**
-1. Go to Actions tab
-2. Click on a workflow run
-3. Scroll to "Artifacts" section
-4. Download:
-   - `backend-coverage` - Go coverage reports
-   - `frontend-coverage` - Frontend coverage reports
-   - `playwright-report` - E2E test results
 
 ## Monitoring
 
-### Check workflow status
-- View in GitHub Actions tab
-- Status badge in README (automatically updated)
-
-### View security scan results
-- GitHub Security tab → Code scanning alerts
-- Trivy results uploaded as SARIF format
-
-### Deployment logs
 ```bash
-# View Fly.io logs
+# Fly.io logs
 fly logs --app boostedbudget-api
 fly logs --app boostedbudget-web
 
-# Check deployment status
+# Deployment status
 fly status --app boostedbudget-api
 fly status --app boostedbudget-web
 ```
 
 ## Troubleshooting
 
-### Tests failing in CI but passing locally
-- Ensure Node/Go versions match CI
-- Check for timing issues in E2E tests
-- Review race condition warnings
-
-### Coverage below threshold
-- Add more unit tests
-- Remove excluded files from coverage
-- Check coverage locally first: `make test-ci`
-
-### Docker build failures
-- Check Dockerfile syntax
-- Verify all dependencies are listed
-- Test build locally: `./scripts/build-and-push.sh`
-
-### Deployment failures
-- Verify `FLY_API_TOKEN` secret is set
-- Check Fly.io app exists: `fly status --app boostedbudget-api`
-- Review Fly.io logs: `fly logs --app boostedbudget-api`
-
-### Security scan failures
-- Review GitHub Security tab for details
-- Check Trivy results in workflow logs
-- Update base images if needed
-- Fix or suppress known false positives
-
-## Future Enhancements
-
-Prepared but not yet implemented:
-- [ ] Coverage report PR comments
-- [ ] Staging deployment (when develop branch exists)
-- [ ] SonarCloud integration
-- [ ] Slack/Discord notifications
-- [ ] Performance benchmarking
-- [ ] Multi-region deployment support
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| Promote fails "Main is ahead of staging" | A hotfix landed on main after the last promote | Dispatch `sync-staging.yml`, then re-promote |
+| Promote fails "Staging is not ahead of main" | Nothing new on staging | Merge feature PRs to staging first |
+| Deploy fails with `BUILD_DATE` empty | Old workflow version | Pull latest — `BUILD_DATE` is now set via `git show` |
+| Tests fail in CI but pass locally | Go/Node version drift | Ensure local versions match `GO_VERSION`/`NODE_VERSION` in workflow |
+| `sync-staging` didn't fire after hotfix | Push used `GITHUB_TOKEN` (bot) | Dispatch `sync-staging.yml` manually |
 
 ## Related Documentation
 
-- [CLAUDE.md](../../CLAUDE.md) - Development guidelines
-- [boosted-budget-fly-deployment.md](../../boosted-budget-fly-deployment.md) - Deployment strategy
-- [Branch Protection Setup](.github/branch-protection-setup.md) - GitHub settings
-- [Scripts README](../../scripts/README.md) - Deployment scripts
-
-## Support
-
-For issues with the CI/CD pipeline:
-1. Check workflow logs in GitHub Actions
-2. Review this documentation
-3. Check deployment scripts in `scripts/` directory
-4. Consult deployment documentation
+- [CLAUDE.md](../../CLAUDE.md) — Development guidelines
+- [boosted-budget-fly-deployment.md](../../boosted-budget-fly-deployment.md) — Fly.io deployment strategy
+- [Branch Protection Setup](../branch-protection-setup.md) — GitHub settings
+- [Scripts README](../../scripts/README.md) — Deployment scripts
