@@ -116,7 +116,7 @@ test-fast:
 	@echo "✅ Frontend tests passed (run 'make test-all' for vitest coverage)"
 	@echo ""
 	@echo "4️⃣  MCP Server Tests..."
-	@cd apps/mcp-server && bun test src/
+	@cd apps/mcp-server && bun run test
 	@cd apps/mcp-server && bun run scripts/check-manifest-completeness.ts
 	@cd apps/mcp-server && bun run scripts/check-no-direct-api-calls.ts
 	@echo "✅ MCP server tests passed"
@@ -175,7 +175,7 @@ test-all:
 	@echo "✅ Frontend coverage: apps/web/coverage/combined.lcov"
 	@echo ""
 	@echo "4️⃣  MCP Server Tests..."
-	@cd apps/mcp-server && bun test src/
+	@cd apps/mcp-server && bun run test
 	@cd apps/mcp-server && bun run scripts/check-manifest-completeness.ts
 	@cd apps/mcp-server && bun run scripts/check-no-direct-api-calls.ts
 	@echo "✅ MCP server tests passed"
