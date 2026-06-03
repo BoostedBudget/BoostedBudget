@@ -39,6 +39,9 @@ export default defineConfig({
   ],
   test: {
     include: ['integration/mcp/transport.integration.test.ts'],
+    // Match the non-transport config timeouts — cold-start and token-minting can be slow on CI.
+    testTimeout: 30000,
+    hookTimeout: 60000,
     coverage: {
       provider: 'istanbul',
     },

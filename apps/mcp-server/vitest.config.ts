@@ -34,6 +34,10 @@ export default defineConfig({
       'integration/**/*.integration.test.ts',
       '!integration/mcp/transport.integration.test.ts',
     ],
+    // On CI the Workers runtime (workerd) cold-compiles the Worker bundle on first use.
+    // This can take >5s on shared runners. Raise timeouts to prevent false failures.
+    testTimeout: 30000,
+    hookTimeout: 60000,
     coverage: {
       provider: 'istanbul',
     },
