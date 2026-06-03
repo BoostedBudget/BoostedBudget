@@ -433,10 +433,16 @@ jobs:
           # we create it explicitly here for older bun versions.
           if [ ! -f node_modules/.bin/vitest ]; then
             mkdir -p node_modules/.bin
-            # Ensure workspace vitest package symlink exists
+            # Ensure workspace vitest package symlink exists.
+            # IMPORTANT: symlink targets are relative to the symlink's location
+            # (node_modules/), NOT to the CWD (apps/mcp-server/).
+            # From node_modules/:  ../   = apps/mcp-server/
+            #                      ../../ = apps/
+            #                      ../../../ = repo root  ← correct
+            # So the target must be ../../../node_modules/vitest (3 levels up).
             if [ ! -e node_modules/vitest ] && [ -d ../../node_modules/vitest ]; then
-              ln -sf ../../node_modules/vitest node_modules/vitest
-              echo "Created node_modules/vitest -> ../../node_modules/vitest"
+              ln -sf ../../../node_modules/vitest node_modules/vitest
+              echo "Created node_modules/vitest -> ../../../node_modules/vitest"
             fi
             # Find the vitest binary entry from package.json (bin.vitest field) and
             # create a RELATIVE symlink. Using relative path keeps __dirname inside
