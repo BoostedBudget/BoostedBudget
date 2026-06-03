@@ -18,9 +18,9 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { env } from 'cloudflare:test'
 import { exports } from 'cloudflare:workers'
-import type { Env } from '../env'
-import { mintAccessToken, setupFetchMock, handleBaseUrls } from '../test/helpers/mint-token'
-import { clearRevocationCache } from '../oauth/revocation'
+import type { Env } from '../../src/env'
+import { mintAccessToken, setupFetchMock, handleBaseUrls } from '../../src/test/helpers/mint-token'
+import { clearRevocationCache } from '../../src/oauth/revocation'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

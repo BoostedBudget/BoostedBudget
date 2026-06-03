@@ -28,7 +28,7 @@ export default defineConfig({
     }),
   ],
   test: {
-    include: ['**/*.integration.test.ts'],
+    include: ['integration/**/*.integration.test.ts'],
     coverage: {
       provider: 'istanbul',
     },

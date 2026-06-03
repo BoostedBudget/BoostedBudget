@@ -20,8 +20,8 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { env } from 'cloudflare:test'
 import { exports } from 'cloudflare:workers'
-import type { Env } from '../env'
-import { mintAccessToken, setupFetchMock } from './helpers/mint-token'
+import type { Env } from '../src/env'
+import { mintAccessToken, setupFetchMock } from '../src/test/helpers/mint-token'
 
 describe('mintAccessToken helper', () => {
   setupFetchMock()
