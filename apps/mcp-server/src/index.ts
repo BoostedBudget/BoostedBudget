@@ -29,7 +29,7 @@ import type { Env } from './env'
 export { BoostedBudgetMcpAgent }
 export { McpApiHandler }
 
-const oauthOptions: OAuthProviderOptions<Env> = {
+export const oauthOptions: OAuthProviderOptions<Env> = {
   // /mcp and /sse routes are authenticated; all other routes go to defaultHandler
   apiRoute: ['/mcp', '/sse'],
   apiHandler: McpApiHandler,
