@@ -7,7 +7,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "deploy:staging": "wrangler deploy --env staging",
-    "test": "bun test --path-ignore-patterns '**/*.integration.test.ts' src/",
+    "test": "bun test src/",
     "test:integration": "node --experimental-vm-modules node_modules/.bin/vitest run --config vitest.config.ts",
     "test:integration:transport": "node --experimental-vm-modules node_modules/.bin/vitest run --config vitest.config.ts --no-isolate --max-workers=1",
     "test:watch": "bun test --watch src/",
