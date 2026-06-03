@@ -578,25 +578,26 @@ describe('MCP transport integration', () => {
       }
     }
 
-    if (sessionPath) {
-      // Session path was extracted — POST a notifications/initialized message to it.
-      // This verifies the /sse/message endpoint accepts authenticated requests.
-      const msgRes = await worker.fetch(
-        new Request(`http://mcp.test${sessionPath}`, {
-          method: 'POST',
-          headers: {
-            Authorization: bearerToken,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', id: null }),
-        }),
-      )
-      expect(msgRes.status).not.toBe(401)
-      expect(msgRes.status).not.toBe(503)
-    }
-    // If sessionPath was not parseable (first chunk did not contain the endpoint event in this
-    // runtime), the /sse/message assertion is skipped gracefully — the session may buffer
-    // differently across miniflare versions.
+    // The agents SDK always emits the endpoint event in the first SSE chunk in the
+    // miniflare test environment. Fail loudly if it isn't there — a silent skip would
+    // falsely satisfy the requirement that /sse/message reaches the SSE handler.
+    expect(sessionPath, 'SSE endpoint event not received in first chunk — agents SDK must emit it immediately').toBeTruthy()
+
+    // POST a notifications/initialized message to the /sse/message endpoint.
+    // This verifies the endpoint accepts authenticated requests and the full
+    // /sse + /sse/message routing chain works end-to-end.
+    const msgRes = await worker.fetch(
+      new Request(`http://mcp.test${sessionPath}`, {
+        method: 'POST',
+        headers: {
+          Authorization: bearerToken,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', id: null }),
+      }),
+    )
+    expect(msgRes.status).not.toBe(401)
+    expect(msgRes.status).not.toBe(503)
 
     // ── X-MCP-* header injection on SSE: attacker headers do not cause auth failure ──
     // Header injection on SSE verified via auth acceptance — attacker headers stripped by
