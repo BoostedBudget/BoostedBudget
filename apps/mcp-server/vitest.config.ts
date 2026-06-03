@@ -28,7 +28,12 @@ export default defineConfig({
     }),
   ],
   test: {
-    include: ['integration/**/*.integration.test.ts'],
+    // Exclude the transport test — it requires --no-isolate --max-workers=1 (DO-backed
+    // WebSocket sessions need a shared isolate). Run it via vitest.transport.config.ts.
+    include: [
+      'integration/**/*.integration.test.ts',
+      '!integration/mcp/transport.integration.test.ts',
+    ],
     coverage: {
       provider: 'istanbul',
     },
