@@ -179,5 +179,11 @@ describe('TriageDetailView', () => {
       fireEvent.keyDown(document, { key: 'z', ctrlKey: true })
       expect(onUndo).toHaveBeenCalledTimes(1)
     })
+
+    it('disables keyboard shortcuts when externalOverlayOpen=true', () => {
+      const { props } = renderTriage({ externalOverlayOpen: true })
+      fireEvent.keyDown(document, { key: 'e' })
+      expect(props.onApprove).not.toHaveBeenCalled()
+    })
   })
 })

@@ -418,6 +418,7 @@ export function ReviewInboxPage() {
             onUndo={handleTriageUndo}
             isSelected={triageTx ? isSelected(triageTx.id) : false}
             isPending={isPending}
+            externalOverlayOpen={showBulkRecategorize}
           />
         </div>
       )}

@@ -52,6 +52,7 @@ interface TriageDetailViewProps {
   onUndo?: () => void
   isSelected?: boolean
   isPending?: boolean
+  externalOverlayOpen?: boolean
 }
 
 export function TriageDetailView({
@@ -70,6 +71,7 @@ export function TriageDetailView({
   onUndo,
   isSelected = false,
   isPending = false,
+  externalOverlayOpen = false,
 }: TriageDetailViewProps) {
   const [showHelp, setShowHelp] = useState(false)
   const [showRecategorize, setShowRecategorize] = useState(false)
@@ -101,7 +103,7 @@ export function TriageDetailView({
     onClose: handleClose,
     onUndo,
     // Disable shortcuts when any overlay is open or a mutation is in flight
-    enabled: !showHelp && !showRecategorize && !isPending,
+    enabled: !showHelp && !showRecategorize && !isPending && !externalOverlayOpen,
   })
 
   const displayName = transaction.merchant_name || transaction.name

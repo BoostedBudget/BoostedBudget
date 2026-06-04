@@ -100,4 +100,9 @@ describe('Navigation', () => {
     await user.click(screen.getByRole('link', { name: /dashboard/i }))
     expect(onLinkClick).toHaveBeenCalledTimes(1)
   })
+
+  it('does not include a Review link (entry point is header inbox button)', () => {
+    renderWithRouter()
+    expect(screen.queryByRole('link', { name: /^review$/i })).not.toBeInTheDocument()
+  })
 })
