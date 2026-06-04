@@ -1,2 +1,3 @@
-export { ReviewBadge, reviewBadgeVariantFromTransaction } from './ReviewBadge'
+export { ReviewBadge } from './ReviewBadge'
 export type { ReviewBadgeVariant } from './ReviewBadge'
+export { reviewBadgeVariantFromTransaction } from './reviewBadgeUtils'

@@ -138,6 +138,12 @@
     "gzip": true
   },
   {
+    "name": "category-editor",
+    "path": "apps/web/dist/assets/CategoryEditor-*.js",
+    "limit": "4 KB",
+    "gzip": true
+  },
+  {
     "name": "css",
     "path": "apps/web/dist/assets/*.css",
     "limit": "68 KB",

@@ -1,11 +1,4 @@
-/**
- * ReviewBulkActionBar — sticky action bar shown when ≥1 rows are selected.
- *
- * Actions: mark reviewed | mark unreviewed | clear selection
- * Future: bulk recategorize (requires category picker, deferred to follow-up)
- */
-
-import { CheckCircle2, Circle, X } from 'lucide-react'
+import { CheckCircle2, Circle, Tag, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ReadOnlyGuard } from '@/auth'
 
@@ -13,6 +6,7 @@ interface ReviewBulkActionBarProps {
   selectedCount: number
   onMarkReviewed: () => void
   onMarkUnreviewed: () => void
+  onBulkRecategorize?: () => void
   onClear: () => void
   isLoading?: boolean
 }
@@ -21,6 +15,7 @@ export function ReviewBulkActionBar({
   selectedCount,
   onMarkReviewed,
   onMarkUnreviewed,
+  onBulkRecategorize,
   onClear,
   isLoading = false,
 }: ReviewBulkActionBarProps) {
@@ -59,6 +54,19 @@ export function ReviewBulkActionBar({
             <Circle className="text-warning" />
             Mark unreviewed
           </Button>
+
+          {onBulkRecategorize && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onBulkRecategorize}
+              disabled={isLoading}
+              aria-label="Recategorize selected"
+            >
+              <Tag />
+              Recategorize
+            </Button>
+          )}
         </>
       </ReadOnlyGuard>
 
