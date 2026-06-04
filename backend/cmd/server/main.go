@@ -371,6 +371,7 @@ func main() {
 		})
 		privacyService := services.NewPrivacyService(privacyRepo)
 		transactionService := services.NewTransactionService(transactionRepo, customCategoryRepo)
+		transactionService.SetAnalytics(phClient)
 		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
 		registrationService.SetAnalytics(phClient)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)

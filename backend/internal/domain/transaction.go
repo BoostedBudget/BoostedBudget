@@ -269,6 +269,50 @@ func (t Transaction) IncomeAmount() float64 {
 	return 0
 }
 
+// TopUnreviewedCategory holds aggregated counts of unreviewed transactions grouped by
+// a stable category key (custom_category_override_id or PFC primary enum).
+// Issue #1210.
+type TopUnreviewedCategory struct {
+	// CategoryKey is the stable grouping key: custom-category UUID for custom, PFC primary enum otherwise.
+	CategoryKey string `json:"category_key"`
+	// DisplayName is a human-readable label derived from the stable key.
+	DisplayName string `json:"display_name"`
+	// Count is the number of unreviewed transactions in this category bucket.
+	Count int64 `json:"count"`
+}
+
+// ReviewSummaryResponse is the structured response for GET /api/v1/transactions/review-summary.
+// Designed for AI-tool consumption: single-responsibility, pre-computed, token-efficient.
+// Issue #1210.
+type ReviewSummaryResponse struct {
+	// UnreviewedCount is the total number of transactions not yet reviewed.
+	UnreviewedCount int64 `json:"unreviewed_count"`
+	// ReviewedByRuleCount is the number of transactions reviewed via automation rule.
+	ReviewedByRuleCount int64 `json:"reviewed_by_rule_count"`
+	// ReviewedByManualCount is the number of transactions reviewed via manual user action.
+	ReviewedByManualCount int64 `json:"reviewed_by_manual_count"`
+	// ReviewedByPlaidCount is the number of transactions reviewed with original Plaid category (approve-as-is).
+	ReviewedByPlaidCount int64 `json:"reviewed_by_plaid_count"`
+	// AvgIngestionToReviewSec is the average time in seconds from transaction creation (sync time)
+	// to when it was reviewed. Named "ingestion-to-review" because created_at reflects sync time,
+	// not the original transaction date; historical imports skew this metric.
+	// Nil when no reviewed transactions exist.
+	AvgIngestionToReviewSec *float64 `json:"avg_ingestion_to_review_seconds,omitempty"`
+	// TopUnreviewedCategories is the top-5 unreviewed category buckets, ordered by count descending.
+	// Empty slice (not null) when no unreviewed transactions exist.
+	TopUnreviewedCategories []TopUnreviewedCategory `json:"top_unreviewed_categories"`
+}
+
+// ReviewSummaryFilters provides optional date-range scoping for the review summary query.
+// Both fields are optional — omitting them returns all-time data (transfers included).
+// Issue #1210.
+type ReviewSummaryFilters struct {
+	// StartDate optionally scopes the summary to transactions on or after this date.
+	StartDate *time.Time
+	// EndDate optionally scopes the summary to transactions on or before this date.
+	EndDate *time.Time
+}
+
 // TransactionFilters represents optional filters for querying transactions.
 // All fields are optional pointers - nil means no filter applied for that field.
 // Used by repository layer to build dynamic WHERE clauses.
@@ -309,6 +353,10 @@ type TransactionFilters struct {
 	// Reviewed filters by review state (Issue #1203).
 	// True = only reviewed, False = only unreviewed (inbox), nil = both
 	Reviewed *bool
+
+	// CategorySources filters by category origin (OR logic within): plaid, rule, manual.
+	// Nil/empty means no filter. Issue #1210.
+	CategorySources []string
 
 	// MinAmount filters transactions with absolute amount >= this value
 	// Issue #529: Amount range filter support

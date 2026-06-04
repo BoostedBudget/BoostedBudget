@@ -210,3 +210,29 @@ func TestMCPManifest_AnalyticsOpsAreInGoManifest(t *testing.T) {
 		)
 	}
 }
+
+// TestMCPManifest_Issue1210_ReviewWorkflowEntries verifies that the new Issue #1210
+// operation entries are present with the correct class so a future rename can't
+// silently drop them.
+func TestMCPManifest_Issue1210_ReviewWorkflowEntries(t *testing.T) {
+	type wantEntry struct {
+		operationID string
+		wantClass   domain.MCPOperationClass
+	}
+
+	want := []wantEntry{
+		{"getTransactionReviewSummary", domain.MCPClassRead},
+		{"bulkUpdateTransactionCategory", domain.MCPClassWrite},
+	}
+
+	for _, w := range want {
+		class, found := domain.MCPOperationManifest[w.operationID]
+		if !found {
+			t.Errorf("MCPOperationManifest missing entry for %q (Issue #1210)", w.operationID)
+			continue
+		}
+		if class != w.wantClass {
+			t.Errorf("MCPOperationManifest[%q] = %q, want %q (Issue #1210)", w.operationID, class, w.wantClass)
+		}
+	}
+}

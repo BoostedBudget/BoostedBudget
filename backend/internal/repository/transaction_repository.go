@@ -102,6 +102,16 @@ type TransactionRepository interface {
 	// are ignored. reviewed_at is set to now when reviewed=true, cleared when false.
 	SetReviewed(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error)
 
+	// BulkUpdateCategory recategorizes many transactions at once using a single UPDATE (Issue #1210).
+	// Best-effort: IDs not owned by userID are silently skipped. Always 200.
+	// Sets reviewed=true + reviewed_at=now + category_source='manual' + effective_category_name
+	// using the same CASE logic as UpdateCategory. Returns rows affected.
+	BulkUpdateCategory(ctx context.Context, userID string, transactionIDs []string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) (int64, error)
+
+	// GetReviewSummary returns pre-computed review-state counts and top unreviewed categories (Issue #1210).
+	// Single CTE query; dates in filters are optional (all-time default). Transfers included.
+	GetReviewSummary(ctx context.Context, userID string, filters domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error)
+
 	// GetDistinctPlaidCategories returns distinct Plaid category names for a user's transactions
 	// Prefers secondary category (index 1) when available for better granularity
 	// Falls back to primary category (index 0) when secondary is not available
@@ -897,6 +907,17 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		argIndex++
 	}
 
+	// Optional filter: category_source (Issue #1210) — OR logic within the enum set
+	if len(filters.CategorySources) > 0 {
+		placeholders := make([]string, len(filters.CategorySources))
+		for i, s := range filters.CategorySources {
+			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+			args = append(args, s)
+			argIndex++
+		}
+		conditions = append(conditions, "category_source IN ("+strings.Join(placeholders, ", ")+")")
+	}
+
 	// Optional filter: min_amount (Issue #529)
 	// Filters by absolute amount (users see positive amounts in UI)
 	if filters.MinAmount != nil {
@@ -1218,6 +1239,165 @@ func (r *transactionRepository) SetReviewed(ctx context.Context, userID string, 
 		return 0, fmt.Errorf("failed to set reviewed: %w", err)
 	}
 	return ct.RowsAffected(), nil
+}
+
+// BulkUpdateCategory recategorizes many transactions in one UPDATE (Issue #1210).
+// Single statement (atomic by definition) — no explicit transaction needed.
+// IDs not owned by userID are silently skipped; returns rows affected.
+func (r *transactionRepository) BulkUpdateCategory(ctx context.Context, userID string, transactionIDs []string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) (int64, error) {
+	if len(transactionIDs) == 0 {
+		return 0, nil
+	}
+	now := time.Now()
+
+	query := `
+		UPDATE transactions
+		SET category_override_kind      = $1,
+		    pfc_primary_override        = $2,
+		    pfc_detailed_override       = $3,
+		    custom_category_override_id = $4,
+		    category_source             = $5,
+		    category_override_date      = $6,
+		    reviewed                    = true,
+		    reviewed_at                 = $6,
+		    effective_category_name     = CASE
+		        WHEN $1 = 'custom' THEN
+		            (SELECT name FROM custom_categories WHERE id = $4::uuid AND user_id = transactions.user_id)
+		        WHEN $1 = 'pfc' THEN COALESCE(NULLIF($2, ''), pfc_primary)
+		        ELSE pfc_primary
+		    END,
+		    updated_at = $7
+		WHERE user_id = $8
+		  AND id = ANY($9::uuid[])
+	`
+
+	ct, err := r.db.Exec(ctx, query, overrideKind, pfcPrimaryOverride, pfcDetailedOverride, customCategoryOverrideID, categorySource, now, now, userID, transactionIDs)
+	if err != nil {
+		return 0, fmt.Errorf("failed to bulk update transaction category: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
+// GetReviewSummary returns review-state counts and top-5 unreviewed categories in one CTE query (Issue #1210).
+// Designed for AI-tool consumption: single DB round-trip, structured output, all-time default.
+func (r *transactionRepository) GetReviewSummary(ctx context.Context, userID string, filters domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error) {
+	// Build optional date conditions (appended to both the summary CTE and the top-categories CTE).
+	args := []any{userID}
+	argIndex := 2
+	dateCondition := ""
+	if filters.StartDate != nil {
+		dateCondition += fmt.Sprintf(" AND date >= $%d", argIndex)
+		args = append(args, *filters.StartDate)
+		argIndex++
+	}
+	if filters.EndDate != nil {
+		dateCondition += fmt.Sprintf(" AND date <= $%d", argIndex)
+		args = append(args, *filters.EndDate)
+		argIndex++
+	}
+
+	query := fmt.Sprintf(`
+		WITH base AS (
+			SELECT
+				reviewed,
+				category_source,
+				reviewed_at,
+				created_at,
+				CASE
+					WHEN custom_category_override_id IS NOT NULL THEN custom_category_override_id::text
+					ELSE COALESCE(pfc_primary, 'UNCATEGORIZED')
+				END AS cat_key,
+				COALESCE(effective_category_name, pfc_primary, 'Uncategorized') AS cat_display
+			FROM transactions
+			WHERE user_id = $1%s
+		),
+		summary AS (
+			SELECT
+				COUNT(*) FILTER (WHERE NOT reviewed)                                       AS unreviewed_count,
+				COUNT(*) FILTER (WHERE reviewed AND category_source = 'rule')              AS reviewed_by_rule_count,
+				COUNT(*) FILTER (WHERE reviewed AND category_source = 'manual')            AS reviewed_by_manual_count,
+				COUNT(*) FILTER (WHERE reviewed AND category_source = 'plaid')             AS reviewed_by_plaid_count,
+				AVG(EXTRACT(EPOCH FROM reviewed_at - created_at)) FILTER (WHERE reviewed) AS avg_ingestion_to_review_sec
+			FROM base
+		),
+		top_cats AS (
+			SELECT
+				cat_key,
+				cat_display,
+				COUNT(*) AS cnt
+			FROM base
+			WHERE NOT reviewed
+			GROUP BY cat_key, cat_display
+			ORDER BY cnt DESC
+			LIMIT 5
+		)
+		SELECT
+			s.unreviewed_count,
+			s.reviewed_by_rule_count,
+			s.reviewed_by_manual_count,
+			s.reviewed_by_plaid_count,
+			s.avg_ingestion_to_review_sec,
+			COALESCE(
+				json_agg(json_build_object('category_key', t.cat_key, 'display_name', t.cat_display, 'count', t.cnt) ORDER BY t.cnt DESC)
+				FILTER (WHERE t.cat_key IS NOT NULL),
+				'[]'::json
+			) AS top_unreviewed_categories
+		FROM summary s
+		LEFT JOIN top_cats t ON true
+		GROUP BY
+			s.unreviewed_count, s.reviewed_by_rule_count,
+			s.reviewed_by_manual_count, s.reviewed_by_plaid_count,
+			s.avg_ingestion_to_review_sec
+	`, dateCondition)
+
+	row := r.db.QueryRow(ctx, query, args...)
+
+	var (
+		unreviewedCount        int64
+		reviewedByRuleCount    int64
+		reviewedByManualCount  int64
+		reviewedByPlaidCount   int64
+		avgIngestionSec        *float64
+		topCategoriesJSON      []byte
+	)
+
+	err := row.Scan(
+		&unreviewedCount,
+		&reviewedByRuleCount,
+		&reviewedByManualCount,
+		&reviewedByPlaidCount,
+		&avgIngestionSec,
+		&topCategoriesJSON,
+	)
+	if err != nil {
+		// No rows means zero transactions — return a zeroed summary.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return &domain.ReviewSummaryResponse{
+				TopUnreviewedCategories: []domain.TopUnreviewedCategory{},
+			}, nil
+		}
+		return nil, fmt.Errorf("failed to get review summary: %w", err)
+	}
+
+	// Unmarshal the json_agg result for top categories.
+	var topCategories []domain.TopUnreviewedCategory
+	if len(topCategoriesJSON) > 0 && string(topCategoriesJSON) != "null" && string(topCategoriesJSON) != "[]" {
+		if err := json.Unmarshal(topCategoriesJSON, &topCategories); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal top unreviewed categories: %w", err)
+		}
+	}
+	if topCategories == nil {
+		topCategories = []domain.TopUnreviewedCategory{}
+	}
+
+	return &domain.ReviewSummaryResponse{
+		UnreviewedCount:         unreviewedCount,
+		ReviewedByRuleCount:     reviewedByRuleCount,
+		ReviewedByManualCount:   reviewedByManualCount,
+		ReviewedByPlaidCount:    reviewedByPlaidCount,
+		AvgIngestionToReviewSec: avgIngestionSec,
+		TopUnreviewedCategories: topCategories,
+	}, nil
 }
 
 // GetDistinctPlaidCategories returns distinct Plaid category names for a user's transactions

@@ -8,6 +8,7 @@ import type { ReactNode } from 'react'
 import {
   mockSetTransactionReviewedMutateAsync,
   mockBulkSetTransactionReviewedMutateAsync,
+  mockBulkUpdateTransactionCategoryMutateAsync,
 } from '@/test/mocks/transactions-api'
 import { mockPosthogCapture } from '@/test/mocks/posthog'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
@@ -24,6 +25,7 @@ describe('useReviewMutations', () => {
   beforeEach(() => {
     mockSetTransactionReviewedMutateAsync.mockClear()
     mockBulkSetTransactionReviewedMutateAsync.mockClear()
+    mockBulkUpdateTransactionCategoryMutateAsync.mockClear()
     mockPosthogCapture.mockClear()
   })
 
@@ -57,5 +59,26 @@ describe('useReviewMutations', () => {
 
     expect(mockBulkSetTransactionReviewedMutateAsync).not.toHaveBeenCalled()
     expect(mockPosthogCapture).not.toHaveBeenCalled()
+  })
+
+  it('bulkRecategorize sends transaction_ids+kind and tracks REVIEW_BULK_RECATEGORIZED', async () => {
+    const { result } = renderHook(() => useReviewMutations(), { wrapper: wrapper() })
+    await result.current.bulkRecategorize(['tx-1', 'tx-2'], { kind: 'pfc', pfc_primary: 'Food' })
+
+    expect(mockBulkUpdateTransactionCategoryMutateAsync).toHaveBeenCalledWith({
+      data: { transaction_ids: ['tx-1', 'tx-2'], kind: 'pfc', pfc_primary: 'Food' },
+    })
+    expect(mockPosthogCapture).toHaveBeenCalledWith(
+      ANALYTICS_EVENTS.REVIEW_BULK_RECATEGORIZED,
+      expect.objectContaining({ count: 2, kind: 'pfc' }),
+    )
+  })
+
+  it('bulkRecategorize is a no-op for an empty id list', async () => {
+    const { result } = renderHook(() => useReviewMutations(), { wrapper: wrapper() })
+    const out = await result.current.bulkRecategorize([], { kind: 'clear' })
+
+    expect(mockBulkUpdateTransactionCategoryMutateAsync).not.toHaveBeenCalled()
+    expect(out).toEqual({ requested: 0, updated: 0 })
   })
 })

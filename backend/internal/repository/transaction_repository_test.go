@@ -3542,6 +3542,42 @@ func TestBuildWhereClause_PFCPrimariesAndDetailedsCombined(t *testing.T) {
 	assert.Equal(t, "TRANSPORTATION_RIDE_SHARE", args[2])
 }
 
+// TestBuildWhereClause_CategorySources verifies that a CategorySources filter produces
+// category_source IN (...) in the WHERE clause (Issue #1210).
+func TestBuildWhereClause_CategorySources(t *testing.T) {
+	userID := "user-abc"
+	filters := domain.TransactionFilters{
+		CategorySources: []string{"plaid", "rule"},
+	}
+
+	whereClause, args := buildWhereClause(userID, filters)
+
+	assert.Contains(t, whereClause, "category_source IN (", "WHERE clause must include category_source IN condition")
+
+	// args: $1=userID, $2=plaid, $3=rule
+	require.Len(t, args, 3, "expected exactly 3 args: user_id and the two source values")
+	assert.Equal(t, userID, args[0])
+	assert.Equal(t, "plaid", args[1])
+	assert.Equal(t, "rule", args[2])
+}
+
+// TestBuildWhereClause_CategorySourcesEmpty verifies that an empty CategorySources filter
+// produces no additional WHERE clause condition.
+func TestBuildWhereClause_CategorySourcesEmpty(t *testing.T) {
+	userID := "user-abc"
+	filters := domain.TransactionFilters{
+		CategorySources: []string{},
+	}
+
+	whereClause, args := buildWhereClause(userID, filters)
+
+	assert.NotContains(t, whereClause, "category_source IN (", "WHERE clause must not include category_source when filter is empty")
+
+	// args: $1=userID only
+	require.Len(t, args, 1, "expected only user_id arg")
+	assert.Equal(t, userID, args[0])
+}
+
 // TestBuildWhereClause_PFCPrimariesOnly_Unchanged is a regression test verifying that
 // providing only PFCPrimaries (no detaileds) still produces effective_pfc_primary IN (...)
 // without any effective_pfc_detailed condition.
@@ -3563,4 +3599,123 @@ func TestBuildWhereClause_PFCPrimariesOnly_Unchanged(t *testing.T) {
 	require.Len(t, args, 2, "expected exactly 2 args: user_id and the primary value")
 	assert.Equal(t, userID, args[0])
 	assert.Equal(t, "FOOD_AND_DRINK", args[1])
+}
+
+// TestGetReviewSummary_NoRows verifies that GetReviewSummary returns a zeroed response when
+// the CTE returns no rows (new user with zero transactions).
+// NOTE: pgxmock cannot validate the FILTER/EXTRACT/json_agg CTE against the real schema —
+// see transaction_review_summary_integration_test.go for that.
+func TestGetReviewSummary_NoRows(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	mock.ExpectQuery(".*").WithArgs(pgxmock.AnyArg()).WillReturnError(pgx.ErrNoRows)
+
+	summary, err := repo.GetReviewSummary(ctx, "user-x", domain.ReviewSummaryFilters{})
+	require.NoError(t, err, "ErrNoRows must be treated as zero summary, not an error")
+	require.NotNil(t, summary)
+	assert.Equal(t, int64(0), summary.UnreviewedCount)
+	assert.Empty(t, summary.TopUnreviewedCategories)
+}
+
+// TestGetReviewSummary_WithRows verifies that GetReviewSummary correctly scans a non-empty result.
+func TestGetReviewSummary_WithRows(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	avgSec := 1800.0
+	topJSON := `[{"category_key":"FOOD_AND_DRINK","display_name":"Coffee","count":3}]`
+
+	rows := pgxmock.NewRows([]string{
+		"unreviewed_count", "reviewed_by_rule_count", "reviewed_by_manual_count",
+		"reviewed_by_plaid_count", "avg_ingestion_to_review_sec", "top_unreviewed_categories",
+	}).AddRow(int64(5), int64(10), int64(3), int64(2), &avgSec, []byte(topJSON))
+
+	mock.ExpectQuery(".*").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
+
+	summary, err := repo.GetReviewSummary(ctx, "user-y", domain.ReviewSummaryFilters{})
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	assert.Equal(t, int64(5), summary.UnreviewedCount)
+	assert.Equal(t, int64(10), summary.ReviewedByRuleCount)
+	assert.Equal(t, int64(3), summary.ReviewedByManualCount)
+	assert.Equal(t, int64(2), summary.ReviewedByPlaidCount)
+	require.NotNil(t, summary.AvgIngestionToReviewSec)
+	assert.InDelta(t, 1800.0, *summary.AvgIngestionToReviewSec, 0.001)
+	require.Len(t, summary.TopUnreviewedCategories, 1)
+	assert.Equal(t, "FOOD_AND_DRINK", summary.TopUnreviewedCategories[0].CategoryKey)
+}
+
+// TestBulkUpdateCategory_Success verifies that BulkUpdateCategory issues one UPDATE and
+// returns the row count reported by pgx (Issue #1210).
+// NOTE: pgxmock cannot validate the effective_category_name CASE expression or the
+// ANY($::uuid[]) cast against the real schema — see transaction_bulk_category_integration_test.go.
+func TestBulkUpdateCategory_Success(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-111"
+	pfcPrimary := "FOOD_AND_DRINK"
+	ids := []string{uuid.New().String(), uuid.New().String()}
+
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE transactions")).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+
+	n, err := repo.BulkUpdateCategory(ctx, userID, ids, ptrStr("pfc"), &pfcPrimary, nil, nil, domain.CategorySourceManual)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBulkUpdateCategory_EmptyIDs verifies that BulkUpdateCategory returns 0 and skips
+// the DB call when the id list is empty.
+func TestBulkUpdateCategory_EmptyIDs(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	n, err := repo.BulkUpdateCategory(ctx, "user-x", []string{}, nil, nil, nil, nil, domain.CategorySourceManual)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+	// No DB expectations set; ensures no query was issued.
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBulkUpdateCategory_PartialOwnership verifies that rows affected < requested is
+// correctly returned (unowned IDs ignored by the WHERE user_id=$ clause).
+func TestBulkUpdateCategory_PartialOwnership(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-222"
+	ids := []string{uuid.New().String(), uuid.New().String(), uuid.New().String()} // 3 requested
+
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE transactions")).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1)) // only 1 owned
+
+	n, err := repo.BulkUpdateCategory(ctx, userID, ids, nil, nil, nil, nil, domain.CategorySourceManual)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n, "should reflect only the owned rows that were updated")
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
