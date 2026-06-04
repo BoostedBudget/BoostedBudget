@@ -83,6 +83,10 @@ pending?: string;
  */
 reviewed?: string;
 /**
+ * Filter by category origin (comma-separated): plaid, rule, manual
+ */
+category_source?: string;
+/**
  * Filter by minimum absolute amount
  */
 min_amount?: string;

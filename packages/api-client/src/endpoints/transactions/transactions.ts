@@ -48,9 +48,13 @@ import type {
 
 import type {
   BulkSetTransactionReviewedInputBody,
+  BulkUpdateTransactionCategoryInputBody,
+  BulkUpdateTransactionCategoryOutputBody,
   ErrorModel,
+  GetTransactionReviewSummaryParams,
   GetTransactionsOutputBody,
   GetTransactionsParams,
+  ReviewSummaryResponse,
   SetTransactionReviewedInputBody,
   SetTransactionReviewedOutputBody,
   Transaction,
@@ -188,6 +192,70 @@ export function useGetTransactions<TData = Awaited<ReturnType<typeof getTransact
 
 
 /**
+ * Recategorizes multiple transactions for the authenticated user. Best-effort: unowned/unknown IDs are silently ignored. Returns requested (de-duplicated input count) and updated (rows changed).
+ * @summary Bulk update transaction category
+ */
+export const bulkUpdateTransactionCategory = (
+    bulkUpdateTransactionCategoryInputBody: BodyType<NonReadonly<BulkUpdateTransactionCategoryInputBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<BulkUpdateTransactionCategoryOutputBody>(
+      {url: `/api/v1/transactions/category`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', },
+      data: bulkUpdateTransactionCategoryInputBody, signal
+    },
+      options);
+    }
+
+
+
+export const getBulkUpdateTransactionCategoryMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof bulkUpdateTransactionCategory>>, TError,{data: BodyType<NonReadonly<BulkUpdateTransactionCategoryInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof bulkUpdateTransactionCategory>>, TError,{data: BodyType<NonReadonly<BulkUpdateTransactionCategoryInputBody>>}, TContext> => {
+
+const mutationKey = ['bulkUpdateTransactionCategory'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof bulkUpdateTransactionCategory>>, {data: BodyType<NonReadonly<BulkUpdateTransactionCategoryInputBody>>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  bulkUpdateTransactionCategory(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type BulkUpdateTransactionCategoryMutationResult = NonNullable<Awaited<ReturnType<typeof bulkUpdateTransactionCategory>>>
+    export type BulkUpdateTransactionCategoryMutationBody = BodyType<NonReadonly<BulkUpdateTransactionCategoryInputBody>>
+    export type BulkUpdateTransactionCategoryMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Bulk update transaction category
+ */
+export const useBulkUpdateTransactionCategory = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof bulkUpdateTransactionCategory>>, TError,{data: BodyType<NonReadonly<BulkUpdateTransactionCategoryInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof bulkUpdateTransactionCategory>>,
+        TError,
+        {data: BodyType<NonReadonly<BulkUpdateTransactionCategoryInputBody>>},
+        TContext
+      > => {
+      return useMutation(getBulkUpdateTransactionCategoryMutationOptions(options), queryClient);
+    }
+    /**
  * Marks multiple transactions reviewed or unreviewed for the authenticated user.
  * @summary Bulk update transaction review state
  */
@@ -252,6 +320,100 @@ export const useBulkSetTransactionReviewed = <TError = ErrorType<ErrorModel>,
       return useMutation(getBulkSetTransactionReviewedMutationOptions(options), queryClient);
     }
     /**
+ * Returns pre-computed review-state counts and top unreviewed categories. Dates are optional (all-time default). Transfers included. Designed for AI-tool consumption.
+ * @summary Get transaction review summary
+ */
+export const getTransactionReviewSummary = (
+    params?: GetTransactionReviewSummaryParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<ReviewSummaryResponse>(
+      {url: `/api/v1/transactions/review-summary`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetTransactionReviewSummaryQueryKey = (params?: GetTransactionReviewSummaryParams,) => {
+    return [
+    `/api/v1/transactions/review-summary`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetTransactionReviewSummaryQueryOptions = <TData = Awaited<ReturnType<typeof getTransactionReviewSummary>>, TError = ErrorType<ErrorModel>>(params?: GetTransactionReviewSummaryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionReviewSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetTransactionReviewSummaryQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTransactionReviewSummary>>> = ({ signal }) => getTransactionReviewSummary(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getTransactionReviewSummary>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetTransactionReviewSummaryQueryResult = NonNullable<Awaited<ReturnType<typeof getTransactionReviewSummary>>>
+export type GetTransactionReviewSummaryQueryError = ErrorType<ErrorModel>
+
+
+export function useGetTransactionReviewSummary<TData = Awaited<ReturnType<typeof getTransactionReviewSummary>>, TError = ErrorType<ErrorModel>>(
+ params: undefined |  GetTransactionReviewSummaryParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionReviewSummary>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTransactionReviewSummary>>,
+          TError,
+          Awaited<ReturnType<typeof getTransactionReviewSummary>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetTransactionReviewSummary<TData = Awaited<ReturnType<typeof getTransactionReviewSummary>>, TError = ErrorType<ErrorModel>>(
+ params?: GetTransactionReviewSummaryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionReviewSummary>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTransactionReviewSummary>>,
+          TError,
+          Awaited<ReturnType<typeof getTransactionReviewSummary>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetTransactionReviewSummary<TData = Awaited<ReturnType<typeof getTransactionReviewSummary>>, TError = ErrorType<ErrorModel>>(
+ params?: GetTransactionReviewSummaryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionReviewSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get transaction review summary
+ */
+
+export function useGetTransactionReviewSummary<TData = Awaited<ReturnType<typeof getTransactionReviewSummary>>, TError = ErrorType<ErrorModel>>(
+ params?: GetTransactionReviewSummaryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionReviewSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetTransactionReviewSummaryQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+/**
  * Retrieves a specific transaction by its UUID.
  * @summary Get transaction by ID
  */

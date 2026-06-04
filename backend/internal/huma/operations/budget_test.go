@@ -158,7 +158,9 @@ func (m *mockTransactionRepoForBudget) GetByExternalID(ctx context.Context, sour
 func (m *mockTransactionRepoForBudget) GetByID(ctx context.Context, id string) (*domain.Transaction, error) { return nil, nil }
 func (m *mockTransactionRepoForBudget) UpdateTags(ctx context.Context, id string, userID string, tags []string, tagsSource []domain.TagSource) error { return nil }
 func (m *mockTransactionRepoForBudget) UpdateCategory(ctx context.Context, id string, userID string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) error { return nil }
-func (m *mockTransactionRepoForBudget) SetReviewed(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error) { return 0, nil }
+func (m *mockTransactionRepoForBudget) SetReviewed(_ context.Context, _ string, _ []string, _ bool) (int64, error) { return 0, nil }
+func (m *mockTransactionRepoForBudget) BulkUpdateCategory(_ context.Context, _ string, _ []string, _ *string, _ *string, _ *string, _ *string, _ domain.CategorySource) (int64, error) { return 0, nil }
+func (m *mockTransactionRepoForBudget) GetReviewSummary(_ context.Context, _ string, _ domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error) { return &domain.ReviewSummaryResponse{TopUnreviewedCategories: []domain.TopUnreviewedCategory{}}, nil }
 func (m *mockTransactionRepoForBudget) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) { return nil, nil }
 func (m *mockTransactionRepoForBudget) GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error) { return 0, nil }
 func (m *mockTransactionRepoForBudget) GetIncomeSumByTag(ctx context.Context, userID string, tag string, startDate, endDate time.Time) (float64, error) { return 0, nil }

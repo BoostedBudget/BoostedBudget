@@ -60,6 +60,7 @@ type GetTransactionsInput struct {
 	Search            string `query:"search" doc:"Search in merchant name or transaction name"`
 	Pending           string `query:"pending" doc:"Filter by pending status (true/false)"`
 	Reviewed          string `query:"reviewed" doc:"Filter by review state: true (reviewed), false (unreviewed inbox), omit for both"`
+	CategorySources   string `query:"category_source" doc:"Filter by category origin (comma-separated): plaid, rule, manual"`
 	MinAmount         string `query:"min_amount" doc:"Filter by minimum absolute amount"`
 	MaxAmount         string `query:"max_amount" doc:"Filter by maximum absolute amount"`
 	AmountType        string `query:"amount_type" enum:"income,expense,all" doc:"Filter by transaction type"`
@@ -136,6 +137,7 @@ type UpdateTransactionCategoryOutput struct {
 // SetTransactionReviewedInput updates the review state of a single transaction (Issue #1203).
 type SetTransactionReviewedInput struct {
 	inputs.AuthenticatedInput
+	inputs.MCPContextInput
 	ID   string `path:"id" doc:"Transaction UUID"`
 	Body struct {
 		Reviewed bool `json:"reviewed" doc:"true to mark reviewed, false to move back to the unreviewed inbox"`
@@ -145,6 +147,7 @@ type SetTransactionReviewedInput struct {
 // BulkSetTransactionReviewedInput updates the review state of many transactions (Issue #1203).
 type BulkSetTransactionReviewedInput struct {
 	inputs.AuthenticatedInput
+	inputs.MCPContextInput
 	Body struct {
 		TransactionIDs []string `json:"transaction_ids" doc:"Transaction UUIDs to update (owned by the caller)"`
 		Reviewed       bool     `json:"reviewed" doc:"true to mark reviewed, false to move back to the unreviewed inbox"`
@@ -156,6 +159,45 @@ type SetTransactionReviewedOutput struct {
 	Body struct {
 		Updated int64 `json:"updated" doc:"Number of transactions whose review state changed"`
 	}
+}
+
+// BulkUpdateTransactionCategoryInput represents the request body for bulk recategorization (Issue #1210).
+type BulkUpdateTransactionCategoryInput struct {
+	inputs.AuthenticatedInput
+	inputs.MCPContextInput
+	Body struct {
+		// TransactionIDs is the list of transaction UUIDs to recategorize (max 500).
+		TransactionIDs []string `json:"transaction_ids" doc:"Transaction UUIDs to recategorize (max 500, owned by the caller)"`
+		// Kind is the discriminated-union selector: pfc, custom, or clear.
+		Kind             string  `json:"kind" enum:"pfc,custom,clear" doc:"Category override kind"`
+		PFCPrimary       *string `json:"pfc_primary,omitempty" doc:"PFC primary enum (required when kind=pfc)"`
+		PFCDetailed      *string `json:"pfc_detailed,omitempty" doc:"PFC detailed enum (optional when kind=pfc)"`
+		CustomCategoryID *string `json:"custom_category_id,omitempty" doc:"Custom category UUID (required when kind=custom)"`
+	} `json:"body"`
+}
+
+// BulkUpdateTransactionCategoryOutput reports requested vs. actually-updated counts.
+type BulkUpdateTransactionCategoryOutput struct {
+	Body struct {
+		// Requested is the de-duplicated count of transaction IDs in the request.
+		Requested int64 `json:"requested" doc:"De-duplicated count of transaction IDs in the request"`
+		// Updated is the number of owned transactions that were actually updated.
+		Updated int64 `json:"updated" doc:"Number of owned transactions updated; unowned/unknown IDs are silently ignored"`
+	}
+}
+
+// GetTransactionReviewSummaryInput represents the input for the review-summary endpoint (Issue #1210).
+type GetTransactionReviewSummaryInput struct {
+	inputs.AuthenticatedInput
+	// StartDate optionally scopes the summary to transactions on or after this date (YYYY-MM-DD).
+	StartDate string `query:"start_date" doc:"Optional: scope summary to transactions on or after this date (YYYY-MM-DD)"`
+	// EndDate optionally scopes the summary to transactions on or before this date (YYYY-MM-DD).
+	EndDate string `query:"end_date" doc:"Optional: scope summary to transactions on or before this date (YYYY-MM-DD)"`
+}
+
+// GetTransactionReviewSummaryOutput wraps the ReviewSummaryResponse (Issue #1210).
+type GetTransactionReviewSummaryOutput struct {
+	Body *domain.ReviewSummaryResponse
 }
 
 // GetPlaidCategoriesInput represents the input for getting Plaid categories.
@@ -267,6 +309,19 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 			return nil, huma.Error400BadRequest("Invalid reviewed parameter (expected true or false)")
 		}
 		filters.Reviewed = &reviewed
+	}
+
+	// Category source filter (Issue #1210) — comma-separated, validated enum tokens
+	if input.CategorySources != "" {
+		sources := parseCommaSeparated(input.CategorySources)
+		for _, s := range sources {
+			if s != "plaid" && s != "rule" && s != "manual" {
+				return nil, huma.Error400BadRequest("Invalid category_source value: " + s + " (allowed: plaid, rule, manual)")
+			}
+		}
+		if len(sources) > 0 {
+			filters.CategorySources = sources
+		}
 	}
 
 	// Min amount filter
@@ -401,6 +456,12 @@ func (h *TransactionHandler) SetTransactionReviewed(ctx context.Context, input *
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+	// MCP audit (fire-and-forget; value-idempotent; Issue #1210)
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.mcpAuditRepo != nil {
+		if auditErr := recordMCPWriteAudit(ctx, h.mcpAuditRepo, input.UserID, input.MCPGrantID, "setTransactionReviewed", ""); auditErr != nil {
+			slog.WarnContext(ctx, "MCP audit write failed", "operation", "setTransactionReviewed", "error", auditErr)
+		}
+	}
 	out := &SetTransactionReviewedOutput{}
 	out.Body.Updated = n
 	return out, nil
@@ -415,9 +476,112 @@ func (h *TransactionHandler) BulkSetTransactionReviewed(ctx context.Context, inp
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+	// MCP audit (fire-and-forget; value-idempotent; Issue #1210)
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.mcpAuditRepo != nil {
+		if auditErr := recordMCPWriteAudit(ctx, h.mcpAuditRepo, input.UserID, input.MCPGrantID, "bulkSetTransactionReviewed", ""); auditErr != nil {
+			slog.WarnContext(ctx, "MCP audit write failed", "operation", "bulkSetTransactionReviewed", "error", auditErr)
+		}
+	}
 	out := &SetTransactionReviewedOutput{}
 	out.Body.Updated = n
 	return out, nil
+}
+
+// BulkUpdateTransactionCategory handles PUT /api/v1/transactions/category (Issue #1210).
+// Best-effort bulk recategorize: applies to all owned rows; unowned/unknown IDs are ignored.
+// Always returns 200 with {requested, updated}; callers needing strictness compare requested==updated.
+func (h *TransactionHandler) BulkUpdateTransactionCategory(ctx context.Context, input *BulkUpdateTransactionCategoryInput) (*BulkUpdateTransactionCategoryOutput, error) {
+	b := input.Body
+
+	// Validate: at least one transaction ID required
+	if len(b.TransactionIDs) == 0 {
+		return nil, huma.Error400BadRequest("transaction_ids must not be empty")
+	}
+
+	// Validate: max batch size
+	const maxBulkCategoryBatch = 500
+	if len(b.TransactionIDs) > maxBulkCategoryBatch {
+		return nil, huma.Error400BadRequest("transaction_ids exceeds maximum batch size of 500")
+	}
+
+	// De-duplicate IDs; requested count = unique entries
+	seen := make(map[string]struct{}, len(b.TransactionIDs))
+	uniqueIDs := make([]string, 0, len(b.TransactionIDs))
+	for _, id := range b.TransactionIDs {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			uniqueIDs = append(uniqueIDs, id)
+		}
+	}
+	requested := int64(len(uniqueIDs))
+
+	// Validate the discriminated union (mirrors UpdateTransactionCategory)
+	switch b.Kind {
+	case "custom":
+		if b.CustomCategoryID == nil || *b.CustomCategoryID == "" {
+			return nil, huma.Error400BadRequest("custom_category_id is required when kind=custom")
+		}
+		if b.PFCPrimary != nil || b.PFCDetailed != nil {
+			return nil, huma.Error400BadRequest("pfc_primary/pfc_detailed must be omitted when kind=custom")
+		}
+	case "pfc":
+		if b.PFCPrimary == nil || *b.PFCPrimary == "" {
+			return nil, huma.Error400BadRequest("pfc_primary is required when kind=pfc")
+		}
+		if b.CustomCategoryID != nil {
+			return nil, huma.Error400BadRequest("custom_category_id must be omitted when kind=pfc")
+		}
+	case "clear":
+		if (b.PFCPrimary != nil && *b.PFCPrimary != "") || (b.PFCDetailed != nil && *b.PFCDetailed != "") || b.CustomCategoryID != nil {
+			return nil, huma.Error400BadRequest("pfc_primary/pfc_detailed/custom_category_id must be omitted when kind=clear")
+		}
+	}
+
+	updated, err := h.service.BulkUpdateTransactionCategory(ctx, input.UserID, uniqueIDs, b.Kind, b.PFCPrimary, b.PFCDetailed, b.CustomCategoryID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	// MCP audit (fire-and-forget; value-idempotent writes)
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.mcpAuditRepo != nil {
+		if auditErr := recordMCPWriteAudit(ctx, h.mcpAuditRepo, input.UserID, input.MCPGrantID, "bulkUpdateTransactionCategory", ""); auditErr != nil {
+			slog.WarnContext(ctx, "MCP audit write failed (non-atomic post-write)", "operation", "bulkUpdateTransactionCategory", "error", auditErr)
+		}
+	}
+
+	out := &BulkUpdateTransactionCategoryOutput{}
+	out.Body.Requested = requested
+	out.Body.Updated = updated
+	return out, nil
+}
+
+// GetTransactionReviewSummary handles GET /api/v1/transactions/review-summary (Issue #1210).
+// Returns pre-computed review-state counts and top unreviewed categories for the authenticated user.
+// Dates are optional — omitting them returns all-time data (transfers included).
+// Designed for AI-tool consumption: single-responsibility, token-efficient, one DB round-trip.
+func (h *TransactionHandler) GetTransactionReviewSummary(ctx context.Context, input *GetTransactionReviewSummaryInput) (*GetTransactionReviewSummaryOutput, error) {
+	filters := domain.ReviewSummaryFilters{}
+
+	if input.StartDate != "" {
+		t, err := dateutil.ParseOptionalDate(input.StartDate, "start_date")
+		if err != nil {
+			return nil, huma.Error400BadRequest("invalid start_date: " + err.Error())
+		}
+		filters.StartDate = t
+	}
+	if input.EndDate != "" {
+		t, err := dateutil.ParseOptionalDate(input.EndDate, "end_date")
+		if err != nil {
+			return nil, huma.Error400BadRequest("invalid end_date: " + err.Error())
+		}
+		filters.EndDate = t
+	}
+
+	summary, err := h.service.GetReviewSummary(ctx, input.UserID, filters)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	return &GetTransactionReviewSummaryOutput{Body: summary}, nil
 }
 
 // GetPlaidCategories handles GET /api/v1/categories/plaid requests.
@@ -470,6 +634,18 @@ func RegisterTransactionRoutes(api huma.API, handler *TransactionHandler) {
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetTransactions)
 
+	// GET /api/v1/transactions/review-summary - Review summary (Issue #1210).
+	// Registered BEFORE the {id} route so "review-summary" is not captured as an {id}.
+	huma.Register(api, huma.Operation{
+		OperationID: "getTransactionReviewSummary",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/transactions/review-summary",
+		Summary:     "Get transaction review summary",
+		Description: "Returns pre-computed review-state counts and top unreviewed categories. Dates are optional (all-time default). Transfers included. Designed for AI-tool consumption.",
+		Tags:        []string{"Transactions"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetTransactionReviewSummary)
+
 	// GET /api/v1/transactions/{id} - Get transaction by ID
 	huma.Register(api, huma.Operation{
 		OperationID: "getTransactionByID",
@@ -491,6 +667,18 @@ func RegisterTransactionRoutes(api huma.API, handler *TransactionHandler) {
 		Tags:        []string{"Transactions"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateTransactionTags)
+
+	// PUT /api/v1/transactions/category - Bulk update transaction category (Issue #1210).
+	// Registered BEFORE the {id}/category route so "category" is not captured as an {id}.
+	huma.Register(api, huma.Operation{
+		OperationID: "bulkUpdateTransactionCategory",
+		Method:      http.MethodPut,
+		Path:        "/api/v1/transactions/category",
+		Summary:     "Bulk update transaction category",
+		Description: "Recategorizes multiple transactions for the authenticated user. Best-effort: unowned/unknown IDs are silently ignored. Returns requested (de-duplicated input count) and updated (rows changed).",
+		Tags:        []string{"Transactions"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.BulkUpdateTransactionCategory)
 
 	// PUT /api/v1/transactions/{id}/category - Update transaction category
 	huma.Register(api, huma.Operation{
