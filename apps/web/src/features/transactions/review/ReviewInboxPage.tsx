@@ -61,7 +61,7 @@ export function ReviewInboxPage() {
   const [filters, setFilters] = useState<TransactionFilters>({ reviewed: false })
 
   // ── Transactions ──────────────────────────────────────────────────────────
-  const { transactions: apiTransactions, isLoading, hasNextPage, fetchNextPage, isFetchingNextPage } =
+  const { transactions: apiTransactions, isLoading, isError, hasNextPage, fetchNextPage, isFetchingNextPage } =
     useInfiniteTransactions({
       filters,
       sortBy: 'date',
@@ -70,6 +70,9 @@ export function ReviewInboxPage() {
     })
   // Cast API transactions to local Transaction type (compatible shape, narrower string literals)
   const transactions = apiTransactions as unknown as Transaction[]
+
+  // ── All caught up (computed early — used in analytics effect below) ────────
+  const allCaughtUp = !isLoading && !isError && transactions.length === 0 && activePreset === 'unreviewed'
 
   // ── Mutations ─────────────────────────────────────────────────────────────
   const { setReviewed, bulkSetReviewed, bulkRecategorize, isPending } = useReviewMutations()
@@ -125,6 +128,10 @@ export function ReviewInboxPage() {
   useEffect(() => {
     trackEvent(ANALYTICS_EVENTS.REVIEW_INBOX_VIEWED)
   }, [trackEvent])
+
+  useEffect(() => {
+    if (allCaughtUp) trackEvent(ANALYTICS_EVENTS.REVIEW_ALL_CAUGHT_UP)
+  }, [allCaughtUp, trackEvent])
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -320,9 +327,6 @@ export function ReviewInboxPage() {
       render: (tx) => CURRENCY_FORMATTER.format(Math.abs(tx.amount)),
     },
   ], [selectedCount, transactions.length, handleSelectAll, isSelected, toggle])
-
-  // ── All caught up ─────────────────────────────────────────────────────────
-  const allCaughtUp = !isLoading && transactions.length === 0 && activePreset === 'unreviewed'
 
   return (
     <div className="flex flex-col gap-6">

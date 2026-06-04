@@ -44,6 +44,7 @@ export function useKeyboardShortcuts(keymap: KeyMap, enabled = true): void {
 
     const handler = (event: KeyboardEvent) => {
       if (isTypingTarget(document.activeElement)) return
+      if (event.altKey && !event.metaKey && !event.ctrlKey) return
       const key = event.metaKey ? `Meta+${event.key}` : event.ctrlKey ? `Control+${event.key}` : event.key
       const action = keymap[key]
       if (action) {

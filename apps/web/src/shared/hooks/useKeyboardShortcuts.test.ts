@@ -110,6 +110,32 @@ describe('useKeyboardShortcuts', () => {
     expect(handler).not.toHaveBeenCalled()
   })
 
+  it('does not fire shortcuts when altKey is held without meta/ctrl', () => {
+    const handler = mock(() => {})
+    renderHook(() => useKeyboardShortcuts({ ArrowLeft: handler }))
+
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowLeft', altKey: true, bubbles: true })
+      )
+    })
+
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('fires Meta+z shortcut even when altKey is also held', () => {
+    const handler = mock(() => {})
+    renderHook(() => useKeyboardShortcuts({ 'Meta+z': handler }))
+
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'z', altKey: true, metaKey: true, bubbles: true })
+      )
+    })
+
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
   it('removes event listener on unmount', () => {
     const handler = mock(() => {})
     const { unmount } = renderHook(() => useKeyboardShortcuts({ e: handler }))
