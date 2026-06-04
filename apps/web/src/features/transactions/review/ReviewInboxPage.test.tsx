@@ -254,4 +254,31 @@ describe('ReviewInboxPage', () => {
     // setReviewed called with tx-1 and false (not a stale ref to a different tx)
     expect(mockSetTransactionReviewedMutateAsync).toHaveBeenLastCalledWith({ id: 'tx-1', data: { reviewed: false } })
   })
+
+  it('opens bulk recategorize dialog with correct title after row selection', async () => {
+    configureBase([mockTx])
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    await waitFor(() => expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument())
+
+    const checkboxes = screen.getAllByRole('checkbox')
+    fireEvent.click(checkboxes[1])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Recategorize selected' }))
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+    expect(screen.getByText('Recategorize 1 transaction')).toBeInTheDocument()
+  })
+
+  it('closes bulk recategorize dialog on Cancel', async () => {
+    configureBase([mockTx])
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    await waitFor(() => expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument())
+
+    const checkboxes = screen.getAllByRole('checkbox')
+    fireEvent.click(checkboxes[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Recategorize selected' }))
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
 })

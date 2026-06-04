@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth, useUser, useClerk } from '@clerk/react-router'
+import { Inbox } from 'lucide-react'
 import { Navigation } from './Navigation'
 import { UserDropdown } from './UserDropdown'
 import { MobileNav } from './MobileNav'
@@ -8,6 +9,28 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { NotificationBell, NotificationDrawer } from '@/features/notifications'
 import { useLoginEnabled } from '@/shared/hooks'
+import { useReviewSummary } from '@/features/transactions/hooks/useReviewSummary'
+
+function ReviewInboxButton() {
+  const { summary } = useReviewSummary()
+  const unreviewedCount = summary?.unreviewed_count ?? 0
+
+  return (
+    <Button variant="ghost" size="icon" className="relative" asChild>
+      <Link
+        to="/review"
+        aria-label={unreviewedCount > 0 ? `Review inbox, ${unreviewedCount} unreviewed` : 'Review inbox'}
+      >
+        <Inbox className="h-5 w-5" />
+        {unreviewedCount > 0 && (
+          <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-warning text-warning-foreground text-[10px] font-semibold px-0.5">
+            {unreviewedCount > 99 ? '99+' : unreviewedCount}
+          </span>
+        )}
+      </Link>
+    </Button>
+  )
+}
 
 interface HeaderProps {
   className?: string
@@ -64,6 +87,9 @@ export function Header({ className }: HeaderProps) {
 
       {/* Right side actions */}
       <div className="flex items-center gap-4">
+        {/* Review Inbox Button */}
+        {isAuthenticated && <ReviewInboxButton />}
+
         {/* Notification Bell */}
         {isAuthenticated && <NotificationBell onOpen={() => setNotifOpen(true)} />}
 
