@@ -10,6 +10,7 @@
  *   ArrowLeft  / p → previous transaction
  *   ?          → toggle keyboard shortcuts help dialog
  *   Escape     → close triage view / help dialog
+ *   ⌘Z/Ctrl+Z  → undo last action (when onUndo provided)
  *
  * Disabled when `enabled=false` (e.g. when a modal is open).
  */
@@ -25,6 +26,7 @@ export interface UseTriageKeyboardOptions {
   onPrev: () => void
   onToggleHelp: () => void
   onClose: () => void
+  onUndo?: () => void
   enabled?: boolean
 }
 
@@ -37,6 +39,7 @@ export function useTriageKeyboard({
   onPrev,
   onToggleHelp,
   onClose,
+  onUndo,
   enabled = true,
 }: UseTriageKeyboardOptions): void {
   const keymap = {
@@ -51,6 +54,7 @@ export function useTriageKeyboard({
     p: onPrev,
     '?': onToggleHelp,
     Escape: onClose,
+    ...(onUndo ? { 'Meta+z': onUndo, 'Control+z': onUndo } : {}),
   }
 
   useKeyboardShortcuts(keymap, enabled)
@@ -66,4 +70,5 @@ export const TRIAGE_SHORTCUTS = [
   { key: '← / p', description: 'Previous transaction' },
   { key: '?', description: 'Toggle keyboard shortcuts' },
   { key: 'Esc', description: 'Close triage / help' },
+  { key: '⌘Z / Ctrl+Z', description: 'Undo last action' },
 ] as const

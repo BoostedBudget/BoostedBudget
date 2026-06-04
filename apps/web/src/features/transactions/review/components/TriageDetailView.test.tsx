@@ -132,4 +132,52 @@ describe('TriageDetailView', () => {
     renderTriage({ currentIndex: 2, total: 3 })
     expect(screen.getByRole('button', { name: /next transaction/i })).toBeDisabled()
   })
+
+  describe('keyboard shortcuts', () => {
+    it('e key fires onApprove', () => {
+      const { props } = renderTriage()
+      fireEvent.keyDown(document, { key: 'e' })
+      expect(props.onApprove).toHaveBeenCalledTimes(1)
+    })
+
+    it('s key fires onSkip', () => {
+      const { props } = renderTriage()
+      fireEvent.keyDown(document, { key: 's' })
+      expect(props.onSkip).toHaveBeenCalledTimes(1)
+    })
+
+    it('c key opens recategorize panel', () => {
+      renderTriage()
+      expect(screen.queryByText('Apply')).toBeNull()
+      fireEvent.keyDown(document, { key: 'c' })
+      expect(screen.getByText('Apply')).toBeInTheDocument()
+    })
+
+    it('x key fires onToggleSelect', () => {
+      const { props } = renderTriage()
+      fireEvent.keyDown(document, { key: 'x' })
+      expect(props.onToggleSelect).toHaveBeenCalledTimes(1)
+    })
+
+    it('shortcuts do not fire when recategorize panel is open', () => {
+      const { props } = renderTriage()
+      fireEvent.click(screen.getByRole('button', { name: /recategorize transaction/i }))
+      fireEvent.keyDown(document, { key: 'e' })
+      expect(props.onApprove).not.toHaveBeenCalled()
+    })
+
+    it('Meta+z fires onUndo when provided', () => {
+      const onUndo = mock()
+      renderTriage({ onUndo })
+      fireEvent.keyDown(document, { key: 'z', metaKey: true })
+      expect(onUndo).toHaveBeenCalledTimes(1)
+    })
+
+    it('Control+z fires onUndo when provided', () => {
+      const onUndo = mock()
+      renderTriage({ onUndo })
+      fireEvent.keyDown(document, { key: 'z', ctrlKey: true })
+      expect(onUndo).toHaveBeenCalledTimes(1)
+    })
+  })
 })

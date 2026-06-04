@@ -12,7 +12,7 @@
  * which is invalidated by every review/category mutation in useReviewMutations.
  */
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { ClipboardCheck, Inbox } from 'lucide-react'
 import { toast } from 'sonner'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -96,6 +96,7 @@ export function ReviewInboxPage() {
   // ── Triage ────────────────────────────────────────────────────────────────
   const [triageIndex, setTriageIndex] = useState<number | null>(null)
   const [announcement, setAnnouncement] = useState('')
+  const lastTriageApprovedId = useRef<string | null>(null)
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== 'undefined' && window.innerWidth < 768
   )
@@ -194,11 +195,30 @@ export function ReviewInboxPage() {
     }
   }, [triageTx, bulkRecategorize])
 
+  // id is explicit for toast (closure-captured); falls back to ref for ⌘Z (most-recent approval)
+  const handleTriageUndo = useCallback(async (id?: string) => {
+    const targetId = id ?? lastTriageApprovedId.current
+    if (!targetId) return
+    try {
+      await setReviewed(targetId, false)
+      lastTriageApprovedId.current = null
+      setAnnouncement('Moved back to inbox')
+      trackEvent(ANALYTICS_EVENTS.REVIEW_UNDO, { count: 1 })
+    } catch {
+      toast.error('Failed to undo. Please try again.')
+    }
+  }, [setReviewed, trackEvent])
+
   const handleTriageApprove = useCallback(async () => {
     if (!triageTx) return
     try {
       await handleApprove(triageTx)
+      const approvedId = triageTx.id
+      lastTriageApprovedId.current = approvedId
       setAnnouncement('Marked as reviewed')
+      toast.success('Marked as reviewed', {
+        action: { label: 'Undo', onClick: () => handleTriageUndo(approvedId) },
+      })
       // When filter removes approved items (reviewed:false presets), the list refetch
       // shrinks the array and the clamping effect handles index correction — don't advance.
       // For presets where items stay visible, advance to the next row.
@@ -212,7 +232,7 @@ export function ReviewInboxPage() {
     } catch {
       toast.error('Failed to mark as reviewed. Please try again.')
     }
-  }, [triageTx, triageIndex, transactions.length, handleApprove, filters.reviewed])
+  }, [triageTx, triageIndex, transactions.length, handleApprove, filters.reviewed, handleTriageUndo])
 
   const handleTriageSkip = useCallback(() => {
     if (triageIndex === null) return
@@ -391,6 +411,7 @@ export function ReviewInboxPage() {
             onNext={() => triageIndex !== null && setTriageIndex(Math.min(triageIndex + 1, transactions.length - 1))}
             onPrev={() => triageIndex !== null && setTriageIndex(Math.max(0, triageIndex - 1))}
             onClose={() => setTriageIndex(null)}
+            onUndo={handleTriageUndo}
             isSelected={triageTx ? isSelected(triageTx.id) : false}
             isPending={isPending}
           />
@@ -402,7 +423,11 @@ export function ReviewInboxPage() {
         selectedCount={selectedCount}
         onMarkReviewed={() => handleBulkSetReviewed(true)}
         onMarkUnreviewed={() => handleBulkSetReviewed(false)}
-        onBulkRecategorize={() => { setPendingBulkCategory([]); setBulkCategoryDirty(false); setShowBulkRecategorize(true) }}
+        onBulkRecategorize={() => {
+          setPendingBulkCategory([])
+          setBulkCategoryDirty(false)
+          setShowBulkRecategorize(true)
+        }}
         onClear={clearSelection}
         isLoading={isPending}
       />
@@ -417,7 +442,10 @@ export function ReviewInboxPage() {
             selectedCategory={pendingBulkCategory}
             availableCategories={availableCategories}
             plaidPrimaries={plaidPrimaries}
-            onChange={(cat) => { setPendingBulkCategory(cat); setBulkCategoryDirty(true) }}
+            onChange={(cat) => {
+              setPendingBulkCategory(cat)
+              setBulkCategoryDirty(true)
+            }}
             disabled={isPending}
           />
           <DialogFooter>

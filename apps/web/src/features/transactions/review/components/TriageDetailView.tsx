@@ -10,6 +10,7 @@
  *   ←/p       → previous
  *   ?         → keyboard help dialog
  *   Escape    → close triage
+ *   ⌘Z/Ctrl+Z → undo last action (when onUndo provided)
  *
  * Amounts are masked with data-ph-mask for PostHog session replay PII compliance.
  */
@@ -48,6 +49,7 @@ interface TriageDetailViewProps {
   onNext: () => void
   onPrev: () => void
   onClose: () => void
+  onUndo?: () => void
   isSelected?: boolean
   isPending?: boolean
 }
@@ -65,6 +67,7 @@ export function TriageDetailView({
   onNext,
   onPrev,
   onClose,
+  onUndo,
   isSelected = false,
   isPending = false,
 }: TriageDetailViewProps) {
@@ -96,8 +99,9 @@ export function TriageDetailView({
     onPrev,
     onToggleHelp: handleToggleHelp,
     onClose: handleClose,
-    // Disable shortcuts when any overlay is open
-    enabled: !showHelp && !showRecategorize,
+    onUndo,
+    // Disable shortcuts when any overlay is open or a mutation is in flight
+    enabled: !showHelp && !showRecategorize && !isPending,
   })
 
   const displayName = transaction.merchant_name || transaction.name
@@ -120,7 +124,6 @@ export function TriageDetailView({
   return (
     <>
       <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5 shadow-sm">
-        {/* Navigation header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1">
             <Button
@@ -166,7 +169,6 @@ export function TriageDetailView({
           </div>
         </div>
 
-        {/* Transaction summary */}
         <div className="space-y-1">
           <div className="flex items-start justify-between gap-3">
             <p className="font-medium text-foreground" data-ph-mask>
@@ -187,7 +189,6 @@ export function TriageDetailView({
           </div>
         </div>
 
-        {/* Category recategorize panel */}
         {showRecategorize && (
           <div className="rounded-lg border border-border p-3">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -212,7 +213,6 @@ export function TriageDetailView({
           </div>
         )}
 
-        {/* Action buttons — always visible (keyboard shortcut alternatives) */}
         <div className="flex items-center gap-2">
           <ReadOnlyGuard message="Resubscribe to review transactions">
             <Button

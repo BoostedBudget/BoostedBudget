@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
@@ -16,6 +16,7 @@ import {
   mockUseBulkUpdateTransactionCategory,
 } from '@/test/mocks/transactions-api'
 import { mockPosthogCapture } from '@/test/mocks/posthog'
+import { mockToastSuccess } from '@/test/mocks/sonner'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 
 const mockTx: Transaction = {
@@ -99,6 +100,7 @@ describe('ReviewInboxPage', () => {
     mockBulkSetTransactionReviewedMutateAsync.mockClear()
     mockBulkUpdateTransactionCategoryMutateAsync.mockClear()
     mockPosthogCapture.mockClear()
+    mockToastSuccess.mockClear()
   })
 
   it('fires REVIEW_INBOX_VIEWED analytics on mount', () => {
@@ -204,5 +206,34 @@ describe('ReviewInboxPage', () => {
 
     fireEvent.click(screen.getByRole('checkbox', { name: /select all/i }))
     expect(screen.getByText('2 selected')).toBeInTheDocument()
+  })
+
+  it('triage approve shows undo toast; undo action reverts to unreviewed using closure-captured id', async () => {
+    configureBase([mockTx])
+    mockSetTransactionReviewedMutateAsync.mockResolvedValue({})
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    await waitFor(() => expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument())
+
+    // Open triage view
+    fireEvent.click(screen.getByText('Starbucks Coffee'))
+    await waitFor(() => expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument())
+
+    // Approve
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }))
+
+    // Toast with undo action appears
+    await waitFor(() =>
+      expect(mockToastSuccess).toHaveBeenCalledWith(
+        'Marked as reviewed',
+        expect.objectContaining({ action: expect.objectContaining({ label: 'Undo' }) })
+      )
+    )
+
+    // Extract closure-captured undo action and invoke it
+    const [, opts] = mockToastSuccess.mock.calls[0] as [string, { action: { onClick: () => Promise<void> } }]
+    await opts.action.onClick()
+
+    // setReviewed called with tx-1 and false (not a stale ref to a different tx)
+    expect(mockSetTransactionReviewedMutateAsync).toHaveBeenLastCalledWith({ id: 'tx-1', data: { reviewed: false } })
   })
 })
