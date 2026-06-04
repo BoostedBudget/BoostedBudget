@@ -109,12 +109,30 @@ describe('ReviewInboxPage', () => {
     expect(mockPosthogCapture).toHaveBeenCalledWith(ANALYTICS_EVENTS.REVIEW_INBOX_VIEWED, undefined)
   })
 
-  it('shows "All caught up!" empty state when unreviewed preset has 0 transactions', async () => {
+  it('shows "All caught up!" empty state and fires REVIEW_ALL_CAUGHT_UP when unreviewed preset has 0 transactions', async () => {
     configureBase([])
     render(<ReviewInboxPage />, { wrapper: createWrapper() })
     await waitFor(() => {
       expect(screen.getByText('All caught up!')).toBeInTheDocument()
     })
+    expect(mockPosthogCapture).toHaveBeenCalledWith(ANALYTICS_EVENTS.REVIEW_ALL_CAUGHT_UP, undefined)
+  })
+
+  it('does not show "All caught up!" when transaction fetch errors', async () => {
+    mockGetTransactions.mockRejectedValue(new Error('Network error'))
+    mockUseGetTransactionReviewSummary.mockReturnValue({
+      data: null,
+      isLoading: false,
+      isError: false,
+    })
+    mockUseSetTransactionReviewed.mockReturnValue({ mutateAsync: mockSetTransactionReviewedMutateAsync, isPending: false })
+    mockUseBulkSetTransactionReviewed.mockReturnValue({ mutateAsync: mockBulkSetTransactionReviewedMutateAsync, isPending: false })
+    mockUseBulkUpdateTransactionCategory.mockReturnValue({ mutateAsync: mockBulkUpdateTransactionCategoryMutateAsync, isPending: false })
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    // Wait for the fetch to be attempted (ensures we're past the initial loading state)
+    await waitFor(() => expect(mockGetTransactions).toHaveBeenCalled())
+    expect(screen.queryByText('All caught up!')).toBeNull()
+    expect(mockPosthogCapture).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.REVIEW_ALL_CAUGHT_UP, undefined)
   })
 
   it('shows generic empty state when non-default preset has 0 transactions', async () => {
