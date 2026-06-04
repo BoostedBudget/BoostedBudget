@@ -44,7 +44,8 @@ export function useKeyboardShortcuts(keymap: KeyMap, enabled = true): void {
 
     const handler = (event: KeyboardEvent) => {
       if (isTypingTarget(document.activeElement)) return
-      const action = keymap[event.key]
+      const key = event.metaKey ? `Meta+${event.key}` : event.ctrlKey ? `Control+${event.key}` : event.key
+      const action = keymap[key]
       if (action) {
         event.preventDefault()
         action()
@@ -53,5 +54,5 @@ export function useKeyboardShortcuts(keymap: KeyMap, enabled = true): void {
 
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [keymap, enabled]) // stabilize on keymap/enabled changes
+  }, [keymap, enabled])
 }
