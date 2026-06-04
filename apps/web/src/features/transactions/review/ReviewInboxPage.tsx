@@ -12,7 +12,7 @@
  * which is invalidated by every review/category mutation in useReviewMutations.
  */
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { ClipboardCheck, Inbox } from 'lucide-react'
 import { toast } from 'sonner'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -28,6 +28,14 @@ import { ReviewBulkActionBar } from './components/ReviewBulkActionBar'
 import { TriageDetailView } from './components/TriageDetailView'
 import type { ReviewPreset } from './components/ReviewFilterPresets'
 import type { TransactionFilters, Transaction } from '../types'
+import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
+import type { ColumnDef } from '@/shared/components/DataTable'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { CategoryEditor } from '../../categories/components/CategoryEditor'
+import { useGetUserCategories, useGetPlaidPrimaryCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
+import type { CustomCategory } from '../../categories/types'
+import type { Primary } from '@boostedbudget/api-client/models/primary'
 
 const INBOX_PAGE_LIMIT = 30
 
@@ -39,6 +47,8 @@ const CURRENCY_FORMATTER = new Intl.NumberFormat('en-US', {
   currency: 'USD',
   minimumFractionDigits: 2,
 })
+
+const REVIEW_INBOX_COLUMN_IDS = ['select', 'date', 'merchant', 'status', 'amount'] as const
 
 export function ReviewInboxPage() {
   const trackEvent = useTrackEvent()
@@ -64,12 +74,28 @@ export function ReviewInboxPage() {
   // ── Mutations ─────────────────────────────────────────────────────────────
   const { setReviewed, bulkSetReviewed, bulkRecategorize, isPending } = useReviewMutations()
 
+  // ── Category data (for triage + bulk recategorize) ────────────────────────
+  const { data: categoriesData } = useGetUserCategories()
+  const { data: plaidPrimariesData } = useGetPlaidPrimaryCategories()
+  const availableCategories = useMemo(() => (categoriesData as unknown as CustomCategory[]) ?? [], [categoriesData])
+  const plaidPrimaries = useMemo(() => (plaidPrimariesData as unknown as Primary[]) ?? [], [plaidPrimariesData])
+
+  // ── Bulk recategorize state ───────────────────────────────────────────────
+  const [showBulkRecategorize, setShowBulkRecategorize] = useState(false)
+  const [pendingBulkCategory, setPendingBulkCategory] = useState<string[]>([])
+  const [bulkCategoryDirty, setBulkCategoryDirty] = useState(false)
+
   // ── Row selection ─────────────────────────────────────────────────────────
   const { selectedIds, selectedCount, isSelected, toggle, selectAll, clearSelection } =
     useRowSelection()
 
+  // ── Table preferences ─────────────────────────────────────────────────────
+  const { sizing, onSizingChange, columnOrder, onColumnOrderChange } =
+    useTablePreferences('review-inbox', [...REVIEW_INBOX_COLUMN_IDS])
+
   // ── Triage ────────────────────────────────────────────────────────────────
   const [triageIndex, setTriageIndex] = useState<number | null>(null)
+  const [announcement, setAnnouncement] = useState('')
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== 'undefined' && window.innerWidth < 768
   )
@@ -117,35 +143,34 @@ export function ReviewInboxPage() {
     trackEvent(ANALYTICS_EVENTS.TRANSACTION_APPROVED, { transaction_id: tx.id })
   }, [setReviewed, trackEvent])
 
-  const handleBulkMarkReviewed = useCallback(async () => {
+  const handleBulkSetReviewed = useCallback(async (reviewed: boolean) => {
     const ids = [...selectedIds]
+    const count = ids.length
+    const countLabel = `${count} transaction${count === 1 ? '' : 's'}`
     try {
-      await bulkSetReviewed(ids, true)
+      await bulkSetReviewed(ids, reviewed)
       clearSelection()
-      toast.success(`Marked ${formatTransactionCount(ids.length)} as reviewed`, {
-        action: {
-          label: 'Undo',
-          onClick: async () => {
-            await bulkSetReviewed(ids, false)
-            trackEvent(ANALYTICS_EVENTS.REVIEW_UNDO, { count: ids.length })
+      if (reviewed) {
+        setAnnouncement(`Marked ${countLabel} as reviewed`)
+        toast.success(`Marked ${countLabel} as reviewed`, {
+          action: {
+            label: 'Undo',
+            onClick: async () => {
+              await bulkSetReviewed(ids, false)
+              setAnnouncement(`Moved ${countLabel} back to inbox`)
+              trackEvent(ANALYTICS_EVENTS.REVIEW_UNDO, { count })
+            },
           },
-        },
-      })
+        })
+      } else {
+        setAnnouncement(`Moved ${countLabel} back to inbox`)
+        toast.success(`Moved ${countLabel} back to inbox`)
+      }
     } catch {
-      toast.error('Failed to mark as reviewed. Please try again.')
+      const action = reviewed ? 'marked as reviewed' : 'marked as unreviewed'
+      toast.error(`Failed to ${action}. Please try again.`)
     }
   }, [selectedIds, bulkSetReviewed, clearSelection, trackEvent])
-
-  const handleBulkMarkUnreviewed = useCallback(async () => {
-    const ids = [...selectedIds]
-    try {
-      await bulkSetReviewed(ids, false)
-      clearSelection()
-      toast.success(`Moved ${formatTransactionCount(ids.length)} back to inbox`)
-    } catch {
-      toast.error('Failed to mark as unreviewed. Please try again.')
-    }
-  }, [selectedIds, bulkSetReviewed, clearSelection])
 
   const handleSelectAll = useCallback(() => {
     if (selectedCount === transactions.length) {
@@ -173,6 +198,7 @@ export function ReviewInboxPage() {
     if (!triageTx) return
     try {
       await handleApprove(triageTx)
+      setAnnouncement('Marked as reviewed')
       // When filter removes approved items (reviewed:false presets), the list refetch
       // shrinks the array and the clamping effect handles index correction — don't advance.
       // For presets where items stay visible, advance to the next row.
@@ -195,6 +221,7 @@ export function ReviewInboxPage() {
     } else {
       setTriageIndex(null)
     }
+    setAnnouncement('Skipped')
     if (triageTx) trackEvent(ANALYTICS_EVENTS.TRANSACTION_SKIPPED, { transaction_id: triageTx.id })
   }, [triageIndex, transactions.length, triageTx, trackEvent])
 
@@ -204,11 +231,83 @@ export function ReviewInboxPage() {
     }
   }, [hasNextPage, isFetchingNextPage, fetchNextPage])
 
+  // ── Bulk recategorize apply ───────────────────────────────────────────────
+  const handleApplyBulkRecategorize = useCallback(async () => {
+    const ids = [...selectedIds]
+    const customCat = availableCategories.find((c) => c.name === pendingBulkCategory[0])
+    const plaidMatch = !customCat ? plaidPrimaries?.find((p) => p.display === pendingBulkCategory[0]) : null
+    const request =
+      pendingBulkCategory.length === 0
+        ? { kind: 'clear' as const }
+        : customCat
+          ? { kind: 'custom' as const, custom_category_id: customCat.id }
+          : { kind: 'pfc' as const, pfc_primary: plaidMatch?.enum ?? pendingBulkCategory[0], pfc_detailed: pendingBulkCategory[1] }
+    try {
+      await bulkRecategorize(ids, request)
+      setShowBulkRecategorize(false)
+      setPendingBulkCategory([])
+      clearSelection()
+      toast.success(`Recategorized ${ids.length} transaction${ids.length === 1 ? '' : 's'}`)
+    } catch {
+      toast.error('Failed to recategorize. Please try again.')
+    }
+  }, [selectedIds, availableCategories, plaidPrimaries, pendingBulkCategory, bulkRecategorize, clearSelection])
+
+  // ── Column definitions ────────────────────────────────────────────────────
+  const columns = useMemo((): ColumnDef<Transaction>[] => [
+    {
+      id: 'select',
+      header: (
+        <input
+          type="checkbox"
+          checked={selectedCount === transactions.length && transactions.length > 0}
+          onChange={handleSelectAll}
+          aria-label="Select all transactions"
+          className="size-4 rounded border-border"
+        />
+      ),
+      widthClass: 'w-10',
+      render: (tx) => (
+        <input
+          type="checkbox"
+          checked={isSelected(tx.id)}
+          onChange={() => toggle(tx.id)}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`Select ${tx.merchant_name || tx.name}`}
+          className="size-4 rounded border-border"
+        />
+      ),
+    },
+    {
+      id: 'date',
+      header: 'Date',
+      render: (tx) => <span className="text-muted-foreground">{tx.date}</span>,
+    },
+    {
+      id: 'merchant',
+      header: 'Transaction',
+      render: (tx) => <span className="font-medium text-foreground">{tx.merchant_name || tx.name}</span>,
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      render: (tx) => <ReviewBadge variant={reviewBadgeVariantFromTransaction(tx)} />,
+    },
+    {
+      id: 'amount',
+      header: 'Amount',
+      align: 'right',
+      render: (tx) => CURRENCY_FORMATTER.format(Math.abs(tx.amount)),
+    },
+  ], [selectedCount, transactions.length, handleSelectAll, isSelected, toggle])
+
   // ── All caught up ─────────────────────────────────────────────────────────
   const allCaughtUp = !isLoading && transactions.length === 0 && activePreset === 'unreviewed'
 
   return (
     <div className="flex flex-col gap-6">
+      <div className="sr-only" aria-live="polite" aria-atomic="true" role="status">{announcement}</div>
+
       {/* Page header */}
       <div className="flex items-start justify-between">
         <div>
@@ -245,60 +344,21 @@ export function ReviewInboxPage() {
       {/* Desktop: Transaction list table */}
       {transactions.length > 0 && (
         <div className="hidden md:block">
-          <div className="overflow-hidden rounded-xl border border-border">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/50">
-                  <th className="w-10 px-4 py-2 text-left">
-                    <input
-                      type="checkbox"
-                      checked={selectedCount === transactions.length && transactions.length > 0}
-                      onChange={handleSelectAll}
-                      aria-label="Select all transactions"
-                      className="size-4 rounded border-border"
-                    />
-                  </th>
-                  <th className="px-4 py-2 text-left font-medium text-muted-foreground">Date</th>
-                  <th className="px-4 py-2 text-left font-medium text-muted-foreground">Transaction</th>
-                  <th className="px-4 py-2 text-left font-medium text-muted-foreground">Status</th>
-                  <th className="px-4 py-2 text-right font-medium text-muted-foreground">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {transactions.map((tx, idx) => (
-                  <tr
-                    key={tx.id}
-                    className="border-b border-border/50 hover:bg-muted/30 cursor-pointer"
-                    onClick={() => setTriageIndex(idx)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') setTriageIndex(idx) }}
-                    tabIndex={0}
-                    aria-label={`Open triage for ${tx.merchant_name || tx.name}`}
-                  >
-                    <td className="px-4 py-3">
-                      <input
-                        type="checkbox"
-                        checked={isSelected(tx.id)}
-                        onChange={() => toggle(tx.id)}
-                        onClick={(e) => e.stopPropagation()}
-                        aria-label={`Select ${tx.merchant_name || tx.name}`}
-                        className="size-4 rounded border-border"
-                      />
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">{tx.date}</td>
-                    <td className="px-4 py-3 font-medium text-foreground" data-ph-mask>
-                      {tx.merchant_name || tx.name}
-                    </td>
-                    <td className="px-4 py-3">
-                      <ReviewBadge variant={reviewBadgeVariantFromTransaction(tx)} />
-                    </td>
-                    <td className="px-4 py-3 text-right" data-ph-mask>
-                      {CURRENCY_FORMATTER.format(Math.abs(tx.amount))}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable<Transaction>
+            data={transactions}
+            columns={columns}
+            rowKey={(row) => row.id}
+            sort={null}
+            onSortChange={() => {}}
+            filters={{}}
+            onFiltersChange={() => {}}
+            onRowClick={(row) => setTriageIndex(transactions.indexOf(row))}
+            columnSizing={sizing}
+            onColumnSizingChange={onSizingChange}
+            columnOrder={columnOrder}
+            onColumnOrderChange={onColumnOrderChange}
+            maskedColumnIds={['merchant', 'amount']}
+          />
 
           {hasNextPage && (
             <div className="mt-4 text-center">
@@ -322,6 +382,8 @@ export function ReviewInboxPage() {
             transaction={triageTx}
             currentIndex={triageIndex ?? 0}
             total={transactions.length}
+            availableCategories={availableCategories}
+            plaidPrimaries={plaidPrimaries}
             onApprove={handleTriageApprove}
             onSkip={handleTriageSkip}
             onRecategorize={handleTriageRecategorize}
@@ -338,11 +400,34 @@ export function ReviewInboxPage() {
       {/* Bulk action bar */}
       <ReviewBulkActionBar
         selectedCount={selectedCount}
-        onMarkReviewed={handleBulkMarkReviewed}
-        onMarkUnreviewed={handleBulkMarkUnreviewed}
+        onMarkReviewed={() => handleBulkSetReviewed(true)}
+        onMarkUnreviewed={() => handleBulkSetReviewed(false)}
+        onBulkRecategorize={() => { setPendingBulkCategory([]); setBulkCategoryDirty(false); setShowBulkRecategorize(true) }}
         onClear={clearSelection}
         isLoading={isPending}
       />
+
+      {/* Bulk recategorize dialog */}
+      <Dialog open={showBulkRecategorize} onOpenChange={setShowBulkRecategorize}>
+        <DialogContent aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle>Recategorize {selectedCount} transaction{selectedCount === 1 ? '' : 's'}</DialogTitle>
+          </DialogHeader>
+          <CategoryEditor
+            selectedCategory={pendingBulkCategory}
+            availableCategories={availableCategories}
+            plaidPrimaries={plaidPrimaries}
+            onChange={(cat) => { setPendingBulkCategory(cat); setBulkCategoryDirty(true) }}
+            disabled={isPending}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBulkRecategorize(false)}>Cancel</Button>
+            <Button onClick={handleApplyBulkRecategorize} disabled={isPending || !bulkCategoryDirty}>
+              Apply
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

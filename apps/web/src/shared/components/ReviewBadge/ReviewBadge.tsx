@@ -64,21 +64,3 @@ export function ReviewBadge({ variant, className, 'data-testid': testId }: Revie
   )
 }
 
-/**
- * Derive the ReviewBadge variant from a transaction's reviewed/category_source state.
- *
- * - reviewed=false (or undefined) → 'unreviewed'
- * - reviewed=true + source='plaid' → 'plaid'
- * - reviewed=true + source='rule'  → 'rule'
- * - reviewed=true + source='manual' (or undefined) → 'manual'
- */
-export function reviewBadgeVariantFromTransaction(tx: {
-  reviewed?: boolean
-  category_source?: 'plaid' | 'rule' | 'manual'
-}): ReviewBadgeVariant {
-  if (!tx.reviewed) return 'unreviewed'
-  const src = tx.category_source ?? 'manual'
-  if (src === 'plaid') return 'plaid'
-  if (src === 'rule') return 'rule'
-  return 'manual'
-}

@@ -9,28 +9,17 @@
  */
 
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import type { TransactionFilters, CategorySource } from '../../types'
+import { presetToFilters } from './reviewFilterPresetsUtils'
+import type { ReviewPreset } from './reviewFilterPresetsUtils'
+import type { TransactionFilters } from '../../types'
 
-export type ReviewPreset = 'unreviewed' | 'reviewed' | 'auto-categorized' | 'manually-reviewed'
+export type { ReviewPreset }
 
 const PRESET_LABELS: Record<ReviewPreset, string> = {
   'unreviewed': 'Unreviewed',
   'reviewed': 'Reviewed',
   'auto-categorized': 'Auto-categorized',
   'manually-reviewed': 'Manually reviewed',
-}
-
-function presetToFilters(preset: ReviewPreset): Pick<TransactionFilters, 'reviewed' | 'category_sources'> {
-  switch (preset) {
-    case 'unreviewed':
-      return { reviewed: false, category_sources: undefined }
-    case 'reviewed':
-      return { reviewed: true, category_sources: undefined }
-    case 'auto-categorized':
-      return { reviewed: false, category_sources: ['plaid', 'rule'] as CategorySource[] }
-    case 'manually-reviewed':
-      return { reviewed: true, category_sources: ['manual'] as CategorySource[] }
-  }
 }
 
 interface ReviewFilterPresetsProps {
@@ -62,4 +51,3 @@ export function ReviewFilterPresets({ activePreset, onChange }: ReviewFilterPres
   )
 }
 
-export { presetToFilters }

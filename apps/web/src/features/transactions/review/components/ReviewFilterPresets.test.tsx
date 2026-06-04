@@ -1,6 +1,7 @@
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { ReviewFilterPresets, presetToFilters } from './ReviewFilterPresets'
+import { ReviewFilterPresets } from './ReviewFilterPresets'
+import { presetToFilters } from './reviewFilterPresetsUtils'
 
 describe('ReviewFilterPresets', () => {
   it('renders all four preset buttons', () => {
