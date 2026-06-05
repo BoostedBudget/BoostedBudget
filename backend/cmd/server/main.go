@@ -255,6 +255,9 @@ func main() {
 	// Issue #972: Declare budget period close check worker (daily scanner, no Plaid dependency)
 	var budgetPeriodCloseCheckWorker *jobs.BudgetPeriodCloseCheckWorker
 
+	// Issue #972: Declare savings stats snapshot worker (daily aggregate, no Plaid dependency)
+	var savingsStatsWorker *jobs.SavingsStatsWorker
+
 	// Issue #1123: Declare effective category refresh worker
 	var effectiveCategoryRefreshWorker *jobs.EffectiveCategoryRefreshWorker
 
@@ -647,6 +650,14 @@ func main() {
 		})
 		appLogger.Info("Budget period close check worker created (River)")
 
+		// Issue #972: Create savings stats snapshot worker (daily aggregate, no Plaid dependency)
+		savingsStatsWorker = jobs.NewSavingsStatsWorker(jobs.SavingsStatsWorkerDeps{
+			AggregateRepo:    repository.NewSavingsImpactRepository(db),
+			SavingsImpactRepo: repository.NewSavingsImpactRepository(db),
+			Logger:           appLogger,
+		})
+		appLogger.Info("Savings stats snapshot worker created (River)")
+
 		// Issue #1123: Create effective category refresh worker (no external dependencies)
 		effectiveCategoryRefreshWorker = jobs.NewEffectiveCategoryRefreshWorker(jobs.EffectiveCategoryRefreshWorkerDeps{
 			TransactionRepo: transactionRepo,
@@ -980,6 +991,22 @@ func main() {
 				appLogger.Info("Budget period close check periodic job configured (daily)")
 			}
 
+			// Issue #972: Savings stats snapshot (daily) — aggregate completed transfer amounts
+			if savingsStatsWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.SavingsStatsArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: queue.QueueLow,
+							}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false},
+				))
+				appLogger.Info("Savings stats snapshot periodic job configured (daily)")
+			}
+
 			// Issue #1087 R4-7: Idempotency keys cleanup (daily — deletes expired rows)
 			periodicJobs = append(periodicJobs, river.NewPeriodicJob(
 				river.PeriodicInterval(24*time.Hour),
@@ -1057,6 +1084,10 @@ func main() {
 			if budgetPeriodCloseCheckWorker != nil {
 				river.AddWorker(riverWorkers, budgetPeriodCloseCheckWorker)
 				appLogger.Info("Budget period close check worker registered with River")
+			}
+			if savingsStatsWorker != nil {
+				river.AddWorker(riverWorkers, savingsStatsWorker)
+				appLogger.Info("Savings stats snapshot worker registered with River")
 			}
 			if effectiveCategoryRefreshWorker != nil {
 				river.AddWorker(riverWorkers, effectiveCategoryRefreshWorker)
