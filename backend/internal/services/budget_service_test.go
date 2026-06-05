@@ -122,6 +122,15 @@ func (m *MockBudgetRepository) RemoveIncomeSource(ctx context.Context, budgetID 
 	return args.Error(0)
 }
 
+// Issue #972: Paginated active-budget enumeration for period-close scanner
+func (m *MockBudgetRepository) GetAllActivePaginated(ctx context.Context, limit, offset int) ([]*domain.Budget, error) {
+	args := m.Called(ctx, limit, offset)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.Budget), args.Error(1)
+}
+
 // Envelope budgeting rollover method (Issue #36: Rule Executors)
 func (m *MockBudgetRepository) AdjustCategoryAllocatedAmount(ctx context.Context, categoryID string, delta float64) error {
 	args := m.Called(ctx, categoryID, delta)

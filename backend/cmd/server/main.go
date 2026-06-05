@@ -651,10 +651,12 @@ func main() {
 		appLogger.Info("Budget period close check worker created (River)")
 
 		// Issue #972: Create savings stats snapshot worker (daily aggregate, no Plaid dependency)
+		// Share one repo instance — both fields satisfy different narrow interfaces from the same concrete type.
+		savingsImpactStatsRepo := repository.NewSavingsImpactRepository(db)
 		savingsStatsWorker = jobs.NewSavingsStatsWorker(jobs.SavingsStatsWorkerDeps{
-			AggregateRepo:    repository.NewSavingsImpactRepository(db),
-			SavingsImpactRepo: repository.NewSavingsImpactRepository(db),
-			Logger:           appLogger,
+			AggregateRepo:     savingsImpactStatsRepo,
+			SavingsImpactRepo: savingsImpactStatsRepo,
+			Logger:            appLogger,
 		})
 		appLogger.Info("Savings stats snapshot worker created (River)")
 
