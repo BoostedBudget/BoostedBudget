@@ -36,7 +36,7 @@
     "@typescript-eslint/eslint-plugin": "^8.60.1",
     "@typescript-eslint/parser": "^8.60.1",
     "eslint": "^9.0.0",
-    "globals": "^15.0.0",
+    "globals": "^17.6.0",
     "typescript": "^5.8.3",
     "vitest": "^4.1.8",
     "wrangler": "^4.20.0",
