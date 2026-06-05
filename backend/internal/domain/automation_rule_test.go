@@ -526,6 +526,7 @@ func TestTransferSuggestionStatus_IsValid(t *testing.T) {
 		{"accepted is valid", SuggestionStatusAccepted, true},
 		{"rejected is valid", SuggestionStatusRejected, true},
 		{"expired is valid", SuggestionStatusExpired, true},
+		{"completed is valid", SuggestionStatusCompleted, true},
 		{"empty is invalid", SuggestionStatus(""), false},
 		{"unknown is invalid", SuggestionStatus("cancelled"), false},
 	}
@@ -640,6 +641,65 @@ func TestTransferSuggestion_Reject(t *testing.T) {
 	assert.NotNil(t, suggestion.UserActionAt)
 	assert.NotNil(t, suggestion.UserNotes)
 	assert.Equal(t, "Not needed this month", *suggestion.UserNotes)
+}
+
+func TestTransferSuggestion_Complete(t *testing.T) {
+	t.Run("success case — pending suggestion", func(t *testing.T) {
+		suggestion := &TransferSuggestion{
+			Status: SuggestionStatusPending,
+		}
+
+		before := time.Now().UTC()
+		err := suggestion.Complete("txn-abc", 150.0, "exact_match")
+		after := time.Now().UTC()
+
+		require.NoError(t, err)
+		assert.Equal(t, SuggestionStatusCompleted, suggestion.Status)
+		assert.NotNil(t, suggestion.CompletedAt)
+		assert.True(t, !suggestion.CompletedAt.Before(before) && !suggestion.CompletedAt.After(after))
+		require.NotNil(t, suggestion.MatchedTransactionID)
+		assert.Equal(t, "txn-abc", *suggestion.MatchedTransactionID)
+		require.NotNil(t, suggestion.ActualAmount)
+		assert.Equal(t, 150.0, *suggestion.ActualAmount)
+		require.NotNil(t, suggestion.CompletionSource)
+		assert.Equal(t, "exact_match", *suggestion.CompletionSource)
+	})
+
+	t.Run("success case — accepted suggestion", func(t *testing.T) {
+		suggestion := &TransferSuggestion{
+			Status: SuggestionStatusAccepted,
+		}
+
+		err := suggestion.Complete("txn-def", 200.0, "user_confirmed")
+
+		require.NoError(t, err)
+		assert.Equal(t, SuggestionStatusCompleted, suggestion.Status)
+		assert.NotNil(t, suggestion.CompletedAt)
+	})
+
+	t.Run("already completed returns error", func(t *testing.T) {
+		suggestion := &TransferSuggestion{
+			Status: SuggestionStatusCompleted,
+		}
+
+		err := suggestion.Complete("txn-xyz", 100.0, "exact_match")
+
+		assert.ErrorIs(t, err, ErrTransferSuggestionAlreadyActioned)
+	})
+
+	t.Run("all completion fields populated", func(t *testing.T) {
+		suggestion := &TransferSuggestion{
+			Status: SuggestionStatusPending,
+		}
+
+		err := suggestion.Complete("txn-ghi", 75.50, "user_confirmed")
+		require.NoError(t, err)
+
+		assert.NotNil(t, suggestion.CompletedAt)
+		assert.NotNil(t, suggestion.MatchedTransactionID)
+		assert.NotNil(t, suggestion.ActualAmount)
+		assert.NotNil(t, suggestion.CompletionSource)
+	})
 }
 
 // =============================================================================

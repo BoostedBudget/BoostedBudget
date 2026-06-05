@@ -375,6 +375,7 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 	reason := fmt.Sprintf("Rule '%s' triggered", rule.Name)
 
 	// Create suggestion
+	expiresAt := time.Now().UTC().Add(30 * 24 * time.Hour) // 30 days
 	suggestion := &domain.TransferSuggestion{
 		ID:              uuid.New().String(),
 		UserID:          rule.UserID,
@@ -387,6 +388,7 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 		Reason:          &reason,
 		Source:          domain.SuggestionSourceRule,
 		Status:          domain.SuggestionStatusPending,
+		ExpiresAt:       &expiresAt,
 	}
 
 	// Issue #1109: Resolve stable user_account_id → current active account_id (backfilled by migration 000070).
@@ -623,6 +625,7 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 	}
 
 	// Create transfer suggestion from source account to savings goal's linked account.
+	expiresAt := time.Now().UTC().Add(30 * 24 * time.Hour) // 30 days
 	suggestion := &domain.TransferSuggestion{
 		ID:              uuid.New().String(),
 		UserID:          rule.UserID,
@@ -635,6 +638,7 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 		Reason:          &reason,
 		Source:          domain.SuggestionSourceRule,
 		Status:          domain.SuggestionStatusPending,
+		ExpiresAt:       &expiresAt,
 	}
 	// Propagate stable user_account_id so monitoring can re-resolve post-relink.
 	if goal.UserAccountID != nil {

@@ -41,6 +41,13 @@ type TransferSuggestionRepository interface {
 
 	// GetByRuleID retrieves suggestions created by a specific rule.
 	GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.TransferSuggestion, error)
+
+	// Complete marks a suggestion as completed after a transfer was detected or confirmed.
+	// Race-safe: only operates on pending or accepted suggestions.
+	Complete(ctx context.Context, id string, matchedTransactionID string, actualAmount float64, completionSource string, completedAt time.Time) error
+
+	// GetActiveByUserID retrieves all active (pending + accepted) suggestions for a user.
+	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error)
 }
 
 // transferSuggestionRepository implements TransferSuggestionRepository using PostgreSQL.
@@ -277,6 +284,56 @@ func (r *transferSuggestionRepository) GetByRuleID(ctx context.Context, ruleID s
 	`
 
 	return r.querySuggestions(ctx, query, ruleID, limit, offset)
+}
+
+// Complete marks a suggestion as completed after a transfer was detected or confirmed.
+// Race-safe: only operates on pending or accepted suggestions (status IN ('pending','accepted')).
+func (r *transferSuggestionRepository) Complete(ctx context.Context, id string, matchedTransactionID string, actualAmount float64, completionSource string, completedAt time.Time) error {
+	now := time.Now()
+
+	query := `
+		UPDATE transfer_suggestions
+		SET status = 'completed',
+		    completed_at = $2,
+		    matched_transaction_id = $3,
+		    actual_amount = $4,
+		    completion_source = $5,
+		    updated_at = $6
+		WHERE id = $1 AND status IN ('pending', 'accepted')
+	`
+
+	ct, err := r.db.Exec(ctx, query, id, completedAt, matchedTransactionID, actualAmount, completionSource, now)
+	if err != nil {
+		return err
+	}
+
+	if ct.RowsAffected() == 0 {
+		// Distinguish: does the row exist but was already actioned, or does it not exist?
+		_, getErr := r.GetByID(ctx, id)
+		if getErr != nil {
+			return domain.ErrTransferSuggestionNotFound
+		}
+		return domain.ErrTransferSuggestionAlreadyActioned
+	}
+
+	return nil
+}
+
+// GetActiveByUserID retrieves all active (pending + accepted) suggestions for a user,
+// ordered by creation date ascending.
+func (r *transferSuggestionRepository) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error) {
+	query := `
+		SELECT id, user_id, rule_id, rule_execution_id,
+			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
+			amount, currency_code,
+			reason, source, status, expires_at,
+			user_action_at, user_notes, created_at, updated_at
+		FROM transfer_suggestions
+		WHERE user_id = $1 AND status IN ('pending', 'accepted')
+		ORDER BY created_at ASC
+	`
+
+	return r.querySuggestions(ctx, query, userID)
 }
 
 // scanSuggestion scans a single suggestion from a row.

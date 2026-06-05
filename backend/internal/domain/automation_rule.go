@@ -150,18 +150,20 @@ type SuggestionStatus string
 
 // Supported suggestion statuses (matches database CHECK constraint).
 const (
-	SuggestionStatusPending  SuggestionStatus = "pending"
-	SuggestionStatusAccepted SuggestionStatus = "accepted"
-	SuggestionStatusRejected SuggestionStatus = "rejected"
-	SuggestionStatusExpired  SuggestionStatus = "expired"
+	SuggestionStatusPending   SuggestionStatus = "pending"
+	SuggestionStatusAccepted  SuggestionStatus = "accepted"
+	SuggestionStatusRejected  SuggestionStatus = "rejected"
+	SuggestionStatusExpired   SuggestionStatus = "expired"
+	SuggestionStatusCompleted SuggestionStatus = "completed"
 )
 
 // validSuggestionStatuses is a set of all valid suggestion statuses.
 var validSuggestionStatuses = map[SuggestionStatus]bool{
-	SuggestionStatusPending:  true,
-	SuggestionStatusAccepted: true,
-	SuggestionStatusRejected: true,
-	SuggestionStatusExpired:  true,
+	SuggestionStatusPending:   true,
+	SuggestionStatusAccepted:  true,
+	SuggestionStatusRejected:  true,
+	SuggestionStatusExpired:   true,
+	SuggestionStatusCompleted: true,
 }
 
 // IsValid checks if the suggestion status is valid.
@@ -570,11 +572,15 @@ type TransferSuggestion struct {
 	Reason            *string          `json:"reason,omitempty" db:"reason"`
 	Source            SuggestionSource `json:"source" db:"source"`
 	Status            SuggestionStatus `json:"status" db:"status"`
-	ExpiresAt         *time.Time       `json:"expires_at,omitempty" db:"expires_at"`
-	UserActionAt      *time.Time       `json:"user_action_at,omitempty" db:"user_action_at"`
-	UserNotes         *string          `json:"user_notes,omitempty" db:"user_notes"`
-	CreatedAt         time.Time        `json:"created_at" db:"created_at"`
-	UpdatedAt         time.Time        `json:"updated_at" db:"updated_at"`
+	ExpiresAt            *time.Time       `json:"expires_at,omitempty"             db:"expires_at"`
+	UserActionAt         *time.Time       `json:"user_action_at,omitempty"         db:"user_action_at"`
+	UserNotes            *string          `json:"user_notes,omitempty"             db:"user_notes"`
+	CompletedAt          *time.Time       `json:"completed_at,omitempty"           db:"completed_at"`
+	MatchedTransactionID *string          `json:"matched_transaction_id,omitempty" db:"matched_transaction_id"`
+	ActualAmount         *float64         `json:"actual_amount,omitempty"          db:"actual_amount"`
+	CompletionSource     *string          `json:"completion_source,omitempty"      db:"completion_source"`
+	CreatedAt            time.Time        `json:"created_at" db:"created_at"`
+	UpdatedAt            time.Time        `json:"updated_at" db:"updated_at"`
 }
 
 // Validate checks that the transfer suggestion has all required fields and valid values.
@@ -612,6 +618,21 @@ func (s *TransferSuggestion) Reject(notes *string) {
 	s.Status = SuggestionStatusRejected
 	s.UserActionAt = &now
 	s.UserNotes = notes
+}
+
+// Complete marks the suggestion as completed after a transfer was detected or confirmed.
+// completionSource must be "exact_match" or "user_confirmed".
+func (s *TransferSuggestion) Complete(matchedTransactionID string, actualAmount float64, completionSource string) error {
+	if s.Status == SuggestionStatusCompleted {
+		return ErrTransferSuggestionAlreadyActioned
+	}
+	now := time.Now().UTC()
+	s.Status = SuggestionStatusCompleted
+	s.CompletedAt = &now
+	s.MatchedTransactionID = &matchedTransactionID
+	s.ActualAmount = &actualAmount
+	s.CompletionSource = &completionSource
+	return nil
 }
 
 // =============================================================================
