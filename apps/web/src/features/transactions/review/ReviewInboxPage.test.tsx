@@ -1,9 +1,8 @@
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
 import type { ReactNode } from 'react'
-import { ReviewInboxPage } from './ReviewInboxPage'
 import type { Transaction } from '../types'
 import {
   mockGetTransactions,
@@ -15,9 +14,34 @@ import {
   mockBulkUpdateTransactionCategoryMutateAsync,
   mockUseBulkUpdateTransactionCategory,
 } from '@/test/mocks/transactions-api'
-import { mockPosthogCapture } from '@/test/mocks/posthog'
-import { mockToastSuccess } from '@/test/mocks/sonner'
-import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { mockToast, mockToastSuccess } from '@/test/mocks/sonner'
+
+const REVIEW_ANALYTICS_EVENTS = {
+  REVIEW_INBOX_VIEWED: 'review_inbox_viewed',
+  REVIEW_ALL_CAUGHT_UP: 'review_all_caught_up',
+  REVIEW_PRESET_CHANGED: 'review_preset_changed',
+  TRANSACTION_APPROVED: 'transaction_approved',
+  TRANSACTION_REVIEWED: 'transaction_reviewed',
+  TRANSACTION_SKIPPED: 'transaction_skipped',
+  REVIEW_UNDO: 'review_undo',
+  REVIEW_BULK_RECATEGORIZED: 'review_bulk_recategorized',
+} as const
+
+mock.module('@/shared/analytics/events', () => ({
+  ANALYTICS_EVENTS: REVIEW_ANALYTICS_EVENTS,
+}))
+
+mock.module('@/shared/hooks/useTrackEvent', () => ({
+  useTrackEvent: () => mockTrackEvent,
+}))
+
+mock.module('sonner', () => ({
+  toast: mockToast,
+  Toaster: () => null,
+}))
+
+import { ReviewInboxPage } from './ReviewInboxPage'
 
 const mockTx: Transaction = {
   id: 'tx-1',
@@ -64,6 +88,11 @@ function createWrapper() {
   }
 }
 
+function setDesktopViewport() {
+  Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1024 })
+  window.dispatchEvent(new Event('resize'))
+}
+
 function configureBase(transactions: Transaction[] = []) {
   // Configure raw fetcher used by useInfiniteTransactions (async)
   mockGetTransactions.mockResolvedValue({
@@ -94,19 +123,23 @@ function configureBase(transactions: Transaction[] = []) {
 
 describe('ReviewInboxPage', () => {
   beforeEach(() => {
-    mockGetTransactions.mockClear()
-    mockUseGetTransactionReviewSummary.mockClear()
-    mockSetTransactionReviewedMutateAsync.mockClear()
-    mockBulkSetTransactionReviewedMutateAsync.mockClear()
-    mockBulkUpdateTransactionCategoryMutateAsync.mockClear()
-    mockPosthogCapture.mockClear()
-    mockToastSuccess.mockClear()
+    setDesktopViewport()
+    mockGetTransactions.mockReset()
+    mockUseGetTransactionReviewSummary.mockReset()
+    mockSetTransactionReviewedMutateAsync.mockReset()
+    mockUseSetTransactionReviewed.mockReset()
+    mockBulkSetTransactionReviewedMutateAsync.mockReset()
+    mockUseBulkSetTransactionReviewed.mockReset()
+    mockBulkUpdateTransactionCategoryMutateAsync.mockReset()
+    mockUseBulkUpdateTransactionCategory.mockReset()
+    mockTrackEvent.mockReset()
+    mockToastSuccess.mockReset()
   })
 
   it('fires REVIEW_INBOX_VIEWED analytics on mount', () => {
     configureBase()
     render(<ReviewInboxPage />, { wrapper: createWrapper() })
-    expect(mockPosthogCapture).toHaveBeenCalledWith(ANALYTICS_EVENTS.REVIEW_INBOX_VIEWED, undefined)
+    expect(mockTrackEvent).toHaveBeenCalledWith(REVIEW_ANALYTICS_EVENTS.REVIEW_INBOX_VIEWED)
   })
 
   it('shows "All caught up!" empty state and fires REVIEW_ALL_CAUGHT_UP when unreviewed preset has 0 transactions', async () => {
@@ -115,7 +148,7 @@ describe('ReviewInboxPage', () => {
     await waitFor(() => {
       expect(screen.getByText('All caught up!')).toBeInTheDocument()
     })
-    expect(mockPosthogCapture).toHaveBeenCalledWith(ANALYTICS_EVENTS.REVIEW_ALL_CAUGHT_UP, undefined)
+    expect(mockTrackEvent).toHaveBeenCalledWith(REVIEW_ANALYTICS_EVENTS.REVIEW_ALL_CAUGHT_UP)
   })
 
   it('does not show "All caught up!" when transaction fetch errors', async () => {
@@ -132,7 +165,7 @@ describe('ReviewInboxPage', () => {
     // Wait for the fetch to be attempted (ensures we're past the initial loading state)
     await waitFor(() => expect(mockGetTransactions).toHaveBeenCalled())
     expect(screen.queryByText('All caught up!')).toBeNull()
-    expect(mockPosthogCapture).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.REVIEW_ALL_CAUGHT_UP, undefined)
+    expect(mockTrackEvent).not.toHaveBeenCalledWith(REVIEW_ANALYTICS_EVENTS.REVIEW_ALL_CAUGHT_UP)
   })
 
   it('shows generic empty state when non-default preset has 0 transactions', async () => {
@@ -233,7 +266,7 @@ describe('ReviewInboxPage', () => {
     await waitFor(() => expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument())
 
     // Open triage view
-    fireEvent.click(screen.getByText('Starbucks Coffee'))
+    fireEvent.click(screen.getByRole('cell', { name: 'Starbucks Coffee' }))
     await waitFor(() => expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument())
 
     // Approve

@@ -56,6 +56,32 @@ func (m *mockIdempotencyRepository) GetOrCreateInTx(
 	return cacheHit, err
 }
 
+func (m *mockIdempotencyRepository) GetOrCreateInTx(
+	_ context.Context,
+	_ pgx.Tx,
+	key, _ /* userID */, _ /* operationID */ string,
+	fn func() (interface{}, error),
+	result interface{},
+) error {
+	// Delegate to in-memory cache — tx is irrelevant for unit tests.
+	m.getCalls = append(m.getCalls, key)
+	if existing, ok := m.cached[key]; ok {
+		*(result.(**domain.MCPRecipe)) = existing
+		return nil
+	}
+	res, err := fn()
+	if err != nil {
+		return err
+	}
+	recipe := res.(*domain.MCPRecipe)
+	if m.cached == nil {
+		m.cached = make(map[string]*domain.MCPRecipe)
+	}
+	m.cached[key] = recipe
+	*(result.(**domain.MCPRecipe)) = recipe
+	return nil
+}
+
 func (m *mockIdempotencyRepository) DeleteExpired(_ context.Context) (int64, error) {
 	return 0, nil
 }

@@ -12,7 +12,8 @@ import {
   mockUseGetAccounts,
 } from '@/test/mocks/accounts-api'
 
-const mockTrackEvent = mock(() => {})
+import { mockTrackEvent } from '@/test/mocks/track-event'
+
 mock.module('@/shared/hooks/useTrackEvent', () => ({
   useTrackEvent: () => mockTrackEvent,
 }))
@@ -67,7 +68,7 @@ function makeAccount(overrides: Record<string, unknown> = {}) {
 
 describe('NetWorthPage', () => {
   beforeEach(() => {
-    mockTrackEvent.mockReset()
+    mockTrackEvent.mockClear()
     mockUseNetWorthData.mockClear()
     mockNetWorthRefetch.mockClear()
     mockUseGetAccounts.mockReturnValue({ data: null, isLoading: false, error: null })

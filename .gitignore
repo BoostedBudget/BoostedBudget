@@ -322,6 +322,8 @@ package-lock.json
 # Binary lockfile variant bun may create locally (not the canonical text bun.lock)
 /bun.lockbapps/*/bun.lock
 packages/*/bun.lock
+# Binary lockfile variant bun may create locally (not the canonical text bun.lock)
+/bun.lockb
 
 # Turborepo
 .turbo

@@ -10,7 +10,7 @@ import {
   mockBulkSetTransactionReviewedMutateAsync,
   mockBulkUpdateTransactionCategoryMutateAsync,
 } from '@/test/mocks/transactions-api'
-import { mockPosthogCapture } from '@/test/mocks/posthog'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { useReviewMutations } from './useReviewMutations'
 
@@ -26,7 +26,7 @@ describe('useReviewMutations', () => {
     mockSetTransactionReviewedMutateAsync.mockClear()
     mockBulkSetTransactionReviewedMutateAsync.mockClear()
     mockBulkUpdateTransactionCategoryMutateAsync.mockClear()
-    mockPosthogCapture.mockClear()
+    mockTrackEvent.mockClear()
   })
 
   it('setReviewed sends {id,data} and tracks TRANSACTION_REVIEWED', async () => {
@@ -34,7 +34,7 @@ describe('useReviewMutations', () => {
     await result.current.setReviewed('tx-1', true)
 
     expect(mockSetTransactionReviewedMutateAsync).toHaveBeenCalledWith({ id: 'tx-1', data: { reviewed: true } })
-    expect(mockPosthogCapture).toHaveBeenCalledWith(
+    expect(mockTrackEvent).toHaveBeenCalledWith(
       ANALYTICS_EVENTS.TRANSACTION_REVIEWED,
       expect.objectContaining({ reviewed: true, count: 1 })
     )
@@ -47,7 +47,7 @@ describe('useReviewMutations', () => {
     expect(mockBulkSetTransactionReviewedMutateAsync).toHaveBeenCalledWith({
       data: { transaction_ids: ['a', 'b'], reviewed: false },
     })
-    expect(mockPosthogCapture).toHaveBeenCalledWith(
+    expect(mockTrackEvent).toHaveBeenCalledWith(
       ANALYTICS_EVENTS.TRANSACTION_REVIEWED,
       expect.objectContaining({ reviewed: false, count: 2 })
     )
@@ -58,7 +58,7 @@ describe('useReviewMutations', () => {
     await result.current.bulkSetReviewed([], true)
 
     expect(mockBulkSetTransactionReviewedMutateAsync).not.toHaveBeenCalled()
-    expect(mockPosthogCapture).not.toHaveBeenCalled()
+    expect(mockTrackEvent).not.toHaveBeenCalled()
   })
 
   it('bulkRecategorize sends transaction_ids+kind and tracks REVIEW_BULK_RECATEGORIZED', async () => {
@@ -68,7 +68,7 @@ describe('useReviewMutations', () => {
     expect(mockBulkUpdateTransactionCategoryMutateAsync).toHaveBeenCalledWith({
       data: { transaction_ids: ['tx-1', 'tx-2'], kind: 'pfc', pfc_primary: 'Food' },
     })
-    expect(mockPosthogCapture).toHaveBeenCalledWith(
+    expect(mockTrackEvent).toHaveBeenCalledWith(
       ANALYTICS_EVENTS.REVIEW_BULK_RECATEGORIZED,
       expect.objectContaining({ count: 2, kind: 'pfc' }),
     )

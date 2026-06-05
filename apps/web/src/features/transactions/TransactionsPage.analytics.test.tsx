@@ -4,21 +4,16 @@
  * Issue #1200: Multi-Level Category Hierarchy
  *
  * Dedicated test file for category filter analytics events.
- * Uses mock.module for useTrackEvent (safe here — this is a focused,
- * single-purpose file, not a broad test file per CLAUDE.md guidance).
  */
 
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 
-// Mock useTrackEvent before any component imports so the spy is installed
-// process-globally for this file. Acceptable: this is a focused analytics test
-// file, not a broad component test file.
-const mockTrackEvent = mock(() => {})
 mock.module('@/shared/hooks/useTrackEvent', () => ({
   useTrackEvent: () => mockTrackEvent,
 }))
