@@ -251,6 +251,15 @@ func (m *MockTransactionRepository) SetReviewed(ctx context.Context, userID stri
 	return args.Get(0).(int64), args.Error(1)
 }
 
+func (m *MockTransactionRepository) BulkUpdateCategory(ctx context.Context, userID string, transactionIDs []string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) (int64, error) {
+	args := m.Called(ctx, userID, transactionIDs, overrideKind, pfcPrimaryOverride, pfcDetailedOverride, customCategoryOverrideID, categorySource)
+	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *MockTransactionRepository) GetReviewSummary(_ context.Context, _ string, _ domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error) {
+	return &domain.ReviewSummaryResponse{TopUnreviewedCategories: []domain.TopUnreviewedCategory{}}, nil
+}
+
 func (m *MockTransactionRepository) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {

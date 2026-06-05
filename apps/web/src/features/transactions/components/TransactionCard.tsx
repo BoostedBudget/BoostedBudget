@@ -8,6 +8,8 @@ import { getEffectiveCategory, getEffectiveCategoryLabel } from '@/shared/catego
 import { formatTransactionAmount } from '@/shared/transactions/amount'
 import { ArrowUpRight, ArrowDownRight, Clock, Pencil, Tag } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { ReviewBadge } from '@/shared/components/ReviewBadge'
+import { reviewBadgeVariantFromTransaction } from '@/shared/components/ReviewBadge/reviewBadgeUtils'
 
 interface TransactionCardProps {
   transaction: Transaction
@@ -168,7 +170,8 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
               <span data-ph-mask>{accountDisplayName}</span>
             </span>
           )}
-          <div className="transaction-card__meta flex gap-3 text-sm text-muted-foreground mt-1">
+          <div className="transaction-card__meta flex gap-3 text-sm text-muted-foreground mt-1 flex-wrap">
+            <ReviewBadge variant={reviewBadgeVariantFromTransaction(transaction)} className="text-xs" />
             <TransactionBudgetBadge match={budgetMatch} />
             <span className="transaction-card__category inline-flex items-center gap-1">
               {transaction.pfc_category_icon_url ? (

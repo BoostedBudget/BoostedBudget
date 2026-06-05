@@ -116,6 +116,15 @@ export const ANALYTICS_EVENTS = {
   REPORT_CUSTOM_CATEGORY_FILTERED: 'report_custom_category_filtered',
   TRANSACTION_REVIEWED: 'transaction_reviewed',
 
+  // Issue #1210: Transaction review inbox
+  REVIEW_INBOX_VIEWED: 'review_inbox_viewed',
+  REVIEW_PRESET_CHANGED: 'review_preset_changed',
+  TRANSACTION_APPROVED: 'transaction_approved',
+  TRANSACTION_SKIPPED: 'transaction_skipped',
+  REVIEW_BULK_RECATEGORIZED: 'review_bulk_recategorized',
+  REVIEW_UNDO: 'review_undo',
+  REVIEW_ALL_CAUGHT_UP: 'review_all_caught_up',
+
   // Issue #1215: MCP analytics helper endpoints — analytics views
   ANALYTICS_FINANCIAL_SUMMARY_VIEWED: 'analytics_financial_summary_viewed',
   ANALYTICS_SAVINGS_RATE_VIEWED: 'analytics_savings_rate_viewed',

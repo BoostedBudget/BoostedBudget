@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -80,6 +81,19 @@ type TransactionService interface {
 	// SetReviewed marks the given transactions reviewed/unreviewed for the user
 	// (Issue #1203). Returns the number of transactions updated.
 	SetReviewed(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error)
+
+	// BulkUpdateTransactionCategory recategorizes multiple transactions for a user (Issue #1210).
+	// Best-effort: unowned/unknown IDs are silently ignored.
+	// Returns the number of rows actually updated.
+	BulkUpdateTransactionCategory(ctx context.Context, userID string, transactionIDs []string, kind string, pfcPrimary, pfcDetailed, customCategoryID *string) (int64, error)
+
+	// GetReviewSummary returns pre-computed review-state counts and top unreviewed categories (Issue #1210).
+	// Dates in filters are optional — omitting them returns all-time data (transfers included).
+	GetReviewSummary(ctx context.Context, userID string, filters domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error)
+
+	// SetAnalytics sets the PostHog analytics client for event capture (Issue #1210).
+	// Nil-safe: calling Capture on nil analytics is a no-op.
+	SetAnalytics(analytics phclient.Analytics)
 }
 
 // TransactionListResponse contains paginated transaction results with metadata.
@@ -98,6 +112,7 @@ type TransactionListResponse struct {
 type transactionService struct {
 	repo               repository.TransactionRepository
 	customCategoryRepo repository.CustomCategoryRepository
+	analytics          phclient.Analytics
 }
 
 // NewTransactionService creates a new TransactionService instance
@@ -400,6 +415,14 @@ func (s *transactionService) UpdateTransactionCategory(ctx context.Context, user
 		return nil, fmt.Errorf("failed to update transaction category: %w", err)
 	}
 
+	if s.analytics != nil {
+		s.analytics.Capture(userID, phclient.EventTransactionRecategorized, map[string]interface{}{
+			"transaction_id":  transactionID,
+			"kind":            overrideKind,
+			"category_source": string(domain.CategorySourceManual),
+		})
+	}
+
 	return s.GetTransactionByID(ctx, userID, transactionID)
 }
 
@@ -408,7 +431,56 @@ func (s *transactionService) SetReviewed(ctx context.Context, userID string, tra
 	if len(transactionIDs) == 0 {
 		return 0, nil
 	}
-	return s.repo.SetReviewed(ctx, userID, transactionIDs, reviewed)
+	n, err := s.repo.SetReviewed(ctx, userID, transactionIDs, reviewed)
+	if err != nil {
+		return 0, err
+	}
+	if s.analytics != nil && n > 0 {
+		s.analytics.Capture(userID, phclient.EventTransactionReviewStateChanged, map[string]interface{}{
+			"reviewed": reviewed,
+			"count":    n,
+		})
+	}
+	return n, nil
+}
+
+// BulkUpdateTransactionCategory recategorizes many transactions at once (Issue #1210).
+// Best-effort: unowned/unknown IDs are silently ignored; returns rows affected.
+// Validates custom-category ownership once (single query) to prevent cross-user references.
+func (s *transactionService) BulkUpdateTransactionCategory(ctx context.Context, userID string, transactionIDs []string, kind string, pfcPrimary, pfcDetailed, customCategoryID *string) (int64, error) {
+	if len(transactionIDs) == 0 {
+		return 0, nil
+	}
+
+	// Validate custom-category ownership once (single query)
+	if kind == "custom" && customCategoryID != nil {
+		cat, err := s.customCategoryRepo.GetByID(ctx, *customCategoryID)
+		if err != nil {
+			return 0, err
+		}
+		if cat.UserID != userID {
+			return 0, domain.ErrCategoryNotFound
+		}
+	}
+
+	// Map clear → nil kind for repo layer
+	var kindPtr *string
+	if kind != "clear" {
+		kindPtr = &kind
+	}
+
+	n, err := s.repo.BulkUpdateCategory(ctx, userID, transactionIDs, kindPtr, pfcPrimary, pfcDetailed, customCategoryID, domain.CategorySourceManual)
+	if err != nil {
+		return 0, err
+	}
+	if s.analytics != nil && n > 0 {
+		s.analytics.Capture(userID, phclient.EventTransactionRecategorized, map[string]interface{}{
+			"kind":            kind,
+			"category_source": string(domain.CategorySourceManual),
+			"count":           n,
+		})
+	}
+	return n, nil
 }
 
 // enrichCustomCategoryDisplay fetches custom-category names in one batched query and sets
@@ -456,6 +528,22 @@ func (s *transactionService) GetDistinctPlaidCategories(ctx context.Context, use
 	}
 
 	return categories, nil
+}
+
+// SetAnalytics sets the PostHog analytics client for event capture (Issue #1210).
+// Nil-safe: if analytics is nil, all Capture calls are skipped.
+func (s *transactionService) SetAnalytics(analytics phclient.Analytics) {
+	s.analytics = analytics
+}
+
+// GetReviewSummary returns pre-computed review-state counts and top unreviewed categories (Issue #1210).
+// Delegates directly to the repository's single-query CTE implementation.
+func (s *transactionService) GetReviewSummary(ctx context.Context, userID string, filters domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error) {
+	summary, err := s.repo.GetReviewSummary(ctx, userID, filters)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get review summary: %w", err)
+	}
+	return summary, nil
 }
 
 // ListByBudgetCategory returns transactions for a budget category, enriched with PFC display fields.

@@ -142,6 +142,14 @@ func (m *MockTransactionRepositoryForBudget) GetDistinctPlaidCategories(ctx cont
 	return args.Get(0).([]string), args.Error(1)
 }
 
+func (m *MockTransactionRepositoryForBudget) BulkUpdateCategory(_ context.Context, _ string, _ []string, _ *string, _ *string, _ *string, _ *string, _ domain.CategorySource) (int64, error) {
+	return 0, nil
+}
+
+func (m *MockTransactionRepositoryForBudget) GetReviewSummary(_ context.Context, _ string, _ domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error) {
+	return &domain.ReviewSummaryResponse{TopUnreviewedCategories: []domain.TopUnreviewedCategory{}}, nil
+}
+
 // Helper to create a test logger
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))

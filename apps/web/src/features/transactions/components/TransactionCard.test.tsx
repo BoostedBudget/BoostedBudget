@@ -1013,4 +1013,16 @@ describe('TransactionCard — PFC v2 source fields (Issue #1073)', () => {
 
     expect(screen.getByText('Uncategorized')).toBeTruthy()
   })
+
+  it('shows ReviewBadge with Unreviewed variant when transaction is not reviewed', () => {
+    const txn: Transaction = { ...baseTxn, reviewed: false }
+    render(<TransactionCard transaction={txn} />)
+    expect(screen.getByText('Unreviewed')).toBeTruthy()
+  })
+
+  it('shows ReviewBadge with Reviewed variant when manually reviewed', () => {
+    const txn: Transaction = { ...baseTxn, reviewed: true, category_source: 'manual' }
+    render(<TransactionCard transaction={txn} />)
+    expect(screen.getByText('Reviewed')).toBeTruthy()
+  })
 })

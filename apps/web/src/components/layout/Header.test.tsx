@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Header } from './Header'
 import { mockUseAuth, mockUseUser, mockUseClerk } from '@/test/mocks/clerk'
 import { mockUseFeatureFlagEnabled } from '@/test/mocks/posthog'
+import { mockUseGetTransactionReviewSummary } from '@/test/mocks/transactions-api'
 
 const mockClerkUser = {
   id: 'user_123',
@@ -167,6 +168,54 @@ describe('Header', () => {
       setupUnauthenticatedMocks()
       renderHeader({ className: 'custom-class' })
       expect(screen.getByRole('banner')).toHaveClass('custom-class')
+    })
+  })
+
+  describe('ReviewInboxButton', () => {
+    beforeEach(() => {
+      setupAuthenticatedMocks()
+    })
+
+    it('shows ReviewInboxButton with count badge when there are unreviewed transactions', () => {
+      mockUseGetTransactionReviewSummary.mockReturnValue({
+        data: {
+          unreviewed_count: 3,
+          reviewed_by_rule_count: 0,
+          reviewed_by_manual_count: 0,
+          reviewed_by_plaid_count: 0,
+        },
+        isLoading: false,
+        isError: false,
+      })
+      renderHeader()
+      expect(screen.getByRole('link', { name: /review inbox, 3 unreviewed/i })).toBeInTheDocument()
+      expect(screen.getByText('3')).toBeInTheDocument()
+    })
+
+    it('shows ReviewInboxButton without badge when 0 unreviewed', () => {
+      mockUseGetTransactionReviewSummary.mockReturnValue({
+        data: {
+          unreviewed_count: 0,
+          reviewed_by_rule_count: 0,
+          reviewed_by_manual_count: 0,
+          reviewed_by_plaid_count: 0,
+        },
+        isLoading: false,
+        isError: false,
+      })
+      renderHeader()
+      expect(screen.getByRole('link', { name: /^review inbox$/i })).toBeInTheDocument()
+      expect(screen.queryByText('0')).not.toBeInTheDocument()
+    })
+
+    it('shows ReviewInboxButton without badge when summary is loading', () => {
+      mockUseGetTransactionReviewSummary.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        isError: false,
+      })
+      renderHeader()
+      expect(screen.getByRole('link', { name: /^review inbox$/i })).toBeInTheDocument()
     })
   })
 
