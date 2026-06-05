@@ -475,3 +475,174 @@ func TestTransferSuggestionService_RejectSuggestion_NoAnalyticsWhenNil(t *testin
 	assert.NotNil(t, result)
 	suggestionRepo.AssertExpectations(t)
 }
+
+// =============================================================================
+// ConfirmTransferSuggestionMatch Tests (Issue #972: C3)
+// =============================================================================
+
+func TestTransferSuggestionService_ConfirmMatch_PendingSuccess(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-123"
+	suggestionID := "suggestion-123"
+	actualAmount := 150.00
+
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.Status = domain.SuggestionStatusPending
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("Complete", ctx, suggestionID, "", actualAmount, "user_confirmed", mock.AnythingOfType("time.Time")).Return(nil)
+
+	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, domain.SuggestionStatusCompleted, result.Status)
+	assert.NotNil(t, result.ActualAmount)
+	assert.Equal(t, actualAmount, *result.ActualAmount)
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_ConfirmMatch_AcceptedSuccess(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-123"
+	suggestionID := "suggestion-123"
+	actualAmount := 200.00
+
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.Status = domain.SuggestionStatusAccepted
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("Complete", ctx, suggestionID, "", actualAmount, "user_confirmed", mock.AnythingOfType("time.Time")).Return(nil)
+
+	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, domain.SuggestionStatusCompleted, result.Status)
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_ConfirmMatch_NotFound(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	suggestionRepo.On("GetByID", ctx, "nonexistent").Return(nil, domain.ErrTransferSuggestionNotFound)
+
+	result, err := svc.ConfirmTransferSuggestionMatch(ctx, "user-123", "nonexistent", 100.00)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Equal(t, domain.ErrTransferSuggestionNotFound, err)
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_ConfirmMatch_WrongUser(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-123"
+	suggestionID := "suggestion-123"
+
+	// Suggestion belongs to different user
+	suggestion := createTestTransferSuggestion("other-user")
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+
+	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, 100.00)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Equal(t, domain.ErrTransferSuggestionNotFound, err) // security: don't reveal existence
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_ConfirmMatch_AlreadyCompleted(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-123"
+	suggestionID := "suggestion-123"
+
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.Status = domain.SuggestionStatusCompleted
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+
+	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, 100.00)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_ConfirmMatch_AlreadyRejected(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-123"
+	suggestionID := "suggestion-123"
+
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.Status = domain.SuggestionStatusRejected
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+
+	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, 100.00)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_ConfirmMatch_AlreadyExpired(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-123"
+	suggestionID := "suggestion-123"
+
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.Status = domain.SuggestionStatusExpired
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+
+	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, 100.00)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_ConfirmMatch_RepoCompleteError(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-123"
+	suggestionID := "suggestion-123"
+
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.Status = domain.SuggestionStatusPending
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("Complete", ctx, suggestionID, "", 100.00, "user_confirmed", mock.AnythingOfType("time.Time")).Return(errors.New("db error"))
+
+	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, 100.00)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	suggestionRepo.AssertExpectations(t)
+}

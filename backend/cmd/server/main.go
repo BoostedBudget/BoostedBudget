@@ -1288,12 +1288,23 @@ func main() {
 		operations.RegisterNotificationRoutes(humaAPI, humaNotificationHandler)
 		appLogger.Info("Huma notification routes registered")
 
-		// Register Huma transfer suggestion routes (Issue #952: Notification Center)
+		// Register Huma transfer suggestion routes (Issue #952: Notification Center, #972: C3 confirm-match)
 		transferSuggestionSvc := services.NewTransferSuggestionService(transferSuggestionRepo)
 		transferSuggestionSvc.SetGDPRAnalytics(gdprClient)
-		humaTransferSuggestionHandler := operations.NewTransferSuggestionHandler(transferSuggestionSvc)
+		humaTransferSuggestionHandler := operations.NewTransferSuggestionHandler(transferSuggestionSvc,
+			operations.TransferSuggestionHandlerDeps{
+				IdempotencyRepo: humaIdempotencyRepo,
+				DB:              db,
+				MCPAuditRepo:    humaMCPAuditRepo,
+				MCPWorkerSecret: cfg.MCPWorkerSecret,
+			})
 		operations.RegisterTransferSuggestionRoutes(humaAPI, humaTransferSuggestionHandler)
 		appLogger.Info("Huma transfer suggestion routes registered")
+
+		// Register savings impact routes (Issue #972: C1 public aggregate, C2 per-user impact)
+		humaSavingsImpactHandler := operations.NewSavingsImpactHandler(repository.NewSavingsImpactRepository(db))
+		operations.RegisterSavingsImpactRoutes(humaAPI, humaSavingsImpactHandler)
+		appLogger.Info("Savings impact routes registered")
 
 		// Wire notification repo to rule execution service for suggestion notifications (Issue #952)
 		ruleExecutionService.SetNotificationRepo(notificationRepo)
