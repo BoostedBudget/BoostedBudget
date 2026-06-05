@@ -423,6 +423,10 @@ func main() {
 		ruleExecutionService.SetAnalytics(phClient)
 		appLogger.Info("Rule execution service initialized")
 
+		// Issue #972: Wire budget sync → rule engine so budget_updated events are not silently dropped.
+		// SetEventProcessor must be called after ruleExecutionService is fully initialized.
+		budgetSyncService.SetEventProcessor(ruleExecutionService)
+
 		// Issue #37: Rule Scheduler Manager with providers
 		ruleSchedulerManager = workers.NewRuleSchedulerManager(appLogger)
 

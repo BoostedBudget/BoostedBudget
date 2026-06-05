@@ -53,6 +53,19 @@ const (
 	TriggerTypeSchedule TriggerType = "schedule" // Triggered by cron schedule (Issue #37)
 )
 
+// =============================================================================
+// Event Type Constants
+// =============================================================================
+
+// Event type constants for event-triggered automation rules.
+// These are the valid values for TriggerConfig.Event when TriggerType is "event".
+// Issue #35: Rules Engine Core - budget_updated event integration.
+// Issue #972: Savings Transfer Automation - budget_period_end event.
+const (
+	EventBudgetUpdated   = "budget_updated"   // Fired when budget income/spent amounts are recalculated
+	EventBudgetPeriodEnd = "budget_period_end" // Fired when a budget period ends (for rollover/savings rules)
+)
+
 // validTriggerTypes is a set of all valid trigger types.
 var validTriggerTypes = map[TriggerType]bool{
 	TriggerTypeEvent:    true,
