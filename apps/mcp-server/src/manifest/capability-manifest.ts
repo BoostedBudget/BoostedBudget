@@ -251,10 +251,12 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // ── Transactions ────────────────────────────────────────────────────────
   read('getTransactions'),
   read('getTransactionByID'),
+  read('getTransactionReviewSummary'),
   write('updateTransactionCategory', { idempotent: true }),
   write('updateTransactionTags', { idempotent: true }),
   write('setTransactionReviewed', { idempotent: true }),
   write('bulkSetTransactionReviewed', { idempotent: true }),
+  write('bulkUpdateTransactionCategory', { idempotent: true }),
 
   // ── Transfer Suggestions ────────────────────────────────────────────────
   read('getTransferSuggestions'),

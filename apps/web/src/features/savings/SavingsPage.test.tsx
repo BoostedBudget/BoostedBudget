@@ -16,14 +16,15 @@ import {
   mockDeleteSavingsGoalMutateAsync,
 } from '@/test/mocks/savings-goals-api'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 
-const mockTrackEvent = mock(() => {})
 mock.module('@/shared/hooks/useTrackEvent', () => ({
   useTrackEvent: () => mockTrackEvent,
 }))
 
 mock.module('@/auth/ReadOnlyContext', () => ({
   useReadOnly: () => ({ isReadOnly: false }),
+  ReadOnlyProvider: ({ children }: { children: React.ReactNode }) => children,
 }))
 
 const { SavingsPage } = await import('./SavingsPage')
@@ -66,7 +67,7 @@ const completedGoal: SavingsGoal = {
 
 describe('SavingsPage', () => {
   beforeEach(() => {
-    mockTrackEvent.mockReset()
+    mockTrackEvent.mockClear()
     mockSavingsGoalsRefetch.mockClear()
     mockDeleteSavingsGoalMutateAsync.mockClear()
     mockUseGetAccounts.mockReturnValue({

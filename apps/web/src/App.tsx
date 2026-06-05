@@ -50,6 +50,9 @@ const PlaidOAuthCallback = lazy(() =>
 const TransactionsPage = lazy(() =>
   import('./features/transactions/TransactionsPage').then(m => ({ default: m.TransactionsPage }))
 )
+const ReviewInboxPage = lazy(() =>
+  import('./features/transactions/review/ReviewInboxPage').then(m => ({ default: m.ReviewInboxPage }))
+)
 const DashboardPage = lazy(() =>
   import('./features/dashboard/components/DashboardPage').then(m => ({ default: m.DashboardPage }))
 )
@@ -265,6 +268,18 @@ function App() {
                   <PremiumRoute>
                     <Suspense fallback={<PageSkeleton />}>
                       <TransactionsPage />
+                    </Suspense>
+                  </PremiumRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/review"
+              element={
+                <ProtectedRoute>
+                  <PremiumRoute>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <ReviewInboxPage />
                     </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>

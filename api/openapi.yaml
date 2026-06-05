@@ -904,6 +904,65 @@ components:
         - transaction_ids
         - reviewed
       type: object
+    BulkUpdateTransactionCategoryInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/BulkUpdateTransactionCategoryInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        custom_category_id:
+          description: Custom category UUID (required when kind=custom)
+          type: string
+        kind:
+          description: Category override kind
+          enum:
+            - pfc
+            - custom
+            - clear
+          type: string
+        pfc_detailed:
+          description: PFC detailed enum (optional when kind=pfc)
+          type: string
+        pfc_primary:
+          description: PFC primary enum (required when kind=pfc)
+          type: string
+        transaction_ids:
+          description: Transaction UUIDs to recategorize (max 500, owned by the caller)
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - transaction_ids
+        - kind
+      type: object
+    BulkUpdateTransactionCategoryOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/BulkUpdateTransactionCategoryOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        requested:
+          description: De-duplicated count of transaction IDs in the request
+          format: int64
+          type: integer
+        updated:
+          description: Number of owned transactions updated; unowned/unknown IDs are silently ignored
+          format: int64
+          type: integer
+      required:
+        - requested
+        - updated
+      type: object
     CancelDeletionResponseBody:
       additionalProperties: false
       properties:
@@ -3705,6 +3764,44 @@ components:
         - scheduled_at
         - cancellation_token
       type: object
+    ReviewSummaryResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ReviewSummaryResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        avg_ingestion_to_review_seconds:
+          format: double
+          type: number
+        reviewed_by_manual_count:
+          format: int64
+          type: integer
+        reviewed_by_plaid_count:
+          format: int64
+          type: integer
+        reviewed_by_rule_count:
+          format: int64
+          type: integer
+        top_unreviewed_categories:
+          items:
+            $ref: "#/components/schemas/TopUnreviewedCategory"
+          type:
+            - array
+            - "null"
+        unreviewed_count:
+          format: int64
+          type: integer
+      required:
+        - unreviewed_count
+        - reviewed_by_rule_count
+        - reviewed_by_manual_count
+        - reviewed_by_plaid_count
+        - top_unreviewed_categories
+      type: object
     RuleCondition:
       additionalProperties: false
       properties:
@@ -4441,6 +4538,21 @@ components:
         - date
         - start_date
         - end_date
+      type: object
+    TopUnreviewedCategory:
+      additionalProperties: false
+      properties:
+        category_key:
+          type: string
+        count:
+          format: int64
+          type: integer
+        display_name:
+          type: string
+      required:
+        - category_key
+        - display_name
+        - count
       type: object
     Transaction:
       additionalProperties: false
@@ -10139,6 +10251,13 @@ paths:
           schema:
             description: "Filter by review state: true (reviewed), false (unreviewed inbox), omit for both"
             type: string
+        - description: "Filter by category origin (comma-separated): plaid, rule, manual"
+          explode: false
+          in: query
+          name: category_source
+          schema:
+            description: "Filter by category origin (comma-separated): plaid, rule, manual"
+            type: string
         - description: Filter by minimum absolute amount
           explode: false
           in: query
@@ -10222,10 +10341,64 @@ paths:
       summary: List transactions
       tags:
         - Transactions
+  /api/v1/transactions/category:
+    put:
+      description: "Recategorizes multiple transactions for the authenticated user. Best-effort: unowned/unknown IDs are silently ignored. Returns requested (de-duplicated input count) and updated (rows changed)."
+      operationId: bulkUpdateTransactionCategory
+      parameters:
+        - description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+          in: header
+          name: X-MCP-Grant-Id
+          schema:
+            description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+            type: string
+        - description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+          in: header
+          name: X-MCP-Worker-Secret
+          schema:
+            description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkUpdateTransactionCategoryInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkUpdateTransactionCategoryOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Bulk update transaction category
+      tags:
+        - Transactions
   /api/v1/transactions/review:
     patch:
       description: Marks multiple transactions reviewed or unreviewed for the authenticated user.
       operationId: bulkSetTransactionReviewed
+      parameters:
+        - description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+          in: header
+          name: X-MCP-Grant-Id
+          schema:
+            description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+            type: string
+        - description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+          in: header
+          name: X-MCP-Worker-Secret
+          schema:
+            description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+            type: string
       requestBody:
         content:
           application/json:
@@ -10248,6 +10421,43 @@ paths:
       security:
         - clerk: []
       summary: Bulk update transaction review state
+      tags:
+        - Transactions
+  /api/v1/transactions/review-summary:
+    get:
+      description: Returns pre-computed review-state counts and top unreviewed categories. Dates are optional (all-time default). Transfers included. Designed for AI-tool consumption.
+      operationId: getTransactionReviewSummary
+      parameters:
+        - description: "Optional: scope summary to transactions on or after this date (YYYY-MM-DD)"
+          explode: false
+          in: query
+          name: start_date
+          schema:
+            description: "Optional: scope summary to transactions on or after this date (YYYY-MM-DD)"
+            type: string
+        - description: "Optional: scope summary to transactions on or before this date (YYYY-MM-DD)"
+          explode: false
+          in: query
+          name: end_date
+          schema:
+            description: "Optional: scope summary to transactions on or before this date (YYYY-MM-DD)"
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewSummaryResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get transaction review summary
       tags:
         - Transactions
   /api/v1/transactions/{id}:
@@ -10333,6 +10543,18 @@ paths:
       description: Marks a transaction reviewed or unreviewed (moves it out of / into the unreviewed inbox).
       operationId: setTransactionReviewed
       parameters:
+        - description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+          in: header
+          name: X-MCP-Grant-Id
+          schema:
+            description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+            type: string
+        - description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+          in: header
+          name: X-MCP-Worker-Secret
+          schema:
+            description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+            type: string
         - description: Transaction UUID
           in: path
           name: id
