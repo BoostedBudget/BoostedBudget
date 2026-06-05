@@ -207,6 +207,42 @@ func TestTransferSuggestionService_AcceptSuggestion_AlreadyProcessed(t *testing.
 	suggestionRepo.AssertExpectations(t)
 }
 
+// AcceptSuggestion also blocks completed and expired — these are new terminal states
+// introduced by #972 and their guard coverage is verified below.
+func TestTransferSuggestionService_AcceptSuggestion_AlreadyCompleted(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	suggestion := createTestTransferSuggestion("user-123")
+	suggestion.Status = domain.SuggestionStatusCompleted
+
+	suggestionRepo.On("GetByID", ctx, "s-1").Return(suggestion, nil)
+
+	result, err := svc.AcceptSuggestion(ctx, "user-123", "s-1", nil)
+
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_AcceptSuggestion_AlreadyExpired(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	suggestion := createTestTransferSuggestion("user-123")
+	suggestion.Status = domain.SuggestionStatusExpired
+
+	suggestionRepo.On("GetByID", ctx, "s-2").Return(suggestion, nil)
+
+	result, err := svc.AcceptSuggestion(ctx, "user-123", "s-2", nil)
+
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
+	suggestionRepo.AssertExpectations(t)
+}
+
 // =============================================================================
 // RejectSuggestion Tests
 // =============================================================================
