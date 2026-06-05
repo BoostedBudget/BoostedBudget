@@ -42,6 +42,10 @@ type BudgetRepository interface {
 	// Envelope budgeting rollover operations (Issue #36: Rule Executors)
 	// AdjustCategoryAllocatedAmount adjusts the allocated amount by delta (can be positive or negative)
 	AdjustCategoryAllocatedAmount(ctx context.Context, categoryID string, delta float64) error
+
+	// GetAllActivePaginated returns all active budgets across all users, ordered by id ASC.
+	// "Active" means is_active = true. Used by the period-close scanner (Issue #972).
+	GetAllActivePaginated(ctx context.Context, limit int, offset int) ([]*domain.Budget, error)
 }
 
 // budgetRepository implements BudgetRepository using PostgreSQL.
@@ -848,4 +852,68 @@ func (r *budgetRepository) AdjustCategoryAllocatedAmount(ctx context.Context, ca
 	}
 
 	return nil
+}
+
+// GetAllActivePaginated returns all active budgets across all users ordered by id ASC.
+// Used by the budget period-close scanner (Issue #972) to fan out across all budgets.
+func (r *budgetRepository) GetAllActivePaginated(ctx context.Context, limit int, offset int) ([]*domain.Budget, error) {
+	query := `
+		SELECT id, user_id, name, description, period, start_date, end_date,
+			amount, currency_code, is_active, created_at, updated_at,
+			income_amount, income_sources, expected_income
+		FROM budgets
+		WHERE is_active = true
+		ORDER BY id ASC
+		LIMIT $1 OFFSET $2
+	`
+
+	rows, err := r.db.Query(ctx, query, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var budgets []*domain.Budget
+	for rows.Next() {
+		budget := &domain.Budget{}
+		var incomeSourcesJSON []byte
+		err := rows.Scan(
+			&budget.ID,
+			&budget.UserID,
+			&budget.Name,
+			&budget.Description,
+			&budget.Period,
+			&budget.StartDate,
+			&budget.EndDate,
+			&budget.Amount,
+			&budget.CurrencyCode,
+			&budget.IsActive,
+			&budget.CreatedAt,
+			&budget.UpdatedAt,
+			&budget.IncomeAmount,
+			&incomeSourcesJSON,
+			&budget.ExpectedIncome,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		sources, err := unmarshalIncomeSources(incomeSourcesJSON)
+		if err != nil {
+			return nil, err
+		}
+		budget.IncomeSources = sources
+
+		budgets = append(budgets, budget)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if budgets == nil {
+		budgets = []*domain.Budget{}
+	}
+
+	return budgets, nil
 }

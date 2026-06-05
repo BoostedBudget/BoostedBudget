@@ -252,6 +252,9 @@ func main() {
 	// Issue #1015: Declare rule evaluation worker (non-Plaid)
 	var ruleEvaluationWorker *jobs.RuleEvaluationWorker
 
+	// Issue #972: Declare budget period close check worker (daily scanner, no Plaid dependency)
+	var budgetPeriodCloseCheckWorker *jobs.BudgetPeriodCloseCheckWorker
+
 	// Issue #1123: Declare effective category refresh worker
 	var effectiveCategoryRefreshWorker *jobs.EffectiveCategoryRefreshWorker
 
@@ -635,6 +638,15 @@ func main() {
 		})
 		appLogger.Info("Rule evaluation worker created (River)")
 
+		// Issue #972: Create budget period close check worker (daily scanner, no Plaid dependency)
+		budgetPeriodCloseCheckWorker = jobs.NewBudgetPeriodCloseCheckWorker(jobs.BudgetPeriodCloseCheckWorkerDeps{
+			BudgetRepo:       budgetRepo,
+			PeriodEventsRepo: repository.NewBudgetPeriodEventsRepository(db),
+			JobQueue:         nil, // Set after River client created (circular dependency)
+			Logger:           appLogger,
+		})
+		appLogger.Info("Budget period close check worker created (River)")
+
 		// Issue #1123: Create effective category refresh worker (no external dependencies)
 		effectiveCategoryRefreshWorker = jobs.NewEffectiveCategoryRefreshWorker(jobs.EffectiveCategoryRefreshWorkerDeps{
 			TransactionRepo: transactionRepo,
@@ -952,6 +964,22 @@ func main() {
 				appLogger.Info("DLQ cleanup check periodic job configured (daily)")
 			}
 
+			// Issue #972: Budget period close check (daily) — detects closed budget periods and fires events
+			if budgetPeriodCloseCheckWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.BudgetPeriodCloseCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: queue.QueueLow,
+							}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false},
+				))
+				appLogger.Info("Budget period close check periodic job configured (daily)")
+			}
+
 			// Issue #1087 R4-7: Idempotency keys cleanup (daily — deletes expired rows)
 			periodicJobs = append(periodicJobs, river.NewPeriodicJob(
 				river.PeriodicInterval(24*time.Hour),
@@ -1026,6 +1054,10 @@ func main() {
 				river.AddWorker(riverWorkers, ruleEvaluationWorker)
 				appLogger.Info("Rule evaluation worker registered with River")
 			}
+			if budgetPeriodCloseCheckWorker != nil {
+				river.AddWorker(riverWorkers, budgetPeriodCloseCheckWorker)
+				appLogger.Info("Budget period close check worker registered with River")
+			}
 			if effectiveCategoryRefreshWorker != nil {
 				river.AddWorker(riverWorkers, effectiveCategoryRefreshWorker)
 				appLogger.Info("Effective category refresh worker registered with River")
@@ -1086,6 +1118,10 @@ func main() {
 				if itemCleanupCheckWorker != nil {
 					itemCleanupCheckWorker.SetJobQueue(jobQueue)
 					appLogger.Info("Item cleanup check worker connected to job queue")
+				}
+				if budgetPeriodCloseCheckWorker != nil {
+					budgetPeriodCloseCheckWorker.SetJobQueue(jobQueue)
+					appLogger.Info("Budget period close check worker connected to job queue")
 				}
 
 				// Issue #1123: Wire job queue for async effective_category_name refresh
