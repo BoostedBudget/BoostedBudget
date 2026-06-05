@@ -212,6 +212,33 @@ func (m *mockTransferSuggestionRepository) GetByRuleID(ctx context.Context, rule
 	return result, nil
 }
 
+func (m *mockTransferSuggestionRepository) Complete(ctx context.Context, id string, matchedTransactionID string, actualAmount float64, completionSource string, completedAt time.Time) error {
+	for _, s := range m.suggestions {
+		if s.ID == id {
+			if s.Status != domain.SuggestionStatusPending && s.Status != domain.SuggestionStatusAccepted {
+				return domain.ErrTransferSuggestionAlreadyActioned
+			}
+			s.Status = domain.SuggestionStatusCompleted
+			s.MatchedTransactionID = &matchedTransactionID
+			s.ActualAmount = &actualAmount
+			s.CompletionSource = &completionSource
+			s.CompletedAt = &completedAt
+			return nil
+		}
+	}
+	return domain.ErrTransferSuggestionNotFound
+}
+
+func (m *mockTransferSuggestionRepository) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error) {
+	var result []*domain.TransferSuggestion
+	for _, s := range m.suggestions {
+		if s.UserID == userID && (s.Status == domain.SuggestionStatusPending || s.Status == domain.SuggestionStatusAccepted) {
+			result = append(result, s)
+		}
+	}
+	return result, nil
+}
+
 // TestConditionEvaluation tests the condition matching logic.
 func TestConditionEvaluation(t *testing.T) {
 	t.Run("evaluates equals operator", func(t *testing.T) {
@@ -1615,4 +1642,128 @@ func TestTestRule_PFCConditionPopulatesDisplay(t *testing.T) {
 	require.Len(t, result.ConditionResults, 1)
 	assert.Equal(t, "Food And Drink", result.ConditionResults[0].ValueDisplay)
 	assert.Equal(t, "Food And Drink", result.ConditionResults[0].ActualDisplay)
+}
+
+// TestRuleExecutionService_ExpiresAt verifies that suggestions created by
+// executeTransferSuggestion and executeSavingsGoal have ExpiresAt set ~30 days
+// in the future.
+func TestRuleExecutionService_ExpiresAt(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-expires"
+
+	t.Run("transfer suggestion has ExpiresAt ~30 days in future", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+
+		service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+		actions := RuleActions{
+			Transfer: &domain.TransferAction{
+				FromAccountID: "account-from",
+				ToAccountID:   "account-to",
+				AmountType:    "fixed",
+				Amount:        100.0,
+			},
+		}
+		actionsJSON, _ := json.Marshal(actions)
+
+		rule := &domain.AutomationRule{
+			ID:       "rule-expires-test",
+			UserID:   userID,
+			Name:     "Transfer Rule",
+			Enabled:  true,
+			Priority: 1,
+			RuleType: domain.RuleTypeTransferSuggestion,
+			TriggerConfig: domain.TriggerConfig{
+				Type:  domain.TriggerTypeEvent,
+				Event: "transaction_created",
+			},
+			Conditions:     []domain.AutomationRuleCondition{},
+			ConditionLogic: "AND",
+			Actions:        actionsJSON,
+		}
+
+		before := time.Now().UTC()
+		_, err := service.ExecuteRule(ctx, rule, map[string]interface{}{"amount": 100.0})
+		after := time.Now().UTC()
+
+		require.NoError(t, err)
+		require.Len(t, suggestionRepo.suggestions, 1)
+
+		suggestion := suggestionRepo.suggestions[0]
+		require.NotNil(t, suggestion.ExpiresAt, "ExpiresAt must be set for transfer suggestions")
+
+		expectedLow := before.Add(29 * 24 * time.Hour)
+		expectedHigh := after.Add(31 * 24 * time.Hour)
+		assert.True(t, suggestion.ExpiresAt.After(expectedLow),
+			"ExpiresAt %v should be after %v", *suggestion.ExpiresAt, expectedLow)
+		assert.True(t, suggestion.ExpiresAt.Before(expectedHigh),
+			"ExpiresAt %v should be before %v", *suggestion.ExpiresAt, expectedHigh)
+	})
+
+	t.Run("savings goal suggestion has ExpiresAt ~30 days in future", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+
+		// Build a mock savings goal repo that returns a goal.
+		mockGoalRepo := &mockSavingsGoalRepository{}
+		goalID := "goal-1"
+		accountID := "savings-account"
+		mockGoalRepo.goals = []*domain.SavingsGoal{
+			{
+				ID:        goalID,
+				Name:      "Vacation Fund",
+				AccountID: accountID,
+				UserID:    userID,
+			},
+		}
+
+		service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+		service.SetSavingsGoalRepo(mockGoalRepo)
+
+		actions := RuleActions{
+			SavingsGoal: &domain.SavingsGoalAction{
+				SavingsGoalID: goalID,
+				FromAccountID: "checking-account",
+				AmountType:    "fixed",
+				Amount:        50.0,
+			},
+		}
+		actionsJSON, _ := json.Marshal(actions)
+
+		rule := &domain.AutomationRule{
+			ID:       "rule-savings-expires",
+			UserID:   userID,
+			Name:     "Savings Goal Rule",
+			Enabled:  true,
+			Priority: 1,
+			RuleType: domain.RuleTypeSavingsGoal,
+			TriggerConfig: domain.TriggerConfig{
+				Type:  domain.TriggerTypeEvent,
+				Event: "transaction_created",
+			},
+			Conditions:     []domain.AutomationRuleCondition{},
+			ConditionLogic: "AND",
+			Actions:        actionsJSON,
+		}
+
+		before := time.Now().UTC()
+		_, err := service.ExecuteRule(ctx, rule, map[string]interface{}{"amount": 50.0})
+		after := time.Now().UTC()
+
+		require.NoError(t, err)
+		require.Len(t, suggestionRepo.suggestions, 1)
+
+		suggestion := suggestionRepo.suggestions[0]
+		require.NotNil(t, suggestion.ExpiresAt, "ExpiresAt must be set for savings goal suggestions")
+
+		expectedLow := before.Add(29 * 24 * time.Hour)
+		expectedHigh := after.Add(31 * 24 * time.Hour)
+		assert.True(t, suggestion.ExpiresAt.After(expectedLow),
+			"ExpiresAt %v should be after %v", *suggestion.ExpiresAt, expectedLow)
+		assert.True(t, suggestion.ExpiresAt.Before(expectedHigh),
+			"ExpiresAt %v should be before %v", *suggestion.ExpiresAt, expectedHigh)
+	})
 }

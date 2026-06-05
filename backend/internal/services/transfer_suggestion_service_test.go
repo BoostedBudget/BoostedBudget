@@ -79,6 +79,19 @@ func (m *mockTransferSuggestionRepo) GetByRuleID(ctx context.Context, ruleID str
 	return args.Get(0).([]*domain.TransferSuggestion), args.Error(1)
 }
 
+func (m *mockTransferSuggestionRepo) Complete(ctx context.Context, id string, matchedTransactionID string, actualAmount float64, completionSource string, completedAt time.Time) error {
+	args := m.Called(ctx, id, matchedTransactionID, actualAmount, completionSource, completedAt)
+	return args.Error(0)
+}
+
+func (m *mockTransferSuggestionRepo) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.TransferSuggestion), args.Error(1)
+}
+
 // =============================================================================
 // Test Helpers
 // =============================================================================
