@@ -1301,10 +1301,6 @@ func main() {
 		operations.RegisterTransferSuggestionRoutes(humaAPI, humaTransferSuggestionHandler)
 		appLogger.Info("Huma transfer suggestion routes registered")
 
-		// Register savings impact routes (Issue #972: C1 public aggregate, C2 per-user impact)
-		humaSavingsImpactHandler := operations.NewSavingsImpactHandler(repository.NewSavingsImpactRepository(db))
-		operations.RegisterSavingsImpactRoutes(humaAPI, humaSavingsImpactHandler)
-		appLogger.Info("Savings impact routes registered")
 
 		// Wire notification repo to rule execution service for suggestion notifications (Issue #952)
 		ruleExecutionService.SetNotificationRepo(notificationRepo)
@@ -1419,6 +1415,14 @@ func main() {
 		// email fallback that the Huma middleware provides).
 
 		appLogger.Info("Authenticated routes enabled (Clerk + Database)")
+	}
+
+	// Issue #972: Savings impact routes (public aggregate + per-user) require DB but NOT Clerk,
+	// so they are registered in their own if db != nil block rather than the Clerk-gated block.
+	if db != nil {
+		humaSavingsImpactHandler := operations.NewSavingsImpactHandler(repository.NewSavingsImpactRepository(db))
+		operations.RegisterSavingsImpactRoutes(humaAPI, humaSavingsImpactHandler)
+		appLogger.Info("Savings impact routes registered")
 	}
 
 	// Plaid webhook endpoint (public - no auth required) - Migrated to Huma (Issue #559)

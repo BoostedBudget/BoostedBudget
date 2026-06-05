@@ -334,6 +334,46 @@ func TestConfirmTransferSuggestionMatch_NotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
+// TestConfirmTransferSuggestionMatch_MCPGuardFallthrough verifies that when
+// X-MCP-Worker-Secret is set but db is nil (or mcpAuditRepo is nil), the
+// handler falls through to the non-MCP path and still calls the service.
+// This covers the IsMCPOrigin guard logic (lines 166+ in transfer_suggestion.go).
+func TestConfirmTransferSuggestionMatch_MCPGuardFallthrough(t *testing.T) {
+	userID := "user-mcp"
+	suggestionID := "s-mcp-001"
+	actualAmount := 200.00
+	mcpWorkerSecret := "test-secret"
+
+	completed := newTestSuggestionItem(suggestionID, userID)
+	completed.Status = domain.SuggestionStatusCompleted
+	completed.ActualAmount = &actualAmount
+
+	svc := &mockTransferSuggestionService{
+		confirmMatchResult: completed,
+	}
+
+	// Handler with MCPWorkerSecret but nil db/mcpAuditRepo — MCP guard evaluates false,
+	// falls through to non-MCP path.
+	handler := NewTransferSuggestionHandler(svc, TransferSuggestionHandlerDeps{
+		MCPWorkerSecret: mcpWorkerSecret,
+		// DB and MCPAuditRepo intentionally nil
+	})
+
+	input := &ConfirmTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		MCPContextInput:    inputs.MCPContextInput{MCPWorkerSecret: mcpWorkerSecret},
+		ID:                 suggestionID,
+		Body:               ConfirmMatchBody{ActualAmount: actualAmount},
+	}
+
+	output, err := handler.ConfirmMatch(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "Transfer suggestion confirmed", output.Body.Message)
+	assert.Equal(t, domain.SuggestionStatusCompleted, output.Body.Suggestion.Status)
+}
+
 // =============================================================================
 // Route Registration Test
 // =============================================================================
