@@ -205,6 +205,50 @@ func TestUpdatePrivacySettingsRequest_ApplyTo(t *testing.T) {
 	}
 }
 
+// TestPrivacySettings_IncludeInAggregateStats tests that the IncludeInAggregateStats flag
+// defaults to true (opt-out model) and can be toggled via ApplyTo.
+func TestPrivacySettings_IncludeInAggregateStats(t *testing.T) {
+	t.Run("NewPrivacySettings defaults to true", func(t *testing.T) {
+		settings := NewPrivacySettings("user-aggregate-test")
+		if !settings.IncludeInAggregateStats {
+			t.Error("IncludeInAggregateStats should default to true (opt-out model)")
+		}
+	})
+
+	t.Run("ApplyTo sets false when requested", func(t *testing.T) {
+		settings := NewPrivacySettings("user-aggregate-test")
+		req := &UpdatePrivacySettingsRequest{
+			IncludeInAggregateStats: boolPtr(false),
+		}
+		req.ApplyTo(settings)
+		if settings.IncludeInAggregateStats {
+			t.Error("IncludeInAggregateStats should be set to false after ApplyTo")
+		}
+	})
+
+	t.Run("ApplyTo sets true when requested", func(t *testing.T) {
+		settings := NewPrivacySettings("user-aggregate-test")
+		// First turn off
+		offReq := &UpdatePrivacySettingsRequest{IncludeInAggregateStats: boolPtr(false)}
+		offReq.ApplyTo(settings)
+		// Then turn back on
+		onReq := &UpdatePrivacySettingsRequest{IncludeInAggregateStats: boolPtr(true)}
+		onReq.ApplyTo(settings)
+		if !settings.IncludeInAggregateStats {
+			t.Error("IncludeInAggregateStats should be set to true after ApplyTo(true)")
+		}
+	})
+
+	t.Run("ApplyTo nil leaves field unchanged", func(t *testing.T) {
+		settings := NewPrivacySettings("user-aggregate-test")
+		req := &UpdatePrivacySettingsRequest{} // IncludeInAggregateStats nil
+		req.ApplyTo(settings)
+		if !settings.IncludeInAggregateStats {
+			t.Error("IncludeInAggregateStats should remain true when not in update request")
+		}
+	})
+}
+
 // Helper function to create bool pointers for tests
 func boolPtr(b bool) *bool {
 	return &b
