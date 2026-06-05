@@ -163,7 +163,14 @@ BEGIN
     END IF;
 END $$;
 
-ALTER TABLE transfer_suggestions VALIDATE CONSTRAINT fk_transfer_sugg_matched_txn;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'fk_transfer_sugg_matched_txn'
+    ) THEN
+        ALTER TABLE transfer_suggestions VALIDATE CONSTRAINT fk_transfer_sugg_matched_txn;
+    END IF;
+END $$;
 
 -- =============================================================================
 -- Step 8: Partial unique index on matched_transaction_id
