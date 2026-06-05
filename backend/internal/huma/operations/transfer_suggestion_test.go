@@ -19,12 +19,14 @@ import (
 // =============================================================================
 
 type mockTransferSuggestionService struct {
-	getPendingResult []*domain.TransferSuggestion
-	getPendingErr    error
-	acceptResult     *domain.TransferSuggestion
-	acceptErr        error
-	rejectResult     *domain.TransferSuggestion
-	rejectErr        error
+	getPendingResult   []*domain.TransferSuggestion
+	getPendingErr      error
+	acceptResult       *domain.TransferSuggestion
+	acceptErr          error
+	rejectResult       *domain.TransferSuggestion
+	rejectErr          error
+	confirmMatchResult *domain.TransferSuggestion
+	confirmMatchErr    error
 }
 
 func (m *mockTransferSuggestionService) GetPendingSuggestions(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error) {
@@ -37,6 +39,10 @@ func (m *mockTransferSuggestionService) AcceptSuggestion(ctx context.Context, us
 
 func (m *mockTransferSuggestionService) RejectSuggestion(ctx context.Context, userID, suggestionID string, notes *string) (*domain.TransferSuggestion, error) {
 	return m.rejectResult, m.rejectErr
+}
+
+func (m *mockTransferSuggestionService) ConfirmTransferSuggestionMatch(ctx context.Context, userID, suggestionID string, actualAmount float64) (*domain.TransferSuggestion, error) {
+	return m.confirmMatchResult, m.confirmMatchErr
 }
 
 // =============================================================================
@@ -252,6 +258,80 @@ func TestRejectTransferSuggestion_AlreadyActioned(t *testing.T) {
 	require.Error(t, err)
 	// Huma wraps the error as a 409 Conflict; message contains "already".
 	assert.Contains(t, err.Error(), "already")
+}
+
+// =============================================================================
+// C3: ConfirmTransferSuggestionMatch Tests
+// =============================================================================
+
+func TestConfirmTransferSuggestionMatch_Success(t *testing.T) {
+	userID := "user-123"
+	suggestionID := "s-456"
+	actualAmount := 150.00
+
+	completed := newTestSuggestionItem(suggestionID, userID)
+	completed.Status = domain.SuggestionStatusCompleted
+	completed.ActualAmount = &actualAmount
+
+	svc := &mockTransferSuggestionService{
+		confirmMatchResult: completed,
+	}
+
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &ConfirmTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 suggestionID,
+		Body:               ConfirmMatchBody{ActualAmount: actualAmount},
+	}
+
+	output, err := handler.ConfirmMatch(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "Transfer suggestion confirmed", output.Body.Message)
+	assert.Equal(t, suggestionID, output.Body.Suggestion.ID)
+	assert.Equal(t, domain.SuggestionStatusCompleted, output.Body.Suggestion.Status)
+}
+
+func TestConfirmTransferSuggestionMatch_AlreadyActioned(t *testing.T) {
+	svc := &mockTransferSuggestionService{
+		confirmMatchErr: domain.ErrTransferSuggestionAlreadyActioned,
+	}
+
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &ConfirmTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "s-789",
+		Body:               ConfirmMatchBody{ActualAmount: 100.00},
+	}
+
+	output, err := handler.ConfirmMatch(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already")
+}
+
+func TestConfirmTransferSuggestionMatch_NotFound(t *testing.T) {
+	svc := &mockTransferSuggestionService{
+		confirmMatchErr: domain.ErrTransferSuggestionNotFound,
+	}
+
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &ConfirmTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "nonexistent",
+		Body:               ConfirmMatchBody{ActualAmount: 100.00},
+	}
+
+	output, err := handler.ConfirmMatch(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
 }
 
 // =============================================================================
