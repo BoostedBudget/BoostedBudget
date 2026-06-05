@@ -365,6 +365,14 @@ func (m *MockNotificationRepositoryForItemError) MarkAllAsRead(ctx context.Conte
 	return args.Get(0).(int64), args.Error(1)
 }
 
+func (m *MockNotificationRepositoryForItemError) GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string) (*domain.Notification, error) {
+	args := m.Called(ctx, transferSuggestionID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Notification), args.Error(1)
+}
+
 // ============================================================================
 // HandleError Tests
 // ============================================================================

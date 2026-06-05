@@ -173,6 +173,12 @@ type TransactionRepository interface {
 		cursor *domain.TransactionCursor,
 		limit int,
 	) ([]domain.Transaction, *domain.TransactionCursor, error)
+
+	// GetRecentInflowsByUserID returns posted (non-pending) inflow transactions
+	// (amount < 0 under PFCv2) for a user with a date on or after since.
+	// Used by TransferCorrelationService to match transfer suggestions.
+	// Issue #972: Savings transfer automation.
+	GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -2069,4 +2075,49 @@ func effDateStr(tx domain.Transaction) string {
 		return tx.AuthorizedDate.Format(time.DateOnly)
 	}
 	return tx.Date.Format(time.DateOnly)
+}
+
+// GetRecentInflowsByUserID returns posted (non-pending) inflow transactions
+// (amount < 0 under PFCv2) for a user with a date on or after since.
+// Only the fields required for correlation matching are populated.
+// Issue #972: Savings transfer automation.
+func (r *transactionRepository) GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error) {
+	query := `
+		SELECT id, user_id, account_id, user_account_id, amount, date, pending
+		FROM transactions
+		WHERE user_id = $1
+		  AND amount < 0
+		  AND pending = false
+		  AND date >= $2
+		ORDER BY date ASC
+	`
+
+	rows, err := r.db.Query(ctx, query, userID, since)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query recent inflow transactions: %w", err)
+	}
+	defer rows.Close()
+
+	var transactions []*domain.Transaction
+	for rows.Next() {
+		var tx domain.Transaction
+		if err := rows.Scan(
+			&tx.ID,
+			&tx.UserID,
+			&tx.AccountID,
+			&tx.UserAccountID,
+			&tx.Amount,
+			&tx.Date,
+			&tx.Pending,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan inflow transaction: %w", err)
+		}
+		transactions = append(transactions, &tx)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating inflow transactions: %w", err)
+	}
+
+	return transactions, nil
 }
