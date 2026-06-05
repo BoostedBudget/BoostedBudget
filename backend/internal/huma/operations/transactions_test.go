@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
@@ -21,18 +24,20 @@ import (
 
 // mockTransactionService is a mock implementation of services.TransactionService
 type mockTransactionService struct {
-	listResponse      *services.TransactionListResponse
-	listErr           error
-	transaction       *domain.Transaction
-	getErr            error
-	updateTagsErr     error
-	updateCategoryErr error
-	categories        []string
-	categoriesErr     error
-	capturedFilters   domain.TransactionFilters
-	capturedCursor    *domain.TransactionCursor
-	capturedLimit     int
-	setReviewedFn     func(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error)
+	listResponse         *services.TransactionListResponse
+	listErr              error
+	transaction          *domain.Transaction
+	getErr               error
+	updateTagsErr        error
+	updateCategoryErr    error
+	categories           []string
+	categoriesErr        error
+	capturedFilters      domain.TransactionFilters
+	capturedCursor       *domain.TransactionCursor
+	capturedLimit        int
+	setReviewedFn        func(ctx context.Context, userID string, transactionIDs []string, reviewed bool) (int64, error)
+	bulkUpdateCategoryFn func(ctx context.Context, userID string, ids []string, kind string, pfcPrimary, pfcDetailed, customCategoryID *string) (int64, error)
+	reviewSummaryFn      func(ctx context.Context, userID string, filters domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error)
 }
 
 func (m *mockTransactionService) ListTransactions(
@@ -91,6 +96,24 @@ func (m *mockTransactionService) SetReviewed(ctx context.Context, userID string,
 		return m.setReviewedFn(ctx, userID, transactionIDs, reviewed)
 	}
 	return int64(len(transactionIDs)), nil
+}
+
+func (m *mockTransactionService) BulkUpdateTransactionCategory(ctx context.Context, userID string, ids []string, kind string, pfcPrimary, pfcDetailed, customCategoryID *string) (int64, error) {
+	if m.bulkUpdateCategoryFn != nil {
+		return m.bulkUpdateCategoryFn(ctx, userID, ids, kind, pfcPrimary, pfcDetailed, customCategoryID)
+	}
+	return int64(len(ids)), nil
+}
+
+func (m *mockTransactionService) GetReviewSummary(ctx context.Context, userID string, filters domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error) {
+	if m.reviewSummaryFn != nil {
+		return m.reviewSummaryFn(ctx, userID, filters)
+	}
+	return &domain.ReviewSummaryResponse{TopUnreviewedCategories: []domain.TopUnreviewedCategory{}}, nil
+}
+
+func (m *mockTransactionService) SetAnalytics(_ phclient.Analytics) {
+	// no-op in tests
 }
 
 func (m *mockTransactionService) ListTransactionsByCursor(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) (*services.TransactionListResponse, error) {
@@ -1187,4 +1210,508 @@ func TestGetTransactions_OldOffsetParamSilentlyIgnored(t *testing.T) {
 	assert.NotContains(t, body, "unknown query parameter")
 	assert.NotContains(t, body, "unexpected query parameter")
 	assert.NotContains(t, body, "\"offset\"")
+}
+
+// TestGetTransactions_CategorySourceFilterParsing verifies that the category_source query
+// parameter is parsed into the correct slice on capturedFilters.CategorySources (Issue #1210).
+func TestGetTransactions_CategorySourceFilterParsing(t *testing.T) {
+	userID := "user-123"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.Transaction{},
+			Limit:        50,
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		CategorySources:       "plaid,rule",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, []string{"plaid", "rule"}, mockService.capturedFilters.CategorySources)
+}
+
+// TestGetTransactions_CategorySourceSingleValue verifies a single category_source value parses correctly.
+func TestGetTransactions_CategorySourceSingleValue(t *testing.T) {
+	userID := "user-123"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.Transaction{},
+			Limit:        50,
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		CategorySources:       "manual",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, []string{"manual"}, mockService.capturedFilters.CategorySources)
+}
+
+// TestGetTransactions_InvalidCategorySource verifies that an unknown token returns 400 (Issue #1210).
+func TestGetTransactions_InvalidCategorySource(t *testing.T) {
+	mockService := &mockTransactionService{}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: "user-123"},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		CategorySources:       "plaid,bogus",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Invalid category_source")
+}
+
+// TestGetTransactions_EmptyCategorySource verifies that an empty category_source is ignored (no filter set).
+func TestGetTransactions_EmptyCategorySource(t *testing.T) {
+	userID := "user-123"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.Transaction{},
+			Limit:        50,
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		CategorySources:       "",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Empty(t, mockService.capturedFilters.CategorySources)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BulkUpdateTransactionCategory tests (Issue #1210)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestBulkUpdateTransactionCategory_Success verifies the happy path: valid pfc kind returns
+// {requested, updated} with the correct values.
+func TestBulkUpdateTransactionCategory_Success(t *testing.T) {
+	userID := "user-123"
+	var gotIDs []string
+	var gotKind string
+	mockService := &mockTransactionService{
+		bulkUpdateCategoryFn: func(_ context.Context, _ string, ids []string, kind string, _, _, _ *string) (int64, error) {
+			gotIDs = ids
+			gotKind = kind
+			return int64(len(ids)), nil
+		},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	pfcPrimary := "FOOD_AND_DRINK"
+	input := &BulkUpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+	}
+	input.Body.TransactionIDs = []string{"tx-1", "tx-2"}
+	input.Body.Kind = "pfc"
+	input.Body.PFCPrimary = &pfcPrimary
+
+	output, err := handler.BulkUpdateTransactionCategory(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, int64(2), output.Body.Requested)
+	assert.Equal(t, int64(2), output.Body.Updated)
+	assert.Equal(t, []string{"tx-1", "tx-2"}, gotIDs)
+	assert.Equal(t, "pfc", gotKind)
+}
+
+// TestBulkUpdateTransactionCategory_DeduplicatesIDs verifies duplicate ids are de-duped in
+// the requested count but only unique ids are forwarded to the service.
+func TestBulkUpdateTransactionCategory_DeduplicatesIDs(t *testing.T) {
+	var gotIDs []string
+	mockService := &mockTransactionService{
+		bulkUpdateCategoryFn: func(_ context.Context, _ string, ids []string, _ string, _, _, _ *string) (int64, error) {
+			gotIDs = ids
+			return int64(len(ids)), nil
+		},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	pfcPrimary := "FOOD_AND_DRINK"
+	input := &BulkUpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body.TransactionIDs = []string{"tx-1", "tx-2", "tx-1"} // tx-1 duplicated
+	input.Body.Kind = "pfc"
+	input.Body.PFCPrimary = &pfcPrimary
+
+	output, err := handler.BulkUpdateTransactionCategory(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, int64(2), output.Body.Requested, "requested should count unique ids")
+	assert.Len(t, gotIDs, 2, "service should receive de-duplicated ids")
+}
+
+// TestBulkUpdateTransactionCategory_EmptyIDs tests a 400 when no transaction ids are given.
+func TestBulkUpdateTransactionCategory_EmptyIDs(t *testing.T) {
+	handler := NewTransactionHandler(&mockTransactionService{})
+	input := &BulkUpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body.TransactionIDs = []string{}
+	input.Body.Kind = "pfc"
+
+	output, err := handler.BulkUpdateTransactionCategory(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "transaction_ids must not be empty")
+}
+
+// TestBulkUpdateTransactionCategory_OverLimit tests a 400 when more than 500 ids are given.
+func TestBulkUpdateTransactionCategory_OverLimit(t *testing.T) {
+	handler := NewTransactionHandler(&mockTransactionService{})
+	ids := make([]string, 501)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("tx-%d", i)
+	}
+	input := &BulkUpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body.TransactionIDs = ids
+	input.Body.Kind = "pfc"
+
+	output, err := handler.BulkUpdateTransactionCategory(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "500")
+}
+
+// TestBulkUpdateTransactionCategory_CustomMissingID validates kind=custom requires custom_category_id.
+func TestBulkUpdateTransactionCategory_CustomMissingID(t *testing.T) {
+	handler := NewTransactionHandler(&mockTransactionService{})
+	input := &BulkUpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body.TransactionIDs = []string{"tx-1"}
+	input.Body.Kind = "custom"
+
+	output, err := handler.BulkUpdateTransactionCategory(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "custom_category_id is required")
+}
+
+// TestBulkUpdateTransactionCategory_PFCMissingPrimary validates kind=pfc requires pfc_primary.
+func TestBulkUpdateTransactionCategory_PFCMissingPrimary(t *testing.T) {
+	handler := NewTransactionHandler(&mockTransactionService{})
+	input := &BulkUpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body.TransactionIDs = []string{"tx-1"}
+	input.Body.Kind = "pfc"
+
+	output, err := handler.BulkUpdateTransactionCategory(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pfc_primary is required")
+}
+
+// TestBulkUpdateTransactionCategory_ClearSucceeds verifies kind=clear with no override fields is accepted.
+func TestBulkUpdateTransactionCategory_ClearSucceeds(t *testing.T) {
+	mockService := &mockTransactionService{
+		bulkUpdateCategoryFn: func(_ context.Context, _ string, ids []string, _ string, _, _, _ *string) (int64, error) {
+			return int64(len(ids)), nil
+		},
+	}
+	handler := NewTransactionHandler(mockService)
+	input := &BulkUpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body.TransactionIDs = []string{"tx-1"}
+	input.Body.Kind = "clear"
+
+	output, err := handler.BulkUpdateTransactionCategory(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+}
+
+// TestBulkUpdateTransactionCategory_MCPOriginWritesAudit verifies the MCP-origin path
+// records exactly one audit entry (Issue #1210).
+func TestBulkUpdateTransactionCategory_MCPOriginWritesAudit(t *testing.T) {
+	const workerSecret = "test-bulk-cat-secret"
+	auditRepo := &mockMCPAuditRepository{}
+	pfcPrimary := "FOOD_AND_DRINK"
+	mockService := &mockTransactionService{
+		bulkUpdateCategoryFn: func(_ context.Context, _ string, ids []string, _ string, _, _, _ *string) (int64, error) {
+			return int64(len(ids)), nil
+		},
+	}
+	handler := NewTransactionHandler(mockService, TransactionHandlerDeps{
+		MCPAuditRepo:    auditRepo,
+		MCPWorkerSecret: workerSecret,
+	})
+
+	input := &BulkUpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-mcp"},
+		MCPContextInput:    inputs.MCPContextInput{MCPGrantID: "grant-bulk", MCPWorkerSecret: workerSecret},
+	}
+	input.Body.TransactionIDs = []string{"tx-1"}
+	input.Body.Kind = "pfc"
+	input.Body.PFCPrimary = &pfcPrimary
+
+	_, err := handler.BulkUpdateTransactionCategory(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, auditRepo.recordedEntry, "should record an MCP audit entry")
+	assert.Equal(t, "bulkUpdateTransactionCategory", auditRepo.recordedEntry.OperationID)
+	assert.Equal(t, "write", auditRepo.recordedEntry.OperationClass)
+	assert.Equal(t, "grant-bulk", auditRepo.recordedEntry.GrantID)
+}
+
+// TestBulkUpdateTransactionCategory_NonMCPNoAudit verifies that a non-MCP-origin call does
+// not write an MCP audit entry.
+func TestBulkUpdateTransactionCategory_NonMCPNoAudit(t *testing.T) {
+	const workerSecret = "test-bulk-cat-secret-2"
+	auditRepo := &mockMCPAuditRepository{}
+	pfcPrimary := "FOOD_AND_DRINK"
+	mockService := &mockTransactionService{
+		bulkUpdateCategoryFn: func(_ context.Context, _ string, ids []string, _ string, _, _, _ *string) (int64, error) {
+			return int64(len(ids)), nil
+		},
+	}
+	handler := NewTransactionHandler(mockService, TransactionHandlerDeps{
+		MCPAuditRepo:    auditRepo,
+		MCPWorkerSecret: workerSecret,
+	})
+
+	// No MCPContextInput / wrong secret
+	input := &BulkUpdateTransactionCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-regular"},
+	}
+	input.Body.TransactionIDs = []string{"tx-1"}
+	input.Body.Kind = "pfc"
+	input.Body.PFCPrimary = &pfcPrimary
+
+	_, err := handler.BulkUpdateTransactionCategory(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Nil(t, auditRepo.recordedEntry, "non-MCP call must not write audit entry")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GetTransactionReviewSummary tests (Issue #1210)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestGetTransactionReviewSummary_Success verifies the happy path: the handler
+// calls the service and returns the structured summary.
+func TestGetTransactionReviewSummary_Success(t *testing.T) {
+	userID := "user-rs-1"
+	pfcKey := "FOOD_AND_DRINK"
+	pfcDisplay := "Food and Drink"
+	avgSec := 3600.0
+	summary := &domain.ReviewSummaryResponse{
+		UnreviewedCount:        5,
+		ReviewedByRuleCount:    10,
+		ReviewedByManualCount:  3,
+		ReviewedByPlaidCount:   2,
+		AvgIngestionToReviewSec: &avgSec,
+		TopUnreviewedCategories: []domain.TopUnreviewedCategory{
+			{CategoryKey: pfcKey, DisplayName: pfcDisplay, Count: 5},
+		},
+	}
+	mockService := &mockTransactionService{
+		reviewSummaryFn: func(_ context.Context, _ string, _ domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error) {
+			return summary, nil
+		},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionReviewSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+	}
+
+	output, err := handler.GetTransactionReviewSummary(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, int64(5), output.Body.UnreviewedCount)
+	assert.Equal(t, int64(10), output.Body.ReviewedByRuleCount)
+	assert.Equal(t, int64(3), output.Body.ReviewedByManualCount)
+	assert.Equal(t, int64(2), output.Body.ReviewedByPlaidCount)
+	require.NotNil(t, output.Body.AvgIngestionToReviewSec)
+	assert.InDelta(t, 3600.0, *output.Body.AvgIngestionToReviewSec, 0.001)
+	require.Len(t, output.Body.TopUnreviewedCategories, 1)
+	assert.Equal(t, pfcKey, output.Body.TopUnreviewedCategories[0].CategoryKey)
+}
+
+// TestGetTransactionReviewSummary_ServiceError verifies that a service error maps to 500.
+func TestGetTransactionReviewSummary_ServiceError(t *testing.T) {
+	mockService := &mockTransactionService{
+		reviewSummaryFn: func(_ context.Context, _ string, _ domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error) {
+			return nil, errors.New("db error")
+		},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionReviewSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-err"},
+	}
+
+	output, err := handler.GetTransactionReviewSummary(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// TestGetTransactionReviewSummary_ZeroRows verifies the handler returns a valid empty-counts
+// response when the service returns a zeroed summary (no transactions).
+func TestGetTransactionReviewSummary_ZeroRows(t *testing.T) {
+	mockService := &mockTransactionService{
+		reviewSummaryFn: func(_ context.Context, _ string, _ domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error) {
+			return &domain.ReviewSummaryResponse{
+				TopUnreviewedCategories: []domain.TopUnreviewedCategory{},
+			}, nil
+		},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionReviewSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-zero"},
+	}
+
+	output, err := handler.GetTransactionReviewSummary(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, int64(0), output.Body.UnreviewedCount)
+	assert.Empty(t, output.Body.TopUnreviewedCategories)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP audit on review toggles (Issue #1210 Slice 5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestSetTransactionReviewed_MCPOriginWritesAudit verifies that SetTransactionReviewed
+// records an MCP audit entry when called from an MCP origin.
+func TestSetTransactionReviewed_MCPOriginWritesAudit(t *testing.T) {
+	const workerSecret = "test-review-mcp-secret"
+	auditRepo := &mockMCPAuditRepository{}
+	mockService := &mockTransactionService{
+		setReviewedFn: func(_ context.Context, _ string, _ []string, _ bool) (int64, error) {
+			return 1, nil
+		},
+	}
+	handler := NewTransactionHandler(mockService, TransactionHandlerDeps{
+		MCPAuditRepo:    auditRepo,
+		MCPWorkerSecret: workerSecret,
+	})
+
+	input := &SetTransactionReviewedInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-mcp-review"},
+		MCPContextInput:    inputs.MCPContextInput{MCPGrantID: "grant-review", MCPWorkerSecret: workerSecret},
+	}
+	input.ID = "tx-1"
+	input.Body.Reviewed = true
+
+	_, err := handler.SetTransactionReviewed(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, auditRepo.recordedEntry, "should record an MCP audit entry")
+	assert.Equal(t, "setTransactionReviewed", auditRepo.recordedEntry.OperationID)
+	assert.Equal(t, "write", auditRepo.recordedEntry.OperationClass)
+}
+
+// TestSetTransactionReviewed_NonMCPNoAudit verifies no audit is written for non-MCP calls.
+func TestSetTransactionReviewed_NonMCPNoAudit(t *testing.T) {
+	const workerSecret = "test-review-mcp-secret-2"
+	auditRepo := &mockMCPAuditRepository{}
+	handler := NewTransactionHandler(&mockTransactionService{}, TransactionHandlerDeps{
+		MCPAuditRepo:    auditRepo,
+		MCPWorkerSecret: workerSecret,
+	})
+
+	input := &SetTransactionReviewedInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-regular"},
+	}
+	input.ID = "tx-1"
+	input.Body.Reviewed = true
+
+	_, err := handler.SetTransactionReviewed(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Nil(t, auditRepo.recordedEntry, "non-MCP call must not write audit entry")
+}
+
+// TestBulkSetTransactionReviewed_MCPOriginWritesAudit verifies MCP audit for bulk review.
+func TestBulkSetTransactionReviewed_MCPOriginWritesAudit(t *testing.T) {
+	const workerSecret = "test-bulk-review-mcp-secret"
+	auditRepo := &mockMCPAuditRepository{}
+	mockService := &mockTransactionService{
+		setReviewedFn: func(_ context.Context, _ string, _ []string, _ bool) (int64, error) {
+			return 2, nil
+		},
+	}
+	handler := NewTransactionHandler(mockService, TransactionHandlerDeps{
+		MCPAuditRepo:    auditRepo,
+		MCPWorkerSecret: workerSecret,
+	})
+
+	input := &BulkSetTransactionReviewedInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-mcp-bulk-review"},
+		MCPContextInput:    inputs.MCPContextInput{MCPGrantID: "grant-bulk-review", MCPWorkerSecret: workerSecret},
+	}
+	input.Body.TransactionIDs = []string{"tx-1", "tx-2"}
+	input.Body.Reviewed = true
+
+	_, err := handler.BulkSetTransactionReviewed(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, auditRepo.recordedEntry, "should record an MCP audit entry")
+	assert.Equal(t, "bulkSetTransactionReviewed", auditRepo.recordedEntry.OperationID)
+	assert.Equal(t, "write", auditRepo.recordedEntry.OperationClass)
+}
+
+// TestBulkSetTransactionReviewed_NonMCPNoAudit verifies no audit for non-MCP bulk review.
+func TestBulkSetTransactionReviewed_NonMCPNoAudit(t *testing.T) {
+	const workerSecret = "test-bulk-review-mcp-secret-2"
+	auditRepo := &mockMCPAuditRepository{}
+	handler := NewTransactionHandler(&mockTransactionService{}, TransactionHandlerDeps{
+		MCPAuditRepo:    auditRepo,
+		MCPWorkerSecret: workerSecret,
+	})
+
+	input := &BulkSetTransactionReviewedInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-regular"},
+	}
+	input.Body.TransactionIDs = []string{"tx-1"}
+	input.Body.Reviewed = false
+
+	_, err := handler.BulkSetTransactionReviewed(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Nil(t, auditRepo.recordedEntry, "non-MCP call must not write audit entry")
 }

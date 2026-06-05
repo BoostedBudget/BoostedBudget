@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { ReadOnlyGuard } from '@/auth'
@@ -10,6 +11,7 @@ import { TagEditor } from '../../tags/components/TagEditor'
 import { CategoryEditor } from '../../categories/components/CategoryEditor'
 import { useReviewMutations } from '../hooks/useReviewMutations'
 import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
+import { ReviewBadge, reviewBadgeVariantFromTransaction } from '@/shared/components/ReviewBadge'
 import {
   useUpdateTransactionTags,
   useUpdateTransactionCategory,
@@ -27,7 +29,6 @@ interface TransactionEditorProps {
   isOpen: boolean
 }
 
-/** Convert EffectiveCategory to a string[] for backward-compat with CategoryEditor */
 function effectiveCategoryToStringArray(transaction: Transaction): string[] {
   const eff = getEffectiveCategory(transaction)
   if (!eff) return []
@@ -53,6 +54,7 @@ export function TransactionEditor({
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const trackEvent = useTrackEvent()
+  const queryClient = useQueryClient()
 
   // Use generated mutation hooks
   const updateTagsMutation = useUpdateTransactionTags()
@@ -70,11 +72,8 @@ export function TransactionEditor({
     }
   }
 
-  const initialTags = transaction.tags || []
-  const initialCategory = effectiveCategoryToStringArray(transaction)
-
-  const hasTagChanges = JSON.stringify(tags) !== JSON.stringify(initialTags)
-  const hasCategoryChanges = JSON.stringify(category) !== JSON.stringify(initialCategory)
+  const hasTagChanges = JSON.stringify(tags) !== JSON.stringify(transaction.tags || [])
+  const hasCategoryChanges = JSON.stringify(category) !== JSON.stringify(effectiveCategoryToStringArray(transaction))
   const hasChanges = hasTagChanges || hasCategoryChanges
 
   const handleSave = async () => {
@@ -107,6 +106,7 @@ export function TransactionEditor({
           id: transaction.id,
           data: categoryRequest,
         })) as Transaction
+        queryClient.invalidateQueries({ queryKey: ['review-summary'] })
         trackEvent(ANALYTICS_EVENTS.TRANSACTION_CATEGORIZED)
       }
 
@@ -196,16 +196,10 @@ export function TransactionEditor({
             Review
           </label>
           <div className="flex items-center justify-between">
-            <span
-              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
-                transaction.reviewed
-                  ? 'bg-emerald-500/15 text-emerald-600'
-                  : 'bg-amber-500/15 text-amber-600'
-              }`}
+            <ReviewBadge
+              variant={reviewBadgeVariantFromTransaction(transaction)}
               data-testid="review-status-badge"
-            >
-              {transaction.reviewed ? 'Reviewed' : 'Unreviewed'}
-            </span>
+            />
             <ReadOnlyGuard message="Resubscribe to review transactions">
               <button
                 type="button"

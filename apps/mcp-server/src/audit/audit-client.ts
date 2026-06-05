@@ -75,8 +75,10 @@ export function createAuditClient(env: AuditClientEnv): AuditClient {
           revocation_state: entry.revocationState,
           request_id: entry.requestId,
         }),
-      }).catch(() => {
-        // Audit failures must never break MCP operations — fire-and-forget
+      }).catch((err: unknown) => {
+        const errType = err instanceof Error ? err.constructor.name : typeof err
+        const status = err instanceof Error && 'status' in err ? (err as { status: number }).status : 'unknown'
+        console.warn('[mcp-audit] record failed (fire-and-forget)', { errType, status, operationId: entry.operationId })
       })
     },
   }

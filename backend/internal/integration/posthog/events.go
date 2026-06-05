@@ -43,6 +43,10 @@ const (
 	// Job events
 	EventDeadLetterCreated = "dead_letter_created"
 
+	// Transaction review and recategorization events (Issue #1210)
+	EventTransactionRecategorized      = "transaction_recategorized"
+	EventTransactionReviewStateChanged = "transaction_review_state_changed"
+
 	// MCP server events (Issue #1087)
 	// NOTE: MCP analytics are fired exclusively by the Cloudflare Worker (apps/mcp-server/src/analytics/)
 	// which has direct access to the MCP session context. The backend does not receive the PostHog

@@ -1416,6 +1416,17 @@
       "excluded": false
     },
     {
+      "operationId": "bulkUpdateTransactionCategory",
+      "method": "PUT",
+      "path": "/api/v1/transactions/category",
+      "summary": "Bulk update transaction category",
+      "tags": [
+        "Transactions"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
       "operationId": "bulkSetTransactionReviewed",
       "method": "PATCH",
       "path": "/api/v1/transactions/review",
@@ -1424,6 +1435,17 @@
         "Transactions"
       ],
       "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "getTransactionReviewSummary",
+      "method": "GET",
+      "path": "/api/v1/transactions/review-summary",
+      "summary": "Get transaction review summary",
+      "tags": [
+        "Transactions"
+      ],
+      "manifestClass": "read",
       "excluded": false
     },
     {

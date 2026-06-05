@@ -79,45 +79,80 @@ Agent responds:
 
 ---
 
-### 2. "Categorize all my unreviewed transactions and show me my top expense this month"
+### 2. "Review my unreviewed transactions — recategorize wrong ones, approve the rest"
 
-The agent chains three calls: list uncategorized transactions, bulk-mark them as reviewed, then find the top expense. Writes require confirmation.
+The review workflow has two phases:
+1. **Triage phase** — check the inbox, recategorize any misclassified transactions (`bulkUpdateTransactionCategory`)
+2. **Approve phase** — mark the batch as reviewed (`bulkSetTransactionReviewed`)
+
+> **Important:** `execute` truncates each call result to ~500 characters. Always use a small `limit` (≤ 10) when fetching transactions and page through with `next_cursor` if `unreviewed_count` is larger. `getTransactionReviewSummary` gives you the total before you start paging.
 
 ```
-You: Review all my uncategorized transactions and show me my biggest expense this month.
+You: Review my unreviewed transactions.
 
 Agent calls:
+  search({ query: "review summary inbox" })
+  → finds getTransactionReviewSummary, getTransactions, bulkUpdateTransactionCategory,
+           bulkSetTransactionReviewed
+
   execute({
     calls: [
       {
+        operationId: "getTransactionReviewSummary"
+      },
+      {
         operationId: "getTransactions",
-        params: { reviewed: false, limit: 50 }
-      },
-      {
-        operationId: "bulkSetTransactionReviewed",
-        body: { transaction_ids: ["txn-1", "txn-2", ...], reviewed: true }
-      },
-      {
-        operationId: "getTopExpense",
-        params: { start_date: "2026-05-01", end_date: "2026-05-31" }
+        params: { reviewed: false, limit: 10 }  // keep limit small — results truncated at ~500 chars
       }
     ]
   })
+  → getTransactionReviewSummary: { unreviewed_count: 23, reviewed_by_rule_count: 5,
+      top_unreviewed_categories: [{ category_key: "FOOD_AND_DRINK", display_name: "Food & Drink", count: 9 }, ...] }
+  → getTransactions: { transactions: [{id: "txn-1", name: "Starbucks", ...}, ...], next_cursor: "abc123" }
 
-  → First call: list 12 unreviewed transactions
-  → Second call: returns confirmation challenge (write operation)
-    "bulkSetTransactionReviewed requires confirmation. Re-invoke with
-     confirmationToken: '3f7a9c...' "
+Agent: I see 23 unreviewed transactions. Showing the first 10. "Starbucks" is tagged
+       as FOOD_AND_DRINK — looks right. "Netflix" is tagged as ENTERTAINMENT but you
+       want it under your custom "Subscriptions" category. Should I recategorize Netflix
+       and then approve the batch?
+You: Yes, recategorize Netflix to Subscriptions and approve all 10.
 
-Agent: I found 12 unreviewed transactions. Should I mark them all as reviewed?
-You: Yes, go ahead.
+  execute({
+    calls: [
+      {
+        operationId: "bulkUpdateTransactionCategory",    // recategorize first
+        body: {
+          transaction_ids: ["txn-netflix"],
+          kind: "custom",
+          custom_category_id: "cat-subscriptions-uuid"
+        }
+      },
+      {
+        operationId: "bulkSetTransactionReviewed",       // then approve the batch
+        body: { transaction_ids: ["txn-1", "txn-2", ..., "txn-10"], reviewed: true }
+      }
+    ]
+  })
+  → bulkUpdateTransactionCategory requires confirmation.
+    "Re-invoke with confirmationToken: '3f7a9c...'"
 
-Agent re-invokes with confirmationToken → all 12 marked reviewed
-  → Third call: { merchant: "AMZN", amount: 187.43, date: "2026-05-14" }
+Agent: Ready to recategorize Netflix and mark 10 transactions as reviewed. Confirm?
+You: Yes.
 
-Agent responds:
-  Marked 12 transactions as reviewed. Your biggest expense this month was
-  $187.43 at Amazon on May 14th.
+Agent re-invokes with confirmationToken → Netflix recategorized, all 10 marked reviewed.
+
+Agent: Done. 13 unreviewed transactions remain (next_cursor: "abc123" to continue).
+       Run again to review the next page.
+```
+
+**Approval-only shortcut** (when no recategorization is needed):
+
+```
+  execute({
+    calls: [{
+      operationId: "bulkSetTransactionReviewed",
+      body: { transaction_ids: ["txn-1", ..., "txn-10"], reviewed: true }
+    }]
+  })
 ```
 
 ---
