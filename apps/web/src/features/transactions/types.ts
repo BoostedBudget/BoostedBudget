@@ -79,6 +79,7 @@ export interface TransactionFilters {
   search?: string // Search in name or merchant_name, case-insensitive
   pending?: boolean // Filter by pending status
   reviewed?: boolean // Filter by review state (#1203): true=reviewed, false=unreviewed inbox
+  category_sources?: CategorySource[] // Filter by category source (#1210): plaid|rule|manual
   account_ids?: string[] // Multiple account IDs
   pfc_primaries?: string[] // PFC primary enum values
   pfc_detaileds?: string[] // PFC detailed enum values (OR with pfc_primaries)

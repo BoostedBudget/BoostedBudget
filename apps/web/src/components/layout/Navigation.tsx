@@ -42,7 +42,7 @@ export function Navigation({ className, orientation = 'horizontal', onLinkClick 
           onClick={onLinkClick}
           className={({ isActive }) =>
             cn(
-              'text-sm font-medium transition-colors',
+              'flex items-center gap-1.5 text-sm font-medium transition-colors',
               orientation === 'vertical' && 'py-2 px-3 rounded-md w-full',
               isActive
                 ? 'text-foreground font-semibold'

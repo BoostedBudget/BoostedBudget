@@ -52,6 +52,7 @@ jobs:
       mcp_changed:          ${{ steps.compute.outputs.mcp_changed }}
       backend_prior_sha:    ${{ steps.resolve-tags.outputs.backend_prior_sha }}
       frontend_prior_sha:   ${{ steps.resolve-tags.outputs.frontend_prior_sha }}
+      mcp_prior_sha:        ${{ steps.resolve-tags.outputs.mcp_prior_sha }}
 
     steps:
       - uses: actions/checkout@v6
@@ -75,7 +76,8 @@ jobs:
           # Belt-and-suspenders fetch in case fetch-tags: true missed them
           git fetch --force origin \
             'refs/tags/backend-staging-latest:refs/tags/backend-staging-latest' \
-            'refs/tags/frontend-staging-latest:refs/tags/frontend-staging-latest' 2>/dev/null || true
+            'refs/tags/frontend-staging-latest:refs/tags/frontend-staging-latest' \
+            'refs/tags/mcp-staging-latest:refs/tags/mcp-staging-latest' 2>/dev/null || true
 
           resolve() {
             local tag="$1"
@@ -87,10 +89,13 @@ jobs:
           }
           BACKEND_PRIOR="$(resolve backend-staging-latest)"
           FRONTEND_PRIOR="$(resolve frontend-staging-latest)"
+          MCP_PRIOR="$(resolve mcp-staging-latest)"
           echo "backend_prior_sha=${BACKEND_PRIOR}"   >> "$GITHUB_OUTPUT"
           echo "frontend_prior_sha=${FRONTEND_PRIOR}" >> "$GITHUB_OUTPUT"
+          echo "mcp_prior_sha=${MCP_PRIOR}"           >> "$GITHUB_OUTPUT"
           echo "bootstrap_backend=$([ -z "$BACKEND_PRIOR" ] && echo true || echo false)"   >> "$GITHUB_OUTPUT"
           echo "bootstrap_frontend=$([ -z "$FRONTEND_PRIOR" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "bootstrap_mcp=$([ -z "$MCP_PRIOR" ] && echo true || echo false)"           >> "$GITHUB_OUTPUT"
 
       - id: rollback-guard
         env:
@@ -98,6 +103,7 @@ jobs:
           ALLOW_ROLLBACK: ${{ inputs.allow_rollback }}
           BACKEND_PRIOR: ${{ steps.resolve-tags.outputs.backend_prior_sha }}
           FRONTEND_PRIOR: ${{ steps.resolve-tags.outputs.frontend_prior_sha }}
+          MCP_PRIOR: ${{ steps.resolve-tags.outputs.mcp_prior_sha }}
         run: |
           set -euo pipefail
           check() {
@@ -114,6 +120,7 @@ jobs:
           }
           check "$BACKEND_PRIOR"  backend-staging-latest
           check "$FRONTEND_PRIOR" frontend-staging-latest
+          check "$MCP_PRIOR"      mcp-staging-latest
 
       - id: filter-backend
         if: steps.resolve-tags.outputs.bootstrap_backend == 'false'
@@ -138,12 +145,16 @@ jobs:
             workflow: ['.github/workflows/**']
 
       - id: filter-mcp
+        # Skipped on first run (bootstrap_mcp=true): compute's BOOT_MCP OR-branch covers that case.
+        # Note: .github/workflows/** is intentionally excluded — workflow-only MCP deploy changes
+        # do not retrigger an MCP deploy; use force_rebuild=true for those.
+        if: steps.resolve-tags.outputs.bootstrap_mcp == 'false'
         uses: dorny/paths-filter@v4
         with:
-          base: ${{ steps.resolve-tags.outputs.backend_prior_sha || steps.resolve-sha.outputs.deploy_sha }}
+          base: ${{ steps.resolve-tags.outputs.mcp_prior_sha }}
           ref:  ${{ steps.resolve-sha.outputs.deploy_sha }}
           filters: |
-            mcp: ['apps/mcp-server/**', 'api/openapi.yaml', '.github/workflows/**']
+            mcp: ['apps/mcp-server/**', 'api/openapi.yaml']
 
       - id: filter-fly-config
         if: steps.resolve-tags.outputs.bootstrap_backend == 'false'
@@ -175,6 +186,7 @@ jobs:
           FORCE_REBUILD:    ${{ inputs.force_rebuild }}
           BOOT_BE:          ${{ steps.resolve-tags.outputs.bootstrap_backend }}
           BOOT_FE:          ${{ steps.resolve-tags.outputs.bootstrap_frontend }}
+          BOOT_MCP:         ${{ steps.resolve-tags.outputs.bootstrap_mcp }}
           BE_BACKEND_CODE:  ${{ steps.filter-fly-config.outputs.backend_code }}
           BE_FLY_CONFIG:    ${{ steps.filter-fly-config.outputs.fly_config }}
           BE_API:           ${{ steps.filter-backend.outputs.api }}
@@ -210,8 +222,12 @@ jobs:
             frontend_changed=true
           fi
 
+          # mcp_changed: triggers Cloudflare Workers MCP deploy.
+          # BOOT_MCP=true on first run (no mcp-staging-latest tag yet); filter-mcp is skipped
+          # in that case so MCP_CHANGED is '' — BOOT_MCP covers bootstrap.
+          # Workflow-only changes are excluded from filter-mcp; use force_rebuild=true for those.
           mcp_changed=false
-          if [ "$FORCE_REBUILD" = "true" ] || [ "${MCP_CHANGED:-}" = "true" ]; then
+          if [ "$FORCE_REBUILD" = "true" ] || [ "$BOOT_MCP" = "true" ] || [ "${MCP_CHANGED:-}" = "true" ]; then
             mcp_changed=true
           fi
 
@@ -572,7 +588,8 @@ jobs:
 
   # =============================================================================
   # Deploy MCP Worker to Cloudflare Workers (Staging)
-  # Issue #1087: MCP server for BoostedBudget
+  # Issue #1087: MCP server — change-gated via mcp-staging-latest tag, bypassable with force_rebuild=true.
+  # Diffs apps/mcp-server/** and api/openapi.yaml vs. last MCP deploy (mcp-staging-latest).
   # NOTE: CLOUDFLARE_API_TOKEN needs Workers Scripts:Edit permission
   # =============================================================================
   deploy-mcp-worker:
@@ -719,7 +736,7 @@ jobs:
   # =============================================================================
   update-release-tags:
     name: Update Release Tags
-    needs: [detect-changes, build-backend, deploy-backend, deploy-frontend, smoke-tests]
+    needs: [detect-changes, build-backend, deploy-backend, deploy-frontend, deploy-mcp-worker, smoke-tests]
     if: always() && !cancelled() && needs.smoke-tests.result == 'success' && needs.deploy-backend.result == 'success'
     runs-on: [self-hosted, macOS, mac-mini]
     permissions:
@@ -774,11 +791,30 @@ jobs:
           git tag -f frontend-staging-latest "${SHA}"
           git push origin refs/tags/frontend-staging-latest --force
 
+      - name: Update MCP release tags
+        # mcp_changed && deploy-mcp-worker success → advance mcp-staging-latest.
+        # If MCP deployed but smoke/backend gating later fails, this step is skipped and
+        # mcp-staging-latest is not written — identical to backend/frontend tag behavior; MCP
+        # will redeploy next run. This is intentional for consistency.
+        if: needs.detect-changes.outputs.mcp_changed == 'true' && needs.deploy-mcp-worker.result == 'success'
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        env:
+          SHA: ${{ needs.detect-changes.outputs.deploy_sha }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse --verify --quiet "refs/tags/mcp-staging-${SHA}" >/dev/null 2>&1; then
+            git tag "mcp-staging-${SHA}" "${SHA}"
+            git push origin "refs/tags/mcp-staging-${SHA}"
+          fi
+          git tag -f mcp-staging-latest "${SHA}"
+          git push origin refs/tags/mcp-staging-latest --force
+
       - name: Tag update summary
         env:
           DEPLOY_SHA: ${{ needs.detect-changes.outputs.deploy_sha }}
           BACKEND_CHANGED: ${{ needs.detect-changes.outputs.backend_changed }}
           FRONTEND_CHANGED: ${{ needs.detect-changes.outputs.frontend_changed }}
+          MCP_CHANGED: ${{ needs.detect-changes.outputs.mcp_changed }}
         run: |
           echo "### Release Tags Updated" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -793,6 +829,12 @@ jobs:
             echo "- \`frontend-staging-${DEPLOY_SHA}\` (immutable)" >> $GITHUB_STEP_SUMMARY
           else
             echo "- frontend tags unchanged (no frontend change)" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "$MCP_CHANGED" = "true" ]; then
+            echo "- \`mcp-staging-latest\` → \`${DEPLOY_SHA}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- \`mcp-staging-${DEPLOY_SHA}\` (immutable)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- mcp tags unchanged (no MCP change)" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Final workspace cleanup

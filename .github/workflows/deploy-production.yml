@@ -1,6 +1,6 @@
 name: Deploy to Production
 
-# Manual deployment: dispatch after promoting staging→main.
+# Manual deployment: dispatch from 'main' only after promoting staging→main.
 # Note: Rotating VITE_* secrets requires force_rebuild=true (baked at build time).
 on:
   workflow_dispatch:
@@ -59,8 +59,21 @@ jobs:
       mcp_changed:          ${{ steps.compute.outputs.mcp_changed }}
       backend_prior_sha:    ${{ steps.resolve-tags.outputs.backend_prior_sha }}
       frontend_prior_sha:   ${{ steps.resolve-tags.outputs.frontend_prior_sha }}
+      mcp_prior_sha:        ${{ steps.resolve-tags.outputs.mcp_prior_sha }}
 
     steps:
+      # Guard: production workflow must be dispatched from 'main'.
+      # Prevents accidentally running a stale/diverged workflow file from staging.
+      # (The workflow always deploys main's *code* regardless, but the *workflow definition*
+      # itself comes from the dispatched branch — so we enforce dispatch-from-main here.)
+      - name: Guard — production deploy must run from main
+        if: github.ref_name != 'main'
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          echo "::error::Production deploy must be dispatched from 'main'. In the 'Run workflow' dialog, set 'Use workflow from' → 'Branch: main'. Got '${REF_NAME}'."
+          exit 1
+
       - uses: actions/checkout@v6
         with:
           ref: main
@@ -81,7 +94,8 @@ jobs:
           # Belt-and-suspenders fetch in case fetch-tags: true missed them
           git fetch --force origin \
             'refs/tags/backend-prod-latest:refs/tags/backend-prod-latest' \
-            'refs/tags/frontend-prod-latest:refs/tags/frontend-prod-latest' 2>/dev/null || true
+            'refs/tags/frontend-prod-latest:refs/tags/frontend-prod-latest' \
+            'refs/tags/mcp-prod-latest:refs/tags/mcp-prod-latest' 2>/dev/null || true
 
           resolve() {
             local tag="$1"
@@ -93,10 +107,13 @@ jobs:
           }
           BACKEND_PRIOR="$(resolve backend-prod-latest)"
           FRONTEND_PRIOR="$(resolve frontend-prod-latest)"
+          MCP_PRIOR="$(resolve mcp-prod-latest)"
           echo "backend_prior_sha=${BACKEND_PRIOR}"   >> "$GITHUB_OUTPUT"
           echo "frontend_prior_sha=${FRONTEND_PRIOR}" >> "$GITHUB_OUTPUT"
+          echo "mcp_prior_sha=${MCP_PRIOR}"           >> "$GITHUB_OUTPUT"
           echo "bootstrap_backend=$([ -z "$BACKEND_PRIOR" ] && echo true || echo false)"   >> "$GITHUB_OUTPUT"
           echo "bootstrap_frontend=$([ -z "$FRONTEND_PRIOR" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "bootstrap_mcp=$([ -z "$MCP_PRIOR" ] && echo true || echo false)"           >> "$GITHUB_OUTPUT"
 
       - id: rollback-guard
         env:
@@ -104,6 +121,7 @@ jobs:
           ALLOW_ROLLBACK: ${{ inputs.allow_rollback }}
           BACKEND_PRIOR: ${{ steps.resolve-tags.outputs.backend_prior_sha }}
           FRONTEND_PRIOR: ${{ steps.resolve-tags.outputs.frontend_prior_sha }}
+          MCP_PRIOR: ${{ steps.resolve-tags.outputs.mcp_prior_sha }}
         run: |
           set -euo pipefail
           # inputs.allow_rollback is always available (workflow_dispatch-only); :-false is a defensive fallback.
@@ -122,6 +140,7 @@ jobs:
           }
           check "$BACKEND_PRIOR"  backend-prod-latest
           check "$FRONTEND_PRIOR" frontend-prod-latest
+          check "$MCP_PRIOR"      mcp-prod-latest
 
       - id: filter-backend
         if: steps.resolve-tags.outputs.bootstrap_backend == 'false'
@@ -146,12 +165,16 @@ jobs:
             workflow: ['.github/workflows/**']
 
       - id: filter-mcp
+        # Skipped on first run (bootstrap_mcp=true): compute's BOOT_MCP OR-branch covers that case.
+        # Note: .github/workflows/** is intentionally excluded — workflow-only MCP deploy changes
+        # do not retrigger an MCP deploy; use force_rebuild=true for those.
+        if: steps.resolve-tags.outputs.bootstrap_mcp == 'false'
         uses: dorny/paths-filter@v4
         with:
-          base: ${{ steps.resolve-tags.outputs.backend_prior_sha || steps.resolve-sha.outputs.deploy_sha }}
+          base: ${{ steps.resolve-tags.outputs.mcp_prior_sha }}
           ref:  ${{ steps.resolve-sha.outputs.deploy_sha }}
           filters: |
-            mcp: ['apps/mcp-server/**', 'api/openapi.yaml', '.github/workflows/**']
+            mcp: ['apps/mcp-server/**', 'api/openapi.yaml']
 
       - id: filter-fly-config
         if: steps.resolve-tags.outputs.bootstrap_backend == 'false'
@@ -183,6 +206,7 @@ jobs:
           FORCE_REBUILD:    ${{ inputs.force_rebuild }}
           BOOT_BE:          ${{ steps.resolve-tags.outputs.bootstrap_backend }}
           BOOT_FE:          ${{ steps.resolve-tags.outputs.bootstrap_frontend }}
+          BOOT_MCP:         ${{ steps.resolve-tags.outputs.bootstrap_mcp }}
           BE_BACKEND_CODE:  ${{ steps.filter-fly-config.outputs.backend_code }}
           BE_FLY_CONFIG:    ${{ steps.filter-fly-config.outputs.fly_config }}
           MCP_CHANGED:      ${{ steps.filter-mcp.outputs.mcp }}
@@ -219,8 +243,12 @@ jobs:
             frontend_changed=true
           fi
 
+          # mcp_changed: triggers Cloudflare Workers MCP deploy.
+          # BOOT_MCP=true on first run (no mcp-prod-latest tag yet); filter-mcp is skipped
+          # in that case so MCP_CHANGED is '' — BOOT_MCP covers bootstrap.
+          # Workflow-only changes are excluded from filter-mcp; use force_rebuild=true for those.
           mcp_changed=false
-          if [ "$FORCE" = "true" ] || [ "${MCP_CHANGED:-}" = "true" ]; then
+          if [ "$FORCE" = "true" ] || [ "$BOOT_MCP" = "true" ] || [ "${MCP_CHANGED:-}" = "true" ]; then
             mcp_changed=true
           fi
 
@@ -626,7 +654,8 @@ jobs:
 
   # =============================================================================
   # Deploy MCP Worker to Cloudflare Workers (Production)
-  # Issue #1087: MCP server — always deploy alongside backend/frontend
+  # Issue #1087: MCP server — change-gated via mcp-prod-latest tag, bypassable with force_rebuild=true.
+  # Diffs apps/mcp-server/** and api/openapi.yaml vs. last MCP deploy (mcp-prod-latest).
   # NOTE: CLOUDFLARE_API_TOKEN must have Workers Scripts:Edit permission
   # (same token as Pages deploy; add Workers Scripts:Edit if missing)
   # =============================================================================
@@ -775,7 +804,7 @@ jobs:
   # =============================================================================
   update-release-tags:
     name: Update Release Tags
-    needs: [detect-changes, build-images, deploy-to-fly, deploy-frontend, smoke-tests]
+    needs: [detect-changes, build-images, deploy-to-fly, deploy-frontend, deploy-mcp-worker, smoke-tests]
     if: always() && !cancelled() && needs.smoke-tests.result == 'success' && needs.deploy-to-fly.result == 'success'
     runs-on: [self-hosted, macOS, mac-mini]
     permissions:
@@ -830,11 +859,30 @@ jobs:
           git tag -f frontend-prod-latest "${SHA}"
           git push origin refs/tags/frontend-prod-latest --force
 
+      - name: Update MCP release tags
+        # mcp_changed && deploy-mcp-worker success → advance mcp-prod-latest.
+        # If MCP deployed but smoke/backend gating later fails, this step is skipped and
+        # mcp-prod-latest is not written — identical to backend/frontend tag behavior; MCP
+        # will redeploy next run. This is intentional for consistency.
+        if: needs.detect-changes.outputs.mcp_changed == 'true' && needs.deploy-mcp-worker.result == 'success'
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        env:
+          SHA: ${{ needs.detect-changes.outputs.deploy_sha }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse --verify --quiet "refs/tags/mcp-prod-${SHA}" >/dev/null 2>&1; then
+            git tag "mcp-prod-${SHA}" "${SHA}"
+            git push origin "refs/tags/mcp-prod-${SHA}"
+          fi
+          git tag -f mcp-prod-latest "${SHA}"
+          git push origin refs/tags/mcp-prod-latest --force
+
       - name: Tag update summary
         env:
           DEPLOY_SHA: ${{ needs.detect-changes.outputs.deploy_sha }}
           BACKEND_CHANGED: ${{ needs.detect-changes.outputs.backend_changed }}
           FRONTEND_CHANGED: ${{ needs.detect-changes.outputs.frontend_changed }}
+          MCP_CHANGED: ${{ needs.detect-changes.outputs.mcp_changed }}
         run: |
           echo "### Release Tags Updated" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -849,6 +897,12 @@ jobs:
             echo "- \`frontend-prod-${DEPLOY_SHA}\` (immutable)" >> $GITHUB_STEP_SUMMARY
           else
             echo "- frontend tags unchanged (no frontend change)" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "$MCP_CHANGED" = "true" ]; then
+            echo "- \`mcp-prod-latest\` → \`${DEPLOY_SHA}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- \`mcp-prod-${DEPLOY_SHA}\` (immutable)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- mcp tags unchanged (no MCP change)" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Final workspace cleanup

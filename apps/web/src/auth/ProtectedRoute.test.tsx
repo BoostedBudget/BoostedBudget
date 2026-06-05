@@ -29,8 +29,8 @@ function renderProtectedRoute(initialPath = '/dashboard') {
 afterEach(() => {
   // Reset window.ENV so PostHog configured state doesn't leak between tests
   delete (window as unknown as { ENV?: unknown }).ENV
-  mockUseFeatureFlagEnabled.mockReset()
-  mockUseAuth.mockReset()
+  mockUseFeatureFlagEnabled.mockClear()
+  mockUseAuth.mockClear()
 })
 
 describe('ProtectedRoute', () => {

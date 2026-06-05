@@ -59,8 +59,10 @@ export function createPosthogClient(
         distinct_id: distinctId,
         properties: { ...properties, $lib: 'mcp-server-worker' },
       }),
-    }).catch(() => {
-      // Fire-and-forget: analytics failures must never break MCP operations
+    }).catch((err: unknown) => {
+      const errType = err instanceof Error ? err.constructor.name : typeof err
+      const status = err instanceof Error && 'status' in err ? (err as { status: number }).status : 'unknown'
+      console.warn('[mcp-analytics] capture failed (fire-and-forget)', { errType, status, event })
     })
   })
 

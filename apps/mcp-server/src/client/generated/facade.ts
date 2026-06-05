@@ -381,9 +381,17 @@ export function createApiClient(mutator: FetchMutator) {
       getTransactions(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/transactions', method: 'GET', params, signal })
       },
+      /** PUT /api/v1/transactions/category */
+      bulkUpdateTransactionCategory(data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/transactions/category', method: 'PUT', data, signal })
+      },
       /** PATCH /api/v1/transactions/review */
       bulkSetTransactionReviewed(data?: unknown, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/transactions/review', method: 'PATCH', data, signal })
+      },
+      /** GET /api/v1/transactions/review-summary */
+      getTransactionReviewSummary(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/transactions/review-summary', method: 'GET', params, signal })
       },
       /** GET /api/v1/transactions/{id} */
       getTransactionByID(id: string, signal?: AbortSignal): Promise<unknown> {
