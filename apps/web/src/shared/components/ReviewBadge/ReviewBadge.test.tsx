@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
-import { ReviewBadge, reviewBadgeVariantFromTransaction } from './ReviewBadge'
+import { ReviewBadge } from './ReviewBadge'
+import { reviewBadgeVariantFromTransaction } from './reviewBadgeUtils'
 
 // ── ReviewBadge rendering ───────────────────────────────────────────────────
 

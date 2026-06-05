@@ -10,7 +10,7 @@ import {
   mockUpdateCategoryMutateAsync,
   mockDeleteCategoryMutateAsync,
 } from '@/test/mocks/categories-api'
-import { mockPosthogCapture } from '@/test/mocks/posthog'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { useCategoryMutations } from './useCategoryMutations'
 
@@ -26,7 +26,7 @@ describe('useCategoryMutations', () => {
     mockCreateCategoryMutateAsync.mockClear()
     mockUpdateCategoryMutateAsync.mockClear()
     mockDeleteCategoryMutateAsync.mockClear()
-    mockPosthogCapture.mockClear()
+    mockTrackEvent.mockClear()
   })
 
   it('createCategory sends {data} and tracks CUSTOM_CATEGORY_CREATED', async () => {
@@ -37,7 +37,7 @@ describe('useCategoryMutations', () => {
 
     expect(mockCreateCategoryMutateAsync).toHaveBeenCalledWith({ data: { name: 'Travel' } })
     expect(created.id).toBe('new-1')
-    expect(mockPosthogCapture).toHaveBeenCalledWith(
+    expect(mockTrackEvent).toHaveBeenCalledWith(
       ANALYTICS_EVENTS.CUSTOM_CATEGORY_CREATED,
       expect.objectContaining({ parent_kind: 'none' })
     )
@@ -49,7 +49,7 @@ describe('useCategoryMutations', () => {
 
     await result.current.createCategory({ name: 'Sub', parent_id: 'p1' })
 
-    expect(mockPosthogCapture).toHaveBeenCalledWith(
+    expect(mockTrackEvent).toHaveBeenCalledWith(
       ANALYTICS_EVENTS.CUSTOM_CATEGORY_CREATED,
       expect.objectContaining({ parent_kind: 'custom' })
     )
@@ -62,7 +62,7 @@ describe('useCategoryMutations', () => {
     await result.current.updateCategory('c1', { name: 'Renamed' })
 
     expect(mockUpdateCategoryMutateAsync).toHaveBeenCalledWith({ id: 'c1', data: { name: 'Renamed' } })
-    expect(mockPosthogCapture).toHaveBeenCalledWith(
+    expect(mockTrackEvent).toHaveBeenCalledWith(
       ANALYTICS_EVENTS.CUSTOM_CATEGORY_UPDATED,
       expect.objectContaining({ id: 'c1' })
     )
@@ -75,7 +75,7 @@ describe('useCategoryMutations', () => {
     await result.current.deleteCategory('c1')
 
     expect(mockDeleteCategoryMutateAsync).toHaveBeenCalledWith({ id: 'c1' })
-    expect(mockPosthogCapture).toHaveBeenCalledWith(
+    expect(mockTrackEvent).toHaveBeenCalledWith(
       ANALYTICS_EVENTS.CUSTOM_CATEGORY_DELETED,
       expect.objectContaining({ id: 'c1' })
     )

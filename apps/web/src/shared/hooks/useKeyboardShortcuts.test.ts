@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { describe, it, expect, mock, afterEach } from 'bun:test'
 import { renderHook } from '@testing-library/react'
 import { act } from '@testing-library/react'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
@@ -15,18 +15,15 @@ function fireKeydown(key: string, target?: Element) {
 }
 
 describe('useKeyboardShortcuts', () => {
-  let originalActiveElement: Element | null
-
-  beforeEach(() => {
-    originalActiveElement = document.activeElement
-  })
-
   afterEach(() => {
-    // Restore activeElement to body
-    Object.defineProperty(document, 'activeElement', {
-      value: originalActiveElement,
-      configurable: true,
-    })
+    // Remove any instance-level shadow on document.activeElement to restore native getter.
+    // Object.defineProperty(document, 'activeElement', ...) replaces the native getter
+    // with a static data property — deleting it restores the prototype getter.
+    try {
+      delete (document as unknown as Record<string, unknown>).activeElement
+    } catch {
+      // Not configurable; nothing to clean up
+    }
   })
 
   it('calls the handler when the mapped key is pressed', () => {
@@ -65,11 +62,12 @@ describe('useKeyboardShortcuts', () => {
 
     const input = document.createElement('input')
     document.body.appendChild(input)
-    Object.defineProperty(document, 'activeElement', { value: input, configurable: true })
+    input.focus()
 
     act(() => fireKeydown('e'))
 
     expect(handler).not.toHaveBeenCalled()
+    input.blur()
     document.body.removeChild(input)
   })
 
@@ -79,11 +77,12 @@ describe('useKeyboardShortcuts', () => {
 
     const textarea = document.createElement('textarea')
     document.body.appendChild(textarea)
-    Object.defineProperty(document, 'activeElement', { value: textarea, configurable: true })
+    textarea.focus()
 
     act(() => fireKeydown('e'))
 
     expect(handler).not.toHaveBeenCalled()
+    textarea.blur()
     document.body.removeChild(textarea)
   })
 
@@ -93,11 +92,12 @@ describe('useKeyboardShortcuts', () => {
 
     const select = document.createElement('select')
     document.body.appendChild(select)
-    Object.defineProperty(document, 'activeElement', { value: select, configurable: true })
+    select.focus()
 
     act(() => fireKeydown('e'))
 
     expect(handler).not.toHaveBeenCalled()
+    select.blur()
     document.body.removeChild(select)
   })
 

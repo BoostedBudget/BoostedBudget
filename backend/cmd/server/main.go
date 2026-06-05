@@ -957,6 +957,15 @@ func main() {
 				riverConfig.PeriodicJobs = periodicJobs
 			}
 
+			// Issue #1087 R5-2: Construct idempotency cleanup worker here (before river.NewWorkers)
+			// so it is non-nil at river.AddWorker time. The var is declared at the top of main().
+			// db is available from this point; the repo is a cheap wrapper over the same pool.
+			idempotencyCleanupWorker = jobs.NewIdempotencyCleanupWorker(jobs.IdempotencyCleanupWorkerDeps{
+				Repo:   repository.NewIdempotencyRepository(db),
+				Logger: appLogger,
+			})
+			appLogger.Info("Idempotency cleanup worker created (River)")
+
 			// Register ALL workers with nil-guards.
 			// Non-Plaid workers are always non-nil when their config gates are met.
 			// Plaid-specific workers are nil when Plaid is not configured.
@@ -991,9 +1000,11 @@ func main() {
 				river.AddWorker(riverWorkers, dlqCleanupCheckWorker)
 				appLogger.Info("DLQ cleanup check worker registered with River")
 			}
-			// Issue #1087 R4-7: Idempotency cleanup worker (always active — repo always available)
-			river.AddWorker(riverWorkers, idempotencyCleanupWorker)
-			appLogger.Info("Idempotency cleanup worker registered with River")
+			// Issue #1087 R4-7/R5-2: Idempotency cleanup worker (constructed above, always non-nil here)
+			if idempotencyCleanupWorker != nil {
+				river.AddWorker(riverWorkers, idempotencyCleanupWorker)
+				appLogger.Info("Idempotency cleanup worker registered with River")
+			}
 			if subscriptionWebhookWorker != nil {
 				river.AddWorker(riverWorkers, subscriptionWebhookWorker)
 				appLogger.Info("Paddle subscription webhook worker registered with River")
@@ -1148,14 +1159,6 @@ func main() {
 		// Shared idempotency repository (Issue #1087: MCP server — R4-5 wiring)
 		humaIdempotencyRepo := repository.NewIdempotencyRepository(db)
 		humaMCPAuditRepo := repository.NewMCPAuditRepository(db)
-
-		// R4-7: Idempotency cleanup periodic job (deletes expired rows daily)
-		// Uses = not := to assign to the outer var declared at the top of main().
-		idempotencyCleanupWorker = jobs.NewIdempotencyCleanupWorker(jobs.IdempotencyCleanupWorkerDeps{
-			Repo:   humaIdempotencyRepo,
-			Logger: appLogger,
-		})
-		appLogger.Info("Idempotency cleanup worker created (River)")
 
 		// Register Huma tag routes (Issue #345: User tag management)
 		humaTagHandler := operations.NewTagHandler(userTagService, operations.TagHandlerDeps{
