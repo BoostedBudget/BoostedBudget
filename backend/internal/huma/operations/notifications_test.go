@@ -64,6 +64,10 @@ func (m *mockNotificationRepository) MarkAllAsRead(ctx context.Context, userID s
 	return m.markAllCount, nil
 }
 
+func (m *mockNotificationRepository) GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string) (*domain.Notification, error) {
+	return nil, nil
+}
+
 // Helper to create a test notification
 func createTestNotification(userID, id string) domain.Notification {
 	now := time.Now()

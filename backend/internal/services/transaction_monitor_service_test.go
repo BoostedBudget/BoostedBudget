@@ -2,12 +2,10 @@ package services
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -69,187 +67,30 @@ func createTestTransactionForMonitor(userID string, accountID string, amount flo
 
 // =============================================================================
 // MonitorForMatches Tests
+// MonitorForMatches is now a no-op (Issue #972: auto-accept removed).
+// Transfer correlation is handled by TransferCorrelationService.CorrelateForUser.
 // =============================================================================
 
-func TestTransactionMonitorService_MonitorForMatches_MatchFound(t *testing.T) {
+func TestTransactionMonitorService_MonitorForMatches_NoOp_WithTransactions(t *testing.T) {
 	ctx := context.Background()
 	suggestionRepo := new(mockSuggestionRepoForMonitor)
 
 	svc := NewTransactionMonitorService(suggestionRepo)
 
 	userID := "user-123"
-	accountID := "savings-account"
-	suggestionAmount := 100.00
 	now := time.Now()
 
-	// Create suggestion that was created recently
-	suggestion := createTestSuggestionForMonitor(userID, accountID, suggestionAmount, now.Add(-1*time.Hour))
+	transaction := createTestTransactionForMonitor(userID, "savings-account", -100.00, now)
 
-	// Create matching transaction (same account, inflow = negative amount under PFCv2)
-	transaction := createTestTransactionForMonitor(userID, accountID, -suggestionAmount, now)
-
-	// Mock: Get pending suggestions
-	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
-
-	// Mock: Auto-accept the matched suggestion
-	expectedNote := "Auto-matched with transaction txn-savings-account"
-	suggestionRepo.On("UpdateStatus", ctx, suggestion.ID, domain.SuggestionStatusAccepted, &expectedNote).Return(nil)
-
+	// No repo calls expected — MonitorForMatches is a no-op
 	err := svc.MonitorForMatches(ctx, userID, []*domain.Transaction{transaction})
 
 	require.NoError(t, err)
-	suggestionRepo.AssertExpectations(t)
-}
-
-func TestTransactionMonitorService_MonitorForMatches_NoMatch_DifferentAmount(t *testing.T) {
-	ctx := context.Background()
-	suggestionRepo := new(mockSuggestionRepoForMonitor)
-
-	svc := NewTransactionMonitorService(suggestionRepo)
-
-	userID := "user-123"
-	accountID := "savings-account"
-	now := time.Now()
-
-	// Suggestion for $100
-	suggestion := createTestSuggestionForMonitor(userID, accountID, 100.00, now.Add(-1*time.Hour))
-
-	// Transaction for -$50 inflow (different magnitude than suggestion's $100)
-	transaction := createTestTransactionForMonitor(userID, accountID, -50.00, now)
-
-	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
-
-	// No UpdateStatus call expected - no match
-
-	err := svc.MonitorForMatches(ctx, userID, []*domain.Transaction{transaction})
-
-	require.NoError(t, err)
-	suggestionRepo.AssertExpectations(t)
+	suggestionRepo.AssertNotCalled(t, "GetPendingByUserID", mock.Anything, mock.Anything)
 	suggestionRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
-func TestTransactionMonitorService_MonitorForMatches_NoMatch_DifferentAccount(t *testing.T) {
-	ctx := context.Background()
-	suggestionRepo := new(mockSuggestionRepoForMonitor)
-
-	svc := NewTransactionMonitorService(suggestionRepo)
-
-	userID := "user-123"
-	now := time.Now()
-
-	// Suggestion to transfer to "savings-account"
-	suggestion := createTestSuggestionForMonitor(userID, "savings-account", 100.00, now.Add(-1*time.Hour))
-
-	// Transaction in "checking-account" (different account), inflow under PFCv2
-	transaction := createTestTransactionForMonitor(userID, "checking-account", -100.00, now)
-
-	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
-
-	err := svc.MonitorForMatches(ctx, userID, []*domain.Transaction{transaction})
-
-	require.NoError(t, err)
-	suggestionRepo.AssertExpectations(t)
-	suggestionRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-}
-
-func TestTransactionMonitorService_MonitorForMatches_NoMatch_NegativeAmount(t *testing.T) {
-	ctx := context.Background()
-	suggestionRepo := new(mockSuggestionRepoForMonitor)
-
-	svc := NewTransactionMonitorService(suggestionRepo)
-
-	userID := "user-123"
-	accountID := "savings-account"
-	now := time.Now()
-
-	// Suggestion for $100 deposit
-	suggestion := createTestSuggestionForMonitor(userID, accountID, 100.00, now.Add(-1*time.Hour))
-
-	// Transaction is positive (outflow/spending under PFCv2) - should not match a deposit suggestion
-	transaction := createTestTransactionForMonitor(userID, accountID, 100.00, now)
-
-	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
-
-	err := svc.MonitorForMatches(ctx, userID, []*domain.Transaction{transaction})
-
-	require.NoError(t, err)
-	suggestionRepo.AssertExpectations(t)
-	suggestionRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-}
-
-func TestTransactionMonitorService_MonitorForMatches_NoMatch_OutsideDateRange(t *testing.T) {
-	ctx := context.Background()
-	suggestionRepo := new(mockSuggestionRepoForMonitor)
-
-	svc := NewTransactionMonitorService(suggestionRepo)
-
-	userID := "user-123"
-	accountID := "savings-account"
-	now := time.Now()
-
-	// Suggestion created 10 days ago (outside 7-day window)
-	suggestion := createTestSuggestionForMonitor(userID, accountID, 100.00, now.Add(-10*24*time.Hour))
-
-	// Transaction today (too far from suggestion creation), inflow under PFCv2
-	transaction := createTestTransactionForMonitor(userID, accountID, -100.00, now)
-
-	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
-
-	err := svc.MonitorForMatches(ctx, userID, []*domain.Transaction{transaction})
-
-	require.NoError(t, err)
-	suggestionRepo.AssertExpectations(t)
-	suggestionRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-}
-
-func TestTransactionMonitorService_MonitorForMatches_AmountWithinTolerance(t *testing.T) {
-	ctx := context.Background()
-	suggestionRepo := new(mockSuggestionRepoForMonitor)
-
-	svc := NewTransactionMonitorService(suggestionRepo)
-
-	userID := "user-123"
-	accountID := "savings-account"
-	now := time.Now()
-
-	// Suggestion for $100.00
-	suggestion := createTestSuggestionForMonitor(userID, accountID, 100.00, now.Add(-1*time.Hour))
-
-	// Transaction for -$100.005 inflow (within 1 cent tolerance of suggestion's $100)
-	transaction := createTestTransactionForMonitor(userID, accountID, -100.005, now)
-
-	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
-
-	expectedNote := "Auto-matched with transaction txn-savings-account"
-	suggestionRepo.On("UpdateStatus", ctx, suggestion.ID, domain.SuggestionStatusAccepted, &expectedNote).Return(nil)
-
-	err := svc.MonitorForMatches(ctx, userID, []*domain.Transaction{transaction})
-
-	require.NoError(t, err)
-	suggestionRepo.AssertExpectations(t)
-}
-
-func TestTransactionMonitorService_MonitorForMatches_NoPendingSuggestions(t *testing.T) {
-	ctx := context.Background()
-	suggestionRepo := new(mockSuggestionRepoForMonitor)
-
-	svc := NewTransactionMonitorService(suggestionRepo)
-
-	userID := "user-123"
-	now := time.Now()
-
-	transaction := createTestTransactionForMonitor(userID, "any-account", -100.00, now)
-
-	// No pending suggestions
-	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{}, nil)
-
-	err := svc.MonitorForMatches(ctx, userID, []*domain.Transaction{transaction})
-
-	require.NoError(t, err)
-	suggestionRepo.AssertExpectations(t)
-}
-
-func TestTransactionMonitorService_MonitorForMatches_NoTransactions(t *testing.T) {
+func TestTransactionMonitorService_MonitorForMatches_NoOp_EmptyTransactions(t *testing.T) {
 	ctx := context.Background()
 	suggestionRepo := new(mockSuggestionRepoForMonitor)
 
@@ -257,91 +98,22 @@ func TestTransactionMonitorService_MonitorForMatches_NoTransactions(t *testing.T
 
 	userID := "user-123"
 
-	// No transactions to check - should return early without querying suggestions
 	err := svc.MonitorForMatches(ctx, userID, []*domain.Transaction{})
 
 	require.NoError(t, err)
 	suggestionRepo.AssertNotCalled(t, "GetPendingByUserID", mock.Anything, mock.Anything)
 }
 
-func TestTransactionMonitorService_MonitorForMatches_RepoError(t *testing.T) {
+func TestTransactionMonitorService_MonitorForMatches_NoOp_NilTransactions(t *testing.T) {
 	ctx := context.Background()
 	suggestionRepo := new(mockSuggestionRepoForMonitor)
 
 	svc := NewTransactionMonitorService(suggestionRepo)
 
 	userID := "user-123"
-	now := time.Now()
 
-	transaction := createTestTransactionForMonitor(userID, "any-account", -100.00, now)
-
-	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return(nil, errors.New("database error"))
-
-	err := svc.MonitorForMatches(ctx, userID, []*domain.Transaction{transaction})
-
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "database error")
-	suggestionRepo.AssertExpectations(t)
-}
-
-func TestTransactionMonitorService_MonitorForMatches_NilToAccountID(t *testing.T) {
-	ctx := context.Background()
-	suggestionRepo := new(mockSuggestionRepoForMonitor)
-
-	svc := NewTransactionMonitorService(suggestionRepo)
-
-	userID := "user-123"
-	now := time.Now()
-
-	// Suggestion with nil ToAccountID (shouldn't match anything)
-	suggestion := &domain.TransferSuggestion{
-		ID:            "suggestion-nil-to",
-		UserID:        userID,
-		FromAccountID: nil,
-		ToAccountID:   nil, // No target account
-		Amount:        100.00,
-		CurrencyCode:  "USD",
-		Status:        domain.SuggestionStatusPending,
-		CreatedAt:     now.Add(-1 * time.Hour),
-	}
-
-	transaction := createTestTransactionForMonitor(userID, "any-account", -100.00, now)
-
-	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
-
-	err := svc.MonitorForMatches(ctx, userID, []*domain.Transaction{transaction})
+	err := svc.MonitorForMatches(ctx, userID, nil)
 
 	require.NoError(t, err)
-	suggestionRepo.AssertExpectations(t)
-	suggestionRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-}
-
-func TestTransactionMonitorService_MonitorForMatches_MultipleTransactionsOneMatch(t *testing.T) {
-	ctx := context.Background()
-	suggestionRepo := new(mockSuggestionRepoForMonitor)
-
-	svc := NewTransactionMonitorService(suggestionRepo)
-
-	userID := "user-123"
-	now := time.Now()
-
-	// Suggestion for savings account
-	suggestion := createTestSuggestionForMonitor(userID, "savings-account", 100.00, now.Add(-1*time.Hour))
-
-	// Multiple transactions - only one matches
-	transactions := []*domain.Transaction{
-		createTestTransactionForMonitor(userID, "checking-account", -50.00, now),  // wrong account
-		createTestTransactionForMonitor(userID, "savings-account", -100.00, now),  // MATCH - inflow, right account and amount
-		createTestTransactionForMonitor(userID, "savings-account", 100.00, now),   // outflow (positive), excluded by IsInflow check
-	}
-
-	suggestionRepo.On("GetPendingByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
-
-	expectedNote := "Auto-matched with transaction txn-savings-account"
-	suggestionRepo.On("UpdateStatus", ctx, suggestion.ID, domain.SuggestionStatusAccepted, &expectedNote).Return(nil)
-
-	err := svc.MonitorForMatches(ctx, userID, transactions)
-
-	require.NoError(t, err)
-	suggestionRepo.AssertExpectations(t)
+	suggestionRepo.AssertNotCalled(t, "GetPendingByUserID", mock.Anything, mock.Anything)
 }

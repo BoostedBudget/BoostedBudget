@@ -41,4 +41,9 @@ type NotificationRepository interface {
 	// MarkAllAsRead marks all unread notifications as read for a user.
 	// Returns the number of notifications marked as read.
 	MarkAllAsRead(ctx context.Context, userID string) (int64, error)
+
+	// GetOpenByTransferSuggestionID returns the first non-read accept_reject notification
+	// linked to the given transfer suggestion, or nil if none exists.
+	// Used by TransferCorrelationService to prevent duplicate fuzzy-match prompts.
+	GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string) (*domain.Notification, error)
 }
