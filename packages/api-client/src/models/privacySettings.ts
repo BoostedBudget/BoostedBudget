@@ -38,6 +38,7 @@ export interface PrivacySettings {
   gdpr_consent_timestamp: string;
   gdpr_necessary_consent: boolean;
   id: string;
+  include_in_aggregate_stats: boolean;
   marketing_emails_enabled: boolean;
   product_updates_enabled: boolean;
   security_alerts_enabled: boolean;

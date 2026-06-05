@@ -1487,6 +1487,31 @@ components:
         - checkout_url
         - transaction_id
       type: object
+    CompletedSuggestionSummary:
+      additionalProperties: false
+      properties:
+        actual_amount:
+          format: double
+          type: number
+        amount:
+          format: double
+          type: number
+        completed_at:
+          format: date-time
+          type: string
+        completion_source:
+          type: string
+        id:
+          type: string
+        to_account_id:
+          type: string
+        to_user_account_id:
+          type: string
+      required:
+        - id
+        - amount
+        - actual_amount
+      type: object
     ConditionEvalResult:
       additionalProperties: false
       properties:
@@ -1508,6 +1533,42 @@ components:
         - value
         - actual
         - met
+      type: object
+    ConfirmMatchBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ConfirmMatchBody.json
+          format: uri
+          readOnly: true
+          type: string
+        actual_amount:
+          description: Actual amount transferred
+          format: double
+          minimum: 0.01
+          type: number
+      required:
+        - actual_amount
+      type: object
+    ConfirmTransferSuggestionMatchOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ConfirmTransferSuggestionMatchOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          type: string
+        suggestion:
+          $ref: "#/components/schemas/TransferSuggestion"
+      required:
+        - message
+        - suggestion
       type: object
     ConnectionPoolStats:
       additionalProperties: false
@@ -3421,6 +3482,8 @@ components:
           type: boolean
         id:
           type: string
+        include_in_aggregate_stats:
+          type: boolean
         marketing_emails_enabled:
           type: boolean
         product_updates_enabled:
@@ -3443,6 +3506,7 @@ components:
         - product_updates_enabled
         - security_alerts_enabled
         - data_sharing_enabled
+        - include_in_aggregate_stats
         - created_at
         - updated_at
       type: object
@@ -4007,6 +4071,40 @@ components:
         - is_completed
         - created_at
         - updated_at
+      type: object
+    SavingsImpactAggregateBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SavingsImpactAggregateBody.json
+          format: uri
+          readOnly: true
+          type: string
+        completed_count:
+          description: Number of completed transfers (0 when not published)
+          format: int64
+          type: integer
+        computed_at:
+          description: ISO8601 timestamp of last snapshot (omitted when not published)
+          type: string
+        published:
+          description: False when k-anonymity threshold not met
+          type: boolean
+        total_amount:
+          description: Total moved to savings, rounded to nearest $1000 (0 when not published)
+          format: double
+          type: number
+        user_count:
+          description: Number of users (0 when not published)
+          format: int64
+          type: integer
+      required:
+        - published
+        - total_amount
+        - user_count
+        - completed_count
       type: object
     SavingsRateResponse:
       additionalProperties: false
@@ -4683,9 +4781,17 @@ components:
     TransferSuggestion:
       additionalProperties: false
       properties:
+        actual_amount:
+          format: double
+          type: number
         amount:
           format: double
           type: number
+        completed_at:
+          format: date-time
+          type: string
+        completion_source:
+          type: string
         created_at:
           format: date-time
           type: string
@@ -4699,6 +4805,8 @@ components:
         from_user_account_id:
           type: string
         id:
+          type: string
+        matched_transaction_id:
           type: string
         reason:
           type: string
@@ -5075,6 +5183,8 @@ components:
         gdpr_analytics_consent:
           type: boolean
         gdpr_necessary_consent:
+          type: boolean
+        include_in_aggregate_stats:
           type: boolean
         marketing_emails_enabled:
           type: boolean
@@ -5453,6 +5563,41 @@ components:
         - is_hidden
         - created_at
         - updated_at
+      type: object
+    UserSavingsImpact:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UserSavingsImpact.json
+          format: uri
+          readOnly: true
+          type: string
+        completed_count:
+          format: int64
+          type: integer
+        month_amount:
+          format: double
+          type: number
+        prev_month_amount:
+          format: double
+          type: number
+        recent_items:
+          items:
+            $ref: "#/components/schemas/CompletedSuggestionSummary"
+          type:
+            - array
+            - "null"
+        total_amount:
+          format: double
+          type: number
+      required:
+        - total_amount
+        - completed_count
+        - month_amount
+        - prev_month_amount
+        - recent_items
       type: object
     UserSubscriptionOverride:
       additionalProperties: false
@@ -9816,6 +9961,52 @@ paths:
       summary: Update savings goal
       tags:
         - Savings Goals
+  /api/v1/savings-impact/aggregate:
+    get:
+      description: Returns platform-wide savings transfer automation impact. Published only when k-anonymity thresholds are met (≥10 users, ≥$1000 total). Public endpoint — no authentication required.
+      operationId: getSavingsImpactAggregate
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavingsImpactAggregateBody"
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get aggregate savings impact
+      tags:
+        - SavingsImpact
+  /api/v1/savings-impact/me:
+    get:
+      description: Returns savings transfer automation impact totals for the authenticated user.
+      operationId: getSavingsImpactMe
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserSavingsImpact"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get my savings impact
+      tags:
+        - SavingsImpact
   /api/v1/subscription/billing-portal:
     get:
       description: Returns URL to Paddle billing portal where users can manage payment methods and view billing history.
@@ -10682,6 +10873,60 @@ paths:
       security:
         - clerk: []
       summary: Accept a transfer suggestion
+      tags:
+        - TransferSuggestions
+  /api/v1/transfer-suggestions/{id}/confirm-match:
+    post:
+      description: Confirms a fuzzy-matched transfer suggestion with the actual transfer amount. For MCP use.
+      operationId: confirmTransferSuggestionMatch
+      parameters:
+        - description: Idempotency key for MCP write operations (optional)
+          in: header
+          name: Idempotency-Key
+          schema:
+            description: Idempotency key for MCP write operations (optional)
+            type: string
+        - description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+          in: header
+          name: X-MCP-Grant-Id
+          schema:
+            description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+            type: string
+        - description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+          in: header
+          name: X-MCP-Worker-Secret
+          schema:
+            description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+            type: string
+        - description: Transfer suggestion UUID to confirm
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Transfer suggestion UUID to confirm
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmMatchBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfirmTransferSuggestionMatchOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Confirm transfer suggestion match
       tags:
         - TransferSuggestions
   /api/v1/transfer-suggestions/{id}/reject:

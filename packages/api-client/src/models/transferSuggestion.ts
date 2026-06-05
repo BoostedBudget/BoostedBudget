@@ -29,13 +29,17 @@
  */
 
 export interface TransferSuggestion {
+  actual_amount?: number;
   amount: number;
+  completed_at?: string;
+  completion_source?: string;
   created_at: string;
   currency_code: string;
   expires_at?: string;
   from_account_id?: string;
   from_user_account_id?: string;
   id: string;
+  matched_transaction_id?: string;
   reason?: string;
   rule_execution_id?: string;
   rule_id?: string;
