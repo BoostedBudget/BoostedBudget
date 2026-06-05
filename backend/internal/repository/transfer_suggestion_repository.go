@@ -122,7 +122,8 @@ func (r *transferSuggestionRepository) GetByID(ctx context.Context, id string) (
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
 			amount, currency_code,
 			reason, source, status, expires_at,
-			user_action_at, user_notes, created_at, updated_at
+			user_action_at, user_notes, created_at, updated_at,
+			completed_at, matched_transaction_id, actual_amount, completion_source
 		FROM transfer_suggestions
 		WHERE id = $1
 	`
@@ -137,7 +138,8 @@ func (r *transferSuggestionRepository) GetByUserID(ctx context.Context, userID s
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
 			amount, currency_code,
 			reason, source, status, expires_at,
-			user_action_at, user_notes, created_at, updated_at
+			user_action_at, user_notes, created_at, updated_at,
+			completed_at, matched_transaction_id, actual_amount, completion_source
 		FROM transfer_suggestions
 	`
 
@@ -170,7 +172,8 @@ func (r *transferSuggestionRepository) GetPendingByUserID(ctx context.Context, u
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
 			amount, currency_code,
 			reason, source, status, expires_at,
-			user_action_at, user_notes, created_at, updated_at
+			user_action_at, user_notes, created_at, updated_at,
+			completed_at, matched_transaction_id, actual_amount, completion_source
 		FROM transfer_suggestions
 		WHERE user_id = $1 AND status = 'pending'
 		ORDER BY created_at DESC
@@ -276,7 +279,8 @@ func (r *transferSuggestionRepository) GetByRuleID(ctx context.Context, ruleID s
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
 			amount, currency_code,
 			reason, source, status, expires_at,
-			user_action_at, user_notes, created_at, updated_at
+			user_action_at, user_notes, created_at, updated_at,
+			completed_at, matched_transaction_id, actual_amount, completion_source
 		FROM transfer_suggestions
 		WHERE rule_id = $1
 		ORDER BY created_at DESC
@@ -327,7 +331,8 @@ func (r *transferSuggestionRepository) GetActiveByUserID(ctx context.Context, us
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
 			amount, currency_code,
 			reason, source, status, expires_at,
-			user_action_at, user_notes, created_at, updated_at
+			user_action_at, user_notes, created_at, updated_at,
+			completed_at, matched_transaction_id, actual_amount, completion_source
 		FROM transfer_suggestions
 		WHERE user_id = $1 AND status IN ('pending', 'accepted')
 		ORDER BY created_at ASC
@@ -359,6 +364,10 @@ func (r *transferSuggestionRepository) scanSuggestion(row pgx.Row) (*domain.Tran
 		&suggestion.UserNotes,
 		&suggestion.CreatedAt,
 		&suggestion.UpdatedAt,
+		&suggestion.CompletedAt,
+		&suggestion.MatchedTransactionID,
+		&suggestion.ActualAmount,
+		&suggestion.CompletionSource,
 	)
 
 	if err != nil {
@@ -402,6 +411,10 @@ func (r *transferSuggestionRepository) querySuggestions(ctx context.Context, que
 			&suggestion.UserNotes,
 			&suggestion.CreatedAt,
 			&suggestion.UpdatedAt,
+			&suggestion.CompletedAt,
+			&suggestion.MatchedTransactionID,
+			&suggestion.ActualAmount,
+			&suggestion.CompletionSource,
 		)
 		if err != nil {
 			return nil, err
