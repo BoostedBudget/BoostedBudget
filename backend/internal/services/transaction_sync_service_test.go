@@ -3248,6 +3248,129 @@ func TestProcessAddedTransactions_EmitBatchSideEffectsCalledWithInsertedIDs(t *t
 	mockMonitor.AssertExpectations(t)
 }
 
+// ============================================================================
+// Issue #972: B4 — TransferCorrelationService wiring tests
+// ============================================================================
+
+// MockTransferCorrelationService is a testify mock for TransferCorrelationService.
+type MockTransferCorrelationService struct {
+	mock.Mock
+}
+
+func (m *MockTransferCorrelationService) CorrelateForUser(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+// TestSyncTransactions_CallsCorrelateForUser verifies that CorrelateForUser is called
+// with the correct userID after a successful sync that adds transactions.
+func TestSyncTransactions_CallsCorrelateForUser(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockCorrelation := new(MockTransferCorrelationService)
+
+	svc := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, // profileRepo
+		nil, // balanceSnapshotRepo
+		mockPlaidService,
+		nil, // subscriptionService
+		nil, // ruleApplicationService
+		nil, // budgetSyncService
+		nil, // transactionMonitorService
+		nil, // merchantRepo
+		nil, // logger
+	)
+	svc.SetTransferCorrelationService(mockCorrelation)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:          "li-corr-1",
+		UserID:      "user-corr-1",
+		AccessToken: "token",
+		Cursor:      stringPtr("c1"),
+	}
+
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added:      []plaid.Transaction{{TransactionId: "txn-corr-1", Amount: 50.0}},
+		Modified:   []plaid.Transaction{},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: "c2",
+		HasMore:    false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "token", "c1", 0).Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	// CorrelateForUser must be called with the correct userID
+	mockCorrelation.On("CorrelateForUser", ctx, "user-corr-1").Return(nil)
+
+	result, err := svc.SyncTransactions(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	mockCorrelation.AssertExpectations(t)
+}
+
+// TestSyncTransactions_CorrelationErrorDoesNotFailSync verifies that if CorrelateForUser
+// returns an error, SyncTransactions still returns nil (error is logged but swallowed).
+func TestSyncTransactions_CorrelationErrorDoesNotFailSync(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockCorrelation := new(MockTransferCorrelationService)
+
+	svc := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, // profileRepo
+		nil, // balanceSnapshotRepo
+		mockPlaidService,
+		nil, // subscriptionService
+		nil, // ruleApplicationService
+		nil, // budgetSyncService
+		nil, // transactionMonitorService
+		nil, // merchantRepo
+		nil, // logger
+	)
+	svc.SetTransferCorrelationService(mockCorrelation)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:          "li-corr-2",
+		UserID:      "user-corr-2",
+		AccessToken: "token2",
+		Cursor:      stringPtr("c3"),
+	}
+
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added:      []plaid.Transaction{{TransactionId: "txn-corr-2", Amount: 25.0}},
+		Modified:   []plaid.Transaction{},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: "c4",
+		HasMore:    false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "token2", "c3", 0).Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c4").Return(nil)
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	// CorrelateForUser returns an error — sync must NOT fail
+	mockCorrelation.On("CorrelateForUser", ctx, "user-corr-2").Return(errors.New("correlation db error"))
+
+	result, err := svc.SyncTransactions(ctx, linkedItem)
+
+	// Sync must succeed even though correlation errored
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	mockCorrelation.AssertExpectations(t)
+}
+
 // TestProcessAddedTransactions_MonitorForMatchesReceivesAllTransactions ensures
 // that MonitorForMatches receives all persisted transactions, not just inserted
 // ones, preserving the existing re-link matching semantics.
