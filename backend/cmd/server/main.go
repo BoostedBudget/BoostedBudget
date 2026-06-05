@@ -715,6 +715,15 @@ func main() {
 					appLogger,
 				)
 
+				// Issue #972: Initialize TransferCorrelationService and wire into sync pipeline (B4)
+				transferCorrelationService := services.NewTransferCorrelationService(
+					transferSuggestionRepo,
+					transactionRepo,
+					notificationRepo,
+				)
+				transactionSyncService.SetTransferCorrelationService(transferCorrelationService)
+				appLogger.Info("Transfer correlation service wired into transaction sync")
+
 				// Initialize Item Error Service for ITEM webhook processing
 				// Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
 				itemErrorService := services.NewItemErrorService(
