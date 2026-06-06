@@ -113,7 +113,10 @@ func (r *savingsImpactRepository) GetAggregateSavingsStats(ctx context.Context) 
 }
 
 // GetUserImpact returns per-user savings totals and recent completed suggestions.
-// Only includes suggestions where the user's privacy settings have include_in_aggregate_stats = true.
+// Returns ALL completed suggestions for the requesting user regardless of their
+// privacy/aggregate-stats setting — users always see their own data in full.
+// The include_in_aggregate_stats privacy filter is applied only in GetCommunityImpact
+// and similar aggregate functions, not here.
 func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID string) (*domain.UserSavingsImpact, error) {
 	now := time.Now().UTC()
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
