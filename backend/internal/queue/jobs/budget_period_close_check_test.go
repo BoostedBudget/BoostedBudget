@@ -16,6 +16,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// mockUserTimezoneLookup mocks UserTimezoneLookup.
+type mockUserTimezoneLookup struct {
+	mock.Mock
+}
+
+func (m *mockUserTimezoneLookup) GetTimezonesByUserIDs(ctx context.Context, userIDs []string) (map[string]string, error) {
+	args := m.Called(ctx, userIDs)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string]string), args.Error(1)
+}
+
 // =============================================================================
 // Mocks
 // =============================================================================
@@ -117,7 +130,7 @@ func TestBudgetPeriodCloseCheck_FiresEventOnPeriodClose(t *testing.T) {
 		Return(true, nil)
 
 	// Verify computeJustClosedPeriod detects the January close when now is Feb 1.
-	pStart, pEnd, closed := computeJustClosedPeriod(budget, now)
+	pStart, pEnd, closed := computeJustClosedPeriod(budget, now, time.UTC)
 	require.True(t, closed, "should detect January closed when now is Feb 1")
 	assert.Equal(t, expectedPeriodStart, pStart)
 	assert.Equal(t, expectedPeriodEnd, pEnd)
@@ -165,7 +178,7 @@ func TestBudgetPeriodCloseCheck_IdempotentOnRerun(t *testing.T) {
 	expectedPeriodEnd := time.Date(2024, time.January, 7, 0, 0, 0, 0, time.UTC)
 
 	// Verify the period computation is correct.
-	pStart, pEnd, closed := computeJustClosedPeriod(budget, now)
+	pStart, pEnd, closed := computeJustClosedPeriod(budget, now, time.UTC)
 	require.True(t, closed)
 	assert.Equal(t, expectedPeriodStart, pStart)
 	assert.Equal(t, expectedPeriodEnd, pEnd)
@@ -187,7 +200,7 @@ func TestBudgetPeriodCloseCheck_NoPeriodClose(t *testing.T) {
 	budget := newMonthlyBudget("b1", "u1", time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC))
 	now := time.Date(2024, time.January, 15, 9, 0, 0, 0, time.UTC)
 
-	_, _, closed := computeJustClosedPeriod(budget, now)
+	_, _, closed := computeJustClosedPeriod(budget, now, time.UTC)
 	assert.False(t, closed, "no period closed mid-month")
 }
 
@@ -206,12 +219,12 @@ func TestBudgetPeriodCloseCheck_LateExecution(t *testing.T) {
 	budget := newMonthlyBudget("b1", "u1", time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC))
 	now := time.Date(2024, time.February, 2, 9, 0, 0, 0, time.UTC)
 
-	_, _, closed := computeJustClosedPeriod(budget, now)
+	_, _, closed := computeJustClosedPeriod(budget, now, time.UTC)
 	assert.False(t, closed, "job running 2 days after period close misses the boundary (expected for MVP)")
 
 	// Contrast: job running exactly 1 day after (Feb 1 = first day of new period).
 	nowOnTime := time.Date(2024, time.February, 1, 9, 0, 0, 0, time.UTC)
-	pStart, pEnd, closedOnTime := computeJustClosedPeriod(budget, nowOnTime)
+	pStart, pEnd, closedOnTime := computeJustClosedPeriod(budget, nowOnTime, time.UTC)
 	require.True(t, closedOnTime, "job running on Feb 1 should detect Jan close")
 	assert.Equal(t, time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC), pStart)
 	assert.Equal(t, time.Date(2024, time.January, 31, 0, 0, 0, 0, time.UTC), pEnd)
@@ -352,19 +365,19 @@ func TestComputeCurrentPeriod_Monthly(t *testing.T) {
 	}
 
 	t.Run("mid-month", func(t *testing.T) {
-		s, e := computeCurrentPeriod(budget, time.Date(2024, time.March, 15, 0, 0, 0, 0, time.UTC))
+		s, e := computeCurrentPeriod(budget, time.Date(2024, time.March, 15, 0, 0, 0, 0, time.UTC), time.UTC)
 		assert.Equal(t, time.Date(2024, time.March, 1, 0, 0, 0, 0, time.UTC), s)
 		assert.Equal(t, time.Date(2024, time.March, 31, 0, 0, 0, 0, time.UTC), e)
 	})
 
 	t.Run("first day of month", func(t *testing.T) {
-		s, e := computeCurrentPeriod(budget, time.Date(2024, time.February, 1, 0, 0, 0, 0, time.UTC))
+		s, e := computeCurrentPeriod(budget, time.Date(2024, time.February, 1, 0, 0, 0, 0, time.UTC), time.UTC)
 		assert.Equal(t, time.Date(2024, time.February, 1, 0, 0, 0, 0, time.UTC), s)
 		assert.Equal(t, time.Date(2024, time.February, 29, 0, 0, 0, 0, time.UTC), e) // 2024 is a leap year
 	})
 
 	t.Run("last day of month", func(t *testing.T) {
-		s, e := computeCurrentPeriod(budget, time.Date(2024, time.January, 31, 0, 0, 0, 0, time.UTC))
+		s, e := computeCurrentPeriod(budget, time.Date(2024, time.January, 31, 0, 0, 0, 0, time.UTC), time.UTC)
 		assert.Equal(t, time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC), s)
 		assert.Equal(t, time.Date(2024, time.January, 31, 0, 0, 0, 0, time.UTC), e)
 	})
@@ -378,19 +391,19 @@ func TestComputeCurrentPeriod_Weekly(t *testing.T) {
 	}
 
 	t.Run("first week", func(t *testing.T) {
-		s, e := computeCurrentPeriod(budget, time.Date(2024, time.January, 3, 0, 0, 0, 0, time.UTC))
+		s, e := computeCurrentPeriod(budget, time.Date(2024, time.January, 3, 0, 0, 0, 0, time.UTC), time.UTC)
 		assert.Equal(t, time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC), s)
 		assert.Equal(t, time.Date(2024, time.January, 7, 0, 0, 0, 0, time.UTC), e)
 	})
 
 	t.Run("second week starts on day 8", func(t *testing.T) {
-		s, e := computeCurrentPeriod(budget, time.Date(2024, time.January, 8, 0, 0, 0, 0, time.UTC))
+		s, e := computeCurrentPeriod(budget, time.Date(2024, time.January, 8, 0, 0, 0, 0, time.UTC), time.UTC)
 		assert.Equal(t, time.Date(2024, time.January, 8, 0, 0, 0, 0, time.UTC), s)
 		assert.Equal(t, time.Date(2024, time.January, 14, 0, 0, 0, 0, time.UTC), e)
 	})
 
 	t.Run("last day of first week", func(t *testing.T) {
-		s, e := computeCurrentPeriod(budget, time.Date(2024, time.January, 7, 0, 0, 0, 0, time.UTC))
+		s, e := computeCurrentPeriod(budget, time.Date(2024, time.January, 7, 0, 0, 0, 0, time.UTC), time.UTC)
 		assert.Equal(t, time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC), s)
 		assert.Equal(t, time.Date(2024, time.January, 7, 0, 0, 0, 0, time.UTC), e)
 	})
@@ -403,19 +416,19 @@ func TestComputeCurrentPeriod_Quarterly(t *testing.T) {
 	}
 
 	t.Run("Q1", func(t *testing.T) {
-		s, e := computeCurrentPeriod(budget, time.Date(2024, time.February, 15, 0, 0, 0, 0, time.UTC))
+		s, e := computeCurrentPeriod(budget, time.Date(2024, time.February, 15, 0, 0, 0, 0, time.UTC), time.UTC)
 		assert.Equal(t, time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC), s)
 		assert.Equal(t, time.Date(2024, time.March, 31, 0, 0, 0, 0, time.UTC), e)
 	})
 
 	t.Run("Q2", func(t *testing.T) {
-		s, e := computeCurrentPeriod(budget, time.Date(2024, time.May, 1, 0, 0, 0, 0, time.UTC))
+		s, e := computeCurrentPeriod(budget, time.Date(2024, time.May, 1, 0, 0, 0, 0, time.UTC), time.UTC)
 		assert.Equal(t, time.Date(2024, time.April, 1, 0, 0, 0, 0, time.UTC), s)
 		assert.Equal(t, time.Date(2024, time.June, 30, 0, 0, 0, 0, time.UTC), e)
 	})
 
 	t.Run("Q4", func(t *testing.T) {
-		s, e := computeCurrentPeriod(budget, time.Date(2024, time.December, 31, 0, 0, 0, 0, time.UTC))
+		s, e := computeCurrentPeriod(budget, time.Date(2024, time.December, 31, 0, 0, 0, 0, time.UTC), time.UTC)
 		assert.Equal(t, time.Date(2024, time.October, 1, 0, 0, 0, 0, time.UTC), s)
 		assert.Equal(t, time.Date(2024, time.December, 31, 0, 0, 0, 0, time.UTC), e)
 	})
@@ -427,7 +440,7 @@ func TestComputeCurrentPeriod_Yearly(t *testing.T) {
 		StartDate: time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC),
 	}
 
-	s, e := computeCurrentPeriod(budget, time.Date(2024, time.July, 4, 0, 0, 0, 0, time.UTC))
+	s, e := computeCurrentPeriod(budget, time.Date(2024, time.July, 4, 0, 0, 0, 0, time.UTC), time.UTC)
 	assert.Equal(t, time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC), s)
 	assert.Equal(t, time.Date(2024, time.December, 31, 0, 0, 0, 0, time.UTC), e)
 }
@@ -441,7 +454,7 @@ func TestComputeCurrentPeriod_Custom(t *testing.T) {
 	}
 
 	// Custom period always returns the fixed [StartDate, EndDate] window.
-	s, e := computeCurrentPeriod(budget, time.Date(2024, time.February, 15, 0, 0, 0, 0, time.UTC))
+	s, e := computeCurrentPeriod(budget, time.Date(2024, time.February, 15, 0, 0, 0, 0, time.UTC), time.UTC)
 	assert.Equal(t, time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC), s)
 	assert.Equal(t, time.Date(2024, time.March, 31, 0, 0, 0, 0, time.UTC), e)
 }
@@ -455,7 +468,7 @@ func TestComputeJustClosedPeriod_MonthlyBoundary(t *testing.T) {
 
 	t.Run("first day of new month - period closed", func(t *testing.T) {
 		now := time.Date(2024, time.February, 1, 9, 0, 0, 0, time.UTC)
-		s, e, closed := computeJustClosedPeriod(budget, now)
+		s, e, closed := computeJustClosedPeriod(budget, now, time.UTC)
 		require.True(t, closed)
 		assert.Equal(t, time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC), s)
 		assert.Equal(t, time.Date(2024, time.January, 31, 0, 0, 0, 0, time.UTC), e)
@@ -463,13 +476,13 @@ func TestComputeJustClosedPeriod_MonthlyBoundary(t *testing.T) {
 
 	t.Run("mid-month - no close", func(t *testing.T) {
 		now := time.Date(2024, time.January, 15, 9, 0, 0, 0, time.UTC)
-		_, _, closed := computeJustClosedPeriod(budget, now)
+		_, _, closed := computeJustClosedPeriod(budget, now, time.UTC)
 		assert.False(t, closed)
 	})
 
 	t.Run("last day of month - no close yet", func(t *testing.T) {
 		now := time.Date(2024, time.January, 31, 9, 0, 0, 0, time.UTC)
-		_, _, closed := computeJustClosedPeriod(budget, now)
+		_, _, closed := computeJustClosedPeriod(budget, now, time.UTC)
 		assert.False(t, closed, "last day of the period is still in the same period")
 	})
 }
@@ -483,7 +496,7 @@ func TestComputeJustClosedPeriod_WeeklyBoundary(t *testing.T) {
 
 	// Jan 8 is the first day of the second weekly period.
 	now := time.Date(2024, time.January, 8, 9, 0, 0, 0, time.UTC)
-	s, e, closed := computeJustClosedPeriod(budget, now)
+	s, e, closed := computeJustClosedPeriod(budget, now, time.UTC)
 	require.True(t, closed)
 	assert.Equal(t, time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC), s)
 	assert.Equal(t, time.Date(2024, time.January, 7, 0, 0, 0, 0, time.UTC), e)
@@ -497,7 +510,7 @@ func TestComputeJustClosedPeriod_QuarterlyBoundary(t *testing.T) {
 
 	// April 1 = first day of Q2; Q1 (Jan–Mar) just closed.
 	now := time.Date(2024, time.April, 1, 9, 0, 0, 0, time.UTC)
-	s, e, closed := computeJustClosedPeriod(budget, now)
+	s, e, closed := computeJustClosedPeriod(budget, now, time.UTC)
 	require.True(t, closed)
 	assert.Equal(t, time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC), s)
 	assert.Equal(t, time.Date(2024, time.March, 31, 0, 0, 0, 0, time.UTC), e)
@@ -511,7 +524,7 @@ func TestComputeJustClosedPeriod_YearlyBoundary(t *testing.T) {
 
 	// Jan 1, 2025 = first day of 2025; 2024 just closed.
 	now := time.Date(2025, time.January, 1, 9, 0, 0, 0, time.UTC)
-	s, e, closed := computeJustClosedPeriod(budget, now)
+	s, e, closed := computeJustClosedPeriod(budget, now, time.UTC)
 	require.True(t, closed)
 	assert.Equal(t, time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC), s)
 	assert.Equal(t, time.Date(2024, time.December, 31, 0, 0, 0, 0, time.UTC), e)
@@ -535,16 +548,15 @@ func TestComputeJustClosedPeriod_YearlyBoundary(t *testing.T) {
 func TestBudgetPeriodCloseCheckWorker_NoDuplicateEnqueueOnMarkerRace(t *testing.T) {
 	ctx := context.Background()
 
-	// Build a weekly budget whose first period ended exactly yesterday.
-	// This guarantees computeJustClosedPeriod(budget, time.Now()) returns closed=true.
-	// Use the same time.Now() that the worker will use (local, not UTC-truncated) to
-	// ensure the period boundary aligns with the worker's internal clock.
-	now := time.Now()
-	tDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	yesterday := tDate.AddDate(0, 0, -1)
-	// Budget started 6 days before yesterday so yesterday is the last day of week 1,
-	// and today is the first day of week 2.
-	budgetStart := yesterday.AddDate(0, 0, -6)
+	// Use a fixed UTC clock so the budget calibration and worker clock are always
+	// aligned regardless of the test machine's local timezone.
+	// "now" is 2024-01-08 09:00 UTC — the first day of week 2 for a budget that
+	// started on 2024-01-01. Both workers receive the same fixed clock via workAt.
+	now := time.Date(2024, time.January, 8, 9, 0, 0, 0, time.UTC)
+
+	// Budget: weekly, started Jan 1. Week 1 = Jan 1–7. Week 2 starts Jan 8.
+	// computeJustClosedPeriod(budget, now=Jan8, UTC) → closed=true (Jan 1–7 just closed).
+	budgetStart := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 	budget := &domain.Budget{
 		ID:           "budget-race",
@@ -562,8 +574,7 @@ func TestBudgetPeriodCloseCheckWorker_NoDuplicateEnqueueOnMarkerRace(t *testing.
 	periodEventsRepo := &mockBudgetPeriodEventsRepo{}
 	mockQueue := new(MockJobQueue)
 
-	// Both workers see no marker on the fast-path check (mock.Anything for period times
-	// since the worker uses time.Now() internally).
+	// Both workers see no marker on the fast-path check (mock.Anything for period times).
 	periodEventsRepo.On("HasMarker", ctx, "user-race", "budget-race",
 		mock.Anything, mock.Anything, domain.EventBudgetPeriodEnd).
 		Return(false, nil)
@@ -598,16 +609,167 @@ func TestBudgetPeriodCloseCheckWorker_NoDuplicateEnqueueOnMarkerRace(t *testing.
 	job := newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{TriggerSource: "test-race"})
 
 	// Worker 1: wins the InsertMarker race — should enqueue.
+	// Use workAt with fixed clock to avoid timezone/time.Now() flakiness.
 	worker1 := makeWorker()
-	err1 := worker1.Work(ctx, job)
+	err1 := worker1.workAt(ctx, job, now)
 	require.NoError(t, err1, "worker 1 should complete without error")
 
 	// Worker 2: loses the InsertMarker race — must NOT enqueue again.
 	worker2 := makeWorker()
-	err2 := worker2.Work(ctx, job)
+	err2 := worker2.workAt(ctx, job, now)
 	require.NoError(t, err2, "worker 2 should complete without error")
 
 	// Enqueue must have been called exactly once across both workers.
+	mockQueue.AssertNumberOfCalls(t, "Enqueue", 1)
+	mockQueue.AssertExpectations(t)
+	periodEventsRepo.AssertExpectations(t)
+}
+
+// =============================================================================
+// Timezone-aware period detection tests (Issue #972 Task 2e)
+// =============================================================================
+
+// TestComputeCurrentPeriod_WithTimezone_MonthBoundary verifies that when the user
+// is in America/Los_Angeles and UTC is already March 1, the local date is still
+// Feb 29 (2024 is a leap year). The period containing local Feb 29 is February.
+func TestComputeCurrentPeriod_WithTimezone_MonthBoundary(t *testing.T) {
+	// 2024-03-01 07:00:00 UTC = 2024-02-29 23:00:00 PST (UTC-8 in winter)
+	now := time.Date(2024, time.March, 1, 7, 0, 0, 0, time.UTC)
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	require.NoError(t, err)
+
+	budget := &domain.Budget{
+		Period:    domain.BudgetPeriodMonthly,
+		StartDate: time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	// With LA timezone: local date is Feb 29 → period is February.
+	s, e := computeCurrentPeriod(budget, now, loc)
+	assert.Equal(t, time.Date(2024, time.February, 1, 0, 0, 0, 0, time.UTC), s)
+	assert.Equal(t, time.Date(2024, time.February, 29, 0, 0, 0, 0, time.UTC), e)
+
+	// With UTC: date is March 1 → period is March.
+	sUTC, eUTC := computeCurrentPeriod(budget, now, time.UTC)
+	assert.Equal(t, time.Date(2024, time.March, 1, 0, 0, 0, 0, time.UTC), sUTC)
+	assert.Equal(t, time.Date(2024, time.March, 31, 0, 0, 0, 0, time.UTC), eUTC)
+}
+
+// TestComputeJustClosedPeriod_WithTimezone_NoBoundaryUTC_YesBoundaryLocal verifies
+// the scenario where UTC sees no boundary but a western timezone does.
+//
+// Setup: monthly budget. now = 2024-03-01 03:00:00 UTC.
+//   - UTC: today = Mar 1, yesterday = Feb 29 — boundary crossed (Feb→Mar). closed=true.
+//   - America/Los_Angeles (UTC-8): now.In(loc) = Feb 29 23:00 PST, yesterday.In(loc) = Feb 28 23:00 PST.
+//     Local today = Feb 29, local yesterday = Feb 28. Same month → NO boundary yet.
+//
+// This demonstrates that a user in LA has NOT yet crossed the month boundary when
+// UTC reads 03:00 on March 1 — their local clock still shows Feb 29.
+func TestComputeJustClosedPeriod_WithTimezone_NoBoundaryUTC_YesBoundaryLocal(t *testing.T) {
+	// 2024-03-01 03:00:00 UTC = 2024-02-29 19:00:00 PST
+	now := time.Date(2024, time.March, 1, 3, 0, 0, 0, time.UTC)
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	require.NoError(t, err)
+
+	budget := newMonthlyBudget("b", "u", time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC))
+
+	// In LA timezone: local now is still Feb 29 (no boundary yet).
+	_, _, closed := computeJustClosedPeriod(budget, now, loc)
+	assert.False(t, closed, "no boundary in LA timezone when local date is still Feb 29")
+
+	// In UTC: today is Mar 1, yesterday was Feb 29 — boundary IS crossed.
+	_, _, closedUTC := computeJustClosedPeriod(budget, now, time.UTC)
+	assert.True(t, closedUTC, "boundary detected in UTC on March 1")
+}
+
+// TestWorkAt_UsesUserTimezone verifies that workAt uses the timezone from the
+// UserTimezoneLookup when detecting period boundaries.
+//
+// Setup: monthly budget, user in America/New_York (UTC-5 in winter).
+// now = 2024-02-01 04:00:00 UTC = 2024-01-31 23:00:00 EST.
+// UTC → January just closed (Feb 1 UTC vs Jan 31 UTC → boundary).
+// America/New_York → local date is still Jan 31 → yesterday was Jan 30 → same period (January) → NO boundary.
+//
+// With UserTimezones = New_York, the worker should NOT fire the period-end event.
+func TestWorkAt_UsesUserTimezone(t *testing.T) {
+	ctx := context.Background()
+
+	// 2024-02-01 04:00:00 UTC = 2024-01-31 23:00:00 EST (UTC-5 in winter)
+	now := time.Date(2024, time.February, 1, 4, 0, 0, 0, time.UTC)
+
+	budget := newMonthlyBudget("budget-tz", "user-tz", time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC))
+
+	budgetRepo := &mockBudgetPeriodCheckRepo{}
+	periodEventsRepo := &mockBudgetPeriodEventsRepo{}
+	mockQueue := new(MockJobQueue)
+	tzLookup := new(mockUserTimezoneLookup)
+
+	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).
+		Return([]*domain.Budget{budget}, nil)
+
+	// Timezone lookup returns America/New_York — local date on Feb 1 04:00 UTC is Jan 31.
+	tzLookup.On("GetTimezonesByUserIDs", ctx, []string{"user-tz"}).
+		Return(map[string]string{"user-tz": "America/New_York"}, nil)
+
+	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
+		BudgetRepo:       budgetRepo,
+		PeriodEventsRepo: periodEventsRepo,
+		JobQueue:         mockQueue,
+		UserTimezones:    tzLookup,
+	})
+
+	job := newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{TriggerSource: "test-tz"})
+	err := worker.workAt(ctx, job, now)
+	require.NoError(t, err)
+
+	// With New_York timezone: local date is Jan 31, so January has NOT closed yet.
+	// No marker check, no insert, no enqueue.
+	periodEventsRepo.AssertNotCalled(t, "HasMarker")
+	mockQueue.AssertNotCalled(t, "Enqueue")
+	tzLookup.AssertExpectations(t)
+}
+
+// TestWorkAt_FallsBackToUTCWhenTimezoneNil verifies that when UserTimezones is nil,
+// the worker falls back to UTC and still processes period boundaries correctly.
+func TestWorkAt_FallsBackToUTCWhenTimezoneNil(t *testing.T) {
+	ctx := context.Background()
+
+	// Feb 1 UTC → January just closed.
+	now := time.Date(2024, time.February, 1, 9, 0, 0, 0, time.UTC)
+	expectedPeriodStart := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
+	expectedPeriodEnd := time.Date(2024, time.January, 31, 0, 0, 0, 0, time.UTC)
+
+	budget := newMonthlyBudget("budget-utcfb", "user-utcfb", time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC))
+
+	budgetRepo := &mockBudgetPeriodCheckRepo{}
+	periodEventsRepo := &mockBudgetPeriodEventsRepo{}
+	mockQueue := new(MockJobQueue)
+
+	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).
+		Return([]*domain.Budget{budget}, nil)
+	periodEventsRepo.On("HasMarker", ctx, "user-utcfb", "budget-utcfb",
+		expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
+		Return(false, nil)
+	periodEventsRepo.On("InsertMarker", ctx, "user-utcfb", "budget-utcfb",
+		expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
+		Return(true, nil)
+	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		evalArgs, ok := job.(RuleEvaluationArgs)
+		return ok && evalArgs.UserID == "user-utcfb" && evalArgs.EventType == domain.EventBudgetPeriodEnd
+	}), mock.Anything).Return(&queue.JobResult{ID: 99}, nil)
+
+	// UserTimezones is nil → falls back to UTC.
+	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
+		BudgetRepo:       budgetRepo,
+		PeriodEventsRepo: periodEventsRepo,
+		JobQueue:         mockQueue,
+		UserTimezones:    nil,
+	})
+
+	job := newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{TriggerSource: "test-utcfb"})
+	err := worker.workAt(ctx, job, now)
+	require.NoError(t, err)
+
+	// With UTC fallback: February 1 → January just closed → event fires.
 	mockQueue.AssertNumberOfCalls(t, "Enqueue", 1)
 	mockQueue.AssertExpectations(t)
 	periodEventsRepo.AssertExpectations(t)
