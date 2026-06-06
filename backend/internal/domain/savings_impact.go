@@ -6,7 +6,7 @@ import "time"
 
 // SavingsImpactSnapshot represents a daily aggregate snapshot of savings transfer
 // automation impact across all users who have opted into aggregate statistics.
-// One snapshot per UTC calendar day (enforced by unique index on computed_at::date).
+// One snapshot per UTC calendar day (enforced by unique index on DATE(computed_at AT TIME ZONE 'UTC')).
 type SavingsImpactSnapshot struct {
 	ID             string    `json:"id"              db:"id"`
 	ComputedAt     time.Time `json:"computed_at"     db:"computed_at"`

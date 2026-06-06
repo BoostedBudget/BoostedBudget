@@ -2041,3 +2041,47 @@ func TestEventDataKeyContract(t *testing.T) {
 			"calculateSavingsGoalAmount reads key %q which is NOT in the period-close emitted map", key)
 	}
 }
+
+// TestTestRule_DottedFieldPreviewShowsActual verifies GAP T: TestRule's preview must
+// expose the real EventData value for dotted UI-built condition fields (e.g.
+// "budget.remaining_amount") in ConditionEvalResult.Actual, not nil.
+// Without normalizeConditionField applied to the Actual lookup, dotted fields miss in
+// the EventData map and Actual is set to nil even though Met is computed correctly.
+func TestTestRule_DottedFieldPreviewShowsActual(t *testing.T) {
+	ctx := context.Background()
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	actions, _ := json.Marshal(RuleActions{Transfer: &domain.TransferAction{
+		FromAccountID: "account-a", ToAccountID: "account-b",
+		AmountType: "fixed", Amount: 50,
+	}})
+	rule := &domain.AutomationRule{
+		ID: "rule-dotted", UserID: "u", Name: "dotted", Enabled: true, Priority: 1,
+		RuleType: domain.RuleTypeTransferSuggestion,
+		TriggerConfig: domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+		// UI-built dotted field — backend emits flat "remaining"
+		Conditions: []domain.AutomationRuleCondition{
+			{Field: "budget.remaining_amount", Operator: domain.ConditionOperatorGt, Value: "100"},
+		},
+		ConditionLogic: "AND",
+		Actions:        actions,
+	}
+	// Period-close EventData uses flat keys (domain.EventDataKey*)
+	triggerData := map[string]interface{}{
+		domain.EventDataKeyRemaining: 150.0,
+		domain.EventDataKeyBudgetID:  "b-1",
+	}
+
+	result, err := service.TestRule(ctx, rule, triggerData)
+	require.NoError(t, err)
+
+	require.Len(t, result.ConditionResults, 1)
+	cr := result.ConditionResults[0]
+	assert.True(t, cr.Met, "budget.remaining_amount (150) > 100 should be Met")
+	// Actual must be the resolved flat value, not nil
+	assert.NotNil(t, cr.Actual, "Actual must not be nil for dotted field with matching EventData")
+	assert.Equal(t, 150.0, cr.Actual, "Actual must equal the EventData value for budget.remaining_amount")
+}

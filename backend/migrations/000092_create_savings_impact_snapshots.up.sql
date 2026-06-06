@@ -1,12 +1,12 @@
 -- #972: Create savings_impact_snapshots table.
 --
 -- This table stores daily aggregate snapshots of savings transfer automation impact:
---   total_amount     — sum of all completed transfer amounts across all users
---   user_count       — number of distinct users with completed transfers
---   completed_count  — number of completed transfer suggestions included
+--   total_amount     — sum of all completed transfer amounts across opted-in users (include_in_aggregate_stats=true)
+--   user_count       — number of distinct opted-in users with completed transfers
+--   completed_count  — number of completed transfer suggestions from opted-in users
 --
 -- One snapshot is recorded per UTC day (enforced by the unique expression index
--- on computed_at::date). The computed_at DESC index supports efficient "get latest"
+-- on DATE(computed_at AT TIME ZONE 'UTC')). The computed_at DESC index supports efficient "get latest"
 -- queries without a full table scan.
 
 -- =============================================================================

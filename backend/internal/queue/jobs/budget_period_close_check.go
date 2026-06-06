@@ -55,6 +55,9 @@ type BudgetPeriodEventsRepo interface {
 	// inserted, false if it already existed (ON CONFLICT). Callers should only
 	// proceed with enqueueing when the return value is true.
 	InsertMarker(ctx context.Context, userID string, budgetID string, periodStart time.Time, periodEnd time.Time, eventType string) (bool, error)
+	// DeleteMarker removes a previously-inserted marker so the next daily run can
+	// retry. Used to clean up an orphaned marker when Enqueue fails.
+	DeleteMarker(ctx context.Context, userID string, budgetID string, periodStart time.Time, periodEnd time.Time, eventType string) error
 }
 
 // BudgetPeriodCloseCheckWorker processes the daily period-close scan.
@@ -265,17 +268,27 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 				},
 			}
 
-			// Note: if Enqueue fails after a successful InsertMarker, the marker
-			// remains in place. HasMarker will return true on the next daily run,
-			// preventing a retry via the normal late-execution path. This is the
-			// accepted trade-off: the marker is the source of truth for exactly-once
-			// delivery; a failed enqueue requires manual intervention or a new
-			// marker-aware recovery path.
 			result, enqueueErr := w.jobQueue.Enqueue(ctx, evalArgs,
 				queue.WithQueue(queue.QueueDefault),
 			)
 			if enqueueErr != nil {
-				w.logger.Error("failed to enqueue rule evaluation for period end",
+				// Enqueue failed AFTER a successful InsertMarker. Without cleanup the
+				// orphaned marker would permanently suppress budget_period_end for this
+				// period. Delete the marker so the next daily run retries.
+				// Worst case: the job actually enqueued but returned an error — the
+				// retry produces a duplicate rule evaluation for the same period. This
+				// is safe: rules check actual budget state and duplicate evaluations are
+				// idempotent (same suggestion would be created or deduped).
+				if delErr := w.periodEventsRepo.DeleteMarker(ctx,
+					budget.UserID, budget.ID, periodStart, periodEnd, domain.EventBudgetPeriodEnd,
+				); delErr != nil {
+					w.logger.Error("failed to delete marker after enqueue failure",
+						"budget_id", budget.ID,
+						"user_id", budget.UserID,
+						"delete_error", delErr,
+					)
+				}
+				w.logger.Error("failed to enqueue rule evaluation for period end; marker removed for retry",
 					"budget_id", budget.ID,
 					"user_id", budget.UserID,
 					"error", enqueueErr,

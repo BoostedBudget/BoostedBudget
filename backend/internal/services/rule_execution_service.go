@@ -249,10 +249,19 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 		TriggerDataUsed: triggerData,
 	}
 
-	// Evaluate each condition individually
+	// Evaluate each condition individually.
+	// Use normalizeConditionField for the Actual lookup so that dotted UI-built fields
+	// (e.g. "budget.remaining_amount") resolve to the real EventData value ("remaining")
+	// — the same normalization applied inside evaluateCondition for Met.
+	// Fall back to the raw field if the normalized key misses: some emitters (e.g.
+	// transaction-trigger EventData) publish the full dotted key as-is.
 	conditionResults := make([]domain.ConditionEvalResult, len(rule.Conditions))
 	for i, condition := range rule.Conditions {
-		actual, exists := triggerData[condition.Field]
+		normalizedField := normalizeConditionField(condition.Field)
+		actual, exists := triggerData[normalizedField]
+		if !exists && normalizedField != condition.Field {
+			actual, exists = triggerData[condition.Field]
+		}
 		met := evaluateCondition(condition, triggerData)
 
 		conditionResults[i] = domain.ConditionEvalResult{

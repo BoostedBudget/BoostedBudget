@@ -13,15 +13,16 @@ import (
 
 // SavingsImpactRepository defines the data access methods for savings impact snapshots.
 type SavingsImpactRepository interface {
-	// WriteSnapshot inserts a daily snapshot. Uses ON CONFLICT ((computed_at::date)) DO UPDATE
-	// so re-running the same day overwrites (idempotent per UTC date).
+	// WriteSnapshot inserts a daily snapshot (idempotent per UTC date).
+	// See implementation for ON CONFLICT details.
 	WriteSnapshot(ctx context.Context, snapshot *domain.SavingsImpactSnapshot) error
 
 	// GetLatestSnapshot returns the most recent snapshot row, or nil if none exists.
 	GetLatestSnapshot(ctx context.Context) (*domain.SavingsImpactSnapshot, error)
 
-	// GetUserImpact returns the sum of actual_amount for completed suggestions by a user
-	// where include_in_aggregate_stats = true. Also returns count and recent items.
+	// GetUserImpact returns the sum of actual_amount for all completed suggestions by the
+	// requesting user, regardless of their include_in_aggregate_stats setting. Also returns
+	// count and recent items. The privacy filter only applies to aggregate (community-wide) stats.
 	GetUserImpact(ctx context.Context, userID string) (*domain.UserSavingsImpact, error)
 
 	// GetAggregateSavingsStats returns cross-user aggregate totals for completed suggestions
@@ -116,8 +117,8 @@ func (r *savingsImpactRepository) GetAggregateSavingsStats(ctx context.Context) 
 // GetUserImpact returns per-user savings totals and recent completed suggestions.
 // Returns ALL completed suggestions for the requesting user regardless of their
 // privacy/aggregate-stats setting — users always see their own data in full.
-// The include_in_aggregate_stats privacy filter is applied only in GetCommunityImpact
-// and similar aggregate functions, not here.
+// The include_in_aggregate_stats privacy filter is applied only in GetAggregateSavingsStats,
+// not in per-user queries.
 func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID string) (*domain.UserSavingsImpact, error) {
 	now := time.Now().UTC()
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)

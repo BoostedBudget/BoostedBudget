@@ -135,10 +135,10 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 				}
 				usedTxnIDs[txn.ID] = true
 
-				// Create acknowledgeable notification
+				// Create acknowledgeable notification (exact match — no confirmation needed)
 				notif := &domain.Notification{
 					UserID:             userID,
-					Type:               "transfer_suggestion",
+					Type:               domain.NotificationTypeTransferSuggestion,
 					InteractionPattern: "acknowledgeable",
 					Title:              "Transfer matched ✓",
 					Message:            fmt.Sprintf("We matched your $%.2f transfer to your savings account.", actualAmount),
@@ -169,11 +169,14 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 				// Mark this transaction as used so it doesn't prompt multiple suggestions.
 				usedTxnIDs[txn.ID] = true
 
-				// Create accept_reject notification prompting user to confirm
+				// Create accept_reject notification prompting user to confirm the amount.
+				// Type must be NotificationTypeTransferSuggestionMatch so the frontend
+				// renders the amount-confirm UI (NotificationConfirmMatch), not the
+				// generic accept/reject buttons.
 				suggID := suggestion.ID
 				notif := &domain.Notification{
 					UserID:               userID,
-					Type:                 "transfer_suggestion",
+					Type:                 domain.NotificationTypeTransferSuggestionMatch,
 					InteractionPattern:   "accept_reject",
 					TransferSuggestionID: &suggID,
 					Title:                "Did you transfer a different amount?",

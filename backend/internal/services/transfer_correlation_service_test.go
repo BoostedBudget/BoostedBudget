@@ -154,7 +154,9 @@ func TestCorrelateForUser_FuzzyMatch(t *testing.T) {
 	// No open validation notification yet
 	notifRepo.On("GetOpenByTransferSuggestionID", ctx, "sug-2").Return(nil, nil)
 	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
-		return n.Type == "transfer_suggestion" &&
+		// Fuzzy-match must use transfer_suggestion_match so the frontend renders
+		// the amount-confirm UI (NotificationConfirmMatch), not generic accept/reject.
+		return n.Type == domain.NotificationTypeTransferSuggestionMatch &&
 			n.InteractionPattern == "accept_reject" &&
 			n.TransferSuggestionID != nil &&
 			*n.TransferSuggestionID == "sug-2"
