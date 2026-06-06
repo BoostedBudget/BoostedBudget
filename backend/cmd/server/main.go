@@ -643,10 +643,11 @@ func main() {
 
 		// Issue #972: Create budget period close check worker (daily scanner, no Plaid dependency)
 		budgetPeriodCloseCheckWorker = jobs.NewBudgetPeriodCloseCheckWorker(jobs.BudgetPeriodCloseCheckWorkerDeps{
-			BudgetRepo:       budgetRepo,
-			PeriodEventsRepo: repository.NewBudgetPeriodEventsRepository(db),
-			JobQueue:         nil, // Set after River client created (circular dependency)
-			Logger:           appLogger,
+			BudgetRepo:                budgetRepo,
+			PeriodEventsRepo:          repository.NewBudgetPeriodEventsRepository(db),
+			JobQueue:                  nil, // Set after River client created (circular dependency)
+			TransferSuggestionExpirer: transferSuggestionRepo, // Issue #972 GAP E: expire stale pending suggestions
+			Logger:                    appLogger,
 		})
 		appLogger.Info("Budget period close check worker created (River)")
 
@@ -1310,8 +1311,14 @@ func main() {
 		appLogger.Info("Huma transfer suggestion routes registered")
 
 
-		// Wire notification repo to rule execution service for suggestion notifications (Issue #952)
+		// Wire all optional setters for ruleExecutionService.
+		// IMPORTANT: ALL SetXxx calls must be listed here. Omitting any setter means
+		// the corresponding feature silently fails in production (nil guard returns error,
+		// no suggestion created). See Issue #972 (GAP H) for the savings_goal example.
 		ruleExecutionService.SetNotificationRepo(notificationRepo)
+		ruleExecutionService.SetSavingsGoalRepo(savingsGoalRepo)
+		// Issue #1109: Chain resolver maps stable user_account_id → current active account_id.
+		ruleExecutionService.SetChainResolver(services.NewAccountChainResolver(accountRepo))
 
 		// Register Huma dashboard routes (Issue #559: Huma migration)
 		humaDashboardHandler := operations.NewDashboardHandler(dashboardService)

@@ -32,6 +32,15 @@ type BudgetPeriodCheckRepository interface {
 	GetAllActivePaginated(ctx context.Context, limit int, offset int) ([]*domain.Budget, error)
 }
 
+// TransferSuggestionExpirer defines the expiry method needed by the daily worker.
+// Only pending suggestions whose expires_at is in the past are affected; accepted
+// suggestions are never auto-expired because the user has explicitly acted on them.
+type TransferSuggestionExpirer interface {
+	// ExpirePending marks stale pending suggestions (expires_at < now) as expired.
+	// Returns the count of rows updated.
+	ExpirePending(ctx context.Context) (int64, error)
+}
+
 // BudgetPeriodEventsRepo defines the marker methods needed by the worker.
 type BudgetPeriodEventsRepo interface {
 	HasMarker(ctx context.Context, userID string, budgetID string, periodStart time.Time, periodEnd time.Time, eventType string) (bool, error)
@@ -45,21 +54,25 @@ type BudgetPeriodEventsRepo interface {
 // For each active budget it computes whether a period boundary was crossed between
 // yesterday and today. If so, and no marker exists yet, it inserts the marker and
 // enqueues a RuleEvaluationArgs job for that user/budget.
+// At the end of every run it also calls TransferSuggestionExpirer.ExpirePending to
+// transition stale pending suggestions to "expired" status.
 type BudgetPeriodCloseCheckWorker struct {
 	river.WorkerDefaults[BudgetPeriodCloseCheckArgs]
 
-	budgetRepo      BudgetPeriodCheckRepository
-	periodEventsRepo BudgetPeriodEventsRepo
-	jobQueue        queue.JobQueue
-	logger          *slog.Logger
+	budgetRepo                BudgetPeriodCheckRepository
+	periodEventsRepo          BudgetPeriodEventsRepo
+	jobQueue                  queue.JobQueue
+	transferSuggestionExpirer TransferSuggestionExpirer // Issue #972: GAP E
+	logger                    *slog.Logger
 }
 
 // BudgetPeriodCloseCheckWorkerDeps contains the dependencies for the worker.
 type BudgetPeriodCloseCheckWorkerDeps struct {
-	BudgetRepo       BudgetPeriodCheckRepository
-	PeriodEventsRepo BudgetPeriodEventsRepo
-	JobQueue         queue.JobQueue
-	Logger           *slog.Logger
+	BudgetRepo                BudgetPeriodCheckRepository
+	PeriodEventsRepo          BudgetPeriodEventsRepo
+	JobQueue                  queue.JobQueue
+	TransferSuggestionExpirer TransferSuggestionExpirer // Issue #972: GAP E — expire stale pending suggestions
+	Logger                    *slog.Logger
 }
 
 // NewBudgetPeriodCloseCheckWorker creates a new BudgetPeriodCloseCheckWorker.
@@ -71,10 +84,11 @@ func NewBudgetPeriodCloseCheckWorker(deps BudgetPeriodCloseCheckWorkerDeps) *Bud
 		logger = slog.Default()
 	}
 	return &BudgetPeriodCloseCheckWorker{
-		budgetRepo:        deps.BudgetRepo,
-		periodEventsRepo:  deps.PeriodEventsRepo,
-		jobQueue:          deps.JobQueue,
-		logger:            logger,
+		budgetRepo:                deps.BudgetRepo,
+		periodEventsRepo:          deps.PeriodEventsRepo,
+		jobQueue:                  deps.JobQueue,
+		transferSuggestionExpirer: deps.TransferSuggestionExpirer,
+		logger:                    logger,
 	}
 }
 
@@ -168,14 +182,16 @@ func (w *BudgetPeriodCloseCheckWorker) Work(ctx context.Context, job *river.Job[
 			evalArgs := RuleEvaluationArgs{
 				UserID:    budget.UserID,
 				EventType: domain.EventBudgetPeriodEnd,
+				// EventData keys must match domain.EventDataKey* constants so that
+				// calculateTransferAmount and calculateSavingsGoalAmount can read them.
 				EventData: map[string]interface{}{
-					"budget_id":      budget.ID,
-					"remaining":      budget.RemainingAmount(),
-					"income_amount":  budget.IncomeAmount,
-					"amount":         budget.Amount,
-					"total_spent":    budget.TotalSpent(),
-					"period_start":   periodStart.Format("2006-01-02"),
-					"period_end":     periodEnd.Format("2006-01-02"),
+					domain.EventDataKeyBudgetID:     budget.ID,
+					domain.EventDataKeyRemaining:    budget.RemainingAmount(),
+					domain.EventDataKeyIncomeAmount: budget.IncomeAmount,
+					domain.EventDataKeyAmount:       budget.Amount,
+					domain.EventDataKeyTotalSpent:   budget.TotalSpent(),
+					domain.EventDataKeyPeriodStart:  periodStart.Format("2006-01-02"),
+					domain.EventDataKeyPeriodEnd:    periodEnd.Format("2006-01-02"),
 				},
 			}
 
@@ -230,6 +246,26 @@ func (w *BudgetPeriodCloseCheckWorker) Work(ctx context.Context, job *river.Job[
 			break
 		}
 		offset += budgetPeriodCheckPageSize
+	}
+
+	// Issue #972 GAP E: Expire stale pending suggestions on every daily run.
+	// Accepted suggestions are never auto-expired (user has acted on them); only
+	// pending suggestions past their expires_at are transitioned to "expired".
+	// Failure is non-critical: log a warning and continue so the main job result
+	// (period-close firing) is not affected.
+	if w.transferSuggestionExpirer != nil {
+		expiredCount, expireErr := w.transferSuggestionExpirer.ExpirePending(ctx)
+		if expireErr != nil {
+			w.logger.Warn("failed to expire pending transfer suggestions",
+				"job_id", job.ID,
+				"error", expireErr,
+			)
+		} else if expiredCount > 0 {
+			w.logger.Info("expired stale pending transfer suggestions",
+				"job_id", job.ID,
+				"expired_count", expiredCount,
+			)
+		}
 	}
 
 	w.logger.Info("budget period close check completed",
