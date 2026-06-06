@@ -19,14 +19,6 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
-// RuleActions is a wrapper for parsing action configurations from JSONB.
-type RuleActions struct {
-	Transfer    *domain.TransferAction    `json:"transfer,omitempty"`
-	Alert       *domain.AlertAction       `json:"alert,omitempty"`
-	Rollover    *domain.RolloverAction    `json:"rollover,omitempty"`
-	SavingsGoal *domain.SavingsGoalAction `json:"savings_goal,omitempty"`
-}
-
 // ExecutionStatusSkipped is a synthetic status for skipped executions.
 // In the database, this maps to "completed" with output_data containing skip_reason.
 // This allows us to track skipped executions separately in the service layer.
@@ -297,64 +289,75 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 
 // simulateAction returns a description of what action would occur without actually executing it.
 func (s *ruleExecutionService) simulateAction(rule *domain.AutomationRule, triggerData map[string]interface{}) (map[string]interface{}, error) {
-	var actions RuleActions
-	if err := json.Unmarshal(rule.Actions, &actions); err != nil {
-		return nil, fmt.Errorf("failed to parse actions: %w", err)
-	}
-
 	simulatedAction := make(map[string]interface{})
 
 	switch rule.RuleType {
 	case domain.RuleTypeTransferSuggestion:
-		if actions.Transfer == nil {
+		transfer, err := rule.ParseTransferAction()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse transfer action: %w", err)
+		}
+		if transfer.FromAccountID == "" {
 			return nil, fmt.Errorf("transfer action not defined")
 		}
-		amount := s.calculateTransferAmount(actions.Transfer, triggerData)
+		amount := s.calculateTransferAmount(transfer, triggerData)
 		simulatedAction["action_type"] = "transfer_suggestion"
-		simulatedAction["from_account_id"] = actions.Transfer.FromAccountID
-		simulatedAction["to_account_id"] = actions.Transfer.ToAccountID
+		simulatedAction["from_account_id"] = transfer.FromAccountID
+		simulatedAction["to_account_id"] = transfer.ToAccountID
 		simulatedAction["amount"] = amount
-		simulatedAction["amount_type"] = actions.Transfer.AmountType
+		simulatedAction["amount_type"] = transfer.AmountType
 		// Issue #1109: Expose stable user_account_id for transparency if available
-		if actions.Transfer.FromUserAccountID != "" {
-			simulatedAction["from_user_account_id"] = actions.Transfer.FromUserAccountID
+		if transfer.FromUserAccountID != "" {
+			simulatedAction["from_user_account_id"] = transfer.FromUserAccountID
 		}
 
 	case domain.RuleTypeBudgetAlert:
-		if actions.Alert == nil {
+		alert, err := rule.ParseAlertAction()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse alert action: %w", err)
+		}
+		if alert.ThresholdType == "" {
 			return nil, fmt.Errorf("alert action not defined")
 		}
 		simulatedAction["action_type"] = "budget_alert"
-		simulatedAction["notification_channels"] = actions.Alert.NotificationChannels
-		simulatedAction["threshold_type"] = actions.Alert.ThresholdType
-		simulatedAction["threshold_value"] = actions.Alert.ThresholdValue
+		simulatedAction["notification_channels"] = alert.NotificationChannels
+		simulatedAction["threshold_type"] = alert.ThresholdType
+		simulatedAction["threshold_value"] = alert.ThresholdValue
 
 	case domain.RuleTypeCategoryRollover:
-		if actions.Rollover == nil {
+		rollover, err := rule.ParseRolloverAction()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse rollover action: %w", err)
+		}
+		if rollover.RolloverType == "" {
 			return nil, fmt.Errorf("rollover action not defined")
 		}
 		remaining := 0.0
 		if r, ok := triggerData["remaining"].(float64); ok {
 			remaining = r
 		}
-		amount := s.calculateRolloverAmount(actions.Rollover, remaining)
+		amount := s.calculateRolloverAmount(rollover, remaining)
 		simulatedAction["action_type"] = "category_rollover"
-		simulatedAction["rollover_type"] = actions.Rollover.RolloverType
+		simulatedAction["rollover_type"] = rollover.RolloverType
 		simulatedAction["rollover_amount"] = amount
-		if actions.Rollover.SourceBudgetCategoryID != "" {
-			simulatedAction["source_category_id"] = actions.Rollover.SourceBudgetCategoryID
+		if rollover.SourceBudgetCategoryID != "" {
+			simulatedAction["source_category_id"] = rollover.SourceBudgetCategoryID
 		}
 
 	case domain.RuleTypeSavingsGoal:
-		if actions.SavingsGoal == nil {
+		savingsGoal, err := rule.ParseSavingsGoalAction()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse savings goal action: %w", err)
+		}
+		if savingsGoal.SavingsGoalID == "" {
 			return nil, fmt.Errorf("savings goal action not defined")
 		}
-		amount := s.calculateSavingsGoalAmount(actions.SavingsGoal, triggerData)
+		amount := s.calculateSavingsGoalAmount(savingsGoal, triggerData)
 		simulatedAction["action_type"] = "savings_goal"
-		simulatedAction["savings_goal_id"] = actions.SavingsGoal.SavingsGoalID
-		simulatedAction["from_account_id"] = actions.SavingsGoal.FromAccountID
+		simulatedAction["savings_goal_id"] = savingsGoal.SavingsGoalID
+		simulatedAction["from_account_id"] = savingsGoal.FromAccountID
 		simulatedAction["amount"] = amount
-		simulatedAction["amount_type"] = actions.SavingsGoal.AmountType
+		simulatedAction["amount_type"] = savingsGoal.AmountType
 
 	default:
 		return nil, fmt.Errorf("unknown rule type: %s", rule.RuleType)
@@ -365,17 +368,13 @@ func (s *ruleExecutionService) simulateAction(rule *domain.AutomationRule, trigg
 
 // executeTransferSuggestion creates a transfer suggestion from the rule action.
 func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, rule *domain.AutomationRule, executionID string, triggerData map[string]interface{}) error {
-	// Parse actions
-	var actions RuleActions
-	if err := json.Unmarshal(rule.Actions, &actions); err != nil {
-		return fmt.Errorf("failed to parse actions: %w", err)
+	transfer, err := rule.ParseTransferAction()
+	if err != nil {
+		return fmt.Errorf("failed to parse transfer action: %w", err)
 	}
-
-	if actions.Transfer == nil {
+	if transfer.FromAccountID == "" {
 		return fmt.Errorf("transfer action not defined")
 	}
-
-	transfer := actions.Transfer
 
 	// Calculate amount
 	amount := s.calculateTransferAmount(transfer, triggerData)
@@ -490,19 +489,17 @@ func (s *ruleExecutionService) calculateTransferAmount(action *domain.TransferAc
 
 // executeBudgetAlert sends a budget alert notification.
 func (s *ruleExecutionService) executeBudgetAlert(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) error {
-	// Parse actions
-	var actions RuleActions
-	if err := json.Unmarshal(rule.Actions, &actions); err != nil {
-		return fmt.Errorf("failed to parse actions: %w", err)
+	alert, err := rule.ParseAlertAction()
+	if err != nil {
+		return fmt.Errorf("failed to parse alert action: %w", err)
 	}
-
-	if actions.Alert == nil {
+	if alert.ThresholdType == "" {
 		return fmt.Errorf("alert action not defined")
 	}
 
 	// Send notification if service is available
 	if s.notificationService != nil {
-		return s.notificationService.SendBudgetAlert(ctx, rule.UserID, actions.Alert, triggerData)
+		return s.notificationService.SendBudgetAlert(ctx, rule.UserID, alert, triggerData)
 	}
 
 	// If no notification service, just return success
@@ -512,17 +509,13 @@ func (s *ruleExecutionService) executeBudgetAlert(ctx context.Context, rule *dom
 
 // executeCategoryRollover creates a rollover suggestion.
 func (s *ruleExecutionService) executeCategoryRollover(ctx context.Context, rule *domain.AutomationRule, executionID string, triggerData map[string]interface{}) error {
-	// Parse actions
-	var actions RuleActions
-	if err := json.Unmarshal(rule.Actions, &actions); err != nil {
-		return fmt.Errorf("failed to parse actions: %w", err)
+	rollover, err := rule.ParseRolloverAction()
+	if err != nil {
+		return fmt.Errorf("failed to parse rollover action: %w", err)
 	}
-
-	if actions.Rollover == nil {
+	if rollover.RolloverType == "" {
 		return fmt.Errorf("rollover action not defined")
 	}
-
-	rollover := actions.Rollover
 
 	// Calculate rollover amount from trigger data
 	remaining := 0.0
@@ -590,17 +583,13 @@ func (s *ruleExecutionService) calculateRolloverAmount(action *domain.RolloverAc
 // executeSavingsGoal creates a transfer suggestion to contribute to a savings goal.
 // Issue #36: Rule Executors - Savings Goal Executor.
 func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *domain.AutomationRule, executionID string, triggerData map[string]interface{}) error {
-	// Parse actions
-	var actions RuleActions
-	if err := json.Unmarshal(rule.Actions, &actions); err != nil {
-		return fmt.Errorf("failed to parse actions: %w", err)
+	savingsGoalAction, err := rule.ParseSavingsGoalAction()
+	if err != nil {
+		return fmt.Errorf("failed to parse savings goal action: %w", err)
 	}
-
-	if actions.SavingsGoal == nil {
+	if savingsGoalAction.SavingsGoalID == "" {
 		return fmt.Errorf("savings goal action not defined")
 	}
-
-	savingsGoalAction := actions.SavingsGoal
 
 	// Get the savings goal to find the linked account
 	if s.savingsGoalRepo == nil {

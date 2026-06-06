@@ -64,8 +64,8 @@ func (m *mockNotificationRepository) MarkAllAsRead(ctx context.Context, userID s
 	return m.markAllCount, nil
 }
 
-func (m *mockNotificationRepository) GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string) (*domain.Notification, error) {
-	return nil, nil
+func (m *mockNotificationRepository) GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string, notificationType string) (*domain.Notification, error) {
+	return nil, errors.New("not implemented")
 }
 
 // Helper to create a test notification

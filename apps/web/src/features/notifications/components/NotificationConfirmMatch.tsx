@@ -17,11 +17,12 @@ import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 interface NotificationConfirmMatchProps {
   suggestionId: string
   onDismiss: () => void
+  onConfirm?: () => void
 }
 
 type ActionStatus = 'pending' | 'confirmed'
 
-export function NotificationConfirmMatch({ suggestionId, onDismiss }: NotificationConfirmMatchProps) {
+export function NotificationConfirmMatch({ suggestionId, onDismiss, onConfirm }: NotificationConfirmMatchProps) {
   const [amount, setAmount] = useState<string>('')
   const [validationError, setValidationError] = useState<string | null>(null)
   const [status, setStatus] = useState<ActionStatus>('pending')
@@ -36,6 +37,7 @@ export function NotificationConfirmMatch({ suggestionId, onDismiss }: Notificati
         queryClient.invalidateQueries({ queryKey: getGetUnreadNotificationCountQueryKey() })
         queryClient.invalidateQueries({ queryKey: getGetTransferSuggestionsQueryKey() })
         trackEvent(ANALYTICS_EVENTS.TRANSFER_SUGGESTION_VALIDATED)
+        onConfirm?.()
       },
       onError: () => {
         toast.error('Failed to confirm transfer. Please try again.')

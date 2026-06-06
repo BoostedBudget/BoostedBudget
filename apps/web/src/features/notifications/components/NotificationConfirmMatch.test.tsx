@@ -124,6 +124,28 @@ describe('NotificationConfirmMatch', () => {
     expect(screen.getByRole('button', { name: /confirm/i })).toBeTruthy()
   })
 
+  it('calls onConfirm when confirm mutation succeeds', async () => {
+    let capturedOnSuccess: (() => void) | undefined
+    mockUseConfirmTransferSuggestionMatch.mockImplementation((options?: { mutation?: { onSuccess?: () => void } }) => {
+      capturedOnSuccess = options?.mutation?.onSuccess
+      return {
+        mutate: mock((_args: unknown) => { capturedOnSuccess?.() }),
+        isPending: false,
+        isError: false,
+      }
+    })
+
+    const onConfirmSpy = mock(() => {})
+    renderWithQuery(
+      <NotificationConfirmMatch suggestionId="sugg-1" onDismiss={() => {}} onConfirm={onConfirmSpy} />
+    )
+
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '100' } })
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
+
+    expect(onConfirmSpy).toHaveBeenCalledTimes(1)
+  })
+
   it('fires TRANSFER_SUGGESTION_VALIDATED on successful confirm', async () => {
     mockUseConfirmTransferSuggestionMatch.mockReturnValue({
       mutate: mockConfirmTransferSuggestionMatchMutateAsync,

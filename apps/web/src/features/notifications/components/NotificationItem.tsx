@@ -102,26 +102,21 @@ export function NotificationItem({ notification }: NotificationItemProps) {
           </Button>
         )}
 
-        {/* accept_reject: confirm-match flow for fuzzy-matched transfers */}
+        {/* accept_reject patterns: confirm-match (fuzzy) or standard accept/reject */}
         {notification.interaction_pattern === 'accept_reject' &&
-          notification.transfer_suggestion_id &&
-          notification.type === 'transfer_suggestion_match' && (
+          notification.transfer_suggestion_id && (
             <div onClick={(e) => e.stopPropagation()}>
-              <NotificationConfirmMatch
-                suggestionId={notification.transfer_suggestion_id}
-                onDismiss={() => markReadMutation.mutate({ id: notification.id })}
-              />
-            </div>
-          )}
-
-        {/* accept_reject: standard accept/reject for transfer suggestions */}
-        {notification.interaction_pattern === 'accept_reject' &&
-          notification.transfer_suggestion_id &&
-          notification.type !== 'transfer_suggestion_match' && (
-            <div onClick={(e) => e.stopPropagation()}>
-              <NotificationAcceptReject
-                suggestionId={notification.transfer_suggestion_id}
-              />
+              {notification.type === 'transfer_suggestion_match' ? (
+                <NotificationConfirmMatch
+                  suggestionId={notification.transfer_suggestion_id}
+                  onDismiss={() => markReadMutation.mutate({ id: notification.id })}
+                  onConfirm={() => markReadMutation.mutate({ id: notification.id })}
+                />
+              ) : (
+                <NotificationAcceptReject
+                  suggestionId={notification.transfer_suggestion_id}
+                />
+              )}
             </div>
           )}
       </div>

@@ -440,27 +440,27 @@ func TestRuleExecutionService(t *testing.T) {
 	userID := "test-user-id"
 
 	createTestRule := func(ruleType domain.RuleType, triggerType domain.TriggerType) *domain.AutomationRule {
-		actions := RuleActions{}
+		var actionsJSON []byte
 		switch ruleType {
 		case domain.RuleTypeTransferSuggestion:
-			actions.Transfer = &domain.TransferAction{
+			actionsJSON, _ = json.Marshal(domain.TransferAction{
 				FromAccountID: "account-1",
 				ToAccountID:   "account-2",
 				AmountType:    "fixed",
 				Amount:        100.0,
-			}
+			})
 		case domain.RuleTypeBudgetAlert:
-			actions.Alert = &domain.AlertAction{
+			actionsJSON, _ = json.Marshal(domain.AlertAction{
 				ThresholdType:  "percentage",
 				ThresholdValue: 80,
-			}
+			})
 		case domain.RuleTypeCategoryRollover:
-			actions.Rollover = &domain.RolloverAction{
+			actionsJSON, _ = json.Marshal(domain.RolloverAction{
 				RolloverType: "all",
-			}
+			})
+		default:
+			actionsJSON = json.RawMessage(`{}`)
 		}
-
-		actionsJSON, _ := json.Marshal(actions)
 
 		return &domain.AutomationRule{
 			ID:       "rule-1",
@@ -603,15 +603,12 @@ func TestProcessEventTrigger(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
 
-		actions := RuleActions{
-			Transfer: &domain.TransferAction{
-				FromAccountID: "account-1",
-				ToAccountID:   "account-2",
-				AmountType:    "fixed",
-				Amount:        100.0,
-			},
-		}
-		actionsJSON, _ := json.Marshal(actions)
+		actionsJSON, _ := json.Marshal(domain.TransferAction{
+			FromAccountID: "account-1",
+			ToAccountID:   "account-2",
+			AmountType:    "fixed",
+			Amount:        100.0,
+		})
 
 		ruleRepo := &mockAutomationRulesRepository{
 			rules: []*domain.AutomationRule{
@@ -683,15 +680,12 @@ func TestProcessEventTrigger(t *testing.T) {
 		}
 		suggestionRepo := &mockTransferSuggestionRepository{}
 
-		actions := RuleActions{
-			Transfer: &domain.TransferAction{
-				FromAccountID: "account-1",
-				ToAccountID:   "account-2",
-				AmountType:    "fixed",
-				Amount:        100.0,
-			},
-		}
-		actionsJSON, _ := json.Marshal(actions)
+		actionsJSON, _ := json.Marshal(domain.TransferAction{
+			FromAccountID: "account-1",
+			ToAccountID:   "account-2",
+			AmountType:    "fixed",
+			Amount:        100.0,
+		})
 
 		ruleRepo := &mockAutomationRulesRepository{
 			rules: []*domain.AutomationRule{
@@ -1020,10 +1014,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 	fromAccountID := "checking-account-789"
 
 	createSavingsGoalRule := func(action domain.SavingsGoalAction) *domain.AutomationRule {
-		actions := RuleActions{
-			SavingsGoal: &action,
-		}
-		actionsJSON, _ := json.Marshal(actions)
+		actionsJSON, _ := json.Marshal(action)
 
 		return &domain.AutomationRule{
 			ID:       "rule-savings-1",
@@ -1200,8 +1191,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		)
 
 		// Create rule without savings goal action
-		actions := RuleActions{}
-		actionsJSON, _ := json.Marshal(actions)
+		actionsJSON := json.RawMessage(`{}`)
 		rule := &domain.AutomationRule{
 			ID:             "rule-savings-bad",
 			UserID:         userID,
@@ -1311,14 +1301,12 @@ func TestRuleExecutionService_SavingsGoal_NilRepo_ReturnsError(t *testing.T) {
 	suggestionRepo := &mockTransferSuggestionRepository{}
 
 	// Return a savings_goal rule when queried for budget_period_end events.
-	action := domain.SavingsGoalAction{
+	actionsJSON, _ := json.Marshal(domain.SavingsGoalAction{
 		SavingsGoalID: "goal-123",
 		FromAccountID: "checking-account",
 		AmountType:    "fixed",
 		Amount:        100.0,
-	}
-	actions := RuleActions{SavingsGoal: &action}
-	actionsJSON, _ := json.Marshal(actions)
+	})
 	rule := &domain.AutomationRule{
 		ID:             "rule-savings-nil-repo",
 		UserID:         userID,
@@ -1406,15 +1394,12 @@ func TestTestRule(t *testing.T) {
 	userID := "test-user-id"
 
 	createTestTransferRule := func() *domain.AutomationRule {
-		actions := RuleActions{
-			Transfer: &domain.TransferAction{
-				FromAccountID: "account-1",
-				ToAccountID:   "account-2",
-				AmountType:    "fixed",
-				Amount:        100.0,
-			},
-		}
-		actionsJSON, _ := json.Marshal(actions)
+		actionsJSON, _ := json.Marshal(domain.TransferAction{
+			FromAccountID: "account-1",
+			ToAccountID:   "account-2",
+			AmountType:    "fixed",
+			Amount:        100.0,
+		})
 
 		return &domain.AutomationRule{
 			ID:       "rule-1",
@@ -1436,14 +1421,11 @@ func TestTestRule(t *testing.T) {
 	}
 
 	createTestAlertRule := func() *domain.AutomationRule {
-		actions := RuleActions{
-			Alert: &domain.AlertAction{
-				NotificationChannels: []string{"email", "in_app"},
-				ThresholdType:        "percentage",
-				ThresholdValue:       75.0,
-			},
-		}
-		actionsJSON, _ := json.Marshal(actions)
+		actionsJSON, _ := json.Marshal(domain.AlertAction{
+			NotificationChannels: []string{"email", "in_app"},
+			ThresholdType:        "percentage",
+			ThresholdValue:       75.0,
+		})
 
 		return &domain.AutomationRule{
 			ID:       "rule-2",
@@ -1724,7 +1706,7 @@ func TestTestRule_PFCConditionPopulatesDisplay(t *testing.T) {
 
 	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
 
-	actions, _ := json.Marshal(RuleActions{})
+	actions := json.RawMessage(`{}`)
 	rule := &domain.AutomationRule{
 		ID:   "rule-pfc-test",
 		Name: "PFC dry-run",
@@ -1759,15 +1741,12 @@ func TestRuleExecutionService_ExpiresAt(t *testing.T) {
 
 		service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
 
-		actions := RuleActions{
-			Transfer: &domain.TransferAction{
-				FromAccountID: "account-from",
-				ToAccountID:   "account-to",
-				AmountType:    "fixed",
-				Amount:        100.0,
-			},
-		}
-		actionsJSON, _ := json.Marshal(actions)
+		actionsJSON, _ := json.Marshal(domain.TransferAction{
+			FromAccountID: "account-from",
+			ToAccountID:   "account-to",
+			AmountType:    "fixed",
+			Amount:        100.0,
+		})
 
 		rule := &domain.AutomationRule{
 			ID:       "rule-expires-test",
@@ -1824,15 +1803,12 @@ func TestRuleExecutionService_ExpiresAt(t *testing.T) {
 		service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
 		service.SetSavingsGoalRepo(mockGoalRepo)
 
-		actions := RuleActions{
-			SavingsGoal: &domain.SavingsGoalAction{
-				SavingsGoalID: goalID,
-				FromAccountID: "checking-account",
-				AmountType:    "fixed",
-				Amount:        50.0,
-			},
-		}
-		actionsJSON, _ := json.Marshal(actions)
+		actionsJSON, _ := json.Marshal(domain.SavingsGoalAction{
+			SavingsGoalID: goalID,
+			FromAccountID: "checking-account",
+			AmountType:    "fixed",
+			Amount:        50.0,
+		})
 
 		rule := &domain.AutomationRule{
 			ID:       "rule-savings-expires",
@@ -2054,10 +2030,10 @@ func TestTestRule_DottedFieldPreviewShowsActual(t *testing.T) {
 	ruleRepo := &mockAutomationRulesRepository{}
 	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
 
-	actions, _ := json.Marshal(RuleActions{Transfer: &domain.TransferAction{
+	actions, _ := json.Marshal(domain.TransferAction{
 		FromAccountID: "account-a", ToAccountID: "account-b",
 		AmountType: "fixed", Amount: 50,
-	}})
+	})
 	rule := &domain.AutomationRule{
 		ID: "rule-dotted", UserID: "u", Name: "dotted", Enabled: true, Priority: 1,
 		RuleType: domain.RuleTypeTransferSuggestion,
@@ -2084,4 +2060,55 @@ func TestTestRule_DottedFieldPreviewShowsActual(t *testing.T) {
 	// Actual must be the resolved flat value, not nil
 	assert.NotNil(t, cr.Actual, "Actual must not be nil for dotted field with matching EventData")
 	assert.Equal(t, 150.0, cr.Actual, "Actual must equal the EventData value for budget.remaining_amount")
+}
+
+// TestFlatActionJSON_ValidateAndExecuteConsistency proves that a savings_goal rule
+// created with the flat action JSON the UI submits passes BOTH validateSavingsGoalAction
+// AND executeSavingsGoal, preventing the flat/wrapped convention from diverging again.
+// Issue #972: GAP W fix.
+func TestFlatActionJSON_ValidateAndExecuteConsistency(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-consistency-test"
+	goalID := "goal-consistency"
+
+	// This is exactly the flat JSON the RuleBuilder submits.
+	actionsJSON, _ := json.Marshal(domain.SavingsGoalAction{
+		SavingsGoalID: goalID,
+		FromAccountID: "checking-acct",
+		AmountType:    "fixed",
+		Amount:        100.0,
+	})
+
+	rule := &domain.AutomationRule{
+		ID:             "rule-flat-test",
+		UserID:         userID,
+		Name:           "Flat Action Rule",
+		Enabled:        true,
+		RuleType:       domain.RuleTypeSavingsGoal,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+		ConditionLogic: "AND",
+		Conditions:     []domain.AutomationRuleCondition{},
+		Actions:        actionsJSON,
+	}
+
+	// Validation must pass with flat JSON.
+	err := rule.Validate()
+	require.NoError(t, err, "flat action JSON must pass domain validation")
+
+	// Execution must also succeed with the same flat JSON.
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+	goalRepo := &mockSavingsGoalRepository{
+		goals: []*domain.SavingsGoal{
+			{ID: goalID, UserID: userID, Name: "Emergency Fund", AccountID: "savings-acct"},
+		},
+	}
+
+	svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	svc.SetSavingsGoalRepo(goalRepo)
+
+	_, err = svc.ExecuteRule(ctx, rule, map[string]interface{}{"remaining": 200.0})
+	require.NoError(t, err, "flat action JSON must execute successfully (GAP W regression guard)")
+	require.Len(t, suggestionRepo.suggestions, 1, "one suggestion must be created")
 }
