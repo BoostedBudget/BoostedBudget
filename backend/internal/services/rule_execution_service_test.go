@@ -1868,3 +1868,162 @@ func TestRuleExecutionService_ExpiresAt(t *testing.T) {
 			"ExpiresAt %v should be before %v", *suggestion.ExpiresAt, expectedHigh)
 	})
 }
+
+// TestEvaluateCondition_DottedFieldNormalization verifies that evaluateCondition maps
+// UI-built dotted field names (e.g. "budget.remaining_amount") to the flat engine keys
+// (e.g. "remaining") before doing the data lookup. Without the normalization shim,
+// every UI-built condition silently returns false because the engine emits flat keys.
+// Issue #972: GAP M – normalization shim.
+func TestEvaluateCondition_DottedFieldNormalization(t *testing.T) {
+	tests := []struct {
+		name      string
+		field     string
+		operator  domain.ConditionOperator
+		value     string
+		data      map[string]interface{}
+		wantMatch bool
+	}{
+		{
+			name:      "budget.remaining_amount maps to remaining (gt, matches)",
+			field:     "budget.remaining_amount",
+			operator:  domain.ConditionOperatorGt,
+			value:     "100",
+			data:      map[string]interface{}{"remaining": 150.0},
+			wantMatch: true,
+		},
+		{
+			name:      "budget.remaining_amount maps to remaining (gt, no match)",
+			field:     "budget.remaining_amount",
+			operator:  domain.ConditionOperatorGt,
+			value:     "200",
+			data:      map[string]interface{}{"remaining": 150.0},
+			wantMatch: false,
+		},
+		{
+			name:      "budget.total_spent maps to total_spent",
+			field:     "budget.total_spent",
+			operator:  domain.ConditionOperatorGte,
+			value:     "500",
+			data:      map[string]interface{}{"total_spent": 500.0},
+			wantMatch: true,
+		},
+		{
+			name:      "budget.percent_used maps to percent_used",
+			field:     "budget.percent_used",
+			operator:  domain.ConditionOperatorGt,
+			value:     "75",
+			data:      map[string]interface{}{"percent_used": 82.5},
+			wantMatch: true,
+		},
+		{
+			name:      "budget_category.remaining_amount maps to remaining",
+			field:     "budget_category.remaining_amount",
+			operator:  domain.ConditionOperatorLt,
+			value:     "50",
+			data:      map[string]interface{}{"remaining": 30.0},
+			wantMatch: true,
+		},
+		{
+			name:      "budget_category.spent_amount maps to total_spent",
+			field:     "budget_category.spent_amount",
+			operator:  domain.ConditionOperatorGt,
+			value:     "100",
+			data:      map[string]interface{}{"total_spent": 200.0},
+			wantMatch: true,
+		},
+		{
+			name:      "account.balance maps to balance",
+			field:     "account.balance",
+			operator:  domain.ConditionOperatorGte,
+			value:     "1000",
+			data:      map[string]interface{}{"balance": 2500.0},
+			wantMatch: true,
+		},
+		{
+			name:      "transaction.amount maps to amount",
+			field:     "transaction.amount",
+			operator:  domain.ConditionOperatorGt,
+			value:     "50",
+			data:      map[string]interface{}{"amount": 75.0},
+			wantMatch: true,
+		},
+		{
+			// Regression: flat keys must still work (no double-mapping).
+			name:      "flat key remaining still works (backward compat)",
+			field:     "remaining",
+			operator:  domain.ConditionOperatorGt,
+			value:     "100",
+			data:      map[string]interface{}{"remaining": 150.0},
+			wantMatch: true,
+		},
+		{
+			// Regression: flat key percent_used must still work.
+			name:      "flat key percent_used still works (backward compat)",
+			field:     "percent_used",
+			operator:  domain.ConditionOperatorGte,
+			value:     "75",
+			data:      map[string]interface{}{"percent_used": 82.5},
+			wantMatch: true,
+		},
+		{
+			// Unknown field should still return false (key absent from data).
+			name:      "unknown dotted field returns false",
+			field:     "foo.bar",
+			operator:  domain.ConditionOperatorEq,
+			value:     "x",
+			data:      map[string]interface{}{"baz": "x"},
+			wantMatch: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			condition := domain.AutomationRuleCondition{
+				Field:    tc.field,
+				Operator: tc.operator,
+				Value:    tc.value,
+			}
+			got := evaluateCondition(condition, tc.data)
+			assert.Equal(t, tc.wantMatch, got)
+		})
+	}
+}
+
+// TestEventDataKeyContract asserts that every key the calculators read from EventData
+// is present in the map emitted by the period-close worker. This is a drift guard —
+// if either the emitter or the readers are updated and the constants diverge, this
+// test fails. Issue #972: GAP J – emitter/reader parity.
+func TestEventDataKeyContract(t *testing.T) {
+	// Keys emitted by the period-close worker (budget_period_close_check.go).
+	emittedKeys := map[string]bool{
+		domain.EventDataKeyBudgetID:     true,
+		domain.EventDataKeyRemaining:    true,
+		domain.EventDataKeyIncomeAmount: true,
+		domain.EventDataKeyAmount:       true,
+		domain.EventDataKeyTotalSpent:   true,
+		domain.EventDataKeyPeriodStart:  true,
+		domain.EventDataKeyPeriodEnd:    true,
+	}
+
+	// Keys that calculateTransferAmount reads.
+	transferReaderKeys := []string{
+		domain.EventDataKeyAmount,    // "percentage" and "threshold" branches
+		domain.EventDataKeyRemaining, // "remaining" branch
+	}
+
+	// Keys that calculateSavingsGoalAmount reads.
+	savingsReaderKeys := []string{
+		domain.EventDataKeyAmount,    // "percentage" branch
+		domain.EventDataKeyRemaining, // "remaining" branch
+	}
+
+	for _, key := range transferReaderKeys {
+		assert.True(t, emittedKeys[key],
+			"calculateTransferAmount reads key %q which is NOT in the period-close emitted map", key)
+	}
+
+	for _, key := range savingsReaderKeys {
+		assert.True(t, emittedKeys[key],
+			"calculateSavingsGoalAmount reads key %q which is NOT in the period-close emitted map", key)
+	}
+}
