@@ -66,6 +66,23 @@ const (
 	EventBudgetPeriodEnd = "budget_period_end" // Fired when a budget period ends (for rollover/savings rules)
 )
 
+// EventData key constants for rule trigger data maps.
+// These keys MUST match between the emitter (budget_period_close_check.go) and the
+// readers (calculateTransferAmount / calculateSavingsGoalAmount). Using constants
+// eliminates the class of bug where a reader accesses a different string than the
+// emitter publishes (e.g. "balance" vs "remaining").
+//
+// Issue #972: Savings Transfer Automation — key mismatch bug fix (GAP G).
+const (
+	EventDataKeyRemaining   = "remaining"    // Budget remaining amount after spending; emitted by period-close check
+	EventDataKeyAmount      = "amount"       // Budget total amount (income) for the period
+	EventDataKeyIncomeAmount = "income_amount" // Explicit income amount; emitted by period-close check
+	EventDataKeyTotalSpent  = "total_spent"  // Total spent in the period; emitted by period-close check
+	EventDataKeyBudgetID    = "budget_id"    // Budget UUID; emitted by period-close check
+	EventDataKeyPeriodStart = "period_start" // Period start date (YYYY-MM-DD); emitted by period-close check
+	EventDataKeyPeriodEnd   = "period_end"   // Period end date (YYYY-MM-DD); emitted by period-close check
+)
+
 // validTriggerTypes is a set of all valid trigger types.
 var validTriggerTypes = map[TriggerType]bool{
 	TriggerTypeEvent:    true,

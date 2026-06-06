@@ -268,6 +268,79 @@ func TestBudgetPeriodCloseCheck_EmptyBudgets(t *testing.T) {
 }
 
 // =============================================================================
+// GAP E: ExpirePending must be called from the daily budget-period-close job.
+// =============================================================================
+
+// mockTransferSuggestionExpirer is a minimal mock satisfying TransferSuggestionExpirer.
+type mockTransferSuggestionExpirer struct {
+	mock.Mock
+}
+
+func (m *mockTransferSuggestionExpirer) ExpirePending(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(int64), args.Error(1)
+}
+
+// TestBudgetPeriodCloseCheck_ExpiresPendingSuggestions verifies that the daily
+// budget-period-close worker calls ExpirePending on each run so that stale
+// pending suggestions are transitioned to "expired" status.
+func TestBudgetPeriodCloseCheck_ExpiresPendingSuggestions(t *testing.T) {
+	ctx := context.Background()
+
+	budgetRepo := &mockBudgetPeriodCheckRepo{}
+	periodEventsRepo := &mockBudgetPeriodEventsRepo{}
+	mockQueue := new(MockJobQueue)
+	expirer := new(mockTransferSuggestionExpirer)
+
+	// No budgets to process — we only care that ExpirePending is called.
+	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).
+		Return([]*domain.Budget{}, nil)
+	expirer.On("ExpirePending", ctx).Return(int64(3), nil)
+
+	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
+		BudgetRepo:            budgetRepo,
+		PeriodEventsRepo:      periodEventsRepo,
+		JobQueue:              mockQueue,
+		TransferSuggestionExpirer: expirer,
+	})
+
+	job := newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{TriggerSource: "test"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	expirer.AssertExpectations(t) // ExpirePending must have been called exactly once.
+}
+
+// TestBudgetPeriodCloseCheck_ExpirePendingError_DoesNotFailJob verifies that when
+// ExpirePending returns an error, the overall job still succeeds (non-critical path).
+func TestBudgetPeriodCloseCheck_ExpirePendingError_DoesNotFailJob(t *testing.T) {
+	ctx := context.Background()
+
+	budgetRepo := &mockBudgetPeriodCheckRepo{}
+	periodEventsRepo := &mockBudgetPeriodEventsRepo{}
+	mockQueue := new(MockJobQueue)
+	expirer := new(mockTransferSuggestionExpirer)
+
+	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).
+		Return([]*domain.Budget{}, nil)
+	expirer.On("ExpirePending", ctx).Return(int64(0), errors.New("db connection lost"))
+
+	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
+		BudgetRepo:            budgetRepo,
+		PeriodEventsRepo:      periodEventsRepo,
+		JobQueue:              mockQueue,
+		TransferSuggestionExpirer: expirer,
+	})
+
+	job := newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{TriggerSource: "test"})
+	err := worker.Work(ctx, job)
+
+	// ExpirePending failure must not propagate as a job error.
+	require.NoError(t, err)
+	expirer.AssertExpectations(t)
+}
+
+// =============================================================================
 // computeCurrentPeriod unit tests
 // =============================================================================
 

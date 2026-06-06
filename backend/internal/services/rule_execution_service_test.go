@@ -1175,7 +1175,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		rule := createSavingsGoalRule(action)
 
 		triggerData := map[string]interface{}{
-			"balance": 1500.0, // Balance after paycheck
+			"remaining": 1500.0, // Remaining budget amount after spending (EventDataKeyRemaining)
 		}
 
 		execution, err := service.ExecuteRule(ctx, rule, triggerData)
@@ -1283,7 +1283,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		rule := createSavingsGoalRule(action)
 
 		triggerData := map[string]interface{}{
-			"balance": 500.0, // Less than threshold
+			"remaining": 500.0, // Less than threshold (EventDataKeyRemaining)
 		}
 
 		execution, err := service.ExecuteRule(ctx, rule, triggerData)
@@ -1293,6 +1293,107 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		// No suggestion created when amount <= 0
 		assert.Empty(t, suggestionRepo.suggestions)
 	})
+}
+
+// ============================================================================
+// GAP H: SetSavingsGoalRepo nil guard — ensures production wiring is correct.
+// ============================================================================
+
+// TestRuleExecutionService_SavingsGoal_NilRepo_ReturnsError verifies that when
+// SetSavingsGoalRepo is never called (i.e. the production main.go omits it),
+// ProcessEventTrigger with a savings_goal rule returns a meaningful error instead
+// of silently succeeding with no suggestion created.
+func TestRuleExecutionService_SavingsGoal_NilRepo_ReturnsError(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-id"
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+
+	// Return a savings_goal rule when queried for budget_period_end events.
+	action := domain.SavingsGoalAction{
+		SavingsGoalID: "goal-123",
+		FromAccountID: "checking-account",
+		AmountType:    "fixed",
+		Amount:        100.0,
+	}
+	actions := RuleActions{SavingsGoal: &action}
+	actionsJSON, _ := json.Marshal(actions)
+	rule := &domain.AutomationRule{
+		ID:             "rule-savings-nil-repo",
+		UserID:         userID,
+		Name:           "Savings Goal Rule",
+		Enabled:        true,
+		RuleType:       domain.RuleTypeSavingsGoal,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: domain.EventBudgetPeriodEnd},
+		ConditionLogic: "AND",
+		Conditions:     []domain.AutomationRuleCondition{},
+		Actions:        actionsJSON,
+	}
+	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.AutomationRule{rule}}
+
+	// Create service WITHOUT calling SetSavingsGoalRepo — simulates production misconfiguration.
+	svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	eventData := map[string]interface{}{
+		"budget_id": "budget-1",
+		"remaining": 500.0,
+	}
+	err := svc.ProcessEventTrigger(ctx, userID, domain.EventBudgetPeriodEnd, eventData)
+
+	// ProcessEventTrigger swallows per-rule errors and returns nil. The execution
+	// record must reflect a failed status with the "not configured" message.
+	require.NoError(t, err)
+	require.Len(t, execRepo.executions, 1, "an execution record should have been created")
+	exec := execRepo.executions[0]
+	assert.Equal(t, domain.ExecutionStatusFailed, exec.Status)
+	require.NotNil(t, exec.ErrorMessage)
+	assert.Contains(t, *exec.ErrorMessage, "savings goal repository not configured")
+
+	// No suggestion should have been created.
+	assert.Empty(t, suggestionRepo.suggestions)
+}
+
+// ============================================================================
+// GAP G: calculateSavingsGoalAmount uses wrong EventData key for "remaining".
+// ============================================================================
+
+// TestCalculateSavingsGoalAmount_Remaining_UsesRemainingKey verifies that the
+// "remaining" AmountType reads from the "remaining" EventData key (emitted by
+// budget_period_close_check.go), NOT the "balance" key that was previously used.
+func TestCalculateSavingsGoalAmount_Remaining_UsesRemainingKey(t *testing.T) {
+	svc := &ruleExecutionService{}
+
+	action := &domain.SavingsGoalAction{
+		AmountType: "remaining",
+		Threshold:  100.0, // keep at least $100, transfer the rest
+	}
+
+	// Use "remaining" key — the correct EventData key emitted by the period-close worker.
+	triggerData := map[string]interface{}{
+		"remaining": 150.0,
+	}
+
+	result := svc.calculateSavingsGoalAmount(action, triggerData)
+	assert.Equal(t, 50.0, result, "150 - 100 threshold = 50; wrong key returns 0")
+}
+
+// TestCalculateSavingsGoalAmount_Remaining_BelowThreshold verifies no amount is
+// returned when remaining is at or below the threshold.
+func TestCalculateSavingsGoalAmount_Remaining_BelowThreshold(t *testing.T) {
+	svc := &ruleExecutionService{}
+
+	action := &domain.SavingsGoalAction{
+		AmountType: "remaining",
+		Threshold:  200.0,
+	}
+
+	triggerData := map[string]interface{}{
+		"remaining": 150.0, // below threshold — nothing to transfer
+	}
+
+	result := svc.calculateSavingsGoalAmount(action, triggerData)
+	assert.Equal(t, 0.0, result)
 }
 
 // ============================================================================

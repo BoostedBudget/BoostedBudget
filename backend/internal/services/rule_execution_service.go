@@ -462,15 +462,15 @@ func (s *ruleExecutionService) calculateTransferAmount(action *domain.TransferAc
 	case "fixed":
 		return action.Amount
 	case "percentage":
-		if amt, ok := triggerData["amount"].(float64); ok {
+		if amt, ok := triggerData[domain.EventDataKeyAmount].(float64); ok {
 			return amt * (action.Amount / 100)
 		}
 	case "remaining":
-		if remaining, ok := triggerData["remaining"].(float64); ok {
+		if remaining, ok := triggerData[domain.EventDataKeyRemaining].(float64); ok {
 			return remaining
 		}
 	case "threshold":
-		if amt, ok := triggerData["amount"].(float64); ok {
+		if amt, ok := triggerData[domain.EventDataKeyAmount].(float64); ok {
 			if amt > action.Threshold {
 				return amt - action.Threshold
 			}
@@ -660,17 +660,18 @@ func (s *ruleExecutionService) calculateSavingsGoalAmount(action *domain.Savings
 		return action.Amount
 	case "percentage":
 		if action.Percentage != nil {
-			if amt, ok := triggerData["amount"].(float64); ok {
+			if amt, ok := triggerData[domain.EventDataKeyAmount].(float64); ok {
 				return amt * (*action.Percentage / 100)
 			}
 		}
 		return 0
 	case "remaining":
-		// Calculate remaining amount above threshold
-		if balance, ok := triggerData["balance"].(float64); ok {
-			remaining := balance - action.Threshold
-			if remaining > 0 {
-				return remaining
+		// EventData key must match the emitter in budget_period_close_check.go which
+		// publishes "remaining" (not "balance"). See domain.EventDataKeyRemaining.
+		if remainingAmt, ok := triggerData[domain.EventDataKeyRemaining].(float64); ok {
+			contribution := remainingAmt - action.Threshold
+			if contribution > 0 {
+				return contribution
 			}
 		}
 		return 0
