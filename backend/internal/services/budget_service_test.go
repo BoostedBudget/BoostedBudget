@@ -137,15 +137,6 @@ func (m *MockBudgetRepository) AdjustCategoryAllocatedAmount(ctx context.Context
 	return args.Error(0)
 }
 
-// Issue #972: Paginated active-budget enumeration for period-close scanner
-func (m *MockBudgetRepository) GetAllActivePaginated(ctx context.Context, limit, offset int) ([]*domain.Budget, error) {
-	args := m.Called(ctx, limit, offset)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*domain.Budget), args.Error(1)
-}
-
 // MockTransactionRepositoryForBudget is a minimal mock for transaction repository
 // Only mocking methods needed by BudgetService
 type MockTransactionRepositoryForBudget struct {
