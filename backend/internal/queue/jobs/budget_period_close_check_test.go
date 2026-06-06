@@ -654,17 +654,17 @@ func TestComputeCurrentPeriod_WithTimezone_MonthBoundary(t *testing.T) {
 	assert.Equal(t, time.Date(2024, time.March, 31, 0, 0, 0, 0, time.UTC), eUTC)
 }
 
-// TestComputeJustClosedPeriod_WithTimezone_NoBoundaryUTC_YesBoundaryLocal verifies
-// the scenario where UTC sees no boundary but a western timezone does.
+// TestComputeJustClosedPeriod_WithTimezone_YesBoundaryUTC_NoBoundaryLocal verifies
+// the scenario where UTC already sees a boundary but the user's local timezone does not.
 //
 // Setup: monthly budget. now = 2024-03-01 03:00:00 UTC.
 //   - UTC: today = Mar 1, yesterday = Feb 29 — boundary crossed (Feb→Mar). closed=true.
-//   - America/Los_Angeles (UTC-8): now.In(loc) = Feb 29 23:00 PST, yesterday.In(loc) = Feb 28 23:00 PST.
-//     Local today = Feb 29, local yesterday = Feb 28. Same month → NO boundary yet.
+//   - America/Los_Angeles (UTC-8): now.In(loc) = Feb 29 19:00 PST — local date is Feb 29.
+//     Local today = Feb 29, local yesterday = Feb 28. Same month (February) → NO boundary yet.
 //
 // This demonstrates that a user in LA has NOT yet crossed the month boundary when
 // UTC reads 03:00 on March 1 — their local clock still shows Feb 29.
-func TestComputeJustClosedPeriod_WithTimezone_NoBoundaryUTC_YesBoundaryLocal(t *testing.T) {
+func TestComputeJustClosedPeriod_WithTimezone_YesBoundaryUTC_NoBoundaryLocal(t *testing.T) {
 	// 2024-03-01 03:00:00 UTC = 2024-02-29 19:00:00 PST
 	now := time.Date(2024, time.March, 1, 3, 0, 0, 0, time.UTC)
 	loc, err := time.LoadLocation("America/Los_Angeles")
@@ -726,6 +726,82 @@ func TestWorkAt_UsesUserTimezone(t *testing.T) {
 	periodEventsRepo.AssertNotCalled(t, "HasMarker")
 	mockQueue.AssertNotCalled(t, "Enqueue")
 	tzLookup.AssertExpectations(t)
+}
+
+// TestWorkAt_MarkerStableAfterTimezoneChange verifies that the marker identity is
+// stable even if a user changes their timezone between two daily worker runs.
+//
+// The marker key uses UTC-anchored dates derived from the budget's stored StartDate,
+// so changing from e.g. America/New_York to America/Los_Angeles does not produce a
+// different (period_start, period_end) tuple and therefore cannot cause a double-fire.
+//
+// Setup: monthly budget. First run uses UTC (period Jan 1–31 just closed on Feb 1 09:00).
+// HasMarker returns false → InsertMarker returns true → Enqueue called once.
+// Second run uses America/New_York — same period start/end → HasMarker returns true → no enqueue.
+func TestWorkAt_MarkerStableAfterTimezoneChange(t *testing.T) {
+	ctx := context.Background()
+
+	// Feb 1 09:00 UTC: January just closed in both UTC and New_York (Jan 31 04:00 EST is still Jan 31).
+	now := time.Date(2024, time.February, 1, 9, 0, 0, 0, time.UTC)
+	expectedPeriodStart := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
+	expectedPeriodEnd := time.Date(2024, time.January, 31, 0, 0, 0, 0, time.UTC)
+
+	budget := newMonthlyBudget("budget-tz-stable", "user-tz-stable", time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC))
+
+	budgetRepo := &mockBudgetPeriodCheckRepo{}
+	periodEventsRepo := &mockBudgetPeriodEventsRepo{}
+	mockQueue := new(MockJobQueue)
+
+	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).
+		Return([]*domain.Budget{budget}, nil)
+
+	// Run 1 (UTC timezone): HasMarker=false → InsertMarker wins → Enqueue once.
+	tzLookup1 := new(mockUserTimezoneLookup)
+	tzLookup1.On("GetTimezonesByUserIDs", ctx, []string{"user-tz-stable"}).
+		Return(map[string]string{"user-tz-stable": "UTC"}, nil)
+
+	periodEventsRepo.On("HasMarker", ctx, "user-tz-stable", "budget-tz-stable",
+		expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
+		Return(false, nil).Once()
+	periodEventsRepo.On("InsertMarker", ctx, "user-tz-stable", "budget-tz-stable",
+		expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
+		Return(true, nil).Once()
+	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		ea, ok := job.(RuleEvaluationArgs)
+		return ok && ea.UserID == "user-tz-stable"
+	}), mock.Anything).Return(&queue.JobResult{ID: 10}, nil).Once()
+
+	worker1 := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
+		BudgetRepo:       budgetRepo,
+		PeriodEventsRepo: periodEventsRepo,
+		JobQueue:         mockQueue,
+		UserTimezones:    tzLookup1,
+	})
+	require.NoError(t, worker1.workAt(ctx, newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{}), now))
+
+	// Run 2 (America/New_York timezone): user changed tz. HasMarker must still return
+	// true for the SAME UTC-anchored (expectedPeriodStart, expectedPeriodEnd) key.
+	// The marker identity must not shift due to the timezone change.
+	tzLookup2 := new(mockUserTimezoneLookup)
+	tzLookup2.On("GetTimezonesByUserIDs", ctx, []string{"user-tz-stable"}).
+		Return(map[string]string{"user-tz-stable": "America/New_York"}, nil)
+
+	periodEventsRepo.On("HasMarker", ctx, "user-tz-stable", "budget-tz-stable",
+		expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
+		Return(true, nil).Once() // marker already exists → skip
+
+	worker2 := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
+		BudgetRepo:       budgetRepo,
+		PeriodEventsRepo: periodEventsRepo,
+		JobQueue:         mockQueue,
+		UserTimezones:    tzLookup2,
+	})
+	require.NoError(t, worker2.workAt(ctx, newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{}), now))
+
+	// Enqueue must have been called exactly once across both runs.
+	mockQueue.AssertNumberOfCalls(t, "Enqueue", 1)
+	periodEventsRepo.AssertExpectations(t)
+	mockQueue.AssertExpectations(t)
 }
 
 // TestWorkAt_FallsBackToUTCWhenTimezoneNil verifies that when UserTimezones is nil,

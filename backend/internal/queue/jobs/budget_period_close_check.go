@@ -177,9 +177,16 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 		// UserTimezones is not configured — all budgets will use UTC).
 		var tzMap map[string]string
 		if w.userTimezones != nil {
-			userIDs := make([]string, len(budgets))
-			for i, b := range budgets {
-				userIDs[i] = b.UserID
+			// Deduplicate user IDs — a single user may own multiple budgets on
+			// this page. Passing duplicates to the repo is functionally harmless
+			// (SQL ANY dedupes), but deduplication keeps the contract clean.
+			seenUsers := make(map[string]struct{}, len(budgets))
+			userIDs := make([]string, 0, len(budgets))
+			for _, b := range budgets {
+				if _, dup := seenUsers[b.UserID]; !dup {
+					seenUsers[b.UserID] = struct{}{}
+					userIDs = append(userIDs, b.UserID)
+				}
 			}
 			var tzErr error
 			tzMap, tzErr = w.userTimezones.GetTimezonesByUserIDs(ctx, userIDs)
