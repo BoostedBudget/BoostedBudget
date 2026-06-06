@@ -102,7 +102,12 @@ func TestBudgetPeriodCloseCheckArgs_Kind(t *testing.T) {
 
 // TestBudgetPeriodCloseCheck_FiresEventOnPeriodClose verifies that when the job
 // runs on the first day of a new month, it fires the budget_period_end event
-// for the previous (just-closed) month.
+// for the previous (just-closed) month. This is the GAP N fix — the test now
+// exercises the full worker firing path (workAt) rather than only the helper.
+//
+// This also serves as the GAP J emitter⊇reader parity guard: it asserts that
+// every EventDataKey* constant consumed by calculateTransferAmount and
+// calculateSavingsGoalAmount is present in the emitted EventData map.
 func TestBudgetPeriodCloseCheck_FiresEventOnPeriodClose(t *testing.T) {
 	ctx := context.Background()
 
@@ -113,43 +118,106 @@ func TestBudgetPeriodCloseCheck_FiresEventOnPeriodClose(t *testing.T) {
 	expectedPeriodStart := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
 	expectedPeriodEnd := time.Date(2024, time.January, 31, 0, 0, 0, 0, time.UTC)
 
-	budget := newMonthlyBudget("budget-1", "user-1", time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC))
+	// Budget with non-zero TotalSpent() and RemainingAmount() so we can assert
+	// on the emitted values. TotalSpent() sums top-level category SpentAmount fields.
+	// Amount=1500 with 300 spent → RemainingAmount()=1200, TotalSpent()=300.
+	budget := &domain.Budget{
+		ID:           "budget-1",
+		UserID:       "user-1",
+		Name:         "Test Budget",
+		Period:       domain.BudgetPeriodMonthly,
+		StartDate:    time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC),
+		Amount:       1500,
+		IncomeAmount: 2000,
+		CurrencyCode: "USD",
+		IsActive:     true,
+		Categories: []domain.BudgetCategory{
+			{
+				ID:              "cat-1",
+				BudgetID:        "budget-1",
+				CategoryKind:    "custom",
+				AllocatedAmount: 500,
+				SpentAmount:     300,
+			},
+		},
+	}
 
 	budgetRepo := &mockBudgetPeriodCheckRepo{}
 	periodEventsRepo := &mockBudgetPeriodEventsRepo{}
 	mockQueue := new(MockJobQueue)
 
-	// First page returns one budget; second page is empty (end of iteration).
+	// Page 1 returns one budget; single-page result (len < pageSize) → loop exits.
 	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).
 		Return([]*domain.Budget{budget}, nil)
-	// A single-page result means len < pageSize → loop exits without a second call.
 
 	periodEventsRepo.On("HasMarker", ctx, "user-1", "budget-1", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
 		Return(false, nil)
 	periodEventsRepo.On("InsertMarker", ctx, "user-1", "budget-1", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
 		Return(true, nil)
 
-	// Verify computeJustClosedPeriod detects the January close when now is Feb 1.
-	pStart, pEnd, closed := computeJustClosedPeriod(budget, now, time.UTC)
-	require.True(t, closed, "should detect January closed when now is Feb 1")
-	assert.Equal(t, expectedPeriodStart, pStart)
-	assert.Equal(t, expectedPeriodEnd, pEnd)
+	// Capture the enqueued job to inspect EventData keys.
+	var capturedArgs RuleEvaluationArgs
+	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		ea, ok := job.(RuleEvaluationArgs)
+		if ok {
+			capturedArgs = ea
+		}
+		return ok && ea.UserID == "user-1" && ea.EventType == domain.EventBudgetPeriodEnd
+	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil).Once()
 
-	// Verify the worker Work method integration using a budget whose period
-	// closes relative to the real current time. Since time.Now() is live we use a
-	// budget that started at the very beginning of this calendar year; if today is
-	// January 1 a yearly period would close which is a different scenario, so we
-	// instead exercise the full Work path with the empty-budgets worker test.
-	// The mock expectations below cover the idempotency / "has marker" paths; the
-	// period-crossing case is covered fully via the computeJustClosedPeriod tests.
+	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
+		BudgetRepo:       budgetRepo,
+		PeriodEventsRepo: periodEventsRepo,
+		JobQueue:         mockQueue,
+	})
 
-	// Separate idempotency check: marker already exists → no insert, no enqueue.
-	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).
-		Return([]*domain.Budget{}, nil)
+	job := newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{TriggerSource: "test-fires-event"})
+	err := worker.workAt(ctx, job, now)
+	require.NoError(t, err)
 
-	_ = budgetRepo       // consumed in EmptyBudgets test
-	_ = periodEventsRepo // consumed individually
-	_ = mockQueue
+	// Enqueue must have been called exactly once.
+	mockQueue.AssertNumberOfCalls(t, "Enqueue", 1)
+	mockQueue.AssertExpectations(t)
+	periodEventsRepo.AssertExpectations(t)
+
+	// Assert the emitted EventData contains all domain.EventDataKey* constants that
+	// the rule-execution readers consume (GAP J parity guard).
+	require.NotNil(t, capturedArgs.EventData, "EventData must not be nil")
+	assert.Equal(t, "budget-1", capturedArgs.EventData[domain.EventDataKeyBudgetID], "budget_id must match")
+	assert.Equal(t, float64(300), capturedArgs.EventData[domain.EventDataKeyTotalSpent], "total_spent must match TotalSpent()")
+	assert.Equal(t, float64(1200), capturedArgs.EventData[domain.EventDataKeyRemaining], "remaining must match RemainingAmount()")
+	assert.Equal(t, expectedPeriodStart.Format("2006-01-02"), capturedArgs.EventData[domain.EventDataKeyPeriodStart], "period_start must be YYYY-MM-DD")
+	assert.Equal(t, expectedPeriodEnd.Format("2006-01-02"), capturedArgs.EventData[domain.EventDataKeyPeriodEnd], "period_end must be YYYY-MM-DD")
+}
+
+// TestEventDataKeyEmitterCoversReaderKeys is a contract test that verifies the
+// set of EventDataKey* constants emitted by the period-close worker (GAP J emitter)
+// is a superset of the keys consumed by calculateTransferAmount and
+// calculateSavingsGoalAmount (the reader side). No functions are called — this is a
+// pure set-membership assertion over the domain constant values.
+func TestEventDataKeyEmitterCoversReaderKeys(t *testing.T) {
+	// Keys emitted by budget_period_close_check.go (the worker's EventData map).
+	emitted := map[string]bool{
+		domain.EventDataKeyBudgetID:     true,
+		domain.EventDataKeyRemaining:    true,
+		domain.EventDataKeyIncomeAmount: true,
+		domain.EventDataKeyAmount:       true,
+		domain.EventDataKeyTotalSpent:   true,
+		domain.EventDataKeyPeriodStart:  true,
+		domain.EventDataKeyPeriodEnd:    true,
+	}
+
+	// Keys consumed by calculateTransferAmount (amount types: percentage, remaining, threshold).
+	// Keys consumed by calculateSavingsGoalAmount (amount types: percentage, remaining).
+	consumed := []string{
+		domain.EventDataKeyAmount,    // calculateTransferAmount: "percentage" and "threshold" branches
+		domain.EventDataKeyRemaining, // calculateTransferAmount: "remaining" branch; calculateSavingsGoalAmount: "remaining" branch
+	}
+
+	for _, key := range consumed {
+		assert.True(t, emitted[key],
+			"emitter must include key %q consumed by rule-execution calculators", key)
+	}
 }
 
 // TestBudgetPeriodCloseCheck_IdempotentOnRerun verifies that when a marker

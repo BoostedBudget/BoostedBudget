@@ -25,15 +25,13 @@ type PendingSuggestionRepository interface {
 	UpdateStatus(ctx context.Context, id string, status domain.SuggestionStatus, userNotes *string) error
 }
 
-// TransactionMonitorService monitors transactions to auto-accept matching suggestions.
+// TransactionMonitorService is a no-op stub retained for API compatibility.
+// Transfer detection is now handled by TransferCorrelationService.CorrelateForUser,
+// which is wired into the transaction sync pipeline (Issue #972 Task B4).
 type TransactionMonitorService interface {
-	// MonitorForMatches checks new transactions against pending suggestions.
-	// If a match is found, the suggestion is auto-accepted.
-	// Match criteria:
-	// - Transaction account matches suggestion's ToAccountID
-	// - Amount within tolerance (default 1 cent)
-	// - Transaction date within range of suggestion creation (default 7 days)
-	// - Negative transaction amount (inflow/credit/deposit under PFCv2)
+	// MonitorForMatches is a no-op stub preserved for interface compatibility.
+	// It no longer performs auto-accept; correlation is handled by
+	// TransferCorrelationService instead.
 	MonitorForMatches(ctx context.Context, userID string, newTransactions []*domain.Transaction) error
 }
 
