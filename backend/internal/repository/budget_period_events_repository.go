@@ -24,6 +24,11 @@ type BudgetPeriodEventsRepository interface {
 	// caller distinguish a fresh insert from a concurrent/repeat call without a
 	// separate HasMarker round-trip.
 	InsertMarker(ctx context.Context, userID string, budgetID string, periodStart time.Time, periodEnd time.Time, eventType string) (bool, error)
+
+	// DeleteMarker removes a previously-inserted marker so the next daily run can
+	// retry. Used when Enqueue fails after a successful InsertMarker — without this,
+	// the orphaned marker would permanently suppress the event for that period.
+	DeleteMarker(ctx context.Context, userID string, budgetID string, periodStart time.Time, periodEnd time.Time, eventType string) error
 }
 
 // budgetPeriodEventsRepository implements BudgetPeriodEventsRepository using PostgreSQL.
@@ -98,4 +103,28 @@ func (r *budgetPeriodEventsRepository) InsertMarker(
 	}
 	// RowsAffected == 0 means the ON CONFLICT clause fired — marker already existed.
 	return ct.RowsAffected() > 0, nil
+}
+
+// DeleteMarker removes a period event marker by the natural key. Used when Enqueue
+// fails after a successful InsertMarker — callers delete the orphaned marker so the
+// next daily run can retry (rather than silently suppressing the event forever).
+// Deleting a marker that doesn't exist is a no-op (idempotent).
+func (r *budgetPeriodEventsRepository) DeleteMarker(
+	ctx context.Context,
+	userID string,
+	budgetID string,
+	periodStart time.Time,
+	periodEnd time.Time,
+	eventType string,
+) error {
+	query := `
+		DELETE FROM budget_period_events
+		WHERE user_id = $1
+		  AND budget_id = $2
+		  AND period_start = $3
+		  AND period_end = $4
+		  AND event_type = $5
+	`
+	_, err := r.db.Exec(ctx, query, userID, budgetID, periodStart, periodEnd, eventType)
+	return err
 }

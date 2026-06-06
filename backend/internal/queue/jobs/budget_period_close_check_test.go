@@ -61,6 +61,11 @@ func (m *mockBudgetPeriodEventsRepo) InsertMarker(ctx context.Context, userID st
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *mockBudgetPeriodEventsRepo) DeleteMarker(ctx context.Context, userID string, budgetID string, periodStart time.Time, periodEnd time.Time, eventType string) error {
+	args := m.Called(ctx, userID, budgetID, periodStart, periodEnd, eventType)
+	return args.Error(0)
+}
+
 // =============================================================================
 // Test helpers
 // =============================================================================
@@ -677,6 +682,52 @@ func TestBudgetPeriodCloseCheckWorker_NoDuplicateEnqueueOnMarkerRace(t *testing.
 	mockQueue.AssertNumberOfCalls(t, "Enqueue", 1)
 	mockQueue.AssertExpectations(t)
 	periodEventsRepo.AssertExpectations(t)
+}
+
+// TestWorkAt_DeletesMarkerOnEnqueueFailure verifies GAP S: when Enqueue fails after
+// a successful InsertMarker, DeleteMarker is called so the next daily run can retry.
+// Without this clean-up the orphaned marker would permanently suppress budget_period_end.
+func TestWorkAt_DeletesMarkerOnEnqueueFailure(t *testing.T) {
+	ctx := context.Background()
+	// Monthly budget starting 2024-01-01; "now" is 2024-02-01 = first day of February
+	// so January just closed.
+	now := time.Date(2024, time.February, 1, 9, 0, 0, 0, time.UTC)
+
+	budget := newMonthlyBudget("budget-fail", "user-fail", time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	budgetRepo := &mockBudgetPeriodCheckRepo{}
+	periodEventsRepo := &mockBudgetPeriodEventsRepo{}
+	mockQueue := new(MockJobQueue)
+	expirer := new(mockTransferSuggestionExpirer)
+
+	expectedPeriodStart := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	expectedPeriodEnd := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
+
+	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).Return([]*domain.Budget{budget}, nil)
+	periodEventsRepo.On("HasMarker", ctx, "user-fail", "budget-fail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(false, nil)
+	// InsertMarker succeeds (newly inserted row)
+	periodEventsRepo.On("InsertMarker", ctx, "user-fail", "budget-fail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(true, nil)
+	// Enqueue fails with a transient error
+	mockQueue.On("Enqueue", ctx, mock.Anything, mock.Anything).Return(nil, errors.New("transient enqueue failure"))
+	// DeleteMarker must be called to clean up the orphaned marker so the next daily run can retry
+	periodEventsRepo.On("DeleteMarker", ctx, "user-fail", "budget-fail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(nil)
+	expirer.On("ExpirePending", ctx).Return(int64(0), nil)
+
+	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
+		BudgetRepo:                budgetRepo,
+		PeriodEventsRepo:          periodEventsRepo,
+		JobQueue:                  mockQueue,
+		TransferSuggestionExpirer: expirer,
+	})
+	job := newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{TriggerSource: "test-gaps"})
+
+	err := worker.workAt(ctx, job, now)
+	require.NoError(t, err) // enqueue errors are logged, not propagated
+
+	// DeleteMarker must have been called exactly once to clean up the orphaned marker
+	periodEventsRepo.AssertCalled(t, "DeleteMarker", ctx, "user-fail", "budget-fail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd)
+	periodEventsRepo.AssertExpectations(t)
+	mockQueue.AssertExpectations(t)
 }
 
 // =============================================================================
