@@ -703,11 +703,51 @@ func evaluateConditions(conditions []domain.AutomationRuleCondition, logic strin
 	return true
 }
 
+// normalizeConditionField maps a UI-built dotted field name to the flat key that the
+// event engine emits. The rule-builder UI stores conditions with entity-prefixed field
+// names (e.g. "budget.remaining_amount") but the period-close worker and budget_updated
+// emitters publish flat keys (e.g. "remaining", "total_spent"). Without this shim every
+// UI-built condition silently returns false because data[condition.Field] misses.
+//
+// Mapping rules:
+//   - Strip leading entity prefix: "budget.", "budget_category.", "account.", "transaction."
+//   - Alias suffix differences:
+//       "remaining_amount" → "remaining"   (UI label vs. engine flat key)
+//       "spent_amount"     → "total_spent" (category variant vs. engine flat key)
+//   - All other suffixes (percent_used, total_spent, income_amount, amount, balance,
+//     merchant, type, …) already match after the prefix is removed.
+//   - Unknown or already-flat fields are returned unchanged.
+//
+// Follow-up: category-specific emitters (budget_category.remaining_amount etc.) do not
+// yet have a dedicated emitter — they will be added in a follow-up issue.
+func normalizeConditionField(field string) string {
+	// Entity prefixes emitted by the UI rule-builder (CONDITION_FIELD_OPTIONS).
+	prefixes := []string{"budget_category.", "budget.", "account.", "transaction."}
+	suffix := field
+	for _, p := range prefixes {
+		if strings.HasPrefix(field, p) {
+			suffix = field[len(p):]
+			break
+		}
+	}
+	// Alias suffix names that differ between the UI label and the engine flat key.
+	switch suffix {
+	case "remaining_amount":
+		return "remaining"
+	case "spent_amount":
+		return "total_spent"
+	}
+	return suffix
+}
+
 // evaluateCondition evaluates a single condition against the data.
 // Supports both short form (eq, neq, gt, gte, lt, lte) and long form
 // (equals, not_equals, greater_than, etc.) operator names.
 func evaluateCondition(condition domain.AutomationRuleCondition, data map[string]interface{}) bool {
-	fieldValue, exists := data[condition.Field]
+	// Normalize the stored field name from the UI dotted form to the flat engine key.
+	// e.g. "budget.remaining_amount" → "remaining", "account.balance" → "balance".
+	normalizedField := normalizeConditionField(condition.Field)
+	fieldValue, exists := data[normalizedField]
 	if !exists {
 		return false
 	}
