@@ -127,23 +127,11 @@ func (w *BudgetPeriodCloseCheckWorker) Work(ctx context.Context, job *river.Job[
 	return w.workAt(ctx, job, time.Now())
 }
 
-// workAt implements the period-close scanning logic with an injectable clock.
-// Using an explicit now parameter creates a clock seam for deterministic testing.
-//
-// Algorithm:
-//  1. Pages through ALL active budgets via GetAllActivePaginated.
-//  2. For each page, batch-resolves user timezones via UserTimezoneLookup
-//     (nil → UTC fallback). Period boundaries are detected in each user's local time.
-//  3. For each budget, calls computeJustClosedPeriod(budget, now, loc) to determine
-//     whether a period boundary was crossed between yesterday and today in local time.
-//  4. If a period just closed: checks HasMarker (fast path); if no marker, calls
-//     InsertMarker to claim the period atomically. Only when InsertMarker returns
-//     inserted=true (this worker won the DB race) is the RuleEvaluationArgs job
-//     enqueued. This guarantees exactly-once delivery even under concurrent runs.
-//
-// Marker key stability: period_start/period_end in the marker are UTC-anchored dates
-// derived from the budget's StartDate, so they remain stable even if a user changes
-// timezone between daily runs (no double-fire or skipped period).
+// workAt performs period-close scanning with an injectable clock for testing.
+// Pages through active budgets, detects period boundaries in each user's local timezone,
+// and enqueues RuleEvaluationArgs when a period just closed. Uses InsertMarker as the
+// exactly-once guard: only the worker that wins the DB race proceeds to enqueue.
+// Marker boundaries are UTC-anchored for stability across timezone changes.
 func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Job[BudgetPeriodCloseCheckArgs], now time.Time) error {
 	args := job.Args
 
@@ -173,13 +161,10 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 			break
 		}
 
-		// Batch-resolve timezones for this page of budgets (nil guard: skip when
-		// UserTimezones is not configured — all budgets will use UTC).
+		// Batch-resolve timezones for this page of budgets (nil → UTC fallback).
+		// Deduplicate user IDs: a single user may own multiple budgets on this page.
 		var tzMap map[string]string
 		if w.userTimezones != nil {
-			// Deduplicate user IDs — a single user may own multiple budgets on
-			// this page. Passing duplicates to the repo is functionally harmless
-			// (SQL ANY dedupes), but deduplication keeps the contract clean.
 			seenUsers := make(map[string]struct{}, len(budgets))
 			userIDs := make([]string, 0, len(budgets))
 			for _, b := range budgets {
@@ -363,21 +348,14 @@ func resolveLocation(userID string, tzMap map[string]string) *time.Location {
 	return loc
 }
 
-// computeJustClosedPeriod determines whether a budget period boundary was crossed
-// between yesterday and today (in the user's local timezone). Returns the
-// just-closed period's (start, end, true) if a boundary was crossed, otherwise
-// returns zero values and false.
+// computeJustClosedPeriod determines if a budget period boundary was crossed
+// between yesterday and today in the user's local timezone. Returns (start, end, true)
+// if a period just closed, otherwise (zero values, false).
 //
-// For custom (fixed) periods: the period is closed on the first day after EndDate.
-// The unique marker prevents re-firing if the worker runs late (tDate > EndDate+1).
+// For custom periods: closed when current date > EndDate.
+// For recurring periods: closed when yesterday and today fall in different periods.
 //
-// For recurring periods: computes the period containing yesterday and today (both
-// resolved in loc); if they differ a boundary was crossed and yesterday's period
-// just closed.
-//
-// Marker key stability: the returned start/end are UTC-anchored dates derived from
-// the budget's stored StartDate. This means the marker identity is stable even if
-// a user changes their timezone between daily runs.
+// Returned start/end are UTC-anchored for marker stability across timezone changes.
 func computeJustClosedPeriod(budget *domain.Budget, now time.Time, loc *time.Location) (start, end time.Time, closed bool) {
 	if loc == nil {
 		loc = time.UTC
@@ -423,17 +401,13 @@ func computeJustClosedPeriod(budget *domain.Budget, now time.Time, loc *time.Loc
 	return yesterdayStart, yesterdayEnd, true
 }
 
-// computeCurrentPeriod computes the period boundaries (start inclusive, end inclusive)
-// that contain the given instant t for the specified budget.
+// computeCurrentPeriod returns the period boundaries containing t for the budget,
+// mapping t to a calendar date in the given location. loc=UTC for UTC boundaries,
+// or a user's location for local boundaries. Always returns UTC midnight timestamps
+// for marker stability.
 //
-// loc controls which calendar date t is mapped to before computing boundaries.
-// Pass time.UTC (or nil) for UTC-based boundary detection; pass a user's location
-// for local-time boundary detection. The returned start/end are always UTC midnight
-// timestamps so marker keys remain stable across timezone changes.
-//
-// For custom budgets the single explicit period [StartDate, EndDate] is returned.
-// For recurring periods (weekly/monthly/quarterly/yearly) the period that contains t
-// is computed by advancing from the budget's StartDate.
+// For custom periods: returns [StartDate, EndDate].
+// For recurring: computes the period containing t by advancing from StartDate.
 func computeCurrentPeriod(budget *domain.Budget, t time.Time, loc *time.Location) (start, end time.Time) {
 	if loc == nil {
 		loc = time.UTC

@@ -9,43 +9,7 @@ import { Button } from '../../components/ui/button'
 import { AlertCircle } from 'lucide-react'
 import { posthog } from '../../shared/lib/posthog'
 import type { User, UpdateProfileRequest } from './types'
-
-export const IANA_TIMEZONES = [
-  'Africa/Cairo',
-  'America/Anchorage',
-  'America/Chicago',
-  'America/Denver',
-  'America/Los_Angeles',
-  'America/New_York',
-  'America/Phoenix',
-  'America/Sao_Paulo',
-  'America/Toronto',
-  'America/Vancouver',
-  'Asia/Bangkok',
-  'Asia/Dubai',
-  'Asia/Hong_Kong',
-  'Asia/Jakarta',
-  'Asia/Kolkata',
-  'Asia/Seoul',
-  'Asia/Shanghai',
-  'Asia/Singapore',
-  'Asia/Tokyo',
-  'Australia/Melbourne',
-  'Australia/Sydney',
-  'Europe/Amsterdam',
-  'Europe/Berlin',
-  'Europe/Helsinki',
-  'Europe/Istanbul',
-  'Europe/London',
-  'Europe/Madrid',
-  'Europe/Moscow',
-  'Europe/Paris',
-  'Europe/Rome',
-  'Europe/Stockholm',
-  'Pacific/Auckland',
-  'Pacific/Honolulu',
-  'UTC',
-]
+import { IANA_TIMEZONES } from './timezones'
 
 interface ProfileFormProps {
   user: User
@@ -68,20 +32,21 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
   const hasTimezoneChange = timezone !== (user.timezone ?? 'UTC')
   const hasChanges = email !== user.email || hasRegionChange || hasTimezoneChange
 
+  // Auto-detect timezone on mount if user has default (unset) timezone_source.
+  // Guard is checked inside the effect to allow per-mount re-evaluation without
+  // explicit dependency tracking.
   useEffect(() => {
     if (user.timezone_source === 'default') {
       const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone
       if (browserTz && browserTz !== user.timezone) {
-        // Silent PATCH: set to auto-detected tz with source="auto"
         updateProfileMutation.mutate(
           { data: { timezone: browserTz, timezone_source: 'auto' } },
           { onSuccess: () => { /* silent — no toast */ } },
         )
       }
     }
-    // Only run once on mount — user.timezone_source is the guard
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []) // intentional empty deps: run once, guard is inside the effect
+  }, [])
 
   function getRegionDisplay(code: string): string {
     return regions?.[code]?.display_name ?? code

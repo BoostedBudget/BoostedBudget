@@ -703,26 +703,19 @@ func evaluateConditions(conditions []domain.AutomationRuleCondition, logic strin
 	return true
 }
 
-// normalizeConditionField maps a UI-built dotted field name to the flat key that the
-// event engine emits. The rule-builder UI stores conditions with entity-prefixed field
-// names (e.g. "budget.remaining_amount") but the period-close worker and budget_updated
-// emitters publish flat keys (e.g. "remaining", "total_spent"). Without this shim every
-// UI-built condition silently returns false because data[condition.Field] misses.
+// normalizeConditionField maps UI-built dotted field names (e.g. "budget.remaining_amount")
+// to flat engine keys (e.g. "remaining"). The rule-builder stores entity-prefixed names,
+// but event emitters publish flat keys. Without normalization, all UI-built conditions
+// would silently fail.
 //
-// Mapping rules:
-//   - Strip leading entity prefix: "budget.", "budget_category.", "account.", "transaction."
-//   - Alias suffix differences:
-//       "remaining_amount" → "remaining"   (UI label vs. engine flat key)
-//       "spent_amount"     → "total_spent" (budget_category.spent_amount suffix vs. engine flat key)
-//   - All other suffixes (percent_used, total_spent, income_amount, amount, balance,
-//     merchant, type, …) already match after the prefix is removed.
-//   - Unknown or already-flat fields are returned unchanged.
-//
-// Follow-up: category-specific emitters (budget_category.remaining_amount etc.) do not
-// yet have a dedicated emitter — they will be added in a follow-up issue.
+// Mapping:
+//   - Strip entity prefix: "budget_category.", "budget.", "account.", "transaction."
+//     (longer prefixes checked first)
+//   - Alias suffix changes: "remaining_amount" → "remaining", "spent_amount" → "total_spent"
+//   - Other suffixes pass through unchanged
+//   - Unknown/flat fields returned as-is
 func normalizeConditionField(field string) string {
-	// Entity prefixes emitted by the UI rule-builder (CONDITION_FIELD_OPTIONS).
-	// budget_category MUST precede budget — longer prefixes must be checked first.
+	// Strip entity prefix (longer prefixes must be checked first)
 	prefixes := []string{"budget_category.", "budget.", "account.", "transaction."}
 	suffix := field
 	for _, p := range prefixes {
@@ -731,7 +724,8 @@ func normalizeConditionField(field string) string {
 			break
 		}
 	}
-	// Alias suffix names that differ between the UI label and the engine flat key.
+
+	// Alias suffix names that differ between UI label and engine flat key
 	switch suffix {
 	case "remaining_amount":
 		return "remaining"
