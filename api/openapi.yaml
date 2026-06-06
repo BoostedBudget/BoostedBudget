@@ -5207,6 +5207,10 @@ components:
           type: string
         primary_region:
           type: string
+        timezone:
+          type: string
+        timezone_source:
+          type: string
       type: object
     UpdateSavingsGoalRequest:
       additionalProperties: false
@@ -5487,6 +5491,10 @@ components:
           type: string
         subscription_tier:
           type: string
+        timezone:
+          type: string
+        timezone_source:
+          type: string
         trial_days_remaining:
           format: int64
           type: integer
@@ -5510,6 +5518,8 @@ components:
         - primary_region
         - is_active
         - is_deleted
+        - timezone
+        - timezone_source
         - created_at
         - updated_at
       type: object

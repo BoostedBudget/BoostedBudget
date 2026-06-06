@@ -58,6 +58,12 @@ type User struct {
 	RetentionNotice30dSentAt *time.Time `json:"retention_notice_30d_sent_at,omitempty" db:"retention_notice_30d_sent_at"`
 	RetentionNotice7dSentAt  *time.Time `json:"retention_notice_7d_sent_at,omitempty" db:"retention_notice_7d_sent_at"`
 
+	// Timezone settings (Issue #972)
+	// Timezone stores the user's IANA timezone string (default "UTC").
+	// TimezoneSource tracks how it was set: "default", "auto" (browser-detected), or "user" (explicit choice).
+	Timezone       string `json:"timezone" db:"timezone"`
+	TimezoneSource string `json:"timezone_source" db:"timezone_source"`
+
 	// Timestamps
 	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at"`
@@ -65,11 +71,13 @@ type User struct {
 }
 
 // UpdateProfileRequest represents the request body for updating a user profile
-// Only allows updating specific fields (email, primary_region)
+// Only allows updating specific fields (email, primary_region, timezone, timezone_source)
 // Subscription fields are managed separately through payment webhooks
 type UpdateProfileRequest struct {
-	Email         *string `json:"email,omitempty"`
-	PrimaryRegion *string `json:"primary_region,omitempty"`
+	Email          *string `json:"email,omitempty"`
+	PrimaryRegion  *string `json:"primary_region,omitempty"`
+	Timezone       *string `json:"timezone,omitempty"`
+	TimezoneSource *string `json:"timezone_source,omitempty"`
 }
 
 // ComputeTrialDaysRemaining calculates and sets the TrialDaysRemaining field
@@ -113,6 +121,8 @@ func NewUser(clerkUserID, email string, emailVerified bool) *User {
 		PrimaryRegion:      DefaultRegionCode(),
 		IsActive:           true,
 		IsDeleted:          false,
+		Timezone:           "UTC",
+		TimezoneSource:     "default",
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
