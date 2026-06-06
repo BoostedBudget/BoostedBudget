@@ -647,6 +647,7 @@ func main() {
 			PeriodEventsRepo:          repository.NewBudgetPeriodEventsRepository(db),
 			JobQueue:                  nil, // Set after River client created (circular dependency)
 			TransferSuggestionExpirer: transferSuggestionRepo, // Issue #972 GAP E: expire stale pending suggestions
+			UserTimezones:             budgetRepo,             // Issue #972 Task 2e: per-user timezone for period-boundary detection
 			Logger:                    appLogger,
 		})
 		appLogger.Info("Budget period close check worker created (River)")
