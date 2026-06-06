@@ -9,6 +9,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -34,6 +35,9 @@ func (m *MockTransactionSyncServiceForWorker) SyncTransactions(ctx context.Conte
 	}
 	return args.Get(0).(*domain.TransactionSyncResult), args.Error(1)
 }
+
+// SetTransferCorrelationService satisfies the TransactionSyncService interface (Issue #972: B4).
+func (m *MockTransactionSyncServiceForWorker) SetTransferCorrelationService(_ services.TransferCorrelationService) {}
 
 // MockItemErrorServiceForWorker for testing
 type MockItemErrorServiceForWorker struct {
