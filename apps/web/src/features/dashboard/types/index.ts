@@ -149,7 +149,8 @@ export type WidgetType =
   | 'cash-flow-chart'
   | 'account-cards'
   | 'budget-overview'
-  | 'net-worth';
+  | 'net-worth'
+  | 'savings-impact';
 
 export interface WidgetConfig {
   i: string;          // Unique widget instance ID (react-grid-layout uses 'i')

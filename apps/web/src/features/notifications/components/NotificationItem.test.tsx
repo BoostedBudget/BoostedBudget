@@ -87,6 +87,18 @@ describe('NotificationItem', () => {
     expect(screen.getByRole('button', { name: /reject/i })).toBeTruthy()
   })
 
+  it('renders confirm-match UI for transfer_suggestion_match type', () => {
+    renderItem({
+      ...baseNotification,
+      type: 'transfer_suggestion_match',
+      interaction_pattern: 'accept_reject',
+      transfer_suggestion_id: 'sugg-1',
+    })
+    expect(screen.getByRole('spinbutton')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /confirm/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /dismiss/i })).toBeTruthy()
+  })
+
   it('shows relative timestamp', () => {
     renderItem(baseNotification)
     expect(screen.getByText(/m ago|just now/i)).toBeTruthy()

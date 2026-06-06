@@ -43,8 +43,9 @@ type TransferSuggestionRepository interface {
 	GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.TransferSuggestion, error)
 
 	// Complete marks a suggestion as completed after a transfer was detected or confirmed.
+	// matchedTransactionID is nil for user-confirmed completions (no specific transaction ID).
 	// Race-safe: only operates on pending or accepted suggestions.
-	Complete(ctx context.Context, id string, matchedTransactionID string, actualAmount float64, completionSource string, completedAt time.Time) error
+	Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error
 
 	// GetActiveByUserID retrieves all active (pending + accepted) suggestions for a user.
 	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error)
@@ -292,7 +293,7 @@ func (r *transferSuggestionRepository) GetByRuleID(ctx context.Context, ruleID s
 
 // Complete marks a suggestion as completed after a transfer was detected or confirmed.
 // Race-safe: only operates on pending or accepted suggestions (status IN ('pending','accepted')).
-func (r *transferSuggestionRepository) Complete(ctx context.Context, id string, matchedTransactionID string, actualAmount float64, completionSource string, completedAt time.Time) error {
+func (r *transferSuggestionRepository) Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error {
 	now := time.Now()
 
 	query := `

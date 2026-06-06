@@ -35,7 +35,10 @@ type BudgetPeriodCheckRepository interface {
 // BudgetPeriodEventsRepo defines the marker methods needed by the worker.
 type BudgetPeriodEventsRepo interface {
 	HasMarker(ctx context.Context, userID string, budgetID string, periodStart time.Time, periodEnd time.Time, eventType string) (bool, error)
-	InsertMarker(ctx context.Context, userID string, budgetID string, periodStart time.Time, periodEnd time.Time, eventType string) error
+	// InsertMarker inserts the marker and returns true if the row was newly
+	// inserted, false if it already existed (ON CONFLICT). Callers should only
+	// proceed with enqueueing when the return value is true.
+	InsertMarker(ctx context.Context, userID string, budgetID string, periodStart time.Time, periodEnd time.Time, eventType string) (bool, error)
 }
 
 // BudgetPeriodCloseCheckWorker processes the daily period-close scan.
@@ -68,10 +71,10 @@ func NewBudgetPeriodCloseCheckWorker(deps BudgetPeriodCloseCheckWorkerDeps) *Bud
 		logger = slog.Default()
 	}
 	return &BudgetPeriodCloseCheckWorker{
-		budgetRepo:       deps.BudgetRepo,
-		periodEventsRepo: deps.PeriodEventsRepo,
-		jobQueue:         deps.JobQueue,
-		logger:           logger,
+		budgetRepo:        deps.BudgetRepo,
+		periodEventsRepo:  deps.PeriodEventsRepo,
+		jobQueue:          deps.JobQueue,
+		logger:            logger,
 	}
 }
 
@@ -162,23 +165,6 @@ func (w *BudgetPeriodCloseCheckWorker) Work(ctx context.Context, job *river.Job[
 				continue
 			}
 
-			// Insert marker first — if the job enqueue fails below, the next daily
-			// run will re-detect the closed period and retry. Using ON CONFLICT DO
-			// NOTHING makes this safe even if two workers overlap.
-			if insertErr := w.periodEventsRepo.InsertMarker(ctx,
-				budget.UserID, budget.ID,
-				periodStart, periodEnd,
-				domain.EventBudgetPeriodEnd,
-			); insertErr != nil {
-				w.logger.Error("failed to insert period event marker",
-					"budget_id", budget.ID,
-					"user_id", budget.UserID,
-					"error", insertErr,
-				)
-				totalErrors++
-				continue
-			}
-
 			evalArgs := RuleEvaluationArgs{
 				UserID:    budget.UserID,
 				EventType: domain.EventBudgetPeriodEnd,
@@ -204,6 +190,30 @@ func (w *BudgetPeriodCloseCheckWorker) Work(ctx context.Context, job *river.Job[
 				)
 				totalErrors++
 				continue
+			}
+
+			// Insert marker AFTER successful enqueue. If marker insert fails (e.g.
+			// concurrent worker won the race), log a warning but do not treat as
+			// error — the job is already enqueued and will run. The next daily run
+			// will see the marker and skip. If InsertMarker returns false (conflict),
+			// a concurrent worker already claimed this period — skip silently.
+			inserted, insertErr := w.periodEventsRepo.InsertMarker(ctx,
+				budget.UserID, budget.ID,
+				periodStart, periodEnd,
+				domain.EventBudgetPeriodEnd,
+			)
+			if insertErr != nil {
+				w.logger.Warn("failed to insert period event marker (job already enqueued)",
+					"budget_id", budget.ID,
+					"user_id", budget.UserID,
+					"error", insertErr,
+				)
+			} else if !inserted {
+				w.logger.Debug("concurrent worker already claimed this period, job still enqueued",
+					"budget_id", budget.ID,
+					"period_start", periodStart,
+					"period_end", periodEnd,
+				)
 			}
 
 			w.logger.Info("fired budget_period_end event",
@@ -238,14 +248,29 @@ func (w *BudgetPeriodCloseCheckWorker) Work(ctx context.Context, job *river.Job[
 // between yesterday and today. Returns the just-closed period's (start, end, true)
 // if a boundary was crossed, otherwise returns zero values and false.
 //
-// Strategy: compute the period containing (now - 1 day) and the period containing now.
-// If they differ, yesterday was in the just-closed period.
+// For custom (fixed) periods: the period is closed on the first day after EndDate.
+// The unique marker prevents re-firing if the worker runs late (tDate > EndDate+1).
 //
-// For custom periods with an explicit EndDate, the period is considered closed if
-// now > budget.EndDate.
+// For recurring periods: computes the period containing yesterday and today; if they
+// differ a boundary was crossed and yesterday's period just closed.
 func computeJustClosedPeriod(budget *domain.Budget, now time.Time) (start, end time.Time, closed bool) {
-	yesterday := now.AddDate(0, 0, -1)
+	tDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 
+	if budget.Period == domain.BudgetPeriodCustom {
+		if budget.EndDate == nil {
+			return time.Time{}, time.Time{}, false
+		}
+		endDate := time.Date(budget.EndDate.Year(), budget.EndDate.Month(), budget.EndDate.Day(), 0, 0, 0, 0, time.UTC)
+		// Closed on any day after EndDate (unique marker prevents duplicate firings).
+		if !tDate.After(endDate) {
+			return time.Time{}, time.Time{}, false
+		}
+		startDate := time.Date(budget.StartDate.Year(), budget.StartDate.Month(), budget.StartDate.Day(), 0, 0, 0, 0, time.UTC)
+		return startDate, endDate, true
+	}
+
+	// Recurring periods: detect boundary crossing between yesterday and today.
+	yesterday := now.AddDate(0, 0, -1)
 	todayStart, todayEnd := computeCurrentPeriod(budget, now)
 	yesterdayStart, yesterdayEnd := computeCurrentPeriod(budget, yesterday)
 

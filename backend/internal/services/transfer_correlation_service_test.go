@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -30,7 +31,7 @@ func (m *mockActiveSuggestionRepo) GetActiveByUserID(ctx context.Context, userID
 	return args.Get(0).([]*domain.TransferSuggestion), args.Error(1)
 }
 
-func (m *mockActiveSuggestionRepo) Complete(ctx context.Context, id string, matchedTransactionID string, actualAmount float64, completionSource string, completedAt time.Time) error {
+func (m *mockActiveSuggestionRepo) Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error {
 	args := m.Called(ctx, id, matchedTransactionID, actualAmount, completionSource, completedAt)
 	return args.Error(0)
 }
@@ -119,7 +120,7 @@ func TestCorrelateForUser_ExactMatch(t *testing.T) {
 
 	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
 	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).Return([]*domain.Transaction{txn}, nil)
-	suggestionRepo.On("Complete", ctx, "sug-1", "txn-1", 200.00, "exact_match", mock.AnythingOfType("time.Time")).Return(nil)
+	suggestionRepo.On("Complete", ctx, "sug-1", mock.MatchedBy(func(s *string) bool { return s != nil && *s == "txn-1" }), 200.00, "exact_match", mock.AnythingOfType("time.Time")).Return(nil)
 	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
 		return n.Type == "transfer_suggestion" && n.InteractionPattern == "acknowledgeable"
 	})).Return(nil)
@@ -247,7 +248,7 @@ func TestCorrelateForUser_SkipsAlreadyUsedTxns(t *testing.T) {
 	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).Return([]*domain.Transaction{txn}, nil)
 
 	// Only the first suggestion (oldest) should be completed
-	suggestionRepo.On("Complete", ctx, "sug-5a", "txn-5", 200.00, "exact_match", mock.AnythingOfType("time.Time")).Return(nil)
+	suggestionRepo.On("Complete", ctx, "sug-5a", mock.MatchedBy(func(s *string) bool { return s != nil && *s == "txn-5" }), 200.00, "exact_match", mock.AnythingOfType("time.Time")).Return(nil)
 	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
 		return n.InteractionPattern == "acknowledgeable"
 	})).Return(nil)
@@ -377,6 +378,151 @@ func TestCorrelateForUser_OutsideDateWindow(t *testing.T) {
 	notifRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 }
 
+// =============================================================================
+// Mock Analytics for TransferCorrelationService Tests
+// =============================================================================
+
+// mockCorrelationAnalytics is a minimal mock for phclient.Analytics.
+type mockCorrelationAnalytics struct {
+	mock.Mock
+}
+
+func (m *mockCorrelationAnalytics) Capture(distinctID, event string, properties map[string]interface{}) {
+	m.Called(distinctID, event, properties)
+}
+
+func (m *mockCorrelationAnalytics) Identify(distinctID string, properties map[string]interface{}) {
+	m.Called(distinctID, properties)
+}
+
+func (m *mockCorrelationAnalytics) Close() {
+	m.Called()
+}
+
+// Ensure mockCorrelationAnalytics satisfies the interface at compile time.
+var _ phclient.Analytics = (*mockCorrelationAnalytics)(nil)
+
+// =============================================================================
+// Analytics Tests (Issue #972)
+// =============================================================================
+
+func TestCorrelateForUser_ExactMatch_FiresAnalytics(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockActiveSuggestionRepo)
+	txnRepo := new(mockRecentTransactionRepo)
+	notifRepo := new(mockCorrelationNotificationRepo)
+	analytics := new(mockCorrelationAnalytics)
+
+	svc := NewTransferCorrelationService(suggestionRepo, txnRepo, notifRepo)
+	// SetAnalytics does not exist yet — this test will fail (RED) until we add it.
+	svc.SetAnalytics(analytics)
+
+	userID := "user-analytics-1"
+	now := time.Now().Truncate(24 * time.Hour)
+	toAcct := "savings-acct"
+
+	suggestion := newTestSuggestion("sug-a1", userID, 200.00, toAcct, domain.SuggestionStatusPending, now.Add(-1*time.Hour))
+	txn := newTestTransaction("txn-a1", userID, toAcct, -200.00, now, false)
+
+	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
+	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).Return([]*domain.Transaction{txn}, nil)
+	suggestionRepo.On("Complete", ctx, "sug-a1", mock.MatchedBy(func(s *string) bool { return s != nil && *s == "txn-a1" }), 200.00, "exact_match", mock.AnythingOfType("time.Time")).Return(nil)
+	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.InteractionPattern == "acknowledgeable"
+	})).Return(nil)
+	analytics.On("Capture", userID, phclient.EventTransferSuggestionMatched, mock.Anything).Return()
+
+	err := svc.CorrelateForUser(ctx, userID)
+
+	require.NoError(t, err)
+	analytics.AssertCalled(t, "Capture", userID, phclient.EventTransferSuggestionMatched, mock.Anything)
+}
+
+func TestCorrelateForUser_FuzzyMatch_FiresAnalytics(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockActiveSuggestionRepo)
+	txnRepo := new(mockRecentTransactionRepo)
+	notifRepo := new(mockCorrelationNotificationRepo)
+	analytics := new(mockCorrelationAnalytics)
+
+	svc := NewTransferCorrelationService(suggestionRepo, txnRepo, notifRepo)
+	svc.SetAnalytics(analytics)
+
+	userID := "user-analytics-2"
+	now := time.Now().Truncate(24 * time.Hour)
+	toAcct := "savings-acct"
+
+	suggestion := newTestSuggestion("sug-a2", userID, 200.00, toAcct, domain.SuggestionStatusPending, now.Add(-1*time.Hour))
+	txn := newTestTransaction("txn-a2", userID, toAcct, -190.00, now, false) // fuzzy
+
+	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
+	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).Return([]*domain.Transaction{txn}, nil)
+	notifRepo.On("GetOpenByTransferSuggestionID", ctx, "sug-a2").Return(nil, nil)
+	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.InteractionPattern == "accept_reject"
+	})).Return(nil)
+	analytics.On("Capture", userID, phclient.EventTransferSuggestionMatched, mock.Anything).Return()
+
+	err := svc.CorrelateForUser(ctx, userID)
+
+	require.NoError(t, err)
+	analytics.AssertCalled(t, "Capture", userID, phclient.EventTransferSuggestionMatched, mock.Anything)
+}
+
+func TestCorrelateForUser_NoMatch_NoAnalyticsFired(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockActiveSuggestionRepo)
+	txnRepo := new(mockRecentTransactionRepo)
+	notifRepo := new(mockCorrelationNotificationRepo)
+	analytics := new(mockCorrelationAnalytics)
+
+	svc := NewTransferCorrelationService(suggestionRepo, txnRepo, notifRepo)
+	svc.SetAnalytics(analytics)
+
+	userID := "user-analytics-3"
+	now := time.Now().Truncate(24 * time.Hour)
+	toAcct := "savings-acct"
+
+	suggestion := newTestSuggestion("sug-a3", userID, 200.00, toAcct, domain.SuggestionStatusPending, now.Add(-1*time.Hour))
+	txn := newTestTransaction("txn-a3", userID, "other-acct", -200.00, now, false) // wrong account
+
+	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
+	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).Return([]*domain.Transaction{txn}, nil)
+
+	err := svc.CorrelateForUser(ctx, userID)
+
+	require.NoError(t, err)
+	analytics.AssertNotCalled(t, "Capture", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestCorrelateForUser_NilAnalytics_NoNilPanic(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockActiveSuggestionRepo)
+	txnRepo := new(mockRecentTransactionRepo)
+	notifRepo := new(mockCorrelationNotificationRepo)
+
+	// No SetAnalytics call — analytics is nil
+	svc := NewTransferCorrelationService(suggestionRepo, txnRepo, notifRepo)
+
+	userID := "user-analytics-4"
+	now := time.Now().Truncate(24 * time.Hour)
+	toAcct := "savings-acct"
+
+	suggestion := newTestSuggestion("sug-a4", userID, 200.00, toAcct, domain.SuggestionStatusPending, now.Add(-1*time.Hour))
+	txn := newTestTransaction("txn-a4", userID, toAcct, -200.00, now, false)
+
+	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
+	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).Return([]*domain.Transaction{txn}, nil)
+	suggestionRepo.On("Complete", ctx, "sug-a4", mock.MatchedBy(func(s *string) bool { return s != nil && *s == "txn-a4" }), 200.00, "exact_match", mock.AnythingOfType("time.Time")).Return(nil)
+	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.InteractionPattern == "acknowledgeable"
+	})).Return(nil)
+
+	// Should not panic with nil analytics
+	err := svc.CorrelateForUser(ctx, userID)
+	assert.NoError(t, err)
+}
+
 func TestCorrelateForUser_AcceptedSuggestion_UsesUserActionAtForWindow(t *testing.T) {
 	ctx := context.Background()
 	suggestionRepo := new(mockActiveSuggestionRepo)
@@ -400,7 +546,7 @@ func TestCorrelateForUser_AcceptedSuggestion_UsesUserActionAtForWindow(t *testin
 
 	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
 	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).Return([]*domain.Transaction{txn}, nil)
-	suggestionRepo.On("Complete", ctx, "sug-10", "txn-10", 200.00, "exact_match", mock.AnythingOfType("time.Time")).Return(nil)
+	suggestionRepo.On("Complete", ctx, "sug-10", mock.MatchedBy(func(s *string) bool { return s != nil && *s == "txn-10" }), 200.00, "exact_match", mock.AnythingOfType("time.Time")).Return(nil)
 	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
 		return n.InteractionPattern == "acknowledgeable"
 	})).Return(nil)
@@ -454,7 +600,7 @@ func TestCorrelateForUser_UserAccountIDPreferredOverAccountID(t *testing.T) {
 
 	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
 	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).Return([]*domain.Transaction{txn}, nil)
-	suggestionRepo.On("Complete", ctx, "sug-12", "txn-12", 100.00, "exact_match", mock.AnythingOfType("time.Time")).Return(nil)
+	suggestionRepo.On("Complete", ctx, "sug-12", mock.MatchedBy(func(s *string) bool { return s != nil && *s == "txn-12" }), 100.00, "exact_match", mock.AnythingOfType("time.Time")).Return(nil)
 	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
 		return n.InteractionPattern == "acknowledgeable"
 	})).Return(nil)

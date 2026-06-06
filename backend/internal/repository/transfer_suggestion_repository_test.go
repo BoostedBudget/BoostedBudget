@@ -197,7 +197,7 @@ func (r *inMemTransferSuggestionRepo) GetByRuleID(ctx context.Context, ruleID st
 
 // Complete transitions a suggestion to completed status. Race-safe: only operates
 // on pending or accepted suggestions.
-func (r *inMemTransferSuggestionRepo) Complete(ctx context.Context, id string, matchedTransactionID string, actualAmount float64, completionSource string, completedAt time.Time) error {
+func (r *inMemTransferSuggestionRepo) Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error {
 	s, ok := r.suggestions[id]
 	if !ok {
 		return domain.ErrTransferSuggestionNotFound
@@ -207,7 +207,7 @@ func (r *inMemTransferSuggestionRepo) Complete(ctx context.Context, id string, m
 	}
 	s.Status = domain.SuggestionStatusCompleted
 	s.CompletedAt = &completedAt
-	s.MatchedTransactionID = &matchedTransactionID
+	s.MatchedTransactionID = matchedTransactionID
 	s.ActualAmount = &actualAmount
 	s.CompletionSource = &completionSource
 	return nil
@@ -237,7 +237,8 @@ func TestTransferSuggestionRepository_Complete(t *testing.T) {
 		require.NoError(t, repo.Create(ctx, s))
 
 		completedAt := time.Now().UTC()
-		err := repo.Complete(ctx, "s-1", "txn-001", 50.0, "exact_match", completedAt)
+		txnID := "txn-001"
+		err := repo.Complete(ctx, "s-1", &txnID, 50.0, "exact_match", completedAt)
 
 		require.NoError(t, err)
 		got, _ := repo.GetByID(ctx, "s-1")
@@ -257,11 +258,12 @@ func TestTransferSuggestionRepository_Complete(t *testing.T) {
 		s.Status = domain.SuggestionStatusAccepted
 		require.NoError(t, repo.Create(ctx, s))
 
-		err := repo.Complete(ctx, "s-2", "txn-002", 99.99, "user_confirmed", time.Now().UTC())
+		err := repo.Complete(ctx, "s-2", nil, 99.99, "user_confirmed", time.Now().UTC())
 		require.NoError(t, err)
 
 		got, _ := repo.GetByID(ctx, "s-2")
 		assert.Equal(t, domain.SuggestionStatusCompleted, got.Status)
+		assert.Nil(t, got.MatchedTransactionID, "user_confirmed has no matched transaction ID")
 	})
 
 	t.Run("returns error for non-pending/accepted suggestion", func(t *testing.T) {
@@ -275,14 +277,15 @@ func TestTransferSuggestionRepository_Complete(t *testing.T) {
 			s.Status = status
 			require.NoError(t, repo.Create(ctx, s))
 
-			err := repo.Complete(ctx, "s-3", "txn-003", 10.0, "exact_match", time.Now().UTC())
+			txnID := "txn-003"
+			err := repo.Complete(ctx, "s-3", &txnID, 10.0, "exact_match", time.Now().UTC())
 			assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned, "status=%s", status)
 		}
 	})
 
 	t.Run("returns not found for unknown ID", func(t *testing.T) {
 		repo := newInMemRepo()
-		err := repo.Complete(ctx, "nonexistent", "txn-x", 1.0, "exact_match", time.Now().UTC())
+		err := repo.Complete(ctx, "nonexistent", nil, 1.0, "exact_match", time.Now().UTC())
 		assert.ErrorIs(t, err, domain.ErrTransferSuggestionNotFound)
 	})
 }

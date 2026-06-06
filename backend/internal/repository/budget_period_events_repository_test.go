@@ -105,9 +105,10 @@ func TestBudgetPeriodEventsRepository_InsertMarker_Success(t *testing.T) {
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-	err := repo.InsertMarker(ctx, "user-1", "budget-1", periodStart, periodEnd, "budget_period_end")
+	inserted, err := repo.InsertMarker(ctx, "user-1", "budget-1", periodStart, periodEnd, "budget_period_end")
 
 	require.NoError(t, err)
+	require.True(t, inserted, "should return true when row is newly inserted")
 	require.NoError(t, mockDB.ExpectationsWereMet())
 }
 
@@ -133,9 +134,10 @@ func TestBudgetPeriodEventsRepository_InsertMarker_Idempotent(t *testing.T) {
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 0))
 
-	err := repo.InsertMarker(ctx, "user-1", "budget-1", periodStart, periodEnd, "budget_period_end")
+	inserted, err := repo.InsertMarker(ctx, "user-1", "budget-1", periodStart, periodEnd, "budget_period_end")
 
 	require.NoError(t, err)
+	require.False(t, inserted, "should return false (conflict) when marker already exists")
 	require.NoError(t, mockDB.ExpectationsWereMet())
 }
 
@@ -160,7 +162,7 @@ func TestBudgetPeriodEventsRepository_InsertMarker_DBError(t *testing.T) {
 		).
 		WillReturnError(errMock("disk full"))
 
-	err := repo.InsertMarker(ctx, "user-1", "budget-1", periodStart, periodEnd, "budget_period_end")
+	_, err := repo.InsertMarker(ctx, "user-1", "budget-1", periodStart, periodEnd, "budget_period_end")
 
 	require.Error(t, err)
 }

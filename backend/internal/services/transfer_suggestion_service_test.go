@@ -79,7 +79,7 @@ func (m *mockTransferSuggestionRepo) GetByRuleID(ctx context.Context, ruleID str
 	return args.Get(0).([]*domain.TransferSuggestion), args.Error(1)
 }
 
-func (m *mockTransferSuggestionRepo) Complete(ctx context.Context, id string, matchedTransactionID string, actualAmount float64, completionSource string, completedAt time.Time) error {
+func (m *mockTransferSuggestionRepo) Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error {
 	args := m.Called(ctx, id, matchedTransactionID, actualAmount, completionSource, completedAt)
 	return args.Error(0)
 }
@@ -529,7 +529,7 @@ func TestTransferSuggestionService_ConfirmMatch_PendingSuccess(t *testing.T) {
 	suggestion.Status = domain.SuggestionStatusPending
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
-	suggestionRepo.On("Complete", ctx, suggestionID, "", actualAmount, "user_confirmed", mock.AnythingOfType("time.Time")).Return(nil)
+	suggestionRepo.On("Complete", ctx, suggestionID, (*string)(nil), actualAmount, "user_confirmed", mock.AnythingOfType("time.Time")).Return(nil)
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
 
@@ -554,7 +554,7 @@ func TestTransferSuggestionService_ConfirmMatch_AcceptedSuccess(t *testing.T) {
 	suggestion.Status = domain.SuggestionStatusAccepted
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
-	suggestionRepo.On("Complete", ctx, suggestionID, "", actualAmount, "user_confirmed", mock.AnythingOfType("time.Time")).Return(nil)
+	suggestionRepo.On("Complete", ctx, suggestionID, (*string)(nil), actualAmount, "user_confirmed", mock.AnythingOfType("time.Time")).Return(nil)
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
 
@@ -674,7 +674,7 @@ func TestTransferSuggestionService_ConfirmMatch_RepoCompleteError(t *testing.T) 
 	suggestion.Status = domain.SuggestionStatusPending
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
-	suggestionRepo.On("Complete", ctx, suggestionID, "", 100.00, "user_confirmed", mock.AnythingOfType("time.Time")).Return(errors.New("db error"))
+	suggestionRepo.On("Complete", ctx, suggestionID, (*string)(nil), 100.00, "user_confirmed", mock.AnythingOfType("time.Time")).Return(errors.New("db error"))
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, 100.00)
 

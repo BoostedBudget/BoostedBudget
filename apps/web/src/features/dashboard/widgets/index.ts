@@ -8,6 +8,7 @@ export { CashFlowSummaryWidget } from './CashFlowSummaryWidget';
 export { CashFlowChartWidget } from './CashFlowChartWidget';
 export { AccountCardsWidget } from './AccountCardsWidget';
 export { NetWorthWidget } from './NetWorthWidget';
+export { SavingsImpactWidget } from './SavingsImpactWidget';
 
 // Export registry functions
 export {

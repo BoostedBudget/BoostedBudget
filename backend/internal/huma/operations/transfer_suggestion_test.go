@@ -10,7 +10,9 @@ import (
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -372,6 +374,117 @@ func TestConfirmTransferSuggestionMatch_MCPGuardFallthrough(t *testing.T) {
 	require.NotNil(t, output)
 	assert.Equal(t, "Transfer suggestion confirmed", output.Body.Message)
 	assert.Equal(t, domain.SuggestionStatusCompleted, output.Body.Suggestion.Status)
+}
+
+// =============================================================================
+// Mock Analytics for handler tests
+// =============================================================================
+
+// mockHandlerAnalytics is a minimal mock for phclient.Analytics used in handler tests.
+type mockHandlerAnalytics struct {
+	mock.Mock
+}
+
+func (m *mockHandlerAnalytics) Capture(distinctID, event string, properties map[string]interface{}) {
+	m.Called(distinctID, event, properties)
+}
+
+func (m *mockHandlerAnalytics) Identify(distinctID string, properties map[string]interface{}) {
+	m.Called(distinctID, properties)
+}
+
+func (m *mockHandlerAnalytics) Close() {
+	m.Called()
+}
+
+// Ensure mockHandlerAnalytics satisfies the interface at compile time.
+var _ phclient.Analytics = (*mockHandlerAnalytics)(nil)
+
+// =============================================================================
+// ConfirmMatch Analytics Tests (Issue #972)
+// =============================================================================
+
+func TestConfirmMatch_FiresEventTransferSuggestionValidated(t *testing.T) {
+	userID := "user-123"
+	suggestionID := "s-456"
+	actualAmount := 150.00
+
+	completed := newTestSuggestionItem(suggestionID, userID)
+	completed.Status = domain.SuggestionStatusCompleted
+	completed.ActualAmount = &actualAmount
+
+	svc := &mockTransferSuggestionService{
+		confirmMatchResult: completed,
+	}
+
+	analytics := new(mockHandlerAnalytics)
+	// SetAnalytics does not exist on the handler yet — this test will fail (RED) until implemented.
+	handler := NewTransferSuggestionHandler(svc)
+	handler.SetAnalytics(analytics)
+
+	analytics.On("Capture", userID, phclient.EventTransferSuggestionValidated, mock.Anything).Return()
+
+	input := &ConfirmTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 suggestionID,
+		Body:               ConfirmMatchBody{ActualAmount: actualAmount},
+	}
+
+	output, err := handler.ConfirmMatch(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	analytics.AssertCalled(t, "Capture", userID, phclient.EventTransferSuggestionValidated, mock.Anything)
+}
+
+func TestConfirmMatch_NoAnalyticsFiredOnError(t *testing.T) {
+	svc := &mockTransferSuggestionService{
+		confirmMatchErr: domain.ErrTransferSuggestionNotFound,
+	}
+
+	analytics := new(mockHandlerAnalytics)
+	handler := NewTransferSuggestionHandler(svc)
+	handler.SetAnalytics(analytics)
+
+	input := &ConfirmTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "nonexistent",
+		Body:               ConfirmMatchBody{ActualAmount: 100.00},
+	}
+
+	output, err := handler.ConfirmMatch(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	analytics.AssertNotCalled(t, "Capture", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestConfirmMatch_NilAnalytics_NoNilPanic(t *testing.T) {
+	userID := "user-123"
+	suggestionID := "s-456"
+	actualAmount := 150.00
+
+	completed := newTestSuggestionItem(suggestionID, userID)
+	completed.Status = domain.SuggestionStatusCompleted
+	completed.ActualAmount = &actualAmount
+
+	svc := &mockTransferSuggestionService{
+		confirmMatchResult: completed,
+	}
+
+	// No SetAnalytics — analytics nil; must not panic
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &ConfirmTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 suggestionID,
+		Body:               ConfirmMatchBody{ActualAmount: actualAmount},
+	}
+
+	output, err := handler.ConfirmMatch(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
 }
 
 // =============================================================================

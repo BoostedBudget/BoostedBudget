@@ -18,9 +18,12 @@ type BudgetPeriodEventsRepository interface {
 	// (user, budget, period, event_type) combination.
 	HasMarker(ctx context.Context, userID string, budgetID string, periodStart time.Time, periodEnd time.Time, eventType string) (bool, error)
 
-	// InsertMarker inserts an event marker. Uses ON CONFLICT DO NOTHING so the
-	// call is idempotent — the UNIQUE constraint is the real backstop.
-	InsertMarker(ctx context.Context, userID string, budgetID string, periodStart time.Time, periodEnd time.Time, eventType string) error
+	// InsertMarker inserts an event marker. Returns (true, nil) if the row was
+	// actually inserted, (false, nil) if the marker already existed (ON CONFLICT).
+	// The UNIQUE constraint is the real idempotency backstop; the bool lets the
+	// caller distinguish a fresh insert from a concurrent/repeat call without a
+	// separate HasMarker round-trip.
+	InsertMarker(ctx context.Context, userID string, budgetID string, periodStart time.Time, periodEnd time.Time, eventType string) (bool, error)
 }
 
 // budgetPeriodEventsRepository implements BudgetPeriodEventsRepository using PostgreSQL.
@@ -64,9 +67,10 @@ func (r *budgetPeriodEventsRepository) HasMarker(
 	return true, nil
 }
 
-// InsertMarker inserts a period event marker. The ON CONFLICT DO NOTHING clause
-// makes concurrent or re-run inserts safe — no error is returned if the marker
-// already exists.
+// InsertMarker inserts a period event marker. Returns (true, nil) if the row was
+// actually inserted, (false, nil) if the marker already existed (ON CONFLICT DO
+// NOTHING). The caller should only proceed with enqueueing when inserted=true to
+// avoid duplicate rule evaluations under concurrent worker execution.
 func (r *budgetPeriodEventsRepository) InsertMarker(
 	ctx context.Context,
 	userID string,
@@ -74,14 +78,14 @@ func (r *budgetPeriodEventsRepository) InsertMarker(
 	periodStart time.Time,
 	periodEnd time.Time,
 	eventType string,
-) error {
+) (bool, error) {
 	query := `
 		INSERT INTO budget_period_events (id, user_id, budget_id, period_start, period_end, event_type)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (user_id, budget_id, period_start, period_end, event_type) DO NOTHING
 	`
 
-	_, err := r.db.Exec(ctx, query,
+	ct, err := r.db.Exec(ctx, query,
 		uuid.New().String(),
 		userID,
 		budgetID,
@@ -89,5 +93,9 @@ func (r *budgetPeriodEventsRepository) InsertMarker(
 		periodEnd,
 		eventType,
 	)
-	return err
+	if err != nil {
+		return false, err
+	}
+	// RowsAffected == 0 means the ON CONFLICT clause fired — marker already existed.
+	return ct.RowsAffected() > 0, nil
 }

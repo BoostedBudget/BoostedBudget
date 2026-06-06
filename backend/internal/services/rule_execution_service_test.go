@@ -212,14 +212,14 @@ func (m *mockTransferSuggestionRepository) GetByRuleID(ctx context.Context, rule
 	return result, nil
 }
 
-func (m *mockTransferSuggestionRepository) Complete(ctx context.Context, id string, matchedTransactionID string, actualAmount float64, completionSource string, completedAt time.Time) error {
+func (m *mockTransferSuggestionRepository) Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error {
 	for _, s := range m.suggestions {
 		if s.ID == id {
 			if s.Status != domain.SuggestionStatusPending && s.Status != domain.SuggestionStatusAccepted {
 				return domain.ErrTransferSuggestionAlreadyActioned
 			}
 			s.Status = domain.SuggestionStatusCompleted
-			s.MatchedTransactionID = &matchedTransactionID
+			s.MatchedTransactionID = matchedTransactionID
 			s.ActualAmount = &actualAmount
 			s.CompletionSource = &completionSource
 			s.CompletedAt = &completedAt

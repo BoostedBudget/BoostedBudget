@@ -40,6 +40,10 @@ const (
 	TransferSuggestionAccepted = "transfer_suggestion_accepted"
 	TransferSuggestionRejected = "transfer_suggestion_rejected"
 
+	// Issue #972: Savings transfer automation events
+	EventTransferSuggestionMatched   = "transfer_suggestion_matched"
+	EventTransferSuggestionValidated = "transfer_suggestion_validated"
+
 	// Job events
 	EventDeadLetterCreated = "dead_letter_created"
 

@@ -340,6 +340,16 @@ export function createApiClient(mutator: FetchMutator) {
         return mutator({ url: `/api/v1/savings-goals/${id}`, method: 'DELETE', signal })
       },
     } as const,
+    savingsimpact: {
+      /** GET /api/v1/savings-impact/aggregate */
+      getSavingsImpactAggregate(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/savings-impact/aggregate', method: 'GET', signal })
+      },
+      /** GET /api/v1/savings-impact/me */
+      getSavingsImpactMe(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/savings-impact/me', method: 'GET', signal })
+      },
+    } as const,
     subscription: {
       /** GET /api/v1/subscription/billing-portal */
       getBillingPortalUrl(signal?: AbortSignal): Promise<unknown> {
@@ -418,6 +428,10 @@ export function createApiClient(mutator: FetchMutator) {
       /** PATCH /api/v1/transfer-suggestions/{id}/accept */
       acceptTransferSuggestion(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: `/api/v1/transfer-suggestions/${id}/accept`, method: 'PATCH', data, signal })
+      },
+      /** POST /api/v1/transfer-suggestions/{id}/confirm-match */
+      confirmTransferSuggestionMatch(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/transfer-suggestions/${id}/confirm-match`, method: 'POST', data, signal })
       },
       /** PATCH /api/v1/transfer-suggestions/{id}/reject */
       rejectTransferSuggestion(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {

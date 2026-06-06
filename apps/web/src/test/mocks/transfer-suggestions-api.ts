@@ -39,9 +39,22 @@ export const mockUseRejectTransferSuggestion = mock(() => ({
   isError: false,
 }))
 
+// === useConfirmTransferSuggestionMatch ===
+export const mockConfirmTransferSuggestionMatchMutateAsync = mock(() => Promise.resolve({
+  message: 'Transfer match confirmed',
+  suggestion: null,
+}))
+export const mockUseConfirmTransferSuggestionMatch = mock(() => ({
+  mutate: mock(() => {}),
+  mutateAsync: mockConfirmTransferSuggestionMatchMutateAsync,
+  isPending: false,
+  isError: false,
+}))
+
 mock.module('@boostedbudget/api-client/endpoints/transfer-suggestions/transfer-suggestions', () => ({
   ...RealTransferSuggestionsModule,
   useGetTransferSuggestions: mockUseGetTransferSuggestions,
   useAcceptTransferSuggestion: mockUseAcceptTransferSuggestion,
   useRejectTransferSuggestion: mockUseRejectTransferSuggestion,
+  useConfirmTransferSuggestionMatch: mockUseConfirmTransferSuggestionMatch,
 }))
