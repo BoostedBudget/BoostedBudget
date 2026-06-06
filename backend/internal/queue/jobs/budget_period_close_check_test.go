@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
@@ -514,4 +515,100 @@ func TestComputeJustClosedPeriod_YearlyBoundary(t *testing.T) {
 	require.True(t, closed)
 	assert.Equal(t, time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC), s)
 	assert.Equal(t, time.Date(2024, time.December, 31, 0, 0, 0, 0, time.UTC), e)
+}
+
+// =============================================================================
+// Race condition: marker ordering correctness
+// =============================================================================
+
+// TestBudgetPeriodCloseCheckWorker_NoDuplicateEnqueueOnMarkerRace verifies that
+// when two workers race and both see HasMarker=false, only the winner of the
+// InsertMarker race enqueues a job. The loser (InsertMarker returns false) must
+// NOT enqueue — ensuring exactly-once delivery.
+//
+// Correct order: HasMarker (fast path) → InsertMarker → if inserted: Enqueue.
+// Wrong order (old bug): HasMarker → Enqueue → InsertMarker.
+//
+// The budget uses a weekly period anchored so that today (time.Now()) is always
+// the first day of a new week, guaranteeing computeJustClosedPeriod returns
+// closed=true regardless of when the test runs.
+func TestBudgetPeriodCloseCheckWorker_NoDuplicateEnqueueOnMarkerRace(t *testing.T) {
+	ctx := context.Background()
+
+	// Build a weekly budget whose first period ended exactly yesterday.
+	// This guarantees computeJustClosedPeriod(budget, time.Now()) returns closed=true.
+	// Use the same time.Now() that the worker will use (local, not UTC-truncated) to
+	// ensure the period boundary aligns with the worker's internal clock.
+	now := time.Now()
+	tDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	yesterday := tDate.AddDate(0, 0, -1)
+	// Budget started 6 days before yesterday so yesterday is the last day of week 1,
+	// and today is the first day of week 2.
+	budgetStart := yesterday.AddDate(0, 0, -6)
+
+	budget := &domain.Budget{
+		ID:           "budget-race",
+		UserID:       "user-race",
+		Name:         "Race Test Budget",
+		Period:       domain.BudgetPeriodWeekly,
+		StartDate:    budgetStart,
+		Amount:       500,
+		CurrencyCode: "USD",
+		IsActive:     true,
+	}
+
+	// Shared mocks — both simulated workers share the same repos and queue.
+	budgetRepo := &mockBudgetPeriodCheckRepo{}
+	periodEventsRepo := &mockBudgetPeriodEventsRepo{}
+	mockQueue := new(MockJobQueue)
+
+	// Both workers see no marker on the fast-path check (mock.Anything for period times
+	// since the worker uses time.Now() internally).
+	periodEventsRepo.On("HasMarker", ctx, "user-race", "budget-race",
+		mock.Anything, mock.Anything, domain.EventBudgetPeriodEnd).
+		Return(false, nil)
+
+	// InsertMarker: first call wins (returns true), second call loses the DB race
+	// (ON CONFLICT, returns false). Using Once() to sequence the two calls.
+	periodEventsRepo.On("InsertMarker", ctx, "user-race", "budget-race",
+		mock.Anything, mock.Anything, domain.EventBudgetPeriodEnd).
+		Return(true, nil).Once()
+	periodEventsRepo.On("InsertMarker", ctx, "user-race", "budget-race",
+		mock.Anything, mock.Anything, domain.EventBudgetPeriodEnd).
+		Return(false, nil).Once()
+
+	// Enqueue must be called exactly once (only the winner enqueues).
+	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		evalArgs, ok := job.(RuleEvaluationArgs)
+		return ok && evalArgs.UserID == "user-race" && evalArgs.EventType == domain.EventBudgetPeriodEnd
+	}), mock.Anything).Return(&queue.JobResult{ID: 42}, nil).Once()
+
+	// Both workers get the same single budget page.
+	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).
+		Return([]*domain.Budget{budget}, nil)
+
+	makeWorker := func() *BudgetPeriodCloseCheckWorker {
+		return NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
+			BudgetRepo:       budgetRepo,
+			PeriodEventsRepo: periodEventsRepo,
+			JobQueue:         mockQueue,
+		})
+	}
+
+	job := newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{TriggerSource: "test-race"})
+
+	// Worker 1: wins the InsertMarker race — should enqueue.
+	worker1 := makeWorker()
+	err1 := worker1.Work(ctx, job)
+	require.NoError(t, err1, "worker 1 should complete without error")
+
+	// Worker 2: loses the InsertMarker race — must NOT enqueue again.
+	worker2 := makeWorker()
+	err2 := worker2.Work(ctx, job)
+	require.NoError(t, err2, "worker 2 should complete without error")
+
+	// Enqueue must have been called exactly once across both workers.
+	mockQueue.AssertNumberOfCalls(t, "Enqueue", 1)
+	mockQueue.AssertExpectations(t)
+	periodEventsRepo.AssertExpectations(t)
 }
