@@ -713,7 +713,7 @@ func evaluateConditions(conditions []domain.AutomationRuleCondition, logic strin
 //   - Strip leading entity prefix: "budget.", "budget_category.", "account.", "transaction."
 //   - Alias suffix differences:
 //       "remaining_amount" → "remaining"   (UI label vs. engine flat key)
-//       "spent_amount"     → "total_spent" (category variant vs. engine flat key)
+//       "spent_amount"     → "total_spent" (budget_category.spent_amount suffix vs. engine flat key)
 //   - All other suffixes (percent_used, total_spent, income_amount, amount, balance,
 //     merchant, type, …) already match after the prefix is removed.
 //   - Unknown or already-flat fields are returned unchanged.
@@ -722,6 +722,7 @@ func evaluateConditions(conditions []domain.AutomationRuleCondition, logic strin
 // yet have a dedicated emitter — they will be added in a follow-up issue.
 func normalizeConditionField(field string) string {
 	// Entity prefixes emitted by the UI rule-builder (CONDITION_FIELD_OPTIONS).
+	// budget_category MUST precede budget — longer prefixes must be checked first.
 	prefixes := []string{"budget_category.", "budget.", "account.", "transaction."}
 	suffix := field
 	for _, p := range prefixes {

@@ -1932,6 +1932,17 @@ func TestEvaluateCondition_DottedFieldNormalization(t *testing.T) {
 			wantMatch: true,
 		},
 		{
+			// NOTE: percent_used is not emitted yet, but prefix stripping works correctly.
+			// This demonstrates that the normalization works for budget_category.percent_used,
+			// and once the emitter is added (GAP L), conditions will succeed.
+			name:      "budget_category.percent_used maps to percent_used (prefix stripping works)",
+			field:     "budget_category.percent_used",
+			operator:  domain.ConditionOperatorGt,
+			value:     "50",
+			data:      map[string]interface{}{"percent_used": 80.0},
+			wantMatch: true,
+		},
+		{
 			name:      "account.balance maps to balance",
 			field:     "account.balance",
 			operator:  domain.ConditionOperatorGte,
@@ -1993,6 +2004,9 @@ func TestEvaluateCondition_DottedFieldNormalization(t *testing.T) {
 // is present in the map emitted by the period-close worker. This is a drift guard —
 // if either the emitter or the readers are updated and the constants diverge, this
 // test fails. Issue #972: GAP J – emitter/reader parity.
+// NOTE: percent_used is not emitted by any worker yet.
+// Conditions using budget.percent_used / budget_category.percent_used silently
+// return false until the emitter is added (see GAP L follow-up issue).
 func TestEventDataKeyContract(t *testing.T) {
 	// Keys emitted by the period-close worker (budget_period_close_check.go).
 	emittedKeys := map[string]bool{
