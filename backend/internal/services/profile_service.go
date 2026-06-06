@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/mail"
 	"strings"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
@@ -22,6 +24,13 @@ type emailChangePropagationArgs struct {
 
 // Kind returns the job type identifier. Must match jobs.EmailChangePropagationArgs.Kind()
 func (emailChangePropagationArgs) Kind() string { return "email_change_propagation" }
+
+// validTimezoneSources is the set of allowed timezone_source values.
+var validTimezoneSources = map[string]bool{
+	"default": true,
+	"auto":    true,
+	"user":    true,
+}
 
 var (
 	// ErrInvalidEmail is returned when an email address is invalid
@@ -120,6 +129,23 @@ func (s *profileService) UpdateProfile(ctx context.Context, userID string, req *
 			return nil, err
 		}
 	}
+	if req.Timezone != nil {
+		if err := validateTimezone(*req.Timezone); err != nil {
+			return nil, err
+		}
+	}
+	// Validate TimezoneSource when provided without an explicit Timezone.
+	// When Timezone is explicitly set, the source is always forced to "user" below
+	// regardless of what the client sends, so we only validate the standalone case.
+	if req.Timezone == nil && req.TimezoneSource != nil {
+		if err := validateTimezoneSource(*req.TimezoneSource); err != nil {
+			return nil, err
+		}
+		// Client may not claim "user" without supplying an explicit timezone value.
+		if *req.TimezoneSource == "user" {
+			return nil, fmt.Errorf("invalid timezone_source: \"user\" requires an explicit timezone value")
+		}
+	}
 
 	if emailChanged {
 		tx, err := s.db.Begin(ctx)
@@ -145,9 +171,22 @@ func (s *profileService) UpdateProfile(ctx context.Context, userID string, req *
 			return nil, err
 		}
 
-		// Update region outside email transaction (non-critical)
-		if req.PrimaryRegion != nil && *req.PrimaryRegion != user.PrimaryRegion {
-			user.PrimaryRegion = *req.PrimaryRegion
+		// Update region and timezone outside email transaction (non-critical)
+		regionChanged := req.PrimaryRegion != nil && *req.PrimaryRegion != user.PrimaryRegion
+		timezoneChanged := req.Timezone != nil && *req.Timezone != user.Timezone
+		timezoneSourceChanged := req.TimezoneSource != nil && *req.TimezoneSource != user.TimezoneSource
+		if regionChanged || timezoneChanged || timezoneSourceChanged {
+			if req.PrimaryRegion != nil {
+				user.PrimaryRegion = *req.PrimaryRegion
+			}
+			if req.Timezone != nil {
+				user.Timezone = *req.Timezone
+				// Always enforce source="user" when the user explicitly sets a timezone;
+				// never trust the client-provided source value.
+				user.TimezoneSource = "user"
+			} else if req.TimezoneSource != nil {
+				user.TimezoneSource = *req.TimezoneSource
+			}
 			if err := s.repo.UpdateUser(ctx, user); err != nil {
 				return nil, err
 			}
@@ -172,6 +211,14 @@ func (s *profileService) UpdateProfile(ctx context.Context, userID string, req *
 		if req.PrimaryRegion != nil {
 			user.PrimaryRegion = *req.PrimaryRegion
 		}
+		if req.Timezone != nil {
+			user.Timezone = *req.Timezone
+			// Always enforce source="user" when the user explicitly sets a timezone;
+			// never trust the client-provided source value.
+			user.TimezoneSource = "user"
+		} else if req.TimezoneSource != nil {
+			user.TimezoneSource = *req.TimezoneSource
+		}
 		if err := s.repo.UpdateUser(ctx, user); err != nil {
 			return nil, err
 		}
@@ -192,6 +239,24 @@ func validateEmail(email string) error {
 func validateRegion(region string) error {
 	if !domain.IsValidRegion(region) {
 		return ErrInvalidRegion
+	}
+	return nil
+}
+
+// validateTimezone validates that tz is a recognised IANA timezone name.
+// The period-close scanner calls time.LoadLocation on stored values, so a
+// garbage value would cause runtime errors in production.
+func validateTimezone(tz string) error {
+	if _, err := time.LoadLocation(tz); err != nil {
+		return fmt.Errorf("invalid timezone: %w", err)
+	}
+	return nil
+}
+
+// validateTimezoneSource validates that src is one of the allowed timezone_source values.
+func validateTimezoneSource(src string) error {
+	if !validTimezoneSources[src] {
+		return fmt.Errorf("invalid timezone_source: %q is not one of [default, auto, user]", src)
 	}
 	return nil
 }
