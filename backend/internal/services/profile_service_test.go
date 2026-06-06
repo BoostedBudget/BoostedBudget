@@ -941,8 +941,8 @@ func TestUpdateProfile_EmailUnchanged_NoJobEnqueued(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
-// TestUpdateProfile_ValidTimezone tests that a valid IANA timezone is accepted,
-// and that TimezoneSource is always enforced to "user" when Timezone is explicitly set.
+// TestUpdateProfile_ValidTimezone tests that when only Timezone is provided (no source),
+// TimezoneSource defaults to "user" (manual selection assumed).
 func TestUpdateProfile_ValidTimezone(t *testing.T) {
 	mockRepo := new(MockProfileRepository)
 	service := NewProfileService(NewProfileServiceDeps{Repo: mockRepo})
@@ -999,6 +999,43 @@ func TestUpdateProfile_InvalidTimezone(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid timezone")
 	assert.Nil(t, user)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestUpdateProfile_AutoCaptureCombined tests the browser auto-capture path where
+// both Timezone and TimezoneSource:"auto" are sent together. The backend must NOT
+// coerce the source to "user" — the "auto" value must be preserved.
+func TestUpdateProfile_AutoCaptureCombined(t *testing.T) {
+	mockRepo := new(MockProfileRepository)
+	service := NewProfileService(NewProfileServiceDeps{Repo: mockRepo})
+	ctx := context.Background()
+
+	userID := uuid.New().String()
+	existingUser := &domain.User{
+		ID:             userID,
+		ClerkUserID:    "user_tz_auto",
+		Email:          "tz@example.com",
+		PrimaryRegion:  "iad",
+		Timezone:       "UTC",
+		TimezoneSource: "default",
+	}
+
+	tz := "America/Chicago"
+	src := "auto"
+	req := &domain.UpdateProfileRequest{Timezone: &tz, TimezoneSource: &src}
+
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
+	mockRepo.On("UpdateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
+		return u.Timezone == "America/Chicago" && u.TimezoneSource == "auto"
+	})).Return(nil)
+
+	user, err := service.UpdateProfile(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.Equal(t, "America/Chicago", user.Timezone)
+	// "auto" source must survive — it is the correct value for browser auto-detect.
+	assert.Equal(t, "auto", user.TimezoneSource)
 	mockRepo.AssertExpectations(t)
 }
 
