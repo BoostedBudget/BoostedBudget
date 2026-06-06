@@ -138,15 +138,15 @@ func (s *profileService) UpdateProfile(ctx context.Context, userID string, req *
 			return nil, err
 		}
 	}
-	// Validate TimezoneSource when provided without an explicit Timezone.
-	// When Timezone is explicitly set, the source is always forced to "user" below
-	// regardless of what the client sends, so we only validate the standalone case.
-	if req.Timezone == nil && req.TimezoneSource != nil {
+	// Validate TimezoneSource whenever it is provided.
+	// "user" without an explicit Timezone is rejected (it implies a user-selected
+	// timezone but none was supplied). "auto" is only meaningful alongside a Timezone
+	// (browser-detected value). "default" may never be sent by a client.
+	if req.TimezoneSource != nil {
 		if err := validateTimezoneSource(*req.TimezoneSource); err != nil {
 			return nil, err
 		}
-		// Client may not claim "user" without supplying an explicit timezone value.
-		if *req.TimezoneSource == "user" {
+		if req.Timezone == nil && *req.TimezoneSource == "user" {
 			return nil, fmt.Errorf("%w: \"user\" requires an explicit timezone value", ErrInvalidTimezoneSource)
 		}
 	}
@@ -185,9 +185,13 @@ func (s *profileService) UpdateProfile(ctx context.Context, userID string, req *
 			}
 			if req.Timezone != nil {
 				user.Timezone = *req.Timezone
-				// Always enforce source="user" when the user explicitly sets a timezone;
-				// never trust the client-provided source value.
-				user.TimezoneSource = "user"
+				// Respect "auto" from browser auto-detection; treat everything else
+				// (missing source or explicit "user") as a manual user selection.
+				if req.TimezoneSource != nil && *req.TimezoneSource == "auto" {
+					user.TimezoneSource = "auto"
+				} else {
+					user.TimezoneSource = "user"
+				}
 			} else if req.TimezoneSource != nil {
 				user.TimezoneSource = *req.TimezoneSource
 			}
@@ -217,9 +221,13 @@ func (s *profileService) UpdateProfile(ctx context.Context, userID string, req *
 		}
 		if req.Timezone != nil {
 			user.Timezone = *req.Timezone
-			// Always enforce source="user" when the user explicitly sets a timezone;
-			// never trust the client-provided source value.
-			user.TimezoneSource = "user"
+			// Respect "auto" from browser auto-detection; treat everything else
+			// (missing source or explicit "user") as a manual user selection.
+			if req.TimezoneSource != nil && *req.TimezoneSource == "auto" {
+				user.TimezoneSource = "auto"
+			} else {
+				user.TimezoneSource = "user"
+			}
 		} else if req.TimezoneSource != nil {
 			user.TimezoneSource = *req.TimezoneSource
 		}

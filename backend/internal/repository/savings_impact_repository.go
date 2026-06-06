@@ -40,13 +40,14 @@ func NewSavingsImpactRepository(db DB) SavingsImpactRepository {
 }
 
 // WriteSnapshot inserts or updates a daily savings impact snapshot.
-// The ON CONFLICT clause targets the unique expression index on (computed_at::date),
-// ensuring idempotency — re-running the same day just overwrites with the latest values.
+// The ON CONFLICT clause targets the unique expression index on
+// (DATE(computed_at AT TIME ZONE 'UTC')) — this must exactly match the
+// index expression in migration 000092 for PostgreSQL to use it.
 func (r *savingsImpactRepository) WriteSnapshot(ctx context.Context, snapshot *domain.SavingsImpactSnapshot) error {
 	query := `
 		INSERT INTO savings_impact_snapshots (id, computed_at, total_amount, user_count, completed_count)
 		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT ((computed_at::date)) DO UPDATE SET
+		ON CONFLICT ((DATE(computed_at AT TIME ZONE 'UTC'))) DO UPDATE SET
 			total_amount    = EXCLUDED.total_amount,
 			user_count      = EXCLUDED.user_count,
 			completed_count = EXCLUDED.completed_count,
