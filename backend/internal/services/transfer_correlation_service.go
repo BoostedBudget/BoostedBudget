@@ -41,7 +41,7 @@ type RecentTransactionRepository interface {
 // by TransferCorrelationService.
 type CorrelationNotificationRepository interface {
 	Create(ctx context.Context, notification *domain.Notification) error
-	GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string) (*domain.Notification, error)
+	GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string, notificationType string) (*domain.Notification, error)
 }
 
 // TransferCorrelationService detects when users have followed through on transfer suggestions.
@@ -130,7 +130,7 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 			if matchKind == matchExact {
 				// Complete the suggestion
 				txnID := txn.ID
-			if err := s.suggestionRepo.Complete(ctx, suggestion.ID, &txnID, actualAmount, "exact_match", time.Now()); err != nil {
+				if err := s.suggestionRepo.Complete(ctx, suggestion.ID, &txnID, actualAmount, "exact_match", time.Now()); err != nil {
 					return fmt.Errorf("failed to complete suggestion %s: %w", suggestion.ID, err)
 				}
 				usedTxnIDs[txn.ID] = true
@@ -147,7 +147,7 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 					return fmt.Errorf("failed to create match notification: %w", err)
 				}
 
-				// Fire analytics event for matched transfer suggestion
+				// Fire analytics event
 				if s.analytics != nil {
 					s.analytics.Capture(userID, phclient.EventTransferSuggestionMatched, map[string]interface{}{
 						"suggestion_id": suggestion.ID,
@@ -157,7 +157,7 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 				}
 			} else {
 				// matchFuzzy — check if there's already an open validation prompt
-				existing, err := s.notifRepo.GetOpenByTransferSuggestionID(ctx, suggestion.ID)
+				existing, err := s.notifRepo.GetOpenByTransferSuggestionID(ctx, suggestion.ID, domain.NotificationTypeTransferSuggestionMatch)
 				if err != nil {
 					return fmt.Errorf("failed to check open notification for suggestion %s: %w", suggestion.ID, err)
 				}
@@ -186,7 +186,7 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 					return fmt.Errorf("failed to create fuzzy-match notification: %w", err)
 				}
 
-				// Fire analytics event for fuzzy-matched transfer suggestion
+				// Fire analytics event
 				if s.analytics != nil {
 					s.analytics.Capture(userID, phclient.EventTransferSuggestionMatched, map[string]interface{}{
 						"suggestion_id": suggestion.ID,

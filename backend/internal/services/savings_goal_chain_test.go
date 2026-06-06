@@ -192,15 +192,12 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	actions := map[string]interface{}{
-		"savings_goal": map[string]interface{}{
-			"savings_goal_id": savingsGoalID,
-			"from_account_id": "from-checking-account",
-			"amount_type":     "fixed",
-			"amount":          float64(500),
-		},
-	}
-	actionsJSON, _ := json.Marshal(actions)
+	actionsJSON, _ := json.Marshal(domain.SavingsGoalAction{
+		SavingsGoalID: savingsGoalID,
+		FromAccountID: "from-checking-account",
+		AmountType:    "fixed",
+		Amount:        500,
+	})
 
 	rule := &domain.AutomationRule{
 		ID:             "rule-savings-chain-001",
@@ -264,15 +261,12 @@ func TestSavingsGoalExecutor_ChainResolver_NilFallback(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	actions := map[string]interface{}{
-		"savings_goal": map[string]interface{}{
-			"savings_goal_id": savingsGoalID,
-			"from_account_id": "from-checking",
-			"amount_type":     "fixed",
-			"amount":          float64(200),
-		},
-	}
-	actionsJSON, _ := json.Marshal(actions)
+	actionsJSON, _ := json.Marshal(domain.SavingsGoalAction{
+		SavingsGoalID: savingsGoalID,
+		FromAccountID: "from-checking",
+		AmountType:    "fixed",
+		Amount:        200,
+	})
 
 	rule := &domain.AutomationRule{
 		ID:             "rule-savings-nil-resolver",
@@ -346,15 +340,12 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID_Depth2(t *testing.
 	ctx := context.Background()
 	now := time.Now()
 
-	actions := map[string]interface{}{
-		"savings_goal": map[string]interface{}{
-			"savings_goal_id": savingsGoalID,
-			"from_account_id": "from-checking",
-			"amount_type":     "fixed",
-			"amount":          float64(750),
-		},
-	}
-	actionsJSON, _ := json.Marshal(actions)
+	actionsJSON, _ := json.Marshal(domain.SavingsGoalAction{
+		SavingsGoalID: savingsGoalID,
+		FromAccountID: "from-checking",
+		AmountType:    "fixed",
+		Amount:        750,
+	})
 
 	rule := &domain.AutomationRule{
 		ID:             "rule-savings-depth2-001",

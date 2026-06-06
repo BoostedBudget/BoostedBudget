@@ -365,8 +365,8 @@ func (m *MockNotificationRepositoryForItemError) MarkAllAsRead(ctx context.Conte
 	return args.Get(0).(int64), args.Error(1)
 }
 
-func (m *MockNotificationRepositoryForItemError) GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string) (*domain.Notification, error) {
-	args := m.Called(ctx, transferSuggestionID)
+func (m *MockNotificationRepositoryForItemError) GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string, notificationType string) (*domain.Notification, error) {
+	args := m.Called(ctx, transferSuggestionID, notificationType)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

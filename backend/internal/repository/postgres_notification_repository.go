@@ -339,16 +339,19 @@ func (r *notificationRepository) MarkAllAsRead(ctx context.Context, userID strin
 	return ct.RowsAffected(), nil
 }
 
-// GetOpenByTransferSuggestionID returns the first non-read accept_reject notification
-// linked to the given transfer suggestion, or nil if none exists.
-// Used by TransferCorrelationService to prevent duplicate fuzzy-match prompts.
-func (r *notificationRepository) GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string) (*domain.Notification, error) {
+// GetOpenByTransferSuggestionID returns the first unread accept_reject notification of the
+// given type linked to the given transfer suggestion, or nil if none exists.
+// The notificationType param scopes the lookup to the specific prompt type so that an
+// unread original 'transfer_suggestion' prompt does not suppress a new
+// 'transfer_suggestion_match' fuzzy-match prompt (GAP V fix).
+func (r *notificationRepository) GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string, notificationType string) (*domain.Notification, error) {
 	query := `
 		SELECT id, user_id, type, title, message, action_url, action_label,
 		       read, sent_email, email_sent_at, interaction_pattern, transfer_suggestion_id,
 		       created_at, updated_at
 		FROM notifications
 		WHERE transfer_suggestion_id = $1
+		  AND type = $2
 		  AND interaction_pattern = 'accept_reject'
 		  AND read = false
 		ORDER BY created_at ASC
@@ -356,7 +359,7 @@ func (r *notificationRepository) GetOpenByTransferSuggestionID(ctx context.Conte
 	`
 
 	var n domain.Notification
-	err := r.db.QueryRow(ctx, query, transferSuggestionID).Scan(
+	err := r.db.QueryRow(ctx, query, transferSuggestionID, notificationType).Scan(
 		&n.ID,
 		&n.UserID,
 		&n.Type,

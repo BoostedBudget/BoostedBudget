@@ -59,8 +59,8 @@ func (m *mockCorrelationNotificationRepo) Create(ctx context.Context, notificati
 	return args.Error(0)
 }
 
-func (m *mockCorrelationNotificationRepo) GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string) (*domain.Notification, error) {
-	args := m.Called(ctx, transferSuggestionID)
+func (m *mockCorrelationNotificationRepo) GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string, notificationType string) (*domain.Notification, error) {
+	args := m.Called(ctx, transferSuggestionID, notificationType)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -152,7 +152,7 @@ func TestCorrelateForUser_FuzzyMatch(t *testing.T) {
 	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
 	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).Return([]*domain.Transaction{txn}, nil)
 	// No open validation notification yet
-	notifRepo.On("GetOpenByTransferSuggestionID", ctx, "sug-2").Return(nil, nil)
+	notifRepo.On("GetOpenByTransferSuggestionID", ctx, "sug-2", domain.NotificationTypeTransferSuggestionMatch).Return(nil, nil)
 	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
 		// Fuzzy-match must use transfer_suggestion_match so the frontend renders
 		// the amount-confirm UI (NotificationConfirmMatch), not generic accept/reject.
@@ -278,26 +278,62 @@ func TestCorrelateForUser_NoRepeatFuzzyPrompt(t *testing.T) {
 	suggestion := newTestSuggestion("sug-6", userID, 200.00, toAcct, domain.SuggestionStatusPending, now.Add(-1*time.Hour))
 	txn := newTestTransaction("txn-6", userID, toAcct, -190.00, now, false) // fuzzy
 
-	existingNotification := &domain.Notification{
-		ID:                   "notif-existing",
+	// An already-open transfer_suggestion_match prompt (same fuzzy type) — must NOT create a duplicate.
+	existingFuzzyNotif := &domain.Notification{
+		ID:                   "notif-existing-fuzzy",
 		UserID:               userID,
-		Type:                 "transfer_suggestion",
+		Type:                 domain.NotificationTypeTransferSuggestionMatch,
 		InteractionPattern:   "accept_reject",
 		TransferSuggestionID: &suggestion.ID,
 		Title:                "Did you transfer a different amount?",
-		Message:              "existing prompt",
+		Message:              "existing fuzzy prompt",
 	}
 
 	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
 	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).Return([]*domain.Transaction{txn}, nil)
-	// Open validation notification exists — should NOT create another
-	notifRepo.On("GetOpenByTransferSuggestionID", ctx, "sug-6").Return(existingNotification, nil)
+	// Existing fuzzy prompt of the correct type → skip creating a duplicate.
+	notifRepo.On("GetOpenByTransferSuggestionID", ctx, "sug-6", domain.NotificationTypeTransferSuggestionMatch).Return(existingFuzzyNotif, nil)
 
 	err := svc.CorrelateForUser(ctx, userID)
 
 	require.NoError(t, err)
 	notifRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 	suggestionRepo.AssertExpectations(t)
+}
+
+// TestCorrelateForUser_OriginalPromptDoesNotBlockFuzzyPrompt proves GAP V fix:
+// an unread 'transfer_suggestion' prompt (the original suggestion nudge) must NOT
+// suppress the new 'transfer_suggestion_match' fuzzy-match confirmation prompt.
+// The guard is type-scoped; before the fix it returned any accept_reject notification.
+func TestCorrelateForUser_OriginalPromptDoesNotBlockFuzzyPrompt(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockActiveSuggestionRepo)
+	txnRepo := new(mockRecentTransactionRepo)
+	notifRepo := new(mockCorrelationNotificationRepo)
+
+	svc := NewTransferCorrelationService(suggestionRepo, txnRepo, notifRepo)
+
+	userID := "user-orig-block"
+	now := time.Now().Truncate(24 * time.Hour)
+	toAcct := "savings-acct"
+
+	suggestion := newTestSuggestion("sug-orig", userID, 200.00, toAcct, domain.SuggestionStatusPending, now.Add(-1*time.Hour))
+	txn := newTestTransaction("txn-orig", userID, toAcct, -185.00, now, false) // fuzzy
+
+	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
+	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).Return([]*domain.Transaction{txn}, nil)
+	// Guard returns nil for transfer_suggestion_match — the original 'transfer_suggestion' prompt
+	// is NOT a match because the query is type-scoped. A new fuzzy prompt SHOULD be created.
+	notifRepo.On("GetOpenByTransferSuggestionID", ctx, "sug-orig", domain.NotificationTypeTransferSuggestionMatch).Return(nil, nil)
+	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == domain.NotificationTypeTransferSuggestionMatch &&
+			n.InteractionPattern == "accept_reject"
+	})).Return(nil)
+
+	err := svc.CorrelateForUser(ctx, userID)
+
+	require.NoError(t, err)
+	notifRepo.AssertExpectations(t)
 }
 
 func TestCorrelateForUser_SkipsSuggestionWithMatchedTransactionID(t *testing.T) {
@@ -459,7 +495,7 @@ func TestCorrelateForUser_FuzzyMatch_FiresAnalytics(t *testing.T) {
 
 	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
 	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).Return([]*domain.Transaction{txn}, nil)
-	notifRepo.On("GetOpenByTransferSuggestionID", ctx, "sug-a2").Return(nil, nil)
+	notifRepo.On("GetOpenByTransferSuggestionID", ctx, "sug-a2", domain.NotificationTypeTransferSuggestionMatch).Return(nil, nil)
 	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
 		return n.InteractionPattern == "accept_reject"
 	})).Return(nil)
