@@ -1,10 +1,12 @@
 // Issue #952: Notification Center — Single notification item (all 4 patterns)
+// Issue #972: Added confirm-match flow for fuzzy-matched transfer suggestions
 import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { formatRelativeTime } from '@/shared/dates/formatRelativeTime'
 import { NOTIFICATION_TYPE_CONFIG, URGENCY_COLOR_CLASS } from '../constants'
 import { NotificationAcceptReject } from './NotificationAcceptReject'
+import { NotificationConfirmMatch } from './NotificationConfirmMatch'
 import { NOTIFICATIONS_LIMIT } from '../hooks/useNotifications'
 import {
   useMarkNotificationAsRead,
@@ -100,14 +102,25 @@ export function NotificationItem({ notification }: NotificationItemProps) {
           </Button>
         )}
 
-        {/* accept_reject: transfer suggestion buttons */}
+        {/* accept_reject: confirm-match flow for fuzzy-matched transfers */}
         {notification.interaction_pattern === 'accept_reject' &&
-          notification.transfer_suggestion_id && (
+          notification.transfer_suggestion_id &&
+          notification.type === 'transfer_suggestion_match' && (
+            <div onClick={(e) => e.stopPropagation()}>
+              <NotificationConfirmMatch
+                suggestionId={notification.transfer_suggestion_id}
+                onDismiss={() => markReadMutation.mutate({ id: notification.id })}
+              />
+            </div>
+          )}
+
+        {/* accept_reject: standard accept/reject for transfer suggestions */}
+        {notification.interaction_pattern === 'accept_reject' &&
+          notification.transfer_suggestion_id &&
+          notification.type !== 'transfer_suggestion_match' && (
             <div onClick={(e) => e.stopPropagation()}>
               <NotificationAcceptReject
                 suggestionId={notification.transfer_suggestion_id}
-                amount={0}
-                currencyCode="USD"
               />
             </div>
           )}

@@ -126,11 +126,9 @@ func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID stri
 			COALESCE(SUM(ts.actual_amount) FILTER (WHERE ts.completed_at >= $2), 0)      AS month_amount,
 			COALESCE(SUM(ts.actual_amount) FILTER (WHERE ts.completed_at >= $3 AND ts.completed_at < $2), 0) AS prev_month_amount
 		FROM transfer_suggestions ts
-		JOIN privacy_settings ps ON ps.user_id = ts.user_id
 		WHERE ts.user_id = $1
 		  AND ts.status = 'completed'
 		  AND ts.actual_amount IS NOT NULL
-		  AND ps.include_in_aggregate_stats = true
 	`
 
 	var impact domain.UserSavingsImpact
@@ -180,7 +178,7 @@ func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID stri
 	}
 
 	if impact.RecentItems == nil {
-		impact.RecentItems = []*domain.CompletedSuggestionSummary{}
+		impact.RecentItems = make([]*domain.CompletedSuggestionSummary, 0)
 	}
 
 	return &impact, nil

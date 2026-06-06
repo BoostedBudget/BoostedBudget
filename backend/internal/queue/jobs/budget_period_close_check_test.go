@@ -42,9 +42,9 @@ func (m *mockBudgetPeriodEventsRepo) HasMarker(ctx context.Context, userID strin
 	return args.Bool(0), args.Error(1)
 }
 
-func (m *mockBudgetPeriodEventsRepo) InsertMarker(ctx context.Context, userID string, budgetID string, periodStart time.Time, periodEnd time.Time, eventType string) error {
+func (m *mockBudgetPeriodEventsRepo) InsertMarker(ctx context.Context, userID string, budgetID string, periodStart time.Time, periodEnd time.Time, eventType string) (bool, error) {
 	args := m.Called(ctx, userID, budgetID, periodStart, periodEnd, eventType)
-	return args.Error(0)
+	return args.Bool(0), args.Error(1)
 }
 
 // =============================================================================
@@ -113,7 +113,7 @@ func TestBudgetPeriodCloseCheck_FiresEventOnPeriodClose(t *testing.T) {
 	periodEventsRepo.On("HasMarker", ctx, "user-1", "budget-1", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
 		Return(false, nil)
 	periodEventsRepo.On("InsertMarker", ctx, "user-1", "budget-1", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
-		Return(nil)
+		Return(true, nil)
 
 	// Verify computeJustClosedPeriod detects the January close when now is Feb 1.
 	pStart, pEnd, closed := computeJustClosedPeriod(budget, now)

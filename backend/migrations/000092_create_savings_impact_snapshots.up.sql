@@ -45,10 +45,11 @@ CREATE INDEX IF NOT EXISTS idx_savings_impact_snapshots_computed_at
     ON savings_impact_snapshots (computed_at DESC);
 
 -- =============================================================================
--- Step 3: Unique expression index on DATE(computed_at) for idempotency
+-- Step 3: Unique expression index on DATE(computed_at AT TIME ZONE 'UTC') for idempotency
 -- Enforces one snapshot per UTC calendar day.
+-- Uses explicit UTC cast (IMMUTABLE-equivalent) to avoid session-timezone dependence.
 -- Double parens required by PostgreSQL for expression indexes.
 -- =============================================================================
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_savings_impact_snapshots_date_unique
-    ON savings_impact_snapshots ((computed_at::date));
+    ON savings_impact_snapshots ((DATE(computed_at AT TIME ZONE 'UTC')));

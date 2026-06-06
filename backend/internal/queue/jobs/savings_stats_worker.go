@@ -65,9 +65,9 @@ func NewSavingsStatsWorker(deps SavingsStatsWorkerDeps) *SavingsStatsWorker {
 		logger = slog.Default()
 	}
 	return &SavingsStatsWorker{
-		aggregateRepo:    deps.AggregateRepo,
-		savingsImpactRepo: deps.SavingsImpactRepo,
-		logger:           logger,
+		aggregateRepo:     deps.AggregateRepo,
+		savingsImpactRepo:  deps.SavingsImpactRepo,
+		logger:            logger,
 	}
 }
 

@@ -16,8 +16,9 @@ type TransferSuggestionRepository interface {
 	GetPendingByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error)
 	UpdateStatus(ctx context.Context, id string, status domain.SuggestionStatus, userNotes *string) error
 	// Complete marks a suggestion as completed after a transfer was detected or confirmed.
+	// matchedTransactionID is nil for user-confirmed completions (no specific transaction ID).
 	// Race-safe: only operates on pending or accepted suggestions.
-	Complete(ctx context.Context, id string, matchedTransactionID string, actualAmount float64, completionSource string, completedAt time.Time) error
+	Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error
 }
 
 // TransferSuggestionService handles transfer suggestion operations.
@@ -188,8 +189,9 @@ func (s *transferSuggestionService) ConfirmTransferSuggestionMatch(
 	}
 
 	// 4. Complete in the database (race-safe: repo checks status IN ('pending','accepted')).
+	// User-confirmed path has no matched transaction ID (nil = NULL in DB).
 	completedAt := time.Now().UTC()
-	if err := s.suggestionRepo.Complete(ctx, suggestionID, "", actualAmount, "user_confirmed", completedAt); err != nil {
+	if err := s.suggestionRepo.Complete(ctx, suggestionID, nil, actualAmount, "user_confirmed", completedAt); err != nil {
 		return nil, err
 	}
 

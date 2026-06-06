@@ -1267,6 +1267,28 @@
       "excluded": false
     },
     {
+      "operationId": "getSavingsImpactAggregate",
+      "method": "GET",
+      "path": "/api/v1/savings-impact/aggregate",
+      "summary": "Get aggregate savings impact",
+      "tags": [
+        "SavingsImpact"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "getSavingsImpactMe",
+      "method": "GET",
+      "path": "/api/v1/savings-impact/me",
+      "summary": "Get my savings impact",
+      "tags": [
+        "SavingsImpact"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
       "operationId": "get-billing-portal-url",
       "method": "GET",
       "path": "/api/v1/subscription/billing-portal",
@@ -1508,6 +1530,17 @@
       "method": "PATCH",
       "path": "/api/v1/transfer-suggestions/{id}/accept",
       "summary": "Accept a transfer suggestion",
+      "tags": [
+        "TransferSuggestions"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
+      "operationId": "confirmTransferSuggestionMatch",
+      "method": "POST",
+      "path": "/api/v1/transfer-suggestions/{id}/confirm-match",
+      "summary": "Confirm transfer suggestion match",
       "tags": [
         "TransferSuggestions"
       ],

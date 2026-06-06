@@ -11,6 +11,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
@@ -30,6 +31,12 @@ type TransferSuggestionHandler struct {
 	db              repository.DB
 	mcpAuditRepo    repository.MCPAuditRepository
 	mcpWorkerSecret string
+	analytics       phclient.Analytics
+}
+
+// SetAnalytics sets the analytics client for event capture.
+func (h *TransferSuggestionHandler) SetAnalytics(a phclient.Analytics) {
+	h.analytics = a
 }
 
 // NewTransferSuggestionHandler creates a new TransferSuggestionHandler.
@@ -162,6 +169,25 @@ type ConfirmTransferSuggestionMatchOutput struct {
 // Confirms a fuzzy-matched transfer suggestion with the actual transfer amount.
 // Supports MCP audit path when X-MCP-Worker-Secret is present and valid.
 func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *ConfirmTransferSuggestionMatchInput) (*ConfirmTransferSuggestionMatchOutput, error) {
+	// fireConfirmAnalytics emits EventTransferSuggestionValidated on every successful confirm,
+	// regardless of whether the call arrived via MCP or the normal path.
+	fireConfirmAnalytics := func() {
+		if h.analytics != nil {
+			h.analytics.Capture(input.UserID, phclient.EventTransferSuggestionValidated, map[string]interface{}{
+				"suggestion_id": input.ID,
+			})
+		}
+	}
+
+	// buildOutput constructs the response with analytics fire.
+	buildOutput := func(suggestion *domain.TransferSuggestion) *ConfirmTransferSuggestionMatchOutput {
+		output := &ConfirmTransferSuggestionMatchOutput{}
+		output.Body.Message = "Transfer suggestion confirmed"
+		output.Body.Suggestion = suggestion
+		fireConfirmAnalytics()
+		return output
+	}
+
 	// MCP origin: use transactional audit (mirrors savings_goal.go CreateGoal pattern).
 	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.db != nil && h.mcpAuditRepo != nil {
 		tx, err := h.db.Begin(ctx)
@@ -182,10 +208,7 @@ func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *Con
 				return nil, humaerrors.LoggingMapError(ctx, err)
 			}
 			if cacheHit {
-				output := &ConfirmTransferSuggestionMatchOutput{}
-				output.Body.Message = "Transfer suggestion confirmed"
-				output.Body.Suggestion = suggestion
-				return output, nil
+				return buildOutput(suggestion), nil
 			}
 			if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "confirmTransferSuggestionMatch", input.IdempotencyKey); err != nil {
 				return nil, humaerrors.LoggingMapError(ctx, err)
@@ -193,10 +216,7 @@ func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *Con
 			if err := tx.Commit(ctx); err != nil {
 				return nil, humaerrors.LoggingMapError(ctx, err)
 			}
-			output := &ConfirmTransferSuggestionMatchOutput{}
-			output.Body.Message = "Transfer suggestion confirmed"
-			output.Body.Suggestion = suggestion
-			return output, nil
+			return buildOutput(suggestion), nil
 		}
 
 		txSuggestionRepo := repository.NewTransferSuggestionRepository(tx)
@@ -211,10 +231,7 @@ func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *Con
 		if err := tx.Commit(ctx); err != nil {
 			return nil, humaerrors.LoggingMapError(ctx, err)
 		}
-		output := &ConfirmTransferSuggestionMatchOutput{}
-		output.Body.Message = "Transfer suggestion confirmed"
-		output.Body.Suggestion = suggestion
-		return output, nil
+		return buildOutput(suggestion), nil
 	}
 
 	// Non-MCP path: call service directly.
@@ -223,10 +240,7 @@ func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *Con
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	output := &ConfirmTransferSuggestionMatchOutput{}
-	output.Body.Message = "Transfer suggestion confirmed"
-	output.Body.Suggestion = suggestion
-	return output, nil
+	return buildOutput(suggestion), nil
 }
 
 // RegisterTransferSuggestionRoutes registers transfer suggestion routes with the Huma API.

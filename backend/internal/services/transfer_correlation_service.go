@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 )
 
 // correlationLookbackDays is the number of days of inflow history to load.
@@ -27,7 +28,7 @@ const correlationFuzzyMaxDiffRatio = 0.50
 // by TransferCorrelationService.
 type ActiveSuggestionRepository interface {
 	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error)
-	Complete(ctx context.Context, id string, matchedTransactionID string, actualAmount float64, completionSource string, completedAt time.Time) error
+	Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error
 }
 
 // RecentTransactionRepository is the subset of TransactionRepository needed
@@ -55,19 +56,26 @@ type transferCorrelationService struct {
 	suggestionRepo ActiveSuggestionRepository
 	txnRepo        RecentTransactionRepository
 	notifRepo      CorrelationNotificationRepository
+	analytics      phclient.Analytics
 }
 
 // NewTransferCorrelationService creates a new TransferCorrelationService.
+// Returns the concrete type so callers can invoke optional setter methods (SetAnalytics).
 func NewTransferCorrelationService(
 	suggestionRepo ActiveSuggestionRepository,
 	txnRepo RecentTransactionRepository,
 	notifRepo CorrelationNotificationRepository,
-) TransferCorrelationService {
+) *transferCorrelationService {
 	return &transferCorrelationService{
 		suggestionRepo: suggestionRepo,
 		txnRepo:        txnRepo,
 		notifRepo:      notifRepo,
 	}
+}
+
+// SetAnalytics sets the analytics client for event capture.
+func (s *transferCorrelationService) SetAnalytics(a phclient.Analytics) {
+	s.analytics = a
 }
 
 // CorrelateForUser loads active suggestions and recent inflow transactions for the
@@ -100,7 +108,6 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 			continue
 		}
 
-		matched := false
 		for _, txn := range txns {
 			// Skip pending (un-posted) transactions
 			if txn.Pending {
@@ -122,7 +129,8 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 
 			if matchKind == matchExact {
 				// Complete the suggestion
-				if err := s.suggestionRepo.Complete(ctx, suggestion.ID, txn.ID, actualAmount, "exact_match", time.Now()); err != nil {
+				txnID := txn.ID
+			if err := s.suggestionRepo.Complete(ctx, suggestion.ID, &txnID, actualAmount, "exact_match", time.Now()); err != nil {
 					return fmt.Errorf("failed to complete suggestion %s: %w", suggestion.ID, err)
 				}
 				usedTxnIDs[txn.ID] = true
@@ -139,7 +147,14 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 					return fmt.Errorf("failed to create match notification: %w", err)
 				}
 
-				matched = true
+				// Fire analytics event for matched transfer suggestion
+				if s.analytics != nil {
+					s.analytics.Capture(userID, phclient.EventTransferSuggestionMatched, map[string]interface{}{
+						"suggestion_id": suggestion.ID,
+						"match_kind":    "exact",
+						"actual_amount": actualAmount,
+					})
+				}
 			} else {
 				// matchFuzzy — check if there's already an open validation prompt
 				existing, err := s.notifRepo.GetOpenByTransferSuggestionID(ctx, suggestion.ID)
@@ -148,9 +163,11 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 				}
 				if existing != nil {
 					// Already prompted — skip
-					matched = true
 					break
 				}
+
+				// Mark this transaction as used so it doesn't prompt multiple suggestions.
+				usedTxnIDs[txn.ID] = true
 
 				// Create accept_reject notification prompting user to confirm
 				suggID := suggestion.ID
@@ -166,12 +183,17 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 					return fmt.Errorf("failed to create fuzzy-match notification: %w", err)
 				}
 
-				matched = true
+				// Fire analytics event for fuzzy-matched transfer suggestion
+				if s.analytics != nil {
+					s.analytics.Capture(userID, phclient.EventTransferSuggestionMatched, map[string]interface{}{
+						"suggestion_id": suggestion.ID,
+						"match_kind":    "fuzzy",
+						"actual_amount": actualAmount,
+					})
+				}
 			}
 
-			if matched {
-				break // one suggestion per run
-			}
+			break // one suggestion per run
 		}
 	}
 

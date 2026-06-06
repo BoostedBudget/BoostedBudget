@@ -16,6 +16,7 @@ const (
 	WidgetTypeCashFlowChart   WidgetType = "cash-flow-chart"
 	WidgetTypeAccountCards    WidgetType = "account-cards"
 	WidgetTypeNetWorth        WidgetType = "net-worth"
+	WidgetTypeSavingsImpact   WidgetType = "savings-impact"
 )
 
 // ValidWidgetTypes returns a set of valid widget types

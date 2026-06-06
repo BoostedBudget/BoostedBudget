@@ -14,6 +14,13 @@ DROP INDEX IF EXISTS idx_transfer_sugg_matched_txn_id;
 ALTER TABLE transfer_suggestions DROP CONSTRAINT IF EXISTS fk_transfer_sugg_matched_txn;
 
 -- =============================================================================
+-- Remap completed → pending before restoring the old 4-value CHECK constraint.
+-- Without this, existing 'completed' rows would violate the constraint being added.
+-- =============================================================================
+
+UPDATE transfer_suggestions SET status = 'pending' WHERE status = 'completed';
+
+-- =============================================================================
 -- Revert valid_suggestion_status CHECK to original 4 values (no 'completed')
 -- =============================================================================
 

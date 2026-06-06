@@ -746,6 +746,9 @@ func main() {
 					transactionRepo,
 					notificationRepo,
 				)
+				if phClient != nil {
+					transferCorrelationService.SetAnalytics(phClient)
+				}
 				transactionSyncService.SetTransferCorrelationService(transferCorrelationService)
 				appLogger.Info("Transfer correlation service wired into transaction sync")
 
@@ -1300,6 +1303,9 @@ func main() {
 				MCPAuditRepo:    humaMCPAuditRepo,
 				MCPWorkerSecret: cfg.MCPWorkerSecret,
 			})
+		if phClient != nil {
+			humaTransferSuggestionHandler.SetAnalytics(phClient)
+		}
 		operations.RegisterTransferSuggestionRoutes(humaAPI, humaTransferSuggestionHandler)
 		appLogger.Info("Huma transfer suggestion routes registered")
 
