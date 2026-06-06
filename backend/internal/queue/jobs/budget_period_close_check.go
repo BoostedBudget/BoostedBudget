@@ -52,8 +52,10 @@ type BudgetPeriodEventsRepo interface {
 
 // BudgetPeriodCloseCheckWorker processes the daily period-close scan.
 // For each active budget it computes whether a period boundary was crossed between
-// yesterday and today. If so, and no marker exists yet, it inserts the marker and
-// enqueues a RuleEvaluationArgs job for that user/budget.
+// yesterday and today. If so, and no marker exists yet, it inserts the marker (the
+// exactly-once guard) and — only when the insert succeeds — enqueues a
+// RuleEvaluationArgs job for that user/budget. Inserting before enqueueing prevents
+// duplicate jobs when two workers both see HasMarker=false and race to process.
 // At the end of every run it also calls TransferSuggestionExpirer.ExpirePending to
 // transition stale pending suggestions to "expired" status.
 type BudgetPeriodCloseCheckWorker struct {
@@ -105,8 +107,10 @@ const budgetPeriodCheckPageSize = 100
 //  1. Pages through ALL active budgets via GetAllActivePaginated.
 //  2. For each budget, calls computeJustClosedPeriod(budget, now) to determine whether
 //     a period boundary was crossed between yesterday and today.
-//  3. If a period just closed: checks HasMarker; if no marker, inserts one and
-//     enqueues a RuleEvaluationArgs job for the user with event data.
+//  3. If a period just closed: checks HasMarker (fast path); if no marker, calls
+//     InsertMarker to claim the period atomically. Only when InsertMarker returns
+//     inserted=true (this worker won the DB race) is the RuleEvaluationArgs job
+//     enqueued. This guarantees exactly-once delivery even under concurrent runs.
 func (w *BudgetPeriodCloseCheckWorker) Work(ctx context.Context, job *river.Job[BudgetPeriodCloseCheckArgs]) (err error) {
 	args := job.Args
 
@@ -179,6 +183,36 @@ func (w *BudgetPeriodCloseCheckWorker) Work(ctx context.Context, job *river.Job[
 				continue
 			}
 
+			// InsertMarker is the exactly-once guard. Inserting BEFORE enqueueing
+			// prevents duplicate jobs when two workers both see HasMarker=false and
+			// race here: the DB ON CONFLICT ensures only one insert wins (returns
+			// true) and only the winner proceeds to enqueue.
+			inserted, insertErr := w.periodEventsRepo.InsertMarker(ctx,
+				budget.UserID, budget.ID,
+				periodStart, periodEnd,
+				domain.EventBudgetPeriodEnd,
+			)
+			if insertErr != nil {
+				w.logger.Warn("failed to insert period event marker",
+					"budget_id", budget.ID,
+					"user_id", budget.UserID,
+					"error", insertErr,
+				)
+				totalErrors++
+				continue
+			}
+			if !inserted {
+				// A concurrent worker already inserted the marker; skip enqueueing
+				// to guarantee exactly-once delivery.
+				w.logger.Debug("concurrent worker already inserted marker; skipping enqueue",
+					"budget_id", budget.ID,
+					"period_start", periodStart,
+					"period_end", periodEnd,
+				)
+				totalSkipped++
+				continue
+			}
+
 			evalArgs := RuleEvaluationArgs{
 				UserID:    budget.UserID,
 				EventType: domain.EventBudgetPeriodEnd,
@@ -195,6 +229,12 @@ func (w *BudgetPeriodCloseCheckWorker) Work(ctx context.Context, job *river.Job[
 				},
 			}
 
+			// Note: if Enqueue fails after a successful InsertMarker, the marker
+			// remains in place. HasMarker will return true on the next daily run,
+			// preventing a retry via the normal late-execution path. This is the
+			// accepted trade-off: the marker is the source of truth for exactly-once
+			// delivery; a failed enqueue requires manual intervention or a new
+			// marker-aware recovery path.
 			result, enqueueErr := w.jobQueue.Enqueue(ctx, evalArgs,
 				queue.WithQueue(queue.QueueDefault),
 			)
@@ -206,30 +246,6 @@ func (w *BudgetPeriodCloseCheckWorker) Work(ctx context.Context, job *river.Job[
 				)
 				totalErrors++
 				continue
-			}
-
-			// Insert marker AFTER successful enqueue. If marker insert fails (e.g.
-			// concurrent worker won the race), log a warning but do not treat as
-			// error — the job is already enqueued and will run. The next daily run
-			// will see the marker and skip. If InsertMarker returns false (conflict),
-			// a concurrent worker already claimed this period — skip silently.
-			inserted, insertErr := w.periodEventsRepo.InsertMarker(ctx,
-				budget.UserID, budget.ID,
-				periodStart, periodEnd,
-				domain.EventBudgetPeriodEnd,
-			)
-			if insertErr != nil {
-				w.logger.Warn("failed to insert period event marker (job already enqueued)",
-					"budget_id", budget.ID,
-					"user_id", budget.UserID,
-					"error", insertErr,
-				)
-			} else if !inserted {
-				w.logger.Debug("concurrent worker already claimed this period, job still enqueued",
-					"budget_id", budget.ID,
-					"period_start", periodStart,
-					"period_end", periodEnd,
-				)
 			}
 
 			w.logger.Info("fired budget_period_end event",
