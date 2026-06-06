@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
 import { useUpdateUserProfile } from '@boostedbudget/api-client/endpoints/profile/profile'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
@@ -9,6 +9,43 @@ import { Button } from '../../components/ui/button'
 import { AlertCircle } from 'lucide-react'
 import { posthog } from '../../shared/lib/posthog'
 import type { User, UpdateProfileRequest } from './types'
+
+export const IANA_TIMEZONES = [
+  'Africa/Cairo',
+  'America/Anchorage',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/New_York',
+  'America/Phoenix',
+  'America/Sao_Paulo',
+  'America/Toronto',
+  'America/Vancouver',
+  'Asia/Bangkok',
+  'Asia/Dubai',
+  'Asia/Hong_Kong',
+  'Asia/Jakarta',
+  'Asia/Kolkata',
+  'Asia/Seoul',
+  'Asia/Shanghai',
+  'Asia/Singapore',
+  'Asia/Tokyo',
+  'Australia/Melbourne',
+  'Australia/Sydney',
+  'Europe/Amsterdam',
+  'Europe/Berlin',
+  'Europe/Helsinki',
+  'Europe/Istanbul',
+  'Europe/London',
+  'Europe/Madrid',
+  'Europe/Moscow',
+  'Europe/Paris',
+  'Europe/Rome',
+  'Europe/Stockholm',
+  'Pacific/Auckland',
+  'Pacific/Honolulu',
+  'UTC',
+]
 
 interface ProfileFormProps {
   user: User
@@ -25,9 +62,26 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
 
   const [email, setEmail] = useState(user.email)
   const [primaryRegion, setPrimaryRegion] = useState(user.primary_region)
+  const [timezone, setTimezone] = useState(user.timezone ?? 'UTC')
 
   const hasRegionChange = primaryRegion !== user.primary_region
-  const hasChanges = email !== user.email || hasRegionChange
+  const hasTimezoneChange = timezone !== (user.timezone ?? 'UTC')
+  const hasChanges = email !== user.email || hasRegionChange || hasTimezoneChange
+
+  useEffect(() => {
+    if (user.timezone_source === 'default') {
+      const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone
+      if (browserTz && browserTz !== user.timezone) {
+        // Silent PATCH: set to auto-detected tz with source="auto"
+        updateProfileMutation.mutate(
+          { data: { timezone: browserTz, timezone_source: 'auto' } },
+          { onSuccess: () => { /* silent — no toast */ } },
+        )
+      }
+    }
+    // Only run once on mount — user.timezone_source is the guard
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // intentional empty deps: run once, guard is inside the effect
 
   function getRegionDisplay(code: string): string {
     return regions?.[code]?.display_name ?? code
@@ -51,12 +105,17 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
     const updateData: UpdateProfileRequest = {}
     const emailChanging = email !== user.email
     const regionChanging = primaryRegion !== user.primary_region
+    const timezoneChanging = timezone !== (user.timezone ?? 'UTC')
 
     if (emailChanging) {
       updateData.email = email
     }
     if (regionChanging) {
       updateData.primary_region = primaryRegion
+    }
+    if (timezoneChanging) {
+      updateData.timezone = timezone
+      updateData.timezone_source = 'user'
     }
 
     updateProfileMutation.mutate(
@@ -65,6 +124,7 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
         onSuccess: (updatedUser) => {
           setEmail(updatedUser.email)
           setPrimaryRegion(updatedUser.primary_region)
+          setTimezone(updatedUser.timezone ?? 'UTC')
 
           if (emailChanging) {
             toast.success(
@@ -182,6 +242,26 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
           </select>
           <p className="text-sm text-muted-foreground">
             Select where your financial data is stored
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor="timezone" className="text-sm font-medium text-foreground block">
+            Timezone
+          </label>
+          <select
+            id="timezone"
+            value={timezone}
+            onChange={(e) => setTimezone(e.target.value)}
+            disabled={submitting}
+            className="w-full bg-background border border-input rounded-md px-3 py-2 text-base text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {IANA_TIMEZONES.map((tz) => (
+              <option key={tz} value={tz}>{tz}</option>
+            ))}
+          </select>
+          <p className="text-sm text-muted-foreground">
+            Used to detect when your budget period ends
           </p>
         </div>
 
