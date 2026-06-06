@@ -100,14 +100,10 @@ func TestBudgetPeriodCloseCheckArgs_Kind(t *testing.T) {
 // Worker tests
 // =============================================================================
 
-// TestBudgetPeriodCloseCheck_FiresEventOnPeriodClose verifies that when the job
-// runs on the first day of a new month, it fires the budget_period_end event
-// for the previous (just-closed) month. This is the GAP N fix — the test now
-// exercises the full worker firing path (workAt) rather than only the helper.
-//
-// This also serves as the GAP J emitter⊇reader parity guard: it asserts that
-// every EventDataKey* constant consumed by calculateTransferAmount and
-// calculateSavingsGoalAmount is present in the emitted EventData map.
+// TestBudgetPeriodCloseCheck_FiresEventOnPeriodClose verifies that the worker fires
+// budget_period_end on the first day of a new month for the just-closed month, and
+// serves as the emitter-reader parity guard: asserts that every EventDataKey* consumed
+// by calculateTransferAmount and calculateSavingsGoalAmount is emitted.
 func TestBudgetPeriodCloseCheck_FiresEventOnPeriodClose(t *testing.T) {
 	ctx := context.Background()
 
@@ -190,11 +186,9 @@ func TestBudgetPeriodCloseCheck_FiresEventOnPeriodClose(t *testing.T) {
 	assert.Equal(t, expectedPeriodEnd.Format("2006-01-02"), capturedArgs.EventData[domain.EventDataKeyPeriodEnd], "period_end must be YYYY-MM-DD")
 }
 
-// TestEventDataKeyEmitterCoversReaderKeys is a contract test that verifies the
-// set of EventDataKey* constants emitted by the period-close worker (GAP J emitter)
-// is a superset of the keys consumed by calculateTransferAmount and
-// calculateSavingsGoalAmount (the reader side). No functions are called — this is a
-// pure set-membership assertion over the domain constant values.
+// TestEventDataKeyEmitterCoversReaderKeys verifies that EventDataKey* constants
+// emitted by the period-close worker include all keys consumed by transfer and
+// savings goal calculators. Pure set-membership assertion over domain constants.
 func TestEventDataKeyEmitterCoversReaderKeys(t *testing.T) {
 	// Keys emitted by budget_period_close_check.go (the worker's EventData map).
 	emitted := map[string]bool{
@@ -602,17 +596,9 @@ func TestComputeJustClosedPeriod_YearlyBoundary(t *testing.T) {
 // Race condition: marker ordering correctness
 // =============================================================================
 
-// TestBudgetPeriodCloseCheckWorker_NoDuplicateEnqueueOnMarkerRace verifies that
-// when two workers race and both see HasMarker=false, only the winner of the
-// InsertMarker race enqueues a job. The loser (InsertMarker returns false) must
-// NOT enqueue — ensuring exactly-once delivery.
-//
-// Correct order: HasMarker (fast path) → InsertMarker → if inserted: Enqueue.
-// Wrong order (old bug): HasMarker → Enqueue → InsertMarker.
-//
-// The budget uses a weekly period anchored so that today (time.Now()) is always
-// the first day of a new week, guaranteeing computeJustClosedPeriod returns
-// closed=true regardless of when the test runs.
+// TestBudgetPeriodCloseCheckWorker_NoDuplicateEnqueueOnMarkerRace verifies that when
+// two workers race, only the InsertMarker winner enqueues. Enforces the correct
+// order: HasMarker → InsertMarker → if inserted: Enqueue.
 func TestBudgetPeriodCloseCheckWorker_NoDuplicateEnqueueOnMarkerRace(t *testing.T) {
 	ctx := context.Background()
 
@@ -796,16 +782,9 @@ func TestWorkAt_UsesUserTimezone(t *testing.T) {
 	tzLookup.AssertExpectations(t)
 }
 
-// TestWorkAt_MarkerStableAfterTimezoneChange verifies that the marker identity is
-// stable even if a user changes their timezone between two daily worker runs.
-//
-// The marker key uses UTC-anchored dates derived from the budget's stored StartDate,
-// so changing from e.g. America/New_York to America/Los_Angeles does not produce a
-// different (period_start, period_end) tuple and therefore cannot cause a double-fire.
-//
-// Setup: monthly budget. First run uses UTC (period Jan 1–31 just closed on Feb 1 09:00).
-// HasMarker returns false → InsertMarker returns true → Enqueue called once.
-// Second run uses America/New_York — same period start/end → HasMarker returns true → no enqueue.
+// TestWorkAt_MarkerStableAfterTimezoneChange verifies that marker identity remains
+// stable even when a user changes timezone. UTC-anchored period boundaries prevent
+// double-fires across timezone shifts.
 func TestWorkAt_MarkerStableAfterTimezoneChange(t *testing.T) {
 	ctx := context.Background()
 
