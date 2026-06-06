@@ -46,6 +46,11 @@ type BudgetRepository interface {
 	// GetAllActivePaginated returns all active budgets across all users, ordered by id ASC.
 	// "Active" means is_active = true. Used by the period-close scanner (Issue #972).
 	GetAllActivePaginated(ctx context.Context, limit int, offset int) ([]*domain.Budget, error)
+
+	// GetTimezonesByUserIDs returns a map of userID → timezone string for the given user IDs.
+	// Missing users are not included in the map; callers should default to "UTC" for absent keys.
+	// Used by the period-close scanner (Issue #972) to avoid N+1 timezone lookups.
+	GetTimezonesByUserIDs(ctx context.Context, userIDs []string) (map[string]string, error)
 }
 
 // budgetRepository implements BudgetRepository using PostgreSQL.
@@ -916,4 +921,35 @@ func (r *budgetRepository) GetAllActivePaginated(ctx context.Context, limit int,
 	}
 
 	return budgets, nil
+}
+
+// GetTimezonesByUserIDs returns a map of userID → timezone for the given set of user IDs.
+// Uses COALESCE so users with a NULL timezone column fall back to "UTC".
+// Missing user IDs produce no map entry; callers should default to "UTC" for absent keys.
+func (r *budgetRepository) GetTimezonesByUserIDs(ctx context.Context, userIDs []string) (map[string]string, error) {
+	if len(userIDs) == 0 {
+		return map[string]string{}, nil
+	}
+
+	query := `SELECT id, COALESCE(timezone, 'UTC') FROM users WHERE id = ANY($1)`
+
+	rows, err := r.db.Query(ctx, query, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]string, len(userIDs))
+	for rows.Next() {
+		var userID, tz string
+		if err := rows.Scan(&userID, &tz); err != nil {
+			return nil, err
+		}
+		result[userID] = tz
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }

@@ -39,6 +39,10 @@ var (
 	ErrInvalidRegion = errors.New("invalid primary region")
 	// ErrForbiddenUpdate is returned when attempting to update forbidden fields
 	ErrForbiddenUpdate = errors.New("cannot update subscription fields")
+	// ErrInvalidTimezone is returned when a timezone string is not a valid IANA timezone.
+	ErrInvalidTimezone = errors.New("invalid timezone")
+	// ErrInvalidTimezoneSource is returned when timezone_source is not in the allowed set.
+	ErrInvalidTimezoneSource = errors.New("invalid timezone_source")
 )
 
 
@@ -143,7 +147,7 @@ func (s *profileService) UpdateProfile(ctx context.Context, userID string, req *
 		}
 		// Client may not claim "user" without supplying an explicit timezone value.
 		if *req.TimezoneSource == "user" {
-			return nil, fmt.Errorf("invalid timezone_source: \"user\" requires an explicit timezone value")
+			return nil, fmt.Errorf("%w: \"user\" requires an explicit timezone value", ErrInvalidTimezoneSource)
 		}
 	}
 
@@ -248,7 +252,7 @@ func validateRegion(region string) error {
 // garbage value would cause runtime errors in production.
 func validateTimezone(tz string) error {
 	if _, err := time.LoadLocation(tz); err != nil {
-		return fmt.Errorf("invalid timezone: %w", err)
+		return fmt.Errorf("%w: %s", ErrInvalidTimezone, tz)
 	}
 	return nil
 }
@@ -256,7 +260,7 @@ func validateTimezone(tz string) error {
 // validateTimezoneSource validates that src is one of the allowed timezone_source values.
 func validateTimezoneSource(src string) error {
 	if !validTimezoneSources[src] {
-		return fmt.Errorf("invalid timezone_source: %q is not one of [default, auto, user]", src)
+		return fmt.Errorf("%w: %s", ErrInvalidTimezoneSource, src)
 	}
 	return nil
 }
