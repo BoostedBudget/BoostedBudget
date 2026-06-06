@@ -941,6 +941,128 @@ func TestUpdateProfile_EmailUnchanged_NoJobEnqueued(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
+// TestUpdateProfile_ValidTimezone tests that a valid IANA timezone is accepted,
+// and that TimezoneSource is always enforced to "user" when Timezone is explicitly set.
+func TestUpdateProfile_ValidTimezone(t *testing.T) {
+	mockRepo := new(MockProfileRepository)
+	service := NewProfileService(NewProfileServiceDeps{Repo: mockRepo})
+	ctx := context.Background()
+
+	userID := uuid.New().String()
+	existingUser := &domain.User{
+		ID:             userID,
+		ClerkUserID:    "user_tz1",
+		Email:          "tz@example.com",
+		PrimaryRegion:  "iad",
+		Timezone:       "UTC",
+		TimezoneSource: "default",
+	}
+
+	tz := "America/Los_Angeles"
+	req := &domain.UpdateProfileRequest{Timezone: &tz}
+
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
+	mockRepo.On("UpdateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
+		return u.Timezone == "America/Los_Angeles" && u.TimezoneSource == "user"
+	})).Return(nil)
+
+	user, err := service.UpdateProfile(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.Equal(t, "America/Los_Angeles", user.Timezone)
+	assert.Equal(t, "user", user.TimezoneSource)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestUpdateProfile_InvalidTimezone tests that an invalid IANA timezone is rejected.
+func TestUpdateProfile_InvalidTimezone(t *testing.T) {
+	mockRepo := new(MockProfileRepository)
+	service := NewProfileService(NewProfileServiceDeps{Repo: mockRepo})
+	ctx := context.Background()
+
+	userID := uuid.New().String()
+	existingUser := &domain.User{
+		ID:            userID,
+		ClerkUserID:   "user_tz2",
+		Email:         "tz@example.com",
+		PrimaryRegion: "iad",
+	}
+
+	bad := "not/a/timezone"
+	req := &domain.UpdateProfileRequest{Timezone: &bad}
+
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
+
+	user, err := service.UpdateProfile(ctx, userID, req)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid timezone")
+	assert.Nil(t, user)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestUpdateProfile_AutoCapture tests that TimezoneSource "auto" is accepted when
+// no explicit Timezone is provided (browser auto-capture path).
+func TestUpdateProfile_AutoCapture(t *testing.T) {
+	mockRepo := new(MockProfileRepository)
+	service := NewProfileService(NewProfileServiceDeps{Repo: mockRepo})
+	ctx := context.Background()
+
+	userID := uuid.New().String()
+	existingUser := &domain.User{
+		ID:             userID,
+		ClerkUserID:    "user_tz3",
+		Email:          "tz@example.com",
+		PrimaryRegion:  "iad",
+		Timezone:       "UTC",
+		TimezoneSource: "default",
+	}
+
+	src := "auto"
+	req := &domain.UpdateProfileRequest{TimezoneSource: &src}
+
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
+	mockRepo.On("UpdateUser", ctx, mock.MatchedBy(func(u *domain.User) bool {
+		return u.TimezoneSource == "auto"
+	})).Return(nil)
+
+	user, err := service.UpdateProfile(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.Equal(t, "auto", user.TimezoneSource)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestUpdateProfile_InvalidTimezoneSource tests that an unrecognised TimezoneSource value
+// is rejected.
+func TestUpdateProfile_InvalidTimezoneSource(t *testing.T) {
+	mockRepo := new(MockProfileRepository)
+	service := NewProfileService(NewProfileServiceDeps{Repo: mockRepo})
+	ctx := context.Background()
+
+	userID := uuid.New().String()
+	existingUser := &domain.User{
+		ID:            userID,
+		ClerkUserID:   "user_tz4",
+		Email:         "tz@example.com",
+		PrimaryRegion: "iad",
+	}
+
+	bad := "admin_override"
+	req := &domain.UpdateProfileRequest{TimezoneSource: &bad}
+
+	mockRepo.On("GetUserByID", ctx, userID).Return(existingUser, nil)
+
+	user, err := service.UpdateProfile(ctx, userID, req)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid timezone_source")
+	assert.Nil(t, user)
+	mockRepo.AssertExpectations(t)
+}
+
 // TestUpdateProfile_DuplicateEmail_ReturnsError verifies that when
 // UpdateUserEmailTx returns ErrDuplicateEmail, the error propagates and
 // no propagation job is enqueued.
