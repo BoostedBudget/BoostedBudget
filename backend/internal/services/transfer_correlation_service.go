@@ -36,7 +36,8 @@ type ActiveSuggestionRepository interface {
 	// The partial unique index prevents the same inflow from being reserved by two suggestions.
 	ReserveMatchedTransaction(ctx context.Context, id string, txnID string) error
 	// ClearMatchedTransactionID releases a reservation (HIGH#2 atomicity rollback; reject path).
-	ClearMatchedTransactionID(ctx context.Context, id string) error
+	// GAP AV: expectedTxnID is the matched_transaction_id the caller observed at read time.
+	ClearMatchedTransactionID(ctx context.Context, id string, expectedTxnID *string) error
 }
 
 // RecentTransactionRepository is the subset of TransactionRepository needed
@@ -230,8 +231,12 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 				// HIGH#2 atomicity: if the notification insert fails after a successful reserve,
 				// clear the reservation so the next sync retries rather than leaving the inflow
 				// permanently pinned with no prompt for the user.
+				// GAP AV: pass txn.ID (the reservation we just set) as expectedTxnID so that a
+				// concurrent stale-clear that ran between reserve and this rollback does not cause
+				// the rollback to incorrectly release a different reservation.
+				txnIDCopy := txn.ID
 				if err := s.notifRepo.Create(ctx, notif); err != nil {
-					if clearErr := s.suggestionRepo.ClearMatchedTransactionID(ctx, suggestion.ID); clearErr != nil {
+					if clearErr := s.suggestionRepo.ClearMatchedTransactionID(ctx, suggestion.ID, &txnIDCopy); clearErr != nil {
 						slog.Warn("failed to clear reservation after notification failure",
 							"suggestion_id", suggestion.ID, "txn_id", txn.ID, "error", clearErr)
 					}

@@ -43,8 +43,8 @@ func (m *mockActiveSuggestionRepo) ReserveMatchedTransaction(ctx context.Context
 	return args.Error(0)
 }
 
-func (m *mockActiveSuggestionRepo) ClearMatchedTransactionID(ctx context.Context, id string) error {
-	args := m.Called(ctx, id)
+func (m *mockActiveSuggestionRepo) ClearMatchedTransactionID(ctx context.Context, id string, expectedTxnID *string) error {
+	args := m.Called(ctx, id, expectedTxnID)
 	return args.Error(0)
 }
 
@@ -700,15 +700,18 @@ func TestCorrelateForUser_FuzzyMatch_ReserveClearedOnNotifFailure(t *testing.T) 
 	suggestionRepo.On("ReserveMatchedTransaction", ctx, "sug-high2", "txn-high2").Return(nil)
 	// Notification fails
 	notifRepo.On("Create", ctx, mock.Anything).Return(fmt.Errorf("notification DB error"))
-	// HIGH#2: reservation must be cleared on notification failure
-	suggestionRepo.On("ClearMatchedTransactionID", ctx, "sug-high2").Return(nil)
+	// HIGH#2: reservation must be cleared on notification failure.
+	// GAP AV: rollback passes the reservation ID we just set (txn-high2) as expectedTxnID.
+	txnIDCopy := "txn-high2"
+	suggestionRepo.On("ClearMatchedTransactionID", ctx, "sug-high2",
+		mock.MatchedBy(func(s *string) bool { return s != nil && *s == txnIDCopy }),
+	).Return(nil)
 
 	err := svc.CorrelateForUser(ctx, userID)
 
 	// The run returns an error (notification failed) but the reservation has been cleared.
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "fuzzy-match notification")
-	suggestionRepo.AssertCalled(t, "ClearMatchedTransactionID", ctx, "sug-high2")
 	suggestionRepo.AssertExpectations(t)
 	notifRepo.AssertExpectations(t)
 }

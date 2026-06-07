@@ -97,8 +97,8 @@ func (m *mockTransferSuggestionRepo) CompleteRetainingReservation(ctx context.Co
 	return args.Error(0)
 }
 
-func (m *mockTransferSuggestionRepo) ClearMatchedTransactionID(ctx context.Context, id string) error {
-	args := m.Called(ctx, id)
+func (m *mockTransferSuggestionRepo) ClearMatchedTransactionID(ctx context.Context, id string, expectedTxnID *string) error {
+	args := m.Called(ctx, id, expectedTxnID)
 	return args.Error(0)
 }
 
@@ -817,7 +817,10 @@ func TestDeclineTransferSuggestionMatch_ClearsReservation(t *testing.T) {
 	suggestion.MatchedTransactionID = &reservedTxnID
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
-	suggestionRepo.On("ClearMatchedTransactionID", ctx, suggestionID).Return(nil)
+	// GAP AV: passes observed MatchedTransactionID to the repo.
+	suggestionRepo.On("ClearMatchedTransactionID", ctx, suggestionID,
+		mock.MatchedBy(func(s *string) bool { return s != nil && *s == reservedTxnID }),
+	).Return(nil)
 
 	result, err := svc.DeclineTransferSuggestionMatch(ctx, userID, suggestionID)
 
@@ -882,7 +885,10 @@ func TestDeclineTransferSuggestionMatch_AcceptedSuggestion(t *testing.T) {
 	suggestion.MatchedTransactionID = &reservedTxnID
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
-	suggestionRepo.On("ClearMatchedTransactionID", ctx, suggestionID).Return(nil)
+	// GAP AV: passes observed MatchedTransactionID to the repo.
+	suggestionRepo.On("ClearMatchedTransactionID", ctx, suggestionID,
+		mock.MatchedBy(func(s *string) bool { return s != nil && *s == reservedTxnID }),
+	).Return(nil)
 
 	result, err := svc.DeclineTransferSuggestionMatch(ctx, userID, suggestionID)
 
@@ -919,7 +925,10 @@ func TestDeclineTransferSuggestionMatch_ClearPropagatesAlreadyActioned(t *testin
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
 	// Simulate TOCTOU: the suggestion went terminal between the service's GetByID and the
 	// repo's UPDATE execution — the repo now returns AlreadyActioned (0 rows affected).
-	suggestionRepo.On("ClearMatchedTransactionID", ctx, suggestionID).Return(domain.ErrTransferSuggestionAlreadyActioned)
+	// GAP AV: service passes the observed MatchedTransactionID.
+	suggestionRepo.On("ClearMatchedTransactionID", ctx, suggestionID,
+		mock.MatchedBy(func(s *string) bool { return s != nil && *s == reservedTxnID }),
+	).Return(domain.ErrTransferSuggestionAlreadyActioned)
 
 	result, err := svc.DeclineTransferSuggestionMatch(ctx, userID, suggestionID)
 
@@ -944,12 +953,84 @@ func TestDeclineTransferSuggestionMatch_ClearPropagatesNotFound(t *testing.T) {
 	suggestion.Status = domain.SuggestionStatusPending
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
-	suggestionRepo.On("ClearMatchedTransactionID", ctx, suggestionID).Return(domain.ErrTransferSuggestionNotFound)
+	suggestionRepo.On("ClearMatchedTransactionID", ctx, suggestionID, (*string)(nil)).Return(domain.ErrTransferSuggestionNotFound)
 
 	result, err := svc.DeclineTransferSuggestionMatch(ctx, userID, suggestionID)
 
 	assert.Nil(t, result)
 	assert.ErrorIs(t, err, domain.ErrTransferSuggestionNotFound)
+	suggestionRepo.AssertExpectations(t)
+}
+
+// =============================================================================
+// GAP AV: DeclineTransferSuggestionMatch passes observed reservation to repo
+// =============================================================================
+
+// TestDeclineTransferSuggestionMatch_PassesObservedReservationToRepo proves GAP AV fix:
+// DeclineTransferSuggestionMatch must pass the observed MatchedTransactionID to
+// ClearMatchedTransactionID so the IS NOT DISTINCT FROM predicate can detect if a
+// newer reservation was set between the service's GetByID read and the repo write.
+// A stale decline carrying T must not release a newer reservation T2 on the same suggestion.
+func TestDeclineTransferSuggestionMatch_PassesObservedReservationToRepo(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-av"
+	suggestionID := "suggestion-av"
+	reservedTxnID := "txn-123"
+
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.ID = suggestionID
+	suggestion.Status = domain.SuggestionStatusPending
+	suggestion.MatchedTransactionID = &reservedTxnID
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	// GAP AV: must pass the observed MatchedTransactionID (not nil) to the repo.
+	suggestionRepo.On("ClearMatchedTransactionID", ctx, suggestionID,
+		mock.MatchedBy(func(s *string) bool { return s != nil && *s == reservedTxnID }),
+	).Return(nil)
+
+	result, err := svc.DeclineTransferSuggestionMatch(ctx, userID, suggestionID)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Nil(t, result.MatchedTransactionID, "reservation should be cleared in service result")
+	suggestionRepo.AssertExpectations(t)
+}
+
+// TestDeclineTransferSuggestionMatch_WrongReservation_ReturnsAlreadyActioned proves that
+// when repo.ClearMatchedTransactionID returns ErrTransferSuggestionAlreadyActioned (because
+// the IS NOT DISTINCT FROM predicate found a different reservation in the DB — a newer
+// sync claimed T2 after the stale clear), DeclineTransferSuggestionMatch propagates that
+// error cleanly. The stale decline must not silently succeed.
+func TestDeclineTransferSuggestionMatch_WrongReservation_ReturnsAlreadyActioned(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-av2"
+	suggestionID := "suggestion-av2"
+	staleTxnID := "txn-stale"
+
+	// Service observes stale reservation T at read time.
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.ID = suggestionID
+	suggestion.Status = domain.SuggestionStatusPending
+	suggestion.MatchedTransactionID = &staleTxnID
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	// Simulate TOCTOU: DB now holds T2 (a newer reservation), not T.
+	// IS NOT DISTINCT FROM predicate → 0 rows → repo returns AlreadyActioned.
+	suggestionRepo.On("ClearMatchedTransactionID", ctx, suggestionID,
+		mock.MatchedBy(func(s *string) bool { return s != nil && *s == staleTxnID }),
+	).Return(domain.ErrTransferSuggestionAlreadyActioned)
+
+	result, err := svc.DeclineTransferSuggestionMatch(ctx, userID, suggestionID)
+
+	// GAP AV: must propagate AlreadyActioned (stale decline must not silently succeed)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
 	suggestionRepo.AssertExpectations(t)
 }
 

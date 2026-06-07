@@ -640,35 +640,126 @@ func TestClearMatchedTransactionID_ZeroRowAlreadyActioned_Integration(t *testing
 
 	repo := NewTransferSuggestionRepository(tx)
 
-	// Clearing a pending suggestion (no reservation) → 0 rows → AlreadyActioned.
-	// (The WHERE includes status IN ('pending','accepted') but NOT the reservation column,
-	// so clearing a non-reserved pending row also returns 0 — the suggestion has nothing to clear.)
-	// Actually, the WHERE only guards on status — let's test the terminal case (most common race).
+	// Terminal suggestions always return AlreadyActioned regardless of expectedTxnID —
+	// the status guard fires before the IS NOT DISTINCT FROM check matters.
 	rejectedID := insertSugg("rejected")
-	err = repo.ClearMatchedTransactionID(ctx, rejectedID)
+	err = repo.ClearMatchedTransactionID(ctx, rejectedID, nil)
 	require.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned,
 		"clearing a rejected suggestion must return AlreadyActioned (GAP AQ: 0-row guard)")
 
 	completedID := insertSugg("completed")
-	err = repo.ClearMatchedTransactionID(ctx, completedID)
+	err = repo.ClearMatchedTransactionID(ctx, completedID, nil)
 	require.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned,
 		"clearing a completed suggestion must return AlreadyActioned (GAP AQ: 0-row guard)")
 
 	expiredID := insertSugg("expired")
-	err = repo.ClearMatchedTransactionID(ctx, expiredID)
+	err = repo.ClearMatchedTransactionID(ctx, expiredID, nil)
 	require.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned,
 		"clearing an expired suggestion must return AlreadyActioned (terminal status)")
 
 	// Clearing a non-existent suggestion returns NotFound.
-	err = repo.ClearMatchedTransactionID(ctx, uuid.New().String())
+	err = repo.ClearMatchedTransactionID(ctx, uuid.New().String(), nil)
 	require.ErrorIs(t, err, domain.ErrTransferSuggestionNotFound,
 		"clearing a non-existent suggestion must return NotFound (classifyZeroRowUpdate)")
 
-	// Clearing a pending suggestion (valid) → succeeds.
+	// Clearing a pending suggestion with nil expectedTxnID (no reservation) → succeeds
+	// because IS NOT DISTINCT FROM NULL = NULL is TRUE.
 	pendingID := insertSugg("pending")
-	err = repo.ClearMatchedTransactionID(ctx, pendingID)
+	err = repo.ClearMatchedTransactionID(ctx, pendingID, nil)
 	require.NoError(t, err,
-		"clearing a pending suggestion (happy path) must succeed")
+		"clearing a pending suggestion with nil expectedTxnID (happy path) must succeed")
+}
+
+// TestClearMatchedTransactionID_WrongExpected_DoesNotRelease proves GAP AV:
+// ClearMatchedTransactionID with a stale expectedTxnID must not release a newer
+// reservation T2 on the same suggestion.
+//
+// Scenario:
+//  1. Reserve inflow T on suggestion A.
+//  2. Stale-clear (simulate ClearStaleReservations: set matched_transaction_id = NULL).
+//  3. Reserve inflow T2 on suggestion A (new sync claimed T2).
+//  4. Call ClearMatchedTransactionID(A, expectedTxnID=&T) — old decline arrives.
+//  5. Assert returns ErrTransferSuggestionAlreadyActioned and T2 is still reserved on A.
+func TestClearMatchedTransactionID_WrongExpected_DoesNotRelease(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Seed user and linked_item/account/transactions.
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+	`, userID, "test|"+userID.String(), "gapav-"+userID.String()+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	linkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-gapav-token')
+	`, linkedItemID, userID, "item-gapav-"+linkedItemID.String())
+	require.NoError(t, err, "seed linked_item")
+
+	accountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, 'plaid-gapav', 'GAP AV Test', 'depository')
+	`, accountID, linkedItemID, userID)
+	require.NoError(t, err, "seed account")
+
+	// Seed two inflow transactions T and T2.
+	tID := uuid.New()
+	t2ID := uuid.New()
+	for _, id := range []uuid.UUID{tID, t2ID} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO transactions (id, user_id, account_id, linked_item_id, source, amount, date, name)
+			VALUES ($1, $2, $3, $4, 'plaid', -100.00, '2024-03-01', 'Deposit')
+		`, id, userID, accountID, linkedItemID)
+		require.NoError(t, err, "seed transaction")
+	}
+
+	// Seed suggestion A.
+	suggA := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, created_at, updated_at)
+		VALUES ($1, $2, 100.00, 'rule', 'pending', NOW(), NOW())
+	`, suggA, userID)
+	require.NoError(t, err, "seed suggestion A")
+
+	repo := NewTransferSuggestionRepository(tx)
+	tStr := tID.String()
+	t2Str := t2ID.String()
+
+	// Step 1: Reserve T on suggestion A.
+	require.NoError(t, repo.ReserveMatchedTransaction(ctx, suggA, tStr), "step 1: reserve T")
+
+	// Step 2: Simulate stale-clear (ClearStaleReservations released T).
+	_, err = tx.Exec(ctx, `UPDATE transfer_suggestions SET matched_transaction_id = NULL WHERE id = $1`, suggA)
+	require.NoError(t, err, "step 2: stale-clear")
+
+	// Step 3: New sync reserves T2 on suggestion A.
+	require.NoError(t, repo.ReserveMatchedTransaction(ctx, suggA, t2Str), "step 3: reserve T2")
+
+	// Verify T2 is now the reservation.
+	state, err := repo.GetByID(ctx, suggA)
+	require.NoError(t, err)
+	require.NotNil(t, state.MatchedTransactionID)
+	assert.Equal(t, t2Str, *state.MatchedTransactionID, "step 3: T2 must be the current reservation")
+
+	// Step 4: Old decline arrives carrying stale T — must NOT release T2.
+	// GAP AV: IS NOT DISTINCT FROM $3 compares T vs T2 → no match → 0 rows → AlreadyActioned.
+	err = repo.ClearMatchedTransactionID(ctx, suggA, &tStr)
+	require.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned,
+		"step 4: stale decline with wrong expectedTxnID must return AlreadyActioned (GAP AV guard)")
+
+	// Step 5: T2 must still be reserved on A.
+	state, err = repo.GetByID(ctx, suggA)
+	require.NoError(t, err)
+	require.NotNil(t, state.MatchedTransactionID, "step 5: T2 must still be reserved after stale decline")
+	assert.Equal(t, t2Str, *state.MatchedTransactionID, "step 5: reservation must remain T2, not be cleared")
 }
 
 // TestDeclineReleasesReservationForReClaim_Integration proves GAP AI:
@@ -741,7 +832,8 @@ func TestDeclineReleasesReservationForReClaim_Integration(t *testing.T) {
 	assert.Equal(t, txnIDStr, *suggAState.MatchedTransactionID, "step 3: A must hold reservation on T")
 
 	// Step 4: Decline A — clear the reservation.
-	err = repo.ClearMatchedTransactionID(ctx, suggA)
+	// GAP AV: pass the observed reservation (txnIDStr) as expectedTxnID.
+	err = repo.ClearMatchedTransactionID(ctx, suggA, &txnIDStr)
 	require.NoError(t, err, "step 4: ClearMatchedTransactionID must succeed")
 
 	suggAState, err = repo.GetByID(ctx, suggA)

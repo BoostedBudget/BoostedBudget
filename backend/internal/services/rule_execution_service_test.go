@@ -245,7 +245,7 @@ func (m *mockTransferSuggestionRepository) ReserveMatchedTransaction(_ context.C
 	return nil
 }
 
-func (m *mockTransferSuggestionRepository) ClearMatchedTransactionID(_ context.Context, _ string) error {
+func (m *mockTransferSuggestionRepository) ClearMatchedTransactionID(_ context.Context, _ string, _ *string) error {
 	return nil
 }
 
