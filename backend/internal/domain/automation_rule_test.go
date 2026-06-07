@@ -778,3 +778,130 @@ func TestErrorConstants(t *testing.T) {
 		messages[msg] = true
 	}
 }
+
+// =============================================================================
+// GAP AG — numeric bound validation tests
+// =============================================================================
+
+// TestValidateTransferAction_PercentageUpperBound verifies that a transfer rule with
+// amount_type:"percentage" rejects amounts > 100 (a percentage cannot exceed 100%).
+// Without this bound, API-crafted rules could set percentage=500 and over-suggest 5× income.
+func TestValidateTransferAction_PercentageUpperBound(t *testing.T) {
+	base := AutomationRule{
+		UserID:   "user-1",
+		Name:     "Transfer %",
+		RuleType: RuleTypeTransferSuggestion,
+		TriggerConfig: TriggerConfig{
+			Type:  TriggerTypeEvent,
+			Event: EventBudgetPeriodEnd,
+		},
+		ConditionLogic: "AND",
+	}
+
+	t.Run("percentage=200 is rejected (over 100%)", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"from_account_id":"a","to_account_id":"b","amount_type":"percentage","amount":200}`)
+		err := rule.Validate()
+		require.Error(t, err, "percentage > 100 must be rejected")
+		assert.Contains(t, err.Error(), "percentage")
+	})
+
+	t.Run("percentage=100 is accepted (exactly 100%)", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"from_account_id":"a","to_account_id":"b","amount_type":"percentage","amount":100}`)
+		err := rule.Validate()
+		assert.NoError(t, err, "exactly 100% must be valid")
+	})
+
+	t.Run("percentage=50 is accepted", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"from_account_id":"a","to_account_id":"b","amount_type":"percentage","amount":50}`)
+		err := rule.Validate()
+		assert.NoError(t, err)
+	})
+}
+
+// TestValidateSavingsGoalAction_RemainingThresholdBound verifies that a savings_goal rule
+// with amount_type:"remaining" rejects a negative threshold. A negative threshold would
+// make calculateSavingsGoalAmount compute remaining + |threshold| — an over-suggestion.
+func TestValidateSavingsGoalAction_RemainingThresholdBound(t *testing.T) {
+	base := AutomationRule{
+		UserID:   "user-1",
+		Name:     "SG remaining",
+		RuleType: RuleTypeSavingsGoal,
+		TriggerConfig: TriggerConfig{
+			Type:  TriggerTypeEvent,
+			Event: EventBudgetPeriodEnd,
+		},
+		ConditionLogic: "AND",
+	}
+
+	t.Run("remaining with negative threshold is rejected", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"savings_goal_id":"g","from_account_id":"a","amount_type":"remaining","threshold":-100}`)
+		err := rule.Validate()
+		require.Error(t, err, "negative threshold for remaining amount_type must be rejected")
+		assert.Contains(t, err.Error(), "threshold")
+	})
+
+	t.Run("remaining with threshold=0 is accepted (full remaining)", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"savings_goal_id":"g","from_account_id":"a","amount_type":"remaining","threshold":0}`)
+		err := rule.Validate()
+		assert.NoError(t, err, "threshold=0 means transfer full remaining amount")
+	})
+
+	t.Run("remaining with positive threshold is accepted", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"savings_goal_id":"g","from_account_id":"a","amount_type":"remaining","threshold":100}`)
+		err := rule.Validate()
+		assert.NoError(t, err, "positive threshold is valid for remaining type")
+	})
+}
+
+// TestValidateRolloverAction_PercentageBound verifies that a category_rollover rule with
+// rollover_type:"percentage" rejects out-of-range values (≤0 or >100).
+func TestValidateRolloverAction_PercentageBound(t *testing.T) {
+	base := AutomationRule{
+		UserID:   "user-1",
+		Name:     "Rollover %",
+		RuleType: RuleTypeCategoryRollover,
+		TriggerConfig: TriggerConfig{
+			Type:  TriggerTypeEvent,
+			Event: EventBudgetPeriodEnd,
+		},
+		ConditionLogic: "AND",
+	}
+
+	t.Run("rollover percentage=150 is rejected (over 100%)", func(t *testing.T) {
+		pct := float64(150)
+		rule := base
+		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":150}`)
+		_ = pct
+		err := rule.Validate()
+		require.Error(t, err, "rollover percentage > 100 must be rejected")
+		assert.Contains(t, err.Error(), "percentage")
+	})
+
+	t.Run("rollover percentage=0 is rejected (must be positive)", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":0}`)
+		err := rule.Validate()
+		require.Error(t, err, "rollover percentage=0 must be rejected")
+		assert.Contains(t, err.Error(), "percentage")
+	})
+
+	t.Run("rollover percentage=100 is accepted", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":100}`)
+		err := rule.Validate()
+		assert.NoError(t, err, "rollover percentage=100 must be valid")
+	})
+
+	t.Run("rollover percentage=50 is accepted", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":50}`)
+		err := rule.Validate()
+		assert.NoError(t, err)
+	})
+}

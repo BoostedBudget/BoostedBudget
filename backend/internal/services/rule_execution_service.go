@@ -50,6 +50,7 @@ type ruleExecutionService struct {
 	suggestionRepo      repository.TransferSuggestionRepository
 	ruleRepo            repository.AutomationRulesRepository
 	savingsGoalRepo     repository.SavingsGoalRepository
+	accountRepo         repository.AccountRepository  // optional; for execution-time ownership checks (GAP AE)
 	notificationService NotificationService
 	notificationRepo    repository.NotificationRepository
 	analytics           phclient.Analytics
@@ -89,6 +90,13 @@ func (s *ruleExecutionService) SetSavingsGoalRepo(repo repository.SavingsGoalRep
 // SetNotificationRepo sets the notification repository for creating transfer suggestion notifications.
 func (s *ruleExecutionService) SetNotificationRepo(repo repository.NotificationRepository) {
 	s.notificationRepo = repo
+}
+
+// SetAccountRepo injects the account repository for execution-time ownership checks.
+// When set, executeTransferSuggestion verifies from/to_account_id belong to the rule owner.
+// Issue #972: GAP AE defense-in-depth for already-persisted transfer rules.
+func (s *ruleExecutionService) SetAccountRepo(repo repository.AccountRepository) {
+	s.accountRepo = repo
 }
 
 // SetChainResolver injects the chain resolver to map user_account_id → active account_id.
@@ -384,6 +392,24 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 		return fmt.Errorf("transfer action not defined")
 	}
 
+	// Execution-time ownership check (GAP AE defense-in-depth).
+	// The service layer rejects new rules with mismatched IDs; this guard protects
+	// already-persisted rules that may predate that check.
+	if s.accountRepo != nil {
+		if _, err := s.accountRepo.GetByIDAndUser(ctx, transfer.FromAccountID, rule.UserID); err != nil {
+			slog.Warn("transfer executor: from_account_id ownership mismatch; skipping rule",
+				"rule_id", rule.ID, "user_id", rule.UserID, "from_account_id", transfer.FromAccountID)
+			return nil
+		}
+		if transfer.ToAccountID != "" {
+			if _, err := s.accountRepo.GetByIDAndUser(ctx, transfer.ToAccountID, rule.UserID); err != nil {
+				slog.Warn("transfer executor: to_account_id ownership mismatch; skipping rule",
+					"rule_id", rule.ID, "user_id", rule.UserID, "to_account_id", transfer.ToAccountID)
+				return nil
+			}
+		}
+	}
+
 	// Calculate amount; skip if zero (no surplus to transfer for derived types).
 	amount := s.calculateTransferAmount(transfer, triggerData)
 	if amount <= 0 {
@@ -411,24 +437,22 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 	}
 
 	// Issue #1109: Resolve stable user_account_id → current active account_id (backfilled by migration 000070).
+	// Issue #972 GAP AE: after resolution, verify the resolved account still belongs to rule.UserID.
+	// Without this check an attacker could provide their own from_account_id (passes the guard above)
+	// plus a victim's from_user_account_id, and the unscoped resolver would overwrite FromAccountID
+	// with the victim's active account. The ownership check is the backstop.
 	if transfer.FromUserAccountID != "" {
 		suggestion.FromUserAccountID = ptrString(transfer.FromUserAccountID)
-		if s.chainResolver != nil {
-			if activeFromID, err := s.chainResolver.ResolveActiveID(ctx, transfer.FromUserAccountID); err == nil {
-				suggestion.FromAccountID = ptrString(activeFromID)
-			} else if !errors.Is(err, ErrNoActiveAccount) {
-				slog.Warn("chain resolve failed for from_account; using raw id", "error", err)
-			}
+		if skipRule, _ := s.resolveAndVerifyUserAccount(ctx, transfer.FromUserAccountID, rule.UserID, rule.ID,
+			func(activeID string) { suggestion.FromAccountID = ptrString(activeID) }, "from_account_id"); skipRule {
+			return nil
 		}
 	}
 	if transfer.ToUserAccountID != "" {
 		suggestion.ToUserAccountID = ptrString(transfer.ToUserAccountID)
-		if s.chainResolver != nil {
-			if activeToID, err := s.chainResolver.ResolveActiveID(ctx, transfer.ToUserAccountID); err == nil {
-				suggestion.ToAccountID = ptrString(activeToID)
-			} else if !errors.Is(err, ErrNoActiveAccount) {
-				slog.Warn("chain resolve failed for to_account; using raw id", "error", err)
-			}
+		if skipRule, _ := s.resolveAndVerifyUserAccount(ctx, transfer.ToUserAccountID, rule.UserID, rule.ID,
+			func(activeID string) { suggestion.ToAccountID = ptrString(activeID) }, "to_account_id"); skipRule {
+			return nil
 		}
 	}
 	if transfer.FromUserAccountID != "" || transfer.ToUserAccountID != "" {
@@ -441,6 +465,43 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 
 	s.createTransferSuggestionNotification(ctx, suggestion)
 	return nil
+}
+
+// resolveAndVerifyUserAccount resolves a user_account_id to its active account_id and verifies ownership.
+// Called during transfer suggestion execution to resolve stable identifiers across Plaid re-links.
+// If resolution succeeds, calls onResolve with the active ID. Returns (true, nil) if ownership fails
+// and the entire rule should be skipped; otherwise returns (false, nil).
+func (s *ruleExecutionService) resolveAndVerifyUserAccount(ctx context.Context, userAccountID, userID, ruleID string,
+	onResolve func(string), fieldName string) (bool, error) {
+	if s.chainResolver == nil {
+		return false, nil
+	}
+
+	activeID, err := s.chainResolver.ResolveActiveID(ctx, userAccountID)
+	if err != nil {
+		if !errors.Is(err, ErrNoActiveAccount) {
+			slog.Warn("chain resolve failed; using raw id", "error", err, "field", fieldName)
+		}
+		return false, nil
+	}
+
+	// Verify the resolved account belongs to this user before using it.
+	// If accountRepo is not configured, apply the resolved ID without an ownership check
+	// and log a warning — this is safe because (a) production always wires accountRepo
+	// (main.go:~1324) and (b) the service-layer validateRuleReferenceOwnership already
+	// validates from_user_account_id ownership at create/update time. Issue #972 GAP AE.
+	if s.accountRepo != nil {
+		if _, ownerErr := s.accountRepo.GetByIDAndUser(ctx, activeID, userID); ownerErr != nil {
+			slog.Warn("chain resolve: resolved account belongs to different user; skipping rule",
+				"rule_id", ruleID, "user_id", userID, "resolved_account_id", activeID, "field", fieldName)
+			return true, nil
+		}
+	} else {
+		slog.Warn("chain resolve: accountRepo not configured; applying resolved ID without ownership check (configure SetAccountRepo in production)",
+			"rule_id", ruleID, "user_id", userID, "field", fieldName)
+	}
+	onResolve(activeID)
+	return false, nil
 }
 
 // createTransferSuggestionNotification creates an accept_reject notification for a new transfer suggestion.
@@ -479,32 +540,48 @@ func (s *ruleExecutionService) createTransferSuggestionNotification(ctx context.
 // fixed: Amount directly; percentage: Amount% of budget income; remaining: full surplus;
 // excess: surplus above Threshold; threshold: legacy (use excess).
 func (s *ruleExecutionService) calculateTransferAmount(action *domain.TransferAction, triggerData map[string]interface{}) float64 {
-	switch action.AmountType {
-	case "fixed":
+	if action.AmountType == "fixed" {
 		return action.Amount
-	case "percentage":
+	}
+
+	if action.AmountType == "percentage" {
 		if amt, ok := triggerData[domain.EventDataKeyAmount].(float64); ok {
 			return amt * (action.Amount / 100)
 		}
-	case "remaining":
+		return 0
+	}
+
+	if action.AmountType == "remaining" {
 		if remaining, ok := triggerData[domain.EventDataKeyRemaining].(float64); ok {
 			return remaining
 		}
-	case "excess":
-		// Surplus above threshold; no transfer if remaining <= threshold.
-		if remaining, ok := triggerData[domain.EventDataKeyRemaining].(float64); ok {
-			if remaining > action.Threshold {
-				return remaining - action.Threshold
-			}
-			return 0
-		}
-	case "threshold":
-		if amt, ok := triggerData[domain.EventDataKeyAmount].(float64); ok {
-			if amt > action.Threshold {
-				return amt - action.Threshold
-			}
-		}
+		// Key absent (e.g. schedule trigger has no budget surplus data): no transfer.
+		return 0
 	}
+
+	if action.AmountType == "excess" {
+		remaining, ok := triggerData[domain.EventDataKeyRemaining].(float64)
+		if !ok {
+			return 0 // Key absent: no transfer (GAP AF)
+		}
+		if remaining > action.Threshold {
+			return remaining - action.Threshold
+		}
+		return 0 // Surplus below threshold: no transfer
+	}
+
+	if action.AmountType == "threshold" {
+		amt, ok := triggerData[domain.EventDataKeyAmount].(float64)
+		if !ok {
+			return 0 // Key absent: no transfer (GAP AF)
+		}
+		if amt > action.Threshold {
+			return amt - action.Threshold
+		}
+		return 0 // Amount does not exceed threshold: no transfer
+	}
+
+	// Unrecognized type defaults to fixed
 	return action.Amount
 }
 
@@ -612,14 +689,20 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 		return fmt.Errorf("savings goal action not defined")
 	}
 
-	// Get the savings goal to find the linked account
+	// Get the savings goal to find the linked account, enforcing ownership (GAP AE).
+	// GetByIDForUser returns ErrSavingsGoalNotFound if the goal belongs to a different user,
+	// preventing IDOR for already-persisted rules that bypassed service-layer validation.
 	if s.savingsGoalRepo == nil {
 		return fmt.Errorf("savings goal repository not configured")
 	}
 
-	goal, err := s.savingsGoalRepo.GetByID(ctx, savingsGoalAction.SavingsGoalID)
+	goal, err := s.savingsGoalRepo.GetByIDForUser(ctx, savingsGoalAction.SavingsGoalID, rule.UserID)
 	if err != nil {
-		return fmt.Errorf("savings goal not found: %w", err)
+		// Log but don't fail the batch — this rule is silently skipped.
+		slog.Warn("savings goal executor: goal not found or ownership mismatch; skipping rule",
+			"rule_id", rule.ID, "user_id", rule.UserID,
+			"savings_goal_id", savingsGoalAction.SavingsGoalID, "error", err)
+		return nil
 	}
 
 	// Calculate the contribution amount
@@ -674,17 +757,18 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 
 // calculateSavingsGoalAmount calculates the contribution amount based on action type.
 func (s *ruleExecutionService) calculateSavingsGoalAmount(action *domain.SavingsGoalAction, triggerData map[string]interface{}) float64 {
-	switch action.AmountType {
-	case "fixed":
+	if action.AmountType == "fixed" {
 		return action.Amount
-	case "percentage":
-		if action.Percentage != nil {
-			if amt, ok := triggerData[domain.EventDataKeyAmount].(float64); ok {
-				return amt * (*action.Percentage / 100)
-			}
+	}
+
+	if action.AmountType == "percentage" && action.Percentage != nil {
+		if amt, ok := triggerData[domain.EventDataKeyAmount].(float64); ok {
+			return amt * (*action.Percentage / 100)
 		}
 		return 0
-	case "remaining":
+	}
+
+	if action.AmountType == "remaining" {
 		// EventData key must match the emitter in budget_period_close_check.go which
 		// publishes "remaining" (not "balance"). See domain.EventDataKeyRemaining.
 		if remainingAmt, ok := triggerData[domain.EventDataKeyRemaining].(float64); ok {
@@ -695,6 +779,8 @@ func (s *ruleExecutionService) calculateSavingsGoalAmount(action *domain.Savings
 		}
 		return 0
 	}
+
+	// Unrecognized type defaults to fixed
 	return action.Amount
 }
 

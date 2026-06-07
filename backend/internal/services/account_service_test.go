@@ -369,6 +369,16 @@ func (m *MockAccountRepository) ExpireAccountsByFingerprint(ctx context.Context,
 	return args.Error(0)
 }
 
+// GetByUserAccountIDAndUser retrieves an account by user_account_id with ownership validation.
+// Issue #972: GAP AE — chain-resolver IDOR protection.
+func (m *MockAccountRepository) GetByUserAccountIDAndUser(ctx context.Context, userAccountID, userID string) (*domain.Account, error) {
+	args := m.Called(ctx, userAccountID, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Account), args.Error(1)
+}
+
 type MockUserRepository struct {
 	mock.Mock
 }

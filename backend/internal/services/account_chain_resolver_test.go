@@ -83,6 +83,9 @@ func (m *mockAccountRepositoryForChainResolver) CheckFingerprintOwnership(ctx co
 func (m *mockAccountRepositoryForChainResolver) ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) error {
 	return nil
 }
+func (m *mockAccountRepositoryForChainResolver) GetByUserAccountIDAndUser(ctx context.Context, userAccountID, userID string) (*domain.Account, error) {
+	return nil, nil
+}
 
 // ---------------------------------------------------------------------------
 // ListActiveByUser

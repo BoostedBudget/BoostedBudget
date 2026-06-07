@@ -426,6 +426,10 @@ func (r *AutomationRule) validateTransferAction() error {
 	if (amountType == "fixed" || amountType == "percentage") && action.Amount <= 0 {
 		return errors.New("amount must be positive for transfer_suggestion")
 	}
+	// GAP AG: percentage cannot exceed 100 (over-suggestion guard).
+	if amountType == "percentage" && action.Amount > 100 {
+		return errors.New("percentage must be between 0 and 100 for transfer_suggestion")
+	}
 	// Negative threshold produces nonsensical over-transfer amounts; reject at validation time.
 	if (amountType == "excess" || amountType == "threshold") && action.Threshold < 0 {
 		return errors.New("threshold must be non-negative for transfer_suggestion")
@@ -476,6 +480,12 @@ func (r *AutomationRule) validateRolloverAction() error {
 		return errors.New("percentage is required when rollover_type is 'percentage'")
 	}
 
+	// GAP AG: rollover percentage must be in (0, 100] to prevent over-rollover.
+	if action.RolloverType == "percentage" && action.Percentage != nil &&
+		(*action.Percentage <= 0 || *action.Percentage > 100) {
+		return errors.New("percentage must be between 0 (exclusive) and 100 (inclusive) for category_rollover")
+	}
+
 	return nil
 }
 
@@ -504,6 +514,12 @@ func (r *AutomationRule) validateSavingsGoalAction() error {
 
 	if action.AmountType == "percentage" && (action.Percentage == nil || *action.Percentage <= 0 || *action.Percentage > 100) {
 		return errors.New("percentage must be between 0 and 100 when amount_type is 'percentage'")
+	}
+
+	// GAP AG: a negative threshold for the 'remaining' type would cause calculateSavingsGoalAmount
+	// to over-suggest (remaining + |threshold| instead of remaining - threshold).
+	if action.AmountType == "remaining" && action.Threshold < 0 {
+		return errors.New("threshold must be non-negative when amount_type is 'remaining' for savings_goal")
 	}
 
 	return nil
