@@ -181,5 +181,39 @@ describe('SavingsImpactWidget', () => {
       await act(async () => {})
       expect(mockTrackEvent).not.toHaveBeenCalledWith('savings_impact_viewed')
     })
+
+    // C11: The viewedFired ref (SavingsImpactWidget.tsx:21-29) prevents the analytics
+    // event from firing more than once per component mount, regardless of how many times
+    // the data changes (simulating React Query refetches). Without the ref guard, every
+    // data change would fire the event again.
+    it('fires SAVINGS_IMPACT_VIEWED exactly once across refetches (viewedFired ref dedup)', async () => {
+      mockUseSavingsImpactData.mockReturnValue({ ...defaultDataState, data: mockData })
+
+      const { rerender } = render(
+        <MemoryRouter>
+          <SavingsImpactWidget widgetId="test-savings-impact" onRemove={() => {}} />
+        </MemoryRouter>
+      )
+      await act(async () => {})
+
+      // First render: event fires once.
+      expect(mockTrackEvent).toHaveBeenCalledTimes(1)
+      expect(mockTrackEvent).toHaveBeenCalledWith('savings_impact_viewed')
+
+      // Simulate a refetch by updating the data object reference (same shape, new object).
+      const refreshedData: UserSavingsImpact = { ...mockData, month_amount: 400.00 }
+      mockUseSavingsImpactData.mockReturnValue({ ...defaultDataState, data: refreshedData })
+
+      // Rerender the SAME component instance (refs persist across rerenders).
+      rerender(
+        <MemoryRouter>
+          <SavingsImpactWidget widgetId="test-savings-impact" onRemove={() => {}} />
+        </MemoryRouter>
+      )
+      await act(async () => {})
+
+      // The viewedFired ref is true after the first fire, so the event must NOT fire again.
+      expect(mockTrackEvent).toHaveBeenCalledTimes(1)
+    })
   })
 })

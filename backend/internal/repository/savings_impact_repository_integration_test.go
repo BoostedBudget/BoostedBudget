@@ -169,3 +169,98 @@ func TestGetAggregateSavingsStats_Integration(t *testing.T) {
 	assert.Equal(t, 2, completed-baseCompleted,
 		"aggregate must count exactly two completed+consented suggestions")
 }
+
+// TestGetUserImpact_Integration exercises the month/prev-month FILTER SQL against a
+// real Postgres planner. pgxmock uses too-loose string matching and cannot verify
+// that FILTER (WHERE ...) clauses correctly scope to calendar month boundaries.
+//
+// Issue #972: C5 test rigor — savings_impact_repository.GetUserImpact SQL validation.
+func TestGetUserImpact_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	repo := NewSavingsImpactRepository(tx)
+
+	// Seed a user. No privacy_settings needed — GetUserImpact doesn't filter by consent.
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+	`, userID, "test|"+userID.String(), "user-impact-"+userID.String()+"@example.com")
+	require.NoError(t, err)
+
+	// Compute month boundaries relative to NOW() (same logic as the repo).
+	now := time.Now().UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	prevMonthStart := monthStart.AddDate(0, -1, 0)
+
+	// thisMonthTime: a timestamp within the current month.
+	thisMonthTime := monthStart.Add(24 * time.Hour)
+	// prevMonthTime: a timestamp within the previous month.
+	prevMonthTime := prevMonthStart.Add(24 * time.Hour)
+	// olderTime: two months ago — should count toward TotalAmount but not month/prevMonth.
+	olderTime := prevMonthStart.AddDate(0, -1, 0)
+
+	insertCompleted := func(amount float64, completedAt time.Time) string {
+		id := uuid.New().String()
+		_, err = tx.Exec(ctx, `
+			INSERT INTO transfer_suggestions
+				(id, user_id, amount, source, status, completed_at, actual_amount, completion_source, created_at, updated_at)
+			VALUES ($1, $2, $3, 'rule', 'completed', $4, $3, 'exact_match', $4, $4)
+		`, id, userID, amount, completedAt)
+		require.NoError(t, err)
+		return id
+	}
+
+	// This month: 100 + 150 = 250
+	insertCompleted(100.00, thisMonthTime)
+	insertCompleted(150.00, thisMonthTime)
+
+	// Previous month: 80
+	insertCompleted(80.00, prevMonthTime)
+
+	// Two months ago: 50 (counts toward total but not month/prevMonth).
+	insertCompleted(50.00, olderTime)
+
+	// Pending suggestion: must NOT appear in any total (status != 'completed').
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transfer_suggestions
+			(id, user_id, amount, source, status, created_at, updated_at)
+		VALUES ($1, $2, 75.00, 'rule', 'pending', $3, $3)
+	`, uuid.New(), userID, now)
+	require.NoError(t, err)
+
+	impact, err := repo.GetUserImpact(ctx, userID.String())
+	require.NoError(t, err, "GetUserImpact must not error")
+	require.NotNil(t, impact)
+
+	// TotalAmount = 100 + 150 + 80 + 50 = 380 (all completed, no pending).
+	assert.InDelta(t, 380.00, impact.TotalAmount, 0.01,
+		"TotalAmount must sum ALL completed suggestions regardless of month")
+
+	// CompletedCount = 4 (the four completed inserts; pending excluded).
+	assert.Equal(t, 4, impact.CompletedCount,
+		"CompletedCount must count exactly four completed suggestions")
+
+	// MonthAmount = 100 + 150 = 250 (only this-month completions).
+	assert.InDelta(t, 250.00, impact.MonthAmount, 0.01,
+		"MonthAmount FILTER clause must include only current-month completions")
+
+	// PrevMonthAmount = 80 (only prev-month completions).
+	assert.InDelta(t, 80.00, impact.PrevMonthAmount, 0.01,
+		"PrevMonthAmount FILTER clause must include only previous-month completions")
+
+	// RecentItems: at most 5, ordered by completed_at DESC — all 4 items fit.
+	assert.Len(t, impact.RecentItems, 4,
+		"RecentItems must return all 4 completed suggestions (within the 5-item limit)")
+
+	// None of the items should be the pending suggestion.
+	for _, item := range impact.RecentItems {
+		assert.NotEqual(t, 75.00, item.ActualAmount,
+			"pending suggestion (75.00) must never appear in RecentItems")
+	}
+}

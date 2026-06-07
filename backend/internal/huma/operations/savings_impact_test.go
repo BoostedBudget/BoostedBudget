@@ -165,6 +165,64 @@ func TestGetSavingsImpactAggregate_RoundingEdgeCases(t *testing.T) {
 	})
 }
 
+// TestGetSavingsImpactAggregate_KAnonymityBoundary locks the exact threshold semantics:
+//   - Exactly at both thresholds (10 users, $1000) → published=true.
+//   - One user short (9 users, $1000) → published=false.
+//   - One cent short on amount (10 users, $999.99) → published=false.
+//
+// This is C6 from the ninth-pass test-rigor plan. The guard uses strict < on both
+// thresholds (snapshot.UserCount < MinAggregateUsers || snapshot.TotalAmount < MinAggregateAmount),
+// so the boundary is inclusive: at-or-above publishes, strictly-below does not.
+func TestGetSavingsImpactAggregate_KAnonymityBoundary(t *testing.T) {
+	t.Run("exactly at both thresholds publishes", func(t *testing.T) {
+		repo := &mockSavingsImpactRepository{
+			latestSnapshot: &domain.SavingsImpactSnapshot{
+				TotalAmount:    float64(MinAggregateAmount), // exactly 1000.0
+				UserCount:      MinAggregateUsers,           // exactly 10
+				CompletedCount: 10,
+				ComputedAt:     time.Now(),
+			},
+		}
+		handler := NewSavingsImpactHandler(repo)
+		output, err := handler.GetAggregate(context.Background(), &GetSavingsImpactAggregateInput{})
+		require.NoError(t, err)
+		assert.True(t, output.Body.Published,
+			"UserCount=10 and TotalAmount=1000 are both at the inclusive threshold and must publish")
+	})
+
+	t.Run("one user short does not publish", func(t *testing.T) {
+		repo := &mockSavingsImpactRepository{
+			latestSnapshot: &domain.SavingsImpactSnapshot{
+				TotalAmount:    float64(MinAggregateAmount), // 1000.0 — amount OK
+				UserCount:      MinAggregateUsers - 1,       // 9 — one short
+				CompletedCount: 9,
+				ComputedAt:     time.Now(),
+			},
+		}
+		handler := NewSavingsImpactHandler(repo)
+		output, err := handler.GetAggregate(context.Background(), &GetSavingsImpactAggregateInput{})
+		require.NoError(t, err)
+		assert.False(t, output.Body.Published,
+			"UserCount=9 is strictly below MinAggregateUsers=10 and must not publish")
+	})
+
+	t.Run("one cent short on amount does not publish", func(t *testing.T) {
+		repo := &mockSavingsImpactRepository{
+			latestSnapshot: &domain.SavingsImpactSnapshot{
+				TotalAmount:    MinAggregateAmount - 0.01, // $999.99 — one cent short
+				UserCount:      MinAggregateUsers,         // 10 — user count OK
+				CompletedCount: 10,
+				ComputedAt:     time.Now(),
+			},
+		}
+		handler := NewSavingsImpactHandler(repo)
+		output, err := handler.GetAggregate(context.Background(), &GetSavingsImpactAggregateInput{})
+		require.NoError(t, err)
+		assert.False(t, output.Body.Published,
+			"TotalAmount=$999.99 is strictly below MinAggregateAmount=$1000 and must not publish")
+	})
+}
+
 func TestGetSavingsImpactAggregate_RepoError(t *testing.T) {
 	repo := &mockSavingsImpactRepository{latestErr: errors.New("database error")}
 	handler := NewSavingsImpactHandler(repo)

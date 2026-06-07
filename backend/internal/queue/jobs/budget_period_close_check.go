@@ -256,13 +256,17 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 				UserID:    budget.UserID,
 				EventType: domain.EventBudgetPeriodEnd,
 				// EventData keys must match domain.EventDataKey* constants so that
-				// calculateTransferAmount and calculateSavingsGoalAmount can read them.
+				// calculateTransferAmount, calculateSavingsGoalAmount, and evaluateCondition
+				// can all read them. Always use the domain method (Budget.PercentUsed) rather
+				// than re-deriving, so the value is consistent with any other path that reads
+				// the same domain method.
 				EventData: map[string]interface{}{
 					domain.EventDataKeyBudgetID:     budget.ID,
 					domain.EventDataKeyRemaining:    budget.RemainingAmount(),
 					domain.EventDataKeyIncomeAmount: budget.IncomeAmount,
 					domain.EventDataKeyAmount:       budget.Amount,
 					domain.EventDataKeyTotalSpent:   budget.TotalSpent(),
+					domain.EventDataKeyPercentUsed:  budget.PercentUsed(),
 					domain.EventDataKeyPeriodStart:  periodStart.Format("2006-01-02"),
 					domain.EventDataKeyPeriodEnd:    periodEnd.Format("2006-01-02"),
 				},

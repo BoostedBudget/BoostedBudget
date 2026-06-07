@@ -78,6 +78,7 @@ const (
 	EventDataKeyAmount       = "amount"        // Budget total amount (income) for the period
 	EventDataKeyIncomeAmount = "income_amount" // Explicit income amount; emitted by period-close check
 	EventDataKeyTotalSpent   = "total_spent"   // Total spent in the period; emitted by period-close check
+	EventDataKeyPercentUsed  = "percent_used"  // Budget percent used (0-100+); emitted by period-close check via Budget.PercentUsed()
 	EventDataKeyBudgetID     = "budget_id"     // Budget UUID; emitted by period-close check
 	EventDataKeyPeriodStart  = "period_start"  // Period start date (YYYY-MM-DD); emitted by period-close check
 	EventDataKeyPeriodEnd    = "period_end"    // Period end date (YYYY-MM-DD); emitted by period-close check

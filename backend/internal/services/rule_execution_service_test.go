@@ -1365,6 +1365,82 @@ func TestRuleExecutionService_SavingsGoal_NilRepo_ReturnsError(t *testing.T) {
 	assert.Empty(t, suggestionRepo.suggestions)
 }
 
+// TestProcessEventTrigger_BatchContinuesAfterRuleFailure verifies Issue #972 B2:
+// ProcessEventTrigger must continue executing remaining rules when one rule fails,
+// and must log the failure via slog.Error without aborting the batch.
+// The test seeds TWO rules: rule A fails (nil savingsGoalRepo), rule B succeeds
+// (fixed transfer with all repos). Asserts rule B's suggestion is created despite
+// rule A's error, and ProcessEventTrigger returns nil (batch success).
+func TestProcessEventTrigger_BatchContinuesAfterRuleFailure(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-batch-test"
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+
+	// Rule A: savings_goal rule that will fail (no savingsGoalRepo).
+	actionsFailJSON, _ := json.Marshal(domain.SavingsGoalAction{
+		SavingsGoalID: "goal-xyz",
+		FromAccountID: "acct-a",
+		AmountType:    "fixed",
+		Amount:        50.0,
+	})
+	ruleA := &domain.AutomationRule{
+		ID:             "rule-fail",
+		UserID:         userID,
+		Name:           "Failing Rule",
+		Enabled:        true,
+		RuleType:       domain.RuleTypeSavingsGoal,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: domain.EventBudgetPeriodEnd},
+		ConditionLogic: "AND",
+		Conditions:     []domain.AutomationRuleCondition{},
+		Actions:        actionsFailJSON,
+	}
+
+	// Rule B: transfer rule that will succeed.
+	actionsSucceedJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID: "acct-from",
+		ToAccountID:   "acct-to",
+		AmountType:    "fixed",
+		Amount:        75.0,
+	})
+	ruleB := &domain.AutomationRule{
+		ID:             "rule-succeed",
+		UserID:         userID,
+		Name:           "Succeeding Rule",
+		Enabled:        true,
+		RuleType:       domain.RuleTypeTransferSuggestion,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: domain.EventBudgetPeriodEnd},
+		ConditionLogic: "AND",
+		Conditions:     []domain.AutomationRuleCondition{},
+		Actions:        actionsSucceedJSON,
+	}
+
+	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.AutomationRule{ruleA, ruleB}}
+
+	// Service WITHOUT savingsGoalRepo (rule A will fail) but with suggestion support (rule B succeeds).
+	svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	eventData := map[string]interface{}{
+		domain.EventDataKeyBudgetID:    "budget-1",
+		domain.EventDataKeyRemaining:   500.0,
+		domain.EventDataKeyAmount:      1000.0,
+		domain.EventDataKeyPercentUsed: 50.0,
+	}
+	err := svc.ProcessEventTrigger(ctx, userID, domain.EventBudgetPeriodEnd, eventData)
+
+	// ProcessEventTrigger must return nil — one rule failing must not abort the batch.
+	require.NoError(t, err, "batch must succeed even when one rule fails")
+
+	// Rule B's transfer suggestion must have been created despite rule A's failure.
+	assert.NotEmpty(t, suggestionRepo.suggestions,
+		"rule B's transfer suggestion must be created even though rule A failed")
+
+	// Two execution records: one failed (rule A), one succeeded (rule B).
+	assert.Len(t, execRepo.executions, 2,
+		"both rules must have execution records regardless of rule A's failure")
+}
+
 // ============================================================================
 // GAP G: calculateSavingsGoalAmount uses wrong EventData key for "remaining".
 // ============================================================================
@@ -1931,9 +2007,9 @@ func TestEvaluateCondition_DottedFieldNormalization(t *testing.T) {
 			wantMatch: true,
 		},
 		{
-			// NOTE: percent_used is not emitted yet, but prefix stripping works correctly.
-			// This demonstrates that the normalization works for budget_category.percent_used,
-			// and once the emitter is added (GAP L), conditions will succeed.
+			// budget_category.percent_used prefix-stripping works. Note: category-level
+			// percent_used requires per-category EventData (deferred to follow-up issue #1271);
+			// budget-level budget.percent_used IS now emitted (Issue #972 A-min fix).
 			name:      "budget_category.percent_used maps to percent_used (prefix stripping works)",
 			field:     "budget_category.percent_used",
 			operator:  domain.ConditionOperatorGt,
@@ -2003,9 +2079,7 @@ func TestEvaluateCondition_DottedFieldNormalization(t *testing.T) {
 // is present in the map emitted by the period-close worker. This is a drift guard —
 // if either the emitter or the readers are updated and the constants diverge, this
 // test fails. Issue #972: GAP J – emitter/reader parity.
-// NOTE: percent_used is not emitted by any worker yet.
-// Conditions using budget.percent_used / budget_category.percent_used silently
-// return false until the emitter is added (see GAP L follow-up issue).
+// Note: category-level percent_used requires per-category fan-out (deferred to #1271).
 func TestEventDataKeyContract(t *testing.T) {
 	// Keys emitted by the period-close worker (budget_period_close_check.go).
 	emittedKeys := map[string]bool{
@@ -2014,6 +2088,7 @@ func TestEventDataKeyContract(t *testing.T) {
 		domain.EventDataKeyIncomeAmount: true,
 		domain.EventDataKeyAmount:       true,
 		domain.EventDataKeyTotalSpent:   true,
+		domain.EventDataKeyPercentUsed:  true, // Issue #972 A-min: emitted via Budget.PercentUsed()
 		domain.EventDataKeyPeriodStart:  true,
 		domain.EventDataKeyPeriodEnd:    true,
 	}
@@ -2039,6 +2114,63 @@ func TestEventDataKeyContract(t *testing.T) {
 		assert.True(t, emittedKeys[key],
 			"calculateSavingsGoalAmount reads key %q which is NOT in the period-close emitted map", key)
 	}
+}
+
+// TestBudgetPercentUsedConditionFires verifies Issue #972 Work Item A-min:
+// a rule with condition {Field: "budget.percent_used", Operator: gt, Value: "80"}
+// evaluates to TRUE when the period-close emitter supplies percent_used > 80, and
+// FALSE for a zero-Amount budget (PercentUsed()=0, no divide-by-zero).
+// This is a contract test: it locks the three-layer agreement between
+//  1. the UI offering "budget.percent_used" as a condition field,
+//  2. the emitter publishing domain.EventDataKeyPercentUsed via Budget.PercentUsed(),
+//  3. evaluateCondition normalizing "budget.percent_used" → "percent_used".
+func TestBudgetPercentUsedConditionFires(t *testing.T) {
+	t.Run("fires when percent used exceeds threshold", func(t *testing.T) {
+		// EventData as the period-close worker now emits: Budget.PercentUsed() = 82%.
+		eventData := map[string]interface{}{
+			domain.EventDataKeyPercentUsed: 82.5, // 82.5% used
+			domain.EventDataKeyRemaining:   250.0,
+			domain.EventDataKeyAmount:      1000.0,
+		}
+		condition := domain.AutomationRuleCondition{
+			Field:    "budget.percent_used",
+			Operator: domain.ConditionOperatorGt,
+			Value:    "80",
+		}
+		assert.True(t, evaluateCondition(condition, eventData),
+			"budget.percent_used > 80 should fire when PercentUsed()=82.5")
+	})
+
+	t.Run("does not fire when percent used is below threshold", func(t *testing.T) {
+		eventData := map[string]interface{}{
+			domain.EventDataKeyPercentUsed: 50.0,
+		}
+		condition := domain.AutomationRuleCondition{
+			Field:    "budget.percent_used",
+			Operator: domain.ConditionOperatorGt,
+			Value:    "80",
+		}
+		assert.False(t, evaluateCondition(condition, eventData),
+			"budget.percent_used > 80 should not fire when PercentUsed()=50")
+	})
+
+	t.Run("zero-Amount budget emits 0 (no divide-by-zero)", func(t *testing.T) {
+		// Budget.PercentUsed() returns 0 when Amount==0 and TotalSpent()==0.
+		budget := &domain.Budget{ID: "b0", Amount: 0}
+		assert.Equal(t, 0.0, budget.PercentUsed(),
+			"PercentUsed() must return 0 for a zero-Amount budget with no spending")
+
+		eventData := map[string]interface{}{
+			domain.EventDataKeyPercentUsed: budget.PercentUsed(), // 0.0
+		}
+		condition := domain.AutomationRuleCondition{
+			Field:    "budget.percent_used",
+			Operator: domain.ConditionOperatorGt,
+			Value:    "80",
+		}
+		assert.False(t, evaluateCondition(condition, eventData),
+			"budget.percent_used > 80 must be false for a zero-Amount budget")
+	})
 }
 
 // TestTestRule_DottedFieldPreviewShowsActual verifies GAP T: TestRule's preview must
@@ -2652,10 +2784,58 @@ func TestCalculateTransferAmount_DerivedTypesReturnZeroOnMissingKey(t *testing.T
 			"threshold must return 0 when amount<=threshold, not fall back to action.Amount")
 	})
 
+	// C12: percentage missing income key → 0 (not action.Amount fallback).
+	// When the budget income key is absent (e.g., schedule trigger or future emitter change),
+	// percentage must return 0 rather than computing a percentage of the stale action.Amount.
+	t.Run("percentage returns 0 when EventDataKeyAmount (income) absent", func(t *testing.T) {
+		action := baseAction
+		action.AmountType = "percentage"
+		action.Amount = 10.0 // 10% — but income key is missing
+		result := svc.calculateTransferAmount(&action, map[string]interface{}{
+			// EventDataKeyAmount (income) intentionally omitted; remaining present but unused
+			domain.EventDataKeyRemaining: 500.0,
+		})
+		assert.Equal(t, 0.0, result,
+			"percentage must return 0 when the income key is absent, not fall back to action.Amount ($10)")
+	})
+
 	t.Run("fixed still uses action.Amount (regression guard)", func(t *testing.T) {
 		action := baseAction
 		action.AmountType = "fixed"
 		result := svc.calculateTransferAmount(&action, map[string]interface{}{})
 		assert.Equal(t, 100.0, result, "fixed must return action.Amount regardless of EventData")
 	})
+}
+
+// TestResolveAndVerifyUserAccount_AccountRepoNilFailOpen documents the intentional
+// behavior: when accountRepo is nil (e.g. in unit tests that don't set SetAccountRepo),
+// resolveAndVerifyUserAccount applies the resolved ID WITHOUT a DB ownership check and
+// logs a warning. This is safe because production always wires accountRepo (main.go:~1324)
+// and the service-layer create/update validation already runs ownership checks.
+//
+// The test prevents future over-hardening (panicking or returning an error when nil)
+// while documenting why the fail-open is intentional. Issue #972 GAP AE + C12.
+func TestResolveAndVerifyUserAccount_AccountRepoNilFailOpen(t *testing.T) {
+	ctx := context.Background()
+
+	// Build a stub chain resolver that returns a valid resolution.
+	stubResolver := &stubChainResolver{resolvedID: "user-account-new"}
+
+	// No accountRepo injected (nil) — simulates a unit test or mis-configured service.
+	svc := &ruleExecutionService{
+		chainResolver: stubResolver,
+		accountRepo:   nil, // intentionally nil — fail-open case
+	}
+
+	var resolvedID string
+	skip, err := svc.resolveAndVerifyUserAccount(ctx, "user-account-old", "user-1", "rule-c12",
+		func(id string) { resolvedID = id },
+		"from_user_account_id",
+	)
+
+	// Must NOT skip the rule or return an error — it should apply the resolved ID.
+	require.NoError(t, err, "nil accountRepo must not cause an error")
+	assert.False(t, skip, "nil accountRepo must not skip the rule (fail-open)")
+	assert.Equal(t, "user-account-new", resolvedID,
+		"nil accountRepo must still apply the resolved ID (fail-open; ownership check skipped)")
 }

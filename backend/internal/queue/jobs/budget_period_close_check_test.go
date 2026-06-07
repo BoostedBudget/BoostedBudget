@@ -189,6 +189,10 @@ func TestBudgetPeriodCloseCheck_FiresEventOnPeriodClose(t *testing.T) {
 	assert.Equal(t, float64(1200), capturedArgs.EventData[domain.EventDataKeyRemaining], "remaining must match RemainingAmount()")
 	assert.Equal(t, expectedPeriodStart.Format("2006-01-02"), capturedArgs.EventData[domain.EventDataKeyPeriodStart], "period_start must be YYYY-MM-DD")
 	assert.Equal(t, expectedPeriodEnd.Format("2006-01-02"), capturedArgs.EventData[domain.EventDataKeyPeriodEnd], "period_end must be YYYY-MM-DD")
+
+	// Verify percent_used is emitted via Budget.PercentUsed() — locks the A-min-1 fix.
+	// Budget.Amount=1500, TotalSpent()=300 → PercentUsed() = (300/1500)*100 = 20.0.
+	assert.InDelta(t, 20.0, capturedArgs.EventData[domain.EventDataKeyPercentUsed], 0.001, "percent_used must match Budget.PercentUsed()")
 }
 
 // TestEventDataKeyEmitterCoversReaderKeys verifies that EventDataKey* constants
@@ -202,6 +206,7 @@ func TestEventDataKeyEmitterCoversReaderKeys(t *testing.T) {
 		domain.EventDataKeyIncomeAmount: true,
 		domain.EventDataKeyAmount:       true,
 		domain.EventDataKeyTotalSpent:   true,
+		domain.EventDataKeyPercentUsed:  true, // Issue #972 A-min: emitted via Budget.PercentUsed()
 		domain.EventDataKeyPeriodStart:  true,
 		domain.EventDataKeyPeriodEnd:    true,
 	}
@@ -219,14 +224,16 @@ func TestEventDataKeyEmitterCoversReaderKeys(t *testing.T) {
 	}
 }
 
-// TestBudgetPeriodCloseCheck_IdempotentOnRerun verifies that when a marker
-// already exists, no new event is enqueued.
+// TestBudgetPeriodCloseCheck_IdempotentOnRerun verifies that when a marker already
+// exists for a closed period, neither InsertMarker nor Enqueue are called on the
+// second run. This is the exactly-once guarantee: the marker is the idempotency lock.
+//
+// Previously this test was a dead test — it set up mocks but never called workAt,
+// so AssertNotCalled was trivially true. Now it actually drives the worker (C2 fix).
 func TestBudgetPeriodCloseCheck_IdempotentOnRerun(t *testing.T) {
 	ctx := context.Background()
 
-	// Use a weekly budget where we can control the period precisely.
-	// Budget starts on 2024-01-01 (Monday). "now" is 2024-01-08 (next Monday) —
-	// the first weekly period (Jan 1–7) just closed.
+	// Weekly budget; now = Jan 8 (Monday) → Jan 1–7 period just closed.
 	startDate := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
 	now := time.Date(2024, time.January, 8, 9, 0, 0, 0, time.UTC)
 
@@ -244,21 +251,41 @@ func TestBudgetPeriodCloseCheck_IdempotentOnRerun(t *testing.T) {
 	expectedPeriodStart := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
 	expectedPeriodEnd := time.Date(2024, time.January, 7, 0, 0, 0, 0, time.UTC)
 
-	// Verify the period computation is correct.
+	// Sanity-check the period computation.
 	pStart, pEnd, closed := computeJustClosedPeriod(budget, now, time.UTC)
 	require.True(t, closed)
 	assert.Equal(t, expectedPeriodStart, pStart)
 	assert.Equal(t, expectedPeriodEnd, pEnd)
 
+	budgetRepo := &mockBudgetPeriodCheckRepo{}
 	periodEventsRepo := &mockBudgetPeriodEventsRepo{}
-	// HasMarker returns true → marker already exists, no insert or enqueue.
+	mockQueue := new(MockJobQueue)
+
+	// Budget page 1 returns one budget; len < pageSize → loop exits after one page.
+	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).
+		Return([]*domain.Budget{budget}, nil)
+
+	// HasMarker returns true → the marker already exists from a previous run.
+	// InsertMarker and Enqueue must NOT be called.
 	periodEventsRepo.On("HasMarker", ctx, "user-weekly", "budget-weekly", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
 		Return(true, nil)
 
-	// No InsertMarker call expected.
-	// No Enqueue call expected.
-	_ = periodEventsRepo // expectations verified below
+	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
+		BudgetRepo:       budgetRepo,
+		PeriodEventsRepo: periodEventsRepo,
+		JobQueue:         mockQueue,
+	})
+
+	job := newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{TriggerSource: "test-idempotent"})
+	err := worker.workAt(ctx, job, now)
+	require.NoError(t, err, "workAt must not error on a second run with an existing marker")
+
+	// The key assertions: neither InsertMarker nor Enqueue were invoked.
 	periodEventsRepo.AssertNotCalled(t, "InsertMarker")
+	mockQueue.AssertNotCalled(t, "Enqueue")
+	// HasMarker was called once (to check before skipping).
+	periodEventsRepo.AssertExpectations(t)
+	budgetRepo.AssertExpectations(t)
 }
 
 // TestBudgetPeriodCloseCheck_NoPeriodClose verifies that mid-period, no events fire.

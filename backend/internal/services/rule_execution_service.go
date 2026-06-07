@@ -216,13 +216,18 @@ func (s *ruleExecutionService) ProcessEventTrigger(ctx context.Context, userID, 
 		return err
 	}
 
-	// Execute each matching rule
+	// Execute each matching rule. Errors are logged but do not abort the batch —
+	// one rule failing (e.g. transient DB error, missing repo) must not prevent
+	// other rules for the same user from firing on the same event.
 	for _, rule := range rules {
 		_, execErr := s.ExecuteRule(ctx, rule, eventData)
 		if execErr != nil {
-			// Log error but continue with other rules
-			// In production, this would be logged to a proper logging system
-			continue
+			slog.Error("rule execution failed; continuing with remaining rules",
+				"rule_id", rule.ID,
+				"user_id", rule.UserID,
+				"event_type", eventType,
+				"error", execErr,
+			)
 		}
 	}
 
