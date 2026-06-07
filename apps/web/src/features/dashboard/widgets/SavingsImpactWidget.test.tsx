@@ -128,16 +128,18 @@ describe('SavingsImpactWidget', () => {
     it('renders total amount moved to savings', () => {
       renderWidget()
       // $1,251 formatted as currency — check by content within data-ph-mask containers
-      const masked = document.querySelectorAll('[data-ph-mask]')
-      const texts = Array.from(masked).map((el) => el.textContent ?? '')
-      expect(texts.some((t) => t.includes('1,251') || t.includes('1,250'))).toBe(true)
+      const maskedTexts = Array.from(document.querySelectorAll('[data-ph-mask]')).map(
+        (el) => el.textContent ?? ''
+      )
+      expect(maskedTexts.some((t) => t.includes('1,251') || t.includes('1,250'))).toBe(true)
     })
 
     it('renders month amount', () => {
       renderWidget()
-      const masked = document.querySelectorAll('[data-ph-mask]')
-      const texts = Array.from(masked).map((el) => el.textContent ?? '')
-      expect(texts.some((t) => t.includes('350'))).toBe(true)
+      const maskedTexts = Array.from(document.querySelectorAll('[data-ph-mask]')).map(
+        (el) => el.textContent ?? ''
+      )
+      expect(maskedTexts.some((t) => t.includes('350'))).toBe(true)
     })
 
     it('renders completed count', () => {
@@ -154,9 +156,10 @@ describe('SavingsImpactWidget', () => {
     it('shows month-over-month change', () => {
       renderWidget()
       // 350 vs 200 = +$150 shown in a data-ph-mask span
-      const masked = document.querySelectorAll('[data-ph-mask]')
-      const texts = Array.from(masked).map((el) => el.textContent ?? '')
-      expect(texts.some((t) => t.includes('150'))).toBe(true)
+      const maskedTexts = Array.from(document.querySelectorAll('[data-ph-mask]')).map(
+        (el) => el.textContent ?? ''
+      )
+      expect(maskedTexts.some((t) => t.includes('150'))).toBe(true)
     })
   })
 
@@ -214,6 +217,136 @@ describe('SavingsImpactWidget', () => {
 
       // The viewedFired ref is true after the first fire, so the event must NOT fire again.
       expect(mockTrackEvent).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // GAP AZ: AC#1 requires the widget show "a list of recent completed suggestions
+  // (amount, destination account, date)". The widget previously rendered only
+  // total/count/this-month/MoM and never mapped recent_items.
+  describe('Recent Items (GAP AZ — AC#1)', () => {
+    it('renders a row for each recent item with data-ph-mask on amount', () => {
+      const dataWithItems: UserSavingsImpact = {
+        ...mockData,
+        recent_items: [
+          {
+            id: 'sugg-1',
+            amount: 300.00,
+            actual_amount: 250.75,
+            completed_at: '2024-03-15T10:00:00Z',
+            completion_source: 'exact_match',
+          },
+          {
+            id: 'sugg-2',
+            amount: 100.00,
+            actual_amount: 98.00,
+            completed_at: '2024-02-20T08:30:00Z',
+            completion_source: 'user_confirmed',
+          },
+        ],
+      }
+      mockUseSavingsImpactData.mockReturnValue({ ...defaultDataState, data: dataWithItems })
+      renderWidget()
+
+      // Both rows should render
+      const recentRows = document.querySelectorAll('[data-testid="savings-recent-item"]')
+      expect(recentRows.length).toBe(2)
+
+      // Amounts must be wrapped with data-ph-mask
+      const maskedAmounts = document.querySelectorAll('[data-testid="savings-recent-amount"][data-ph-mask]')
+      expect(maskedAmounts.length).toBe(2)
+
+      // Check that the actual_amounts appear
+      const maskedTexts = Array.from(maskedAmounts).map((el) => el.textContent ?? '')
+      expect(maskedTexts.some((t) => t.includes('251') || t.includes('250'))).toBe(true)
+      expect(maskedTexts.some((t) => t.includes('98'))).toBe(true)
+    })
+
+    it('renders a date for each recent item', () => {
+      const dataWithItems: UserSavingsImpact = {
+        ...mockData,
+        recent_items: [
+          {
+            id: 'sugg-date-1',
+            amount: 200.00,
+            actual_amount: 200.00,
+            completed_at: '2024-03-15T10:00:00Z',
+          },
+        ],
+      }
+      mockUseSavingsImpactData.mockReturnValue({ ...defaultDataState, data: dataWithItems })
+      renderWidget()
+
+      // A formatted date should appear in the row
+      const dateEl = document.querySelector('[data-testid="savings-recent-date"]')
+      expect(dateEl).toBeInTheDocument()
+      expect(dateEl?.textContent).toBeTruthy()
+    })
+
+    it('renders a destination label for each recent item', () => {
+      const dataWithItems: UserSavingsImpact = {
+        ...mockData,
+        recent_items: [
+          {
+            id: 'sugg-dest-1',
+            amount: 150.00,
+            actual_amount: 150.00,
+            completed_at: '2024-04-01T12:00:00Z',
+            to_user_account_id: 'acct-savings-123',
+          },
+        ],
+      }
+      mockUseSavingsImpactData.mockReturnValue({ ...defaultDataState, data: dataWithItems })
+      renderWidget()
+
+      const destEl = document.querySelector('[data-testid="savings-recent-destination"]')
+      expect(destEl).toBeInTheDocument()
+      expect(destEl?.textContent).toBeTruthy()
+    })
+
+    it('shows an empty-state message when recent_items is an empty array', () => {
+      const dataEmpty: UserSavingsImpact = { ...mockData, recent_items: [] }
+      mockUseSavingsImpactData.mockReturnValue({ ...defaultDataState, data: dataEmpty })
+      renderWidget()
+
+      const noItems = document.querySelector('[data-testid="savings-recent-empty"]')
+      expect(noItems).toBeInTheDocument()
+    })
+
+    it('shows an empty-state message when recent_items is null', () => {
+      const dataNull: UserSavingsImpact = { ...mockData, recent_items: null }
+      mockUseSavingsImpactData.mockReturnValue({ ...defaultDataState, data: dataNull })
+      renderWidget()
+
+      const noItems = document.querySelector('[data-testid="savings-recent-empty"]')
+      expect(noItems).toBeInTheDocument()
+    })
+
+    // Codex MED: completed_at is optional in the API type — the date cell is skipped
+    // when absent. The row must still render with amount and destination.
+    it('renders row without date when completed_at is absent', () => {
+      const dataNoDate: UserSavingsImpact = {
+        ...mockData,
+        recent_items: [
+          {
+            id: 'sugg-no-date',
+            amount: 180.00,
+            actual_amount: 180.00,
+            // completed_at intentionally omitted
+          },
+        ],
+      }
+      mockUseSavingsImpactData.mockReturnValue({ ...defaultDataState, data: dataNoDate })
+      renderWidget()
+
+      // Row and amount must still appear
+      const row = document.querySelector('[data-testid="savings-recent-item"]')
+      expect(row).toBeInTheDocument()
+      const amountEl = document.querySelector('[data-testid="savings-recent-amount"][data-ph-mask]')
+      expect(amountEl).toBeInTheDocument()
+
+      // Date cell is omitted when completed_at is absent (conditional render)
+      const dateEl = document.querySelector('[data-testid="savings-recent-date"]')
+      expect(dateEl).toBeNull()
     })
   })
 })

@@ -9,7 +9,6 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
-	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/riverqueue/river"
 )
 
@@ -65,9 +64,9 @@ func NewSavingsStatsWorker(deps SavingsStatsWorkerDeps) *SavingsStatsWorker {
 		logger = slog.Default()
 	}
 	return &SavingsStatsWorker{
-		aggregateRepo:     deps.AggregateRepo,
-		savingsImpactRepo:  deps.SavingsImpactRepo,
-		logger:            logger,
+		aggregateRepo:    deps.AggregateRepo,
+		savingsImpactRepo: deps.SavingsImpactRepo,
+		logger:           logger,
 	}
 }
 
@@ -142,18 +141,3 @@ func (w *SavingsStatsWorker) Work(ctx context.Context, job *river.Job[SavingsSta
 	return nil
 }
 
-// SavingsStatsUniqueOpts returns the recommended uniqueness options.
-// Only one snapshot job should run at a time to prevent duplicate writes.
-func SavingsStatsUniqueOpts() *queue.UniqueOpts {
-	return &queue.UniqueOpts{
-		ByArgs:   false,
-		ByPeriod: 24 * time.Hour,
-		ByState: []queue.JobState{
-			queue.JobStateAvailable,
-			queue.JobStateScheduled,
-			queue.JobStateRunning,
-			queue.JobStateRetryable,
-			queue.JobStatePending,
-		},
-	}
-}

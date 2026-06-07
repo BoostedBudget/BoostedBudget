@@ -1204,3 +1204,123 @@ func TestConfirmMatch_MCPTransactionalPath_NoIdempotency_UsesTxBackedService(t *
 	// used, not h.service (which is not a testify mock and was never called).
 	txMock.AssertCalled(t, "QueryRow")
 }
+
+// =============================================================================
+// GAP BB: idempotency key scoped per suggestion ID
+// =============================================================================
+
+// idempotencyKeyCaptureMock implements repository.IdempotencyRepository and captures
+// the key argument passed to GetOrCreateInTx. It always returns cacheHit=true with
+// a preset suggestion so the fn callback is never invoked (no need for a live tx).
+type idempotencyKeyCaptureMock struct {
+	capturedKey  string
+	returnResult *domain.TransferSuggestion
+}
+
+func (m *idempotencyKeyCaptureMock) GetOrCreate(_ context.Context, _, _, _ string, _ func() (interface{}, error), _ interface{}) (bool, error) {
+	return false, nil
+}
+
+func (m *idempotencyKeyCaptureMock) GetOrCreateInTx(_ context.Context, _ pgx.Tx, key, _, _ string, _ func() (interface{}, error), result interface{}) (bool, error) {
+	m.capturedKey = key
+	// Return cacheHit=true with a preset result so the fn is never called.
+	if r, ok := result.(**domain.TransferSuggestion); ok {
+		*r = m.returnResult
+	}
+	return true, nil
+}
+
+func (m *idempotencyKeyCaptureMock) DeleteExpired(_ context.Context) (int64, error) { return 0, nil }
+
+var _ repository.IdempotencyRepository = (*idempotencyKeyCaptureMock)(nil)
+
+// TestConfirmMatch_MCP_IdempotencyKeyIncludesSuggestionID_GAPBB verifies GAP BB:
+// the idempotency key passed to GetOrCreateInTx must be scoped to the suggestion ID
+// (key = input.IdempotencyKey + ":" + input.ID). Without this scoping, two MCP
+// requests that share the same base key but target different suggestions collide:
+// the second request returns the first suggestion's cached response and never executes.
+func TestConfirmMatch_MCP_IdempotencyKeyIncludesSuggestionID_GAPBB(t *testing.T) {
+	const secret = "mcp-bb-confirm-secret"
+	const userID = "user-bb-confirm"
+	const suggID = "sugg-bb-confirm-xyz"
+	const baseKey = "base-idem-key-bb-confirm"
+
+	confirmed := newTestSuggestionItem(suggID, userID)
+	confirmed.MatchedTransactionID = nil
+
+	svc := &mockTransferSuggestionService{} // never called (cache-hit returned by mock)
+
+	txMock := new(mockPgxTx)
+	txMock.On("Rollback", mock.Anything).Return(nil)
+
+	dbMock := new(mockOperationsDB)
+	dbMock.On("Begin", mock.Anything).Return(txMock, nil)
+
+	keyCapturer := &idempotencyKeyCaptureMock{returnResult: confirmed}
+
+	handler := NewTransferSuggestionHandler(svc, TransferSuggestionHandlerDeps{
+		DB:              dbMock,
+		MCPAuditRepo:    new(mockOperationsMCPAuditRepo),
+		MCPWorkerSecret: secret,
+		IdempotencyRepo: keyCapturer,
+	})
+
+	input := &ConfirmTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		IdempotencyInput:   inputs.IdempotencyInput{IdempotencyKey: baseKey},
+		MCPContextInput:    inputs.MCPContextInput{MCPWorkerSecret: secret},
+		ID:                 suggID,
+		Body:               ConfirmMatchBody{ActualAmount: 100.00},
+	}
+
+	_, err := handler.ConfirmMatch(context.Background(), input)
+	require.NoError(t, err)
+
+	// GAP BB: the key MUST include the suggestion ID so that same-base-key requests
+	// targeting different suggestions don't collide in the idempotency cache.
+	assert.Equal(t, baseKey+":"+suggID, keyCapturer.capturedKey,
+		"GAP BB: idempotency key must be scoped to suggestionID (key+':'+id) to prevent "+
+			"cross-suggestion cache collisions when the same Idempotency-Key header is reused")
+}
+
+// TestDeclineMatch_MCP_IdempotencyKeyIncludesSuggestionID_GAPBB mirrors the confirm
+// test for the decline path.
+func TestDeclineMatch_MCP_IdempotencyKeyIncludesSuggestionID_GAPBB(t *testing.T) {
+	const secret = "mcp-bb-decline-secret"
+	const userID = "user-bb-decline"
+	const suggID = "sugg-bb-decline-xyz"
+	const baseKey = "base-idem-key-bb-decline"
+
+	declined := newTestSuggestionItem(suggID, userID)
+	declined.MatchedTransactionID = nil
+
+	svc := &mockTransferSuggestionService{}
+
+	txMock := new(mockPgxTx)
+	txMock.On("Rollback", mock.Anything).Return(nil)
+
+	dbMock := new(mockOperationsDB)
+	dbMock.On("Begin", mock.Anything).Return(txMock, nil)
+
+	keyCapturer := &idempotencyKeyCaptureMock{returnResult: declined}
+
+	handler := NewTransferSuggestionHandler(svc, TransferSuggestionHandlerDeps{
+		DB:              dbMock,
+		MCPAuditRepo:    new(mockOperationsMCPAuditRepo),
+		MCPWorkerSecret: secret,
+		IdempotencyRepo: keyCapturer,
+	})
+
+	input := &DeclineTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		IdempotencyInput:   inputs.IdempotencyInput{IdempotencyKey: baseKey},
+		MCPContextInput:    inputs.MCPContextInput{MCPWorkerSecret: secret},
+		ID:                 suggID,
+	}
+
+	_, err := handler.DeclineMatch(context.Background(), input)
+	require.NoError(t, err)
+
+	assert.Equal(t, baseKey+":"+suggID, keyCapturer.capturedKey,
+		"GAP BB: decline path must scope the idempotency key to the suggestion ID")
+}

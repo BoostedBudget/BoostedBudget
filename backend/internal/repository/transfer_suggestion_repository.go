@@ -481,25 +481,62 @@ func (r *transferSuggestionRepository) ClearMatchedTransactionID(ctx context.Con
 
 // ClearStaleReservations releases pending/accepted suggestions whose expires_at has
 // passed by setting matched_transaction_id = NULL. Suggestion status is unchanged
-// (accepted stays accepted). Returns the number of rows cleared.
+// (accepted stays accepted). Returns the number of suggestions whose reservations
+// were cleared.
+//
+// GAP BA: the CTE also marks any associated open transfer_suggestion_match
+// notifications as read. Without this, the type-scoped open-notification guard in
+// CorrelateForUser would suppress future re-prompting, permanently stranding the
+// accepted suggestion (AU 409s the stale prompt; correlation sees the open notif
+// and skips). Touching the notifications table here is intentional — reservation
+// release and prompt close are an atomic pair; splitting them risks stranding.
 func (r *transferSuggestionRepository) ClearStaleReservations(ctx context.Context) (int64, error) {
 	now := time.Now()
 
+	// Use a CTE to atomically:
+	//   1. Clear stale reservations on the suggestion rows (matched_transaction_id IS NOT NULL).
+	//   2. Mark open fuzzy-match notifications as read for ALL expired active suggestions —
+	//      not just those whose reservation was cleared in step 1.
+	// The broader notification close (step 2) handles the reserve→notify race: if correlation
+	// reserves an about-to-expire suggestion and then this CTE runs before the notification is
+	// inserted, the notification would be created after the CTE and left open. By closing
+	// notifications for ALL expired active suggestions (regardless of current reservation state),
+	// subsequent daily runs catch any leftover open prompts from previous cycles.
+	// The final SELECT returns the count of freed reservations (step 1 only).
+	//
+	// NOTE: the notification type literal 'transfer_suggestion_match' matches
+	// domain.NotificationTypeTransferSuggestionMatch. If that constant changes,
+	// this SQL literal must be updated in tandem.
 	query := `
-		UPDATE transfer_suggestions
-		SET matched_transaction_id = NULL, updated_at = $1
-		WHERE matched_transaction_id IS NOT NULL
-		  AND status IN ('pending', 'accepted')
-		  AND expires_at IS NOT NULL
-		  AND expires_at < $1
+		WITH cleared AS (
+			UPDATE transfer_suggestions
+			SET matched_transaction_id = NULL, updated_at = $1
+			WHERE matched_transaction_id IS NOT NULL
+			  AND status IN ('pending', 'accepted')
+			  AND expires_at IS NOT NULL
+			  AND expires_at < $1
+			RETURNING id
+		),
+		notif_closed AS (
+			UPDATE notifications
+			SET read = true, updated_at = $1
+			WHERE transfer_suggestion_id IN (
+				SELECT id FROM transfer_suggestions
+				WHERE status IN ('pending', 'accepted')
+				  AND expires_at IS NOT NULL
+				  AND expires_at < $1
+			)
+			  AND type = 'transfer_suggestion_match'
+			  AND read = false
+		)
+		SELECT COUNT(*) FROM cleared
 	`
 
-	ct, err := r.db.Exec(ctx, query, now)
-	if err != nil {
+	var count int64
+	if err := r.db.QueryRow(ctx, query, now).Scan(&count); err != nil {
 		return 0, err
 	}
-
-	return ct.RowsAffected(), nil
+	return count, nil
 }
 
 // GetActiveByUserID retrieves all active (pending + accepted) suggestions for a user,

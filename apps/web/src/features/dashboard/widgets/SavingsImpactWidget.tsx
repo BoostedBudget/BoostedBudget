@@ -15,6 +15,13 @@ const formatCurrency = (amount: number) =>
     maximumFractionDigits: 0,
   }).format(amount)
 
+const formatDate = (isoString: string) =>
+  new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(new Date(isoString))
+
 function SavingsImpactWidget(_props: WidgetProps) {
   const { data, loading, error } = useSavingsImpactData()
   const trackEvent = useTrackEvent()
@@ -93,6 +100,55 @@ function SavingsImpactWidget(_props: WidgetProps) {
               {momPositive ? '+' : ''}{formatCurrency(momChange)} vs last month
             </span>
           </div>
+        )}
+      </div>
+
+      {/* Recent completed suggestions — AC#1 */}
+      <div className="border-t border-border pt-3">
+        <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2">
+          Recent Transfers
+        </p>
+        {data.recent_items && data.recent_items.length > 0 ? (
+          <ul className="space-y-2">
+            {data.recent_items.map((item) => (
+              <li
+                key={item.id}
+                data-testid="savings-recent-item"
+                className="flex items-center justify-between text-xs"
+              >
+                <div className="flex flex-col min-w-0">
+                  <span
+                    data-testid="savings-recent-destination"
+                    className="text-foreground truncate"
+                  >
+                    Savings account
+                  </span>
+                  {item.completed_at && (
+                    <span
+                      data-testid="savings-recent-date"
+                      className="text-muted-foreground"
+                    >
+                      {formatDate(item.completed_at)}
+                    </span>
+                  )}
+                </div>
+                <span
+                  data-testid="savings-recent-amount"
+                  data-ph-mask
+                  className="font-medium text-success ml-2 shrink-0"
+                >
+                  {formatCurrency(item.actual_amount)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p
+            data-testid="savings-recent-empty"
+            className="text-xs text-muted-foreground"
+          >
+            No completed transfers yet
+          </p>
         )}
       </div>
     </div>
