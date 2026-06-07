@@ -241,6 +241,18 @@ func (m *mockTransferSuggestionRepository) GetActiveByUserID(ctx context.Context
 	return result, nil
 }
 
+func (m *mockTransferSuggestionRepository) ReserveMatchedTransaction(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
+func (m *mockTransferSuggestionRepository) ClearMatchedTransactionID(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockTransferSuggestionRepository) ClearStaleReservations(_ context.Context) (int64, error) {
+	return 0, nil
+}
+
 // TestConditionEvaluation tests the condition matching logic.
 func TestConditionEvaluation(t *testing.T) {
 	t.Run("evaluates equals operator", func(t *testing.T) {

@@ -389,6 +389,11 @@ func (m *mockTransferSuggestionExpirer) ExpirePending(ctx context.Context) (int6
 	return args.Get(0).(int64), args.Error(1)
 }
 
+func (m *mockTransferSuggestionExpirer) ClearStaleReservations(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 // TestBudgetPeriodCloseCheck_ExpiresPendingSuggestions verifies that the daily
 // budget-period-close worker calls ExpirePending on each run so that stale
 // pending suggestions are transitioned to "expired" status.
@@ -400,10 +405,12 @@ func TestBudgetPeriodCloseCheck_ExpiresPendingSuggestions(t *testing.T) {
 	mockQueue := new(MockJobQueue)
 	expirer := new(mockTransferSuggestionExpirer)
 
-	// No budgets to process — we only care that ExpirePending is called.
+	// No budgets to process — we only care that ExpirePending and ClearStaleReservations are called.
 	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).
 		Return([]*domain.Budget{}, nil)
 	expirer.On("ExpirePending", ctx).Return(int64(3), nil)
+	// GAP AH HIGH#1: ClearStaleReservations must also be called on every run.
+	expirer.On("ClearStaleReservations", ctx).Return(int64(0), nil)
 
 	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
 		BudgetRepo:            budgetRepo,
@@ -416,7 +423,7 @@ func TestBudgetPeriodCloseCheck_ExpiresPendingSuggestions(t *testing.T) {
 	err := worker.Work(ctx, job)
 
 	require.NoError(t, err)
-	expirer.AssertExpectations(t) // ExpirePending must have been called exactly once.
+	expirer.AssertExpectations(t) // Both ExpirePending and ClearStaleReservations must be called.
 }
 
 // TestBudgetPeriodCloseCheck_ExpirePendingError_DoesNotFailJob verifies that when
@@ -432,6 +439,8 @@ func TestBudgetPeriodCloseCheck_ExpirePendingError_DoesNotFailJob(t *testing.T) 
 	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).
 		Return([]*domain.Budget{}, nil)
 	expirer.On("ExpirePending", ctx).Return(int64(0), errors.New("db connection lost"))
+	// ClearStaleReservations still runs after ExpirePending fails (non-critical, independent).
+	expirer.On("ClearStaleReservations", ctx).Return(int64(0), nil)
 
 	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
 		BudgetRepo:            budgetRepo,
@@ -444,6 +453,69 @@ func TestBudgetPeriodCloseCheck_ExpirePendingError_DoesNotFailJob(t *testing.T) 
 	err := worker.Work(ctx, job)
 
 	// ExpirePending failure must not propagate as a job error.
+	require.NoError(t, err)
+	expirer.AssertExpectations(t)
+}
+
+// TestBudgetPeriodCloseCheck_ClearStaleReservations_CalledEachRun proves GAP AH HIGH#1:
+// ClearStaleReservations is called on every daily run alongside ExpirePending, so
+// accepted suggestions past their expires_at have their reservation freed while keeping
+// their status (never auto-expired).
+func TestBudgetPeriodCloseCheck_ClearStaleReservations_CalledEachRun(t *testing.T) {
+	ctx := context.Background()
+
+	budgetRepo := &mockBudgetPeriodCheckRepo{}
+	periodEventsRepo := &mockBudgetPeriodEventsRepo{}
+	mockQueue := new(MockJobQueue)
+	expirer := new(mockTransferSuggestionExpirer)
+
+	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).
+		Return([]*domain.Budget{}, nil)
+	expirer.On("ExpirePending", ctx).Return(int64(0), nil)
+	// Simulate 2 stale reservations cleared (e.g. accepted suggestions, past expires_at, never confirmed)
+	expirer.On("ClearStaleReservations", ctx).Return(int64(2), nil)
+
+	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
+		BudgetRepo:            budgetRepo,
+		PeriodEventsRepo:      periodEventsRepo,
+		JobQueue:              mockQueue,
+		TransferSuggestionExpirer: expirer,
+	})
+
+	job := newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{TriggerSource: "test"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	expirer.AssertCalled(t, "ClearStaleReservations", ctx)
+	expirer.AssertExpectations(t)
+}
+
+// TestBudgetPeriodCloseCheck_ClearStaleReservationsError_DoesNotFailJob verifies that
+// when ClearStaleReservations returns an error, the job still succeeds (non-critical path).
+func TestBudgetPeriodCloseCheck_ClearStaleReservationsError_DoesNotFailJob(t *testing.T) {
+	ctx := context.Background()
+
+	budgetRepo := &mockBudgetPeriodCheckRepo{}
+	periodEventsRepo := &mockBudgetPeriodEventsRepo{}
+	mockQueue := new(MockJobQueue)
+	expirer := new(mockTransferSuggestionExpirer)
+
+	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).
+		Return([]*domain.Budget{}, nil)
+	expirer.On("ExpirePending", ctx).Return(int64(0), nil)
+	expirer.On("ClearStaleReservations", ctx).Return(int64(0), errors.New("reservation clear failure"))
+
+	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
+		BudgetRepo:            budgetRepo,
+		PeriodEventsRepo:      periodEventsRepo,
+		JobQueue:              mockQueue,
+		TransferSuggestionExpirer: expirer,
+	})
+
+	job := newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{TriggerSource: "test"})
+	err := worker.Work(ctx, job)
+
+	// ClearStaleReservations failure must not propagate as a job error.
 	require.NoError(t, err)
 	expirer.AssertExpectations(t)
 }
@@ -739,6 +811,7 @@ func TestWorkAt_DeletesMarkerOnEnqueueFailure(t *testing.T) {
 	// DeleteMarker must be called to clean up the orphaned marker so the next daily run can retry
 	periodEventsRepo.On("DeleteMarker", ctx, "user-fail", "budget-fail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(nil)
 	expirer.On("ExpirePending", ctx).Return(int64(0), nil)
+	expirer.On("ClearStaleReservations", ctx).Return(int64(0), nil)
 
 	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
 		BudgetRepo:                budgetRepo,
@@ -755,6 +828,7 @@ func TestWorkAt_DeletesMarkerOnEnqueueFailure(t *testing.T) {
 	periodEventsRepo.AssertCalled(t, "DeleteMarker", ctx, "user-fail", "budget-fail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd)
 	periodEventsRepo.AssertExpectations(t)
 	mockQueue.AssertExpectations(t)
+	expirer.AssertExpectations(t)
 }
 
 // =============================================================================

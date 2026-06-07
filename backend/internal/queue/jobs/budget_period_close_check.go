@@ -39,13 +39,19 @@ type UserTimezoneLookup interface {
 	GetTimezonesByUserIDs(ctx context.Context, userIDs []string) (map[string]string, error)
 }
 
-// TransferSuggestionExpirer defines the expiry method needed by the daily worker.
+// TransferSuggestionExpirer defines the expiry methods needed by the daily worker.
 // Only pending suggestions whose expires_at is in the past are affected; accepted
 // suggestions are never auto-expired because the user has explicitly acted on them.
 type TransferSuggestionExpirer interface {
 	// ExpirePending marks stale pending suggestions (expires_at < now) as expired.
 	// Returns the count of rows updated.
 	ExpirePending(ctx context.Context) (int64, error)
+	// ClearStaleReservations releases pending/accepted suggestions whose expires_at has
+	// passed by setting matched_transaction_id = NULL. Suggestion status is unchanged
+	// (accepted stays accepted). Returns the number of reservations cleared.
+	// GAP AH HIGH#1: prevents a never-confirmed reservation from permanently pinning
+	// an inflow and blocking it from being matched by a future suggestion.
+	ClearStaleReservations(ctx context.Context) (int64, error)
 }
 
 // BudgetPeriodEventsRepo defines the marker methods needed by the worker.
@@ -317,12 +323,30 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 		offset += budgetPeriodCheckPageSize
 	}
 
-	// Issue #972 GAP E: Expire stale pending suggestions on every daily run.
-	// Accepted suggestions are never auto-expired (user has acted on them); only
-	// pending suggestions past their expires_at are transitioned to "expired".
-	// Failure is non-critical: log a warning and continue so the main job result
-	// (period-close firing) is not affected.
+	// Issue #972 GAP E + GAP AH HIGH#1: expiry + reservation cleanup on every daily run.
+	// ORDER MATTERS: ClearStaleReservations MUST run before ExpirePending.
+	// ExpirePending transitions pending→expired; ClearStaleReservations only targets
+	// pending/accepted. If ExpirePending ran first, newly-expired rows would keep their
+	// matched_transaction_id permanently, blocking the inflow from future matching.
 	if w.transferSuggestionExpirer != nil {
+		// Step 1: Release reservations on pending/accepted suggestions with past expiry,
+		// freeing the inflow before the suggestion status changes.
+		clearedCount, clearErr := w.transferSuggestionExpirer.ClearStaleReservations(ctx)
+		if clearErr != nil {
+			w.logger.Warn("failed to clear stale transfer suggestion reservations",
+				"job_id", job.ID,
+				"error", clearErr,
+			)
+		} else if clearedCount > 0 {
+			w.logger.Info("cleared stale fuzzy-match reservations",
+				"job_id", job.ID,
+				"cleared_count", clearedCount,
+			)
+		}
+
+		// Step 2: Expire stale pending suggestions. Accepted suggestions are never
+		// auto-expired (user has acted on them). Now that reservations are cleared,
+		// any pending rows that transition to expired no longer pin an inflow.
 		expiredCount, expireErr := w.transferSuggestionExpirer.ExpirePending(ctx)
 		if expireErr != nil {
 			w.logger.Warn("failed to expire pending transfer suggestions",

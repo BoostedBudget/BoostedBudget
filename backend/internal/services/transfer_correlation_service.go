@@ -4,10 +4,13 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 )
@@ -29,6 +32,11 @@ const correlationFuzzyMaxDiffRatio = 0.50
 type ActiveSuggestionRepository interface {
 	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error)
 	Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error
+	// ReserveMatchedTransaction pins matched_transaction_id = txnID (GAP AH reserve step).
+	// The partial unique index prevents the same inflow from being reserved by two suggestions.
+	ReserveMatchedTransaction(ctx context.Context, id string, txnID string) error
+	// ClearMatchedTransactionID releases a reservation (HIGH#2 atomicity rollback; reject path).
+	ClearMatchedTransactionID(ctx context.Context, id string) error
 }
 
 // RecentTransactionRepository is the subset of TransactionRepository needed
@@ -98,12 +106,17 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 		return fmt.Errorf("failed to get recent inflow transactions: %w", err)
 	}
 
-	// Track which transaction IDs have been claimed so we don't double-match.
+	// usedTxnIDs is the intra-run dedup guard. It prevents two suggestions in the
+	// same CorrelateForUser call from claiming the same inflow. The cross-run guard
+	// is the matched_transaction_id reservation + the partial unique index
+	// (WHERE matched_transaction_id IS NOT NULL), which persists across syncs.
 	usedTxnIDs := make(map[string]bool)
 
 	// 3. For each active suggestion (oldest first — GetActiveByUserID already orders by created_at ASC)
 	for _, suggestion := range suggestions {
-		// Skip if already queued for processing (MatchedTransactionID already set)
+		// Skip if already reserved or completed (matched_transaction_id already set).
+		// This is the cross-run dedup guard: a reserved suggestion can't claim a second inflow,
+		// and the existing reservation is still live until released (reject/stale-clear).
 		if suggestion.MatchedTransactionID != nil {
 			continue
 		}
@@ -114,7 +127,7 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 				continue
 			}
 
-			// Skip if this transaction is already claimed by another suggestion
+			// Skip if this transaction is already claimed by another suggestion in this run.
 			if usedTxnIDs[txn.ID] {
 				continue
 			}
@@ -128,9 +141,19 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 			actualAmount := math.Abs(txn.Amount)
 
 			if matchKind == matchExact {
-				// Complete the suggestion
+				// Complete the suggestion with the matched transaction id.
+				// MEDIUM#5: if the partial unique index rejects our matched_transaction_id
+				// (SQLSTATE 23505), the inflow was already claimed by another suggestion
+				// (reservation or prior completion). Mark it used and continue to the next txn.
 				txnID := txn.ID
 				if err := s.suggestionRepo.Complete(ctx, suggestion.ID, &txnID, actualAmount, "exact_match", time.Now()); err != nil {
+					var pgErr *pgconn.PgError
+					if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+						slog.Warn("exact-match: inflow already claimed by another suggestion; skipping",
+							"suggestion_id", suggestion.ID, "txn_id", txn.ID)
+						usedTxnIDs[txn.ID] = true
+						continue
+					}
 					return fmt.Errorf("failed to complete suggestion %s: %w", suggestion.ID, err)
 				}
 				usedTxnIDs[txn.ID] = true
@@ -156,18 +179,40 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 					})
 				}
 			} else {
-				// matchFuzzy — check if there's already an open validation prompt
+				// matchFuzzy — check if there's already an open validation prompt.
+				// The open-prompt guard uses type scoping (domain.NotificationTypeTransferSuggestionMatch)
+				// so an unread original transfer_suggestion prompt does NOT block the fuzzy prompt.
 				existing, err := s.notifRepo.GetOpenByTransferSuggestionID(ctx, suggestion.ID, domain.NotificationTypeTransferSuggestionMatch)
 				if err != nil {
 					return fmt.Errorf("failed to check open notification for suggestion %s: %w", suggestion.ID, err)
 				}
 				if existing != nil {
-					// Already prompted — skip
+					// Already prompted — skip to next suggestion.
 					break
 				}
 
-				// Mark this transaction as used so it doesn't prompt multiple suggestions.
+				// Mark this transaction as used in this run (intra-run guard).
 				usedTxnIDs[txn.ID] = true
+
+				// GAP AH reserve: set matched_transaction_id = txn.ID on the suggestion before
+				// creating the notification. The partial unique index prevents two suggestions
+				// from reserving the same inflow across syncs.
+				// Skip cases: (a) SQLSTATE 23505 — another suggestion holds the txn via the
+				// partial unique index; (b) ErrAlreadyActioned — suggestion is already reserved,
+				// already actioned, or does not exist (zero-row race).
+				if err := s.suggestionRepo.ReserveMatchedTransaction(ctx, suggestion.ID, txn.ID); err != nil {
+					var pgErr *pgconn.PgError
+					if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+						slog.Warn("fuzzy-match: inflow already claimed by another suggestion; skipping",
+							"suggestion_id", suggestion.ID, "txn_id", txn.ID)
+						continue
+					}
+					if errors.Is(err, domain.ErrTransferSuggestionAlreadyActioned) {
+						// Suggestion was already reserved or actioned in a race — skip quietly.
+						continue
+					}
+					return fmt.Errorf("failed to reserve transaction %s for suggestion %s: %w", txn.ID, suggestion.ID, err)
+				}
 
 				// Create accept_reject notification prompting user to confirm the amount.
 				// Type must be NotificationTypeTransferSuggestionMatch so the frontend
@@ -182,7 +227,14 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 					Title:                "Did you transfer a different amount?",
 					Message:              fmt.Sprintf("We suggested $%.2f but detected $%.2f — was this your transfer?", suggestion.Amount, actualAmount),
 				}
+				// HIGH#2 atomicity: if the notification insert fails after a successful reserve,
+				// clear the reservation so the next sync retries rather than leaving the inflow
+				// permanently pinned with no prompt for the user.
 				if err := s.notifRepo.Create(ctx, notif); err != nil {
+					if clearErr := s.suggestionRepo.ClearMatchedTransactionID(ctx, suggestion.ID); clearErr != nil {
+						slog.Warn("failed to clear reservation after notification failure",
+							"suggestion_id", suggestion.ID, "txn_id", txn.ID, "error", clearErr)
+					}
 					return fmt.Errorf("failed to create fuzzy-match notification: %w", err)
 				}
 
@@ -196,7 +248,7 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 				}
 			}
 
-			break // one suggestion per run
+			break // one match per suggestion per run
 		}
 	}
 
