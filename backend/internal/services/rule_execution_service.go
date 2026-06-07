@@ -384,8 +384,11 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 		return fmt.Errorf("transfer action not defined")
 	}
 
-	// Calculate amount
+	// Calculate amount; skip if zero (no surplus to transfer for derived types).
 	amount := s.calculateTransferAmount(transfer, triggerData)
+	if amount <= 0 {
+		return nil
+	}
 
 	// Create reason string
 	reason := fmt.Sprintf("Rule '%s' triggered", rule.Name)
@@ -472,7 +475,9 @@ func (s *ruleExecutionService) createTransferSuggestionNotification(ctx context.
 	}
 }
 
-// calculateTransferAmount calculates the transfer amount based on action type.
+// calculateTransferAmount computes the transfer amount based on action type:
+// fixed: Amount directly; percentage: Amount% of budget income; remaining: full surplus;
+// excess: surplus above Threshold; threshold: legacy (use excess).
 func (s *ruleExecutionService) calculateTransferAmount(action *domain.TransferAction, triggerData map[string]interface{}) float64 {
 	switch action.AmountType {
 	case "fixed":
@@ -484,6 +489,14 @@ func (s *ruleExecutionService) calculateTransferAmount(action *domain.TransferAc
 	case "remaining":
 		if remaining, ok := triggerData[domain.EventDataKeyRemaining].(float64); ok {
 			return remaining
+		}
+	case "excess":
+		// Surplus above threshold; no transfer if remaining <= threshold.
+		if remaining, ok := triggerData[domain.EventDataKeyRemaining].(float64); ok {
+			if remaining > action.Threshold {
+				return remaining - action.Threshold
+			}
+			return 0
 		}
 	case "threshold":
 		if amt, ok := triggerData[domain.EventDataKeyAmount].(float64); ok {
