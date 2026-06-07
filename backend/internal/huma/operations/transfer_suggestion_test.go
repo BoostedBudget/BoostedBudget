@@ -490,6 +490,148 @@ func TestConfirmMatch_NilAnalytics_NoNilPanic(t *testing.T) {
 }
 
 // =============================================================================
+// GAP AH MEDIUM#6: maskReservation — matched_transaction_id scoping tests
+// =============================================================================
+
+// TestMaskReservation_NonCompletedSuggestionsOmitMatchedTransactionID verifies that
+// pending and accepted suggestions have matched_transaction_id cleared in API responses.
+func TestMaskReservation_NonCompletedSuggestionsOmitMatchedTransactionID(t *testing.T) {
+	txnID := "txn-reserved-123"
+
+	tests := []struct {
+		name   string
+		status domain.SuggestionStatus
+		wantID *string // nil = should be masked; &txnID = should be present
+	}{
+		{name: "pending", status: domain.SuggestionStatusPending, wantID: nil},
+		{name: "accepted", status: domain.SuggestionStatusAccepted, wantID: nil},
+		{name: "rejected", status: domain.SuggestionStatusRejected, wantID: nil},
+		{name: "expired", status: domain.SuggestionStatusExpired, wantID: nil},
+		{name: "completed", status: domain.SuggestionStatusCompleted, wantID: &txnID},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestSuggestionItem("s-mask-"+tc.name, "user-mask")
+			s.Status = tc.status
+			s.MatchedTransactionID = &txnID
+
+			result := maskReservation(s)
+
+			if tc.wantID == nil {
+				assert.Nil(t, result.MatchedTransactionID,
+					"status=%s: matched_transaction_id should be nil in API response", tc.name)
+			} else {
+				require.NotNil(t, result.MatchedTransactionID,
+					"status=%s: matched_transaction_id should be present in API response", tc.name)
+				assert.Equal(t, *tc.wantID, *result.MatchedTransactionID)
+			}
+		})
+	}
+}
+
+// TestGetTransferSuggestions_MasksReservation proves that pending suggestions returned
+// by GetTransferSuggestions have matched_transaction_id omitted (GAP AH MEDIUM#6).
+func TestGetTransferSuggestions_MasksReservation(t *testing.T) {
+	userID := "user-mask-get"
+	txnID := "txn-reserved-for-get"
+
+	s1 := newTestSuggestionItem("s-mask-1", userID)
+	s1.MatchedTransactionID = &txnID // reserved pending suggestion
+
+	svc := &mockTransferSuggestionService{
+		getPendingResult: []*domain.TransferSuggestion{s1},
+	}
+
+	handler := NewTransferSuggestionHandler(svc)
+	output, err := handler.GetTransferSuggestions(context.Background(), &GetTransferSuggestionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, output.Body, 1)
+	assert.Nil(t, output.Body[0].MatchedTransactionID,
+		"pending suggestion in list response must not expose matched_transaction_id")
+}
+
+// TestAcceptTransferSuggestion_MasksReservation proves that an accepted suggestion
+// returned by AcceptTransferSuggestion has matched_transaction_id omitted (GAP AH MEDIUM#6).
+func TestAcceptTransferSuggestion_MasksReservation(t *testing.T) {
+	userID := "user-mask-accept"
+	suggestionID := "s-mask-accept"
+	txnID := "txn-reserved-for-accept"
+
+	accepted := newTestSuggestionItem(suggestionID, userID)
+	accepted.Status = domain.SuggestionStatusAccepted
+	accepted.MatchedTransactionID = &txnID
+
+	svc := &mockTransferSuggestionService{acceptResult: accepted}
+	handler := NewTransferSuggestionHandler(svc)
+
+	output, err := handler.AcceptTransferSuggestion(context.Background(), &AcceptTransferSuggestionInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 suggestionID,
+	})
+
+	require.NoError(t, err)
+	assert.Nil(t, output.Body.Suggestion.MatchedTransactionID,
+		"accepted suggestion response must not expose matched_transaction_id")
+}
+
+// TestRejectTransferSuggestion_MasksReservation proves that a rejected suggestion
+// returned by RejectTransferSuggestion has matched_transaction_id omitted (GAP AH MEDIUM#6).
+func TestRejectTransferSuggestion_MasksReservation(t *testing.T) {
+	userID := "user-mask-reject"
+	suggestionID := "s-mask-reject"
+	txnID := "txn-reserved-for-reject"
+
+	rejected := newTestSuggestionItem(suggestionID, userID)
+	rejected.Status = domain.SuggestionStatusRejected
+	rejected.MatchedTransactionID = &txnID
+
+	svc := &mockTransferSuggestionService{rejectResult: rejected}
+	handler := NewTransferSuggestionHandler(svc)
+
+	output, err := handler.RejectTransferSuggestion(context.Background(), &RejectTransferSuggestionInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 suggestionID,
+	})
+
+	require.NoError(t, err)
+	assert.Nil(t, output.Body.Suggestion.MatchedTransactionID,
+		"rejected suggestion response must not expose matched_transaction_id")
+}
+
+// TestConfirmMatch_CompletedSuggestionExposesMatchedTransactionID verifies that a
+// completed suggestion returned by ConfirmMatch DOES expose matched_transaction_id
+// (for auditability — the completed row is the only one allowed to surface it).
+func TestConfirmMatch_CompletedSuggestionExposesMatchedTransactionID(t *testing.T) {
+	userID := "user-mask-confirm"
+	suggestionID := "s-mask-confirm"
+	txnID := "txn-matched-for-confirm"
+	actualAmount := 120.00
+
+	completed := newTestSuggestionItem(suggestionID, userID)
+	completed.Status = domain.SuggestionStatusCompleted
+	completed.ActualAmount = &actualAmount
+	completed.MatchedTransactionID = &txnID
+
+	svc := &mockTransferSuggestionService{confirmMatchResult: completed}
+	handler := NewTransferSuggestionHandler(svc)
+
+	output, err := handler.ConfirmMatch(context.Background(), &ConfirmTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 suggestionID,
+		Body:               ConfirmMatchBody{ActualAmount: actualAmount},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output.Body.Suggestion.MatchedTransactionID,
+		"completed suggestion must expose matched_transaction_id for auditability")
+	assert.Equal(t, txnID, *output.Body.Suggestion.MatchedTransactionID)
+}
+
+// =============================================================================
 // Route Registration Test
 // =============================================================================
 

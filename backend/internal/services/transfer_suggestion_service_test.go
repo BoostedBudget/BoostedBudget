@@ -682,3 +682,39 @@ func TestTransferSuggestionService_ConfirmMatch_RepoCompleteError(t *testing.T) 
 	assert.Nil(t, result)
 	suggestionRepo.AssertExpectations(t)
 }
+
+// TestTransferSuggestionService_ConfirmMatch_RetainsReservedMatchedTransactionID proves
+// GAP AH retain: when a suggestion has a reserved matched_transaction_id (set during
+// fuzzy-match detection), ConfirmTransferSuggestionMatch passes it through to Complete
+// so the partial unique index continues protecting the inflow after completion.
+func TestTransferSuggestionService_ConfirmMatch_RetainsReservedMatchedTransactionID(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-retain"
+	suggestionID := "suggestion-retain"
+	actualAmount := 175.00
+	reservedTxnID := "txn-reserved-by-correlation"
+
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.ID = suggestionID
+	suggestion.Status = domain.SuggestionStatusPending
+	// Simulate a reservation set by CorrelateForUser fuzzy branch
+	suggestion.MatchedTransactionID = &reservedTxnID
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	// Complete must be called with the reserved txnID (not nil) — GAP AH retain
+	suggestionRepo.On("Complete", ctx, suggestionID,
+		mock.MatchedBy(func(s *string) bool { return s != nil && *s == reservedTxnID }),
+		actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"),
+	).Return(nil)
+
+	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, domain.SuggestionStatusCompleted, result.Status)
+	assert.Equal(t, actualAmount, *result.ActualAmount)
+	suggestionRepo.AssertExpectations(t)
+}

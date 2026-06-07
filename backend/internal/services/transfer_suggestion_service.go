@@ -189,9 +189,14 @@ func (s *transferSuggestionService) ConfirmTransferSuggestionMatch(
 	}
 
 	// 4. Complete in the database (race-safe: repo checks status IN ('pending','accepted')).
-	// User-confirmed path has no matched transaction ID (nil = NULL in DB).
+	// GAP AH retain: pass through any reserved matched_transaction_id so the partial unique
+	// index continues protecting the inflow after completion. If no reservation was set
+	// (MatchedTransactionID == nil), completes as before (nil = NULL in DB).
+	// MEDIUM#3 v1 note: if the reservation was cleared (stale-expiry) between the fuzzy
+	// prompt and this confirm, MatchedTransactionID is nil here — completes without a txn id
+	// (same as pre-fix behavior, acceptable for v1 since no prod data exists).
 	completedAt := time.Now().UTC()
-	if err := s.suggestionRepo.Complete(ctx, suggestionID, nil, actualAmount, "user_confirmed", completedAt); err != nil {
+	if err := s.suggestionRepo.Complete(ctx, suggestionID, suggestion.MatchedTransactionID, actualAmount, "user_confirmed", completedAt); err != nil {
 		return nil, err
 	}
 

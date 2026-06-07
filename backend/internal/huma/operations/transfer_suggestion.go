@@ -99,6 +99,18 @@ type RejectTransferSuggestionOutput struct {
 	}
 }
 
+// maskReservation clears the matched_transaction_id field from a non-completed
+// suggestion before including it in an API response. The field is an internal
+// implementation detail (GAP AH reservation) that should not be exposed to clients
+// while the suggestion is still pending/accepted — only the final completed row
+// (which carries the matched txn for auditability) is allowed to surface it.
+func maskReservation(s *domain.TransferSuggestion) *domain.TransferSuggestion {
+	if s != nil && s.Status != domain.SuggestionStatusCompleted {
+		s.MatchedTransactionID = nil
+	}
+	return s
+}
+
 // --- Handler Methods ---
 
 // GetTransferSuggestions handles GET /api/v1/transfer-suggestions.
@@ -114,6 +126,14 @@ func (h *TransferSuggestionHandler) GetTransferSuggestions(ctx context.Context, 
 		suggestions = []*domain.TransferSuggestion{}
 	}
 
+	// GAP AH MEDIUM#6: omit matched_transaction_id from non-completed suggestions.
+	// The field is an internal reservation detail and must not be exposed to clients
+	// while the suggestion is still pending/accepted — only the completed row is allowed
+	// to surface it (for auditability).
+	for i := range suggestions {
+		maskReservation(suggestions[i])
+	}
+
 	return &GetTransferSuggestionsOutput{Body: suggestions}, nil
 }
 
@@ -126,7 +146,8 @@ func (h *TransferSuggestionHandler) AcceptTransferSuggestion(ctx context.Context
 
 	output := &AcceptTransferSuggestionOutput{}
 	output.Body.Message = "Transfer suggestion accepted"
-	output.Body.Suggestion = suggestion
+	// GAP AH MEDIUM#6: accepted suggestions are not completed; mask the reservation field.
+	output.Body.Suggestion = maskReservation(suggestion)
 	return output, nil
 }
 
@@ -139,7 +160,8 @@ func (h *TransferSuggestionHandler) RejectTransferSuggestion(ctx context.Context
 
 	output := &RejectTransferSuggestionOutput{}
 	output.Body.Message = "Transfer suggestion rejected"
-	output.Body.Suggestion = suggestion
+	// GAP AH MEDIUM#6: rejected suggestions are not completed; mask the reservation field.
+	output.Body.Suggestion = maskReservation(suggestion)
 	return output, nil
 }
 
