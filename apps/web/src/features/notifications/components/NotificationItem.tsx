@@ -1,6 +1,7 @@
 // Issue #952: Notification Center — Single notification item (all 4 patterns)
 // Issue #972: Added confirm-match flow for fuzzy-matched transfer suggestions
 import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { formatRelativeTime } from '@/shared/dates/formatRelativeTime'
@@ -36,6 +37,9 @@ export function NotificationItem({ notification }: NotificationItemProps) {
           type: notification.type,
           interaction_pattern: notification.interaction_pattern,
         })
+      },
+      onError: () => {
+        toast.error('Failed to mark notification as read. Please try again.')
       },
     },
   })

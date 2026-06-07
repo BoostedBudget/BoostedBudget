@@ -42,7 +42,6 @@ type RuleExecutionService interface {
 	// TestRule performs a dry-run execution of a rule without persisting any changes.
 	// Issue #38: Rules API Endpoints - Test endpoint.
 	TestRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleTestResult, error)
-
 }
 
 // ruleExecutionService implements RuleExecutionService.
@@ -100,6 +99,15 @@ func (s *ruleExecutionService) SetChainResolver(resolver AccountChainResolver) {
 
 // ExecuteRule executes a single rule with the given trigger data.
 func (s *ruleExecutionService) ExecuteRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleExecution, error) {
+	// Defense-in-depth: re-validate action completeness before dispatching.
+	// The service layer validates on create/update, but rules loaded directly from the
+	// DB or injected in tests may bypass that path. Re-validating here prevents a
+	// partial-field action (e.g. transfer without to_account_id) from creating a
+	// malformed suggestion. Cost: one cheap in-memory validation per execution.
+	if err := rule.Validate(); err != nil {
+		return nil, fmt.Errorf("rule validation failed: %w", err)
+	}
+
 	startTime := time.Now()
 
 	// Create execution record

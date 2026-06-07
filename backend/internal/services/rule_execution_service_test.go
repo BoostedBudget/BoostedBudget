@@ -763,11 +763,11 @@ func TestGetExecutionHistory(t *testing.T) {
 
 // Mock automation rules repository for testing.
 type mockAutomationRulesRepository struct {
-	rules                []*domain.AutomationRule
-	createError          error
-	eventTriggerRules    []*domain.AutomationRule
-	incrementExecCalled  bool
-	updateSuccessCalled  bool
+	rules               []*domain.AutomationRule
+	createError         error
+	eventTriggerRules   []*domain.AutomationRule
+	incrementExecCalled bool
+	updateSuccessCalled bool
 }
 
 func (m *mockAutomationRulesRepository) Create(ctx context.Context, rule *domain.AutomationRule) error {
@@ -1190,7 +1190,8 @@ func TestSavingsGoalExecutor(t *testing.T) {
 			nil,
 		)
 
-		// Create rule without savings goal action
+		// Create rule without savings goal action — ExecuteRule now validates first via
+		// rule.Validate(), so the error is caught before the execution record is created.
 		actionsJSON := json.RawMessage(`{}`)
 		rule := &domain.AutomationRule{
 			ID:             "rule-savings-bad",
@@ -1206,8 +1207,10 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		execution, err := service.ExecuteRule(ctx, rule, map[string]interface{}{})
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "savings goal action not defined")
-		assert.Equal(t, domain.ExecutionStatusFailed, execution.Status)
+		// rule.Validate() catches the missing savings_goal_id before the executor runs.
+		assert.Contains(t, err.Error(), "savings_goal_id is required")
+		// Execution record is not created when pre-flight validation fails.
+		assert.Nil(t, execution)
 	})
 
 	t.Run("fails when savings goal not found", func(t *testing.T) {
@@ -1620,7 +1623,7 @@ func TestTestRule(t *testing.T) {
 
 		rule := createTestTransferRule()
 		triggerData := map[string]interface{}{
-			"amount":      100.0,
+			"amount":       100.0,
 			"custom_field": "custom_value",
 		}
 
@@ -1677,13 +1680,13 @@ func TestTestRule(t *testing.T) {
 
 		rule := createTestTransferRule()
 		rule.Conditions = []domain.AutomationRuleCondition{
-			{Field: "amount", Operator: domain.ConditionOperatorGt, Value: "500"}, // Will not match
+			{Field: "amount", Operator: domain.ConditionOperatorGt, Value: "500"},      // Will not match
 			{Field: "merchant", Operator: domain.ConditionOperatorEq, Value: "Amazon"}, // Will match
 		}
 		rule.ConditionLogic = "OR"
 
 		triggerData := map[string]interface{}{
-			"amount":   100.0,  // Less than 500
+			"amount":   100.0, // Less than 500
 			"merchant": "Amazon",
 		}
 
@@ -2036,7 +2039,7 @@ func TestTestRule_DottedFieldPreviewShowsActual(t *testing.T) {
 	})
 	rule := &domain.AutomationRule{
 		ID: "rule-dotted", UserID: "u", Name: "dotted", Enabled: true, Priority: 1,
-		RuleType: domain.RuleTypeTransferSuggestion,
+		RuleType:      domain.RuleTypeTransferSuggestion,
 		TriggerConfig: domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
 		// UI-built dotted field — backend emits flat "remaining"
 		Conditions: []domain.AutomationRuleCondition{
@@ -2062,53 +2065,196 @@ func TestTestRule_DottedFieldPreviewShowsActual(t *testing.T) {
 	assert.Equal(t, 150.0, cr.Actual, "Actual must equal the EventData value for budget.remaining_amount")
 }
 
-// TestFlatActionJSON_ValidateAndExecuteConsistency proves that a savings_goal rule
-// created with the flat action JSON the UI submits passes BOTH validateSavingsGoalAction
-// AND executeSavingsGoal, preventing the flat/wrapped convention from diverging again.
-// Issue #972: GAP W fix.
+// TestFlatActionJSON_ValidateAndExecuteConsistency proves that rules created with the flat
+// action JSON the UI submits pass BOTH domain.Validate() AND the executor, preventing the
+// flat/wrapped convention from diverging per rule type.
+// Issue #972: GAP W fix — extended to cover all four rule types (savings_goal, transfer,
+// budget_alert, category_rollover).
 func TestFlatActionJSON_ValidateAndExecuteConsistency(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-consistency-test"
 	goalID := "goal-consistency"
 
-	// This is exactly the flat JSON the RuleBuilder submits.
-	actionsJSON, _ := json.Marshal(domain.SavingsGoalAction{
-		SavingsGoalID: goalID,
-		FromAccountID: "checking-acct",
-		AmountType:    "fixed",
-		Amount:        100.0,
-	})
-
-	rule := &domain.AutomationRule{
-		ID:             "rule-flat-test",
-		UserID:         userID,
-		Name:           "Flat Action Rule",
-		Enabled:        true,
-		RuleType:       domain.RuleTypeSavingsGoal,
-		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
-		ConditionLogic: "AND",
-		Conditions:     []domain.AutomationRuleCondition{},
-		Actions:        actionsJSON,
-	}
-
-	// Validation must pass with flat JSON.
-	err := rule.Validate()
-	require.NoError(t, err, "flat action JSON must pass domain validation")
-
-	// Execution must also succeed with the same flat JSON.
-	execRepo := &mockRuleExecutionRepository{}
-	suggestionRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
 	goalRepo := &mockSavingsGoalRepository{
 		goals: []*domain.SavingsGoal{
 			{ID: goalID, UserID: userID, Name: "Emergency Fund", AccountID: "savings-acct"},
 		},
 	}
 
-	svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
-	svc.SetSavingsGoalRepo(goalRepo)
+	tests := []struct {
+		name            string
+		ruleType        domain.RuleType
+		actions         interface{}
+		wantSuggestions int
+		setupSvc        func(svc *ruleExecutionService)
+	}{
+		{
+			name:     "savings_goal flat JSON",
+			ruleType: domain.RuleTypeSavingsGoal,
+			actions: domain.SavingsGoalAction{
+				SavingsGoalID: goalID,
+				FromAccountID: "checking-acct",
+				AmountType:    "fixed",
+				Amount:        100.0,
+			},
+			wantSuggestions: 1,
+			setupSvc:        func(svc *ruleExecutionService) { svc.SetSavingsGoalRepo(goalRepo) },
+		},
+		{
+			name:     "transfer_suggestion flat JSON",
+			ruleType: domain.RuleTypeTransferSuggestion,
+			actions: domain.TransferAction{
+				FromAccountID: "checking-1",
+				ToAccountID:   "savings-1",
+				AmountType:    "fixed",
+				Amount:        50.0,
+			},
+			wantSuggestions: 1,
+			setupSvc:        nil,
+		},
+		{
+			name:     "budget_alert flat JSON",
+			ruleType: domain.RuleTypeBudgetAlert,
+			actions: domain.AlertAction{
+				NotificationChannels: []string{"in_app"},
+				ThresholdType:        "percentage",
+				ThresholdValue:       80.0,
+			},
+			wantSuggestions: 0, // budget alert has no suggestion side-effect
+			setupSvc:        nil,
+		},
+		{
+			name:     "category_rollover flat JSON",
+			ruleType: domain.RuleTypeCategoryRollover,
+			actions: domain.RolloverAction{
+				SourceBudgetCategoryID: "cat-1",
+				RolloverType:           "full",
+			},
+			wantSuggestions: 1,
+			setupSvc:        nil,
+		},
+	}
 
-	_, err = svc.ExecuteRule(ctx, rule, map[string]interface{}{"remaining": 200.0})
-	require.NoError(t, err, "flat action JSON must execute successfully (GAP W regression guard)")
-	require.Len(t, suggestionRepo.suggestions, 1, "one suggestion must be created")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			actionsJSON, _ := json.Marshal(tc.actions)
+			rule := &domain.AutomationRule{
+				ID:             "rule-flat-" + tc.name,
+				UserID:         userID,
+				Name:           "Flat Action Rule",
+				Enabled:        true,
+				RuleType:       tc.ruleType,
+				TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+				ConditionLogic: "AND",
+				Conditions:     []domain.AutomationRuleCondition{},
+				Actions:        actionsJSON,
+			}
+
+			// Validation must pass with flat JSON.
+			require.NoError(t, rule.Validate(), "flat action JSON must pass domain validation for %s", tc.name)
+
+			// Execution must also succeed with the same flat JSON.
+			execRepo := &mockRuleExecutionRepository{}
+			suggestionRepo := &mockTransferSuggestionRepository{}
+			ruleRepo := &mockAutomationRulesRepository{}
+			svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+			if tc.setupSvc != nil {
+				tc.setupSvc(svc)
+			}
+
+			_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{"remaining": 200.0})
+			require.NoError(t, err, "flat action JSON must execute successfully (%s)", tc.name)
+			assert.Len(t, suggestionRepo.suggestions, tc.wantSuggestions,
+				"suggestion count for %s", tc.name)
+		})
+	}
+}
+
+// TestExecuteRule_PartialFieldAction_ReturnsError proves that ExecuteRule validates the rule
+// before dispatching, so a partial/malformed action is rejected before creating side-effects.
+// Issue #972: GAP Y defense-in-depth.
+// RED: fails today (executors gate only one field; partial actions proceed past single-field guard).
+// GREEN: add rule.Validate() at top of ExecuteRule.
+func TestExecuteRule_PartialFieldAction_ReturnsError(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-partial-test"
+
+	tests := []struct {
+		name            string
+		ruleType        domain.RuleType
+		actions         interface{} // intentionally incomplete
+		wantErrContains string
+	}{
+		{
+			name:     "transfer missing to_account_id",
+			ruleType: domain.RuleTypeTransferSuggestion,
+			actions: domain.TransferAction{
+				FromAccountID: "acct-1",
+				// ToAccountID intentionally absent
+				AmountType: "fixed",
+				Amount:     50.0,
+			},
+			wantErrContains: "to_account_id",
+		},
+		{
+			name:     "savings_goal missing from_account_id",
+			ruleType: domain.RuleTypeSavingsGoal,
+			actions: domain.SavingsGoalAction{
+				SavingsGoalID: "goal-1",
+				// FromAccountID intentionally absent
+				AmountType: "fixed",
+				Amount:     50.0,
+			},
+			wantErrContains: "from_account_id",
+		},
+		{
+			name:     "budget_alert missing notification_channels",
+			ruleType: domain.RuleTypeBudgetAlert,
+			actions: domain.AlertAction{
+				// NotificationChannels intentionally absent
+				ThresholdType:  "percentage",
+				ThresholdValue: 80.0,
+			},
+			wantErrContains: "notification_channels",
+		},
+		{
+			name:     "category_rollover missing source_budget_category_id",
+			ruleType: domain.RuleTypeCategoryRollover,
+			actions: domain.RolloverAction{
+				// SourceBudgetCategoryID intentionally absent
+				RolloverType: "full",
+			},
+			wantErrContains: "source_budget_category_id",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			actionsJSON, _ := json.Marshal(tc.actions)
+			rule := &domain.AutomationRule{
+				ID:             "rule-partial-" + tc.name,
+				UserID:         userID,
+				Name:           "Partial Rule",
+				Enabled:        true,
+				RuleType:       tc.ruleType,
+				TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+				ConditionLogic: "AND",
+				Conditions:     []domain.AutomationRuleCondition{},
+				Actions:        actionsJSON,
+			}
+
+			execRepo := &mockRuleExecutionRepository{}
+			suggestionRepo := &mockTransferSuggestionRepository{}
+			ruleRepo := &mockAutomationRulesRepository{}
+			svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+			_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+			require.Error(t, err, "partial action must be rejected by ExecuteRule")
+			assert.Contains(t, err.Error(), tc.wantErrContains,
+				"error must mention the missing field for %s", tc.name)
+			// No suggestion should be created — the action was rejected before side-effects.
+			assert.Empty(t, suggestionRepo.suggestions,
+				"no suggestion must be created for partial action (%s)", tc.name)
+		})
+	}
 }
