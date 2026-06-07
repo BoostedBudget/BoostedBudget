@@ -191,9 +191,17 @@ func (s *transferSuggestionService) ConfirmTransferSuggestionMatch(
 		return nil, domain.ErrTransferSuggestionAlreadyActioned
 	}
 
+	// GAP AU: a nil reservation means the fuzzy prompt is stale (stale-cleared by daily
+	// worker). No legitimate confirm-with-nil path exists — ReserveMatchedTransaction always
+	// sets a non-nil reservation before the fuzzy prompt fires. Reject to prevent double-count.
+	if suggestion.MatchedTransactionID == nil {
+		return nil, domain.ErrTransferSuggestionAlreadyActioned
+	}
+
 	completedAt := time.Now().UTC()
 	// GAP AR: pass the observed reservation so the DB rejects the update if the inflow was
 	// reclaimed between this read and the write (IS NOT DISTINCT FROM predicate).
+	// MatchedTransactionID is guaranteed non-nil here (guarded above by GAP AU).
 	if err := s.suggestionRepo.CompleteRetainingReservation(ctx, suggestionID, actualAmount, "user_confirmed", completedAt, suggestion.MatchedTransactionID); err != nil {
 		return nil, err
 	}

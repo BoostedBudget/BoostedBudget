@@ -534,14 +534,19 @@ func TestTransferSuggestionService_ConfirmMatch_PendingSuccess(t *testing.T) {
 	userID := "user-123"
 	suggestionID := "suggestion-123"
 	actualAmount := 150.00
+	reservedTxnID := "txn-pending-success"
 
 	suggestion := createTestTransferSuggestion(userID)
 	suggestion.Status = domain.SuggestionStatusPending
+	// GAP AU: fuzzy confirm requires a non-nil reservation (ReserveMatchedTransaction sets this)
+	suggestion.MatchedTransactionID = &reservedTxnID
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
 	// GAP AK: now uses CompleteRetainingReservation (no matched_transaction_id argument)
-	// GAP AR: passes the observed MatchedTransactionID (nil for a fresh suggestion)
-	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"), (*string)(nil)).Return(nil)
+	// GAP AR: passes the observed MatchedTransactionID
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"),
+		mock.MatchedBy(func(s *string) bool { return s != nil && *s == reservedTxnID }),
+	).Return(nil)
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
 
@@ -561,14 +566,19 @@ func TestTransferSuggestionService_ConfirmMatch_AcceptedSuccess(t *testing.T) {
 	userID := "user-123"
 	suggestionID := "suggestion-123"
 	actualAmount := 200.00
+	reservedTxnID := "txn-accepted-success"
 
 	suggestion := createTestTransferSuggestion(userID)
 	suggestion.Status = domain.SuggestionStatusAccepted
+	// GAP AU: fuzzy confirm requires a non-nil reservation
+	suggestion.MatchedTransactionID = &reservedTxnID
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
 	// GAP AK: now uses CompleteRetainingReservation
-	// GAP AR: passes the observed MatchedTransactionID (nil for a fresh suggestion)
-	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"), (*string)(nil)).Return(nil)
+	// GAP AR: passes the observed MatchedTransactionID
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"),
+		mock.MatchedBy(func(s *string) bool { return s != nil && *s == reservedTxnID }),
+	).Return(nil)
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
 
@@ -683,14 +693,19 @@ func TestTransferSuggestionService_ConfirmMatch_RepoCompleteError(t *testing.T) 
 
 	userID := "user-123"
 	suggestionID := "suggestion-123"
+	reservedTxnID := "txn-repo-error"
 
 	suggestion := createTestTransferSuggestion(userID)
 	suggestion.Status = domain.SuggestionStatusPending
+	// GAP AU: fuzzy confirm requires a non-nil reservation to reach the repo call
+	suggestion.MatchedTransactionID = &reservedTxnID
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
 	// GAP AK: now uses CompleteRetainingReservation
-	// GAP AR: passes the observed MatchedTransactionID (nil for a fresh suggestion)
-	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, 100.00, "user_confirmed", mock.AnythingOfType("time.Time"), (*string)(nil)).Return(errors.New("db error"))
+	// GAP AR: passes the observed MatchedTransactionID
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, 100.00, "user_confirmed", mock.AnythingOfType("time.Time"),
+		mock.MatchedBy(func(s *string) bool { return s != nil && *s == reservedTxnID }),
+	).Return(errors.New("db error"))
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, 100.00)
 
@@ -747,6 +762,8 @@ func TestTransferSuggestionService_ConfirmMatch_RetainsReservedMatchedTransactio
 // ConfirmTransferSuggestionMatch must call CompleteRetainingReservation (which omits
 // matched_transaction_id from the SET clause) rather than Complete (which overwrites it).
 // This avoids the race where a stale-read id clobbers a reclaimed reservation.
+// GAP AU: a non-nil reservation is required to reach the repo; the nil guard fires first
+// if MatchedTransactionID is nil.
 func TestTransferSuggestionService_ConfirmMatch_UsesRetainReservation(t *testing.T) {
 	ctx := context.Background()
 	suggestionRepo := new(mockTransferSuggestionRepo)
@@ -755,16 +772,20 @@ func TestTransferSuggestionService_ConfirmMatch_UsesRetainReservation(t *testing
 	userID := "user-ak"
 	suggestionID := "suggestion-ak"
 	actualAmount := 250.00
+	reservedTxnID := "txn-ak-retain"
 
 	suggestion := createTestTransferSuggestion(userID)
 	suggestion.ID = suggestionID
 	suggestion.Status = domain.SuggestionStatusPending
-	suggestion.MatchedTransactionID = nil // no reservation set
+	// GAP AU: must have a non-nil reservation; fuzzy flow always sets this via ReserveMatchedTransaction
+	suggestion.MatchedTransactionID = &reservedTxnID
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
 	// GAP AK: CompleteRetainingReservation must be called (not Complete)
-	// GAP AR: passes nil since MatchedTransactionID is nil for this suggestion
-	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"), (*string)(nil)).Return(nil)
+	// GAP AR: passes the observed MatchedTransactionID
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"),
+		mock.MatchedBy(func(s *string) bool { return s != nil && *s == reservedTxnID }),
+	).Return(nil)
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
 
@@ -976,7 +997,9 @@ func TestConfirmTransferSuggestionMatch_TOCTOUReservationReclaimed(t *testing.T)
 // TestConfirmTransferSuggestionMatch_PassesObservedReservationToRepo proves that
 // ConfirmTransferSuggestionMatch correctly passes the observed MatchedTransactionID to
 // CompleteRetainingReservation so the IS NOT DISTINCT FROM guard can detect reclamation.
-// When MatchedTransactionID is nil (no reservation), nil is passed.
+// When MatchedTransactionID is nil (no reservation), nil is passed — but GAP AU now
+// rejects at the service layer before reaching the repo, so this test verifies the
+// rejection behaviour (not the old pass-through behaviour).
 func TestConfirmTransferSuggestionMatch_PassesObservedNilReservationToRepo(t *testing.T) {
 	ctx := context.Background()
 	suggestionRepo := new(mockTransferSuggestionRepo)
@@ -992,16 +1015,51 @@ func TestConfirmTransferSuggestionMatch_PassesObservedNilReservationToRepo(t *te
 	suggestion.MatchedTransactionID = nil
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
-	// The nil IS NOT DISTINCT FROM NULL predicate in the WHERE clause allows the update to proceed.
-	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID,
-		actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"),
-		(*string)(nil), // nil = "I saw no reservation at read time"
-	).Return(nil)
+	// GAP AU: nil reservation is now rejected at the service layer — repo is never called.
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.Equal(t, domain.SuggestionStatusCompleted, result.Status)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
+	suggestionRepo.AssertExpectations(t)
+}
+
+// =============================================================================
+// GAP AU: ConfirmTransferSuggestionMatch nil-reservation guard (stale-cleared prompt)
+// =============================================================================
+
+// TestConfirmTransferSuggestionMatch_StaleReservation_RejectsWithAlreadyActioned proves
+// GAP AU fix: when MatchedTransactionID is nil at confirm time (the daily
+// ClearStaleReservations worker has already nulled it), ConfirmTransferSuggestionMatch must
+// reject the confirm with ErrTransferSuggestionAlreadyActioned — before even reaching
+// CompleteRetainingReservation — so the headline "users moved $X" stat cannot be
+// double-counted by a stale fuzzy prompt.
+//
+// No legitimate confirm-with-nil path exists in the fuzzy flow: ReserveMatchedTransaction
+// always sets a non-nil reservation before the fuzzy prompt fires. A nil reservation at
+// confirm time means the prompt is stale.
+func TestConfirmTransferSuggestionMatch_StaleReservation_RejectsWithAlreadyActioned(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-au"
+	suggestionID := "suggestion-au"
+	actualAmount := 300.00
+
+	// Accepted suggestion whose reservation was nulled by ClearStaleReservations
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.ID = suggestionID
+	suggestion.Status = domain.SuggestionStatusAccepted
+	suggestion.MatchedTransactionID = nil // stale-cleared by daily worker
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	// CompleteRetainingReservation must NOT be called — the nil guard fires first.
+
+	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
+
+	// GAP AU: must reject to prevent double-count
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
 	suggestionRepo.AssertExpectations(t)
 }
