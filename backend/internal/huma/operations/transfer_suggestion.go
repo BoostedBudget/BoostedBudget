@@ -205,15 +205,20 @@ func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *Con
 		}
 	}
 
-	buildOutput := func(suggestion *domain.TransferSuggestion) *ConfirmTransferSuggestionMatchOutput {
+	// buildOutput constructs the response and conditionally fires analytics.
+	// GAP AS: fireAnalytics param prevents double-firing EventTransferSuggestionValidated
+	// on MCP idempotency-key cache-hit replays. Event fires only on first execution.
+	buildOutput := func(suggestion *domain.TransferSuggestion, fireAnalytics bool) *ConfirmTransferSuggestionMatchOutput {
 		output := &ConfirmTransferSuggestionMatchOutput{}
 		output.Body.Message = "Transfer suggestion confirmed"
 		output.Body.Suggestion = suggestion
-		fireConfirmAnalytics()
+		if fireAnalytics {
+			fireConfirmAnalytics()
+		}
 		return output
 	}
 
-	// MCP origin: use transactional audit (mirrors savings_goal.go CreateGoal pattern).
+	// MCP origin: use transactional audit with idempotency support.
 	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.db != nil && h.mcpAuditRepo != nil {
 		tx, err := h.db.Begin(ctx)
 		if err != nil {
@@ -233,7 +238,8 @@ func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *Con
 				return nil, humaerrors.LoggingMapError(ctx, err)
 			}
 			if cacheHit {
-				return buildOutput(suggestion), nil
+				// GAP AS: cache-hit replay — do NOT re-fire analytics (event already fired on first exec).
+				return buildOutput(suggestion, false), nil
 			}
 			if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "confirmTransferSuggestionMatch", input.IdempotencyKey); err != nil {
 				return nil, humaerrors.LoggingMapError(ctx, err)
@@ -241,7 +247,7 @@ func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *Con
 			if err := tx.Commit(ctx); err != nil {
 				return nil, humaerrors.LoggingMapError(ctx, err)
 			}
-			return buildOutput(suggestion), nil
+			return buildOutput(suggestion, true), nil
 		}
 
 		txSuggestionRepo := repository.NewTransferSuggestionRepository(tx)
@@ -256,7 +262,7 @@ func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *Con
 		if err := tx.Commit(ctx); err != nil {
 			return nil, humaerrors.LoggingMapError(ctx, err)
 		}
-		return buildOutput(suggestion), nil
+		return buildOutput(suggestion, true), nil
 	}
 
 	// Non-MCP path: call service directly.
@@ -265,7 +271,7 @@ func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *Con
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return buildOutput(suggestion), nil
+	return buildOutput(suggestion, true), nil
 }
 
 // DeclineMatch handles POST /api/v1/transfer-suggestions/{id}/decline-match.
@@ -273,20 +279,28 @@ func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *Con
 // can be matched by a different suggestion. User chose "No, that wasn't my transfer."
 // Supports MCP audit path when X-MCP-Worker-Secret is present and valid.
 func (h *TransferSuggestionHandler) DeclineMatch(ctx context.Context, input *DeclineTransferSuggestionMatchInput) (*DeclineTransferSuggestionMatchOutput, error) {
-	buildOutput := func(suggestion *domain.TransferSuggestion) *DeclineTransferSuggestionMatchOutput {
+	fireDeclineAnalytics := func() {
 		if h.analytics != nil {
 			h.analytics.Capture(input.UserID, phclient.EventTransferSuggestionValidated, map[string]interface{}{
 				"suggestion_id": input.ID,
 				"action":        "declined",
 			})
 		}
+	}
+
+	// buildOutput constructs the response and conditionally fires analytics.
+	// GAP AS: fireAnalytics param prevents double-firing on MCP idempotency-key cache-hit replays.
+	buildOutput := func(suggestion *domain.TransferSuggestion, fireAnalytics bool) *DeclineTransferSuggestionMatchOutput {
 		output := &DeclineTransferSuggestionMatchOutput{}
 		output.Body.Message = "Transfer match declined"
 		output.Body.Suggestion = maskReservation(suggestion)
+		if fireAnalytics {
+			fireDeclineAnalytics()
+		}
 		return output
 	}
 
-	// MCP origin: use transactional audit (mirrors ConfirmMatch pattern).
+	// MCP origin: use transactional audit with idempotency support.
 	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.db != nil && h.mcpAuditRepo != nil {
 		tx, err := h.db.Begin(ctx)
 		if err != nil {
@@ -306,7 +320,8 @@ func (h *TransferSuggestionHandler) DeclineMatch(ctx context.Context, input *Dec
 				return nil, humaerrors.LoggingMapError(ctx, err)
 			}
 			if cacheHit {
-				return buildOutput(suggestion), nil
+				// GAP AS: cache-hit replay — do not re-fire analytics.
+				return buildOutput(suggestion, false), nil
 			}
 			if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "declineTransferSuggestionMatch", input.IdempotencyKey); err != nil {
 				return nil, humaerrors.LoggingMapError(ctx, err)
@@ -314,7 +329,7 @@ func (h *TransferSuggestionHandler) DeclineMatch(ctx context.Context, input *Dec
 			if err := tx.Commit(ctx); err != nil {
 				return nil, humaerrors.LoggingMapError(ctx, err)
 			}
-			return buildOutput(suggestion), nil
+			return buildOutput(suggestion, true), nil
 		}
 
 		txSuggestionRepo := repository.NewTransferSuggestionRepository(tx)
@@ -329,7 +344,7 @@ func (h *TransferSuggestionHandler) DeclineMatch(ctx context.Context, input *Dec
 		if err := tx.Commit(ctx); err != nil {
 			return nil, humaerrors.LoggingMapError(ctx, err)
 		}
-		return buildOutput(suggestion), nil
+		return buildOutput(suggestion, true), nil
 	}
 
 	// Non-MCP path: call service directly.
@@ -337,7 +352,7 @@ func (h *TransferSuggestionHandler) DeclineMatch(ctx context.Context, input *Dec
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
-	return buildOutput(suggestion), nil
+	return buildOutput(suggestion, true), nil
 }
 
 // RegisterTransferSuggestionRoutes registers transfer suggestion routes with the Huma API.

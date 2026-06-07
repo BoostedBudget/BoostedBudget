@@ -249,10 +249,17 @@ func (m *mockTransferSuggestionRepository) ClearMatchedTransactionID(_ context.C
 	return nil
 }
 
-func (m *mockTransferSuggestionRepository) CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time) error {
+func (m *mockTransferSuggestionRepository) CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time, expectedTxnID *string) error {
 	for _, s := range m.suggestions {
 		if s.ID == id {
 			if s.Status != domain.SuggestionStatusPending && s.Status != domain.SuggestionStatusAccepted {
+				return domain.ErrTransferSuggestionAlreadyActioned
+			}
+			// GAP AR: check IS NOT DISTINCT FROM semantics (both nil, or same value)
+			if (expectedTxnID == nil) != (s.MatchedTransactionID == nil) {
+				return domain.ErrTransferSuggestionAlreadyActioned
+			}
+			if expectedTxnID != nil && s.MatchedTransactionID != nil && *expectedTxnID != *s.MatchedTransactionID {
 				return domain.ErrTransferSuggestionAlreadyActioned
 			}
 			s.Status = domain.SuggestionStatusCompleted

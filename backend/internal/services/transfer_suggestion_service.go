@@ -23,7 +23,10 @@ type TransferSuggestionRepository interface {
 	// The DB retains whatever matched_transaction_id currently holds (T if still reserved, NULL if
 	// stale-cleared). Avoids the race where a stale-read id overwrites a reclaimed reservation.
 	// Race-safe: only operates on pending or accepted suggestions.
-	CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time) error
+	//
+	// GAP AR: expectedTxnID is the matched_transaction_id the service observed at read time.
+	// If the reservation was reclaimed between read and write, returns ErrTransferSuggestionAlreadyActioned.
+	CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time, expectedTxnID *string) error
 	// ClearMatchedTransactionID releases the reservation on a suggestion by setting
 	// matched_transaction_id = NULL. Used for user-driven decline-match.
 	ClearMatchedTransactionID(ctx context.Context, id string) error
@@ -189,7 +192,9 @@ func (s *transferSuggestionService) ConfirmTransferSuggestionMatch(
 	}
 
 	completedAt := time.Now().UTC()
-	if err := s.suggestionRepo.CompleteRetainingReservation(ctx, suggestionID, actualAmount, "user_confirmed", completedAt); err != nil {
+	// GAP AR: pass the observed reservation so the DB rejects the update if the inflow was
+	// reclaimed between this read and the write (IS NOT DISTINCT FROM predicate).
+	if err := s.suggestionRepo.CompleteRetainingReservation(ctx, suggestionID, actualAmount, "user_confirmed", completedAt, suggestion.MatchedTransactionID); err != nil {
 		return nil, err
 	}
 

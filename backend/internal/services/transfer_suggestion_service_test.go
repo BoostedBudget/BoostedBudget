@@ -92,8 +92,8 @@ func (m *mockTransferSuggestionRepo) GetActiveByUserID(ctx context.Context, user
 	return args.Get(0).([]*domain.TransferSuggestion), args.Error(1)
 }
 
-func (m *mockTransferSuggestionRepo) CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time) error {
-	args := m.Called(ctx, id, actualAmount, completionSource, completedAt)
+func (m *mockTransferSuggestionRepo) CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time, expectedTxnID *string) error {
+	args := m.Called(ctx, id, actualAmount, completionSource, completedAt, expectedTxnID)
 	return args.Error(0)
 }
 
@@ -540,7 +540,8 @@ func TestTransferSuggestionService_ConfirmMatch_PendingSuccess(t *testing.T) {
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
 	// GAP AK: now uses CompleteRetainingReservation (no matched_transaction_id argument)
-	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time")).Return(nil)
+	// GAP AR: passes the observed MatchedTransactionID (nil for a fresh suggestion)
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"), (*string)(nil)).Return(nil)
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
 
@@ -566,7 +567,8 @@ func TestTransferSuggestionService_ConfirmMatch_AcceptedSuccess(t *testing.T) {
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
 	// GAP AK: now uses CompleteRetainingReservation
-	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time")).Return(nil)
+	// GAP AR: passes the observed MatchedTransactionID (nil for a fresh suggestion)
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"), (*string)(nil)).Return(nil)
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
 
@@ -687,7 +689,8 @@ func TestTransferSuggestionService_ConfirmMatch_RepoCompleteError(t *testing.T) 
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
 	// GAP AK: now uses CompleteRetainingReservation
-	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, 100.00, "user_confirmed", mock.AnythingOfType("time.Time")).Return(errors.New("db error"))
+	// GAP AR: passes the observed MatchedTransactionID (nil for a fresh suggestion)
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, 100.00, "user_confirmed", mock.AnythingOfType("time.Time"), (*string)(nil)).Return(errors.New("db error"))
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, 100.00)
 
@@ -720,8 +723,11 @@ func TestTransferSuggestionService_ConfirmMatch_RetainsReservedMatchedTransactio
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
 	// GAP AK: CompleteRetainingReservation is called instead of Complete — no matched_transaction_id arg.
 	// The DB retains the reservation; the partial unique index continues protecting the inflow.
+	// GAP AR: the service passes the observed MatchedTransactionID so the WHERE clause enforces that the
+	// reservation has not been reclaimed (IS NOT DISTINCT FROM predicate).
 	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID,
 		actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"),
+		mock.MatchedBy(func(s *string) bool { return s != nil && *s == reservedTxnID }),
 	).Return(nil)
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
@@ -757,7 +763,8 @@ func TestTransferSuggestionService_ConfirmMatch_UsesRetainReservation(t *testing
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
 	// GAP AK: CompleteRetainingReservation must be called (not Complete)
-	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time")).Return(nil)
+	// GAP AR: passes nil since MatchedTransactionID is nil for this suggestion
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"), (*string)(nil)).Return(nil)
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
 
@@ -861,5 +868,140 @@ func TestDeclineTransferSuggestionMatch_AcceptedSuggestion(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Nil(t, result.MatchedTransactionID)
+	suggestionRepo.AssertExpectations(t)
+}
+
+// =============================================================================
+// GAP AQ: ClearMatchedTransactionID propagates errors (TOCTOU false-success fix)
+// =============================================================================
+
+// TestDeclineTransferSuggestionMatch_ClearPropagatesAlreadyActioned proves GAP AQ fix:
+// when ClearMatchedTransactionID returns ErrTransferSuggestionAlreadyActioned (because the
+// suggestion went terminal between the service's GetByID read and the repo's UPDATE write),
+// DeclineTransferSuggestionMatch propagates that error rather than falsely returning success.
+// This simulates the TOCTOU window where the DB UPDATE matched 0 rows.
+func TestDeclineTransferSuggestionMatch_ClearPropagatesAlreadyActioned(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-aq"
+	suggestionID := "suggestion-aq"
+	reservedTxnID := "txn-aq"
+
+	// Service reads the suggestion as pending (before the race window closes)
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.ID = suggestionID
+	suggestion.Status = domain.SuggestionStatusPending
+	suggestion.MatchedTransactionID = &reservedTxnID
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	// Simulate TOCTOU: the suggestion went terminal between the service's GetByID and the
+	// repo's UPDATE execution — the repo now returns AlreadyActioned (0 rows affected).
+	suggestionRepo.On("ClearMatchedTransactionID", ctx, suggestionID).Return(domain.ErrTransferSuggestionAlreadyActioned)
+
+	result, err := svc.DeclineTransferSuggestionMatch(ctx, userID, suggestionID)
+
+	// GAP AQ: must return the error, not nil (no false success)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
+	suggestionRepo.AssertExpectations(t)
+}
+
+// TestDeclineTransferSuggestionMatch_ClearPropagatesNotFound verifies that a not-found
+// error from ClearMatchedTransactionID is also propagated correctly.
+func TestDeclineTransferSuggestionMatch_ClearPropagatesNotFound(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-aq2"
+	suggestionID := "suggestion-aq2"
+
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.ID = suggestionID
+	suggestion.Status = domain.SuggestionStatusPending
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("ClearMatchedTransactionID", ctx, suggestionID).Return(domain.ErrTransferSuggestionNotFound)
+
+	result, err := svc.DeclineTransferSuggestionMatch(ctx, userID, suggestionID)
+
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionNotFound)
+	suggestionRepo.AssertExpectations(t)
+}
+
+// =============================================================================
+// GAP AR: ConfirmTransferSuggestionMatch TOCTOU guard (IS NOT DISTINCT FROM)
+// =============================================================================
+
+// TestConfirmTransferSuggestionMatch_TOCTOUReservationReclaimed proves GAP AR fix:
+// when CompleteRetainingReservation returns ErrTransferSuggestionAlreadyActioned (because the
+// inflow reservation was reclaimed by another suggestion between the service's GetByID read
+// and the repo's UPDATE write), ConfirmTransferSuggestionMatch surfaces that error rather than
+// silently double-counting the transfer in the aggregate stat.
+func TestConfirmTransferSuggestionMatch_TOCTOUReservationReclaimed(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-ar"
+	suggestionID := "suggestion-ar"
+	reservedTxnID := "txn-ar"
+	actualAmount := 200.00
+
+	// Service reads the suggestion as pending with reservation T
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.ID = suggestionID
+	suggestion.Status = domain.SuggestionStatusPending
+	suggestion.MatchedTransactionID = &reservedTxnID
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	// Simulate TOCTOU: ClearStaleReservations ran and another suggestion claimed T —
+	// IS NOT DISTINCT FROM predicate returns 0 rows → repo returns AlreadyActioned.
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID,
+		actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"),
+		mock.MatchedBy(func(s *string) bool { return s != nil && *s == reservedTxnID }),
+	).Return(domain.ErrTransferSuggestionAlreadyActioned)
+
+	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
+
+	// GAP AR: must return the error so the confirm is rejected (not double-counted)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
+	suggestionRepo.AssertExpectations(t)
+}
+
+// TestConfirmTransferSuggestionMatch_PassesObservedReservationToRepo proves that
+// ConfirmTransferSuggestionMatch correctly passes the observed MatchedTransactionID to
+// CompleteRetainingReservation so the IS NOT DISTINCT FROM guard can detect reclamation.
+// When MatchedTransactionID is nil (no reservation), nil is passed.
+func TestConfirmTransferSuggestionMatch_PassesObservedNilReservationToRepo(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-ar2"
+	suggestionID := "suggestion-ar2"
+	actualAmount := 100.00
+
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.ID = suggestionID
+	suggestion.Status = domain.SuggestionStatusPending
+	suggestion.MatchedTransactionID = nil
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	// The nil IS NOT DISTINCT FROM NULL predicate in the WHERE clause allows the update to proceed.
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID,
+		actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"),
+		(*string)(nil), // nil = "I saw no reservation at read time"
+	).Return(nil)
+
+	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, domain.SuggestionStatusCompleted, result.Status)
 	suggestionRepo.AssertExpectations(t)
 }
