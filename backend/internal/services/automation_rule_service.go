@@ -4,6 +4,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -38,16 +39,97 @@ type AutomationRuleService interface {
 
 // automationRuleService implements AutomationRuleService.
 type automationRuleService struct {
-	ruleRepo repository.AutomationRulesRepository
+	ruleRepo        repository.AutomationRulesRepository
+	savingsGoalRepo repository.SavingsGoalRepository // optional; used for ownership validation (GAP AE)
+	accountRepo     repository.AccountRepository     // optional; used for ownership validation (GAP AE)
 }
 
 // NewAutomationRuleService creates a new AutomationRuleService instance.
+// Returns the concrete type so callers in main.go can call optional setter methods
+// (SetSavingsGoalRepo, SetAccountRepo) without adding them to the interface — consistent
+// with NewRuleExecutionService's pattern.
 func NewAutomationRuleService(
 	ruleRepo repository.AutomationRulesRepository,
-) AutomationRuleService {
+) *automationRuleService {
 	return &automationRuleService{
 		ruleRepo: ruleRepo,
 	}
+}
+
+// SetSavingsGoalRepo injects the savings goal repository for ownership validation.
+// Must be called in production (cmd/server/main.go) to enable savings_goal_id IDOR protection.
+// Issue #972: GAP AE.
+func (s *automationRuleService) SetSavingsGoalRepo(repo repository.SavingsGoalRepository) {
+	s.savingsGoalRepo = repo
+}
+
+// SetAccountRepo injects the account repository for ownership validation.
+// Must be called in production (cmd/server/main.go) to enable from/to_account_id IDOR protection.
+// Issue #972: GAP AE.
+func (s *automationRuleService) SetAccountRepo(repo repository.AccountRepository) {
+	s.accountRepo = repo
+}
+
+// validateRuleReferenceOwnership checks that IDs referenced in the rule's actions (savings_goal_id,
+// from_account_id, to_account_id, from_user_account_id, to_user_account_id) belong to rule.UserID.
+// Returns an error if any referenced ID belongs to a different user. Silently skips if the required
+// repo is not injected.
+// Issue #972: GAP AE — prevents IDOR via crafted automation rules, including the chain-resolver
+// attack vector where an attacker supplies their own from_account_id (passes the ID check) plus a
+// victim's from_user_account_id (used by the chain resolver to overwrite the destination).
+func (s *automationRuleService) validateRuleReferenceOwnership(ctx context.Context, rule *domain.AutomationRule) error {
+	switch rule.RuleType {
+	case domain.RuleTypeSavingsGoal:
+		action, err := rule.ParseSavingsGoalAction()
+		if err != nil {
+			return err
+		}
+		if s.savingsGoalRepo != nil && action.SavingsGoalID != "" {
+			if _, err := s.savingsGoalRepo.GetByIDForUser(ctx, action.SavingsGoalID, rule.UserID); err != nil {
+				return fmt.Errorf("savings_goal_id does not belong to this user")
+			}
+		}
+		if s.accountRepo != nil && action.FromAccountID != "" {
+			if _, err := s.accountRepo.GetByIDAndUser(ctx, action.FromAccountID, rule.UserID); err != nil {
+				return fmt.Errorf("from_account_id does not belong to this user")
+			}
+		}
+
+	case domain.RuleTypeTransferSuggestion:
+		action, err := rule.ParseTransferAction()
+		if err != nil {
+			return err
+		}
+		if s.accountRepo == nil {
+			break
+		}
+		// Verify direct account IDs belong to the user
+		if action.FromAccountID != "" {
+			if _, err := s.accountRepo.GetByIDAndUser(ctx, action.FromAccountID, rule.UserID); err != nil {
+				return fmt.Errorf("from_account_id does not belong to this user")
+			}
+		}
+		if action.ToAccountID != "" {
+			if _, err := s.accountRepo.GetByIDAndUser(ctx, action.ToAccountID, rule.UserID); err != nil {
+				return fmt.Errorf("to_account_id does not belong to this user")
+			}
+		}
+		// Chain-resolver IDOR guard: from_user_account_id and to_user_account_id are stable
+		// identifiers that survive Plaid re-links. An attacker could supply their own from_account_id
+		// (passes the check above) plus a victim's from_user_account_id, and the unscoped
+		// ResolveActiveID would overwrite the suggestion's destination at execution time.
+		if action.FromUserAccountID != "" {
+			if _, err := s.accountRepo.GetByUserAccountIDAndUser(ctx, action.FromUserAccountID, rule.UserID); err != nil {
+				return fmt.Errorf("from_user_account_id does not belong to this user")
+			}
+		}
+		if action.ToUserAccountID != "" {
+			if _, err := s.accountRepo.GetByUserAccountIDAndUser(ctx, action.ToUserAccountID, rule.UserID); err != nil {
+				return fmt.Errorf("to_user_account_id does not belong to this user")
+			}
+		}
+	}
+	return nil
 }
 
 // CreateRule creates a new automation rule (unlimited rules for all tiers).
@@ -73,6 +155,11 @@ func (s *automationRuleService) CreateRule(ctx context.Context, userID string, r
 
 	// Validate the rule
 	if err := rule.Validate(); err != nil {
+		return nil, err
+	}
+
+	// Verify referenced IDs (savings_goal_id, account IDs) belong to the rule owner (GAP AE).
+	if err := s.validateRuleReferenceOwnership(ctx, rule); err != nil {
 		return nil, err
 	}
 
@@ -145,6 +232,11 @@ func (s *automationRuleService) UpdateRule(ctx context.Context, userID, ruleID s
 
 	// Validate
 	if err := rule.Validate(); err != nil {
+		return nil, err
+	}
+
+	// Verify referenced IDs (savings_goal_id, account IDs) belong to the rule owner (GAP AE).
+	if err := s.validateRuleReferenceOwnership(ctx, rule); err != nil {
 		return nil, err
 	}
 

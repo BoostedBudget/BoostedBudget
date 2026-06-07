@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -916,6 +918,19 @@ func (m *mockSavingsGoalRepository) GetByID(ctx context.Context, id string) (*do
 	return nil, domain.ErrSavingsGoalNotFound
 }
 
+// GetByIDForUser retrieves a savings goal by ID with ownership validation (GAP AE).
+func (m *mockSavingsGoalRepository) GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error) {
+	if m.findError != nil {
+		return nil, m.findError
+	}
+	for _, g := range m.goals {
+		if g.ID == id && g.UserID == userID {
+			return g, nil
+		}
+	}
+	return nil, domain.ErrSavingsGoalNotFound
+}
+
 func (m *mockSavingsGoalRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
 	var result []*domain.SavingsGoal
 	for _, g := range m.goals {
@@ -1213,7 +1228,10 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		assert.Nil(t, execution)
 	})
 
-	t.Run("fails when savings goal not found", func(t *testing.T) {
+	t.Run("skips silently when savings goal not found or ownership mismatch (GAP AE)", func(t *testing.T) {
+		// Post-GAP AE behavior: executor skips (log+nil) instead of failing with an error.
+		// This prevents IDOR information leakage: both "not found" and "belongs to other user"
+		// return the same no-op result so an attacker can't distinguish them via error messages.
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
 		ruleRepo := &mockAutomationRulesRepository{}
@@ -1239,9 +1257,11 @@ func TestSavingsGoalExecutor(t *testing.T) {
 
 		execution, err := service.ExecuteRule(ctx, rule, map[string]interface{}{})
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "savings goal not found")
-		assert.Equal(t, domain.ExecutionStatusFailed, execution.Status)
+		// Rule is skipped (no error bubbled up — avoids leaking existence info).
+		require.NoError(t, err, "goal-not-found must be silently skipped, not returned as error")
+		assert.Equal(t, domain.ExecutionStatusCompleted, execution.Status, "execution is marked completed (skip-with-no-suggestion)")
+		// Critical: no suggestion must be created for the non-owner rule.
+		assert.Empty(t, suggestionRepo.suggestions, "no transfer suggestion must be created when goal is not found")
 	})
 
 	t.Run("skips when calculated amount is zero or negative", func(t *testing.T) {
@@ -2359,5 +2379,283 @@ func TestTransferExcess_ValidateAndExecute(t *testing.T) {
 			assert.Empty(t, suggestionRepo.suggestions,
 				"excess rule with remaining<=threshold must not create a suggestion")
 		}
+	})
+}
+
+// ============================================================================
+// Issue #972 GAP AE — execution-time IDOR defense (savings_goal)
+// ============================================================================
+
+// TestExecuteSavingsGoal_RejectsMismatchedOwner verifies that executeSavingsGoal skips
+// (returns nil, creates no suggestion) when the referenced savings_goal_id belongs to a
+// different user than rule.UserID. Uses GetByIDForUser which scopes by user_id.
+func TestExecuteSavingsGoal_RejectsMismatchedOwner(t *testing.T) {
+	ctx := context.Background()
+
+	ownerUserID := "user-owner"
+	attackerUserID := "user-attacker"
+	goalID := "goal-owned-by-owner"
+
+	// Goal belongs to ownerUserID, not attackerUserID.
+	goalRepo := &mockSavingsGoalRepository{
+		goals: []*domain.SavingsGoal{
+			{
+				ID:        goalID,
+				UserID:    ownerUserID,
+				Name:      "Owner's Goal",
+				AccountID: "savings-acct-owner",
+			},
+		},
+	}
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+
+	svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	svc.SetSavingsGoalRepo(goalRepo)
+
+	actionsJSON, _ := json.Marshal(map[string]interface{}{
+		"savings_goal_id": goalID,
+		"from_account_id": "from-attacker-acct",
+		"amount_type":     "fixed",
+		"amount":          100.0,
+	})
+	rule := &domain.AutomationRule{
+		ID:      "attacker-rule-id",
+		UserID:  attackerUserID, // ← attacker's rule, references owner's goal
+		Name:    "attacker rule",
+		Enabled: true,
+		RuleType: domain.RuleTypeSavingsGoal,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Actions:        actionsJSON,
+		ConditionLogic: "AND",
+	}
+	triggerData := map[string]interface{}{
+		domain.EventDataKeyRemaining: 500.0,
+		domain.EventDataKeyAmount:    1000.0,
+	}
+
+	_, err := svc.ExecuteRule(ctx, rule, triggerData)
+	// The execution should NOT error (skip+log, not fail the batch), but must NOT create a suggestion.
+	require.NoError(t, err, "mismatched-owner savings_goal rule must be skipped (not error)")
+	assert.Empty(t, suggestionRepo.suggestions,
+		"no suggestion must be created for a savings_goal rule referencing another user's goal")
+}
+
+// ============================================================================
+// GAP AF — derived transfer types must return 0 when trigger key absent
+// ============================================================================
+
+// TestCalculateTransferAmount_PercentageUsesIncome verifies that the "percentage" amount_type
+// computes against period INCOME (EventDataKeyAmount), NOT the surplus/remaining.
+// This is the semantic-lock test for GAP AD: the UI label was updated from "percentage of
+// the balance" to "percentage of period income" to match this behavior. Reverting the executor
+// to read EventDataKeyRemaining instead of EventDataKeyAmount must make this test fail.
+//
+// Setup: income=$1000, remaining=$200, percentage=10% → expected $100 (10% of income).
+// If the executor incorrectly read "remaining": $200 × 10% = $20 ≠ $100.
+func TestCalculateTransferAmount_PercentageUsesIncome(t *testing.T) {
+	svc := &ruleExecutionService{}
+
+	action := domain.TransferAction{
+		FromAccountID: "from-a",
+		ToAccountID:   "to-a",
+		AmountType:    "percentage",
+		Amount:        10.0, // 10%
+	}
+
+	triggerData := map[string]interface{}{
+		domain.EventDataKeyAmount:    1000.0, // income (the base the percentage is applied to)
+		domain.EventDataKeyRemaining: 200.0,  // surplus — must NOT be used for percentage
+	}
+
+	result := svc.calculateTransferAmount(&action, triggerData)
+
+	assert.InDelta(t, 100.0, result, 0.001,
+		"percentage must be 10%% of INCOME ($1000), not of remaining ($200); got %v", result)
+}
+
+// TestCalculateSavingsGoalAmount_PercentageUsesIncome verifies the same income-vs-surplus
+// semantic for the savings_goal calculator (both calculators must agree on the base).
+func TestCalculateSavingsGoalAmount_PercentageUsesIncome(t *testing.T) {
+	svc := &ruleExecutionService{}
+
+	pct := float64(10)
+	action := domain.SavingsGoalAction{
+		SavingsGoalID: "goal-1",
+		FromAccountID: "from-a",
+		AmountType:    "percentage",
+		Percentage:    &pct, // 10%
+	}
+
+	triggerData := map[string]interface{}{
+		domain.EventDataKeyAmount:    1000.0, // income (the base)
+		domain.EventDataKeyRemaining: 200.0,  // surplus — must NOT be used for percentage
+	}
+
+	got := svc.calculateSavingsGoalAmount(&action, triggerData)
+	assert.InDelta(t, 100.0, got, 0.001,
+		"savings_goal percentage must be 10%% of INCOME ($1000), not of remaining ($200); got %v", got)
+}
+
+// ============================================================================
+// GAP AE — chain-resolver IDOR: execution-time ownership guard
+// ============================================================================
+
+// stubChainResolver is an inline AccountChainResolver that returns a fixed resolved ID.
+type stubChainResolver struct {
+	resolvedID string
+	resolveErr error
+}
+
+func (s *stubChainResolver) ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error) {
+	return nil, nil
+}
+func (s *stubChainResolver) ResolveActiveID(_ context.Context, _ string) (string, error) {
+	return s.resolvedID, s.resolveErr
+}
+func (s *stubChainResolver) ChainAccountIDs(_ context.Context, _ string) ([]string, error) {
+	return nil, nil
+}
+
+// TestExecuteTransferSuggestion_ChainResolverIDOR verifies that executeTransferSuggestion
+// skips (returns nil, no suggestion) when the chain resolver resolves a from_user_account_id
+// to an account that belongs to a DIFFERENT user than rule.UserID.
+//
+// Attack scenario: attacker creates a rule with their own from_account_id (passes the
+// GetByIDAndUser ownership check) plus a victim's from_user_account_id. At execution time,
+// the unscoped ResolveActiveID returns the victim's current account.id. Without this guard
+// the suggestion would be created with the victim's account in FromAccountID (information
+// leakage / IDOR). With the guard, the executor detects the ownership mismatch and skips.
+func TestExecuteTransferSuggestion_ChainResolverIDOR(t *testing.T) {
+	ctx := context.Background()
+
+	attackerUserID := "user-attacker"
+	victimAccountID := "victim-active-account-id" // what the unscoped resolver returns
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+	acctRepo := &MockAccountRepository{}
+
+	// The standard from_account_id and to_account_id both belong to the attacker.
+	acctRepo.On("GetByIDAndUser", mock.Anything, "from-attacker", attackerUserID).
+		Return(&domain.Account{ID: "from-attacker"}, nil)
+	acctRepo.On("GetByIDAndUser", mock.Anything, "to-attacker", attackerUserID).
+		Return(&domain.Account{ID: "to-attacker"}, nil)
+	// The chain-resolved victim's account does NOT belong to the attacker.
+	acctRepo.On("GetByIDAndUser", mock.Anything, victimAccountID, attackerUserID).
+		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
+
+	svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	svc.SetAccountRepo(acctRepo)
+	// Chain resolver returns the victim's account ID when asked to resolve the from_user_account_id.
+	svc.SetChainResolver(&stubChainResolver{resolvedID: victimAccountID})
+
+	actionsJSON, _ := json.Marshal(map[string]interface{}{
+		"from_account_id":      "from-attacker",
+		"to_account_id":        "to-attacker",
+		"from_user_account_id": "ua-victim-stable-ref", // victim's stable user_account_id
+		"amount_type":          "fixed",
+		"amount":               100.0,
+	})
+	rule := &domain.AutomationRule{
+		ID:       "attacker-rule",
+		UserID:   attackerUserID,
+		Name:     "chain resolver idor rule",
+		Enabled:  true,
+		RuleType: domain.RuleTypeTransferSuggestion,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Actions:        actionsJSON,
+		ConditionLogic: "AND",
+	}
+	triggerData := map[string]interface{}{
+		domain.EventDataKeyRemaining: 500.0,
+		domain.EventDataKeyAmount:    1000.0,
+	}
+
+	_, err := svc.ExecuteRule(ctx, rule, triggerData)
+	require.NoError(t, err,
+		"chain-resolver IDOR must cause a skip (nil return), not an error that fails the batch")
+	assert.Empty(t, suggestionRepo.suggestions,
+		"no suggestion must be created when the chain-resolved account belongs to a different user")
+}
+
+// TestCalculateTransferAmount_DerivedTypesReturnZeroOnMissingKey verifies that transfer
+// amount_types that derive their value from EventData ("remaining", "excess", "threshold")
+// return 0 — NOT the literal action.Amount — when the required EventData key is absent
+// (e.g. schedule triggers, or a future emitter that omits the key).
+//
+// Background: calculateTransferAmount's final `return action.Amount` is intended only for
+// the "fixed" case (and unknown types). Derived types MUST return 0 when their key is
+// missing to avoid creating phantom suggestions with whatever default amount was set in the
+// RuleBuilder (typically $100). GAP AF: before this fix, "excess"/"remaining"/"threshold"
+// cases fell through to `return action.Amount` when the key was absent.
+func TestCalculateTransferAmount_DerivedTypesReturnZeroOnMissingKey(t *testing.T) {
+	svc := &ruleExecutionService{}
+
+	// action.Amount is intentionally set to a non-zero value (the RuleBuilder default)
+	// to prove the derived cases do NOT fall back to it.
+	baseAction := domain.TransferAction{
+		FromAccountID: "from-a",
+		ToAccountID:   "to-a",
+		Amount:        100.0, // RuleBuilder default — must NOT be used for derived types
+		Threshold:     50.0,
+	}
+
+	t.Run("remaining returns 0 when EventDataKeyRemaining absent", func(t *testing.T) {
+		action := baseAction
+		action.AmountType = "remaining"
+		result := svc.calculateTransferAmount(&action, map[string]interface{}{
+			// EventDataKeyRemaining intentionally omitted (e.g. schedule trigger)
+			domain.EventDataKeyAmount: 1000.0,
+		})
+		assert.Equal(t, 0.0, result,
+			"remaining must return 0 when the 'remaining' key is absent, not fall back to action.Amount")
+	})
+
+	t.Run("excess returns 0 when EventDataKeyRemaining absent", func(t *testing.T) {
+		action := baseAction
+		action.AmountType = "excess"
+		result := svc.calculateTransferAmount(&action, map[string]interface{}{
+			// EventDataKeyRemaining intentionally omitted
+			domain.EventDataKeyAmount: 1000.0,
+		})
+		assert.Equal(t, 0.0, result,
+			"excess must return 0 when the 'remaining' key is absent, not fall back to action.Amount ($100)")
+	})
+
+	t.Run("threshold returns 0 when EventDataKeyAmount absent", func(t *testing.T) {
+		action := baseAction
+		action.AmountType = "threshold"
+		result := svc.calculateTransferAmount(&action, map[string]interface{}{
+			// EventDataKeyAmount intentionally omitted
+			domain.EventDataKeyRemaining: 200.0,
+		})
+		assert.Equal(t, 0.0, result,
+			"threshold must return 0 when the 'amount' key is absent, not fall back to action.Amount ($100)")
+	})
+
+	t.Run("threshold returns 0 when amount does not exceed threshold (no fallback)", func(t *testing.T) {
+		action := baseAction
+		action.AmountType = "threshold"
+		result := svc.calculateTransferAmount(&action, map[string]interface{}{
+			domain.EventDataKeyAmount: 30.0, // Below threshold of 50 → no transfer
+		})
+		assert.Equal(t, 0.0, result,
+			"threshold must return 0 when amount<=threshold, not fall back to action.Amount")
+	})
+
+	t.Run("fixed still uses action.Amount (regression guard)", func(t *testing.T) {
+		action := baseAction
+		action.AmountType = "fixed"
+		result := svc.calculateTransferAmount(&action, map[string]interface{}{})
+		assert.Equal(t, 100.0, result, "fixed must return action.Amount regardless of EventData")
 	})
 }

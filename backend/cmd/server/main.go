@@ -421,6 +421,9 @@ func main() {
 
 		// Issue #37: Automation Rule Service and Rule Scheduler
 		automationRuleService := services.NewAutomationRuleService(automationRuleRepo)
+		// Issue #972 GAP AE: inject repos for create/update IDOR ownership validation.
+		automationRuleService.SetSavingsGoalRepo(savingsGoalRepo)
+		automationRuleService.SetAccountRepo(accountRepo)
 		appLogger.Info("Automation rule service initialized")
 
 		// Issue #37: Rule Execution Service
@@ -1318,6 +1321,8 @@ func main() {
 		// no suggestion created). See Issue #972 (GAP H) for the savings_goal example.
 		ruleExecutionService.SetNotificationRepo(notificationRepo)
 		ruleExecutionService.SetSavingsGoalRepo(savingsGoalRepo)
+		// Issue #972 GAP AE: execution-time account ownership guard for transfer rules.
+		ruleExecutionService.SetAccountRepo(accountRepo)
 		// Issue #1109: Chain resolver maps stable user_account_id → current active account_id.
 		ruleExecutionService.SetChainResolver(services.NewAccountChainResolver(accountRepo))
 

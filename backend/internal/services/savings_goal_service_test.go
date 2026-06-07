@@ -29,6 +29,15 @@ func (m *MockSavingsGoalRepository) GetByID(ctx context.Context, id string) (*do
 	return args.Get(0).(*domain.SavingsGoal), args.Error(1)
 }
 
+// GetByIDForUser retrieves a savings goal by ID with ownership validation (GAP AE).
+func (m *MockSavingsGoalRepository) GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error) {
+	args := m.Called(ctx, id, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.SavingsGoal), args.Error(1)
+}
+
 func (m *MockSavingsGoalRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
