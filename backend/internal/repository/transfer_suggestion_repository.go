@@ -68,10 +68,16 @@ type TransferSuggestionRepository interface {
 	// is already claimed by another suggestion.
 	ReserveMatchedTransaction(ctx context.Context, id string, txnID string) error
 
-	// ClearMatchedTransactionID sets matched_transaction_id = NULL for a suggestion,
-	// releasing any reservation so the inflow can be claimed by a different suggestion.
-	// Used to undo a reservation when a subsequent step (e.g. notification create) fails.
-	ClearMatchedTransactionID(ctx context.Context, id string) error
+	// ClearMatchedTransactionID sets matched_transaction_id = NULL for a pending/accepted
+	// suggestion, releasing any reservation so the inflow can be matched by a different suggestion.
+	// Used for user-driven decline-match and as a rollback when a subsequent step fails.
+	//
+	// GAP AV: expectedTxnID is the matched_transaction_id the caller observed at read time.
+	// The WHERE clause includes AND matched_transaction_id IS NOT DISTINCT FROM $expectedTxnID,
+	// so a stale decline carrying T does not release a newer reservation T2 that was set between
+	// the caller's read and this write. Pass nil when the caller observed no reservation.
+	// 0 rows → classifyZeroRowUpdate → ErrTransferSuggestionAlreadyActioned or ErrNotFound.
+	ClearMatchedTransactionID(ctx context.Context, id string, expectedTxnID *string) error
 
 	// ClearStaleReservations releases pending/accepted suggestions whose reservation
 	// has expired (expires_at < now) by setting matched_transaction_id = NULL.
@@ -443,18 +449,27 @@ func (r *transferSuggestionRepository) ReserveMatchedTransaction(ctx context.Con
 // suggestion, releasing any reservation so the inflow can be matched elsewhere.
 // A no-op on terminal rows (completed/rejected/expired) — those statuses are immutable
 // and their matched_transaction_id must not be disturbed by a concurrent rollback or decline.
-func (r *transferSuggestionRepository) ClearMatchedTransactionID(ctx context.Context, id string) error {
+//
+// GAP AV: expectedTxnID is the matched_transaction_id the caller observed at read time.
+// The WHERE clause includes AND matched_transaction_id IS NOT DISTINCT FROM $expectedTxnID,
+// so a stale decline carrying T does not release a newer reservation T2 set between the
+// caller's read and this write (mirrors GAP AR on CompleteRetainingReservation).
+// 0 rows → classifyZeroRowUpdate → ErrTransferSuggestionAlreadyActioned or ErrNotFound.
+func (r *transferSuggestionRepository) ClearMatchedTransactionID(ctx context.Context, id string, expectedTxnID *string) error {
 	now := time.Now()
 
 	query := `
 		UPDATE transfer_suggestions
 		SET matched_transaction_id = NULL, updated_at = $2
-		WHERE id = $1 AND status IN ('pending', 'accepted')
+		WHERE id = $1
+		  AND status IN ('pending', 'accepted')
+		  AND matched_transaction_id IS NOT DISTINCT FROM $3
 	`
 
 	// GAP AQ: capture the command tag and check RowsAffected so a 0-row update (terminal
-	// status race) surfaces ErrTransferSuggestionAlreadyActioned instead of silent success.
-	ct, err := r.db.Exec(ctx, query, id, now)
+	// status race or GAP AV reservation mismatch) surfaces the appropriate error instead of
+	// silent success.
+	ct, err := r.db.Exec(ctx, query, id, now, expectedTxnID)
 	if err != nil {
 		return err
 	}

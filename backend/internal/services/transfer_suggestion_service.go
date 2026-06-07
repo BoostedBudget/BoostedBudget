@@ -29,7 +29,10 @@ type TransferSuggestionRepository interface {
 	CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time, expectedTxnID *string) error
 	// ClearMatchedTransactionID releases the reservation on a suggestion by setting
 	// matched_transaction_id = NULL. Used for user-driven decline-match.
-	ClearMatchedTransactionID(ctx context.Context, id string) error
+	//
+	// GAP AV: expectedTxnID is the matched_transaction_id the caller observed at read time.
+	// If the reservation was reclaimed between read and write, returns ErrTransferSuggestionAlreadyActioned.
+	ClearMatchedTransactionID(ctx context.Context, id string, expectedTxnID *string) error
 }
 
 // TransferSuggestionService handles transfer suggestion operations.
@@ -238,7 +241,9 @@ func (s *transferSuggestionService) DeclineTransferSuggestionMatch(
 		return nil, domain.ErrTransferSuggestionAlreadyActioned
 	}
 
-	if err := s.suggestionRepo.ClearMatchedTransactionID(ctx, suggestionID); err != nil {
+	// GAP AV: pass the observed MatchedTransactionID so the IS NOT DISTINCT FROM predicate
+	// in the repo rejects a stale decline that would otherwise release a newer reservation T2.
+	if err := s.suggestionRepo.ClearMatchedTransactionID(ctx, suggestionID, suggestion.MatchedTransactionID); err != nil {
 		return nil, err
 	}
 
