@@ -347,6 +347,31 @@ describe('SavingsImpactWidget', () => {
       expect(noItems).toBeInTheDocument()
     })
 
+    // GAP CC: CA replaced the non-PII literal "Savings account" with a real user-controlled
+    // account name. That name must carry data-ph-mask for PostHog session-replay PII policy.
+    // (posthog-pii-masking.md:45-49 classifies account names/nicknames as DOM-replay PII.)
+    it('applies data-ph-mask to destination account name (GAP CC)', () => {
+      const dataWithName: UserSavingsImpact = {
+        ...mockData,
+        recent_items: [
+          {
+            id: 'sugg-cc',
+            amount: 150.00,
+            actual_amount: 150.00,
+            completed_at: '2024-04-01T12:00:00Z',
+            to_account_name: 'Chase Savings',
+          },
+        ],
+      }
+      mockUseSavingsImpactData.mockReturnValue({ ...defaultDataState, data: dataWithName })
+      renderWidget()
+
+      // The destination span must carry data-ph-mask regardless of whether to_account_name
+      // is present — masking the neutral fallback "Transfer destination" is harmless.
+      const destEl = document.querySelector('[data-testid="savings-recent-destination"][data-ph-mask]')
+      expect(destEl).toBeInTheDocument()
+    })
+
     // Codex MED: completed_at is optional in the API type — the date cell is skipped
     // when absent. The row must still render with amount and destination.
     it('renders row without date when completed_at is absent', () => {

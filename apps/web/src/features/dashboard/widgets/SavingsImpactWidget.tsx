@@ -129,6 +129,7 @@ function SavingsImpactWidget(_props: WidgetProps) {
                 <div className="flex flex-col min-w-0">
                   <span
                     data-testid="savings-recent-destination"
+                    data-ph-mask
                     className="text-foreground truncate"
                   >
                     {item.to_account_name ?? 'Transfer destination'}
