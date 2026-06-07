@@ -86,7 +86,7 @@ describe('createApiClient', () => {
     )
   })
 
-  it('contains exactly 100 allowed operation methods', () => {
+  it('contains exactly 101 allowed operation methods', () => {
     const mutator = mock(() => Promise.resolve({})) as unknown as FetchMutator
     const client = createApiClient(mutator)
 
@@ -96,6 +96,9 @@ describe('createApiClient', () => {
         count += Object.values(ns as object).filter((v) => typeof v === 'function').length
       }
     }
-    expect(count).toBe(100)
+    // 155 total ops − 54 excluded = 101 allowed; mirrors capability-manifest.test.ts
+    // +4 from #972: getSavingsImpactAggregate, getSavingsImpactMe,
+    //               confirmTransferSuggestionMatch, declineTransferSuggestionMatch
+    expect(count).toBe(101)
   })
 })
