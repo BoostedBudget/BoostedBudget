@@ -264,3 +264,138 @@ func TestGetUserImpact_Integration(t *testing.T) {
 			"pending suggestion (75.00) must never appear in RecentItems")
 	}
 }
+
+// TestGetUserImpact_DestinationAccountName_Integration validates that GetUserImpact
+// resolves the human-readable destination account name for each of the four cases:
+//
+//   (a) to_account_id → Plaid-linked account: resolves COALESCE(nickname, name)
+//   (b) to_user_account_id → manual account with plaintext nickname: resolves nickname
+//   (c) to_user_account_id → manual account with ONLY encrypted account_name_hint: decrypts hint
+//   (d) to_user_account_id → manual account with neither nickname nor hint: ToAccountName == nil
+//
+// This must be a real-PG test because pgxmock cannot validate JOIN correctness or
+// in-Go decrypt logic combined with the SQL result shape.
+// GAP CA (#972) — transfers can target any account type, so the name must be real.
+func TestGetUserImpact_DestinationAccountName_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Use the standard test FieldEncryptor (testEncryptionService: TENC[...] format).
+	enc := newTestFieldEncryptor(t)
+
+	repo := NewSavingsImpactRepositoryWithEncryptor(tx, enc)
+
+	// Seed a user.
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+	`, userID, "test|"+userID.String(), "int-ca-"+userID.String()+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	// Seed a linked_item and accounts row for case (a) Plaid account.
+	linkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-test-token-ca')
+	`, linkedItemID, userID, "test-item-ca-"+linkedItemID.String())
+	require.NoError(t, err, "seed linked_item")
+
+	plaidAccountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, nickname)
+		VALUES ($1, $2, $3, 'plaid-ca-savings', 'Plaid Savings', 'depository', 'My Savings')
+	`, plaidAccountID, linkedItemID, userID)
+	require.NoError(t, err, "seed Plaid account with nickname")
+
+	// Seed user_accounts rows for cases (b), (c), (d).
+	uaWithNicknameID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id, nickname)
+		VALUES ($1, $2, 'inst-ca-b', 'Manual Savings')
+	`, uaWithNicknameID, userID)
+	require.NoError(t, err, "seed manual account with nickname (case b)")
+
+	// Encrypt the account_name_hint for case (c).
+	encryptedHint, errEnc := enc.EncryptString("Ally Savings Account")
+	require.NoError(t, errEnc, "encrypt account_name_hint for case (c)")
+	uaWithHintID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id, account_name_hint)
+		VALUES ($1, $2, 'inst-ca-c', $3)
+	`, uaWithHintID, userID, encryptedHint)
+	require.NoError(t, err, "seed manual account with encrypted hint (case c)")
+
+	uaNoNameID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id)
+		VALUES ($1, $2, 'inst-ca-d')
+	`, uaNoNameID, userID)
+	require.NoError(t, err, "seed manual account with no name (case d)")
+
+	now := time.Now().UTC()
+	plaidAccIDStr := plaidAccountID.String()
+	uaNicknameIDStr := uaWithNicknameID.String()
+	uaHintIDStr := uaWithHintID.String()
+	uaNoNameIDStr := uaNoNameID.String()
+
+	insertCompleted := func(toAccountID, toUserAccountID *string, amount float64) {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO transfer_suggestions
+				(id, user_id, amount, source, status, completed_at, actual_amount, completion_source,
+				 to_account_id, to_user_account_id, created_at, updated_at)
+			VALUES ($1, $2, $3, 'rule', 'completed', $4, $3, 'exact_match', $5, $6, $4, $4)
+		`, uuid.New(), userID, amount, now, toAccountID, toUserAccountID)
+		require.NoError(t, err, "seed completed suggestion")
+	}
+
+	// (a) Plaid account with nickname → should resolve "My Savings"
+	insertCompleted(&plaidAccIDStr, nil, 100.00)
+	// (b) manual with nickname → should resolve "Manual Savings"
+	insertCompleted(nil, &uaNicknameIDStr, 200.00)
+	// (c) manual with encrypted hint → should resolve "Ally Savings Account"
+	insertCompleted(nil, &uaHintIDStr, 300.00)
+	// (d) manual with no name → ToAccountName should be nil
+	insertCompleted(nil, &uaNoNameIDStr, 400.00)
+
+	impact, err := repo.GetUserImpact(ctx, userID.String())
+	require.NoError(t, err, "GetUserImpact must not error")
+	require.Len(t, impact.RecentItems, 4, "should have 4 completed suggestions")
+
+	// Index by actual_amount for reliable lookup (amounts are unique in this test).
+	byAmount := make(map[float64]*domain.CompletedSuggestionSummary)
+	for _, item := range impact.RecentItems {
+		byAmount[item.ActualAmount] = item
+	}
+
+	// (a) Plaid account with nickname.
+	caseA := byAmount[100.00]
+	require.NotNil(t, caseA, "case (a): amount 100 must appear in RecentItems")
+	require.NotNil(t, caseA.ToAccountName, "case (a): ToAccountName must be non-nil for Plaid account with nickname")
+	assert.Equal(t, "My Savings", *caseA.ToAccountName,
+		"case (a): should resolve accounts.nickname for a Plaid account")
+
+	// (b) Manual account with plaintext nickname.
+	caseB := byAmount[200.00]
+	require.NotNil(t, caseB, "case (b): amount 200 must appear in RecentItems")
+	require.NotNil(t, caseB.ToAccountName, "case (b): ToAccountName must be non-nil for manual account with nickname")
+	assert.Equal(t, "Manual Savings", *caseB.ToAccountName,
+		"case (b): should resolve user_accounts.nickname for a manual account")
+
+	// (c) Manual account with only encrypted account_name_hint.
+	caseC := byAmount[300.00]
+	require.NotNil(t, caseC, "case (c): amount 300 must appear in RecentItems")
+	require.NotNil(t, caseC.ToAccountName, "case (c): ToAccountName must be non-nil after decrypting account_name_hint")
+	assert.Equal(t, "Ally Savings Account", *caseC.ToAccountName,
+		"case (c): should decrypt and resolve user_accounts.account_name_hint")
+
+	// (d) Manual account with neither nickname nor hint.
+	caseD := byAmount[400.00]
+	require.NotNil(t, caseD, "case (d): amount 400 must appear in RecentItems")
+	assert.Nil(t, caseD.ToAccountName,
+		"case (d): ToAccountName must be nil when no name is available")
+}

@@ -169,12 +169,17 @@ func TestSavingsImpactRepository_GetUserImpact(t *testing.T) {
 		WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(totalRows)
 
-	// Second query: recent items
+	// Second query: recent items — 10 columns including the three new name-resolution fields
+	// (GAP CA): plaid_account_name, ua_nickname, ua_hint_encrypted.
 	completedAt := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
 	source := "automatic"
 	toAcctID := "acct-xyz"
-	itemRows := pgxmock.NewRows([]string{"id", "amount", "actual_amount", "to_account_id", "to_user_account_id", "completed_at", "completion_source"}).
-		AddRow("sugg-1", 200.00, 200.00, &toAcctID, nil, &completedAt, &source)
+	plaidName := "Chase Checking"
+	itemRows := pgxmock.NewRows([]string{
+		"id", "amount", "actual_amount", "to_account_id", "to_user_account_id",
+		"completed_at", "completion_source",
+		"plaid_account_name", "ua_nickname", "ua_hint_encrypted",
+	}).AddRow("sugg-1", 200.00, 200.00, &toAcctID, nil, &completedAt, &source, &plaidName, nil, nil)
 	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(userID).
 		WillReturnRows(itemRows)
@@ -189,5 +194,8 @@ func TestSavingsImpactRepository_GetUserImpact(t *testing.T) {
 	assert.Equal(t, 550.50, impact.PrevMonthAmount)
 	require.Len(t, impact.RecentItems, 1)
 	assert.Equal(t, "sugg-1", impact.RecentItems[0].ID)
+	// GAP CA: ToAccountName resolved from the Plaid account's name column.
+	require.NotNil(t, impact.RecentItems[0].ToAccountName)
+	assert.Equal(t, "Chase Checking", *impact.RecentItems[0].ToAccountName)
 	require.NoError(t, mockDB.ExpectationsWereMet())
 }

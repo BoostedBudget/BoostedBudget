@@ -8,11 +8,21 @@ import { WidgetEmptyState } from './WidgetEmptyState'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 
+// Whole-dollar formatter for aggregate headline stats (intentionally scannable).
 const formatCurrency = (amount: number) =>
   new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     maximumFractionDigits: 0,
+  }).format(amount)
+
+// Exact-cents formatter for per-item actual amounts (GAP CB: 250.75 not $251).
+const formatExactCurrency = (amount: number) =>
+  new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(amount)
 
 const formatDate = (isoString: string) =>
@@ -121,7 +131,7 @@ function SavingsImpactWidget(_props: WidgetProps) {
                     data-testid="savings-recent-destination"
                     className="text-foreground truncate"
                   >
-                    Savings account
+                    {item.to_account_name ?? 'Transfer destination'}
                   </span>
                   {item.completed_at && (
                     <span
@@ -137,7 +147,7 @@ function SavingsImpactWidget(_props: WidgetProps) {
                   data-ph-mask
                   className="font-medium text-success ml-2 shrink-0"
                 >
-                  {formatCurrency(item.actual_amount)}
+                  {formatExactCurrency(item.actual_amount)}
                 </span>
               </li>
             ))}

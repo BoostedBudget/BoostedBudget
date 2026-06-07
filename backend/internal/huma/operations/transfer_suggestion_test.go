@@ -1276,11 +1276,12 @@ func TestConfirmMatch_MCP_IdempotencyKeyIncludesSuggestionID_GAPBB(t *testing.T)
 	_, err := handler.ConfirmMatch(context.Background(), input)
 	require.NoError(t, err)
 
-	// GAP BB: the key MUST include the suggestion ID so that same-base-key requests
-	// targeting different suggestions don't collide in the idempotency cache.
-	assert.Equal(t, baseKey+":"+suggID, keyCapturer.capturedKey,
-		"GAP BB: idempotency key must be scoped to suggestionID (key+':'+id) to prevent "+
-			"cross-suggestion cache collisions when the same Idempotency-Key header is reused")
+	// GAP BB/BC: the key must include the suggestion ID and the canonical amount.
+	// Key format: "baseKey:suggID:amount_2dp" — ensures two different (suggestion, amount)
+	// pairs never collide, even when the same base Idempotency-Key header is reused.
+	assert.Equal(t, baseKey+":"+suggID+":100.00", keyCapturer.capturedKey,
+		"GAP BB/BC: idempotency key must be scoped to (suggestionID, amount_2dp) to prevent "+
+			"cross-suggestion and different-amount cache collisions")
 }
 
 // TestDeclineMatch_MCP_IdempotencyKeyIncludesSuggestionID_GAPBB mirrors the confirm
@@ -1323,4 +1324,77 @@ func TestDeclineMatch_MCP_IdempotencyKeyIncludesSuggestionID_GAPBB(t *testing.T)
 
 	assert.Equal(t, baseKey+":"+suggID, keyCapturer.capturedKey,
 		"GAP BB: decline path must scope the idempotency key to the suggestion ID")
+}
+
+// TestConfirmMatch_MCP_IdempotencyKey_IncludesAmount_GAPBC verifies that the confirm
+// scoped key encodes the canonical actual_amount so that two requests with the same
+// Idempotency-Key + suggestion ID but a DIFFERENT actual_amount produce different cache
+// keys (no wrong-cached-body replay).
+//
+// GAP BC: BB key-folding left a residual hole — same-key / same-op / same-suggestion /
+// different actual_amount would return the first cached body instead of re-validating.
+// Fix: append ":<amount_2dp>" to the confirm scopedKey; the decline path is unchanged
+// (no mutable payload beyond the already-folded suggestion ID).
+func TestConfirmMatch_MCP_IdempotencyKey_IncludesAmount_GAPBC(t *testing.T) {
+	const secret = "mcp-bc-confirm-secret"
+	const userID = "user-bc-confirm"
+	const suggID = "sugg-bc-confirm-xyz"
+	const baseKey = "base-idem-key-bc-confirm"
+
+	confirmed := newTestSuggestionItem(suggID, userID)
+	confirmed.MatchedTransactionID = nil
+
+	svc := &mockTransferSuggestionService{}
+
+	newHandler := func(capturer *idempotencyKeyCaptureMock) *TransferSuggestionHandler {
+		txMock := new(mockPgxTx)
+		txMock.On("Rollback", mock.Anything).Return(nil)
+		dbMock := new(mockOperationsDB)
+		dbMock.On("Begin", mock.Anything).Return(txMock, nil)
+		return NewTransferSuggestionHandler(svc, TransferSuggestionHandlerDeps{
+			DB:              dbMock,
+			MCPAuditRepo:    new(mockOperationsMCPAuditRepo),
+			MCPWorkerSecret: secret,
+			IdempotencyRepo: capturer,
+		})
+	}
+
+	// First confirm: actual_amount = 100.00
+	capturer1 := &idempotencyKeyCaptureMock{returnResult: confirmed}
+	h1 := newHandler(capturer1)
+	input1 := &ConfirmTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		IdempotencyInput:   inputs.IdempotencyInput{IdempotencyKey: baseKey},
+		MCPContextInput:    inputs.MCPContextInput{MCPWorkerSecret: secret},
+		ID:                 suggID,
+		Body:               ConfirmMatchBody{ActualAmount: 100.00},
+	}
+	_, err := h1.ConfirmMatch(context.Background(), input1)
+	require.NoError(t, err)
+
+	// Second confirm: same key + same suggestion, but different amount = 99.99
+	capturer2 := &idempotencyKeyCaptureMock{returnResult: confirmed}
+	h2 := newHandler(capturer2)
+	input2 := &ConfirmTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		IdempotencyInput:   inputs.IdempotencyInput{IdempotencyKey: baseKey},
+		MCPContextInput:    inputs.MCPContextInput{MCPWorkerSecret: secret},
+		ID:                 suggID,
+		Body:               ConfirmMatchBody{ActualAmount: 99.99},
+	}
+	_, err = h2.ConfirmMatch(context.Background(), input2)
+	require.NoError(t, err)
+
+	// GAP BC: the two scoped keys MUST differ (different amounts → different cache entries).
+	assert.NotEqual(t, capturer1.capturedKey, capturer2.capturedKey,
+		"GAP BC: different actual_amount values must produce different scoped idempotency keys")
+
+	// Same amount → same key (dedup still works).
+	capturer3 := &idempotencyKeyCaptureMock{returnResult: confirmed}
+	h3 := newHandler(capturer3)
+	input3 := *input1 // identical copy
+	_, err = h3.ConfirmMatch(context.Background(), &input3)
+	require.NoError(t, err)
+	assert.Equal(t, capturer1.capturedKey, capturer3.capturedKey,
+		"GAP BC: same actual_amount must produce the same scoped key (dedup still works)")
 }

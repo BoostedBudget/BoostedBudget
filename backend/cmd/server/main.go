@@ -657,7 +657,10 @@ func main() {
 
 		// Issue #972: Create savings stats snapshot worker (daily aggregate, no Plaid dependency)
 		// Share one repo instance — both fields satisfy different narrow interfaces from the same concrete type.
-		savingsImpactStatsRepo := repository.NewSavingsImpactRepository(db)
+		// Pass fieldEncryptor (may be nil if ClerkSecretKey is unset) — the stats worker only calls
+		// WriteSnapshot/GetAggregateSavingsStats, which do not use the encryptor; it is included
+		// here for interface consistency and future calls that may resolve account names.
+		savingsImpactStatsRepo := repository.NewSavingsImpactRepositoryWithEncryptor(db, fieldEncryptor)
 		savingsStatsWorker = jobs.NewSavingsStatsWorker(jobs.SavingsStatsWorkerDeps{
 			AggregateRepo:     savingsImpactStatsRepo,
 			SavingsImpactRepo: savingsImpactStatsRepo,
@@ -1447,7 +1450,9 @@ func main() {
 	// Issue #972: Savings impact routes (public aggregate + per-user) require DB but NOT Clerk,
 	// so they are registered in their own if db != nil block rather than the Clerk-gated block.
 	if db != nil {
-		humaSavingsImpactHandler := operations.NewSavingsImpactHandler(repository.NewSavingsImpactRepository(db))
+		// GAP CA (#972): pass fieldEncryptor so GetUserImpact can decrypt user_accounts.account_name_hint.
+		// fieldEncryptor is nil when ClerkSecretKey is unset; resolveDestinationName guards for nil enc.
+		humaSavingsImpactHandler := operations.NewSavingsImpactHandler(repository.NewSavingsImpactRepositoryWithEncryptor(db, fieldEncryptor))
 		operations.RegisterSavingsImpactRoutes(humaAPI, humaSavingsImpactHandler)
 		appLogger.Info("Savings impact routes registered")
 	}
