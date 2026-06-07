@@ -9,6 +9,8 @@ import React from 'react'
 import {
   mockUseConfirmTransferSuggestionMatch,
   mockConfirmTransferSuggestionMatchMutateAsync,
+  mockUseDeclineTransferSuggestionMatch,
+  mockDeclineTransferSuggestionMatchMutate,
 } from '@/test/mocks/transfer-suggestions-api'
 import { mockToastError } from '@/test/mocks/sonner'
 import { renderWithQuery } from '@/test/utils/queryTestUtils'
@@ -24,12 +26,20 @@ describe('NotificationConfirmMatch', () => {
   beforeEach(() => {
     mockUseConfirmTransferSuggestionMatch.mockClear()
     mockConfirmTransferSuggestionMatchMutateAsync.mockClear()
+    mockUseDeclineTransferSuggestionMatch.mockClear()
+    mockDeclineTransferSuggestionMatchMutate.mockClear()
     mockToastError.mockClear()
     mockTrackEvent.mockClear()
 
     mockUseConfirmTransferSuggestionMatch.mockReturnValue({
       mutate: mockConfirmTransferSuggestionMatchMutateAsync,
       mutateAsync: mockConfirmTransferSuggestionMatchMutateAsync,
+      isPending: false,
+      isError: false,
+    })
+
+    mockUseDeclineTransferSuggestionMatch.mockReturnValue({
+      mutate: mockDeclineTransferSuggestionMatchMutate,
       isPending: false,
       isError: false,
     })
@@ -91,13 +101,53 @@ describe('NotificationConfirmMatch', () => {
     })
   })
 
-  it('calls onDismiss when Dismiss is clicked', () => {
+  it('calls decline mutation when Dismiss is clicked (GAP AI fix)', () => {
+    renderWithQuery(
+      <NotificationConfirmMatch suggestionId="sugg-1" onDismiss={() => {}} />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    expect(mockDeclineTransferSuggestionMatchMutate).toHaveBeenCalledWith({ id: 'sugg-1' })
+  })
+
+  it('calls onDismiss after decline mutation succeeds', () => {
+    let capturedOnSuccess: (() => void) | undefined
+    mockUseDeclineTransferSuggestionMatch.mockImplementation(
+      (options?: { mutation?: { onSuccess?: () => void } }) => {
+        capturedOnSuccess = options?.mutation?.onSuccess
+        return {
+          mutate: mock((_args: unknown) => { capturedOnSuccess?.() }),
+          isPending: false,
+          isError: false,
+        }
+      }
+    )
+
     let dismissed = false
     renderWithQuery(
       <NotificationConfirmMatch suggestionId="sugg-1" onDismiss={() => { dismissed = true }} />
     )
     fireEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     expect(dismissed).toBe(true)
+  })
+
+  it('fires error toast when decline mutation fails (GAP AI fix)', () => {
+    let capturedOnError: (() => void) | undefined
+    mockUseDeclineTransferSuggestionMatch.mockImplementation(
+      (options?: { mutation?: { onError?: () => void } }) => {
+        capturedOnError = options?.mutation?.onError
+        return {
+          mutate: mock((_args: unknown) => { capturedOnError?.() }),
+          isPending: false,
+          isError: false,
+        }
+      }
+    )
+
+    renderWithQuery(
+      <NotificationConfirmMatch suggestionId="sugg-err" onDismiss={() => {}} />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    expect(mockToastError).toHaveBeenCalledWith('Failed to dismiss. Please try again.')
   })
 
   it('applies data-ph-mask to the amount input', () => {

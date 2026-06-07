@@ -408,9 +408,10 @@ func TestBudgetPeriodCloseCheck_ExpiresPendingSuggestions(t *testing.T) {
 	// No budgets to process — we only care that ExpirePending and ClearStaleReservations are called.
 	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).
 		Return([]*domain.Budget{}, nil)
-	expirer.On("ExpirePending", ctx).Return(int64(3), nil)
-	// GAP AH HIGH#1: ClearStaleReservations must also be called on every run.
-	expirer.On("ClearStaleReservations", ctx).Return(int64(0), nil)
+	clearCall := expirer.On("ClearStaleReservations", ctx).Return(int64(0), nil)
+	expireCall := expirer.On("ExpirePending", ctx).Return(int64(3), nil)
+	// ExpirePending must run AFTER ClearStaleReservations (GAP AJ).
+	expireCall.NotBefore(clearCall)
 
 	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
 		BudgetRepo:            budgetRepo,

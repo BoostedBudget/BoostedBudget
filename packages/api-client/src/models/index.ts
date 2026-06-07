@@ -107,6 +107,7 @@ export * from './deadLetterMetrics';
 export * from './deadLetterRetryResponse';
 export * from './deadLetterStatsResponse';
 export * from './deadLetterStatsResponseByKind';
+export * from './declineTransferSuggestionMatchOutputBody';
 export * from './detailed';
 export * from './errorDetail';
 export * from './errorModel';

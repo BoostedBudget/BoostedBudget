@@ -1,4 +1,3 @@
-// Issue #972: Savings Transfer Automation — confirm fuzzy-matched transfer amount
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -7,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
   useConfirmTransferSuggestionMatch,
+  useDeclineTransferSuggestionMatch,
   getGetTransferSuggestionsQueryKey,
 } from '@boostedbudget/api-client/endpoints/transfer-suggestions/transfer-suggestions'
 import { getGetNotificationsQueryKey, getGetUnreadNotificationCountQueryKey } from '@boostedbudget/api-client/endpoints/notifications/notifications'
@@ -41,6 +41,20 @@ export function NotificationConfirmMatch({ suggestionId, onDismiss, onConfirm }:
       },
       onError: () => {
         toast.error('Failed to confirm transfer. Please try again.')
+      },
+    },
+  })
+
+  const declineMutation = useDeclineTransferSuggestionMatch({
+    mutation: {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getGetNotificationsQueryKey({ limit: NOTIFICATIONS_LIMIT }) })
+        queryClient.invalidateQueries({ queryKey: getGetUnreadNotificationCountQueryKey() })
+        queryClient.invalidateQueries({ queryKey: getGetTransferSuggestionsQueryKey() })
+        onDismiss()
+      },
+      onError: () => {
+        toast.error('Failed to dismiss. Please try again.')
       },
     },
   })
@@ -80,7 +94,7 @@ export function NotificationConfirmMatch({ suggestionId, onDismiss, onConfirm }:
         }}
         data-ph-mask
         className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-60"
-        disabled={confirmMutation.isPending}
+        disabled={confirmMutation.isPending || declineMutation.isPending}
         aria-label="Actual amount transferred"
       />
       {validationError && (
@@ -90,7 +104,7 @@ export function NotificationConfirmMatch({ suggestionId, onDismiss, onConfirm }:
         <Button
           variant="default"
           size="sm"
-          disabled={confirmMutation.isPending}
+          disabled={confirmMutation.isPending || declineMutation.isPending}
           onClick={handleConfirm}
           aria-label="Confirm transfer match"
         >
@@ -100,8 +114,8 @@ export function NotificationConfirmMatch({ suggestionId, onDismiss, onConfirm }:
         <Button
           variant="outline"
           size="sm"
-          disabled={confirmMutation.isPending}
-          onClick={onDismiss}
+          disabled={confirmMutation.isPending || declineMutation.isPending}
+          onClick={() => declineMutation.mutate({ id: suggestionId })}
           aria-label="Dismiss"
         >
           <X className="h-3.5 w-3.5 mr-1" />
