@@ -364,6 +364,82 @@ func TestAutomationRule_Validate_TransferSuggestionRule(t *testing.T) {
 	})
 }
 
+// TestTransferAmountTypeContract_C9 verifies that every amount_type offered by the
+// frontend UI (TransferActionForm.tsx: fixed, percentage, excess) is accepted by
+// the backend validation allow-set, and that backend-only types (remaining, threshold)
+// are also valid. This is the C9 contract guard — it locks the UI⊆backend invariant
+// so a UI-offered type can never be silently rejected at create/update time.
+func TestTransferAmountTypeContract_C9(t *testing.T) {
+	baseRule := AutomationRule{
+		UserID:   "user-c9",
+		Name:     "Transfer Contract Test",
+		RuleType: RuleTypeTransferSuggestion,
+		TriggerConfig: TriggerConfig{
+			Type:  TriggerTypeEvent,
+			Event: "balance_changed",
+		},
+		ConditionLogic: "AND",
+	}
+
+	// UI-offered amount_types: the frontend exposes exactly these three.
+	// ALL must be accepted by the backend (UI ⊆ backend allow-set).
+	uiOfferedTypes := []struct {
+		amountType string
+		actions    string
+		desc       string
+	}{
+		{
+			amountType: "fixed",
+			actions:    `{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"fixed","amount":100}`,
+			desc:       "fixed — standard dollar amount (UI option 1/3)",
+		},
+		{
+			amountType: "percentage",
+			actions:    `{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"percentage","amount":10}`,
+			desc:       "percentage — % of period income (UI option 2/3); amount stores percentage value",
+		},
+		{
+			amountType: "excess",
+			actions:    `{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"excess","amount":0,"threshold":50}`,
+			desc:       "excess — surplus above threshold (UI option 3/3); amount=0 is valid",
+		},
+	}
+
+	for _, tt := range uiOfferedTypes {
+		t.Run("UI type "+tt.amountType+" must be accepted: "+tt.desc, func(t *testing.T) {
+			rule := baseRule
+			rule.Actions = json.RawMessage(tt.actions)
+			err := rule.Validate()
+			assert.NoError(t, err,
+				"amount_type %q is offered by the UI and must be accepted by validateTransferAction (UI ⊆ backend allow-set)",
+				tt.amountType)
+		})
+	}
+
+	// Backend-only amount_types (not in the UI but must remain valid for API-created rules).
+	backendOnlyTypes := []struct {
+		amountType string
+		actions    string
+	}{
+		{
+			amountType: "remaining",
+			actions:    `{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"remaining","amount":0}`,
+		},
+		{
+			amountType: "threshold",
+			actions:    `{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"threshold","threshold":100}`,
+		},
+	}
+	for _, tt := range backendOnlyTypes {
+		t.Run("backend-only type "+tt.amountType+" must also be accepted", func(t *testing.T) {
+			rule := baseRule
+			rule.Actions = json.RawMessage(tt.actions)
+			err := rule.Validate()
+			assert.NoError(t, err, "backend-only amount_type %q must remain valid for API-created rules", tt.amountType)
+		})
+	}
+}
+
 func TestAutomationRule_Validate_BudgetAlertRule(t *testing.T) {
 	validRule := AutomationRule{
 		UserID:   "user-123",

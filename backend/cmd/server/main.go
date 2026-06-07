@@ -1001,7 +1001,10 @@ func main() {
 				appLogger.Info("Budget period close check periodic job configured (daily)")
 			}
 
-			// Issue #972: Savings stats snapshot (daily) — aggregate completed transfer amounts
+			// Issue #972: Savings stats snapshot (daily) — aggregate completed transfer amounts.
+			// SavingsStatsUniqueOpts constrains to one snapshot job per 24h period (queue-level
+			// dedup on top of the ON CONFLICT upsert in WriteSnapshot). We use river.UniqueOpts
+			// directly because the periodic job constructor takes *river.InsertOpts, not queue opts.
 			if savingsStatsWorker != nil {
 				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
 					river.PeriodicInterval(24*time.Hour),
@@ -1010,6 +1013,9 @@ func main() {
 								TriggerSource: "periodic",
 							}, &river.InsertOpts{
 								Queue: queue.QueueLow,
+								UniqueOpts: river.UniqueOpts{
+									ByPeriod: 24 * time.Hour,
+								},
 							}
 					},
 					&river.PeriodicJobOpts{RunOnStart: false},

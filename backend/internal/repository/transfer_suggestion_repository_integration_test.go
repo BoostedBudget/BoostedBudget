@@ -2,17 +2,15 @@
 
 package repository
 
-// Integration test for TransferSuggestionRepository.
-// Verifies that the partial unique index on matched_transaction_id
-// (WHERE matched_transaction_id IS NOT NULL) prevents one inflow transaction
-// from completing two suggestions, while NULL completions remain unrestricted.
+// Integration tests for TransferSuggestionRepository.
 //
-// pgxmock cannot verify partial-index uniqueness because it never sends SQL
-// to a real planner — it matches query strings and returns canned rows.
+// These tests verify SQL-layer guarantees that pgxmock cannot check:
+// partial unique index on matched_transaction_id, status-guard WHERE clauses,
+// and ExpirePending transition logic (pending → expired; accepted stays accepted).
 //
 // Run with:
 //
-//	DATABASE_URL=postgres://... go test ./internal/repository/... -run TestCompletePartialUnique -tags integration -v
+//	DATABASE_URL=postgres://... go test ./internal/repository/... -tags integration -v
 
 import (
 	"context"
@@ -123,4 +121,130 @@ func TestCompletePartialUniqueMatchedTxn_Integration(t *testing.T) {
 	suggB, err := repo.GetByID(ctx, suggIDs[1])
 	require.NoError(t, err)
 	assert.Equal(t, domain.SuggestionStatusPending, suggB.Status)
+}
+
+// TestUpdateStatusAndComplete_StatusGuards_Integration verifies the SQL status-guard
+// WHERE clauses in UpdateStatus and Complete:
+//   - UpdateStatus only applies to pending rows (accepted/rejected/expired/completed → AlreadyActioned)
+//   - Complete applies to pending AND accepted rows
+//   - Rejected/expired/completed rows → AlreadyActioned from Complete
+//   - ExpirePending only transitions pending rows (accepted/rejected/completed rows unchanged)
+//
+// pgxmock returns canned rows without running WHERE clauses; these guards require real SQL.
+func TestUpdateStatusAndComplete_StatusGuards_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Seed a user and linked item (required by FK constraints on transfer_suggestions).
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+	`, userID, "test|"+userID.String(), "status-guard-"+userID.String()+"@example.com")
+	require.NoError(t, err)
+
+	linkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-token')
+	`, linkedItemID, userID, "item-status-"+linkedItemID.String())
+	require.NoError(t, err)
+
+	// Helper to insert a suggestion with a specific status and optional expires_at.
+	insertSugg := func(status string, expiresAt *time.Time) string {
+		id := uuid.New().String()
+		if expiresAt != nil {
+			_, err = tx.Exec(ctx, `
+				INSERT INTO transfer_suggestions (id, user_id, amount, source, status, expires_at, created_at, updated_at)
+				VALUES ($1, $2, 100.00, 'rule', $3, $4, NOW(), NOW())
+			`, id, userID, status, expiresAt)
+		} else {
+			_, err = tx.Exec(ctx, `
+				INSERT INTO transfer_suggestions (id, user_id, amount, source, status, created_at, updated_at)
+				VALUES ($1, $2, 100.00, 'rule', $3, NOW(), NOW())
+			`, id, userID, status)
+		}
+		require.NoError(t, err)
+		return id
+	}
+
+	repo := NewTransferSuggestionRepository(tx)
+	now := time.Now()
+
+	// === UpdateStatus guards: only pending → accepted/rejected ===
+	pendingID := insertSugg("pending", nil)
+	acceptedID := insertSugg("accepted", nil)
+	rejectedID := insertSugg("rejected", nil)
+
+	// UpdateStatus on pending → succeeds.
+	err = repo.UpdateStatus(ctx, pendingID, domain.SuggestionStatusAccepted, nil)
+	require.NoError(t, err, "UpdateStatus pending→accepted must succeed")
+
+	// UpdateStatus on already-accepted → AlreadyActioned.
+	err = repo.UpdateStatus(ctx, acceptedID, domain.SuggestionStatusRejected, nil)
+	require.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned,
+		"UpdateStatus accepted→rejected must return AlreadyActioned (WHERE status='pending' fails)")
+
+	// UpdateStatus on rejected → AlreadyActioned.
+	err = repo.UpdateStatus(ctx, rejectedID, domain.SuggestionStatusAccepted, nil)
+	require.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned,
+		"UpdateStatus rejected→accepted must return AlreadyActioned")
+
+	// === Complete guards: pending OR accepted → completed; terminal → AlreadyActioned ===
+	pendingID2 := insertSugg("pending", nil)
+	acceptedID2 := insertSugg("accepted", nil)
+	rejectedID2 := insertSugg("rejected", nil)
+	completedID := insertSugg("completed", nil)
+
+	// Complete on pending → succeeds.
+	err = repo.Complete(ctx, pendingID2, nil, 100.00, "user_confirmed", now)
+	require.NoError(t, err, "Complete pending→completed must succeed")
+
+	// Complete on accepted → succeeds.
+	err = repo.Complete(ctx, acceptedID2, nil, 100.00, "exact_match", now)
+	require.NoError(t, err, "Complete accepted→completed must succeed")
+
+	// Complete on rejected → AlreadyActioned.
+	err = repo.Complete(ctx, rejectedID2, nil, 100.00, "exact_match", now)
+	require.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned,
+		"Complete on rejected must return AlreadyActioned")
+
+	// Complete on already-completed → AlreadyActioned.
+	err = repo.Complete(ctx, completedID, nil, 100.00, "exact_match", now)
+	require.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned,
+		"Complete on completed must return AlreadyActioned")
+
+	// === ExpirePending: only pending with past expires_at transitions; accepted stays accepted ===
+	pastExpiry := now.Add(-time.Hour)
+	futureExpiry := now.Add(30 * 24 * time.Hour)
+
+	expiredPendingID := insertSugg("pending", &pastExpiry)   // should expire
+	keptPendingID := insertSugg("pending", &futureExpiry)    // future expiry → stays pending
+	keptAcceptedID := insertSugg("accepted", &pastExpiry)    // accepted + past expiry → MUST stay accepted
+
+	count, err := repo.ExpirePending(ctx)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, count, int64(1), "at least one pending suggestion should have been expired")
+
+	// Pending with past expiry → expired.
+	sugg, err := repo.GetByID(ctx, expiredPendingID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.SuggestionStatusExpired, sugg.Status,
+		"pending suggestion with past expires_at must be transitioned to expired")
+
+	// Pending with future expiry → still pending.
+	sugg, err = repo.GetByID(ctx, keptPendingID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.SuggestionStatusPending, sugg.Status,
+		"pending suggestion with future expires_at must remain pending")
+
+	// Accepted with past expiry → MUST remain accepted (user intent must not be auto-expired).
+	sugg, err = repo.GetByID(ctx, keptAcceptedID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.SuggestionStatusAccepted, sugg.Status,
+		"accepted suggestion must never be auto-expired by ExpirePending (user explicitly accepted)")
 }
