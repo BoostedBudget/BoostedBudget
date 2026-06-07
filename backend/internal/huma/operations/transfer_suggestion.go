@@ -228,7 +228,13 @@ func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *Con
 
 		if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
 			var suggestion *domain.TransferSuggestion
-			cacheHit, err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, input.IdempotencyKey, input.UserID, "confirmTransferSuggestionMatch",
+			// GAP BB: scope the key to the suggestion ID so that two requests with the
+			// same Idempotency-Key header targeting different suggestions don't collide
+			// in the cache. Key = "userKey:suggestionID" — unique per distinct request.
+			// The ":" delimiter is safe here because suggestion IDs are UUIDs (no ":"
+			// chars), so (key="a:b", id="c") and (key="a", id="b:c") cannot collide.
+			scopedKey := input.IdempotencyKey + ":" + input.ID
+			cacheHit, err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, scopedKey, input.UserID, "confirmTransferSuggestionMatch",
 				func() (interface{}, error) {
 					txSuggestionRepo := repository.NewTransferSuggestionRepository(tx)
 					txSvc := services.NewTransferSuggestionService(txSuggestionRepo)
@@ -310,7 +316,10 @@ func (h *TransferSuggestionHandler) DeclineMatch(ctx context.Context, input *Dec
 
 		if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
 			var suggestion *domain.TransferSuggestion
-			cacheHit, err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, input.IdempotencyKey, input.UserID, "declineTransferSuggestionMatch",
+			// GAP BB: scope the key to the suggestion ID (mirrors confirm path above).
+			// ":" delimiter is safe because suggestion IDs are UUIDs (no ":" chars).
+			scopedKey := input.IdempotencyKey + ":" + input.ID
+			cacheHit, err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, scopedKey, input.UserID, "declineTransferSuggestionMatch",
 				func() (interface{}, error) {
 					txSuggestionRepo := repository.NewTransferSuggestionRepository(tx)
 					txSvc := services.NewTransferSuggestionService(txSuggestionRepo)

@@ -851,3 +851,115 @@ func TestDeclineReleasesReservationForReClaim_Integration(t *testing.T) {
 	assert.Equal(t, txnIDStr, *suggBState.MatchedTransactionID,
 		"step 5: B must now hold the reservation on T")
 }
+
+// TestClearStaleReservations_ClosesMatchNotifications_Integration verifies GAP BA:
+// when ClearStaleReservations frees a stale reservation it must also mark the
+// associated open transfer_suggestion_match notification as read so that:
+//   (a) The stale prompt is visually closed for the user.
+//   (b) The type-scoped open-notification guard in CorrelateForUser no longer
+//       suppresses re-prompting on the stranded accepted suggestion.
+//
+// pgxmock cannot verify this because the two table updates are only linked by
+// the SQL CTE — a unit mock would not execute the JOIN.
+func TestClearStaleReservations_ClosesMatchNotifications_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Seed user + account hierarchy (needed for FK constraints).
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+	`, userID, "test|ba-"+userID.String(), "notif-close-"+userID.String()+"@example.com")
+	require.NoError(t, err)
+
+	linkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-ba-token')
+	`, linkedItemID, userID, "item-ba-"+linkedItemID.String())
+	require.NoError(t, err)
+
+	accountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, 'plaid-ba', 'BA Test', 'depository')
+	`, accountID, linkedItemID, userID)
+	require.NoError(t, err)
+
+	// Seed two inflow transactions (one per suggestion).
+	staleTxnID := uuid.New()
+	freshTxnID := uuid.New()
+	for _, txnID := range []uuid.UUID{staleTxnID, freshTxnID} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO transactions (id, user_id, account_id, linked_item_id, source, amount, date, name)
+			VALUES ($1, $2, $3, $4, 'plaid', -200.00, '2024-02-01', 'inflow')
+		`, txnID, userID, accountID, linkedItemID)
+		require.NoError(t, err)
+	}
+
+	pastExpiry := time.Now().Add(-1 * time.Hour)
+	futureExpiry := time.Now().Add(30 * 24 * time.Hour)
+
+	// Stale suggestion: accepted, past expiry, has reserved staleTxnID.
+	staleID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, matched_transaction_id, expires_at, created_at, updated_at)
+		VALUES ($1, $2, 200.00, 'rule', 'accepted', $3, $4, NOW(), NOW())
+	`, staleID, userID, staleTxnID.String(), pastExpiry)
+	require.NoError(t, err)
+
+	// Fresh suggestion: pending, future expiry, has reserved freshTxnID.
+	freshID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, matched_transaction_id, expires_at, created_at, updated_at)
+		VALUES ($1, $2, 200.00, 'rule', 'pending', $3, $4, NOW(), NOW())
+	`, freshID, userID, freshTxnID.String(), futureExpiry)
+	require.NoError(t, err)
+
+	// Open transfer_suggestion_match notification for the stale suggestion.
+	staleNotifID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO notifications
+			(id, user_id, type, title, message, read, sent_email, interaction_pattern, transfer_suggestion_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, false, false, 'accept_reject', $6, NOW(), NOW())
+	`, staleNotifID, userID, domain.NotificationTypeTransferSuggestionMatch,
+		"Did you transfer a different amount?", "We suggested $200.00 but detected $190.00", staleID)
+	require.NoError(t, err, "seed open match notification for stale suggestion")
+
+	// Open transfer_suggestion_match notification for the fresh suggestion.
+	freshNotifID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO notifications
+			(id, user_id, type, title, message, read, sent_email, interaction_pattern, transfer_suggestion_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, false, false, 'accept_reject', $6, NOW(), NOW())
+	`, freshNotifID, userID, domain.NotificationTypeTransferSuggestionMatch,
+		"Did you transfer a different amount?", "We suggested $200.00 but detected $190.00", freshID)
+	require.NoError(t, err, "seed open match notification for fresh suggestion")
+
+	repo := NewTransferSuggestionRepository(tx)
+
+	cleared, err := repo.ClearStaleReservations(ctx)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, cleared, int64(1), "at least the stale suggestion reservation must be cleared")
+
+	// GAP BA: stale suggestion's match notification must be marked read.
+	var staleRead bool
+	err = tx.QueryRow(ctx, `SELECT read FROM notifications WHERE id = $1`, staleNotifID).Scan(&staleRead)
+	require.NoError(t, err)
+	assert.True(t, staleRead,
+		"GAP BA: stale suggestion's open transfer_suggestion_match notification must be closed "+
+			"(read=true) when ClearStaleReservations frees the reservation — otherwise the "+
+			"correlation guard suppresses future re-prompting and strands the accepted suggestion")
+
+	// Fresh suggestion's match notification must remain unread (expiry not reached).
+	var freshRead bool
+	err = tx.QueryRow(ctx, `SELECT read FROM notifications WHERE id = $1`, freshNotifID).Scan(&freshRead)
+	require.NoError(t, err)
+	assert.False(t, freshRead,
+		"fresh suggestion's notification must NOT be closed (expiry not yet reached)")
+}
