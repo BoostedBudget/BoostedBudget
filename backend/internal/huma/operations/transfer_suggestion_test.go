@@ -24,14 +24,16 @@ import (
 // =============================================================================
 
 type mockTransferSuggestionService struct {
-	getPendingResult   []*domain.TransferSuggestion
-	getPendingErr      error
-	acceptResult       *domain.TransferSuggestion
-	acceptErr          error
-	rejectResult       *domain.TransferSuggestion
-	rejectErr          error
-	confirmMatchResult *domain.TransferSuggestion
-	confirmMatchErr    error
+	getPendingResult    []*domain.TransferSuggestion
+	getPendingErr       error
+	acceptResult        *domain.TransferSuggestion
+	acceptErr           error
+	rejectResult        *domain.TransferSuggestion
+	rejectErr           error
+	confirmMatchResult  *domain.TransferSuggestion
+	confirmMatchErr     error
+	declineMatchResult  *domain.TransferSuggestion
+	declineMatchErr     error
 }
 
 func (m *mockTransferSuggestionService) GetPendingSuggestions(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error) {
@@ -48,6 +50,10 @@ func (m *mockTransferSuggestionService) RejectSuggestion(ctx context.Context, us
 
 func (m *mockTransferSuggestionService) ConfirmTransferSuggestionMatch(ctx context.Context, userID, suggestionID string, actualAmount float64) (*domain.TransferSuggestion, error) {
 	return m.confirmMatchResult, m.confirmMatchErr
+}
+
+func (m *mockTransferSuggestionService) DeclineTransferSuggestionMatch(ctx context.Context, userID, suggestionID string) (*domain.TransferSuggestion, error) {
+	return m.declineMatchResult, m.declineMatchErr
 }
 
 // =============================================================================
@@ -629,6 +635,74 @@ func TestConfirmMatch_CompletedSuggestionExposesMatchedTransactionID(t *testing.
 	require.NotNil(t, output.Body.Suggestion.MatchedTransactionID,
 		"completed suggestion must expose matched_transaction_id for auditability")
 	assert.Equal(t, txnID, *output.Body.Suggestion.MatchedTransactionID)
+}
+
+// =============================================================================
+// GAP AI: DeclineTransferSuggestionMatch handler tests
+// =============================================================================
+
+func TestDeclineMatch_Success(t *testing.T) {
+	userID := "user-ai"
+	suggestionID := "suggestion-ai"
+
+	pending := newTestSuggestionItem(suggestionID, userID)
+	pending.MatchedTransactionID = nil // cleared by decline
+
+	svc := &mockTransferSuggestionService{
+		declineMatchResult: pending,
+	}
+
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &DeclineTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 suggestionID,
+	}
+
+	output, err := handler.DeclineMatch(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "Transfer match declined", output.Body.Message)
+	assert.Equal(t, suggestionID, output.Body.Suggestion.ID)
+}
+
+func TestDeclineMatch_OwnershipEnforced(t *testing.T) {
+	svc := &mockTransferSuggestionService{
+		declineMatchErr: domain.ErrTransferSuggestionNotFound,
+	}
+
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &DeclineTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-ai"},
+		ID:                 "other-users-suggestion",
+	}
+
+	output, err := handler.DeclineMatch(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestDeclineMatch_AlreadyActioned(t *testing.T) {
+	svc := &mockTransferSuggestionService{
+		declineMatchErr: domain.ErrTransferSuggestionAlreadyActioned,
+	}
+
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &DeclineTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-ai"},
+		ID:                 "completed-suggestion",
+	}
+
+	output, err := handler.DeclineMatch(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already")
 }
 
 // =============================================================================

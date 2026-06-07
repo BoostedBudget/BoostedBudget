@@ -92,6 +92,16 @@ func (m *mockTransferSuggestionRepo) GetActiveByUserID(ctx context.Context, user
 	return args.Get(0).([]*domain.TransferSuggestion), args.Error(1)
 }
 
+func (m *mockTransferSuggestionRepo) CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time) error {
+	args := m.Called(ctx, id, actualAmount, completionSource, completedAt)
+	return args.Error(0)
+}
+
+func (m *mockTransferSuggestionRepo) ClearMatchedTransactionID(ctx context.Context, id string) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
 // =============================================================================
 // Test Helpers
 // =============================================================================
@@ -529,7 +539,8 @@ func TestTransferSuggestionService_ConfirmMatch_PendingSuccess(t *testing.T) {
 	suggestion.Status = domain.SuggestionStatusPending
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
-	suggestionRepo.On("Complete", ctx, suggestionID, (*string)(nil), actualAmount, "user_confirmed", mock.AnythingOfType("time.Time")).Return(nil)
+	// GAP AK: now uses CompleteRetainingReservation (no matched_transaction_id argument)
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time")).Return(nil)
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
 
@@ -554,7 +565,8 @@ func TestTransferSuggestionService_ConfirmMatch_AcceptedSuccess(t *testing.T) {
 	suggestion.Status = domain.SuggestionStatusAccepted
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
-	suggestionRepo.On("Complete", ctx, suggestionID, (*string)(nil), actualAmount, "user_confirmed", mock.AnythingOfType("time.Time")).Return(nil)
+	// GAP AK: now uses CompleteRetainingReservation
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time")).Return(nil)
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
 
@@ -674,7 +686,8 @@ func TestTransferSuggestionService_ConfirmMatch_RepoCompleteError(t *testing.T) 
 	suggestion.Status = domain.SuggestionStatusPending
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
-	suggestionRepo.On("Complete", ctx, suggestionID, (*string)(nil), 100.00, "user_confirmed", mock.AnythingOfType("time.Time")).Return(errors.New("db error"))
+	// GAP AK: now uses CompleteRetainingReservation
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, 100.00, "user_confirmed", mock.AnythingOfType("time.Time")).Return(errors.New("db error"))
 
 	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, 100.00)
 
@@ -684,9 +697,10 @@ func TestTransferSuggestionService_ConfirmMatch_RepoCompleteError(t *testing.T) 
 }
 
 // TestTransferSuggestionService_ConfirmMatch_RetainsReservedMatchedTransactionID proves
-// GAP AH retain: when a suggestion has a reserved matched_transaction_id (set during
-// fuzzy-match detection), ConfirmTransferSuggestionMatch passes it through to Complete
-// so the partial unique index continues protecting the inflow after completion.
+// GAP AK fix: when a suggestion has a reserved matched_transaction_id, ConfirmTransferSuggestionMatch
+// now calls CompleteRetainingReservation (which omits matched_transaction_id from the SET clause)
+// so the DB retains whatever is currently there. This avoids the race where a stale-read id
+// overwrites a reclaimed reservation after ClearStaleReservations ran between the read and write.
 func TestTransferSuggestionService_ConfirmMatch_RetainsReservedMatchedTransactionID(t *testing.T) {
 	ctx := context.Background()
 	suggestionRepo := new(mockTransferSuggestionRepo)
@@ -704,9 +718,9 @@ func TestTransferSuggestionService_ConfirmMatch_RetainsReservedMatchedTransactio
 	suggestion.MatchedTransactionID = &reservedTxnID
 
 	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
-	// Complete must be called with the reserved txnID (not nil) — GAP AH retain
-	suggestionRepo.On("Complete", ctx, suggestionID,
-		mock.MatchedBy(func(s *string) bool { return s != nil && *s == reservedTxnID }),
+	// GAP AK: CompleteRetainingReservation is called instead of Complete — no matched_transaction_id arg.
+	// The DB retains the reservation; the partial unique index continues protecting the inflow.
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID,
 		actualAmount, "user_confirmed", mock.AnythingOfType("time.Time"),
 	).Return(nil)
 
@@ -716,5 +730,136 @@ func TestTransferSuggestionService_ConfirmMatch_RetainsReservedMatchedTransactio
 	require.NotNil(t, result)
 	assert.Equal(t, domain.SuggestionStatusCompleted, result.Status)
 	assert.Equal(t, actualAmount, *result.ActualAmount)
+	suggestionRepo.AssertExpectations(t)
+}
+
+// =============================================================================
+// GAP AK: ConfirmTransferSuggestionMatch uses CompleteRetainingReservation (not Complete)
+// =============================================================================
+
+// TestTransferSuggestionService_ConfirmMatch_UsesRetainReservation proves GAP AK fix:
+// ConfirmTransferSuggestionMatch must call CompleteRetainingReservation (which omits
+// matched_transaction_id from the SET clause) rather than Complete (which overwrites it).
+// This avoids the race where a stale-read id clobbers a reclaimed reservation.
+func TestTransferSuggestionService_ConfirmMatch_UsesRetainReservation(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-ak"
+	suggestionID := "suggestion-ak"
+	actualAmount := 250.00
+
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.ID = suggestionID
+	suggestion.Status = domain.SuggestionStatusPending
+	suggestion.MatchedTransactionID = nil // no reservation set
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	// GAP AK: CompleteRetainingReservation must be called (not Complete)
+	suggestionRepo.On("CompleteRetainingReservation", ctx, suggestionID, actualAmount, "user_confirmed", mock.AnythingOfType("time.Time")).Return(nil)
+
+	result, err := svc.ConfirmTransferSuggestionMatch(ctx, userID, suggestionID, actualAmount)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, domain.SuggestionStatusCompleted, result.Status)
+	assert.Equal(t, actualAmount, *result.ActualAmount)
+	suggestionRepo.AssertExpectations(t)
+}
+
+// =============================================================================
+// GAP AI: DeclineTransferSuggestionMatch tests
+// =============================================================================
+
+// TestDeclineTransferSuggestionMatch_ClearsReservation verifies that declining
+// a pending suggestion with a reservation sets matched_transaction_id = NULL.
+func TestDeclineTransferSuggestionMatch_ClearsReservation(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-ai"
+	suggestionID := "suggestion-ai"
+	reservedTxnID := "txn-reserved"
+
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.ID = suggestionID
+	suggestion.Status = domain.SuggestionStatusPending
+	suggestion.MatchedTransactionID = &reservedTxnID
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("ClearMatchedTransactionID", ctx, suggestionID).Return(nil)
+
+	result, err := svc.DeclineTransferSuggestionMatch(ctx, userID, suggestionID)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Nil(t, result.MatchedTransactionID, "reservation should be cleared")
+	suggestionRepo.AssertExpectations(t)
+}
+
+// TestDeclineTransferSuggestionMatch_OwnershipEnforced verifies that a user cannot
+// decline another user's suggestion (returns not-found for security).
+func TestDeclineTransferSuggestionMatch_OwnershipEnforced(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	suggestion := createTestTransferSuggestion("other-user")
+
+	suggestionRepo.On("GetByID", ctx, "suggestion-ai").Return(suggestion, nil)
+
+	result, err := svc.DeclineTransferSuggestionMatch(ctx, "user-ai", "suggestion-ai")
+
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionNotFound)
+	suggestionRepo.AssertExpectations(t)
+}
+
+// TestDeclineTransferSuggestionMatch_TerminalStatusReturnsActioned verifies that
+// a completed suggestion cannot have its reservation cleared.
+func TestDeclineTransferSuggestionMatch_TerminalStatusReturnsActioned(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-ai"
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.Status = domain.SuggestionStatusCompleted
+
+	suggestionRepo.On("GetByID", ctx, suggestion.ID).Return(suggestion, nil)
+
+	result, err := svc.DeclineTransferSuggestionMatch(ctx, userID, suggestion.ID)
+
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
+	suggestionRepo.AssertExpectations(t)
+}
+
+// TestDeclineTransferSuggestionMatch_AcceptedSuggestion verifies that an accepted
+// suggestion (non-terminal) can still have its reservation cleared via decline.
+func TestDeclineTransferSuggestionMatch_AcceptedSuggestion(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-ai"
+	suggestionID := "suggestion-accepted"
+	reservedTxnID := "txn-accepted"
+
+	suggestion := createTestTransferSuggestion(userID)
+	suggestion.ID = suggestionID
+	suggestion.Status = domain.SuggestionStatusAccepted
+	suggestion.MatchedTransactionID = &reservedTxnID
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("ClearMatchedTransactionID", ctx, suggestionID).Return(nil)
+
+	result, err := svc.DeclineTransferSuggestionMatch(ctx, userID, suggestionID)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Nil(t, result.MatchedTransactionID)
 	suggestionRepo.AssertExpectations(t)
 }

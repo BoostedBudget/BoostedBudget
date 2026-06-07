@@ -2190,6 +2190,24 @@ components:
         - last_24_hours
         - by_kind
       type: object
+    DeclineTransferSuggestionMatchOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DeclineTransferSuggestionMatchOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          type: string
+        suggestion:
+          $ref: "#/components/schemas/TransferSuggestion"
+      required:
+        - message
+        - suggestion
+      type: object
     Detailed:
       additionalProperties: false
       properties:
@@ -10937,6 +10955,54 @@ paths:
       security:
         - clerk: []
       summary: Confirm transfer suggestion match
+      tags:
+        - TransferSuggestions
+  /api/v1/transfer-suggestions/{id}/decline-match:
+    post:
+      description: Releases the fuzzy-match reservation on a pending/accepted suggestion. The inflow is freed for other suggestions.
+      operationId: declineTransferSuggestionMatch
+      parameters:
+        - description: Idempotency key for MCP write operations (optional)
+          in: header
+          name: Idempotency-Key
+          schema:
+            description: Idempotency key for MCP write operations (optional)
+            type: string
+        - description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+          in: header
+          name: X-MCP-Grant-Id
+          schema:
+            description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+            type: string
+        - description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+          in: header
+          name: X-MCP-Worker-Secret
+          schema:
+            description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+            type: string
+        - description: Transfer suggestion UUID to decline
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Transfer suggestion UUID to decline
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeclineTransferSuggestionMatchOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Decline transfer suggestion match
       tags:
         - TransferSuggestions
   /api/v1/transfer-suggestions/{id}/reject:

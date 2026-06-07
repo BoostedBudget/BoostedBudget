@@ -249,6 +249,22 @@ func (m *mockTransferSuggestionRepository) ClearMatchedTransactionID(_ context.C
 	return nil
 }
 
+func (m *mockTransferSuggestionRepository) CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time) error {
+	for _, s := range m.suggestions {
+		if s.ID == id {
+			if s.Status != domain.SuggestionStatusPending && s.Status != domain.SuggestionStatusAccepted {
+				return domain.ErrTransferSuggestionAlreadyActioned
+			}
+			s.Status = domain.SuggestionStatusCompleted
+			s.ActualAmount = &actualAmount
+			s.CompletionSource = &completionSource
+			s.CompletedAt = &completedAt
+			return nil
+		}
+	}
+	return domain.ErrTransferSuggestionNotFound
+}
+
 func (m *mockTransferSuggestionRepository) ClearStaleReservations(_ context.Context) (int64, error) {
 	return 0, nil
 }

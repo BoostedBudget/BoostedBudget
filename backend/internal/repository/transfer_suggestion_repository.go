@@ -47,6 +47,12 @@ type TransferSuggestionRepository interface {
 	// Race-safe: only operates on pending or accepted suggestions.
 	Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error
 
+	// CompleteRetainingReservation completes a suggestion without touching matched_transaction_id.
+	// The DB retains whatever matched_transaction_id currently holds (T if still reserved, NULL if
+	// stale-cleared). Avoids the race where a stale-read id overwrites a reclaimed reservation.
+	// Race-safe: only operates on pending or accepted suggestions.
+	CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time) error
+
 	// GetActiveByUserID retrieves all active (pending + accepted) suggestions for a user.
 	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error)
 
@@ -203,15 +209,11 @@ func (r *transferSuggestionRepository) GetPendingByUserID(ctx context.Context, u
 }
 
 // UpdateStatus updates the status of a pending suggestion.
-// The AND status = 'pending' guard prevents concurrent accept+reject race conditions.
-// If no rows are affected, it distinguishes between "not found" and "already actioned".
-// When transitioning to 'rejected', matched_transaction_id is cleared (reservation released)
-// so the inflow can be matched by a different suggestion in the future.
+// Clears matched_transaction_id when transitioning to 'rejected'.
+// Race-safe: AND status = 'pending' guard prevents concurrent accept+reject.
 func (r *transferSuggestionRepository) UpdateStatus(ctx context.Context, id string, status domain.SuggestionStatus, userNotes *string) error {
 	now := time.Now()
 
-	// Release the fuzzy-match reservation when the suggestion is rejected.
-	// Accepted suggestions keep their reservation (pending → accepted is still active).
 	query := `
 		UPDATE transfer_suggestions
 		SET status = $1,
@@ -318,8 +320,7 @@ func (r *transferSuggestionRepository) GetByRuleID(ctx context.Context, ruleID s
 	return r.querySuggestions(ctx, query, ruleID, limit, offset)
 }
 
-// Complete marks a suggestion as completed after a transfer was detected or confirmed.
-// Race-safe: only operates on pending or accepted suggestions (status IN ('pending','accepted')).
+// Complete marks a suggestion as completed. Race-safe: AND status IN ('pending','accepted').
 func (r *transferSuggestionRepository) Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error {
 	now := time.Now()
 
@@ -341,6 +342,38 @@ func (r *transferSuggestionRepository) Complete(ctx context.Context, id string, 
 
 	if ct.RowsAffected() == 0 {
 		// Distinguish: does the row exist but was already actioned, or does it not exist?
+		_, getErr := r.GetByID(ctx, id)
+		if getErr != nil {
+			return domain.ErrTransferSuggestionNotFound
+		}
+		return domain.ErrTransferSuggestionAlreadyActioned
+	}
+
+	return nil
+}
+
+// CompleteRetainingReservation marks a suggestion as completed without updating matched_transaction_id.
+// Avoids race where stale reservation is overwritten after ClearStaleReservations runs (GAP AK).
+// Race-safe: AND status IN ('pending','accepted').
+func (r *transferSuggestionRepository) CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time) error {
+	now := time.Now()
+
+	query := `
+		UPDATE transfer_suggestions
+		SET status = 'completed',
+		    completed_at = $2,
+		    actual_amount = $3,
+		    completion_source = $4,
+		    updated_at = $5
+		WHERE id = $1 AND status IN ('pending', 'accepted')
+	`
+
+	ct, err := r.db.Exec(ctx, query, id, completedAt, actualAmount, completionSource, now)
+	if err != nil {
+		return err
+	}
+
+	if ct.RowsAffected() == 0 {
 		_, getErr := r.GetByID(ctx, id)
 		if getErr != nil {
 			return domain.ErrTransferSuggestionNotFound
@@ -376,15 +409,17 @@ func (r *transferSuggestionRepository) ReserveMatchedTransaction(ctx context.Con
 	return nil
 }
 
-// ClearMatchedTransactionID sets matched_transaction_id = NULL for a suggestion,
-// releasing any reservation so the inflow can be matched elsewhere.
+// ClearMatchedTransactionID sets matched_transaction_id = NULL for a pending/accepted
+// suggestion, releasing any reservation so the inflow can be matched elsewhere.
+// A no-op on terminal rows (completed/rejected/expired) — those statuses are immutable
+// and their matched_transaction_id must not be disturbed by a concurrent rollback or decline.
 func (r *transferSuggestionRepository) ClearMatchedTransactionID(ctx context.Context, id string) error {
 	now := time.Now()
 
 	query := `
 		UPDATE transfer_suggestions
 		SET matched_transaction_id = NULL, updated_at = $2
-		WHERE id = $1
+		WHERE id = $1 AND status IN ('pending', 'accepted')
 	`
 
 	_, err := r.db.Exec(ctx, query, id, now)

@@ -505,3 +505,92 @@ func TestUpdateStatusAndComplete_StatusGuards_Integration(t *testing.T) {
 	assert.Equal(t, domain.SuggestionStatusAccepted, sugg.Status,
 		"accepted suggestion must never be auto-expired by ExpirePending (user explicitly accepted)")
 }
+
+// TestDeclineReleasesReservationForReClaim_Integration proves GAP AI:
+// ClearMatchedTransactionID releases the reservation so that a second suggestion
+// can claim the same inflow transaction.
+//
+//  1. Seed user + linked_item + account + transaction T.
+//  2. Seed suggestion A and suggestion B (both pending).
+//  3. Reserve T on A → matched_transaction_id = T.
+//  4. Decline A → ClearMatchedTransactionID → matched_transaction_id = NULL.
+//  5. Reserve T on B → succeeds (T is free again).
+func TestDeclineReleasesReservationForReClaim_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+	`, userID, "test|"+userID.String(), "decline-ai-"+userID.String()+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	linkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-decline-token')
+	`, linkedItemID, userID, "item-decline-"+linkedItemID.String())
+	require.NoError(t, err, "seed linked_item")
+
+	accountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, 'plaid-decline', 'Decline Test', 'depository')
+	`, accountID, linkedItemID, userID)
+	require.NoError(t, err, "seed account")
+
+	txnID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transactions
+			(id, user_id, account_id, linked_item_id, source, amount, date, name)
+		VALUES ($1, $2, $3, $4, 'plaid', -300.00, '2024-03-01', 'Savings Transfer')
+	`, txnID, userID, accountID, linkedItemID)
+	require.NoError(t, err, "seed transaction T")
+
+	suggA := uuid.New().String()
+	suggB := uuid.New().String()
+	for _, id := range []string{suggA, suggB} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO transfer_suggestions
+				(id, user_id, amount, source, status, created_at, updated_at)
+			VALUES ($1, $2, 300.00, 'rule', 'pending', NOW(), NOW())
+		`, id, userID)
+		require.NoError(t, err, "seed suggestion "+id)
+	}
+
+	repo := NewTransferSuggestionRepository(tx)
+	txnIDStr := txnID.String()
+
+	// Step 3: Reserve T on A.
+	err = repo.ReserveMatchedTransaction(ctx, suggA, txnIDStr)
+	require.NoError(t, err, "step 3: reserve T on suggestion A must succeed")
+
+	suggAState, err := repo.GetByID(ctx, suggA)
+	require.NoError(t, err)
+	require.NotNil(t, suggAState.MatchedTransactionID)
+	assert.Equal(t, txnIDStr, *suggAState.MatchedTransactionID, "step 3: A must hold reservation on T")
+
+	// Step 4: Decline A — clear the reservation.
+	err = repo.ClearMatchedTransactionID(ctx, suggA)
+	require.NoError(t, err, "step 4: ClearMatchedTransactionID must succeed")
+
+	suggAState, err = repo.GetByID(ctx, suggA)
+	require.NoError(t, err)
+	assert.Nil(t, suggAState.MatchedTransactionID,
+		"step 4: A.matched_transaction_id must be NULL after decline")
+
+	// Step 5: Reserve T on B — must now succeed since T was freed.
+	err = repo.ReserveMatchedTransaction(ctx, suggB, txnIDStr)
+	require.NoError(t, err, "step 5: reserving T on B must succeed after A declined")
+
+	suggBState, err := repo.GetByID(ctx, suggB)
+	require.NoError(t, err)
+	require.NotNil(t, suggBState.MatchedTransactionID)
+	assert.Equal(t, txnIDStr, *suggBState.MatchedTransactionID,
+		"step 5: B must now hold the reservation on T")
+}

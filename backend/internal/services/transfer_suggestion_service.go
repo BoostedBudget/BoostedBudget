@@ -19,6 +19,14 @@ type TransferSuggestionRepository interface {
 	// matchedTransactionID is nil for user-confirmed completions (no specific transaction ID).
 	// Race-safe: only operates on pending or accepted suggestions.
 	Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error
+	// CompleteRetainingReservation completes a suggestion without touching matched_transaction_id.
+	// The DB retains whatever matched_transaction_id currently holds (T if still reserved, NULL if
+	// stale-cleared). Avoids the race where a stale-read id overwrites a reclaimed reservation.
+	// Race-safe: only operates on pending or accepted suggestions.
+	CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time) error
+	// ClearMatchedTransactionID releases the reservation on a suggestion by setting
+	// matched_transaction_id = NULL. Used for user-driven decline-match.
+	ClearMatchedTransactionID(ctx context.Context, id string) error
 }
 
 // TransferSuggestionService handles transfer suggestion operations.
@@ -39,6 +47,13 @@ type TransferSuggestionService interface {
 	// Returns ErrTransferSuggestionNotFound if suggestion doesn't exist or belongs to different user.
 	// Returns ErrTransferSuggestionAlreadyActioned if status is completed, rejected, or expired.
 	ConfirmTransferSuggestionMatch(ctx context.Context, userID, suggestionID string, actualAmount float64) (*domain.TransferSuggestion, error)
+
+	// DeclineTransferSuggestionMatch releases the fuzzy-match reservation on a pending/accepted
+	// suggestion (user chose "No, that wasn't my transfer"). Clears matched_transaction_id so the
+	// inflow can be matched by a different suggestion.
+	// Returns ErrTransferSuggestionNotFound if suggestion doesn't exist or belongs to a different user.
+	// Returns ErrTransferSuggestionAlreadyActioned if status is completed, rejected, or expired.
+	DeclineTransferSuggestionMatch(ctx context.Context, userID, suggestionID string) (*domain.TransferSuggestion, error)
 }
 
 // transferSuggestionService implements TransferSuggestionService.
@@ -67,34 +82,28 @@ func (s *transferSuggestionService) AcceptSuggestion(
 	suggestionID string,
 	notes *string,
 ) (*domain.TransferSuggestion, error) {
-	// 1. Get the suggestion
 	suggestion, err := s.suggestionRepo.GetByID(ctx, suggestionID)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Verify ownership (return not found for security - don't reveal existence)
 	if suggestion.UserID != userID {
 		return nil, domain.ErrTransferSuggestionNotFound
 	}
 
-	// 3. Check if already processed (optimistic guard — the DB has the authoritative guard via AND status='pending')
 	if suggestion.Status != domain.SuggestionStatusPending {
 		return nil, domain.ErrTransferSuggestionAlreadyActioned
 	}
 
-	// 4. Update status to accepted (the DB-level AND status='pending' guard handles races)
 	if err := s.suggestionRepo.UpdateStatus(ctx, suggestionID, domain.SuggestionStatusAccepted, notes); err != nil {
 		return nil, err
 	}
 
-	// 5. Update local copy and return
 	suggestion.Status = domain.SuggestionStatusAccepted
 	if notes != nil {
 		suggestion.UserNotes = notes
 	}
 
-	// 6. Fire analytics event (GDPR consent-gated: user-initiated action)
 	if s.gdprAnalytics != nil {
 		s.gdprAnalytics.CaptureIfConsented(ctx, userID, phclient.TransferSuggestionAccepted, map[string]interface{}{
 			"amount":        suggestion.Amount,
@@ -114,34 +123,28 @@ func (s *transferSuggestionService) RejectSuggestion(
 	suggestionID string,
 	notes *string,
 ) (*domain.TransferSuggestion, error) {
-	// 1. Get the suggestion
 	suggestion, err := s.suggestionRepo.GetByID(ctx, suggestionID)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Verify ownership (return not found for security - don't reveal existence)
 	if suggestion.UserID != userID {
 		return nil, domain.ErrTransferSuggestionNotFound
 	}
 
-	// 3. Check if already processed (optimistic guard — the DB has the authoritative guard via AND status='pending')
 	if suggestion.Status != domain.SuggestionStatusPending {
 		return nil, domain.ErrTransferSuggestionAlreadyActioned
 	}
 
-	// 4. Update status to rejected (the DB-level AND status='pending' guard handles races)
 	if err := s.suggestionRepo.UpdateStatus(ctx, suggestionID, domain.SuggestionStatusRejected, notes); err != nil {
 		return nil, err
 	}
 
-	// 5. Update local copy and return
 	suggestion.Status = domain.SuggestionStatusRejected
 	if notes != nil {
 		suggestion.UserNotes = notes
 	}
 
-	// 6. Fire analytics event (GDPR consent-gated: user-initiated action)
 	if s.gdprAnalytics != nil {
 		s.gdprAnalytics.CaptureIfConsented(ctx, userID, phclient.TransferSuggestionRejected, map[string]interface{}{
 			"amount":        suggestion.Amount,
@@ -163,49 +166,69 @@ func (s *transferSuggestionService) GetPendingSuggestions(
 }
 
 // ConfirmTransferSuggestionMatch completes a pending/accepted suggestion via user confirmation
-// (fuzzy-match path). completionSource is always "user_confirmed".
+// (fuzzy-match path). Uses CompleteRetainingReservation to avoid race with ClearStaleReservations (GAP AK).
 func (s *transferSuggestionService) ConfirmTransferSuggestionMatch(
 	ctx context.Context,
 	userID string,
 	suggestionID string,
 	actualAmount float64,
 ) (*domain.TransferSuggestion, error) {
-	// 1. Get the suggestion.
 	suggestion, err := s.suggestionRepo.GetByID(ctx, suggestionID)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Verify ownership (return not found for security — don't reveal existence).
 	if suggestion.UserID != userID {
 		return nil, domain.ErrTransferSuggestionNotFound
 	}
 
-	// 3. Guard: only pending or accepted can be completed.
 	if suggestion.Status == domain.SuggestionStatusCompleted ||
 		suggestion.Status == domain.SuggestionStatusRejected ||
 		suggestion.Status == domain.SuggestionStatusExpired {
 		return nil, domain.ErrTransferSuggestionAlreadyActioned
 	}
 
-	// 4. Complete in the database (race-safe: repo checks status IN ('pending','accepted')).
-	// GAP AH retain: pass through any reserved matched_transaction_id so the partial unique
-	// index continues protecting the inflow after completion. If no reservation was set
-	// (MatchedTransactionID == nil), completes as before (nil = NULL in DB).
-	// MEDIUM#3 v1 note: if the reservation was cleared (stale-expiry) between the fuzzy
-	// prompt and this confirm, MatchedTransactionID is nil here — completes without a txn id
-	// (same as pre-fix behavior, acceptable for v1 since no prod data exists).
 	completedAt := time.Now().UTC()
-	if err := s.suggestionRepo.Complete(ctx, suggestionID, suggestion.MatchedTransactionID, actualAmount, "user_confirmed", completedAt); err != nil {
+	if err := s.suggestionRepo.CompleteRetainingReservation(ctx, suggestionID, actualAmount, "user_confirmed", completedAt); err != nil {
 		return nil, err
 	}
 
-	// 5. Update local copy and return.
 	suggestion.Status = domain.SuggestionStatusCompleted
 	suggestion.ActualAmount = &actualAmount
 	suggestion.CompletedAt = &completedAt
 	completionSource := "user_confirmed"
 	suggestion.CompletionSource = &completionSource
 
+	return suggestion, nil
+}
+
+// DeclineTransferSuggestionMatch releases the fuzzy-match reservation on a pending/accepted
+// suggestion (user chose "No, that wasn't my transfer"). Clears matched_transaction_id so the
+// inflow can be matched by a different suggestion.
+func (s *transferSuggestionService) DeclineTransferSuggestionMatch(
+	ctx context.Context,
+	userID string,
+	suggestionID string,
+) (*domain.TransferSuggestion, error) {
+	suggestion, err := s.suggestionRepo.GetByID(ctx, suggestionID)
+	if err != nil {
+		return nil, err
+	}
+
+	if suggestion.UserID != userID {
+		return nil, domain.ErrTransferSuggestionNotFound
+	}
+
+	if suggestion.Status == domain.SuggestionStatusCompleted ||
+		suggestion.Status == domain.SuggestionStatusRejected ||
+		suggestion.Status == domain.SuggestionStatusExpired {
+		return nil, domain.ErrTransferSuggestionAlreadyActioned
+	}
+
+	if err := s.suggestionRepo.ClearMatchedTransactionID(ctx, suggestionID); err != nil {
+		return nil, err
+	}
+
+	suggestion.MatchedTransactionID = nil
 	return suggestion, nil
 }

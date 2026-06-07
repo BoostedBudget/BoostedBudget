@@ -99,11 +99,8 @@ type RejectTransferSuggestionOutput struct {
 	}
 }
 
-// maskReservation clears the matched_transaction_id field from a non-completed
-// suggestion before including it in an API response. The field is an internal
-// implementation detail (GAP AH reservation) that should not be exposed to clients
-// while the suggestion is still pending/accepted — only the final completed row
-// (which carries the matched txn for auditability) is allowed to surface it.
+// maskReservation clears matched_transaction_id from non-completed suggestions
+// before including in API response. This is an internal detail (GAP AH).
 func maskReservation(s *domain.TransferSuggestion) *domain.TransferSuggestion {
 	if s != nil && s.Status != domain.SuggestionStatusCompleted {
 		s.MatchedTransactionID = nil
@@ -121,15 +118,10 @@ func (h *TransferSuggestionHandler) GetTransferSuggestions(ctx context.Context, 
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	// Return empty slice instead of nil so JSON serialises as [] not null.
 	if suggestions == nil {
 		suggestions = []*domain.TransferSuggestion{}
 	}
 
-	// GAP AH MEDIUM#6: omit matched_transaction_id from non-completed suggestions.
-	// The field is an internal reservation detail and must not be exposed to clients
-	// while the suggestion is still pending/accepted — only the completed row is allowed
-	// to surface it (for auditability).
 	for i := range suggestions {
 		maskReservation(suggestions[i])
 	}
@@ -146,7 +138,6 @@ func (h *TransferSuggestionHandler) AcceptTransferSuggestion(ctx context.Context
 
 	output := &AcceptTransferSuggestionOutput{}
 	output.Body.Message = "Transfer suggestion accepted"
-	// GAP AH MEDIUM#6: accepted suggestions are not completed; mask the reservation field.
 	output.Body.Suggestion = maskReservation(suggestion)
 	return output, nil
 }
@@ -160,9 +151,24 @@ func (h *TransferSuggestionHandler) RejectTransferSuggestion(ctx context.Context
 
 	output := &RejectTransferSuggestionOutput{}
 	output.Body.Message = "Transfer suggestion rejected"
-	// GAP AH MEDIUM#6: rejected suggestions are not completed; mask the reservation field.
 	output.Body.Suggestion = maskReservation(suggestion)
 	return output, nil
+}
+
+// DeclineTransferSuggestionMatchInput is the input for declining a fuzzy-matched suggestion.
+type DeclineTransferSuggestionMatchInput struct {
+	inputs.AuthenticatedInput
+	inputs.IdempotencyInput
+	inputs.MCPContextInput
+	ID string `path:"id" doc:"Transfer suggestion UUID to decline"`
+}
+
+// DeclineTransferSuggestionMatchOutput is the response for declining a transfer suggestion match.
+type DeclineTransferSuggestionMatchOutput struct {
+	Body struct {
+		Message    string                     `json:"message"`
+		Suggestion *domain.TransferSuggestion `json:"suggestion"`
+	}
 }
 
 // ConfirmMatchBody is the request body for confirming a transfer suggestion match.
@@ -191,8 +197,6 @@ type ConfirmTransferSuggestionMatchOutput struct {
 // Confirms a fuzzy-matched transfer suggestion with the actual transfer amount.
 // Supports MCP audit path when X-MCP-Worker-Secret is present and valid.
 func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *ConfirmTransferSuggestionMatchInput) (*ConfirmTransferSuggestionMatchOutput, error) {
-	// fireConfirmAnalytics emits EventTransferSuggestionValidated on every successful confirm,
-	// regardless of whether the call arrived via MCP or the normal path.
 	fireConfirmAnalytics := func() {
 		if h.analytics != nil {
 			h.analytics.Capture(input.UserID, phclient.EventTransferSuggestionValidated, map[string]interface{}{
@@ -201,7 +205,6 @@ func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *Con
 		}
 	}
 
-	// buildOutput constructs the response with analytics fire.
 	buildOutput := func(suggestion *domain.TransferSuggestion) *ConfirmTransferSuggestionMatchOutput {
 		output := &ConfirmTransferSuggestionMatchOutput{}
 		output.Body.Message = "Transfer suggestion confirmed"
@@ -265,6 +268,78 @@ func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *Con
 	return buildOutput(suggestion), nil
 }
 
+// DeclineMatch handles POST /api/v1/transfer-suggestions/{id}/decline-match.
+// Releases the fuzzy-match reservation on a pending/accepted suggestion so the inflow
+// can be matched by a different suggestion. User chose "No, that wasn't my transfer."
+// Supports MCP audit path when X-MCP-Worker-Secret is present and valid.
+func (h *TransferSuggestionHandler) DeclineMatch(ctx context.Context, input *DeclineTransferSuggestionMatchInput) (*DeclineTransferSuggestionMatchOutput, error) {
+	buildOutput := func(suggestion *domain.TransferSuggestion) *DeclineTransferSuggestionMatchOutput {
+		if h.analytics != nil {
+			h.analytics.Capture(input.UserID, phclient.EventTransferSuggestionValidated, map[string]interface{}{
+				"suggestion_id": input.ID,
+				"action":        "declined",
+			})
+		}
+		output := &DeclineTransferSuggestionMatchOutput{}
+		output.Body.Message = "Transfer match declined"
+		output.Body.Suggestion = maskReservation(suggestion)
+		return output
+	}
+
+	// MCP origin: use transactional audit (mirrors ConfirmMatch pattern).
+	if input.IsMCPOrigin(h.mcpWorkerSecret) && h.db != nil && h.mcpAuditRepo != nil {
+		tx, err := h.db.Begin(ctx)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		defer rollbackMCPAuditTx(ctx, tx)
+
+		if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
+			var suggestion *domain.TransferSuggestion
+			cacheHit, err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, input.IdempotencyKey, input.UserID, "declineTransferSuggestionMatch",
+				func() (interface{}, error) {
+					txSuggestionRepo := repository.NewTransferSuggestionRepository(tx)
+					txSvc := services.NewTransferSuggestionService(txSuggestionRepo)
+					return txSvc.DeclineTransferSuggestionMatch(ctx, input.UserID, input.ID)
+				}, &suggestion)
+			if err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if cacheHit {
+				return buildOutput(suggestion), nil
+			}
+			if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "declineTransferSuggestionMatch", input.IdempotencyKey); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+			return buildOutput(suggestion), nil
+		}
+
+		txSuggestionRepo := repository.NewTransferSuggestionRepository(tx)
+		txSvc := services.NewTransferSuggestionService(txSuggestionRepo)
+		suggestion, err := txSvc.DeclineTransferSuggestionMatch(ctx, input.UserID, input.ID)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		if err := recordMCPWriteAuditInTx(ctx, h.mcpAuditRepo, tx, input.UserID, input.MCPGrantID, "declineTransferSuggestionMatch", input.IdempotencyKey); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		return buildOutput(suggestion), nil
+	}
+
+	// Non-MCP path: call service directly.
+	suggestion, err := h.service.DeclineTransferSuggestionMatch(ctx, input.UserID, input.ID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	return buildOutput(suggestion), nil
+}
+
 // RegisterTransferSuggestionRoutes registers transfer suggestion routes with the Huma API.
 func RegisterTransferSuggestionRoutes(api huma.API, handler *TransferSuggestionHandler) {
 	// GET /api/v1/transfer-suggestions — list pending suggestions for authenticated user
@@ -311,4 +386,16 @@ func RegisterTransferSuggestionRoutes(api huma.API, handler *TransferSuggestionH
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusOK,
 	}, handler.ConfirmMatch)
+
+	// POST /api/v1/transfer-suggestions/{id}/decline-match — release fuzzy-match reservation
+	huma.Register(api, huma.Operation{
+		OperationID:   "declineTransferSuggestionMatch",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/transfer-suggestions/{id}/decline-match",
+		Summary:       "Decline transfer suggestion match",
+		Description:   "Releases the fuzzy-match reservation on a pending/accepted suggestion. The inflow is freed for other suggestions.",
+		Tags:          []string{"TransferSuggestions"},
+		Security:      []map[string][]string{{"clerk": {}}},
+		DefaultStatus: http.StatusOK,
+	}, handler.DeclineMatch)
 }
