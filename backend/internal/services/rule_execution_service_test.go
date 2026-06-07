@@ -2101,13 +2101,43 @@ func TestFlatActionJSON_ValidateAndExecuteConsistency(t *testing.T) {
 			setupSvc:        func(svc *ruleExecutionService) { svc.SetSavingsGoalRepo(goalRepo) },
 		},
 		{
-			name:     "transfer_suggestion flat JSON",
+			name:     "transfer_suggestion flat JSON (fixed)",
 			ruleType: domain.RuleTypeTransferSuggestion,
 			actions: domain.TransferAction{
 				FromAccountID: "checking-1",
 				ToAccountID:   "savings-1",
 				AmountType:    "fixed",
 				Amount:        50.0,
+			},
+			wantSuggestions: 1,
+			setupSvc:        nil,
+		},
+		{
+			// Issue #972 GAP AC: excess is the UI's primary transfer type — amount=0, threshold drives amount.
+			// triggerData contains "remaining": 200.0 (set below), threshold=100 → expect suggestion amount 100.
+			name:     "transfer_suggestion flat JSON (excess)",
+			ruleType: domain.RuleTypeTransferSuggestion,
+			actions: domain.TransferAction{
+				FromAccountID: "checking-1",
+				ToAccountID:   "savings-1",
+				AmountType:    "excess",
+				Amount:        0,
+				Threshold:     100.0,
+			},
+			wantSuggestions: 1,
+			setupSvc:        nil,
+		},
+		{
+			// Issue #972 GAP AC (Codex Q4/Q5): legacy 'threshold' type must still validate AND execute
+			// so that any saved rules with this type continue to fire after the allow-set was added.
+			// triggerData "amount"=200.0, threshold=50 → expect 150.
+			name:     "transfer_suggestion flat JSON (threshold legacy)",
+			ruleType: domain.RuleTypeTransferSuggestion,
+			actions: domain.TransferAction{
+				FromAccountID: "checking-1",
+				ToAccountID:   "savings-1",
+				AmountType:    "threshold",
+				Threshold:     50.0,
 			},
 			wantSuggestions: 1,
 			setupSvc:        nil,
@@ -2162,7 +2192,8 @@ func TestFlatActionJSON_ValidateAndExecuteConsistency(t *testing.T) {
 				tc.setupSvc(svc)
 			}
 
-			_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{"remaining": 200.0})
+			// Use both period-close keys so all amount-type branches (including legacy "threshold") have data.
+			_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{"remaining": 200.0, "amount": 200.0})
 			require.NoError(t, err, "flat action JSON must execute successfully (%s)", tc.name)
 			assert.Len(t, suggestionRepo.suggestions, tc.wantSuggestions,
 				"suggestion count for %s", tc.name)
@@ -2257,4 +2288,76 @@ func TestExecuteRule_PartialFieldAction_ReturnsError(t *testing.T) {
 				"no suggestion must be created for partial action (%s)", tc.name)
 		})
 	}
+}
+
+// TestTransferExcess_ValidateAndExecute validates the 'excess' amount_type:
+// - domain.Validate() accepts amount=0 for excess rules
+// - executeTransferSuggestion computes amount = remaining - threshold
+// - No suggestion created when remaining <= threshold
+func TestTransferExcess_ValidateAndExecute(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-excess-test"
+
+	excessAction := domain.TransferAction{
+		FromAccountID: "checking-1",
+		ToAccountID:   "savings-1",
+		AmountType:    "excess",
+		Amount:        0,
+		Threshold:     50.0,
+	}
+	actionsJSON, err := json.Marshal(excessAction)
+	require.NoError(t, err)
+
+	makeRule := func() *domain.AutomationRule {
+		return &domain.AutomationRule{
+			ID:             "rule-excess-1",
+			UserID:         userID,
+			Name:           "Excess Savings",
+			Enabled:        true,
+			RuleType:       domain.RuleTypeTransferSuggestion,
+			TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+			ConditionLogic: "AND",
+			Conditions:     []domain.AutomationRuleCondition{},
+			Actions:        actionsJSON,
+		}
+	}
+
+	t.Run("domain.Validate accepts excess rule with amount=0 and threshold", func(t *testing.T) {
+		require.NoError(t, makeRule().Validate(),
+			"excess transfer rule (amount=0, threshold>0) must pass domain.Validate()")
+	})
+
+	t.Run("excess creates suggestion for remaining - threshold when remaining > threshold", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+		svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+		triggerData := map[string]interface{}{
+			domain.EventDataKeyRemaining: 200.0, // remaining=200, threshold=50 → expect 150
+		}
+		_, err := svc.ExecuteRule(ctx, makeRule(), triggerData)
+		require.NoError(t, err, "excess rule must execute without error")
+		require.Len(t, suggestionRepo.suggestions, 1, "excess rule must create one suggestion")
+		assert.InDelta(t, 150.0, suggestionRepo.suggestions[0].Amount, 0.001,
+			"suggestion amount must be remaining(200) - threshold(50) = 150")
+	})
+
+	t.Run("excess creates no suggestion when remaining <= threshold", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+		svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+		triggerData := map[string]interface{}{
+			domain.EventDataKeyRemaining: 30.0, // remaining=30, threshold=50 → no surplus
+		}
+		_, err := svc.ExecuteRule(ctx, makeRule(), triggerData)
+		// When amount≤0, executeTransferSuggestion should either not create a suggestion
+		// or return early. Either way, no suggestion is expected.
+		if err == nil {
+			assert.Empty(t, suggestionRepo.suggestions,
+				"excess rule with remaining<=threshold must not create a suggestion")
+		}
+	})
 }

@@ -77,13 +77,9 @@ func TestTransferSuggestionMatchNotificationType_Integration(t *testing.T) {
 	require.Equal(t, domain.NotificationTypeTransferSuggestionMatch, gotType)
 }
 
-// TestGetOpenByTransferSuggestionID_TypeScoping_Integration proves that the
-// "AND type = $2" clause in GetOpenByTransferSuggestionID correctly isolates rows
-// by type, so an unread 'transfer_suggestion' accept_reject prompt does NOT satisfy
-// a query for 'transfer_suggestion_match' (and vice-versa).
-//
-// This is the real-Postgres coverage for GAP V/Z: pgxmock skips the WHERE clause
-// entirely — only a real planner can verify it.
+// TestGetOpenByTransferSuggestionID_TypeScoping_Integration proves that type scoping
+// correctly isolates queries by type. This test calls the real repo method (not raw SQL),
+// exercising the full scan + decrypt + no-row→nil path.
 //
 // Run with:
 //
@@ -95,6 +91,11 @@ func TestGetOpenByTransferSuggestionID_TypeScoping_Integration(t *testing.T) {
 	tx, err := pool.Begin(ctx)
 	require.NoError(t, err)
 	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Build the real notification repository backed by the transaction.
+	// This exercises the full scan + field-decrypt + no-row→nil path,
+	// not just the raw SQL query string.
+	repo := NewNotificationRepository(tx, newTestFieldEncryptor(t))
 
 	// Seed user and transfer_suggestion.
 	userID := uuid.New()
@@ -129,46 +130,33 @@ func TestGetOpenByTransferSuggestionID_TypeScoping_Integration(t *testing.T) {
 	`, matchNotifID, userID, suggID)
 	require.NoError(t, err, "seed transfer_suggestion_match notification")
 
-	// This is the exact query used by postgres_notification_repository.GetOpenByTransferSuggestionID.
-	// Running it against real Postgres validates the AND type = $2 WHERE clause.
-	openByType := func(notifType string) *string {
-		query := `
-			SELECT id FROM notifications
-			WHERE transfer_suggestion_id = $1
-			  AND type = $2
-			  AND interaction_pattern = 'accept_reject'
-			  AND read = false
-			ORDER BY created_at ASC
-			LIMIT 1
-		`
-		var id string
-		err := tx.QueryRow(ctx, query, suggID, notifType).Scan(&id)
-		if err != nil {
-			return nil
-		}
-		return &id
-	}
+	suggIDStr := suggID.String()
 
 	// Querying for 'transfer_suggestion' must return the original prompt (NOT the match prompt).
-	gotOrig := openByType("transfer_suggestion")
+	// This call goes through the full repo scan + decrypt path — not just a raw SQL string check.
+	gotOrig, err := repo.GetOpenByTransferSuggestionID(ctx, suggIDStr, domain.NotificationTypeTransferSuggestion)
+	require.NoError(t, err)
 	require.NotNil(t, gotOrig, "must find unread transfer_suggestion row")
-	require.Equal(t, origNotifID.String(), *gotOrig,
+	require.Equal(t, origNotifID.String(), gotOrig.ID,
 		"transfer_suggestion query must return the original prompt, not the match prompt")
 
 	// Querying for 'transfer_suggestion_match' must return ONLY the match prompt.
-	gotMatch := openByType("transfer_suggestion_match")
+	gotMatch, err := repo.GetOpenByTransferSuggestionID(ctx, suggIDStr, domain.NotificationTypeTransferSuggestionMatch)
+	require.NoError(t, err)
 	require.NotNil(t, gotMatch, "must find unread transfer_suggestion_match row")
-	require.Equal(t, matchNotifID.String(), *gotMatch,
+	require.Equal(t, matchNotifID.String(), gotMatch.ID,
 		"transfer_suggestion_match query must return the fuzzy-match prompt, not the original")
 
 	// Mark the original prompt as read; querying for it should now return nil.
 	_, err = tx.Exec(ctx, `UPDATE notifications SET read = true WHERE id = $1`, origNotifID)
 	require.NoError(t, err, "mark original as read")
-	gotOrigAfterRead := openByType("transfer_suggestion")
+	gotOrigAfterRead, err := repo.GetOpenByTransferSuggestionID(ctx, suggIDStr, domain.NotificationTypeTransferSuggestion)
+	require.NoError(t, err)
 	require.Nil(t, gotOrigAfterRead,
-		"once read, transfer_suggestion query must return nil")
+		"once read, transfer_suggestion query must return nil (exercises the no-row→nil path of the real method)")
 
 	// The match prompt must still be returned (unaffected by the original being read).
-	gotMatchAfterRead := openByType("transfer_suggestion_match")
+	gotMatchAfterRead, err := repo.GetOpenByTransferSuggestionID(ctx, suggIDStr, domain.NotificationTypeTransferSuggestionMatch)
+	require.NoError(t, err)
 	require.NotNil(t, gotMatchAfterRead, "match prompt must still be unread")
 }

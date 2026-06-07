@@ -286,9 +286,9 @@ type TransferAction struct {
 	ToAccountID       string  `json:"to_account_id"`
 	FromUserAccountID string  `json:"from_user_account_id,omitempty"` // Stable reference surviving re-links (Issue #1109)
 	ToUserAccountID   string  `json:"to_user_account_id,omitempty"`   // Stable reference surviving re-links (Issue #1109)
-	AmountType        string  `json:"amount_type,omitempty"`          // fixed, percentage, excess
+	AmountType        string  `json:"amount_type,omitempty"`          // fixed, percentage, excess, remaining, threshold (legacy)
 	Amount            float64 `json:"amount"`
-	Threshold         float64 `json:"threshold,omitempty"` // For excess type: minimum before transfer
+	Threshold         float64 `json:"threshold,omitempty"` // For excess/threshold types: minimum before transfer (must be ≥0)
 }
 
 // AlertAction defines the action for budget_alert rules.
@@ -411,8 +411,24 @@ func (r *AutomationRule) validateTransferAction() error {
 	if action.ToAccountID == "" {
 		return errors.New("to_account_id is required for transfer_suggestion")
 	}
-	if action.Amount <= 0 {
+
+	// 'excess' and 'remaining' derive the transfer amount from triggerData at runtime, so amount=0 is valid.
+	// 'threshold' is a legacy income-based type (transfer income minus threshold); kept for backwards compatibility.
+	validAmountTypes := map[string]bool{"fixed": true, "percentage": true, "excess": true, "remaining": true, "threshold": true}
+	amountType := action.AmountType
+	if amountType == "" {
+		amountType = "fixed"
+	}
+	if !validAmountTypes[amountType] {
+		return errors.New("amount_type must be 'fixed', 'percentage', 'excess', 'remaining', or 'threshold' for transfer_suggestion")
+	}
+	// Only require a positive amount for types that use it as the direct transfer value.
+	if (amountType == "fixed" || amountType == "percentage") && action.Amount <= 0 {
 		return errors.New("amount must be positive for transfer_suggestion")
+	}
+	// Negative threshold produces nonsensical over-transfer amounts; reject at validation time.
+	if (amountType == "excess" || amountType == "threshold") && action.Threshold < 0 {
+		return errors.New("threshold must be non-negative for transfer_suggestion")
 	}
 
 	return nil

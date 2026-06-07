@@ -304,12 +304,63 @@ func TestAutomationRule_Validate_TransferSuggestionRule(t *testing.T) {
 		assert.Contains(t, err.Error(), "to_account_id")
 	})
 
-	t.Run("transfer suggestion requires positive amount", func(t *testing.T) {
+	t.Run("transfer suggestion requires positive amount for fixed type", func(t *testing.T) {
 		rule := validRule
-		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount":-100}`)
+		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"fixed","amount":-100}`)
 		err := rule.Validate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "amount must be positive")
+	})
+
+	// Issue #972 GAP AC: excess amount_type must be accepted even when amount=0 (threshold drives amount).
+	t.Run("excess amount_type with zero amount and threshold is valid", func(t *testing.T) {
+		rule := validRule
+		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"excess","amount":0,"threshold":50}`)
+		err := rule.Validate()
+		assert.NoError(t, err, "excess rules have amount=0; amount>0 check must be skipped for excess")
+	})
+
+	// Issue #972 GAP AC: remaining amount_type must be accepted when amount=0 (derived from triggerData).
+	t.Run("remaining amount_type with zero amount is valid", func(t *testing.T) {
+		rule := validRule
+		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"remaining","amount":0}`)
+		err := rule.Validate()
+		assert.NoError(t, err, "remaining rules have amount=0; amount>0 check must be skipped for remaining")
+	})
+
+	// Issue #972 GAP AC: invalid amount_type must be rejected.
+	t.Run("invalid amount_type is rejected", func(t *testing.T) {
+		rule := validRule
+		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"bogus","amount":100}`)
+		err := rule.Validate()
+		require.Error(t, err, "bogus amount_type must be rejected by validateTransferAction")
+		assert.Contains(t, err.Error(), "amount_type")
+	})
+
+	// Issue #972 GAP AC (Codex Q4): legacy 'threshold' type must still be accepted so saved rules keep firing.
+	t.Run("legacy threshold amount_type is valid", func(t *testing.T) {
+		rule := validRule
+		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"threshold","threshold":100}`)
+		err := rule.Validate()
+		assert.NoError(t, err, "threshold is a legacy amount_type and must remain valid")
+	})
+
+	// Issue #972 GAP AC (Codex Q6): negative threshold on excess rule must be rejected to prevent over-transfer.
+	t.Run("negative threshold on excess is rejected", func(t *testing.T) {
+		rule := validRule
+		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"excess","amount":0,"threshold":-10}`)
+		err := rule.Validate()
+		require.Error(t, err, "negative threshold must be rejected")
+		assert.Contains(t, err.Error(), "threshold")
+	})
+
+	// Issue #972 GAP AC (Codex Q6): negative threshold on legacy 'threshold' type is also rejected.
+	t.Run("negative threshold on threshold type is rejected", func(t *testing.T) {
+		rule := validRule
+		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"threshold","threshold":-5}`)
+		err := rule.Validate()
+		require.Error(t, err, "negative threshold must be rejected for threshold type too")
+		assert.Contains(t, err.Error(), "threshold")
 	})
 }
 
