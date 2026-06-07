@@ -6,6 +6,7 @@ package operations
 import (
 	"context"
 	"net/http"
+	"strconv"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -228,12 +229,14 @@ func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *Con
 
 		if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
 			var suggestion *domain.TransferSuggestion
-			// GAP BB: scope the key to the suggestion ID so that two requests with the
-			// same Idempotency-Key header targeting different suggestions don't collide
-			// in the cache. Key = "userKey:suggestionID" — unique per distinct request.
-			// The ":" delimiter is safe here because suggestion IDs are UUIDs (no ":"
-			// chars), so (key="a:b", id="c") and (key="a", id="b:c") cannot collide.
-			scopedKey := input.IdempotencyKey + ":" + input.ID
+			// GAP BB/BC: scope the key to (suggestion ID, actual_amount) so that:
+			//   • same base key targeting different suggestions → different entries (BB)
+			//   • same base key + same suggestion + different actual_amount → different
+			//     entries, forcing re-validation instead of replaying a cached body (BC)
+			// The ":" delimiter is safe: suggestion IDs are UUIDs (no ":" chars), and
+			// FormatFloat with 'f' precision 2 only emits digits and ".".
+			scopedKey := input.IdempotencyKey + ":" + input.ID +
+				":" + strconv.FormatFloat(input.Body.ActualAmount, 'f', 2, 64)
 			cacheHit, err := h.idempotencyRepo.GetOrCreateInTx(ctx, tx, scopedKey, input.UserID, "confirmTransferSuggestionMatch",
 				func() (interface{}, error) {
 					txSuggestionRepo := repository.NewTransferSuggestionRepository(tx)

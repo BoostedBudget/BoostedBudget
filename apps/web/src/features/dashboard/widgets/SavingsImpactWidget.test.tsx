@@ -255,10 +255,10 @@ describe('SavingsImpactWidget', () => {
       const maskedAmounts = document.querySelectorAll('[data-testid="savings-recent-amount"][data-ph-mask]')
       expect(maskedAmounts.length).toBe(2)
 
-      // Check that the actual_amounts appear
+      // GAP CB: recent-item amounts must show exact cents (250.75, not $251).
       const maskedTexts = Array.from(maskedAmounts).map((el) => el.textContent ?? '')
-      expect(maskedTexts.some((t) => t.includes('251') || t.includes('250'))).toBe(true)
-      expect(maskedTexts.some((t) => t.includes('98'))).toBe(true)
+      expect(maskedTexts.some((t) => t.includes('250.75'))).toBe(true)
+      expect(maskedTexts.some((t) => t.includes('98.00'))).toBe(true)
     })
 
     it('renders a date for each recent item', () => {
@@ -282,16 +282,17 @@ describe('SavingsImpactWidget', () => {
       expect(dateEl?.textContent).toBeTruthy()
     })
 
-    it('renders a destination label for each recent item', () => {
+    // GAP CA: when to_account_name is present, the real name is rendered.
+    it('renders the real account name when to_account_name is provided', () => {
       const dataWithItems: UserSavingsImpact = {
         ...mockData,
         recent_items: [
           {
-            id: 'sugg-dest-1',
+            id: 'sugg-dest-real',
             amount: 150.00,
             actual_amount: 150.00,
             completed_at: '2024-04-01T12:00:00Z',
-            to_user_account_id: 'acct-savings-123',
+            to_account_name: 'Chase Savings',
           },
         ],
       }
@@ -300,7 +301,32 @@ describe('SavingsImpactWidget', () => {
 
       const destEl = document.querySelector('[data-testid="savings-recent-destination"]')
       expect(destEl).toBeInTheDocument()
-      expect(destEl?.textContent).toBeTruthy()
+      expect(destEl?.textContent).toBe('Chase Savings')
+    })
+
+    // GAP CA: when to_account_name is absent, a neutral fallback is rendered (NOT "Savings account").
+    it('renders neutral fallback when to_account_name is absent', () => {
+      const dataWithItems: UserSavingsImpact = {
+        ...mockData,
+        recent_items: [
+          {
+            id: 'sugg-dest-fallback',
+            amount: 150.00,
+            actual_amount: 150.00,
+            completed_at: '2024-04-01T12:00:00Z',
+            to_user_account_id: 'acct-savings-123',
+            // to_account_name intentionally absent
+          },
+        ],
+      }
+      mockUseSavingsImpactData.mockReturnValue({ ...defaultDataState, data: dataWithItems })
+      renderWidget()
+
+      const destEl = document.querySelector('[data-testid="savings-recent-destination"]')
+      expect(destEl).toBeInTheDocument()
+      expect(destEl?.textContent).toBe('Transfer destination')
+      // Must NOT render the old misleading literal
+      expect(destEl?.textContent).not.toBe('Savings account')
     })
 
     it('shows an empty-state message when recent_items is an empty array', () => {

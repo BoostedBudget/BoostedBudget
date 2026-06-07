@@ -35,5 +35,6 @@ export interface CompletedSuggestionSummary {
   completion_source?: string;
   id: string;
   to_account_id?: string;
+  to_account_name?: string;
   to_user_account_id?: string;
 }

@@ -1505,6 +1505,8 @@ components:
           type: string
         to_account_id:
           type: string
+        to_account_name:
+          type: string
         to_user_account_id:
           type: string
       required:

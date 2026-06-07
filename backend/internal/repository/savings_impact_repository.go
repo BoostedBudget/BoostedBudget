@@ -4,10 +4,12 @@ package repository
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -32,12 +34,27 @@ type SavingsImpactRepository interface {
 
 // savingsImpactRepository implements SavingsImpactRepository using PostgreSQL.
 type savingsImpactRepository struct {
-	db DB
+	db  DB
+	// enc resolves and decrypts destination account names for recent items.
+	// Nil when the FieldEncryptor is not available (e.g., integration tests without
+	// encryption config, or when ClerkSecretKey is not set in prod).
+	// When nil, account_name_hint decryption is skipped and the plaintext nickname
+	// path is still attempted.
+	enc *appcrypto.FieldEncryptor
 }
 
-// NewSavingsImpactRepository creates a new SavingsImpactRepository.
+// NewSavingsImpactRepository creates a new SavingsImpactRepository without an encryptor.
+// Destination names for recent items will use only plaintext fields (nickname, name);
+// encrypted account_name_hint will not be decrypted.
 func NewSavingsImpactRepository(db DB) SavingsImpactRepository {
 	return &savingsImpactRepository{db: db}
+}
+
+// NewSavingsImpactRepositoryWithEncryptor creates a new SavingsImpactRepository with an
+// encryptor for decrypting user_accounts.account_name_hint (encrypted at rest, migration 000053).
+// This is the constructor used in production (main.go) and integration tests.
+func NewSavingsImpactRepositoryWithEncryptor(db DB, enc *appcrypto.FieldEncryptor) SavingsImpactRepository {
+	return &savingsImpactRepository{db: db, enc: enc}
 }
 
 // WriteSnapshot inserts or updates a daily savings impact snapshot.
@@ -119,6 +136,13 @@ func (r *savingsImpactRepository) GetAggregateSavingsStats(ctx context.Context) 
 // privacy/aggregate-stats setting — users always see their own data in full.
 // The include_in_aggregate_stats privacy filter is applied only in GetAggregateSavingsStats,
 // not in per-user queries.
+//
+// Recent items include a resolved ToAccountName (GAP CA, #972):
+//   - Plaid-linked accounts: COALESCE(accounts.nickname, accounts.name) — both plaintext.
+//   - Manual accounts (user_accounts): COALESCE(ua.nickname, decrypted ua.account_name_hint).
+//     account_name_hint is encrypted at rest (migration 000053); decryption happens in-Go
+//     for the ≤5 bounded rows via FieldEncryptor.DecryptNullableString.
+//   - Nil when no name can be resolved (manual account with neither nickname nor hint).
 func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID string) (*domain.UserSavingsImpact, error) {
 	now := time.Now().UTC()
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
@@ -147,13 +171,29 @@ func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID stri
 		return nil, err
 	}
 
+	// LEFT JOIN accounts (Plaid) and user_accounts (manual) to fetch plaintext name fields.
+	// account_name_hint is encrypted at rest — decryption happens in-Go below (≤5 rows, bounded).
+	// COALESCE(NULLIF(a.nickname,''), a.name): prefer user-set nickname, fall back to Plaid name.
+	// ua.nickname is plaintext; ua.account_name_hint is fetched raw for app-side decryption.
 	itemsQuery := `
-		SELECT id, amount, actual_amount, to_account_id, to_user_account_id, completed_at, completion_source
-		FROM transfer_suggestions
-		WHERE user_id = $1
-		  AND status = 'completed'
-		  AND actual_amount IS NOT NULL
-		ORDER BY completed_at DESC
+		SELECT
+			ts.id,
+			ts.amount,
+			ts.actual_amount,
+			ts.to_account_id,
+			ts.to_user_account_id,
+			ts.completed_at,
+			ts.completion_source,
+			COALESCE(NULLIF(a.nickname, ''), a.name)   AS plaid_account_name,
+			NULLIF(ua.nickname, '')                      AS ua_nickname,
+			ua.account_name_hint                         AS ua_hint_encrypted
+		FROM transfer_suggestions ts
+		LEFT JOIN accounts a     ON a.id  = ts.to_account_id
+		LEFT JOIN user_accounts ua ON ua.id = ts.to_user_account_id
+		WHERE ts.user_id = $1
+		  AND ts.status = 'completed'
+		  AND ts.actual_amount IS NOT NULL
+		ORDER BY ts.completed_at DESC
 		LIMIT 5
 	`
 
@@ -165,6 +205,8 @@ func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID stri
 
 	for rows.Next() {
 		var item domain.CompletedSuggestionSummary
+		var plaidName, uaNickname, uaHintEncrypted *string
+
 		if scanErr := rows.Scan(
 			&item.ID,
 			&item.Amount,
@@ -173,9 +215,14 @@ func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID stri
 			&item.ToUserAccountID,
 			&item.CompletedAt,
 			&item.CompletionSource,
+			&plaidName,
+			&uaNickname,
+			&uaHintEncrypted,
 		); scanErr != nil {
 			return nil, scanErr
 		}
+
+		item.ToAccountName = resolveDestinationName(plaidName, uaNickname, uaHintEncrypted, r.enc)
 		impact.RecentItems = append(impact.RecentItems, &item)
 	}
 	if err := rows.Err(); err != nil {
@@ -187,4 +234,33 @@ func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID stri
 	}
 
 	return &impact, nil
+}
+
+// resolveDestinationName returns the best available display name for a transfer destination.
+// Resolution order (first non-empty wins):
+//  1. plaidName  — COALESCE(accounts.nickname, accounts.name) for Plaid-linked destinations.
+//  2. uaNickname — user_accounts.nickname (plaintext) for manual destinations.
+//  3. Decrypted uaHintEncrypted — user_accounts.account_name_hint, encrypted at rest.
+//
+// Returns nil when no name can be resolved. enc may be nil (decryption step is skipped).
+func resolveDestinationName(plaidName, uaNickname, uaHintEncrypted *string, enc *appcrypto.FieldEncryptor) *string {
+	if plaidName != nil && *plaidName != "" {
+		return plaidName
+	}
+	if uaNickname != nil && *uaNickname != "" {
+		return uaNickname
+	}
+	if enc != nil && uaHintEncrypted != nil && *uaHintEncrypted != "" {
+		// account_name_hint uses dual-read: values without "ENC$" prefix are returned as-is
+		// (plaintext passthrough in FieldEncryptor.DecryptNullableString).
+		if !strings.HasPrefix(*uaHintEncrypted, "ENC$") {
+			// Plaintext passthrough — no decryption needed.
+			return uaHintEncrypted
+		}
+		decrypted, decryptErr := enc.DecryptNullableString(uaHintEncrypted)
+		if decryptErr == nil && decrypted != nil && *decrypted != "" {
+			return decrypted
+		}
+	}
+	return nil
 }
