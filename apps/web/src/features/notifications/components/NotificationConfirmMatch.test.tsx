@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
-import { screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
 import React from 'react'
 import {
   mockUseConfirmTransferSuggestionMatch,
@@ -146,26 +146,31 @@ describe('NotificationConfirmMatch', () => {
     expect(onConfirmSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('fires TRANSFER_SUGGESTION_VALIDATED on successful confirm', async () => {
-    mockUseConfirmTransferSuggestionMatch.mockReturnValue({
-      mutate: mockConfirmTransferSuggestionMatchMutateAsync,
-      mutateAsync: mockConfirmTransferSuggestionMatchMutateAsync,
-      isPending: false,
-      isError: false,
-    })
-    // Simulate onSuccess by invoking mutate and having the mock call onSuccess directly.
-    mockConfirmTransferSuggestionMatchMutateAsync.mockImplementation(() => {
-      // The mutation's onSuccess is wired inside the component; we test that
-      // trackEvent is called after a confirmed interaction via the onSuccess callback.
-      return Promise.resolve({})
-    })
-
-    renderWithQuery(
-      <NotificationConfirmMatch suggestionId="sugg-1" onDismiss={() => {}} />
+  it('fires TRANSFER_SUGGESTION_VALIDATED on successful confirm', () => {
+    // Wire the confirm mutation so that calling mutate() synchronously invokes
+    // the component's onSuccess callback — the only way to exercise the trackEvent call.
+    // The previous version of this test only asserted the event did NOT fire on mount
+    // (false/weak coverage that never drove onSuccess).
+    let capturedOnSuccess: (() => void) | undefined
+    mockUseConfirmTransferSuggestionMatch.mockImplementation(
+      (options?: { mutation?: { onSuccess?: () => void } }) => {
+        capturedOnSuccess = options?.mutation?.onSuccess
+        return {
+          mutate: mock((_args: unknown) => { capturedOnSuccess?.() }),
+          isPending: false,
+          isError: false,
+        }
+      }
     )
 
-    // Verify the event does NOT fire on mount.
-    await act(async () => {})
-    expect(mockTrackEvent).not.toHaveBeenCalledWith('transfer_suggestion_validated')
+    renderWithQuery(
+      <NotificationConfirmMatch suggestionId="sugg-analytics" onDismiss={() => {}} />
+    )
+
+    // Enter a valid amount and click Confirm → mutate fires → onSuccess → trackEvent.
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '75' } })
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
+
+    expect(mockTrackEvent).toHaveBeenCalledWith('transfer_suggestion_validated')
   })
 })
