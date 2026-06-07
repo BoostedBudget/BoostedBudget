@@ -1548,6 +1548,17 @@
       "excluded": false
     },
     {
+      "operationId": "declineTransferSuggestionMatch",
+      "method": "POST",
+      "path": "/api/v1/transfer-suggestions/{id}/decline-match",
+      "summary": "Decline transfer suggestion match",
+      "tags": [
+        "TransferSuggestions"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
       "operationId": "rejectTransferSuggestion",
       "method": "PATCH",
       "path": "/api/v1/transfer-suggestions/{id}/reject",

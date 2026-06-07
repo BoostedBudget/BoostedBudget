@@ -709,6 +709,262 @@ func TestDeclineMatch_AlreadyActioned(t *testing.T) {
 // Route Registration Test
 // =============================================================================
 
+// =============================================================================
+// GAP AL: DeclineMatch MCP transactional-audit path tests
+// =============================================================================
+
+// TestDeclineMatch_MCPTransactionalPath_BeginError proves that when IsMCPOrigin==true
+// and db+mcpAuditRepo are non-nil, the handler enters the MCP transactional branch
+// and surfaces db.Begin() errors instead of falling through to the non-MCP service call.
+func TestDeclineMatch_MCPTransactionalPath_BeginError(t *testing.T) {
+	const secret = "mcp-secret-decline"
+	const userID = "user-mcp-decline"
+	const suggID = "sugg-mcp-decline"
+
+	svc := &mockTransferSuggestionService{} // never called in MCP path
+
+	dbMock := new(mockOperationsDB)
+	beginErr := errors.New("db unavailable for decline")
+	dbMock.On("Begin", mock.Anything).Return(nil, beginErr)
+
+	handler := NewTransferSuggestionHandler(svc, TransferSuggestionHandlerDeps{
+		DB:              dbMock,
+		MCPAuditRepo:    new(mockOperationsMCPAuditRepo),
+		MCPWorkerSecret: secret,
+	})
+
+	input := &DeclineTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		MCPContextInput:    inputs.MCPContextInput{MCPWorkerSecret: secret},
+		ID:                 suggID,
+	}
+
+	output, err := handler.DeclineMatch(context.Background(), input)
+
+	assert.Nil(t, output, "must not return a response when db.Begin() fails in the MCP path")
+	require.Error(t, err, "handler must propagate the db.Begin error from the MCP transactional path")
+	dbMock.AssertNumberOfCalls(t, "Begin", 1)
+}
+
+// TestDeclineMatch_MCPTransactionalPath_NoIdempotency_UsesTxBackedService proves that
+// when IdempotencyRepo is nil, the no-idempotency branch is entered: Begin() succeeds,
+// a transaction-backed service is created, and the handler returns the error from the tx service.
+func TestDeclineMatch_MCPTransactionalPath_NoIdempotency_UsesTxBackedService(t *testing.T) {
+	const secret = "mcp-secret-decline-noidem"
+	const userID = "user-decline-noidem"
+	const suggID = "sugg-decline-noidem"
+
+	svc := &mockTransferSuggestionService{} // never called in MCP path
+
+	txMock := new(mockPgxTx)
+	// QueryRow is called by the tx-backed repo's GetByID — return ErrNoRows so the
+	// service call fails cleanly without requiring a full result scan.
+	txMock.On("QueryRow").Return(&errScanRow{err: pgx.ErrNoRows})
+	txMock.On("Rollback", mock.Anything).Return(nil)
+
+	dbMock := new(mockOperationsDB)
+	dbMock.On("Begin", mock.Anything).Return(txMock, nil) // Begin SUCCEEDS
+
+	// No IdempotencyRepo — exercises the no-idempotency branch.
+	handler := NewTransferSuggestionHandler(svc, TransferSuggestionHandlerDeps{
+		DB:              dbMock,
+		MCPAuditRepo:    new(mockOperationsMCPAuditRepo),
+		MCPWorkerSecret: secret,
+		// IdempotencyRepo intentionally nil
+	})
+
+	input := &DeclineTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		MCPContextInput:    inputs.MCPContextInput{MCPWorkerSecret: secret},
+		ID:                 suggID,
+	}
+
+	output, err := handler.DeclineMatch(context.Background(), input)
+
+	// The handler must error because the tx-backed GetByID returns ErrNoRows.
+	assert.Nil(t, output, "no output when tx-backed service call fails")
+	require.Error(t, err, "handler must propagate error from the tx-backed service (no-idempotency MCP decline path)")
+	dbMock.AssertNumberOfCalls(t, "Begin", 1)
+	txMock.AssertCalled(t, "Rollback", mock.Anything)
+	txMock.AssertCalled(t, "QueryRow")
+}
+
+// TestDeclineMatch_MCPTransactionalPath_IdempotencyCacheHit_NoAnalytics proves GAP AL
+// (idempotency cache-hit replay) and GAP AS (no double-fire analytics on replay):
+// when GetOrCreateInTx returns cacheHit=true, the handler returns without firing analytics.
+func TestDeclineMatch_MCPTransactionalPath_IdempotencyCacheHit_NoAnalytics(t *testing.T) {
+	const secret = "mcp-secret-decline-hit"
+	const userID = "user-decline-hit"
+	const suggID = "sugg-decline-hit"
+
+	svc := &mockTransferSuggestionService{} // never called
+
+	analytics := new(mockHandlerAnalytics)
+	// Analytics must NOT be called on a cache-hit replay (GAP AS).
+
+	txMock := new(mockPgxTx)
+	txMock.On("Rollback", mock.Anything).Return(nil)
+
+	dbMock := new(mockOperationsDB)
+	dbMock.On("Begin", mock.Anything).Return(txMock, nil)
+
+	declined := newTestSuggestionItem(suggID, userID)
+	declined.MatchedTransactionID = nil
+
+	idempotencyMock := new(mockOperationsIdempotencyRepo)
+	// Return cacheHit=true — simulates an MCP replay with the same idempotency key.
+	idempotencyMock.On("GetOrCreateInTx", mock.Anything).
+		Run(func(args mock.Arguments) {
+			result := args.Get(0).(**domain.TransferSuggestion)
+			*result = declined
+		}).
+		Return(true, nil)
+
+	handler := NewTransferSuggestionHandler(svc, TransferSuggestionHandlerDeps{
+		DB:              dbMock,
+		MCPAuditRepo:    new(mockOperationsMCPAuditRepo),
+		MCPWorkerSecret: secret,
+		IdempotencyRepo: idempotencyMock,
+	})
+	handler.SetAnalytics(analytics)
+
+	input := &DeclineTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		IdempotencyInput:   inputs.IdempotencyInput{IdempotencyKey: "idem-decline-hit-1"},
+		MCPContextInput:    inputs.MCPContextInput{MCPWorkerSecret: secret},
+		ID:                 suggID,
+	}
+
+	output, err := handler.DeclineMatch(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "Transfer match declined", output.Body.Message)
+
+	// GAP AS: analytics must NOT fire on a cache-hit replay.
+	analytics.AssertNotCalled(t, "Capture", userID, phclient.EventTransferSuggestionValidated, mock.Anything)
+}
+
+// =============================================================================
+// GAP AN: DeclineMatch analytics tests
+// =============================================================================
+
+// TestDeclineMatch_FiresEventTransferSuggestionValidated proves that the non-MCP
+// decline path fires EventTransferSuggestionValidated with action="declined".
+func TestDeclineMatch_FiresEventTransferSuggestionValidated(t *testing.T) {
+	userID := "user-decline-analytics"
+	suggestionID := "sugg-decline-analytics"
+
+	declined := newTestSuggestionItem(suggestionID, userID)
+	declined.MatchedTransactionID = nil
+
+	svc := &mockTransferSuggestionService{
+		declineMatchResult: declined,
+	}
+
+	analytics := new(mockHandlerAnalytics)
+	analytics.On("Capture", userID, phclient.EventTransferSuggestionValidated, mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["action"] == "declined" && props["suggestion_id"] == suggestionID
+	})).Return()
+
+	handler := NewTransferSuggestionHandler(svc)
+	handler.SetAnalytics(analytics)
+
+	input := &DeclineTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 suggestionID,
+	}
+
+	output, err := handler.DeclineMatch(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	analytics.AssertCalled(t, "Capture", userID, phclient.EventTransferSuggestionValidated, mock.Anything)
+}
+
+// TestDeclineMatch_NilAnalytics_NoNilPanic proves that nil analytics does not panic.
+func TestDeclineMatch_NilAnalytics_NoNilPanic(t *testing.T) {
+	userID := "user-decline-nil-analytics"
+	suggestionID := "sugg-decline-nil-analytics"
+
+	declined := newTestSuggestionItem(suggestionID, userID)
+
+	svc := &mockTransferSuggestionService{
+		declineMatchResult: declined,
+	}
+
+	// Analytics intentionally not set (nil by default).
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &DeclineTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 suggestionID,
+	}
+
+	// Must not panic when analytics is nil.
+	output, err := handler.DeclineMatch(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "Transfer match declined", output.Body.Message)
+}
+
+// TestConfirmMatch_MCPCacheHit_DoesNotFireAnalytics proves GAP AS for ConfirmMatch:
+// when GetOrCreateInTx returns cacheHit=true, analytics is not re-fired.
+func TestConfirmMatch_MCPCacheHit_DoesNotFireAnalytics(t *testing.T) {
+	const secret = "mcp-secret-confirm-hit"
+	const userID = "user-confirm-hit"
+	const suggID = "sugg-confirm-hit"
+
+	svc := &mockTransferSuggestionService{} // never called
+
+	analytics := new(mockHandlerAnalytics)
+	// Analytics must NOT be called on a cache-hit replay.
+
+	txMock := new(mockPgxTx)
+	txMock.On("Rollback", mock.Anything).Return(nil)
+
+	dbMock := new(mockOperationsDB)
+	dbMock.On("Begin", mock.Anything).Return(txMock, nil)
+
+	actualAmount := 100.00
+	completed := newTestSuggestionItem(suggID, userID)
+	completed.Status = domain.SuggestionStatusCompleted
+	completed.ActualAmount = &actualAmount
+
+	idempotencyMock := new(mockOperationsIdempotencyRepo)
+	idempotencyMock.On("GetOrCreateInTx", mock.Anything).
+		Run(func(args mock.Arguments) {
+			result := args.Get(0).(**domain.TransferSuggestion)
+			*result = completed
+		}).
+		Return(true, nil)
+
+	handler := NewTransferSuggestionHandler(svc, TransferSuggestionHandlerDeps{
+		DB:              dbMock,
+		MCPAuditRepo:    new(mockOperationsMCPAuditRepo),
+		MCPWorkerSecret: secret,
+		IdempotencyRepo: idempotencyMock,
+	})
+	handler.SetAnalytics(analytics)
+
+	input := &ConfirmTransferSuggestionMatchInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		IdempotencyInput:   inputs.IdempotencyInput{IdempotencyKey: "idem-confirm-hit-1"},
+		MCPContextInput:    inputs.MCPContextInput{MCPWorkerSecret: secret},
+		ID:                 suggID,
+		Body:               ConfirmMatchBody{ActualAmount: actualAmount},
+	}
+
+	output, err := handler.ConfirmMatch(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	// GAP AS: analytics must NOT fire on a cache-hit replay.
+	analytics.AssertNotCalled(t, "Capture", userID, phclient.EventTransferSuggestionValidated, mock.Anything)
+}
+
 func TestTransferSuggestionRouteRegistration(t *testing.T) {
 	svc := &mockTransferSuggestionService{}
 	_, api := humatest.New(t)
