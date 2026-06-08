@@ -121,6 +121,62 @@ func TestAutomationRuleCondition_CategoryID_JSON_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestAutomationRuleCondition_BudgetIDRoundTrips(t *testing.T) {
+	tests := []struct {
+		name          string
+		condition     AutomationRuleCondition
+		expectedJSON  string
+		expectKeyJSON bool
+	}{
+		{
+			name: "condition with budget_id",
+			condition: AutomationRuleCondition{
+				Field:    "budget.percent_used",
+				Operator: ConditionOperatorGte,
+				Value:    80,
+				BudgetID: "budget-123",
+			},
+			expectedJSON:  `"budget_id":"budget-123"`,
+			expectKeyJSON: true,
+		},
+		{
+			name: "condition without budget_id omits key",
+			condition: AutomationRuleCondition{
+				Field:    "account.balance",
+				Operator: ConditionOperatorGt,
+				Value:    1000,
+			},
+			expectedJSON:  `"budget_id"`,
+			expectKeyJSON: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Marshal to JSON
+			jsonData, err := json.Marshal(tt.condition)
+			require.NoError(t, err)
+
+			// Check presence/absence of budget_id key
+			jsonStr := string(jsonData)
+			if tt.expectKeyJSON {
+				assert.Contains(t, jsonStr, tt.expectedJSON)
+			} else {
+				assert.NotContains(t, jsonStr, tt.expectedJSON)
+			}
+
+			// Unmarshal back and verify round-trip for BudgetID
+			var unmarshaled AutomationRuleCondition
+			err = json.Unmarshal(jsonData, &unmarshaled)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.condition.Field, unmarshaled.Field)
+			assert.Equal(t, tt.condition.Operator, unmarshaled.Operator)
+			assert.Equal(t, tt.condition.BudgetID, unmarshaled.BudgetID)
+		})
+	}
+}
+
 func TestAutomationRuleConditionOperator_IsValid(t *testing.T) {
 	tests := []struct {
 		name     string
