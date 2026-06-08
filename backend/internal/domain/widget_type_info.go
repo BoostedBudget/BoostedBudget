@@ -95,6 +95,16 @@ func AllWidgetTypes() []WidgetTypeInfo {
 			MaxWidth:      &maxW6,
 			MaxHeight:     &maxH6,
 		},
+		{
+			Type:          WidgetTypeSavingsImpact,
+			Name:          "Savings Impact",
+			Description:   "Track how much you've moved to savings through automated transfer suggestions.",
+			Category:      WidgetCategoryOverview,
+			DefaultWidth:  4,
+			DefaultHeight: 3,
+			MinWidth:      3,
+			MinHeight:     3,
+		},
 	}
 }
 

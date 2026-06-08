@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -28,6 +27,9 @@ type BudgetRepository interface {
 	// BudgetCategory operations
 	CreateCategory(ctx context.Context, category *domain.BudgetCategory) error
 	GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
+	// GetCategoryByIDAndUser returns a budget category only if it belongs to the given user (via the parent budget).
+	// Returns an error if not found or not owned. Issue #1270: category ownership validation.
+	GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error)
 	UpdateCategory(ctx context.Context, category *domain.BudgetCategory) error
 	UpdateCategorySpentAmount(ctx context.Context, categoryID string, spentAmount float64) error
 	DeleteCategory(ctx context.Context, id, budgetID string) error
@@ -44,10 +46,14 @@ type BudgetRepository interface {
 	// AdjustCategoryAllocatedAmount adjusts the allocated amount by delta (can be positive or negative)
 	AdjustCategoryAllocatedAmount(ctx context.Context, categoryID string, delta float64) error
 
-	// GetCategoryByIDAndUser retrieves a budget category by its ID, scoped to the given user via
-	// a JOIN to the budgets table. Returns an error if the category does not exist or belongs to a
-	// different user. Used for ownership validation in the automation rule service (Issue #1270).
-	GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error)
+	// GetAllActivePaginated returns all active budgets across all users, ordered by id ASC.
+	// "Active" means is_active = true. Used by the period-close scanner (Issue #972).
+	GetAllActivePaginated(ctx context.Context, limit int, offset int) ([]*domain.Budget, error)
+
+	// GetTimezonesByUserIDs returns a map of userID → timezone string for the given user IDs.
+	// Missing users are not included in the map; callers should default to "UTC" for absent keys.
+	// Used by the period-close scanner (Issue #972) to avoid N+1 timezone lookups.
+	GetTimezonesByUserIDs(ctx context.Context, userIDs []string) (map[string]string, error)
 }
 
 // budgetRepository implements BudgetRepository using PostgreSQL.
@@ -192,31 +198,6 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 	return budget, nil
 }
 
-// scanBudgetRow scans a budget row from a query result.
-func scanBudgetRow(rows interface {
-	Scan(dest ...interface{}) error
-}, budget *domain.Budget) ([]byte, error) {
-	var incomeSourcesJSON []byte
-	err := rows.Scan(
-		&budget.ID,
-		&budget.UserID,
-		&budget.Name,
-		&budget.Description,
-		&budget.Period,
-		&budget.StartDate,
-		&budget.EndDate,
-		&budget.Amount,
-		&budget.CurrencyCode,
-		&budget.IsActive,
-		&budget.CreatedAt,
-		&budget.UpdatedAt,
-		&budget.IncomeAmount,
-		&incomeSourcesJSON,
-		&budget.ExpectedIncome,
-	)
-	return incomeSourcesJSON, err
-}
-
 // GetByUserID retrieves all budgets for a specific user.
 func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.Budget, error) {
 	query := `
@@ -237,7 +218,24 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 	var budgets []*domain.Budget
 	for rows.Next() {
 		budget := &domain.Budget{}
-		incomeSourcesJSON, err := scanBudgetRow(rows, budget)
+		var incomeSourcesJSON []byte
+		err := rows.Scan(
+			&budget.ID,
+			&budget.UserID,
+			&budget.Name,
+			&budget.Description,
+			&budget.Period,
+			&budget.StartDate,
+			&budget.EndDate,
+			&budget.Amount,
+			&budget.CurrencyCode,
+			&budget.IsActive,
+			&budget.CreatedAt,
+			&budget.UpdatedAt,
+			&budget.IncomeAmount,
+			&incomeSourcesJSON,
+			&budget.ExpectedIncome,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -277,7 +275,24 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 	var budgets []*domain.Budget
 	for rows.Next() {
 		budget := &domain.Budget{}
-		incomeSourcesJSON, err := scanBudgetRow(rows, budget)
+		var incomeSourcesJSON []byte
+		err := rows.Scan(
+			&budget.ID,
+			&budget.UserID,
+			&budget.Name,
+			&budget.Description,
+			&budget.Period,
+			&budget.StartDate,
+			&budget.EndDate,
+			&budget.Amount,
+			&budget.CurrencyCode,
+			&budget.IsActive,
+			&budget.CreatedAt,
+			&budget.UpdatedAt,
+			&budget.IncomeAmount,
+			&incomeSourcesJSON,
+			&budget.ExpectedIncome,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -308,7 +323,24 @@ func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (
 	`
 
 	budget := &domain.Budget{}
-	incomeSourcesJSON, err := scanBudgetRow(r.db.QueryRow(ctx, query, userID, name), budget)
+	var incomeSourcesJSON []byte
+	err := r.db.QueryRow(ctx, query, userID, name).Scan(
+		&budget.ID,
+		&budget.UserID,
+		&budget.Name,
+		&budget.Description,
+		&budget.Period,
+		&budget.StartDate,
+		&budget.EndDate,
+		&budget.Amount,
+		&budget.CurrencyCode,
+		&budget.IsActive,
+		&budget.CreatedAt,
+		&budget.UpdatedAt,
+		&budget.IncomeAmount,
+		&incomeSourcesJSON,
+		&budget.ExpectedIncome,
+	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrBudgetNotFound
@@ -830,27 +862,134 @@ func (r *budgetRepository) AdjustCategoryAllocatedAmount(ctx context.Context, ca
 	return nil
 }
 
-// GetCategoryByIDAndUser retrieves a budget category by ID, scoped to the given user.
-// It JOINs budget_categories to budgets to perform ownership validation, since
-// budget_categories has no user_id column.
-// Returns an error if the category does not exist or belongs to a different user.
-// Issue #1270: Category ownership validation for automation rule conditions.
-func (r *budgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error) {
+// GetAllActivePaginated returns all active budgets across all users ordered by id ASC.
+// Used by the budget period-close scanner (Issue #972) to fan out across all budgets.
+func (r *budgetRepository) GetAllActivePaginated(ctx context.Context, limit int, offset int) ([]*domain.Budget, error) {
 	query := `
-		SELECT bc.id, bc.budget_id
-		FROM budget_categories bc
-		JOIN budgets b ON b.id = bc.budget_id
-		WHERE bc.id = $1 AND b.user_id = $2
+		SELECT id, user_id, name, description, period, start_date, end_date,
+			amount, currency_code, is_active, created_at, updated_at,
+			income_amount, income_sources, expected_income
+		FROM budgets
+		WHERE is_active = true
+		ORDER BY id ASC
+		LIMIT $1 OFFSET $2
 	`
 
-	var bc domain.BudgetCategory
-	err := r.db.QueryRow(ctx, query, categoryID, userID).Scan(&bc.ID, &bc.BudgetID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("category not found or not owned by user")
-	}
+	rows, err := r.db.Query(ctx, query, limit, offset)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
+	var budgets []*domain.Budget
+	for rows.Next() {
+		budget := &domain.Budget{}
+		var incomeSourcesJSON []byte
+		err := rows.Scan(
+			&budget.ID,
+			&budget.UserID,
+			&budget.Name,
+			&budget.Description,
+			&budget.Period,
+			&budget.StartDate,
+			&budget.EndDate,
+			&budget.Amount,
+			&budget.CurrencyCode,
+			&budget.IsActive,
+			&budget.CreatedAt,
+			&budget.UpdatedAt,
+			&budget.IncomeAmount,
+			&incomeSourcesJSON,
+			&budget.ExpectedIncome,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		sources, err := unmarshalIncomeSources(incomeSourcesJSON)
+		if err != nil {
+			return nil, err
+		}
+		budget.IncomeSources = sources
+
+		budgets = append(budgets, budget)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if budgets == nil {
+		budgets = []*domain.Budget{}
+	}
+
+	return budgets, nil
+}
+
+// GetTimezonesByUserIDs returns a map of userID → timezone for the given set of user IDs.
+// Uses COALESCE so users with a NULL timezone column fall back to "UTC".
+// Missing user IDs produce no map entry; callers should default to "UTC" for absent keys.
+func (r *budgetRepository) GetTimezonesByUserIDs(ctx context.Context, userIDs []string) (map[string]string, error) {
+	if len(userIDs) == 0 {
+		return map[string]string{}, nil
+	}
+
+	query := `SELECT id, COALESCE(timezone, 'UTC') FROM users WHERE id = ANY($1)`
+
+	rows, err := r.db.Query(ctx, query, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]string, len(userIDs))
+	for rows.Next() {
+		var userID, tz string
+		if err := rows.Scan(&userID, &tz); err != nil {
+			return nil, err
+		}
+		result[userID] = tz
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// GetCategoryByIDAndUser returns a budget category only if it is owned by the given user.
+// Ownership is established through the parent budget (budget_categories has no user_id column).
+// Returns an error if the category does not exist or belongs to a different user.
+// Issue #1270: category ownership validation for automation rule conditions.
+func (r *budgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error) {
+	query := `
+		SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed, bc.custom_category_id,
+			bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
+			bc.tags, bc.match_logic
+		FROM budget_categories bc
+		JOIN budgets b ON b.id = bc.budget_id AND b.user_id = $2
+		WHERE bc.id = $1
+	`
+	var bc domain.BudgetCategory
+	var tagsJSON []byte
+	var matchLogicJSON []byte
+
+	err := r.db.QueryRow(ctx, query, categoryID, userID).Scan(
+		&bc.ID,
+		&bc.BudgetID,
+		&bc.CategoryKind,
+		&bc.PFCPrimary,
+		&bc.PFCDetailed,
+		&bc.CustomCategoryID,
+		&bc.AllocatedAmount,
+		&bc.SpentAmount,
+		&bc.CreatedAt,
+		&bc.UpdatedAt,
+		&tagsJSON,
+		&matchLogicJSON,
+	)
+	if err != nil {
+		return nil, err
+	}
 	return &bc, nil
 }

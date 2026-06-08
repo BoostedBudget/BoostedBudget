@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -212,6 +214,68 @@ func (m *mockTransferSuggestionRepository) GetByRuleID(ctx context.Context, rule
 	return result, nil
 }
 
+func (m *mockTransferSuggestionRepository) Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error {
+	for _, s := range m.suggestions {
+		if s.ID == id {
+			if s.Status != domain.SuggestionStatusPending && s.Status != domain.SuggestionStatusAccepted {
+				return domain.ErrTransferSuggestionAlreadyActioned
+			}
+			s.Status = domain.SuggestionStatusCompleted
+			s.MatchedTransactionID = matchedTransactionID
+			s.ActualAmount = &actualAmount
+			s.CompletionSource = &completionSource
+			s.CompletedAt = &completedAt
+			return nil
+		}
+	}
+	return domain.ErrTransferSuggestionNotFound
+}
+
+func (m *mockTransferSuggestionRepository) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error) {
+	var result []*domain.TransferSuggestion
+	for _, s := range m.suggestions {
+		if s.UserID == userID && (s.Status == domain.SuggestionStatusPending || s.Status == domain.SuggestionStatusAccepted) {
+			result = append(result, s)
+		}
+	}
+	return result, nil
+}
+
+func (m *mockTransferSuggestionRepository) ReserveMatchedTransaction(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
+func (m *mockTransferSuggestionRepository) ClearMatchedTransactionID(_ context.Context, _ string, _ *string) error {
+	return nil
+}
+
+func (m *mockTransferSuggestionRepository) CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time, expectedTxnID *string) error {
+	for _, s := range m.suggestions {
+		if s.ID == id {
+			if s.Status != domain.SuggestionStatusPending && s.Status != domain.SuggestionStatusAccepted {
+				return domain.ErrTransferSuggestionAlreadyActioned
+			}
+			// GAP AR: check IS NOT DISTINCT FROM semantics (both nil, or same value)
+			if (expectedTxnID == nil) != (s.MatchedTransactionID == nil) {
+				return domain.ErrTransferSuggestionAlreadyActioned
+			}
+			if expectedTxnID != nil && s.MatchedTransactionID != nil && *expectedTxnID != *s.MatchedTransactionID {
+				return domain.ErrTransferSuggestionAlreadyActioned
+			}
+			s.Status = domain.SuggestionStatusCompleted
+			s.ActualAmount = &actualAmount
+			s.CompletionSource = &completionSource
+			s.CompletedAt = &completedAt
+			return nil
+		}
+	}
+	return domain.ErrTransferSuggestionNotFound
+}
+
+func (m *mockTransferSuggestionRepository) ClearStaleReservations(_ context.Context) (int64, error) {
+	return 0, nil
+}
+
 // TestConditionEvaluation tests the condition matching logic.
 func TestConditionEvaluation(t *testing.T) {
 	t.Run("evaluates equals operator", func(t *testing.T) {
@@ -333,146 +397,6 @@ func TestConditionEvaluation(t *testing.T) {
 		result := evaluateCondition(condition, data)
 		assert.False(t, result)
 	})
-
-	// Task 5: nested category lookup tests.
-
-	t.Run("budget_category field matches per-category value (match)", func(t *testing.T) {
-		condition := domain.AutomationRuleCondition{
-			Field:      "budget_category.percent_used",
-			Operator:   domain.ConditionOperatorGt,
-			Value:      "50",
-			CategoryID: "cat-1",
-		}
-		data := map[string]interface{}{
-			"categories": map[string]interface{}{
-				"cat-1": map[string]interface{}{
-					"percent_used": float64(75.0),
-				},
-			},
-		}
-		assert.True(t, evaluateCondition(condition, data))
-	})
-
-	t.Run("budget_category field no-match per-category value (no-match)", func(t *testing.T) {
-		condition := domain.AutomationRuleCondition{
-			Field:      "budget_category.percent_used",
-			Operator:   domain.ConditionOperatorGt,
-			Value:      "50",
-			CategoryID: "cat-1",
-		}
-		data := map[string]interface{}{
-			"categories": map[string]interface{}{
-				"cat-1": map[string]interface{}{
-					"percent_used": float64(30.0),
-				},
-			},
-		}
-		assert.False(t, evaluateCondition(condition, data))
-	})
-
-	t.Run("budget_category field returns false for missing CategoryID in EventData", func(t *testing.T) {
-		condition := domain.AutomationRuleCondition{
-			Field:      "budget_category.percent_used",
-			Operator:   domain.ConditionOperatorGt,
-			Value:      "50",
-			CategoryID: "cat-999",
-		}
-		data := map[string]interface{}{
-			"categories": map[string]interface{}{
-				"cat-1": map[string]interface{}{
-					"percent_used": float64(75.0),
-				},
-			},
-		}
-		assert.False(t, evaluateCondition(condition, data))
-	})
-
-	t.Run("budget_category field JSON round-trip float64 comparison works", func(t *testing.T) {
-		// River queue marshals/unmarshals EventData as JSON → floats stay float64.
-		condition := domain.AutomationRuleCondition{
-			Field:      "budget_category.percent_used",
-			Operator:   domain.ConditionOperatorGt,
-			Value:      "50",
-			CategoryID: "cat-1",
-		}
-		data := map[string]interface{}{
-			"categories": map[string]interface{}{
-				"cat-1": map[string]interface{}{
-					"percent_used": float64(75.0), // explicit float64 as JSON unmarshal produces
-				},
-			},
-		}
-		assert.True(t, evaluateCondition(condition, data))
-	})
-
-	t.Run("budget_category field reads per-category value not budget-level (regression)", func(t *testing.T) {
-		// EventData has percent_used=99.9 at budget level AND 50.0 in category.
-		// condition with budget_category.percent_used + CategoryID=cat-1 must read 50.0.
-		// gt "60" → false (proves 50.0 was read, not 99.9).
-		condition := domain.AutomationRuleCondition{
-			Field:      "budget_category.percent_used",
-			Operator:   domain.ConditionOperatorGt,
-			Value:      "60",
-			CategoryID: "cat-1",
-		}
-		data := map[string]interface{}{
-			"percent_used": float64(99.9), // budget-level — must NOT be used
-			"categories": map[string]interface{}{
-				"cat-1": map[string]interface{}{
-					"percent_used": float64(50.0),
-				},
-			},
-		}
-		assert.False(t, evaluateCondition(condition, data))
-	})
-
-	t.Run("budget_category.remaining_amount suffix alias maps to 'remaining' key", func(t *testing.T) {
-		// lookupFieldValue aliases "remaining_amount" → "remaining" in the per-category map.
-		condition := domain.AutomationRuleCondition{
-			Field:      "budget_category.remaining_amount",
-			Operator:   domain.ConditionOperatorGte,
-			Value:      "0",
-			CategoryID: "cat-1",
-		}
-		data := map[string]interface{}{
-			"categories": map[string]interface{}{
-				"cat-1": map[string]interface{}{
-					"remaining": float64(50.0),
-				},
-			},
-		}
-		assert.True(t, evaluateCondition(condition, data))
-	})
-
-	t.Run("budget_category.spent_amount suffix alias maps to 'total_spent' key", func(t *testing.T) {
-		// lookupFieldValue aliases "spent_amount" → "total_spent" in the per-category map.
-		condition := domain.AutomationRuleCondition{
-			Field:      "budget_category.spent_amount",
-			Operator:   domain.ConditionOperatorGt,
-			Value:      "100",
-			CategoryID: "cat-1",
-		}
-		data := map[string]interface{}{
-			"categories": map[string]interface{}{
-				"cat-1": map[string]interface{}{
-					"total_spent": float64(120.0),
-				},
-			},
-		}
-		assert.True(t, evaluateCondition(condition, data))
-	})
-
-	t.Run("budget.percent_used (flat field) still reads budget-level value", func(t *testing.T) {
-		condition := domain.AutomationRuleCondition{
-			Field:    "budget.percent_used",
-			Operator: domain.ConditionOperatorGt,
-			Value:    "50",
-		}
-		data := map[string]interface{}{
-			"percent_used": float64(80.0),
-		}
-		assert.True(t, evaluateCondition(condition, data))
-	})
 }
 
 // TestConditionLogic tests AND/OR condition logic.
@@ -553,27 +477,27 @@ func TestRuleExecutionService(t *testing.T) {
 	userID := "test-user-id"
 
 	createTestRule := func(ruleType domain.RuleType, triggerType domain.TriggerType) *domain.AutomationRule {
-		actions := RuleActions{}
+		var actionsJSON []byte
 		switch ruleType {
 		case domain.RuleTypeTransferSuggestion:
-			actions.Transfer = &domain.TransferAction{
+			actionsJSON, _ = json.Marshal(domain.TransferAction{
 				FromAccountID: "account-1",
 				ToAccountID:   "account-2",
 				AmountType:    "fixed",
 				Amount:        100.0,
-			}
+			})
 		case domain.RuleTypeBudgetAlert:
-			actions.Alert = &domain.AlertAction{
+			actionsJSON, _ = json.Marshal(domain.AlertAction{
 				ThresholdType:  "percentage",
 				ThresholdValue: 80,
-			}
+			})
 		case domain.RuleTypeCategoryRollover:
-			actions.Rollover = &domain.RolloverAction{
+			actionsJSON, _ = json.Marshal(domain.RolloverAction{
 				RolloverType: "all",
-			}
+			})
+		default:
+			actionsJSON = json.RawMessage(`{}`)
 		}
-
-		actionsJSON, _ := json.Marshal(actions)
 
 		return &domain.AutomationRule{
 			ID:       "rule-1",
@@ -716,15 +640,12 @@ func TestProcessEventTrigger(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
 
-		actions := RuleActions{
-			Transfer: &domain.TransferAction{
-				FromAccountID: "account-1",
-				ToAccountID:   "account-2",
-				AmountType:    "fixed",
-				Amount:        100.0,
-			},
-		}
-		actionsJSON, _ := json.Marshal(actions)
+		actionsJSON, _ := json.Marshal(domain.TransferAction{
+			FromAccountID: "account-1",
+			ToAccountID:   "account-2",
+			AmountType:    "fixed",
+			Amount:        100.0,
+		})
 
 		ruleRepo := &mockAutomationRulesRepository{
 			rules: []*domain.AutomationRule{
@@ -796,15 +717,12 @@ func TestProcessEventTrigger(t *testing.T) {
 		}
 		suggestionRepo := &mockTransferSuggestionRepository{}
 
-		actions := RuleActions{
-			Transfer: &domain.TransferAction{
-				FromAccountID: "account-1",
-				ToAccountID:   "account-2",
-				AmountType:    "fixed",
-				Amount:        100.0,
-			},
-		}
-		actionsJSON, _ := json.Marshal(actions)
+		actionsJSON, _ := json.Marshal(domain.TransferAction{
+			FromAccountID: "account-1",
+			ToAccountID:   "account-2",
+			AmountType:    "fixed",
+			Amount:        100.0,
+		})
 
 		ruleRepo := &mockAutomationRulesRepository{
 			rules: []*domain.AutomationRule{
@@ -882,11 +800,11 @@ func TestGetExecutionHistory(t *testing.T) {
 
 // Mock automation rules repository for testing.
 type mockAutomationRulesRepository struct {
-	rules                []*domain.AutomationRule
-	createError          error
-	eventTriggerRules    []*domain.AutomationRule
-	incrementExecCalled  bool
-	updateSuccessCalled  bool
+	rules               []*domain.AutomationRule
+	createError         error
+	eventTriggerRules   []*domain.AutomationRule
+	incrementExecCalled bool
+	updateSuccessCalled bool
 }
 
 func (m *mockAutomationRulesRepository) Create(ctx context.Context, rule *domain.AutomationRule) error {
@@ -1035,6 +953,19 @@ func (m *mockSavingsGoalRepository) GetByID(ctx context.Context, id string) (*do
 	return nil, domain.ErrSavingsGoalNotFound
 }
 
+// GetByIDForUser retrieves a savings goal by ID with ownership validation (GAP AE).
+func (m *mockSavingsGoalRepository) GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error) {
+	if m.findError != nil {
+		return nil, m.findError
+	}
+	for _, g := range m.goals {
+		if g.ID == id && g.UserID == userID {
+			return g, nil
+		}
+	}
+	return nil, domain.ErrSavingsGoalNotFound
+}
+
 func (m *mockSavingsGoalRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
 	var result []*domain.SavingsGoal
 	for _, g := range m.goals {
@@ -1133,10 +1064,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 	fromAccountID := "checking-account-789"
 
 	createSavingsGoalRule := func(action domain.SavingsGoalAction) *domain.AutomationRule {
-		actions := RuleActions{
-			SavingsGoal: &action,
-		}
-		actionsJSON, _ := json.Marshal(actions)
+		actionsJSON, _ := json.Marshal(action)
 
 		return &domain.AutomationRule{
 			ID:       "rule-savings-1",
@@ -1288,7 +1216,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		rule := createSavingsGoalRule(action)
 
 		triggerData := map[string]interface{}{
-			"balance": 1500.0, // Balance after paycheck
+			"remaining": 1500.0, // Remaining budget amount after spending (EventDataKeyRemaining)
 		}
 
 		execution, err := service.ExecuteRule(ctx, rule, triggerData)
@@ -1312,16 +1240,18 @@ func TestSavingsGoalExecutor(t *testing.T) {
 			nil,
 		)
 
-		// Create rule without savings goal action
-		actions := RuleActions{}
-		actionsJSON, _ := json.Marshal(actions)
+		// Create rule without savings goal action — ExecuteRule now validates first via
+		// rule.Validate(), so the error is caught before the execution record is created.
+		// Use "budget_period_end" (a valid event) so that event-name validation passes and
+		// Validate() proceeds to check savings_goal_id.
+		actionsJSON := json.RawMessage(`{}`)
 		rule := &domain.AutomationRule{
 			ID:             "rule-savings-bad",
 			UserID:         userID,
 			Name:           "Bad Savings Rule",
 			Enabled:        true,
 			RuleType:       domain.RuleTypeSavingsGoal,
-			TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "test"},
+			TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
 			ConditionLogic: "AND",
 			Actions:        actionsJSON,
 		}
@@ -1329,11 +1259,16 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		execution, err := service.ExecuteRule(ctx, rule, map[string]interface{}{})
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "savings goal action not defined")
-		assert.Equal(t, domain.ExecutionStatusFailed, execution.Status)
+		// rule.Validate() catches the missing savings_goal_id before the executor runs.
+		assert.Contains(t, err.Error(), "savings_goal_id is required")
+		// Execution record is not created when pre-flight validation fails.
+		assert.Nil(t, execution)
 	})
 
-	t.Run("fails when savings goal not found", func(t *testing.T) {
+	t.Run("skips silently when savings goal not found or ownership mismatch (GAP AE)", func(t *testing.T) {
+		// Post-GAP AE behavior: executor skips (log+nil) instead of failing with an error.
+		// This prevents IDOR information leakage: both "not found" and "belongs to other user"
+		// return the same no-op result so an attacker can't distinguish them via error messages.
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
 		ruleRepo := &mockAutomationRulesRepository{}
@@ -1359,9 +1294,11 @@ func TestSavingsGoalExecutor(t *testing.T) {
 
 		execution, err := service.ExecuteRule(ctx, rule, map[string]interface{}{})
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "savings goal not found")
-		assert.Equal(t, domain.ExecutionStatusFailed, execution.Status)
+		// Rule is skipped (no error bubbled up — avoids leaking existence info).
+		require.NoError(t, err, "goal-not-found must be silently skipped, not returned as error")
+		assert.Equal(t, domain.ExecutionStatusCompleted, execution.Status, "execution is marked completed (skip-with-no-suggestion)")
+		// Critical: no suggestion must be created for the non-owner rule.
+		assert.Empty(t, suggestionRepo.suggestions, "no transfer suggestion must be created when goal is not found")
 	})
 
 	t.Run("skips when calculated amount is zero or negative", func(t *testing.T) {
@@ -1396,7 +1333,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		rule := createSavingsGoalRule(action)
 
 		triggerData := map[string]interface{}{
-			"balance": 500.0, // Less than threshold
+			"remaining": 500.0, // Less than threshold (EventDataKeyRemaining)
 		}
 
 		execution, err := service.ExecuteRule(ctx, rule, triggerData)
@@ -1409,6 +1346,181 @@ func TestSavingsGoalExecutor(t *testing.T) {
 }
 
 // ============================================================================
+// GAP H: SetSavingsGoalRepo nil guard — ensures production wiring is correct.
+// ============================================================================
+
+// TestRuleExecutionService_SavingsGoal_NilRepo_ReturnsError verifies that when
+// SetSavingsGoalRepo is never called (i.e. the production main.go omits it),
+// ProcessEventTrigger with a savings_goal rule returns a meaningful error instead
+// of silently succeeding with no suggestion created.
+func TestRuleExecutionService_SavingsGoal_NilRepo_ReturnsError(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-id"
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+
+	// Return a savings_goal rule when queried for budget_period_end events.
+	actionsJSON, _ := json.Marshal(domain.SavingsGoalAction{
+		SavingsGoalID: "goal-123",
+		FromAccountID: "checking-account",
+		AmountType:    "fixed",
+		Amount:        100.0,
+	})
+	rule := &domain.AutomationRule{
+		ID:             "rule-savings-nil-repo",
+		UserID:         userID,
+		Name:           "Savings Goal Rule",
+		Enabled:        true,
+		RuleType:       domain.RuleTypeSavingsGoal,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: domain.EventBudgetPeriodEnd},
+		ConditionLogic: "AND",
+		Conditions:     []domain.AutomationRuleCondition{},
+		Actions:        actionsJSON,
+	}
+	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.AutomationRule{rule}}
+
+	// Create service WITHOUT calling SetSavingsGoalRepo — simulates production misconfiguration.
+	svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	eventData := map[string]interface{}{
+		"budget_id": "budget-1",
+		"remaining": 500.0,
+	}
+	err := svc.ProcessEventTrigger(ctx, userID, domain.EventBudgetPeriodEnd, eventData)
+
+	// ProcessEventTrigger swallows per-rule errors and returns nil. The execution
+	// record must reflect a failed status with the "not configured" message.
+	require.NoError(t, err)
+	require.Len(t, execRepo.executions, 1, "an execution record should have been created")
+	exec := execRepo.executions[0]
+	assert.Equal(t, domain.ExecutionStatusFailed, exec.Status)
+	require.NotNil(t, exec.ErrorMessage)
+	assert.Contains(t, *exec.ErrorMessage, "savings goal repository not configured")
+
+	// No suggestion should have been created.
+	assert.Empty(t, suggestionRepo.suggestions)
+}
+
+// TestProcessEventTrigger_BatchContinuesAfterRuleFailure verifies Issue #972 B2:
+// ProcessEventTrigger must continue executing remaining rules when one rule fails,
+// and must log the failure via slog.Error without aborting the batch.
+// The test seeds TWO rules: rule A fails (nil savingsGoalRepo), rule B succeeds
+// (fixed transfer with all repos). Asserts rule B's suggestion is created despite
+// rule A's error, and ProcessEventTrigger returns nil (batch success).
+func TestProcessEventTrigger_BatchContinuesAfterRuleFailure(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-batch-test"
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+
+	// Rule A: savings_goal rule that will fail (no savingsGoalRepo).
+	actionsFailJSON, _ := json.Marshal(domain.SavingsGoalAction{
+		SavingsGoalID: "goal-xyz",
+		FromAccountID: "acct-a",
+		AmountType:    "fixed",
+		Amount:        50.0,
+	})
+	ruleA := &domain.AutomationRule{
+		ID:             "rule-fail",
+		UserID:         userID,
+		Name:           "Failing Rule",
+		Enabled:        true,
+		RuleType:       domain.RuleTypeSavingsGoal,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: domain.EventBudgetPeriodEnd},
+		ConditionLogic: "AND",
+		Conditions:     []domain.AutomationRuleCondition{},
+		Actions:        actionsFailJSON,
+	}
+
+	// Rule B: transfer rule that will succeed.
+	actionsSucceedJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID: "acct-from",
+		ToAccountID:   "acct-to",
+		AmountType:    "fixed",
+		Amount:        75.0,
+	})
+	ruleB := &domain.AutomationRule{
+		ID:             "rule-succeed",
+		UserID:         userID,
+		Name:           "Succeeding Rule",
+		Enabled:        true,
+		RuleType:       domain.RuleTypeTransferSuggestion,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: domain.EventBudgetPeriodEnd},
+		ConditionLogic: "AND",
+		Conditions:     []domain.AutomationRuleCondition{},
+		Actions:        actionsSucceedJSON,
+	}
+
+	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.AutomationRule{ruleA, ruleB}}
+
+	// Service WITHOUT savingsGoalRepo (rule A will fail) but with suggestion support (rule B succeeds).
+	svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	eventData := map[string]interface{}{
+		domain.EventDataKeyBudgetID:    "budget-1",
+		domain.EventDataKeyRemaining:   500.0,
+		domain.EventDataKeyAmount:      1000.0,
+		domain.EventDataKeyPercentUsed: 50.0,
+	}
+	err := svc.ProcessEventTrigger(ctx, userID, domain.EventBudgetPeriodEnd, eventData)
+
+	// ProcessEventTrigger must return nil — one rule failing must not abort the batch.
+	require.NoError(t, err, "batch must succeed even when one rule fails")
+
+	// Rule B's transfer suggestion must have been created despite rule A's failure.
+	assert.NotEmpty(t, suggestionRepo.suggestions,
+		"rule B's transfer suggestion must be created even though rule A failed")
+
+	// Two execution records: one failed (rule A), one succeeded (rule B).
+	assert.Len(t, execRepo.executions, 2,
+		"both rules must have execution records regardless of rule A's failure")
+}
+
+// ============================================================================
+// GAP G: calculateSavingsGoalAmount uses wrong EventData key for "remaining".
+// ============================================================================
+
+// TestCalculateSavingsGoalAmount_Remaining_UsesRemainingKey verifies that the
+// "remaining" AmountType reads from the "remaining" EventData key (emitted by
+// budget_period_close_check.go), NOT the "balance" key that was previously used.
+func TestCalculateSavingsGoalAmount_Remaining_UsesRemainingKey(t *testing.T) {
+	svc := &ruleExecutionService{}
+
+	action := &domain.SavingsGoalAction{
+		AmountType: "remaining",
+		Threshold:  100.0, // keep at least $100, transfer the rest
+	}
+
+	// Use "remaining" key — the correct EventData key emitted by the period-close worker.
+	triggerData := map[string]interface{}{
+		"remaining": 150.0,
+	}
+
+	result := svc.calculateSavingsGoalAmount(action, triggerData)
+	assert.Equal(t, 50.0, result, "150 - 100 threshold = 50; wrong key returns 0")
+}
+
+// TestCalculateSavingsGoalAmount_Remaining_BelowThreshold verifies no amount is
+// returned when remaining is at or below the threshold.
+func TestCalculateSavingsGoalAmount_Remaining_BelowThreshold(t *testing.T) {
+	svc := &ruleExecutionService{}
+
+	action := &domain.SavingsGoalAction{
+		AmountType: "remaining",
+		Threshold:  200.0,
+	}
+
+	triggerData := map[string]interface{}{
+		"remaining": 150.0, // below threshold — nothing to transfer
+	}
+
+	result := svc.calculateSavingsGoalAmount(action, triggerData)
+	assert.Equal(t, 0.0, result)
+}
+
+// ============================================================================
 // Issue #38: Test Rule Execution (TDD - Dry-Run)
 // ============================================================================
 
@@ -1418,15 +1530,12 @@ func TestTestRule(t *testing.T) {
 	userID := "test-user-id"
 
 	createTestTransferRule := func() *domain.AutomationRule {
-		actions := RuleActions{
-			Transfer: &domain.TransferAction{
-				FromAccountID: "account-1",
-				ToAccountID:   "account-2",
-				AmountType:    "fixed",
-				Amount:        100.0,
-			},
-		}
-		actionsJSON, _ := json.Marshal(actions)
+		actionsJSON, _ := json.Marshal(domain.TransferAction{
+			FromAccountID: "account-1",
+			ToAccountID:   "account-2",
+			AmountType:    "fixed",
+			Amount:        100.0,
+		})
 
 		return &domain.AutomationRule{
 			ID:       "rule-1",
@@ -1448,14 +1557,11 @@ func TestTestRule(t *testing.T) {
 	}
 
 	createTestAlertRule := func() *domain.AutomationRule {
-		actions := RuleActions{
-			Alert: &domain.AlertAction{
-				NotificationChannels: []string{"email", "in_app"},
-				ThresholdType:        "percentage",
-				ThresholdValue:       75.0,
-			},
-		}
-		actionsJSON, _ := json.Marshal(actions)
+		actionsJSON, _ := json.Marshal(domain.AlertAction{
+			NotificationChannels: []string{"email", "in_app"},
+			ThresholdType:        "percentage",
+			ThresholdValue:       75.0,
+		})
 
 		return &domain.AutomationRule{
 			ID:       "rule-2",
@@ -1650,7 +1756,7 @@ func TestTestRule(t *testing.T) {
 
 		rule := createTestTransferRule()
 		triggerData := map[string]interface{}{
-			"amount":      100.0,
+			"amount":       100.0,
 			"custom_field": "custom_value",
 		}
 
@@ -1707,13 +1813,13 @@ func TestTestRule(t *testing.T) {
 
 		rule := createTestTransferRule()
 		rule.Conditions = []domain.AutomationRuleCondition{
-			{Field: "amount", Operator: domain.ConditionOperatorGt, Value: "500"}, // Will not match
+			{Field: "amount", Operator: domain.ConditionOperatorGt, Value: "500"},      // Will not match
 			{Field: "merchant", Operator: domain.ConditionOperatorEq, Value: "Amazon"}, // Will match
 		}
 		rule.ConditionLogic = "OR"
 
 		triggerData := map[string]interface{}{
-			"amount":   100.0,  // Less than 500
+			"amount":   100.0, // Less than 500
 			"merchant": "Amazon",
 		}
 
@@ -1736,7 +1842,7 @@ func TestTestRule_PFCConditionPopulatesDisplay(t *testing.T) {
 
 	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
 
-	actions, _ := json.Marshal(RuleActions{})
+	actions := json.RawMessage(`{}`)
 	rule := &domain.AutomationRule{
 		ID:   "rule-pfc-test",
 		Name: "PFC dry-run",
@@ -1757,49 +1863,1050 @@ func TestTestRule_PFCConditionPopulatesDisplay(t *testing.T) {
 	assert.Equal(t, "Food And Drink", result.ConditionResults[0].ActualDisplay)
 }
 
-// TestTestRule_CategoryFieldActual verifies that TestRule returns the correct Actual
-// value from per-category data (not budget-level data) for budget_category.* fields.
-func TestTestRule_CategoryFieldActual(t *testing.T) {
+// TestRuleExecutionService_ExpiresAt verifies that suggestions created by
+// executeTransferSuggestion and executeSavingsGoal have ExpiresAt set ~30 days
+// in the future.
+func TestRuleExecutionService_ExpiresAt(t *testing.T) {
 	ctx := context.Background()
+	userID := "test-user-expires"
 
+	t.Run("transfer suggestion has ExpiresAt ~30 days in future", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+
+		service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+		actionsJSON, _ := json.Marshal(domain.TransferAction{
+			FromAccountID: "account-from",
+			ToAccountID:   "account-to",
+			AmountType:    "fixed",
+			Amount:        100.0,
+		})
+
+		rule := &domain.AutomationRule{
+			ID:       "rule-expires-test",
+			UserID:   userID,
+			Name:     "Transfer Rule",
+			Enabled:  true,
+			Priority: 1,
+			RuleType: domain.RuleTypeTransferSuggestion,
+			TriggerConfig: domain.TriggerConfig{
+				Type:  domain.TriggerTypeEvent,
+				Event: "transaction_created",
+			},
+			Conditions:     []domain.AutomationRuleCondition{},
+			ConditionLogic: "AND",
+			Actions:        actionsJSON,
+		}
+
+		before := time.Now().UTC()
+		_, err := service.ExecuteRule(ctx, rule, map[string]interface{}{"amount": 100.0})
+		after := time.Now().UTC()
+
+		require.NoError(t, err)
+		require.Len(t, suggestionRepo.suggestions, 1)
+
+		suggestion := suggestionRepo.suggestions[0]
+		require.NotNil(t, suggestion.ExpiresAt, "ExpiresAt must be set for transfer suggestions")
+
+		expectedLow := before.Add(29 * 24 * time.Hour)
+		expectedHigh := after.Add(31 * 24 * time.Hour)
+		assert.True(t, suggestion.ExpiresAt.After(expectedLow),
+			"ExpiresAt %v should be after %v", *suggestion.ExpiresAt, expectedLow)
+		assert.True(t, suggestion.ExpiresAt.Before(expectedHigh),
+			"ExpiresAt %v should be before %v", *suggestion.ExpiresAt, expectedHigh)
+	})
+
+	t.Run("savings goal suggestion has ExpiresAt ~30 days in future", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+
+		// Build a mock savings goal repo that returns a goal.
+		mockGoalRepo := &mockSavingsGoalRepository{}
+		goalID := "goal-1"
+		accountID := "savings-account"
+		mockGoalRepo.goals = []*domain.SavingsGoal{
+			{
+				ID:        goalID,
+				Name:      "Vacation Fund",
+				AccountID: accountID,
+				UserID:    userID,
+			},
+		}
+
+		service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+		service.SetSavingsGoalRepo(mockGoalRepo)
+
+		actionsJSON, _ := json.Marshal(domain.SavingsGoalAction{
+			SavingsGoalID: goalID,
+			FromAccountID: "checking-account",
+			AmountType:    "fixed",
+			Amount:        50.0,
+		})
+
+		rule := &domain.AutomationRule{
+			ID:       "rule-savings-expires",
+			UserID:   userID,
+			Name:     "Savings Goal Rule",
+			Enabled:  true,
+			Priority: 1,
+			RuleType: domain.RuleTypeSavingsGoal,
+			TriggerConfig: domain.TriggerConfig{
+				Type:  domain.TriggerTypeEvent,
+				Event: "transaction_created",
+			},
+			Conditions:     []domain.AutomationRuleCondition{},
+			ConditionLogic: "AND",
+			Actions:        actionsJSON,
+		}
+
+		before := time.Now().UTC()
+		_, err := service.ExecuteRule(ctx, rule, map[string]interface{}{"amount": 50.0})
+		after := time.Now().UTC()
+
+		require.NoError(t, err)
+		require.Len(t, suggestionRepo.suggestions, 1)
+
+		suggestion := suggestionRepo.suggestions[0]
+		require.NotNil(t, suggestion.ExpiresAt, "ExpiresAt must be set for savings goal suggestions")
+
+		expectedLow := before.Add(29 * 24 * time.Hour)
+		expectedHigh := after.Add(31 * 24 * time.Hour)
+		assert.True(t, suggestion.ExpiresAt.After(expectedLow),
+			"ExpiresAt %v should be after %v", *suggestion.ExpiresAt, expectedLow)
+		assert.True(t, suggestion.ExpiresAt.Before(expectedHigh),
+			"ExpiresAt %v should be before %v", *suggestion.ExpiresAt, expectedHigh)
+	})
+}
+
+// TestEvaluateCondition_DottedFieldNormalization verifies that evaluateCondition maps
+// UI-built dotted field names (e.g. "budget.remaining_amount") to the flat engine keys
+// (e.g. "remaining") before doing the data lookup. Without the normalization shim,
+// every UI-built condition silently returns false because the engine emits flat keys.
+// Issue #972: GAP M – normalization shim.
+func TestEvaluateCondition_DottedFieldNormalization(t *testing.T) {
+	tests := []struct {
+		name       string
+		field      string
+		categoryID string // non-empty only for budget_category.* tests (Issue #1270)
+		operator   domain.ConditionOperator
+		value      string
+		data       map[string]interface{}
+		wantMatch  bool
+	}{
+		{
+			name:      "budget.remaining_amount maps to remaining (gt, matches)",
+			field:     "budget.remaining_amount",
+			operator:  domain.ConditionOperatorGt,
+			value:     "100",
+			data:      map[string]interface{}{"remaining": 150.0},
+			wantMatch: true,
+		},
+		{
+			name:      "budget.remaining_amount maps to remaining (gt, no match)",
+			field:     "budget.remaining_amount",
+			operator:  domain.ConditionOperatorGt,
+			value:     "200",
+			data:      map[string]interface{}{"remaining": 150.0},
+			wantMatch: false,
+		},
+		{
+			name:      "budget.total_spent maps to total_spent",
+			field:     "budget.total_spent",
+			operator:  domain.ConditionOperatorGte,
+			value:     "500",
+			data:      map[string]interface{}{"total_spent": 500.0},
+			wantMatch: true,
+		},
+		{
+			name:      "budget.percent_used maps to percent_used",
+			field:     "budget.percent_used",
+			operator:  domain.ConditionOperatorGt,
+			value:     "75",
+			data:      map[string]interface{}{"percent_used": 82.5},
+			wantMatch: true,
+		},
+		{
+			// Issue #1270: budget_category.* uses nested categories[CategoryID] lookup.
+			name:       "budget_category.remaining_amount uses nested category lookup",
+			field:      "budget_category.remaining_amount",
+			categoryID: "cat-abc",
+			operator:   domain.ConditionOperatorLt,
+			value:      "50",
+			data: map[string]interface{}{
+				domain.EventDataKeyCategories: map[string]interface{}{
+					"cat-abc": map[string]interface{}{"remaining": 30.0},
+				},
+			},
+			wantMatch: true,
+		},
+		{
+			// Issue #1270: spent_amount suffix alias → "total_spent" key in category map.
+			name:       "budget_category.spent_amount aliases to total_spent in category map",
+			field:      "budget_category.spent_amount",
+			categoryID: "cat-abc",
+			operator:   domain.ConditionOperatorGt,
+			value:      "100",
+			data: map[string]interface{}{
+				domain.EventDataKeyCategories: map[string]interface{}{
+					"cat-abc": map[string]interface{}{"total_spent": 200.0},
+				},
+			},
+			wantMatch: true,
+		},
+		{
+			// Issue #1270: budget_category.percent_used reads from per-category data (no
+			// longer falls through to flat budget-level percent_used).
+			name:       "budget_category.percent_used reads per-category data",
+			field:      "budget_category.percent_used",
+			categoryID: "cat-abc",
+			operator:   domain.ConditionOperatorGt,
+			value:      "50",
+			data: map[string]interface{}{
+				domain.EventDataKeyCategories: map[string]interface{}{
+					"cat-abc": map[string]interface{}{"percent_used": 80.0},
+				},
+			},
+			wantMatch: true,
+		},
+		{
+			// Regression: budget_category.* without a matching CategoryID returns false
+			// (no category found → no match).
+			name:       "budget_category.* with wrong category ID returns false",
+			field:      "budget_category.remaining_amount",
+			categoryID: "cat-other",
+			operator:   domain.ConditionOperatorLt,
+			value:      "50",
+			data: map[string]interface{}{
+				domain.EventDataKeyCategories: map[string]interface{}{
+					"cat-abc": map[string]interface{}{"remaining": 30.0},
+				},
+			},
+			wantMatch: false,
+		},
+		{
+			name:      "account.balance maps to balance",
+			field:     "account.balance",
+			operator:  domain.ConditionOperatorGte,
+			value:     "1000",
+			data:      map[string]interface{}{"balance": 2500.0},
+			wantMatch: true,
+		},
+		{
+			name:      "transaction.amount maps to amount",
+			field:     "transaction.amount",
+			operator:  domain.ConditionOperatorGt,
+			value:     "50",
+			data:      map[string]interface{}{"amount": 75.0},
+			wantMatch: true,
+		},
+		{
+			// Regression: flat keys must still work (no double-mapping).
+			name:      "flat key remaining still works (backward compat)",
+			field:     "remaining",
+			operator:  domain.ConditionOperatorGt,
+			value:     "100",
+			data:      map[string]interface{}{"remaining": 150.0},
+			wantMatch: true,
+		},
+		{
+			// Regression: flat key percent_used must still work.
+			name:      "flat key percent_used still works (backward compat)",
+			field:     "percent_used",
+			operator:  domain.ConditionOperatorGte,
+			value:     "75",
+			data:      map[string]interface{}{"percent_used": 82.5},
+			wantMatch: true,
+		},
+		{
+			// Unknown field should still return false (key absent from data).
+			name:      "unknown dotted field returns false",
+			field:     "foo.bar",
+			operator:  domain.ConditionOperatorEq,
+			value:     "x",
+			data:      map[string]interface{}{"baz": "x"},
+			wantMatch: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			condition := domain.AutomationRuleCondition{
+				Field:      tc.field,
+				CategoryID: tc.categoryID,
+				Operator:   tc.operator,
+				Value:      tc.value,
+			}
+			got := evaluateCondition(condition, tc.data)
+			assert.Equal(t, tc.wantMatch, got)
+		})
+	}
+}
+
+// TestEventDataKeyContract asserts that every key the calculators read from EventData
+// is present in the map emitted by the period-close worker. This is a drift guard —
+// if either the emitter or the readers are updated and the constants diverge, this
+// test fails. Issue #972: GAP J – emitter/reader parity.
+// Issue #1270: EventDataKeyCategories added to emitted set.
+func TestEventDataKeyContract(t *testing.T) {
+	// Keys emitted by the period-close worker (budget_period_close_check.go).
+	emittedKeys := map[string]bool{
+		domain.EventDataKeyBudgetID:     true,
+		domain.EventDataKeyRemaining:    true,
+		domain.EventDataKeyIncomeAmount: true,
+		domain.EventDataKeyAmount:       true,
+		domain.EventDataKeyTotalSpent:   true,
+		domain.EventDataKeyPercentUsed:  true, // Issue #972 A-min: emitted via Budget.PercentUsed()
+		domain.EventDataKeyPeriodStart:  true,
+		domain.EventDataKeyPeriodEnd:    true,
+		domain.EventDataKeyCategories:   true, // Issue #1270: per-category data map
+	}
+
+	// Keys that calculateTransferAmount reads.
+	transferReaderKeys := []string{
+		domain.EventDataKeyAmount,    // "percentage" and "threshold" branches
+		domain.EventDataKeyRemaining, // "remaining" branch
+	}
+
+	// Keys that calculateSavingsGoalAmount reads.
+	savingsReaderKeys := []string{
+		domain.EventDataKeyAmount,    // "percentage" branch
+		domain.EventDataKeyRemaining, // "remaining" branch
+	}
+
+	for _, key := range transferReaderKeys {
+		assert.True(t, emittedKeys[key],
+			"calculateTransferAmount reads key %q which is NOT in the period-close emitted map", key)
+	}
+
+	for _, key := range savingsReaderKeys {
+		assert.True(t, emittedKeys[key],
+			"calculateSavingsGoalAmount reads key %q which is NOT in the period-close emitted map", key)
+	}
+}
+
+// TestBudgetPercentUsedConditionFires verifies Issue #972 Work Item A-min:
+// a rule with condition {Field: "budget.percent_used", Operator: gt, Value: "80"}
+// evaluates to TRUE when the period-close emitter supplies percent_used > 80, and
+// FALSE for a zero-Amount budget (PercentUsed()=0, no divide-by-zero).
+// This is a contract test: it locks the three-layer agreement between
+//  1. the UI offering "budget.percent_used" as a condition field,
+//  2. the emitter publishing domain.EventDataKeyPercentUsed via Budget.PercentUsed(),
+//  3. evaluateCondition normalizing "budget.percent_used" → "percent_used".
+func TestBudgetPercentUsedConditionFires(t *testing.T) {
+	t.Run("fires when percent used exceeds threshold", func(t *testing.T) {
+		// EventData as the period-close worker now emits: Budget.PercentUsed() = 82%.
+		eventData := map[string]interface{}{
+			domain.EventDataKeyPercentUsed: 82.5, // 82.5% used
+			domain.EventDataKeyRemaining:   250.0,
+			domain.EventDataKeyAmount:      1000.0,
+		}
+		condition := domain.AutomationRuleCondition{
+			Field:    "budget.percent_used",
+			Operator: domain.ConditionOperatorGt,
+			Value:    "80",
+		}
+		assert.True(t, evaluateCondition(condition, eventData),
+			"budget.percent_used > 80 should fire when PercentUsed()=82.5")
+	})
+
+	t.Run("does not fire when percent used is below threshold", func(t *testing.T) {
+		eventData := map[string]interface{}{
+			domain.EventDataKeyPercentUsed: 50.0,
+		}
+		condition := domain.AutomationRuleCondition{
+			Field:    "budget.percent_used",
+			Operator: domain.ConditionOperatorGt,
+			Value:    "80",
+		}
+		assert.False(t, evaluateCondition(condition, eventData),
+			"budget.percent_used > 80 should not fire when PercentUsed()=50")
+	})
+
+	t.Run("zero-Amount budget emits 0 (no divide-by-zero)", func(t *testing.T) {
+		// Budget.PercentUsed() returns 0 when Amount==0 and TotalSpent()==0.
+		budget := &domain.Budget{ID: "b0", Amount: 0}
+		assert.Equal(t, 0.0, budget.PercentUsed(),
+			"PercentUsed() must return 0 for a zero-Amount budget with no spending")
+
+		eventData := map[string]interface{}{
+			domain.EventDataKeyPercentUsed: budget.PercentUsed(), // 0.0
+		}
+		condition := domain.AutomationRuleCondition{
+			Field:    "budget.percent_used",
+			Operator: domain.ConditionOperatorGt,
+			Value:    "80",
+		}
+		assert.False(t, evaluateCondition(condition, eventData),
+			"budget.percent_used > 80 must be false for a zero-Amount budget")
+	})
+}
+
+// TestTestRule_DottedFieldPreviewShowsActual verifies GAP T: TestRule's preview must
+// expose the real EventData value for dotted UI-built condition fields (e.g.
+// "budget.remaining_amount") in ConditionEvalResult.Actual, not nil.
+// Without normalizeConditionField applied to the Actual lookup, dotted fields miss in
+// the EventData map and Actual is set to nil even though Met is computed correctly.
+func TestTestRule_DottedFieldPreviewShowsActual(t *testing.T) {
+	ctx := context.Background()
 	execRepo := &mockRuleExecutionRepository{}
 	suggestionRepo := &mockTransferSuggestionRepository{}
 	ruleRepo := &mockAutomationRulesRepository{}
-
 	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
 
-	actions, _ := json.Marshal(RuleActions{})
+	actions, _ := json.Marshal(domain.TransferAction{
+		FromAccountID: "account-a", ToAccountID: "account-b",
+		AmountType: "fixed", Amount: 50,
+	})
 	rule := &domain.AutomationRule{
-		ID:   "rule-cat-test",
-		Name: "Category dry-run",
+		ID: "rule-dotted", UserID: "u", Name: "dotted", Enabled: true, Priority: 1,
+		RuleType:      domain.RuleTypeTransferSuggestion,
+		TriggerConfig: domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+		// UI-built dotted field — backend emits flat "remaining"
 		Conditions: []domain.AutomationRuleCondition{
-			{
-				Field:      "budget_category.percent_used",
-				Operator:   domain.ConditionOperatorGt,
-				Value:      "60",
-				CategoryID: "cat-1",
-			},
+			{Field: "budget.remaining_amount", Operator: domain.ConditionOperatorGt, Value: "100"},
 		},
 		ConditionLogic: "AND",
 		Actions:        actions,
 	}
-	// Budget-level percent_used is 99.9; cat-1's percent_used is 50.0.
-	// The condition uses gt "60" — should NOT match (50.0 < 60).
-	// Actual in ConditionResults must show 50.0, not 99.9.
+	// Period-close EventData uses flat keys (domain.EventDataKey*)
 	triggerData := map[string]interface{}{
-		"percent_used": float64(99.9),
-		"categories": map[string]interface{}{
-			"cat-1": map[string]interface{}{
-				"percent_used": float64(50.0),
-			},
-		},
+		domain.EventDataKeyRemaining: 150.0,
+		domain.EventDataKeyBudgetID:  "b-1",
 	}
 
 	result, err := service.TestRule(ctx, rule, triggerData)
 	require.NoError(t, err)
+
 	require.Len(t, result.ConditionResults, 1)
-	// Condition must NOT be met (50.0 is not > 60).
-	assert.False(t, result.ConditionResults[0].Met)
-	// Actual must be the per-category value (50.0), not budget-level 99.9.
-	assert.Equal(t, float64(50.0), result.ConditionResults[0].Actual)
+	cr := result.ConditionResults[0]
+	assert.True(t, cr.Met, "budget.remaining_amount (150) > 100 should be Met")
+	// Actual must be the resolved flat value, not nil
+	assert.NotNil(t, cr.Actual, "Actual must not be nil for dotted field with matching EventData")
+	assert.Equal(t, 150.0, cr.Actual, "Actual must equal the EventData value for budget.remaining_amount")
+}
+
+// TestFlatActionJSON_ValidateAndExecuteConsistency proves that rules created with the flat
+// action JSON the UI submits pass BOTH domain.Validate() AND the executor, preventing the
+// flat/wrapped convention from diverging per rule type.
+// Issue #972: GAP W fix — extended to cover all four rule types (savings_goal, transfer,
+// budget_alert, category_rollover).
+func TestFlatActionJSON_ValidateAndExecuteConsistency(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-consistency-test"
+	goalID := "goal-consistency"
+
+	goalRepo := &mockSavingsGoalRepository{
+		goals: []*domain.SavingsGoal{
+			{ID: goalID, UserID: userID, Name: "Emergency Fund", AccountID: "savings-acct"},
+		},
+	}
+
+	tests := []struct {
+		name            string
+		ruleType        domain.RuleType
+		actions         interface{}
+		wantSuggestions int
+		setupSvc        func(svc *ruleExecutionService)
+	}{
+		{
+			name:     "savings_goal flat JSON",
+			ruleType: domain.RuleTypeSavingsGoal,
+			actions: domain.SavingsGoalAction{
+				SavingsGoalID: goalID,
+				FromAccountID: "checking-acct",
+				AmountType:    "fixed",
+				Amount:        100.0,
+			},
+			wantSuggestions: 1,
+			setupSvc:        func(svc *ruleExecutionService) { svc.SetSavingsGoalRepo(goalRepo) },
+		},
+		{
+			name:     "transfer_suggestion flat JSON (fixed)",
+			ruleType: domain.RuleTypeTransferSuggestion,
+			actions: domain.TransferAction{
+				FromAccountID: "checking-1",
+				ToAccountID:   "savings-1",
+				AmountType:    "fixed",
+				Amount:        50.0,
+			},
+			wantSuggestions: 1,
+			setupSvc:        nil,
+		},
+		{
+			// Issue #972 GAP AC: excess is the UI's primary transfer type — amount=0, threshold drives amount.
+			// triggerData contains "remaining": 200.0 (set below), threshold=100 → expect suggestion amount 100.
+			name:     "transfer_suggestion flat JSON (excess)",
+			ruleType: domain.RuleTypeTransferSuggestion,
+			actions: domain.TransferAction{
+				FromAccountID: "checking-1",
+				ToAccountID:   "savings-1",
+				AmountType:    "excess",
+				Amount:        0,
+				Threshold:     100.0,
+			},
+			wantSuggestions: 1,
+			setupSvc:        nil,
+		},
+		{
+			// Issue #972 GAP AC (Codex Q4/Q5): legacy 'threshold' type must still validate AND execute
+			// so that any saved rules with this type continue to fire after the allow-set was added.
+			// triggerData "amount"=200.0, threshold=50 → expect 150.
+			name:     "transfer_suggestion flat JSON (threshold legacy)",
+			ruleType: domain.RuleTypeTransferSuggestion,
+			actions: domain.TransferAction{
+				FromAccountID: "checking-1",
+				ToAccountID:   "savings-1",
+				AmountType:    "threshold",
+				Threshold:     50.0,
+			},
+			wantSuggestions: 1,
+			setupSvc:        nil,
+		},
+		{
+			name:     "budget_alert flat JSON",
+			ruleType: domain.RuleTypeBudgetAlert,
+			actions: domain.AlertAction{
+				NotificationChannels: []string{"in_app"},
+				ThresholdType:        "percentage",
+				ThresholdValue:       80.0,
+			},
+			wantSuggestions: 0, // budget alert has no suggestion side-effect
+			setupSvc:        nil,
+		},
+		{
+			name:     "category_rollover flat JSON",
+			ruleType: domain.RuleTypeCategoryRollover,
+			actions: domain.RolloverAction{
+				SourceBudgetCategoryID: "cat-1",
+				RolloverType:           "full",
+			},
+			wantSuggestions: 1,
+			setupSvc:        nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			actionsJSON, _ := json.Marshal(tc.actions)
+			rule := &domain.AutomationRule{
+				ID:             "rule-flat-" + tc.name,
+				UserID:         userID,
+				Name:           "Flat Action Rule",
+				Enabled:        true,
+				RuleType:       tc.ruleType,
+				TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+				ConditionLogic: "AND",
+				Conditions:     []domain.AutomationRuleCondition{},
+				Actions:        actionsJSON,
+			}
+
+			// Validation must pass with flat JSON.
+			require.NoError(t, rule.Validate(), "flat action JSON must pass domain validation for %s", tc.name)
+
+			// Execution must also succeed with the same flat JSON.
+			execRepo := &mockRuleExecutionRepository{}
+			suggestionRepo := &mockTransferSuggestionRepository{}
+			ruleRepo := &mockAutomationRulesRepository{}
+			svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+			if tc.setupSvc != nil {
+				tc.setupSvc(svc)
+			}
+
+			// Use both period-close keys so all amount-type branches (including legacy "threshold") have data.
+			_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{"remaining": 200.0, "amount": 200.0})
+			require.NoError(t, err, "flat action JSON must execute successfully (%s)", tc.name)
+			assert.Len(t, suggestionRepo.suggestions, tc.wantSuggestions,
+				"suggestion count for %s", tc.name)
+		})
+	}
+}
+
+// TestExecuteRule_PartialFieldAction_ReturnsError proves that ExecuteRule validates the rule
+// before dispatching, so a partial/malformed action is rejected before creating side-effects.
+// Issue #972: GAP Y defense-in-depth.
+// RED: fails today (executors gate only one field; partial actions proceed past single-field guard).
+// GREEN: add rule.Validate() at top of ExecuteRule.
+func TestExecuteRule_PartialFieldAction_ReturnsError(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-partial-test"
+
+	tests := []struct {
+		name            string
+		ruleType        domain.RuleType
+		actions         interface{} // intentionally incomplete
+		wantErrContains string
+	}{
+		{
+			name:     "transfer missing to_account_id",
+			ruleType: domain.RuleTypeTransferSuggestion,
+			actions: domain.TransferAction{
+				FromAccountID: "acct-1",
+				// ToAccountID intentionally absent
+				AmountType: "fixed",
+				Amount:     50.0,
+			},
+			wantErrContains: "to_account_id",
+		},
+		{
+			name:     "savings_goal missing from_account_id",
+			ruleType: domain.RuleTypeSavingsGoal,
+			actions: domain.SavingsGoalAction{
+				SavingsGoalID: "goal-1",
+				// FromAccountID intentionally absent
+				AmountType: "fixed",
+				Amount:     50.0,
+			},
+			wantErrContains: "from_account_id",
+		},
+		{
+			name:     "budget_alert missing notification_channels",
+			ruleType: domain.RuleTypeBudgetAlert,
+			actions: domain.AlertAction{
+				// NotificationChannels intentionally absent
+				ThresholdType:  "percentage",
+				ThresholdValue: 80.0,
+			},
+			wantErrContains: "notification_channels",
+		},
+		{
+			name:     "category_rollover missing source_budget_category_id",
+			ruleType: domain.RuleTypeCategoryRollover,
+			actions: domain.RolloverAction{
+				// SourceBudgetCategoryID intentionally absent
+				RolloverType: "full",
+			},
+			wantErrContains: "source_budget_category_id",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			actionsJSON, _ := json.Marshal(tc.actions)
+			rule := &domain.AutomationRule{
+				ID:             "rule-partial-" + tc.name,
+				UserID:         userID,
+				Name:           "Partial Rule",
+				Enabled:        true,
+				RuleType:       tc.ruleType,
+				TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+				ConditionLogic: "AND",
+				Conditions:     []domain.AutomationRuleCondition{},
+				Actions:        actionsJSON,
+			}
+
+			execRepo := &mockRuleExecutionRepository{}
+			suggestionRepo := &mockTransferSuggestionRepository{}
+			ruleRepo := &mockAutomationRulesRepository{}
+			svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+			_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+			require.Error(t, err, "partial action must be rejected by ExecuteRule")
+			assert.Contains(t, err.Error(), tc.wantErrContains,
+				"error must mention the missing field for %s", tc.name)
+			// No suggestion should be created — the action was rejected before side-effects.
+			assert.Empty(t, suggestionRepo.suggestions,
+				"no suggestion must be created for partial action (%s)", tc.name)
+		})
+	}
+}
+
+// TestTransferExcess_ValidateAndExecute validates the 'excess' amount_type:
+// - domain.Validate() accepts amount=0 for excess rules
+// - executeTransferSuggestion computes amount = remaining - threshold
+// - No suggestion created when remaining <= threshold
+func TestTransferExcess_ValidateAndExecute(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-excess-test"
+
+	excessAction := domain.TransferAction{
+		FromAccountID: "checking-1",
+		ToAccountID:   "savings-1",
+		AmountType:    "excess",
+		Amount:        0,
+		Threshold:     50.0,
+	}
+	actionsJSON, err := json.Marshal(excessAction)
+	require.NoError(t, err)
+
+	makeRule := func() *domain.AutomationRule {
+		return &domain.AutomationRule{
+			ID:             "rule-excess-1",
+			UserID:         userID,
+			Name:           "Excess Savings",
+			Enabled:        true,
+			RuleType:       domain.RuleTypeTransferSuggestion,
+			TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+			ConditionLogic: "AND",
+			Conditions:     []domain.AutomationRuleCondition{},
+			Actions:        actionsJSON,
+		}
+	}
+
+	t.Run("domain.Validate accepts excess rule with amount=0 and threshold", func(t *testing.T) {
+		require.NoError(t, makeRule().Validate(),
+			"excess transfer rule (amount=0, threshold>0) must pass domain.Validate()")
+	})
+
+	t.Run("excess creates suggestion for remaining - threshold when remaining > threshold", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+		svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+		triggerData := map[string]interface{}{
+			domain.EventDataKeyRemaining: 200.0, // remaining=200, threshold=50 → expect 150
+		}
+		_, err := svc.ExecuteRule(ctx, makeRule(), triggerData)
+		require.NoError(t, err, "excess rule must execute without error")
+		require.Len(t, suggestionRepo.suggestions, 1, "excess rule must create one suggestion")
+		assert.InDelta(t, 150.0, suggestionRepo.suggestions[0].Amount, 0.001,
+			"suggestion amount must be remaining(200) - threshold(50) = 150")
+	})
+
+	t.Run("excess creates no suggestion when remaining <= threshold", func(t *testing.T) {
+		execRepo := &mockRuleExecutionRepository{}
+		suggestionRepo := &mockTransferSuggestionRepository{}
+		ruleRepo := &mockAutomationRulesRepository{}
+		svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+		triggerData := map[string]interface{}{
+			domain.EventDataKeyRemaining: 30.0, // remaining=30, threshold=50 → no surplus
+		}
+		_, err := svc.ExecuteRule(ctx, makeRule(), triggerData)
+		// When amount≤0, executeTransferSuggestion should either not create a suggestion
+		// or return early. Either way, no suggestion is expected.
+		if err == nil {
+			assert.Empty(t, suggestionRepo.suggestions,
+				"excess rule with remaining<=threshold must not create a suggestion")
+		}
+	})
+}
+
+// ============================================================================
+// Issue #972 GAP AE — execution-time IDOR defense (savings_goal)
+// ============================================================================
+
+// TestExecuteSavingsGoal_RejectsMismatchedOwner verifies that executeSavingsGoal skips
+// (returns nil, creates no suggestion) when the referenced savings_goal_id belongs to a
+// different user than rule.UserID. Uses GetByIDForUser which scopes by user_id.
+func TestExecuteSavingsGoal_RejectsMismatchedOwner(t *testing.T) {
+	ctx := context.Background()
+
+	ownerUserID := "user-owner"
+	attackerUserID := "user-attacker"
+	goalID := "goal-owned-by-owner"
+
+	// Goal belongs to ownerUserID, not attackerUserID.
+	goalRepo := &mockSavingsGoalRepository{
+		goals: []*domain.SavingsGoal{
+			{
+				ID:        goalID,
+				UserID:    ownerUserID,
+				Name:      "Owner's Goal",
+				AccountID: "savings-acct-owner",
+			},
+		},
+	}
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+
+	svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	svc.SetSavingsGoalRepo(goalRepo)
+
+	actionsJSON, _ := json.Marshal(map[string]interface{}{
+		"savings_goal_id": goalID,
+		"from_account_id": "from-attacker-acct",
+		"amount_type":     "fixed",
+		"amount":          100.0,
+	})
+	rule := &domain.AutomationRule{
+		ID:      "attacker-rule-id",
+		UserID:  attackerUserID, // ← attacker's rule, references owner's goal
+		Name:    "attacker rule",
+		Enabled: true,
+		RuleType: domain.RuleTypeSavingsGoal,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Actions:        actionsJSON,
+		ConditionLogic: "AND",
+	}
+	triggerData := map[string]interface{}{
+		domain.EventDataKeyRemaining: 500.0,
+		domain.EventDataKeyAmount:    1000.0,
+	}
+
+	_, err := svc.ExecuteRule(ctx, rule, triggerData)
+	// The execution should NOT error (skip+log, not fail the batch), but must NOT create a suggestion.
+	require.NoError(t, err, "mismatched-owner savings_goal rule must be skipped (not error)")
+	assert.Empty(t, suggestionRepo.suggestions,
+		"no suggestion must be created for a savings_goal rule referencing another user's goal")
+}
+
+// ============================================================================
+// GAP AF — derived transfer types must return 0 when trigger key absent
+// ============================================================================
+
+// TestCalculateTransferAmount_PercentageUsesIncome verifies that the "percentage" amount_type
+// computes against period INCOME (EventDataKeyAmount), NOT the surplus/remaining.
+// This is the semantic-lock test for GAP AD: the UI label was updated from "percentage of
+// the balance" to "percentage of period income" to match this behavior. Reverting the executor
+// to read EventDataKeyRemaining instead of EventDataKeyAmount must make this test fail.
+//
+// Setup: income=$1000, remaining=$200, percentage=10% → expected $100 (10% of income).
+// If the executor incorrectly read "remaining": $200 × 10% = $20 ≠ $100.
+func TestCalculateTransferAmount_PercentageUsesIncome(t *testing.T) {
+	svc := &ruleExecutionService{}
+
+	action := domain.TransferAction{
+		FromAccountID: "from-a",
+		ToAccountID:   "to-a",
+		AmountType:    "percentage",
+		Amount:        10.0, // 10%
+	}
+
+	triggerData := map[string]interface{}{
+		domain.EventDataKeyAmount:    1000.0, // income (the base the percentage is applied to)
+		domain.EventDataKeyRemaining: 200.0,  // surplus — must NOT be used for percentage
+	}
+
+	result := svc.calculateTransferAmount(&action, triggerData)
+
+	assert.InDelta(t, 100.0, result, 0.001,
+		"percentage must be 10%% of INCOME ($1000), not of remaining ($200); got %v", result)
+}
+
+// TestCalculateSavingsGoalAmount_PercentageUsesIncome verifies the same income-vs-surplus
+// semantic for the savings_goal calculator (both calculators must agree on the base).
+func TestCalculateSavingsGoalAmount_PercentageUsesIncome(t *testing.T) {
+	svc := &ruleExecutionService{}
+
+	pct := float64(10)
+	action := domain.SavingsGoalAction{
+		SavingsGoalID: "goal-1",
+		FromAccountID: "from-a",
+		AmountType:    "percentage",
+		Percentage:    &pct, // 10%
+	}
+
+	triggerData := map[string]interface{}{
+		domain.EventDataKeyAmount:    1000.0, // income (the base)
+		domain.EventDataKeyRemaining: 200.0,  // surplus — must NOT be used for percentage
+	}
+
+	got := svc.calculateSavingsGoalAmount(&action, triggerData)
+	assert.InDelta(t, 100.0, got, 0.001,
+		"savings_goal percentage must be 10%% of INCOME ($1000), not of remaining ($200); got %v", got)
+}
+
+// ============================================================================
+// GAP AE — chain-resolver IDOR: execution-time ownership guard
+// ============================================================================
+
+// stubChainResolver is an inline AccountChainResolver that returns a fixed resolved ID.
+type stubChainResolver struct {
+	resolvedID string
+	resolveErr error
+}
+
+func (s *stubChainResolver) ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error) {
+	return nil, nil
+}
+func (s *stubChainResolver) ResolveActiveID(_ context.Context, _ string) (string, error) {
+	return s.resolvedID, s.resolveErr
+}
+func (s *stubChainResolver) ChainAccountIDs(_ context.Context, _ string) ([]string, error) {
+	return nil, nil
+}
+
+// TestExecuteTransferSuggestion_ChainResolverIDOR verifies that executeTransferSuggestion
+// skips (returns nil, no suggestion) when the chain resolver resolves a from_user_account_id
+// to an account that belongs to a DIFFERENT user than rule.UserID.
+//
+// Attack scenario: attacker creates a rule with their own from_account_id (passes the
+// GetByIDAndUser ownership check) plus a victim's from_user_account_id. At execution time,
+// the unscoped ResolveActiveID returns the victim's current account.id. Without this guard
+// the suggestion would be created with the victim's account in FromAccountID (information
+// leakage / IDOR). With the guard, the executor detects the ownership mismatch and skips.
+func TestExecuteTransferSuggestion_ChainResolverIDOR(t *testing.T) {
+	ctx := context.Background()
+
+	attackerUserID := "user-attacker"
+	victimAccountID := "victim-active-account-id" // what the unscoped resolver returns
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+	acctRepo := &MockAccountRepository{}
+
+	// The standard from_account_id and to_account_id both belong to the attacker.
+	acctRepo.On("GetByIDAndUser", mock.Anything, "from-attacker", attackerUserID).
+		Return(&domain.Account{ID: "from-attacker"}, nil)
+	acctRepo.On("GetByIDAndUser", mock.Anything, "to-attacker", attackerUserID).
+		Return(&domain.Account{ID: "to-attacker"}, nil)
+	// The chain-resolved victim's account does NOT belong to the attacker.
+	acctRepo.On("GetByIDAndUser", mock.Anything, victimAccountID, attackerUserID).
+		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
+
+	svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	svc.SetAccountRepo(acctRepo)
+	// Chain resolver returns the victim's account ID when asked to resolve the from_user_account_id.
+	svc.SetChainResolver(&stubChainResolver{resolvedID: victimAccountID})
+
+	actionsJSON, _ := json.Marshal(map[string]interface{}{
+		"from_account_id":      "from-attacker",
+		"to_account_id":        "to-attacker",
+		"from_user_account_id": "ua-victim-stable-ref", // victim's stable user_account_id
+		"amount_type":          "fixed",
+		"amount":               100.0,
+	})
+	rule := &domain.AutomationRule{
+		ID:       "attacker-rule",
+		UserID:   attackerUserID,
+		Name:     "chain resolver idor rule",
+		Enabled:  true,
+		RuleType: domain.RuleTypeTransferSuggestion,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Actions:        actionsJSON,
+		ConditionLogic: "AND",
+	}
+	triggerData := map[string]interface{}{
+		domain.EventDataKeyRemaining: 500.0,
+		domain.EventDataKeyAmount:    1000.0,
+	}
+
+	_, err := svc.ExecuteRule(ctx, rule, triggerData)
+	require.NoError(t, err,
+		"chain-resolver IDOR must cause a skip (nil return), not an error that fails the batch")
+	assert.Empty(t, suggestionRepo.suggestions,
+		"no suggestion must be created when the chain-resolved account belongs to a different user")
+}
+
+// TestCalculateTransferAmount_DerivedTypesReturnZeroOnMissingKey verifies that transfer
+// amount_types that derive their value from EventData ("remaining", "excess", "threshold")
+// return 0 — NOT the literal action.Amount — when the required EventData key is absent
+// (e.g. schedule triggers, or a future emitter that omits the key).
+//
+// Background: calculateTransferAmount's final `return action.Amount` is intended only for
+// the "fixed" case (and unknown types). Derived types MUST return 0 when their key is
+// missing to avoid creating phantom suggestions with whatever default amount was set in the
+// RuleBuilder (typically $100). GAP AF: before this fix, "excess"/"remaining"/"threshold"
+// cases fell through to `return action.Amount` when the key was absent.
+func TestCalculateTransferAmount_DerivedTypesReturnZeroOnMissingKey(t *testing.T) {
+	svc := &ruleExecutionService{}
+
+	// action.Amount is intentionally set to a non-zero value (the RuleBuilder default)
+	// to prove the derived cases do NOT fall back to it.
+	baseAction := domain.TransferAction{
+		FromAccountID: "from-a",
+		ToAccountID:   "to-a",
+		Amount:        100.0, // RuleBuilder default — must NOT be used for derived types
+		Threshold:     50.0,
+	}
+
+	t.Run("remaining returns 0 when EventDataKeyRemaining absent", func(t *testing.T) {
+		action := baseAction
+		action.AmountType = "remaining"
+		result := svc.calculateTransferAmount(&action, map[string]interface{}{
+			// EventDataKeyRemaining intentionally omitted (e.g. schedule trigger)
+			domain.EventDataKeyAmount: 1000.0,
+		})
+		assert.Equal(t, 0.0, result,
+			"remaining must return 0 when the 'remaining' key is absent, not fall back to action.Amount")
+	})
+
+	t.Run("excess returns 0 when EventDataKeyRemaining absent", func(t *testing.T) {
+		action := baseAction
+		action.AmountType = "excess"
+		result := svc.calculateTransferAmount(&action, map[string]interface{}{
+			// EventDataKeyRemaining intentionally omitted
+			domain.EventDataKeyAmount: 1000.0,
+		})
+		assert.Equal(t, 0.0, result,
+			"excess must return 0 when the 'remaining' key is absent, not fall back to action.Amount ($100)")
+	})
+
+	t.Run("threshold returns 0 when EventDataKeyAmount absent", func(t *testing.T) {
+		action := baseAction
+		action.AmountType = "threshold"
+		result := svc.calculateTransferAmount(&action, map[string]interface{}{
+			// EventDataKeyAmount intentionally omitted
+			domain.EventDataKeyRemaining: 200.0,
+		})
+		assert.Equal(t, 0.0, result,
+			"threshold must return 0 when the 'amount' key is absent, not fall back to action.Amount ($100)")
+	})
+
+	t.Run("threshold returns 0 when amount does not exceed threshold (no fallback)", func(t *testing.T) {
+		action := baseAction
+		action.AmountType = "threshold"
+		result := svc.calculateTransferAmount(&action, map[string]interface{}{
+			domain.EventDataKeyAmount: 30.0, // Below threshold of 50 → no transfer
+		})
+		assert.Equal(t, 0.0, result,
+			"threshold must return 0 when amount<=threshold, not fall back to action.Amount")
+	})
+
+	// C12: percentage missing income key → 0 (not action.Amount fallback).
+	// When the budget income key is absent (e.g., schedule trigger or future emitter change),
+	// percentage must return 0 rather than computing a percentage of the stale action.Amount.
+	t.Run("percentage returns 0 when EventDataKeyAmount (income) absent", func(t *testing.T) {
+		action := baseAction
+		action.AmountType = "percentage"
+		action.Amount = 10.0 // 10% — but income key is missing
+		result := svc.calculateTransferAmount(&action, map[string]interface{}{
+			// EventDataKeyAmount (income) intentionally omitted; remaining present but unused
+			domain.EventDataKeyRemaining: 500.0,
+		})
+		assert.Equal(t, 0.0, result,
+			"percentage must return 0 when the income key is absent, not fall back to action.Amount ($10)")
+	})
+
+	t.Run("fixed still uses action.Amount (regression guard)", func(t *testing.T) {
+		action := baseAction
+		action.AmountType = "fixed"
+		result := svc.calculateTransferAmount(&action, map[string]interface{}{})
+		assert.Equal(t, 100.0, result, "fixed must return action.Amount regardless of EventData")
+	})
+}
+
+// TestResolveAndVerifyUserAccount_AccountRepoNilFailOpen documents the intentional
+// behavior: when accountRepo is nil (e.g. in unit tests that don't set SetAccountRepo),
+// resolveAndVerifyUserAccount applies the resolved ID WITHOUT a DB ownership check and
+// logs a warning. This is safe because production always wires accountRepo (main.go:~1324)
+// and the service-layer create/update validation already runs ownership checks.
+//
+// The test prevents future over-hardening (panicking or returning an error when nil)
+// while documenting why the fail-open is intentional. Issue #972 GAP AE + C12.
+func TestResolveAndVerifyUserAccount_AccountRepoNilFailOpen(t *testing.T) {
+	ctx := context.Background()
+
+	// Build a stub chain resolver that returns a valid resolution.
+	stubResolver := &stubChainResolver{resolvedID: "user-account-new"}
+
+	// No accountRepo injected (nil) — simulates a unit test or mis-configured service.
+	svc := &ruleExecutionService{
+		chainResolver: stubResolver,
+		accountRepo:   nil, // intentionally nil — fail-open case
+	}
+
+	var resolvedID string
+	skip, err := svc.resolveAndVerifyUserAccount(ctx, "user-account-old", "user-1", "rule-c12",
+		func(id string) { resolvedID = id },
+		"from_user_account_id",
+	)
+
+	// Must NOT skip the rule or return an error — it should apply the resolved ID.
+	require.NoError(t, err, "nil accountRepo must not cause an error")
+	assert.False(t, skip, "nil accountRepo must not skip the rule (fail-open)")
+	assert.Equal(t, "user-account-new", resolvedID,
+		"nil accountRepo must still apply the resolved ID (fail-open; ownership check skipped)")
 }

@@ -35,6 +35,9 @@ type PrivacySettings struct {
 	// Data sharing preference (share anonymized data for research/improvement)
 	DataSharingEnabled bool `json:"data_sharing_enabled" db:"data_sharing_enabled"`
 
+	// Aggregate stats preference (include anonymized data in aggregate statistics)
+	IncludeInAggregateStats bool `json:"include_in_aggregate_stats" db:"include_in_aggregate_stats"`
+
 	// Timestamps
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
@@ -49,10 +52,11 @@ type UpdatePrivacySettingsRequest struct {
 	GDPRNecessaryConsent   *bool `json:"gdpr_necessary_consent,omitempty"`
 	GDPRAnalyticsConsent   *bool `json:"gdpr_analytics_consent,omitempty"`
 	GDPRAdvertisingConsent *bool `json:"gdpr_advertising_consent,omitempty"`
-	MarketingEmailsEnabled *bool `json:"marketing_emails_enabled,omitempty"`
-	ProductUpdatesEnabled  *bool `json:"product_updates_enabled,omitempty"`
-	SecurityAlertsEnabled  *bool `json:"security_alerts_enabled,omitempty"`
-	DataSharingEnabled     *bool `json:"data_sharing_enabled,omitempty"`
+	MarketingEmailsEnabled  *bool `json:"marketing_emails_enabled,omitempty"`
+	ProductUpdatesEnabled   *bool `json:"product_updates_enabled,omitempty"`
+	SecurityAlertsEnabled   *bool `json:"security_alerts_enabled,omitempty"`
+	DataSharingEnabled      *bool `json:"data_sharing_enabled,omitempty"`
+	IncludeInAggregateStats *bool `json:"include_in_aggregate_stats,omitempty"`
 }
 
 // NewPrivacySettings creates a new PrivacySettings object with GDPR-compliant defaults
@@ -73,6 +77,8 @@ func NewPrivacySettings(userID string) *PrivacySettings {
 		SecurityAlertsEnabled:  true,
 		// Data sharing opt-in
 		DataSharingEnabled: false,
+		// Aggregate stats: opt-out model (included by default)
+		IncludeInAggregateStats: true,
 		// Timestamps
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -113,6 +119,9 @@ func (req *UpdatePrivacySettingsRequest) ApplyTo(settings *PrivacySettings) {
 	}
 	if req.DataSharingEnabled != nil {
 		settings.DataSharingEnabled = *req.DataSharingEnabled
+	}
+	if req.IncludeInAggregateStats != nil {
+		settings.IncludeInAggregateStats = *req.IncludeInAggregateStats
 	}
 
 	// Update timestamps

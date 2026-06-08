@@ -319,5 +319,14 @@ describe('Widget Registry', () => {
         expect(widget.x + widget.w).toBeLessThanOrEqual(12)
       })
     })
+
+    // Issue #972: GAP AZ / AC#9 — savings-impact widget is available in the catalog but
+    // must NOT appear in the default layout (available-but-opt-in locked decision).
+    // A user must explicitly add it from the widget catalog. Do not add it here without
+    // bumping the layout version and confirming with the product decision.
+    it('savings-impact widget is absent from DEFAULT_LAYOUT (available-but-opt-in)', () => {
+      const types = DEFAULT_LAYOUT.widgets.map((w) => w.type)
+      expect(types).not.toContain('savings-impact')
+    })
   })
 })

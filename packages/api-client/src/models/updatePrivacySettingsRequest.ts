@@ -35,6 +35,7 @@ export interface UpdatePrivacySettingsRequest {
   gdpr_advertising_consent?: boolean;
   gdpr_analytics_consent?: boolean;
   gdpr_necessary_consent?: boolean;
+  include_in_aggregate_stats?: boolean;
   marketing_emails_enabled?: boolean;
   product_updates_enabled?: boolean;
   security_alerts_enabled?: boolean;

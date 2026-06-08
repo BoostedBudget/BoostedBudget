@@ -41,6 +41,50 @@ type TransferSuggestionRepository interface {
 
 	// GetByRuleID retrieves suggestions created by a specific rule.
 	GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.TransferSuggestion, error)
+
+	// Complete marks a suggestion as completed after a transfer was detected or confirmed.
+	// matchedTransactionID is nil for user-confirmed completions (no specific transaction ID).
+	// Race-safe: only operates on pending or accepted suggestions.
+	Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error
+
+	// CompleteRetainingReservation completes a suggestion without touching matched_transaction_id.
+	// The DB retains whatever matched_transaction_id currently holds (T if still reserved, NULL if
+	// stale-cleared). Avoids the race where a stale-read id overwrites a reclaimed reservation.
+	// Race-safe: only operates on pending or accepted suggestions.
+	//
+	// GAP AR: expectedTxnID is the matched_transaction_id the service observed at read time.
+	// The WHERE clause includes AND matched_transaction_id IS NOT DISTINCT FROM $expectedTxnID,
+	// so if the reservation was reclaimed between read and write the update matches 0 rows →
+	// ErrTransferSuggestionAlreadyActioned. Pass nil when the service observed no reservation.
+	CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time, expectedTxnID *string) error
+
+	// GetActiveByUserID retrieves all active (pending + accepted) suggestions for a user.
+	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error)
+
+	// ReserveMatchedTransaction sets matched_transaction_id = txnID for a pending/accepted
+	// suggestion whose reservation slot is still empty. The partial unique index
+	// (matched_transaction_id WHERE NOT NULL) prevents the same inflow from being
+	// reserved by two suggestions simultaneously. Returns a 23505 unique_violation if txnID
+	// is already claimed by another suggestion.
+	ReserveMatchedTransaction(ctx context.Context, id string, txnID string) error
+
+	// ClearMatchedTransactionID sets matched_transaction_id = NULL for a pending/accepted
+	// suggestion, releasing any reservation so the inflow can be matched by a different suggestion.
+	// Used for user-driven decline-match and as a rollback when a subsequent step fails.
+	//
+	// GAP AV: expectedTxnID is the matched_transaction_id the caller observed at read time.
+	// The WHERE clause includes AND matched_transaction_id IS NOT DISTINCT FROM $expectedTxnID,
+	// so a stale decline carrying T does not release a newer reservation T2 that was set between
+	// the caller's read and this write. Pass nil when the caller observed no reservation.
+	// 0 rows → classifyZeroRowUpdate → ErrTransferSuggestionAlreadyActioned or ErrNotFound.
+	ClearMatchedTransactionID(ctx context.Context, id string, expectedTxnID *string) error
+
+	// ClearStaleReservations releases pending/accepted suggestions whose reservation
+	// has expired (expires_at < now) by setting matched_transaction_id = NULL.
+	// This prevents an inflow from being permanently pinned by an un-confirmed prompt.
+	// Only reservations are cleared; suggestion status is not changed (accepted stays accepted).
+	// Returns the number of rows updated.
+	ClearStaleReservations(ctx context.Context) (int64, error)
 }
 
 // transferSuggestionRepository implements TransferSuggestionRepository using PostgreSQL.
@@ -115,7 +159,8 @@ func (r *transferSuggestionRepository) GetByID(ctx context.Context, id string) (
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
 			amount, currency_code,
 			reason, source, status, expires_at,
-			user_action_at, user_notes, created_at, updated_at
+			user_action_at, user_notes, created_at, updated_at,
+			completed_at, matched_transaction_id, actual_amount, completion_source
 		FROM transfer_suggestions
 		WHERE id = $1
 	`
@@ -130,7 +175,8 @@ func (r *transferSuggestionRepository) GetByUserID(ctx context.Context, userID s
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
 			amount, currency_code,
 			reason, source, status, expires_at,
-			user_action_at, user_notes, created_at, updated_at
+			user_action_at, user_notes, created_at, updated_at,
+			completed_at, matched_transaction_id, actual_amount, completion_source
 		FROM transfer_suggestions
 	`
 
@@ -163,7 +209,8 @@ func (r *transferSuggestionRepository) GetPendingByUserID(ctx context.Context, u
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
 			amount, currency_code,
 			reason, source, status, expires_at,
-			user_action_at, user_notes, created_at, updated_at
+			user_action_at, user_notes, created_at, updated_at,
+			completed_at, matched_transaction_id, actual_amount, completion_source
 		FROM transfer_suggestions
 		WHERE user_id = $1 AND status = 'pending'
 		ORDER BY created_at DESC
@@ -173,14 +220,18 @@ func (r *transferSuggestionRepository) GetPendingByUserID(ctx context.Context, u
 }
 
 // UpdateStatus updates the status of a pending suggestion.
-// The AND status = 'pending' guard prevents concurrent accept+reject race conditions.
-// If no rows are affected, it distinguishes between "not found" and "already actioned".
+// Clears matched_transaction_id when transitioning to 'rejected'.
+// Race-safe: AND status = 'pending' guard prevents concurrent accept+reject.
 func (r *transferSuggestionRepository) UpdateStatus(ctx context.Context, id string, status domain.SuggestionStatus, userNotes *string) error {
 	now := time.Now()
 
 	query := `
 		UPDATE transfer_suggestions
-		SET status = $1, user_action_at = $2, user_notes = $3, updated_at = $4
+		SET status = $1,
+		    user_action_at = $2,
+		    user_notes = $3,
+		    updated_at = $4,
+		    matched_transaction_id = CASE WHEN $1::text = 'rejected' THEN NULL ELSE matched_transaction_id END
 		WHERE id = $5 AND status = 'pending'
 	`
 
@@ -269,7 +320,8 @@ func (r *transferSuggestionRepository) GetByRuleID(ctx context.Context, ruleID s
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
 			amount, currency_code,
 			reason, source, status, expires_at,
-			user_action_at, user_notes, created_at, updated_at
+			user_action_at, user_notes, created_at, updated_at,
+			completed_at, matched_transaction_id, actual_amount, completion_source
 		FROM transfer_suggestions
 		WHERE rule_id = $1
 		ORDER BY created_at DESC
@@ -277,6 +329,232 @@ func (r *transferSuggestionRepository) GetByRuleID(ctx context.Context, ruleID s
 	`
 
 	return r.querySuggestions(ctx, query, ruleID, limit, offset)
+}
+
+// Complete marks a suggestion as completed. Race-safe: AND status IN ('pending','accepted').
+func (r *transferSuggestionRepository) Complete(ctx context.Context, id string, matchedTransactionID *string, actualAmount float64, completionSource string, completedAt time.Time) error {
+	now := time.Now()
+
+	query := `
+		UPDATE transfer_suggestions
+		SET status = 'completed',
+		    completed_at = $2,
+		    matched_transaction_id = $3,
+		    actual_amount = $4,
+		    completion_source = $5,
+		    updated_at = $6
+		WHERE id = $1 AND status IN ('pending', 'accepted')
+	`
+
+	ct, err := r.db.Exec(ctx, query, id, completedAt, matchedTransactionID, actualAmount, completionSource, now)
+	if err != nil {
+		return err
+	}
+
+	if ct.RowsAffected() == 0 {
+		// Distinguish: does the row exist but was already actioned, or does it not exist?
+		_, getErr := r.GetByID(ctx, id)
+		if getErr != nil {
+			return domain.ErrTransferSuggestionNotFound
+		}
+		return domain.ErrTransferSuggestionAlreadyActioned
+	}
+
+	return nil
+}
+
+// classifyZeroRowUpdate distinguishes "not found" from "already actioned" when an
+// UPDATE matched 0 rows. Calls GetByID to check whether the suggestion exists at all:
+//   - If GetByID returns ErrTransferSuggestionNotFound → suggestion does not exist → propagate NotFound.
+//   - If GetByID returns any other error (transient DB error, context cancellation) → propagate that error.
+//   - If GetByID succeeds → suggestion exists but is in a terminal status → AlreadyActioned.
+//
+// This shared helper prevents the same GetByID+classify pattern from drifting across write methods.
+func (r *transferSuggestionRepository) classifyZeroRowUpdate(ctx context.Context, id string) error {
+	_, getErr := r.GetByID(ctx, id)
+	if getErr != nil {
+		if errors.Is(getErr, domain.ErrTransferSuggestionNotFound) {
+			return domain.ErrTransferSuggestionNotFound
+		}
+		// Transient DB error or context cancellation — propagate as-is so callers
+		// can distinguish a real DB failure from a not-found or already-actioned state.
+		return getErr
+	}
+	return domain.ErrTransferSuggestionAlreadyActioned
+}
+
+// CompleteRetainingReservation marks a suggestion as completed without updating matched_transaction_id.
+// The DB retains whatever matched_transaction_id currently holds (T if still reserved, NULL if
+// stale-cleared after ClearStaleReservations). Avoids the race where a stale-read id overwrites
+// a reclaimed reservation (GAP AK).
+//
+// GAP AR: expectedTxnID is the matched_transaction_id the caller observed at read time. The WHERE
+// clause AND matched_transaction_id IS NOT DISTINCT FROM $6 ensures the update is a no-op (0 rows)
+// if the reservation was reclaimed between read and write, returning ErrTransferSuggestionAlreadyActioned
+// and preventing a stale confirm from completing a suggestion whose inflow was re-claimed by another
+// suggestion. Pass nil when the caller observed no reservation.
+func (r *transferSuggestionRepository) CompleteRetainingReservation(ctx context.Context, id string, actualAmount float64, completionSource string, completedAt time.Time, expectedTxnID *string) error {
+	now := time.Now()
+
+	query := `
+		UPDATE transfer_suggestions
+		SET status = 'completed',
+		    completed_at = $2,
+		    actual_amount = $3,
+		    completion_source = $4,
+		    updated_at = $5
+		WHERE id = $1
+		  AND status IN ('pending', 'accepted')
+		  AND matched_transaction_id IS NOT DISTINCT FROM $6
+	`
+
+	ct, err := r.db.Exec(ctx, query, id, completedAt, actualAmount, completionSource, now, expectedTxnID)
+	if err != nil {
+		return err
+	}
+
+	if ct.RowsAffected() == 0 {
+		return r.classifyZeroRowUpdate(ctx, id)
+	}
+
+	return nil
+}
+
+// ReserveMatchedTransaction sets matched_transaction_id = txnID for a pending/accepted
+// suggestion whose reservation slot is still empty. The partial unique index on
+// matched_transaction_id WHERE NOT NULL prevents double-claiming the same inflow.
+// Returns ErrTransferSuggestionAlreadyActioned if the suggestion is already reserved,
+// already actioned (terminal status), or does not exist — all zero-row cases.
+func (r *transferSuggestionRepository) ReserveMatchedTransaction(ctx context.Context, id string, txnID string) error {
+	now := time.Now()
+
+	query := `
+		UPDATE transfer_suggestions
+		SET matched_transaction_id = $2, updated_at = $3
+		WHERE id = $1 AND status IN ('pending', 'accepted') AND matched_transaction_id IS NULL
+	`
+
+	ct, err := r.db.Exec(ctx, query, id, txnID, now)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		// Suggestion is already reserved, already actioned, or does not exist.
+		return domain.ErrTransferSuggestionAlreadyActioned
+	}
+	return nil
+}
+
+// ClearMatchedTransactionID sets matched_transaction_id = NULL for a pending/accepted
+// suggestion, releasing any reservation so the inflow can be matched elsewhere.
+// A no-op on terminal rows (completed/rejected/expired) — those statuses are immutable
+// and their matched_transaction_id must not be disturbed by a concurrent rollback or decline.
+//
+// GAP AV: expectedTxnID is the matched_transaction_id the caller observed at read time.
+// The WHERE clause includes AND matched_transaction_id IS NOT DISTINCT FROM $expectedTxnID,
+// so a stale decline carrying T does not release a newer reservation T2 set between the
+// caller's read and this write (mirrors GAP AR on CompleteRetainingReservation).
+// 0 rows → classifyZeroRowUpdate → ErrTransferSuggestionAlreadyActioned or ErrNotFound.
+func (r *transferSuggestionRepository) ClearMatchedTransactionID(ctx context.Context, id string, expectedTxnID *string) error {
+	now := time.Now()
+
+	query := `
+		UPDATE transfer_suggestions
+		SET matched_transaction_id = NULL, updated_at = $2
+		WHERE id = $1
+		  AND status IN ('pending', 'accepted')
+		  AND matched_transaction_id IS NOT DISTINCT FROM $3
+	`
+
+	// GAP AQ: capture the command tag and check RowsAffected so a 0-row update (terminal
+	// status race or GAP AV reservation mismatch) surfaces the appropriate error instead of
+	// silent success.
+	ct, err := r.db.Exec(ctx, query, id, now, expectedTxnID)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return r.classifyZeroRowUpdate(ctx, id)
+	}
+	return nil
+}
+
+// ClearStaleReservations releases pending/accepted suggestions whose expires_at has
+// passed by setting matched_transaction_id = NULL. Suggestion status is unchanged
+// (accepted stays accepted). Returns the number of suggestions whose reservations
+// were cleared.
+//
+// GAP BA: the CTE also marks any associated open transfer_suggestion_match
+// notifications as read. Without this, the type-scoped open-notification guard in
+// CorrelateForUser would suppress future re-prompting, permanently stranding the
+// accepted suggestion (AU 409s the stale prompt; correlation sees the open notif
+// and skips). Touching the notifications table here is intentional — reservation
+// release and prompt close are an atomic pair; splitting them risks stranding.
+func (r *transferSuggestionRepository) ClearStaleReservations(ctx context.Context) (int64, error) {
+	now := time.Now()
+
+	// Use a CTE to atomically:
+	//   1. Clear stale reservations on the suggestion rows (matched_transaction_id IS NOT NULL).
+	//   2. Mark open fuzzy-match notifications as read for ALL expired active suggestions —
+	//      not just those whose reservation was cleared in step 1.
+	// The broader notification close (step 2) handles the reserve→notify race: if correlation
+	// reserves an about-to-expire suggestion and then this CTE runs before the notification is
+	// inserted, the notification would be created after the CTE and left open. By closing
+	// notifications for ALL expired active suggestions (regardless of current reservation state),
+	// subsequent daily runs catch any leftover open prompts from previous cycles.
+	// The final SELECT returns the count of freed reservations (step 1 only).
+	//
+	// NOTE: the notification type literal 'transfer_suggestion_match' matches
+	// domain.NotificationTypeTransferSuggestionMatch. If that constant changes,
+	// this SQL literal must be updated in tandem.
+	query := `
+		WITH cleared AS (
+			UPDATE transfer_suggestions
+			SET matched_transaction_id = NULL, updated_at = $1
+			WHERE matched_transaction_id IS NOT NULL
+			  AND status IN ('pending', 'accepted')
+			  AND expires_at IS NOT NULL
+			  AND expires_at < $1
+			RETURNING id
+		),
+		notif_closed AS (
+			UPDATE notifications
+			SET read = true, updated_at = $1
+			WHERE transfer_suggestion_id IN (
+				SELECT id FROM transfer_suggestions
+				WHERE status IN ('pending', 'accepted')
+				  AND expires_at IS NOT NULL
+				  AND expires_at < $1
+			)
+			  AND type = 'transfer_suggestion_match'
+			  AND read = false
+		)
+		SELECT COUNT(*) FROM cleared
+	`
+
+	var count int64
+	if err := r.db.QueryRow(ctx, query, now).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// GetActiveByUserID retrieves all active (pending + accepted) suggestions for a user,
+// ordered by creation date ascending.
+func (r *transferSuggestionRepository) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error) {
+	query := `
+		SELECT id, user_id, rule_id, rule_execution_id,
+			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
+			amount, currency_code,
+			reason, source, status, expires_at,
+			user_action_at, user_notes, created_at, updated_at,
+			completed_at, matched_transaction_id, actual_amount, completion_source
+		FROM transfer_suggestions
+		WHERE user_id = $1 AND status IN ('pending', 'accepted')
+		ORDER BY created_at ASC
+	`
+
+	return r.querySuggestions(ctx, query, userID)
 }
 
 // scanSuggestion scans a single suggestion from a row.
@@ -302,6 +580,10 @@ func (r *transferSuggestionRepository) scanSuggestion(row pgx.Row) (*domain.Tran
 		&suggestion.UserNotes,
 		&suggestion.CreatedAt,
 		&suggestion.UpdatedAt,
+		&suggestion.CompletedAt,
+		&suggestion.MatchedTransactionID,
+		&suggestion.ActualAmount,
+		&suggestion.CompletionSource,
 	)
 
 	if err != nil {
@@ -345,6 +627,10 @@ func (r *transferSuggestionRepository) querySuggestions(ctx context.Context, que
 			&suggestion.UserNotes,
 			&suggestion.CreatedAt,
 			&suggestion.UpdatedAt,
+			&suggestion.CompletedAt,
+			&suggestion.MatchedTransactionID,
+			&suggestion.ActualAmount,
+			&suggestion.CompletionSource,
 		)
 		if err != nil {
 			return nil, err

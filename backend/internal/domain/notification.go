@@ -5,6 +5,15 @@ import (
 	"time"
 )
 
+// Notification type constants. Keep in sync with validTypes in Validate() below.
+// The frontend renders different UI for each type — particularly:
+//   - NotificationTypeTransferSuggestion: generic transfer-suggestion prompt (accept/reject)
+//   - NotificationTypeTransferSuggestionMatch: fuzzy-match prompt with amount-confirm UI
+const (
+	NotificationTypeTransferSuggestion      = "transfer_suggestion"
+	NotificationTypeTransferSuggestionMatch = "transfer_suggestion_match"
+)
+
 // Notification represents a user notification for item errors, authentication requirements, and other events.
 // Supports in-app notifications and email notifications (email via EmailService).
 // Issue #257: Item Error Handler
@@ -54,7 +63,8 @@ func (n *Notification) Validate() error {
 		"subscription_activated":  true,
 		"subscription_trialing":   true,
 		"transaction_past_due":    true,
-		"transfer_suggestion":     true,
+		"transfer_suggestion":       true,
+		"transfer_suggestion_match": true, // #972: fuzzy-match amount-confirm prompt
 	}
 	if !validTypes[n.Type] {
 		return errors.New("invalid notification type")

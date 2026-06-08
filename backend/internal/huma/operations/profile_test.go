@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -196,6 +197,52 @@ func TestProfileResponseJSON(t *testing.T) {
 	var errorResp map[string]interface{}
 	err := json.Unmarshal(resp.Body.Bytes(), &errorResp)
 	require.NoError(t, err, "Error response should be valid JSON")
+}
+
+// TestUpdateProfile_InvalidTimezone_Returns422 tests that an invalid timezone error returns HTTP 422.
+func TestUpdateProfile_InvalidTimezone_Returns422(t *testing.T) {
+	mockService := &mockProfileService{
+		updateErr: fmt.Errorf("%w: Not/A/Timezone", services.ErrInvalidTimezone),
+	}
+
+	handler := NewProfileHandler(mockService)
+
+	tz := "Not/A/Timezone"
+	input := &UpdateProfileInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body = domain.UpdateProfileRequest{
+		Timezone: &tz,
+	}
+
+	output, err := handler.UpdateProfile(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assertHTTPStatus(t, err, http.StatusUnprocessableEntity)
+}
+
+// TestUpdateProfile_InvalidTimezoneSource_Returns422 tests that an invalid timezone_source error returns HTTP 422.
+func TestUpdateProfile_InvalidTimezoneSource_Returns422(t *testing.T) {
+	mockService := &mockProfileService{
+		updateErr: fmt.Errorf("%w: bogus", services.ErrInvalidTimezoneSource),
+	}
+
+	handler := NewProfileHandler(mockService)
+
+	src := "bogus"
+	input := &UpdateProfileInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body = domain.UpdateProfileRequest{
+		TimezoneSource: &src,
+	}
+
+	output, err := handler.UpdateProfile(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assertHTTPStatus(t, err, http.StatusUnprocessableEntity)
 }
 
 // TestUpdateProfile_DuplicateEmail_Returns409 tests that a duplicate email error returns HTTP 409.

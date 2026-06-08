@@ -130,6 +130,9 @@ func MapError(err error) error {
 		return huma.Error409Conflict("Paddle webhook event already processed")
 	case errors.Is(err, repository.ErrAccountOwnedByAnotherUser):
 		return huma.Error409Conflict("This bank account is already linked by another user. Each physical account may only be connected to one BoostedBudget account at a time.")
+	// GAP AW: idempotency key reused for a different operation — RFC 7231 / Stripe semantics.
+	case errors.Is(err, repository.ErrIdempotencyKeyConflict):
+		return huma.Error409Conflict("This idempotency key was already used for a different operation. Use a new key to perform a different request.")
 
 	// ================================
 	// 403 Forbidden - Tier limits exceeded
