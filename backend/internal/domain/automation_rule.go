@@ -121,6 +121,7 @@ var validConditionFieldsByEvent = map[string]map[string]bool{
 		"budget_category.percent_used":     true,
 		"budget_category.spent_amount":     true,
 		"budget_category.remaining_amount": true,
+		"budget_category.allocated":        true, // Issue #1271 Item 5
 	},
 	EventBudgetPeriodEnd: {
 		"budget.percent_used":              true,
@@ -129,6 +130,7 @@ var validConditionFieldsByEvent = map[string]map[string]bool{
 		"budget_category.percent_used":     true,
 		"budget_category.spent_amount":     true,
 		"budget_category.remaining_amount": true,
+		"budget_category.allocated":        true, // Issue #1271 Item 5
 	},
 }
 

@@ -30,9 +30,10 @@ func (BudgetPeriodCloseCheckArgs) Kind() string { return "budget_period_close_ch
 type BudgetPeriodCheckRepository interface {
 	// GetAllActivePaginated returns all active budgets ordered by id ASC, paginated.
 	GetAllActivePaginated(ctx context.Context, limit int, offset int) ([]*domain.Budget, error)
-	// GetCategoriesByBudgetID returns all categories for a budget.
-	// Used to populate per-category EventData for budget_period_end rule evaluation (#1270).
-	GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
+	// GetCategoriesByBudgetIDs batch-loads categories for a page of budget IDs.
+	// Used to populate per-category EventData for budget_period_end rule evaluation.
+	// Issue #1271 Item 6: replaces per-budget GetCategoriesByBudgetID for efficiency.
+	GetCategoriesByBudgetIDs(ctx context.Context, budgetIDs []string) (map[string][]domain.BudgetCategory, error)
 }
 
 // UserTimezoneLookup provides batch timezone lookup for the period-close scanner.
@@ -197,9 +198,19 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 			}
 		}
 
+		// First pass: determine which budgets just closed and filter out any that
+		// already have a marker (idempotency check). Collect IDs for the marker-free
+		// set so we can batch-load their categories before committing any InsertMarker.
+		// Issue #1271 Item 6: batch category pre-load prevents per-budget round-trips.
+		type closedBudgetEntry struct {
+			budget      *domain.Budget
+			periodStart time.Time
+			periodEnd   time.Time
+		}
+		var needsEmit []closedBudgetEntry
+		var needsEmitIDs []string
 		for _, budget := range budgets {
 			totalProcessed++
-
 			loc := resolveLocation(budget.UserID, tzMap)
 			periodStart, periodEnd, closed := computeJustClosedPeriod(budget, now, loc)
 			if !closed {
@@ -231,6 +242,42 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 				continue
 			}
 
+			needsEmit = append(needsEmit, closedBudgetEntry{budget, periodStart, periodEnd})
+			needsEmitIDs = append(needsEmitIDs, budget.ID)
+		}
+
+		if len(needsEmit) == 0 {
+			if len(budgets) < budgetPeriodCheckPageSize {
+				break
+			}
+			offset += budgetPeriodCheckPageSize
+			continue
+		}
+
+		// Batch-load categories for all budgets that need a marker insert.
+		// On error, skip the entire set — no InsertMarker for anyone on this page —
+		// so no orphaned markers are created that would block next-day retry.
+		catsByID, catErr := w.budgetRepo.GetCategoriesByBudgetIDs(ctx, needsEmitIDs)
+		if catErr != nil {
+			w.logger.Warn("failed to batch-load categories for period-end page; skipping page",
+				"job_id", job.ID,
+				"offset", offset,
+				"budget_count", len(needsEmitIDs),
+				"error", catErr,
+			)
+			totalErrors++
+			if len(budgets) < budgetPeriodCheckPageSize {
+				break
+			}
+			offset += budgetPeriodCheckPageSize
+			continue
+		}
+
+		for _, entry := range needsEmit {
+			budget := entry.budget
+			periodStart := entry.periodStart
+			periodEnd := entry.periodEnd
+
 			// InsertMarker is the exactly-once guard. Inserting BEFORE enqueueing
 			// prevents duplicate jobs when two workers both see HasMarker=false and
 			// race here: the DB ON CONFLICT ensures only one insert wins (returns
@@ -261,33 +308,8 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 				continue
 			}
 
-			// Load categories for per-category condition evaluation (#1270).
-			// On error, delete the marker so the next daily run retries with fresh category
-			// data — category-scoped rule conditions must not permanently miss for the period.
-			cats, catErr := w.budgetRepo.GetCategoriesByBudgetID(ctx, budget.ID)
-			if catErr != nil {
-				w.logger.Warn("failed to load categories for period-end event data; deleting marker for retry",
-					"budget_id", budget.ID,
-					"user_id", budget.UserID,
-					"error", catErr,
-				)
-				// Delete the marker so the next daily run retries with categories present.
-				// If DeleteMarker also fails (dual DB failure), the marker stays and this
-				// period will not be retried — same pre-existing limitation as the
-				// enqueue-failure path below. Logged as Error to surface in monitoring.
-				if delErr := w.periodEventsRepo.DeleteMarker(ctx,
-					budget.UserID, budget.ID, periodStart, periodEnd, domain.EventBudgetPeriodEnd,
-				); delErr != nil {
-					w.logger.Error("failed to delete marker after category load failure; period may be permanently skipped",
-						"budget_id", budget.ID,
-						"user_id", budget.UserID,
-						"delete_error", delErr,
-					)
-				}
-				totalErrors++
-				continue
-			}
-			budget.Categories = cats
+			// Assign batch-loaded categories for per-category condition evaluation.
+			budget.Categories = catsByID[budget.ID]
 
 			evalArgs := RuleEvaluationArgs{
 				UserID:    budget.UserID,

@@ -847,7 +847,8 @@ func normalizeConditionField(field string) string {
 	case "remaining_amount":
 		return "remaining"
 	case "spent_amount":
-		return "total_spent"
+		// Issue #1271 Item 5: emitter key renamed from "total_spent" to "spent"
+		return "spent"
 	}
 	return suffix
 }
@@ -856,20 +857,52 @@ func normalizeConditionField(field string) string {
 //
 // For budget_category.* fields the value is read from the nested
 // data["categories"][condition.CategoryID][suffix] structure that category
-// emitters populate.  All other fields fall back to a flat lookup after
-// normalizing the field name via normalizeConditionField.
+// emitters populate. Handles both the typed map[string]map[string]float64
+// shape (from BuildCategoryEventData) and the map[string]interface{} shape
+// that arrives after a River JSON round-trip.
+// All other fields fall back to a flat lookup after normalizing the field name
+// via normalizeConditionField.
 // Issue #1270: GAP M — per-category condition evaluation.
+// Issue #1271 Items 5+6: dual-shape reader, budget-scope guard.
 func lookupFieldValue(condition domain.AutomationRuleCondition, data map[string]interface{}) (interface{}, bool) {
 	if strings.HasPrefix(condition.Field, "budget_category.") {
-		categoriesRaw, ok := data[domain.EventDataKeyCategories]
+		// Defense-in-depth budget scope check (primary guard is in ProcessEventTrigger).
+		if condition.BudgetID != "" {
+			if eventBudgetID, _ := data[domain.EventDataKeyBudgetID].(string); eventBudgetID != condition.BudgetID {
+				return nil, false
+			}
+		}
+		suffix := condition.Field[len("budget_category."):]
+		switch suffix {
+		case "remaining_amount":
+			suffix = "remaining"
+		case "spent_amount":
+			// Issue #1271 Item 5: emitter key renamed from "total_spent" to "spent"
+			suffix = "spent"
+		}
+		return lookupCategoryMetric(data[domain.EventDataKeyCategories], condition.CategoryID, suffix)
+	}
+	// Flat lookup with prefix stripping + suffix normalization.
+	normalizedField := normalizeConditionField(condition.Field)
+	val, ok := data[normalizedField]
+	return val, ok
+}
+
+// lookupCategoryMetric extracts a metric value from a categories map for a given category
+// and key suffix. Handles both the typed map[string]map[string]float64 shape emitted by
+// BuildCategoryEventData and the map[string]interface{} shape that arrives after a River
+// JSON round-trip (where numeric values become json.Number). Issue #1271 Item 6.
+func lookupCategoryMetric(categoriesRaw interface{}, categoryID, suffix string) (interface{}, bool) {
+	switch cats := categoriesRaw.(type) {
+	case map[string]map[string]float64:
+		catMap, ok := cats[categoryID]
 		if !ok {
 			return nil, false
 		}
-		categories, ok := categoriesRaw.(map[string]interface{})
-		if !ok {
-			return nil, false
-		}
-		catRaw, ok := categories[condition.CategoryID]
+		val, ok := catMap[suffix]
+		return val, ok
+	case map[string]interface{}:
+		catRaw, ok := cats[categoryID]
 		if !ok {
 			return nil, false
 		}
@@ -877,22 +910,11 @@ func lookupFieldValue(condition domain.AutomationRuleCondition, data map[string]
 		if !ok {
 			return nil, false
 		}
-		// Strip "budget_category." prefix then apply the same suffix aliases
-		// that normalizeConditionField uses.
-		suffix := condition.Field[len("budget_category."):]
-		switch suffix {
-		case "remaining_amount":
-			suffix = "remaining"
-		case "spent_amount":
-			suffix = "total_spent"
-		}
 		val, ok := catMap[suffix]
 		return val, ok
+	default:
+		return nil, false
 	}
-	// Flat lookup with prefix stripping + suffix normalization.
-	normalizedField := normalizeConditionField(condition.Field)
-	val, ok := data[normalizedField]
-	return val, ok
 }
 
 // evaluateCondition evaluates a single condition against the data.
@@ -960,6 +982,16 @@ func compareNumeric(fieldValue interface{}, conditionValue string, operator stri
 		fieldNum = float64(v)
 	case int64:
 		fieldNum = float64(v)
+	case json.Number:
+		// json.Number arrives after a River JSON round-trip where numbers are
+		// unmarshalled into interface{} (encoding/json uses json.Number when
+		// UseNumber() is configured, or when map[string]interface{} re-reads
+		// the EventData). Issue #1271 Item 6.
+		f, err := v.Float64()
+		if err != nil {
+			return false
+		}
+		fieldNum = f
 	case string:
 		var err error
 		fieldNum, err = strconv.ParseFloat(v, 64)
