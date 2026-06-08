@@ -150,11 +150,19 @@ func (s *automationRuleService) validateRuleReferenceOwnership(ctx context.Conte
 			if !strings.HasPrefix(condition.Field, "budget_category.") {
 				continue
 			}
-			if _, err := s.budgetRepo.GetCategoryByIDAndUser(ctx, condition.CategoryID, rule.UserID); err != nil {
+			cat, err := s.budgetRepo.GetCategoryByIDAndUser(ctx, condition.CategoryID, rule.UserID)
+			if err != nil {
 				if errors.Is(err, domain.ErrBudgetCategoryNotFound) {
 					return fmt.Errorf("%w: condition category_id does not belong to this user", domain.ErrRuleConditionForbidden)
 				}
 				return err
+			}
+			// Issue #1271 (A-CR4): verify the category belongs to the specified budget.
+			// cat.BudgetID is trusted (resolved via GetCategoryByIDAndUser JOIN on user_id).
+			// A mismatch means the caller named a real category but paired it with a different
+			// budget → invalid request (400), not a 403.
+			if condition.BudgetID != "" && cat.BudgetID != condition.BudgetID {
+				return fmt.Errorf("%w: condition category_id is not in the selected budget_id", domain.ErrInvalidRule)
 			}
 		}
 	}
