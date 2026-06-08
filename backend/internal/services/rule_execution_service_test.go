@@ -1863,6 +1863,107 @@ func TestTestRule_PFCConditionPopulatesDisplay(t *testing.T) {
 	assert.Equal(t, "Food And Drink", result.ConditionResults[0].ActualDisplay)
 }
 
+// TestTestRule_CategoryScopedActualPopulated verifies that TestRule sets Actual to the
+// category metric value from the nested categories map for budget_category.* conditions (A-CR9).
+func TestTestRule_CategoryScopedActualPopulated(t *testing.T) {
+	ctx := context.Background()
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	rule := &domain.AutomationRule{
+		ID:   "rule-cat-actual",
+		Name: "Category Actual Test",
+		Conditions: []domain.AutomationRuleCondition{
+			{
+				Field:      "budget_category.percent_used",
+				Operator:   domain.ConditionOperatorGte,
+				Value:      "50",
+				BudgetID:   "B1",
+				CategoryID: "C1",
+			},
+		},
+		ConditionLogic: "AND",
+		Actions:        json.RawMessage(`{}`),
+	}
+
+	t.Run("interface shape (River JSON round-trip)", func(t *testing.T) {
+		triggerData := map[string]interface{}{
+			"budget_id": "B1",
+			"categories": map[string]interface{}{
+				"C1": map[string]interface{}{"percent_used": 85.0},
+			},
+		}
+		result, err := service.TestRule(ctx, rule, triggerData)
+		require.NoError(t, err)
+		require.Len(t, result.ConditionResults, 1)
+		assert.Equal(t, float64(85), result.ConditionResults[0].Actual)
+		assert.True(t, result.ConditionResults[0].Met)
+	})
+
+	t.Run("typed map shape (in-process path)", func(t *testing.T) {
+		triggerData := map[string]interface{}{
+			"budget_id":  "B1",
+			"categories": map[string]map[string]float64{"C1": {"percent_used": 85.0}},
+		}
+		result, err := service.TestRule(ctx, rule, triggerData)
+		require.NoError(t, err)
+		require.Len(t, result.ConditionResults, 1)
+		assert.Equal(t, float64(85), result.ConditionResults[0].Actual)
+		assert.True(t, result.ConditionResults[0].Met)
+	})
+}
+
+// TestTestRule_CategoryActualNilForMissingCategory verifies that TestRule sets Actual=nil
+// when the category is absent from event data (A-CR9: missing/deleted category → nil).
+func TestTestRule_CategoryActualNilForMissingCategory(t *testing.T) {
+	ctx := context.Background()
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	rule := &domain.AutomationRule{
+		ID:   "rule-cat-nil",
+		Name: "Category Nil Test",
+		Conditions: []domain.AutomationRuleCondition{
+			{
+				Field:      "budget_category.percent_used",
+				Operator:   domain.ConditionOperatorGte,
+				Value:      "50",
+				BudgetID:   "B1",
+				CategoryID: "C1",
+			},
+		},
+		ConditionLogic: "AND",
+		Actions:        json.RawMessage(`{}`),
+	}
+
+	t.Run("empty categories map", func(t *testing.T) {
+		triggerData := map[string]interface{}{
+			"budget_id":  "B1",
+			"categories": map[string]interface{}{},
+		}
+		result, err := service.TestRule(ctx, rule, triggerData)
+		require.NoError(t, err)
+		require.Len(t, result.ConditionResults, 1)
+		assert.Nil(t, result.ConditionResults[0].Actual)
+		assert.False(t, result.ConditionResults[0].Met)
+	})
+
+	t.Run("categories key absent", func(t *testing.T) {
+		triggerData := map[string]interface{}{"budget_id": "B1"}
+		result, err := service.TestRule(ctx, rule, triggerData)
+		require.NoError(t, err)
+		require.Len(t, result.ConditionResults, 1)
+		assert.Nil(t, result.ConditionResults[0].Actual)
+		assert.False(t, result.ConditionResults[0].Met)
+	})
+}
+
 // TestRuleExecutionService_ExpiresAt verifies that suggestions created by
 // executeTransferSuggestion and executeSavingsGoal have ExpiresAt set ~30 days
 // in the future.
