@@ -426,6 +426,42 @@ func TestConditionEvaluation(t *testing.T) {
 		assert.False(t, evaluateCondition(condition, data))
 	})
 
+	t.Run("budget_category.remaining_amount suffix alias maps to 'remaining' key", func(t *testing.T) {
+		// lookupFieldValue aliases "remaining_amount" → "remaining" in the per-category map.
+		condition := domain.AutomationRuleCondition{
+			Field:      "budget_category.remaining_amount",
+			Operator:   domain.ConditionOperatorGte,
+			Value:      "0",
+			CategoryID: "cat-1",
+		}
+		data := map[string]interface{}{
+			"categories": map[string]interface{}{
+				"cat-1": map[string]interface{}{
+					"remaining": float64(50.0),
+				},
+			},
+		}
+		assert.True(t, evaluateCondition(condition, data))
+	})
+
+	t.Run("budget_category.spent_amount suffix alias maps to 'total_spent' key", func(t *testing.T) {
+		// lookupFieldValue aliases "spent_amount" → "total_spent" in the per-category map.
+		condition := domain.AutomationRuleCondition{
+			Field:      "budget_category.spent_amount",
+			Operator:   domain.ConditionOperatorGt,
+			Value:      "100",
+			CategoryID: "cat-1",
+		}
+		data := map[string]interface{}{
+			"categories": map[string]interface{}{
+				"cat-1": map[string]interface{}{
+					"total_spent": float64(120.0),
+				},
+			},
+		}
+		assert.True(t, evaluateCondition(condition, data))
+	})
+
 	t.Run("budget.percent_used (flat field) still reads budget-level value", func(t *testing.T) {
 		condition := domain.AutomationRuleCondition{
 			Field:    "budget.percent_used",
