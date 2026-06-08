@@ -166,7 +166,7 @@ func TestAutomationRuleService_CreateRule_CategoryOwnership(t *testing.T) {
 		}
 
 		svc := NewAutomationRuleService(ruleRepo)
-		svc.(*automationRuleService).SetBudgetRepo(budgetRepo)
+		svc.SetBudgetRepo(budgetRepo)
 
 		conditions := []domain.AutomationRuleCondition{
 			{
@@ -204,7 +204,7 @@ func TestAutomationRuleService_CreateRule_CategoryOwnership(t *testing.T) {
 		}
 
 		svc := NewAutomationRuleService(ruleRepo)
-		svc.(*automationRuleService).SetBudgetRepo(budgetRepo)
+		svc.SetBudgetRepo(budgetRepo)
 
 		conditions := []domain.AutomationRuleCondition{
 			{
@@ -239,7 +239,7 @@ func TestAutomationRuleService_CreateRule_CategoryOwnership(t *testing.T) {
 		}
 
 		svc := NewAutomationRuleService(ruleRepo)
-		svc.(*automationRuleService).SetBudgetRepo(budgetRepo)
+		svc.SetBudgetRepo(budgetRepo)
 
 		// Scheduled trigger — conditions not evaluated; no category_id present
 		req := &domain.CreateAutomationRuleRequest{
@@ -312,7 +312,7 @@ func TestAutomationRuleService_UpdateRule_CategoryOwnership(t *testing.T) {
 		}
 
 		svc := NewAutomationRuleService(ruleRepo)
-		svc.(*automationRuleService).SetBudgetRepo(budgetRepo)
+		svc.SetBudgetRepo(budgetRepo)
 
 		newConditions := []domain.AutomationRuleCondition{
 			{
@@ -342,7 +342,7 @@ func TestAutomationRuleService_UpdateRule_CategoryOwnership(t *testing.T) {
 		}
 
 		svc := NewAutomationRuleService(ruleRepo)
-		svc.(*automationRuleService).SetBudgetRepo(budgetRepo)
+		svc.SetBudgetRepo(budgetRepo)
 
 		newConditions := []domain.AutomationRuleCondition{
 			{
