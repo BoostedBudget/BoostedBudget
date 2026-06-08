@@ -105,8 +105,6 @@ describe('TriggerSelector', () => {
 
       const select = screen.getByRole('combobox')
       expect(select).toContainHTML('budget_updated')
-      expect(select).toContainHTML('transaction_created')
-      expect(select).toContainHTML('balance_changed')
       expect(select).toContainHTML('budget_period_end')
     })
   })

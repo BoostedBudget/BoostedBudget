@@ -406,6 +406,38 @@ describe('useRuleForm', () => {
 
       expect(request).toBeNull()
     })
+
+    it('should preserve budget_id and category_id in condition payload', () => {
+      const { result } = renderHook(() => useRuleForm())
+
+      act(() => {
+        result.current.setName('Budget Category Rule')
+        result.current.setRuleType('budget_alert')
+        result.current.addCondition({
+          field: 'budget_category.percent_used',
+          operator: 'gte',
+          value: 80,
+          budget_id: 'budget-1',
+          category_id: 'cat-1',
+        })
+        result.current.setActions({
+          notification_channels: ['in_app'],
+          threshold_type: 'percentage',
+          threshold_value: 80,
+        })
+      })
+
+      const request = result.current.buildApiRequest()
+
+      expect(request).not.toBeNull()
+      expect(request!.conditions).toHaveLength(1)
+      const condition = request!.conditions![0]
+      expect(condition).toMatchObject({
+        field: 'budget_category.percent_used',
+        budget_id: 'budget-1',
+        category_id: 'cat-1',
+      })
+    })
   })
 
   describe('reset', () => {

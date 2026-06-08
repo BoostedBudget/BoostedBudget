@@ -22,9 +22,12 @@ describe('ProfileForm', () => {
     clerk_user_id: 'user_123',
     email: 'test@example.com',
     email_verified: true,
+    had_trial: false,
     primary_region: 'iad',
     subscription_tier: 'free',
     subscription_status: 'active',
+    timezone: 'America/New_York',
+    timezone_source: 'user',
     is_active: true,
     is_deleted: false,
     created_at: '2025-01-01T00:00:00Z',
@@ -298,6 +301,69 @@ describe('ProfileForm', () => {
       await waitFor(() => {
         expect(emailInput).toHaveValue('final@example.com')
       })
+    })
+  })
+
+  describe('Timezone', () => {
+    it('renders timezone select with current user timezone', () => {
+      render(<ProfileForm user={mockUser} />)
+
+      const timezoneSelect = screen.getByLabelText(/timezone/i) as HTMLSelectElement
+      expect(timezoneSelect).toBeInTheDocument()
+      expect(timezoneSelect.value).toBe('America/New_York')
+    })
+
+    it('includes timezone and timezone_source=user in update when timezone changes', async () => {
+      configureMutateSuccess({ ...mockUser, timezone: 'America/Chicago', timezone_source: 'user' })
+
+      const user = userEvent.setup({ delay: null })
+      render(<ProfileForm user={mockUser} />)
+
+      const timezoneSelect = screen.getByLabelText(/timezone/i)
+      await user.selectOptions(timezoneSelect, 'America/Chicago')
+      await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+      await waitFor(() => {
+        expect(mockUpdateUserProfileMutate).toHaveBeenCalledWith(
+          { data: { timezone: 'America/Chicago', timezone_source: 'user' } },
+          expect.any(Object),
+        )
+      })
+    })
+
+    it('auto-captures browser timezone when timezone_source is default', async () => {
+      const originalIntl = globalThis.Intl
+      const mockResolvedOptions = () => ({ timeZone: 'America/Los_Angeles' } as Intl.ResolvedDateTimeFormatOptions)
+      globalThis.Intl = {
+        ...originalIntl,
+        DateTimeFormat: Object.assign(
+          () => ({ resolvedOptions: mockResolvedOptions }),
+          originalIntl.DateTimeFormat,
+          { supportedLocalesOf: originalIntl.DateTimeFormat.supportedLocalesOf },
+        ),
+      }
+
+      try {
+        const defaultUser: User = { ...mockUser, timezone: 'UTC', timezone_source: 'default' }
+        render(<ProfileForm user={defaultUser} />)
+
+        await waitFor(() => {
+          expect(mockUpdateUserProfileMutate).toHaveBeenCalledWith(
+            { data: { timezone: 'America/Los_Angeles', timezone_source: 'auto' } },
+            expect.any(Object),
+          )
+        })
+      } finally {
+        globalThis.Intl = originalIntl
+      }
+    })
+
+    it('does not auto-capture when timezone_source is user', () => {
+      const userSourceUser: User = { ...mockUser, timezone: 'America/New_York', timezone_source: 'user' }
+      render(<ProfileForm user={userSourceUser} />)
+
+      // No auto-capture mutation should fire on mount
+      expect(mockUpdateUserProfileMutate).not.toHaveBeenCalled()
     })
   })
 })

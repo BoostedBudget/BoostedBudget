@@ -69,6 +69,16 @@ func (m *MockBudgetSpentCalculator) CalculateCategorySpent(ctx context.Context, 
 	return args.Get(0).(float64), args.Error(1)
 }
 
+// MockEventTriggerProcessor is a mock implementation of EventTriggerProcessor
+type MockEventTriggerProcessor struct {
+	mock.Mock
+}
+
+func (m *MockEventTriggerProcessor) ProcessEventTrigger(ctx context.Context, userID, eventType string, eventData map[string]interface{}) error {
+	args := m.Called(ctx, userID, eventType, eventData)
+	return args.Error(0)
+}
+
 // Helper to create a test logger
 func testSyncServiceLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -544,6 +554,86 @@ func TestRecalculateBudgetAmounts_PartialFailure(t *testing.T) {
 	mockIncomeCalc.AssertExpectations(t)
 }
 
+// =============================================================================
+// Event Processor Wiring Tests (Issue #972)
+// =============================================================================
+
+// TestRecalculateBudget_TriggersEventProcessor tests that after SetEventProcessor is called,
+// RecalculateBudget fires ProcessEventTrigger with eventType="budget_updated".
+// This is the RED→GREEN test for the B1 event wiring fix.
+func TestRecalculateBudget_TriggersEventProcessor(t *testing.T) {
+	mockRepo := new(MockBudgetSyncRepository)
+	mockIncomeCalc := new(MockBudgetIncomeCalculator)
+	mockSpentCalc := new(MockBudgetSpentCalculator)
+	mockEventProc := new(MockEventTriggerProcessor)
+	logger := testSyncServiceLogger()
+
+	service := NewBudgetSyncService(mockRepo, mockIncomeCalc, mockSpentCalc, logger)
+	service.SetEventProcessor(mockEventProc)
+
+	ctx := context.Background()
+	budget := &domain.Budget{
+		ID:     "budget-999",
+		UserID: "user-999",
+		Period: domain.BudgetPeriodMonthly,
+	}
+
+	categories := []domain.BudgetCategory{
+		{ID: "cat-1", BudgetID: "budget-999", CategoryKind: "pfc", PFCPrimary: ptrStr("FOOD_AND_DRINK")},
+	}
+
+	mockIncomeCalc.On("CalculateBudgetIncome", ctx, budget, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(3000.0, nil)
+	mockRepo.On("UpdateBudgetIncome", ctx, "budget-999", 3000.0).Return(nil)
+	mockRepo.On("GetCategoriesByBudgetID", ctx, "budget-999").Return(categories, nil)
+	mockSpentCalc.On("CalculateCategorySpent", ctx, "user-999", &categories[0], mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(900.0, nil)
+	mockRepo.On("UpdateCategorySpentAmount", ctx, "cat-1", 900.0).Return(nil)
+
+	// Expect ProcessEventTrigger called with "budget_updated" (domain.EventBudgetUpdated)
+	mockEventProc.On("ProcessEventTrigger", ctx, "user-999", domain.EventBudgetUpdated, mock.MatchedBy(func(data map[string]interface{}) bool {
+		return data["budget_id"] == "budget-999" &&
+			data["income_amount"] == 3000.0 &&
+			data["total_spent"] == 900.0
+	})).Return(nil)
+
+	err := service.RecalculateBudget(ctx, budget)
+
+	require.NoError(t, err)
+	mockEventProc.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+	mockIncomeCalc.AssertExpectations(t)
+	mockSpentCalc.AssertExpectations(t)
+}
+
+// TestRecalculateBudget_NoEventProcessorWhenNil tests that without SetEventProcessor
+// RecalculateBudget succeeds without calling any event processor (nil guard).
+func TestRecalculateBudget_NoEventProcessorWhenNil(t *testing.T) {
+	mockRepo := new(MockBudgetSyncRepository)
+	mockIncomeCalc := new(MockBudgetIncomeCalculator)
+	mockSpentCalc := new(MockBudgetSpentCalculator)
+	mockEventProc := new(MockEventTriggerProcessor)
+	logger := testSyncServiceLogger()
+
+	// Intentionally do NOT call SetEventProcessor
+	service := NewBudgetSyncService(mockRepo, mockIncomeCalc, mockSpentCalc, logger)
+
+	ctx := context.Background()
+	budget := &domain.Budget{
+		ID:     "budget-888",
+		UserID: "user-888",
+		Period: domain.BudgetPeriodMonthly,
+	}
+
+	mockIncomeCalc.On("CalculateBudgetIncome", ctx, budget, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(2000.0, nil)
+	mockRepo.On("UpdateBudgetIncome", ctx, "budget-888", 2000.0).Return(nil)
+	mockRepo.On("GetCategoriesByBudgetID", ctx, "budget-888").Return([]domain.BudgetCategory{}, nil)
+
+	err := service.RecalculateBudget(ctx, budget)
+
+	require.NoError(t, err)
+	// ProcessEventTrigger must NOT be called when no event processor is set
+	mockEventProc.AssertNotCalled(t, "ProcessEventTrigger")
+}
+
 // TestRecalculateBudgetAmounts_GetBudgetsError tests that error fetching budgets returns error
 func TestRecalculateBudgetAmounts_GetBudgetsError(t *testing.T) {
 	mockRepo := new(MockBudgetSyncRepository)
@@ -560,4 +650,152 @@ func TestRecalculateBudgetAmounts_GetBudgetsError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get active budgets")
+}
+
+// =============================================================================
+// Issue #1270: Task 4 — EventData categories emitter tests
+// =============================================================================
+
+// TestRecalculateBudget_EmitsCategories verifies that RecalculateBudget emits the
+// "categories" key in the budget_updated event payload (Issue #1270, Task 4).
+func TestRecalculateBudget_EmitsCategories(t *testing.T) {
+	mockRepo := new(MockBudgetSyncRepository)
+	mockIncomeCalc := new(MockBudgetIncomeCalculator)
+	mockSpentCalc := new(MockBudgetSpentCalculator)
+	mockEvent := new(MockEventTriggerProcessor)
+	logger := testSyncServiceLogger()
+
+	svc := NewBudgetSyncService(mockRepo, mockIncomeCalc, mockSpentCalc, logger)
+	svc.SetEventProcessor(mockEvent)
+	ctx := context.Background()
+
+	budget := &domain.Budget{
+		ID:     "budget-abc",
+		UserID: "user-abc",
+		Period: domain.BudgetPeriodMonthly,
+		Amount: 1000.0,
+	}
+
+	categories := []domain.BudgetCategory{
+		{
+			ID:              "cat-groceries",
+			BudgetID:        "budget-abc",
+			CategoryKind:    "pfc",
+			PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
+			AllocatedAmount: 400.0,
+			SpentAmount:     0.0, // set by mock below
+		},
+	}
+
+	mockIncomeCalc.On("CalculateBudgetIncome", ctx, budget, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(1000.0, nil)
+	mockRepo.On("UpdateBudgetIncome", ctx, "budget-abc", 1000.0).Return(nil)
+	mockRepo.On("GetCategoriesByBudgetID", ctx, "budget-abc").Return(categories, nil)
+	mockSpentCalc.On("CalculateCategorySpent", ctx, "user-abc", &categories[0], mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(150.0, nil)
+	mockRepo.On("UpdateCategorySpentAmount", ctx, "cat-groceries", 150.0).Return(nil)
+
+	// Capture the event data passed to ProcessEventTrigger.
+	var capturedEventData map[string]interface{}
+	mockEvent.On("ProcessEventTrigger", ctx, "user-abc", "budget_updated", mock.AnythingOfType("map[string]interface {}")).
+		Run(func(args mock.Arguments) {
+			capturedEventData = args.Get(3).(map[string]interface{})
+		}).
+		Return(nil)
+
+	err := svc.RecalculateBudget(ctx, budget)
+	require.NoError(t, err)
+
+	// Verify "categories" key is present in event data.
+	require.NotNil(t, capturedEventData, "event data should have been captured")
+	categoriesRaw, ok := capturedEventData[domain.EventDataKeyCategories]
+	require.True(t, ok, "event data must contain 'categories' key")
+
+	// Issue #1271 Item 5: BuildCategoryEventData returns map[string]map[string]float64.
+	catMap, ok := categoriesRaw.(map[string]map[string]float64)
+	require.True(t, ok, "categories value must be map[string]map[string]float64")
+	require.Contains(t, catMap, "cat-groceries", "categories map must contain cat-groceries")
+
+	perCat := catMap["cat-groceries"]
+	assert.Equal(t, 150.0/400.0*100, perCat["percent_used"], "percent_used for cat-groceries")
+	assert.Equal(t, 400.0-150.0, perCat["remaining"], "remaining for cat-groceries")
+	// Issue #1271 Item 5: key renamed from "total_spent" to "spent".
+	assert.Equal(t, 150.0, perCat["spent"], "spent for cat-groceries")
+	assert.Equal(t, 400.0, perCat["allocated"], "allocated for cat-groceries")
+
+	// Verify "remaining" key is present (from domain.EventDataKeyRemaining).
+	_, hasRemaining := capturedEventData[domain.EventDataKeyRemaining]
+	assert.True(t, hasRemaining, "event data must contain 'remaining' key")
+
+	mockRepo.AssertExpectations(t)
+	mockIncomeCalc.AssertExpectations(t)
+	mockSpentCalc.AssertExpectations(t)
+	mockEvent.AssertExpectations(t)
+}
+
+// TestRecalculateBudget_PercentUsedMatchesPeriodEnd verifies that budget_updated emits
+// percent_used using Budget.PercentUsed() (denominator = Budget.Amount), matching what
+// budget_period_end emits — even when incomeAmount != Budget.Amount. Both emitters must
+// agree so that a budget.percent_used rule fires consistently regardless of which event
+// triggered it. Issue #1270.
+func TestRecalculateBudget_PercentUsedMatchesPeriodEnd(t *testing.T) {
+	mockRepo := new(MockBudgetSyncRepository)
+	mockIncomeCalc := new(MockBudgetIncomeCalculator)
+	mockSpentCalc := new(MockBudgetSpentCalculator)
+	mockEvent := new(MockEventTriggerProcessor)
+	logger := testSyncServiceLogger()
+
+	svc := NewBudgetSyncService(mockRepo, mockIncomeCalc, mockSpentCalc, logger)
+	svc.SetEventProcessor(mockEvent)
+	ctx := context.Background()
+
+	// Budget.Amount = 4000; incomeAmount = 5000 — the denominators differ.
+	// Old formula: percent_used = totalSpent/incomeAmount*100 = 2000/5000*100 = 40.0
+	// Correct (Budget.PercentUsed()): totalSpent/Budget.Amount*100 = 2000/4000*100 = 50.0
+	budget := &domain.Budget{
+		ID:     "budget-pct",
+		UserID: "user-pct",
+		Period: domain.BudgetPeriodMonthly,
+		Amount: 4000.0,
+	}
+
+	categories := []domain.BudgetCategory{
+		{
+			ID:              "cat-pct",
+			BudgetID:        "budget-pct",
+			CategoryKind:    "pfc",
+			PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
+			AllocatedAmount: 2000.0,
+		},
+	}
+
+	// incomeAmount (5000) != budget.Amount (4000)
+	mockIncomeCalc.On("CalculateBudgetIncome", ctx, budget, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(5000.0, nil)
+	mockRepo.On("UpdateBudgetIncome", ctx, "budget-pct", 5000.0).Return(nil)
+	mockRepo.On("GetCategoriesByBudgetID", ctx, "budget-pct").Return(categories, nil)
+	mockSpentCalc.On("CalculateCategorySpent", ctx, "user-pct", &categories[0], mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(2000.0, nil)
+	mockRepo.On("UpdateCategorySpentAmount", ctx, "cat-pct", 2000.0).Return(nil)
+
+	var capturedData map[string]interface{}
+	mockEvent.On("ProcessEventTrigger", ctx, "user-pct", domain.EventBudgetUpdated, mock.AnythingOfType("map[string]interface {}")).
+		Run(func(args mock.Arguments) {
+			capturedData = args.Get(3).(map[string]interface{})
+		}).
+		Return(nil)
+
+	err := svc.RecalculateBudget(ctx, budget)
+	require.NoError(t, err)
+
+	require.NotNil(t, capturedData, "event data must be captured")
+
+	// percent_used must equal Budget{Amount:4000, Categories:...}.PercentUsed() = 50.0,
+	// NOT the income-based formula 2000/5000*100 = 40.0.
+	expectedPct := (&domain.Budget{Amount: 4000.0, Categories: categories}).PercentUsed()
+	assert.InEpsilon(t, expectedPct, capturedData[domain.EventDataKeyPercentUsed],
+		0.0001, "percent_used must use Budget.PercentUsed() not incomeAmount as denominator")
+	assert.NotEqual(t, 40.0, capturedData[domain.EventDataKeyPercentUsed],
+		"percent_used must NOT use incomeAmount (5000) as denominator")
+
+	mockRepo.AssertExpectations(t)
+	mockIncomeCalc.AssertExpectations(t)
+	mockSpentCalc.AssertExpectations(t)
+	mockEvent.AssertExpectations(t)
 }

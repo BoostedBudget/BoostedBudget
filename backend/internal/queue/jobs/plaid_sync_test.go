@@ -12,6 +12,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -36,6 +37,12 @@ func (m *MockTransactionSyncService) SyncTransactions(ctx context.Context, linke
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.TransactionSyncResult), args.Error(1)
+}
+
+// SetTransferCorrelationService implements the TransactionSyncService interface.
+// Issue #972: Added to fix mock after SetTransferCorrelationService was added to the interface.
+func (m *MockTransactionSyncService) SetTransferCorrelationService(svc services.TransferCorrelationService) {
+	m.Called(svc)
 }
 
 // MockLinkedItemRepository mocks the LinkedItemRepository interface

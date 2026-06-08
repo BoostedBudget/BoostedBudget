@@ -41,6 +41,7 @@ import {
   RolloverActionForm,
   SavingsGoalActionForm,
 } from './actions'
+import { useBudgets } from '../../budgets/hooks/useBudgets'
 
 interface FormErrors {
   name?: string
@@ -107,6 +108,9 @@ export function RuleBuilder() {
   const createMutation = useCreateAutomationRule()
   const updateMutation = useUpdateAutomationRule()
 
+  // Budget data for condition category picker
+  const { budgets } = useBudgets()
+
   // Form state
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -138,7 +142,6 @@ export function RuleBuilder() {
   // Initialize form from existing rule or pre-fill params
   // Note: Multiple setState calls in a single effect is intentional for form initialization
   // from external data. React 18+ batches these automatically.
-   
   useEffect(() => {
     if (existingRule) {
       setName(existingRule.name)
@@ -208,7 +211,6 @@ export function RuleBuilder() {
       }
     }
   }, [existingRule, prefilledType, prefilledBudgetId, prefilledCategoryId])
-   
 
   // Validate form
   const validate = useCallback((): FormErrors => {
@@ -476,6 +478,8 @@ export function RuleBuilder() {
             logic={conditionLogic}
             onConditionsChange={setConditions}
             onLogicChange={setConditionLogic}
+            triggerEvent={triggerConfig.type === 'event' ? triggerConfig.event : undefined}
+            budgets={budgets}
           />
         </section>
 

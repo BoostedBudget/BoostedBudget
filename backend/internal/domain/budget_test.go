@@ -1579,4 +1579,149 @@ func TestBudget_JSONMarshaling_WithIncomeFields(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// BuildCategoryEventData Tests (Issue #1270: Task 4)
+// =============================================================================
+
+// TestBuildCategoryEventData verifies that the helper returns the correct map
+// keyed by category ID with per-category metrics.
+func TestBuildCategoryEventData(t *testing.T) {
+	categories := []BudgetCategory{
+		{
+			ID:              "cat-food",
+			BudgetID:        "budget-1",
+			CategoryKind:    "pfc",
+			AllocatedAmount: 500.0,
+			SpentAmount:     200.0,
+		},
+		{
+			ID:              "cat-transport",
+			BudgetID:        "budget-1",
+			CategoryKind:    "pfc",
+			AllocatedAmount: 300.0,
+			SpentAmount:     300.0,
+		},
+	}
+
+	result := BuildCategoryEventData(categories)
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(result))
+	}
+
+	// Verify cat-food
+	food, ok := result["cat-food"]
+	if !ok {
+		t.Fatal("expected key 'cat-food' in result")
+	}
+	if food["percent_used"] != 40.0 {
+		t.Errorf("cat-food percent_used: got %v, want 40.0", food["percent_used"])
+	}
+	if food["remaining"] != 300.0 {
+		t.Errorf("cat-food remaining: got %v, want 300.0", food["remaining"])
+	}
+	// Issue #1271 Item 5: key renamed from "total_spent" to "spent".
+	if food["spent"] != 200.0 {
+		t.Errorf("cat-food spent: got %v, want 200.0", food["spent"])
+	}
+	if food["allocated"] != 500.0 {
+		t.Errorf("cat-food allocated: got %v, want 500.0", food["allocated"])
+	}
+
+	// Verify cat-transport (100% used)
+	transport, ok := result["cat-transport"]
+	if !ok {
+		t.Fatal("expected key 'cat-transport' in result")
+	}
+	if transport["percent_used"] != 100.0 {
+		t.Errorf("cat-transport percent_used: got %v, want 100.0", transport["percent_used"])
+	}
+	if transport["remaining"] != 0.0 {
+		t.Errorf("cat-transport remaining: got %v, want 0.0", transport["remaining"])
+	}
+	if transport["spent"] != 300.0 {
+		t.Errorf("cat-transport spent: got %v, want 300.0", transport["spent"])
+	}
+	if transport["allocated"] != 300.0 {
+		t.Errorf("cat-transport allocated: got %v, want 300.0", transport["allocated"])
+	}
+}
+
+// TestBuildCategoryEventData_ZeroAllocation verifies that a zero-allocation category
+// returns 0 for percent_used rather than NaN (division by zero guard).
+func TestBuildCategoryEventData_ZeroAllocation(t *testing.T) {
+	categories := []BudgetCategory{
+		{
+			ID:              "cat-zero",
+			BudgetID:        "budget-1",
+			CategoryKind:    "pfc",
+			AllocatedAmount: 0.0,
+			SpentAmount:     0.0,
+		},
+	}
+
+	result := BuildCategoryEventData(categories)
+
+	cat, ok := result["cat-zero"]
+	if !ok {
+		t.Fatal("expected key 'cat-zero' in result")
+	}
+	if cat["percent_used"] != 0.0 {
+		t.Errorf("zero-allocation percent_used: got %v, want 0.0 (not NaN)", cat["percent_used"])
+	}
+}
+
+// TestBuildCategoryEventData_Empty verifies that an empty categories slice returns an empty map.
+func TestBuildCategoryEventData_Empty(t *testing.T) {
+	result := BuildCategoryEventData([]BudgetCategory{})
+	if len(result) != 0 {
+		t.Errorf("expected empty map, got %d entries", len(result))
+	}
+}
+
+// TestBuildCategoryEventData_KeysAndAllocated verifies that the new emitter keys
+// are "spent" and "allocated" (not "total_spent"), and that both values are correct.
+// Issue #1271 Items 5+6: emitter key rename + allocated field.
+func TestBuildCategoryEventData_KeysAndAllocated(t *testing.T) {
+	cat := BudgetCategory{
+		ID:              "cat-1",
+		BudgetID:        "budget-1",
+		AllocatedAmount: 100.0,
+		SpentAmount:     60.0,
+	}
+	result := BuildCategoryEventData([]BudgetCategory{cat})
+
+	catMap, ok := result["cat-1"]
+	if !ok {
+		t.Fatal("expected key 'cat-1' in result")
+	}
+
+	// Verify required keys exist
+	if _, has := catMap["percent_used"]; !has {
+		t.Error("expected key 'percent_used' in category map")
+	}
+	if _, has := catMap["remaining"]; !has {
+		t.Error("expected key 'remaining' in category map")
+	}
+	if _, has := catMap["spent"]; !has {
+		t.Error("expected key 'spent' in category map")
+	}
+	if _, has := catMap["allocated"]; !has {
+		t.Error("expected key 'allocated' in category map")
+	}
+
+	// Verify old key does NOT exist
+	if _, has := catMap["total_spent"]; has {
+		t.Error("key 'total_spent' must not exist; use 'spent' instead")
+	}
+
+	// Verify values
+	if catMap["allocated"] != 100.0 {
+		t.Errorf("allocated: got %v, want 100.0", catMap["allocated"])
+	}
+	if catMap["spent"] != 60.0 {
+		t.Errorf("spent: got %v, want 60.0", catMap["spent"])
+	}
+}
+
 // Note: contains helper is defined in linked_item_test.go

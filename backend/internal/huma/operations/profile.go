@@ -69,6 +69,10 @@ func (h *ProfileHandler) UpdateProfile(ctx context.Context, input *UpdateProfile
 			return nil, huma.Error400BadRequest("Invalid email address")
 		case errors.Is(err, services.ErrInvalidRegion):
 			return nil, huma.Error400BadRequest("Invalid primary region")
+		case errors.Is(err, services.ErrInvalidTimezone):
+			return nil, huma.Error422UnprocessableEntity("Invalid timezone: must be a valid IANA timezone (e.g. America/New_York)")
+		case errors.Is(err, services.ErrInvalidTimezoneSource):
+			return nil, huma.Error422UnprocessableEntity("Invalid timezone_source: must be one of default, auto, user")
 		case errors.Is(err, repository.ErrDuplicateEmail):
 			return nil, huma.Error409Conflict("Email address already in use")
 		default:

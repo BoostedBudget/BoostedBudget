@@ -175,6 +175,10 @@ func (m *mockTransactionRepoForBudget) GetByUserIDKeyset(ctx context.Context, us
 	return nil, nil, nil
 }
 
+func (m *mockTransactionRepoForBudget) GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error) {
+	return nil, nil
+}
+
 // mockCustomCategoryRepoForBudget is a minimal no-op mock of repository.CustomCategoryRepository
 // used by budget handler tests that construct a real TransactionService.
 type mockCustomCategoryRepoForBudget struct{}

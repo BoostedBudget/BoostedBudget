@@ -16,6 +16,10 @@ type SavingsGoalRepository interface {
 	// CRUD operations
 	Create(ctx context.Context, goal *domain.SavingsGoal) error
 	GetByID(ctx context.Context, id string) (*domain.SavingsGoal, error)
+	// GetByIDForUser retrieves a savings goal by ID with ownership validation.
+	// Returns ErrSavingsGoalNotFound if the goal does not exist or belongs to a
+	// different user. Use instead of GetByID in security-sensitive paths (GAP AE).
+	GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error)
 	GetByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
 	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
 	GetByName(ctx context.Context, userID, name string) (*domain.SavingsGoal, error)
@@ -89,16 +93,16 @@ func (r *savingsGoalRepository) Create(ctx context.Context, goal *domain.Savings
 	return nil
 }
 
+// goalSelectCols is the canonical SELECT list for savings goals to avoid duplication
+const goalSelectCols = `
+	id, user_id, name, description, target_amount, current_amount,
+	currency_code, account_id, user_account_id, deadline, is_completed, completed_at,
+	created_at, updated_at
+`
+
 // GetByID retrieves a savings goal by its ID.
 func (r *savingsGoalRepository) GetByID(ctx context.Context, id string) (*domain.SavingsGoal, error) {
-	query := `
-		SELECT id, user_id, name, description, target_amount, current_amount,
-			currency_code, account_id, user_account_id, deadline, is_completed, completed_at,
-			created_at, updated_at
-		FROM savings_goals
-		WHERE id = $1
-	`
-
+	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE id = $1`
 	goal := &domain.SavingsGoal{}
 	err := r.db.QueryRow(ctx, query, id).Scan(
 		&goal.ID,
@@ -127,12 +131,35 @@ func (r *savingsGoalRepository) GetByID(ctx context.Context, id string) (*domain
 	return goal, nil
 }
 
-// goalSelectCols is the canonical SELECT list for savings goals to avoid duplication
-const goalSelectCols = `
-	id, user_id, name, description, target_amount, current_amount,
-	currency_code, account_id, user_account_id, deadline, is_completed, completed_at,
-	created_at, updated_at
-`
+// GetByIDForUser retrieves a savings goal by ID with ownership validation.
+// Returns ErrSavingsGoalNotFound if the goal does not exist or belongs to a different user.
+func (r *savingsGoalRepository) GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error) {
+	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE id = $1 AND user_id = $2`
+	goal := &domain.SavingsGoal{}
+	err := r.db.QueryRow(ctx, query, id, userID).Scan(
+		&goal.ID,
+		&goal.UserID,
+		&goal.Name,
+		&goal.Description,
+		&goal.TargetAmount,
+		&goal.CurrentAmount,
+		&goal.CurrencyCode,
+		&goal.AccountID,
+		&goal.UserAccountID,
+		&goal.Deadline,
+		&goal.IsCompleted,
+		&goal.CompletedAt,
+		&goal.CreatedAt,
+		&goal.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrSavingsGoalNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return goal, nil
+}
 
 // GetByUserID retrieves all savings goals for a specific user.
 func (r *savingsGoalRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
@@ -148,14 +175,7 @@ func (r *savingsGoalRepository) GetActiveByUserID(ctx context.Context, userID st
 
 // GetByName retrieves a savings goal by user ID and name.
 func (r *savingsGoalRepository) GetByName(ctx context.Context, userID, name string) (*domain.SavingsGoal, error) {
-	query := `
-		SELECT id, user_id, name, description, target_amount, current_amount,
-			currency_code, account_id, user_account_id, deadline, is_completed, completed_at,
-			created_at, updated_at
-		FROM savings_goals
-		WHERE user_id = $1 AND name = $2
-	`
-
+	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE user_id = $1 AND name = $2`
 	goal := &domain.SavingsGoal{}
 	err := r.db.QueryRow(ctx, query, userID, name).Scan(
 		&goal.ID,

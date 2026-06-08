@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
@@ -336,6 +337,56 @@ func (r *notificationRepository) MarkAllAsRead(ctx context.Context, userID strin
 		return 0, fmt.Errorf("failed to mark all notifications as read: %w", err)
 	}
 	return ct.RowsAffected(), nil
+}
+
+// GetOpenByTransferSuggestionID returns the first unread accept_reject notification of the
+// given type linked to the given transfer suggestion, or nil if none exists.
+// The notificationType param scopes the lookup to the specific prompt type so that an
+// unread original 'transfer_suggestion' prompt does not suppress a new
+// 'transfer_suggestion_match' fuzzy-match prompt (GAP V fix).
+func (r *notificationRepository) GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string, notificationType string) (*domain.Notification, error) {
+	query := `
+		SELECT id, user_id, type, title, message, action_url, action_label,
+		       read, sent_email, email_sent_at, interaction_pattern, transfer_suggestion_id,
+		       created_at, updated_at
+		FROM notifications
+		WHERE transfer_suggestion_id = $1
+		  AND type = $2
+		  AND interaction_pattern = 'accept_reject'
+		  AND read = false
+		ORDER BY created_at ASC
+		LIMIT 1
+	`
+
+	var n domain.Notification
+	err := r.db.QueryRow(ctx, query, transferSuggestionID, notificationType).Scan(
+		&n.ID,
+		&n.UserID,
+		&n.Type,
+		&n.Title,
+		&n.Message,
+		&n.ActionURL,
+		&n.ActionLabel,
+		&n.Read,
+		&n.SentEmail,
+		&n.EmailSentAt,
+		&n.InteractionPattern,
+		&n.TransferSuggestionID,
+		&n.CreatedAt,
+		&n.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to query open notification for suggestion %s: %w", transferSuggestionID, err)
+	}
+
+	if err := r.decryptNotification(&n); err != nil {
+		return nil, fmt.Errorf("failed to decrypt notification: %w", err)
+	}
+
+	return &n, nil
 }
 
 // Compile-time check to ensure notificationRepository implements NotificationRepository

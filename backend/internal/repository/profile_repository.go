@@ -141,7 +141,8 @@ const userSelectQuery = `
 	       deletion_requested_at, deletion_scheduled_at,
 	       created_at, updated_at, last_login_at,
 	       manual_tier_override, manual_tier_ends_at,
-	       retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at
+	       retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at,
+	       timezone, timezone_source
 	FROM users`
 
 // queryUser is a helper that scans a user from a query row
@@ -157,6 +158,7 @@ func (r *profileRepository) queryUser(ctx context.Context, query string, args ..
 		&user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
 		&user.ManualTierOverride, &user.ManualTierEndsAt,
 		&user.RetentionStartedAt, &user.RetentionExpiresAt, &user.RetentionNotice30dSentAt, &user.RetentionNotice7dSentAt,
+		&user.Timezone, &user.TimezoneSource,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
@@ -213,6 +215,7 @@ func (r *profileRepository) queryUsers(ctx context.Context, query string, args .
 			&user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
 			&user.ManualTierOverride, &user.ManualTierEndsAt,
 			&user.RetentionStartedAt, &user.RetentionExpiresAt, &user.RetentionNotice30dSentAt, &user.RetentionNotice7dSentAt,
+			&user.Timezone, &user.TimezoneSource,
 		); err != nil {
 			return nil, err
 		}
@@ -468,7 +471,7 @@ func (r *profileRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *d
 }
 
 // UpdateUser updates an existing user's information
-// Only updates allowed fields: email, email_verified, primary_region
+// Only updates allowed fields: email, email_verified, primary_region, timezone, timezone_source
 // Subscription fields are managed separately through payment webhooks
 func (r *profileRepository) UpdateUser(ctx context.Context, user *domain.User) error {
 	user.UpdatedAt = time.Now()
@@ -485,12 +488,15 @@ func (r *profileRepository) UpdateUser(ctx context.Context, user *domain.User) e
 		    email_verified = $2,
 		    primary_region = $3,
 		    updated_at = $4,
-		    email_blind_idx = $5
-		WHERE id = $6
+		    email_blind_idx = $5,
+		    timezone = $6,
+		    timezone_source = $7
+		WHERE id = $8
 	`
 
 	ct, err := r.db.Exec(ctx, query,
-		encryptedEmail, user.EmailVerified, user.PrimaryRegion, user.UpdatedAt, emailBlindIdx, user.ID,
+		encryptedEmail, user.EmailVerified, user.PrimaryRegion, user.UpdatedAt, emailBlindIdx,
+		user.Timezone, user.TimezoneSource, user.ID,
 	)
 
 	if err != nil {

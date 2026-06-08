@@ -24,6 +24,7 @@ const mockSettingsWithAlertsEnabled = {
   product_updates_enabled: true,
   security_alerts_enabled: true,
   data_sharing_enabled: true,
+  include_in_aggregate_stats: true,
 }
 
 function renderPrivacySettings() {
@@ -154,6 +155,28 @@ describe('PrivacySettings', () => {
 
       await waitFor(() => {
         expect(mockUpdatePrivacySettingsMutateAsync).toHaveBeenCalled()
+      })
+    })
+  })
+
+  describe('Aggregate stats toggle', () => {
+    it('renders include_in_aggregate_stats checkbox with correct initial state', () => {
+      renderPrivacySettings()
+      const checkbox = screen.getByLabelText(/include my transfers in aggregate statistics/i)
+      expect(checkbox).toBeInTheDocument()
+      expect((checkbox as HTMLInputElement).checked).toBe(true)
+    })
+
+    it('calls update mutation when aggregate stats toggle is changed', async () => {
+      renderPrivacySettings()
+      const checkbox = screen.getByLabelText(/include my transfers in aggregate statistics/i)
+      fireEvent.click(checkbox)
+      fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
+
+      await waitFor(() => {
+        expect(mockUpdatePrivacySettingsMutateAsync).toHaveBeenCalledWith({
+          data: { include_in_aggregate_stats: false },
+        })
       })
     })
   })

@@ -4,6 +4,8 @@ package repository_test
 // Integration tests verify idempotency key uniqueness + caching behavior.
 // Uses pgxmock for unit-level coverage; DB integration tests go in
 // integration_test.go files (pgxmock catches logic, not SQL type errors).
+//
+// GAP AW: Tests for 409 on same key reuse with a different operation_id.
 
 import (
 	"context"
@@ -56,11 +58,11 @@ func TestIdempotencyRepository_GetOrCreate(t *testing.T) {
 			WithArgs(userID, key).
 			WillReturnResult(pgxmock.NewResult("SELECT", 1))
 
-		// Simulate: key found in DB
-		mock.ExpectQuery("SELECT response_body FROM idempotency_keys").
+		// Simulate: key found in DB with same operation_id (GAP AW: now SELECT includes operation_id)
+		mock.ExpectQuery("SELECT response_body, operation_id FROM idempotency_keys").
 			WithArgs(key, userID).
-			WillReturnRows(pgxmock.NewRows([]string{"response_body"}).
-				AddRow(bodyJSON))
+			WillReturnRows(pgxmock.NewRows([]string{"response_body", "operation_id"}).
+				AddRow(bodyJSON, opID))
 
 		repo := repository.NewIdempotencyRepository(mock)
 		var result map[string]interface{}
@@ -87,8 +89,8 @@ func TestIdempotencyRepository_GetOrCreate(t *testing.T) {
 			WithArgs(userID, key).
 			WillReturnResult(pgxmock.NewResult("SELECT", 1))
 
-		// Simulate: key not found
-		mock.ExpectQuery("SELECT response_body FROM idempotency_keys").
+		// Simulate: key not found (GAP AW: now SELECT includes operation_id)
+		mock.ExpectQuery("SELECT response_body, operation_id FROM idempotency_keys").
 			WithArgs(key, userID).
 			WillReturnError(errors.New("no rows in result set"))
 
@@ -121,7 +123,7 @@ func TestIdempotencyRepository_GetOrCreate(t *testing.T) {
 			WillReturnResult(pgxmock.NewResult("SELECT", 1))
 
 		// Simulate: key not found
-		mock.ExpectQuery("SELECT response_body FROM idempotency_keys").
+		mock.ExpectQuery("SELECT response_body, operation_id FROM idempotency_keys").
 			WithArgs(key, userID).
 			WillReturnError(errors.New("no rows in result set"))
 
@@ -135,6 +137,135 @@ func TestIdempotencyRepository_GetOrCreate(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "service error")
 		// INSERT must NOT be called when fn fails
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+// TestGetOrCreate_SameKeyDifferentOp_Returns409 verifies GAP AW: when the same
+// idempotency key is presented with a different operation_id, ErrIdempotencyKeyConflict
+// is returned and the second fn is NOT called.
+func TestGetOrCreate_SameKeyDifferentOp_Returns409(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-aw"
+	key := "idem-key-aw"
+
+	confirmBody, _ := json.Marshal(map[string]interface{}{"id": "sug-1", "status": "confirmed"})
+
+	t.Run("GAP AW: same key different operation returns ErrIdempotencyKeyConflict", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+
+		// Advisory lock
+		mock.ExpectExec("pg_advisory_xact_lock").
+			WithArgs(userID, key).
+			WillReturnResult(pgxmock.NewResult("SELECT", 1))
+
+		// Cache hit: key exists, but stored operation_id is "confirmTransferSuggestionMatch"
+		mock.ExpectQuery("SELECT response_body, operation_id FROM idempotency_keys").
+			WithArgs(key, userID).
+			WillReturnRows(pgxmock.NewRows([]string{"response_body", "operation_id"}).
+				AddRow(confirmBody, "confirmTransferSuggestionMatch"))
+
+		repo := repository.NewIdempotencyRepository(mock)
+		var result map[string]interface{}
+		declineFnCalled := false
+
+		_, err = repo.GetOrCreate(ctx, key, userID, "declineTransferSuggestionMatch", func() (interface{}, error) {
+			declineFnCalled = true
+			return nil, nil
+		}, &result)
+
+		assert.ErrorIs(t, err, repository.ErrIdempotencyKeyConflict, "expected ErrIdempotencyKeyConflict")
+		assert.False(t, declineFnCalled, "decline fn must not be called on key conflict")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+// TestGetOrCreate_SameKeyAndSameOp_ReturnsCachedResult is a regression test verifying
+// that same key + same operation_id still produces a cache hit (unchanged behavior).
+func TestGetOrCreate_SameKeyAndSameOp_ReturnsCachedResult(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-aw2"
+	key := "idem-key-aw2"
+	opID := "confirmTransferSuggestionMatch"
+
+	cachedBody := map[string]interface{}{"id": "sug-2", "status": "confirmed"}
+	bodyJSON, _ := json.Marshal(cachedBody)
+
+	t.Run("GAP AW: same key same operation returns cached result without calling fn", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+
+		// Advisory lock
+		mock.ExpectExec("pg_advisory_xact_lock").
+			WithArgs(userID, key).
+			WillReturnResult(pgxmock.NewResult("SELECT", 1))
+
+		// Cache hit: key exists with same operation_id
+		mock.ExpectQuery("SELECT response_body, operation_id FROM idempotency_keys").
+			WithArgs(key, userID).
+			WillReturnRows(pgxmock.NewRows([]string{"response_body", "operation_id"}).
+				AddRow(bodyJSON, opID))
+
+		repo := repository.NewIdempotencyRepository(mock)
+		var result map[string]interface{}
+		fnCalled := false
+
+		cacheHit, err := repo.GetOrCreate(ctx, key, userID, opID, func() (interface{}, error) {
+			fnCalled = true
+			return nil, nil
+		}, &result)
+
+		require.NoError(t, err)
+		assert.True(t, cacheHit, "expected cache hit for same key+op")
+		assert.False(t, fnCalled, "fn must not be called on cache hit")
+		assert.Equal(t, "sug-2", result["id"])
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+// TestGetOrCreateInTx_SameKeyDifferentOp_Returns409 verifies GAP AW for the transactional path.
+func TestGetOrCreateInTx_SameKeyDifferentOp_Returns409(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-aw-tx"
+	key := "idem-key-aw-tx"
+
+	confirmBody, _ := json.Marshal(map[string]interface{}{"id": "sug-tx-1", "status": "confirmed"})
+
+	t.Run("GAP AW: GetOrCreateInTx same key different operation returns ErrIdempotencyKeyConflict", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+
+		// Begin transaction
+		mock.ExpectBegin()
+		tx, err := mock.Begin(ctx)
+		require.NoError(t, err)
+
+		// Advisory lock inside tx
+		mock.ExpectExec("pg_advisory_xact_lock").
+			WithArgs(userID, key).
+			WillReturnResult(pgxmock.NewResult("SELECT", 1))
+
+		// Cache hit: key exists with a different operation_id
+		mock.ExpectQuery("SELECT response_body, operation_id FROM idempotency_keys").
+			WithArgs(key, userID).
+			WillReturnRows(pgxmock.NewRows([]string{"response_body", "operation_id"}).
+				AddRow(confirmBody, "confirmTransferSuggestionMatch"))
+
+		repo := repository.NewIdempotencyRepository(mock)
+		var result map[string]interface{}
+		declineFnCalled := false
+
+		_, err = repo.GetOrCreateInTx(ctx, tx, key, userID, "declineTransferSuggestionMatch", func() (interface{}, error) {
+			declineFnCalled = true
+			return nil, nil
+		}, &result)
+
+		assert.ErrorIs(t, err, repository.ErrIdempotencyKeyConflict, "expected ErrIdempotencyKeyConflict")
+		assert.False(t, declineFnCalled, "decline fn must not be called on key conflict")
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }

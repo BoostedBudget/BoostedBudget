@@ -34,8 +34,6 @@ export type TriggerType = 'schedule' | 'event'
 
 export type EventType =
   | 'budget_updated'
-  | 'transaction_created'
-  | 'balance_changed'
   | 'budget_period_end'
 
 // =============================================================================
@@ -49,7 +47,6 @@ export type ConditionOperator =
   | 'gte'
   | 'lt'
   | 'lte'
-  | 'between'
   | 'contains'
 
 export type ConditionLogic = 'AND' | 'OR'
@@ -58,6 +55,8 @@ export interface RuleCondition {
   field: string
   operator: ConditionOperator
   value: unknown
+  category_id?: string
+  budget_id?: string
 }
 
 // =============================================================================

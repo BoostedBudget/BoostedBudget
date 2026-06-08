@@ -177,6 +177,41 @@ func TestUpdatePrivacySettings_Success(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
+// TestUpdatePrivacySettings_IncludeInAggregateStats tests that IncludeInAggregateStats
+// is correctly passed through from the request to the repository Update call.
+// Issue #972: GAP AC nit — k-anonymity consent field must flow through the service layer.
+func TestUpdatePrivacySettings_IncludeInAggregateStats(t *testing.T) {
+	// Setup
+	mockRepo := new(MockPrivacyRepository)
+	service := NewPrivacyService(mockRepo)
+	ctx := context.Background()
+
+	userID := uuid.New().String()
+	existingSettings := domain.NewPrivacySettings(userID)
+	existingSettings.ID = uuid.New().String()
+	existingSettings.IncludeInAggregateStats = true // default is true (opt-out model)
+
+	updateRequest := &domain.UpdatePrivacySettingsRequest{
+		IncludeInAggregateStats: boolPtr(false), // user opts out
+	}
+
+	// Mock expectations — verify IncludeInAggregateStats is forwarded to Update
+	mockRepo.On("GetByUserID", ctx, userID).Return(existingSettings, nil)
+	mockRepo.On("Update", ctx, mock.MatchedBy(func(s *domain.PrivacySettings) bool {
+		return s.UserID == userID &&
+			s.IncludeInAggregateStats == false // must be the updated value
+	})).Return(nil)
+
+	// Execute
+	settings, err := service.UpdatePrivacySettings(ctx, userID, updateRequest)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, settings)
+	assert.False(t, settings.IncludeInAggregateStats)
+	mockRepo.AssertExpectations(t)
+}
+
 // TestUpdatePrivacySettings_ValidationFailure tests GDPR validation enforcement
 func TestUpdatePrivacySettings_ValidationFailure(t *testing.T) {
 	// Setup

@@ -17,7 +17,7 @@ import type {
   RuleFormErrors,
 } from '../types'
 import type { CreateAutomationRuleRequest, TriggerConfig } from '@boostedbudget/api-client/models'
-import { DEFAULT_PRIORITY, DEFAULT_CRON, DEFAULT_TIMEZONE } from '../constants'
+import { DEFAULT_PRIORITY, DEFAULT_TRIGGER_CONFIG } from '../constants'
 
 export interface UseRuleFormOptions {
   initialValues?: Partial<RuleFormState>
@@ -49,12 +49,6 @@ export interface UseRuleFormReturn {
   clearError: (field: keyof RuleFormErrors) => void
 }
 
-const DEFAULT_TRIGGER_CONFIG: TriggerFormState = {
-  type: 'schedule',
-  cron: DEFAULT_CRON,
-  timezone: DEFAULT_TIMEZONE,
-}
-
 function createInitialState(initialValues?: Partial<RuleFormState>): RuleFormState {
   return {
     name: initialValues?.name ?? '',
@@ -62,7 +56,10 @@ function createInitialState(initialValues?: Partial<RuleFormState>): RuleFormSta
     priority: initialValues?.priority ?? DEFAULT_PRIORITY,
     enabled: initialValues?.enabled ?? true,
     ruleType: initialValues?.ruleType ?? null,
-    triggerConfig: initialValues?.triggerConfig ?? { ...DEFAULT_TRIGGER_CONFIG },
+    triggerConfig: {
+      ...DEFAULT_TRIGGER_CONFIG,
+      ...initialValues?.triggerConfig,
+    },
     conditions: initialValues?.conditions ?? [],
     conditionLogic: initialValues?.conditionLogic ?? 'AND',
     actions: initialValues?.actions ?? null,
@@ -282,6 +279,8 @@ export function useRuleForm(options?: UseRuleFormOptions): UseRuleFormReturn {
             field: c.field,
             operator: c.operator,
             value: c.value,
+            ...(c.category_id ? { category_id: c.category_id } : {}),
+            ...(c.budget_id ? { budget_id: c.budget_id } : {}),
           }))
         : undefined,
       condition_logic: formState.conditions.length > 1 ? formState.conditionLogic : undefined,

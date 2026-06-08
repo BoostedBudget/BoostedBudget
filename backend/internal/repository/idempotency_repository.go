@@ -6,25 +6,42 @@ package repository
 //
 // Uses the idempotency_keys table (migration 000086). Keys expire after 24 hours.
 // Pattern: check for existing key → if found, return cached JSON; else run fn → store result.
+//
+// GAP AW: If the same key is presented with a different operation_id than originally used,
+// ErrIdempotencyKeyConflict is returned (maps to HTTP 409). Same-key + same-op retries
+// continue to return the cached response as before.
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
 )
 
+// ErrIdempotencyKeyConflict is returned when the same idempotency key is presented
+// with a different operation_id than was originally used. Callers should surface this
+// as HTTP 409 Conflict (per RFC 7231 / Stripe idempotency-key semantics).
+var ErrIdempotencyKeyConflict = errors.New("idempotency key conflict: key already used for a different operation")
+
 // IdempotencyRepository provides idempotent execution of write operations.
 type IdempotencyRepository interface {
 	// GetOrCreate executes fn() once per (key, userID) pair within the TTL.
-	// If the key already exists, the cached response is decoded into result and fn is NOT called.
+	// If the key already exists with the same operationID, the cached response is decoded
+	// into result and fn is NOT called.
 	// If the key does not exist, fn() is called; on success, the result is stored and returned.
 	// fn() errors are propagated without storing anything.
 	//
+	// GAP AW: If the key already exists but was originally used with a DIFFERENT operationID,
+	// ErrIdempotencyKeyConflict is returned (callers should map this to HTTP 409 Conflict).
+	// This prevents a client that reuses an idempotency key for two different write operations
+	// from silently receiving the first op's cached response for the second op.
+	//
 	// Returns (cacheHit bool, err error):
-	//   cacheHit=true  → fn was NOT called; result is the cached value.
+	//   cacheHit=true  → fn was NOT called; result is the cached value (same op retry).
 	//   cacheHit=false → fn was called; result is the freshly created value.
+	//   err=ErrIdempotencyKeyConflict → same key, different op; callers return HTTP 409.
 	//
 	// Callers that record a post-write audit should skip the audit on cache-hit to avoid
 	// inflating the audit log with phantom write events on idempotent retries.
@@ -34,9 +51,14 @@ type IdempotencyRepository interface {
 	// supplied transaction. This makes the idempotency reservation atomic with the entity
 	// write and audit insert that the caller executes in the same tx.
 	//
+	// GAP AW: Same key-conflict detection as GetOrCreate applies here. If the stored
+	// operation_id differs from operationID, ErrIdempotencyKeyConflict is returned and
+	// the caller should rollback the transaction and surface HTTP 409 to the client.
+	//
 	// Returns (cacheHit bool, err error):
 	//   cacheHit=true  → fn was NOT called; caller should rollback (nothing written).
 	//   cacheHit=false → fn was called; caller should commit.
+	//   err=ErrIdempotencyKeyConflict → same key, different op; callers return HTTP 409.
 	//
 	// On a cache hit, the caller MUST NOT write an audit row or commit — the result was
 	// already recorded on the original request.
@@ -80,15 +102,22 @@ func (r *idempotencyRepository) GetOrCreate(
 		_ = lockErr
 	}
 
-	// Check if idempotency key already exists
+	// Check if idempotency key already exists. GAP AW: SELECT operation_id alongside
+	// response_body so we can detect key reuse across different operations.
 	var cachedJSON []byte
+	var storedOpID string
 	err := r.db.QueryRow(ctx,
-		`SELECT response_body FROM idempotency_keys WHERE key = $1 AND user_id = $2 AND expires_at > NOW()`,
+		`SELECT response_body, operation_id FROM idempotency_keys WHERE key = $1 AND user_id = $2 AND expires_at > NOW()`,
 		key, userID,
-	).Scan(&cachedJSON)
+	).Scan(&cachedJSON, &storedOpID)
 
 	if err == nil {
-		// Cache hit — return cached response without calling fn; signal to caller.
+		// Cache hit — check that the operation matches. A different operation_id with the
+		// same key is a client error; return 409 without calling fn or returning cached data.
+		if storedOpID != operationID {
+			return false, ErrIdempotencyKeyConflict
+		}
+		// Same operation: return cached response without calling fn; signal to caller.
 		return true, json.Unmarshal(cachedJSON, result)
 	}
 
@@ -142,14 +171,21 @@ func (r *idempotencyRepository) GetOrCreateInTx(
 
 	// Check for existing key inside the transaction so the reservation is
 	// atomic with any entity write and audit insert the caller issues in the same tx.
+	// GAP AW: SELECT operation_id alongside response_body to detect key reuse across ops.
 	var cachedJSON []byte
+	var storedOpID string
 	err := tx.QueryRow(ctx,
-		`SELECT response_body FROM idempotency_keys WHERE key = $1 AND user_id = $2 AND expires_at > NOW()`,
+		`SELECT response_body, operation_id FROM idempotency_keys WHERE key = $1 AND user_id = $2 AND expires_at > NOW()`,
 		key, userID,
-	).Scan(&cachedJSON)
+	).Scan(&cachedJSON, &storedOpID)
 
 	if err == nil {
-		// Cache hit — return cached response without calling fn.
+		// Cache hit — check that the operation matches. A different operation_id with the
+		// same key is a client error; return 409 without calling fn or returning cached data.
+		if storedOpID != operationID {
+			return false, ErrIdempotencyKeyConflict
+		}
+		// Same operation: return cached response without calling fn.
 		// Return cacheHit=true so the caller knows to rollback (nothing was written on this attempt).
 		return true, json.Unmarshal(cachedJSON, result)
 	}

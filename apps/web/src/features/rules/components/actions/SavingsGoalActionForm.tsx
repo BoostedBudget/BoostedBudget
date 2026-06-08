@@ -33,7 +33,7 @@ const AMOUNT_TYPES: { value: AmountType; label: string; description: string }[] 
   {
     value: 'percentage',
     label: 'Percentage',
-    description: 'Transfer a percentage of the balance to the savings goal',
+    description: 'Transfer a percentage of period income to the savings goal',
   },
   {
     value: 'remaining',

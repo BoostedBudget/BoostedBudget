@@ -319,6 +319,10 @@ func (m *MockTransactionRepository) GetByUserIDKeyset(ctx context.Context, userI
 	return nil, nil, nil
 }
 
+func (m *MockTransactionRepository) GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error) {
+	return nil, nil
+}
+
 // MockPlaidClient is a mock for Plaid API client
 type MockPlaidClient struct {
 	mock.Mock
