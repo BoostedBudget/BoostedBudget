@@ -49,6 +49,9 @@ import type {
 import type {
   AcceptTransferSuggestionInputBody,
   AcceptTransferSuggestionOutputBody,
+  ConfirmMatchBody,
+  ConfirmTransferSuggestionMatchOutputBody,
+  DeclineTransferSuggestionMatchOutputBody,
   ErrorModel,
   RejectTransferSuggestionInputBody,
   RejectTransferSuggestionOutputBody,
@@ -247,6 +250,133 @@ export const useAcceptTransferSuggestion = <TError = ErrorType<ErrorModel>,
         TContext
       > => {
       return useMutation(getAcceptTransferSuggestionMutationOptions(options), queryClient);
+    }
+    /**
+ * Confirms a fuzzy-matched transfer suggestion with the actual transfer amount. For MCP use.
+ * @summary Confirm transfer suggestion match
+ */
+export const confirmTransferSuggestionMatch = (
+    id: string,
+    confirmMatchBody: BodyType<NonReadonly<ConfirmMatchBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<ConfirmTransferSuggestionMatchOutputBody>(
+      {url: `/api/v1/transfer-suggestions/${id}/confirm-match`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: confirmMatchBody, signal
+    },
+      options);
+    }
+
+
+
+export const getConfirmTransferSuggestionMatchMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>, TError,{id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>, TError,{id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>}, TContext> => {
+
+const mutationKey = ['confirmTransferSuggestionMatch'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>, {id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  confirmTransferSuggestionMatch(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ConfirmTransferSuggestionMatchMutationResult = NonNullable<Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>>
+    export type ConfirmTransferSuggestionMatchMutationBody = BodyType<NonReadonly<ConfirmMatchBody>>
+    export type ConfirmTransferSuggestionMatchMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Confirm transfer suggestion match
+ */
+export const useConfirmTransferSuggestionMatch = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>, TError,{id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>,
+        TError,
+        {id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>},
+        TContext
+      > => {
+      return useMutation(getConfirmTransferSuggestionMatchMutationOptions(options), queryClient);
+    }
+    /**
+ * Releases the fuzzy-match reservation on a pending/accepted suggestion. The inflow is freed for other suggestions.
+ * @summary Decline transfer suggestion match
+ */
+export const declineTransferSuggestionMatch = (
+    id: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<DeclineTransferSuggestionMatchOutputBody>(
+      {url: `/api/v1/transfer-suggestions/${id}/decline-match`, method: 'POST', signal
+    },
+      options);
+    }
+
+
+
+export const getDeclineTransferSuggestionMatchMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof declineTransferSuggestionMatch>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof declineTransferSuggestionMatch>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['declineTransferSuggestionMatch'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof declineTransferSuggestionMatch>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  declineTransferSuggestionMatch(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeclineTransferSuggestionMatchMutationResult = NonNullable<Awaited<ReturnType<typeof declineTransferSuggestionMatch>>>
+
+    export type DeclineTransferSuggestionMatchMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Decline transfer suggestion match
+ */
+export const useDeclineTransferSuggestionMatch = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof declineTransferSuggestionMatch>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof declineTransferSuggestionMatch>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+      return useMutation(getDeclineTransferSuggestionMatchMutationOptions(options), queryClient);
     }
     /**
  * Marks a pending transfer suggestion as rejected. Returns 404 if not found, 409 if already actioned.

@@ -184,6 +184,14 @@ func (m *MockTransactionRepository) GetByUserIDKeyset(ctx context.Context, userI
 	return txs, nextCursor, args.Error(2)
 }
 
+func (m *MockTransactionRepository) GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error) {
+	args := m.Called(ctx, userID, since)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.Transaction), args.Error(1)
+}
+
 // TestTransactionService_ListTransactions_EnforcesMaxLimit tests that the service enforces a maximum limit of 100
 func TestTransactionService_ListTransactions_EnforcesMaxLimit(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)

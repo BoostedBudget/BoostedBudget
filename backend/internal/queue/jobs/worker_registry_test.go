@@ -35,6 +35,10 @@ func TestAllExpectedJobKinds(t *testing.T) {
 		// Notification / rule workers
 		{"NotificationEmailArgs", NotificationEmailArgs{}, "notification_email"},
 		{"RuleEvaluationArgs", RuleEvaluationArgs{}, "rule_evaluation"},
+		// Issue #972: Budget period-close scanner
+		{"BudgetPeriodCloseCheckArgs", BudgetPeriodCloseCheckArgs{}, "budget_period_close_check"},
+		// Issue #972: Daily savings stats snapshot
+		{"SavingsStatsArgs", SavingsStatsArgs{}, "savings_stats"},
 		// Category denormalization workers
 		{"EffectiveCategoryRefreshArgs", EffectiveCategoryRefreshArgs{}, "effective_category_refresh"},
 	}

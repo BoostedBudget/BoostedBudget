@@ -29,6 +29,8 @@
  */
 
 export interface AutomationRuleCondition {
+  budget_id?: string;
+  category_id?: string;
   field: string;
   operator: string;
   value: unknown;

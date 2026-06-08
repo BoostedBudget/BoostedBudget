@@ -252,6 +252,12 @@ func main() {
 	// Issue #1015: Declare rule evaluation worker (non-Plaid)
 	var ruleEvaluationWorker *jobs.RuleEvaluationWorker
 
+	// Issue #972: Declare budget period close check worker (daily scanner, no Plaid dependency)
+	var budgetPeriodCloseCheckWorker *jobs.BudgetPeriodCloseCheckWorker
+
+	// Issue #972: Declare savings stats snapshot worker (daily aggregate, no Plaid dependency)
+	var savingsStatsWorker *jobs.SavingsStatsWorker
+
 	// Issue #1123: Declare effective category refresh worker
 	var effectiveCategoryRefreshWorker *jobs.EffectiveCategoryRefreshWorker
 
@@ -415,6 +421,10 @@ func main() {
 
 		// Issue #37: Automation Rule Service and Rule Scheduler
 		automationRuleService := services.NewAutomationRuleService(automationRuleRepo)
+		// Issue #972 GAP AE: inject repos for create/update IDOR ownership validation.
+		automationRuleService.SetSavingsGoalRepo(savingsGoalRepo)
+		automationRuleService.SetAccountRepo(accountRepo)
+		automationRuleService.SetBudgetRepo(budgetRepo) // #1270: category ownership validation
 		appLogger.Info("Automation rule service initialized")
 
 		// Issue #37: Rule Execution Service
@@ -422,6 +432,10 @@ func main() {
 		ruleExecutionService := services.NewRuleExecutionService(ruleExecutionRepo, transferSuggestionRepo, automationRuleRepo, nil)
 		ruleExecutionService.SetAnalytics(phClient)
 		appLogger.Info("Rule execution service initialized")
+
+		// Issue #972: Wire budget sync → rule engine so budget_updated events are not silently dropped.
+		// SetEventProcessor must be called after ruleExecutionService is fully initialized.
+		budgetSyncService.SetEventProcessor(ruleExecutionService)
 
 		// Issue #37: Rule Scheduler Manager with providers
 		ruleSchedulerManager = workers.NewRuleSchedulerManager(appLogger)
@@ -631,6 +645,30 @@ func main() {
 		})
 		appLogger.Info("Rule evaluation worker created (River)")
 
+		// Issue #972: Create budget period close check worker (daily scanner, no Plaid dependency)
+		budgetPeriodCloseCheckWorker = jobs.NewBudgetPeriodCloseCheckWorker(jobs.BudgetPeriodCloseCheckWorkerDeps{
+			BudgetRepo:                budgetRepo,
+			PeriodEventsRepo:          repository.NewBudgetPeriodEventsRepository(db),
+			JobQueue:                  nil, // Set after River client created (circular dependency)
+			TransferSuggestionExpirer: transferSuggestionRepo, // Issue #972 GAP E: expire stale pending suggestions
+			UserTimezones:             budgetRepo,             // Issue #972 Task 2e: per-user timezone for period-boundary detection
+			Logger:                    appLogger,
+		})
+		appLogger.Info("Budget period close check worker created (River)")
+
+		// Issue #972: Create savings stats snapshot worker (daily aggregate, no Plaid dependency)
+		// Share one repo instance — both fields satisfy different narrow interfaces from the same concrete type.
+		// Pass fieldEncryptor (may be nil if ClerkSecretKey is unset) — the stats worker only calls
+		// WriteSnapshot/GetAggregateSavingsStats, which do not use the encryptor; it is included
+		// here for interface consistency and future calls that may resolve account names.
+		savingsImpactStatsRepo := repository.NewSavingsImpactRepositoryWithEncryptor(db, fieldEncryptor)
+		savingsStatsWorker = jobs.NewSavingsStatsWorker(jobs.SavingsStatsWorkerDeps{
+			AggregateRepo:     savingsImpactStatsRepo,
+			SavingsImpactRepo: savingsImpactStatsRepo,
+			Logger:            appLogger,
+		})
+		appLogger.Info("Savings stats snapshot worker created (River)")
+
 		// Issue #1123: Create effective category refresh worker (no external dependencies)
 		effectiveCategoryRefreshWorker = jobs.NewEffectiveCategoryRefreshWorker(jobs.EffectiveCategoryRefreshWorkerDeps{
 			TransactionRepo: transactionRepo,
@@ -710,6 +748,18 @@ func main() {
 					merchantRepo, // Issue #1163: Merchant batch-upsert
 					appLogger,
 				)
+
+				// Issue #972: Initialize TransferCorrelationService and wire into sync pipeline (B4)
+				transferCorrelationService := services.NewTransferCorrelationService(
+					transferSuggestionRepo,
+					transactionRepo,
+					notificationRepo,
+				)
+				if phClient != nil {
+					transferCorrelationService.SetAnalytics(phClient)
+				}
+				transactionSyncService.SetTransferCorrelationService(transferCorrelationService)
+				appLogger.Info("Transfer correlation service wired into transaction sync")
 
 				// Initialize Item Error Service for ITEM webhook processing
 				// Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
@@ -939,6 +989,44 @@ func main() {
 				appLogger.Info("DLQ cleanup check periodic job configured (daily)")
 			}
 
+			// Issue #972: Budget period close check (daily) — detects closed budget periods and fires events
+			if budgetPeriodCloseCheckWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.BudgetPeriodCloseCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: queue.QueueLow,
+							}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false},
+				))
+				appLogger.Info("Budget period close check periodic job configured (daily)")
+			}
+
+			// Issue #972: Savings stats snapshot (daily) — aggregate completed transfer amounts.
+			// SavingsStatsUniqueOpts constrains to one snapshot job per 24h period (queue-level
+			// dedup on top of the ON CONFLICT upsert in WriteSnapshot). We use river.UniqueOpts
+			// directly because the periodic job constructor takes *river.InsertOpts, not queue opts.
+			if savingsStatsWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.SavingsStatsArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: queue.QueueLow,
+								UniqueOpts: river.UniqueOpts{
+									ByPeriod: 24 * time.Hour,
+								},
+							}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false},
+				))
+				appLogger.Info("Savings stats snapshot periodic job configured (daily)")
+			}
+
 			// Issue #1087 R4-7: Idempotency keys cleanup (daily — deletes expired rows)
 			periodicJobs = append(periodicJobs, river.NewPeriodicJob(
 				river.PeriodicInterval(24*time.Hour),
@@ -1013,6 +1101,14 @@ func main() {
 				river.AddWorker(riverWorkers, ruleEvaluationWorker)
 				appLogger.Info("Rule evaluation worker registered with River")
 			}
+			if budgetPeriodCloseCheckWorker != nil {
+				river.AddWorker(riverWorkers, budgetPeriodCloseCheckWorker)
+				appLogger.Info("Budget period close check worker registered with River")
+			}
+			if savingsStatsWorker != nil {
+				river.AddWorker(riverWorkers, savingsStatsWorker)
+				appLogger.Info("Savings stats snapshot worker registered with River")
+			}
 			if effectiveCategoryRefreshWorker != nil {
 				river.AddWorker(riverWorkers, effectiveCategoryRefreshWorker)
 				appLogger.Info("Effective category refresh worker registered with River")
@@ -1073,6 +1169,10 @@ func main() {
 				if itemCleanupCheckWorker != nil {
 					itemCleanupCheckWorker.SetJobQueue(jobQueue)
 					appLogger.Info("Item cleanup check worker connected to job queue")
+				}
+				if budgetPeriodCloseCheckWorker != nil {
+					budgetPeriodCloseCheckWorker.SetJobQueue(jobQueue)
+					appLogger.Info("Budget period close check worker connected to job queue")
 				}
 
 				// Issue #1123: Wire job queue for async effective_category_name refresh
@@ -1208,15 +1308,33 @@ func main() {
 		operations.RegisterNotificationRoutes(humaAPI, humaNotificationHandler)
 		appLogger.Info("Huma notification routes registered")
 
-		// Register Huma transfer suggestion routes (Issue #952: Notification Center)
+		// Register Huma transfer suggestion routes (Issue #952: Notification Center, #972: C3 confirm-match)
 		transferSuggestionSvc := services.NewTransferSuggestionService(transferSuggestionRepo)
 		transferSuggestionSvc.SetGDPRAnalytics(gdprClient)
-		humaTransferSuggestionHandler := operations.NewTransferSuggestionHandler(transferSuggestionSvc)
+		humaTransferSuggestionHandler := operations.NewTransferSuggestionHandler(transferSuggestionSvc,
+			operations.TransferSuggestionHandlerDeps{
+				IdempotencyRepo: humaIdempotencyRepo,
+				DB:              db,
+				MCPAuditRepo:    humaMCPAuditRepo,
+				MCPWorkerSecret: cfg.MCPWorkerSecret,
+			})
+		if phClient != nil {
+			humaTransferSuggestionHandler.SetAnalytics(phClient)
+		}
 		operations.RegisterTransferSuggestionRoutes(humaAPI, humaTransferSuggestionHandler)
 		appLogger.Info("Huma transfer suggestion routes registered")
 
-		// Wire notification repo to rule execution service for suggestion notifications (Issue #952)
+
+		// Wire all optional setters for ruleExecutionService.
+		// IMPORTANT: ALL SetXxx calls must be listed here. Omitting any setter means
+		// the corresponding feature silently fails in production (nil guard returns error,
+		// no suggestion created). See Issue #972 (GAP H) for the savings_goal example.
 		ruleExecutionService.SetNotificationRepo(notificationRepo)
+		ruleExecutionService.SetSavingsGoalRepo(savingsGoalRepo)
+		// Issue #972 GAP AE: execution-time account ownership guard for transfer rules.
+		ruleExecutionService.SetAccountRepo(accountRepo)
+		// Issue #1109: Chain resolver maps stable user_account_id → current active account_id.
+		ruleExecutionService.SetChainResolver(services.NewAccountChainResolver(accountRepo))
 
 		// Register Huma dashboard routes (Issue #559: Huma migration)
 		humaDashboardHandler := operations.NewDashboardHandler(dashboardService)
@@ -1328,6 +1446,16 @@ func main() {
 		// email fallback that the Huma middleware provides).
 
 		appLogger.Info("Authenticated routes enabled (Clerk + Database)")
+	}
+
+	// Issue #972: Savings impact routes (public aggregate + per-user) require DB but NOT Clerk,
+	// so they are registered in their own if db != nil block rather than the Clerk-gated block.
+	if db != nil {
+		// GAP CA (#972): pass fieldEncryptor so GetUserImpact can decrypt user_accounts.account_name_hint.
+		// fieldEncryptor is nil when ClerkSecretKey is unset; resolveDestinationName guards for nil enc.
+		humaSavingsImpactHandler := operations.NewSavingsImpactHandler(repository.NewSavingsImpactRepositoryWithEncryptor(db, fieldEncryptor))
+		operations.RegisterSavingsImpactRoutes(humaAPI, humaSavingsImpactHandler)
+		appLogger.Info("Savings impact routes registered")
 	}
 
 	// Plaid webhook endpoint (public - no auth required) - Migrated to Huma (Issue #559)

@@ -79,6 +79,11 @@ export const ANALYTICS_EVENTS = {
   NOTIFICATION_ACTION_CLICKED: 'notification_action_clicked',
   TRANSFER_SUGGESTION_ACCEPTED: 'transfer_suggestion_accepted',
   TRANSFER_SUGGESTION_REJECTED: 'transfer_suggestion_rejected',
+  TRANSFER_SUGGESTION_MATCH_CONFIRMED: 'transfer_suggestion_match_confirmed',
+
+  // Savings transfer automation (#972)
+  SAVINGS_IMPACT_VIEWED: 'savings_impact_viewed',
+  TRANSFER_SUGGESTION_VALIDATED: 'transfer_suggestion_validated',
 
   // Net Worth (#955)
   NET_WORTH_PAGE_VIEWED: 'net_worth_page_viewed',

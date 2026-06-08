@@ -99,6 +99,16 @@ export const NOTIFICATION_TYPE_CONFIG: Record<string, NotificationTypeConfig> = 
     category: 'suggestion',
     defaultLabel: 'Transfer Suggestion',
   },
+  // Issue #972: fuzzy-match confirmation prompt (GAP R + GAP B3).
+  // Without this entry, the notification falls through to the generic renderer
+  // with no icon/urgency config; the amount-confirm UI relies on this type
+  // being recognized (NotificationItem.tsx:108 checks type === 'transfer_suggestion_match').
+  transfer_suggestion_match: {
+    icon: ArrowRightLeft,
+    urgency: 'high',
+    category: 'suggestion',
+    defaultLabel: 'Confirm Transfer Amount',
+  },
 }
 
 // Urgency → icon color class

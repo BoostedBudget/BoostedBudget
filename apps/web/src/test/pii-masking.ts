@@ -78,14 +78,17 @@ export function scanForUnmaskedPII(
   }
 
   // Scan attributes on every element (including container itself).
-  const all = [container, ...Array.from(container.querySelectorAll('*'))];
-  for (const elNode of all) {
+  // NOTE: data-ph-mask masks DOM text content only; DOM attributes are recorded verbatim
+  // by PostHog session replay (posthog-pii-masking.md:8,18), so we don't skip masked ancestors.
+  // Exception: `value` on form controls is masked via maskAllInputs:true in posthog.ts.
+  const formControlTags = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
+  for (const elNode of [container, ...Array.from(container.querySelectorAll('*'))]) {
     for (const attr of SCANNED_ATTRS) {
+      if (attr === 'value' && formControlTags.has(elNode.tagName)) continue;
       const val = elNode.getAttribute(attr);
       if (!val) continue;
       const matched = matchPII(val, sentinels);
       if (!matched) continue;
-      if (hasMaskedAncestor(elNode)) continue;
       out.push({ text: val, path: pathTo(elNode), matched, via: attr });
     }
   }

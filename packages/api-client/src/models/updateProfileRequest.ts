@@ -33,4 +33,6 @@ export interface UpdateProfileRequest {
   readonly $schema?: string;
   email?: string;
   primary_region?: string;
+  timezone?: string;
+  timezone_source?: string;
 }

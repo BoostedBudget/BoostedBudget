@@ -83,6 +83,14 @@ func (m *MockBudgetRepository) GetCategoriesByBudgetID(ctx context.Context, budg
 	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
 }
 
+func (m *MockBudgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetIDs []string) (map[string][]domain.BudgetCategory, error) {
+	args := m.Called(ctx, budgetIDs)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string][]domain.BudgetCategory), args.Error(1)
+}
+
 func (m *MockBudgetRepository) UpdateCategory(ctx context.Context, category *domain.BudgetCategory) error {
 	args := m.Called(ctx, category)
 	return args.Error(0)
@@ -122,10 +130,37 @@ func (m *MockBudgetRepository) RemoveIncomeSource(ctx context.Context, budgetID 
 	return args.Error(0)
 }
 
+// Issue #972: Paginated active-budget enumeration for period-close scanner
+func (m *MockBudgetRepository) GetAllActivePaginated(ctx context.Context, limit, offset int) ([]*domain.Budget, error) {
+	args := m.Called(ctx, limit, offset)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.Budget), args.Error(1)
+}
+
+// Issue #972: Batch timezone lookup for period-close scanner
+func (m *MockBudgetRepository) GetTimezonesByUserIDs(ctx context.Context, userIDs []string) (map[string]string, error) {
+	args := m.Called(ctx, userIDs)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string]string), args.Error(1)
+}
+
 // Envelope budgeting rollover method (Issue #36: Rule Executors)
 func (m *MockBudgetRepository) AdjustCategoryAllocatedAmount(ctx context.Context, categoryID string, delta float64) error {
 	args := m.Called(ctx, categoryID, delta)
 	return args.Error(0)
+}
+
+// GetCategoryByIDAndUser retrieves a category scoped to a user (Issue #1270: ownership validation).
+func (m *MockBudgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error) {
+	args := m.Called(ctx, categoryID, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.BudgetCategory), args.Error(1)
 }
 
 // MockTransactionRepositoryForBudget is a minimal mock for transaction repository
@@ -361,6 +396,8 @@ func TestBudgetService_GetBudgets_Success(t *testing.T) {
 
 	// Setup mocks
 	mockBudgetRepo.On("GetByUserID", ctx, userID).Return(expectedBudgets, nil)
+	mockBudgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-123").Return([]domain.BudgetCategory{}, nil)
+	mockBudgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-456").Return([]domain.BudgetCategory{}, nil)
 
 	// Execute
 	budgets, err := service.GetBudgets(ctx, userID)
@@ -387,6 +424,7 @@ func TestBudgetService_GetActiveBudgets_Success(t *testing.T) {
 
 	// Setup mocks
 	mockBudgetRepo.On("GetActiveByUserID", ctx, userID).Return(expectedBudgets, nil)
+	mockBudgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-123").Return([]domain.BudgetCategory{}, nil)
 
 	// Execute
 	budgets, err := service.GetActiveBudgets(ctx, userID)

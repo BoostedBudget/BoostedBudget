@@ -66,6 +66,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Issue #952: Notification Center — Transfer Suggestion API
 	transferSuggestionHandler := &TransferSuggestionHandler{}
 
+	// Issue #972: Savings impact routes (C1: public aggregate, C2: per-user impact)
+	savingsImpactHandler := &SavingsImpactHandler{}
+
 	// Issue #1087: MCP saved recipes
 	recipeHandler := &RecipeHandler{}
 
@@ -112,6 +115,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #952: Notification Center — Transfer Suggestion API
 	RegisterTransferSuggestionRoutes(api, transferSuggestionHandler)
+
+	// Issue #972: Savings impact (C1: public aggregate, C2: per-user impact)
+	RegisterSavingsImpactRoutes(api, savingsImpactHandler)
 
 	// Issue #1087: MCP saved recipes
 	RegisterRecipeRoutes(api, recipeHandler)

@@ -111,9 +111,14 @@ var MCPOperationManifest = map[string]MCPOperationClass{
 	"bulkSetTransactionReviewed":   MCPClassWrite,
 	"bulkUpdateTransactionCategory": MCPClassWrite,
 	// Transfer Suggestions
-	"getTransferSuggestions":     MCPClassRead,
-	"acceptTransferSuggestion":   MCPClassWrite,
-	"rejectTransferSuggestion":   MCPClassWrite,
+	"getTransferSuggestions":            MCPClassRead,
+	"acceptTransferSuggestion":          MCPClassWrite,
+	"rejectTransferSuggestion":          MCPClassWrite,
+	"confirmTransferSuggestionMatch":    MCPClassWrite, // #972: idempotent write
+	"declineTransferSuggestionMatch":    MCPClassWrite, // #972: user-driven reservation release
+	// Savings Impact — #972
+	"getSavingsImpactAggregate": MCPClassRead,
+	"getSavingsImpactMe":        MCPClassRead,
 	// User Accounts
 	"getUserAccounts":    MCPClassRead,
 	"getUserAccountById": MCPClassRead,

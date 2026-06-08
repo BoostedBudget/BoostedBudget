@@ -78,10 +78,14 @@ func TestRulesTable_CanInsertWithJSONB(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestRulesTable_RuleTypeConstraint tests the CHECK constraint for rule_type
+// TestRulesTable_RuleTypeConstraint verifies that the pgxmock layer accepts all valid rule_type
+// values. Note: pgxmock cannot validate DB CHECK constraints — real-Postgres acceptance is
+// covered by TestRuleType_AllValidTypesAccepted_Integration (rules_rule_type_integration_test.go).
+// This test ensures service-layer code does not accidentally pass an unexpected literal.
 func TestRulesTable_RuleTypeConstraint(t *testing.T) {
-	// Valid rule types should be: transfer_suggestion, budget_alert, category_rollover
-	validTypes := []string{"transfer_suggestion", "budget_alert", "category_rollover"}
+	// Keep in sync with migration 000088 and domain.RuleType* constants.
+	// 'savings_goal' was added by migration 000088 (#972, GAP CI).
+	validTypes := []string{"transfer_suggestion", "budget_alert", "category_rollover", "savings_goal"}
 
 	for _, ruleType := range validTypes {
 		t.Run("valid_type_"+ruleType, func(t *testing.T) {

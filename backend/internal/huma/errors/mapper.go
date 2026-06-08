@@ -130,6 +130,9 @@ func MapError(err error) error {
 		return huma.Error409Conflict("Paddle webhook event already processed")
 	case errors.Is(err, repository.ErrAccountOwnedByAnotherUser):
 		return huma.Error409Conflict("This bank account is already linked by another user. Each physical account may only be connected to one BoostedBudget account at a time.")
+	// GAP AW: idempotency key reused for a different operation — RFC 7231 / Stripe semantics.
+	case errors.Is(err, repository.ErrIdempotencyKeyConflict):
+		return huma.Error409Conflict("This idempotency key was already used for a different operation. Use a new key to perform a different request.")
 
 	// ================================
 	// 403 Forbidden - Tier limits exceeded
@@ -147,6 +150,9 @@ func MapError(err error) error {
 		return huma.Error403Forbidden("You are not allowed to update this field")
 	case errors.Is(err, repository.ErrNotificationAccessDenied):
 		return huma.Error403Forbidden("Access denied to this notification")
+	// Issue #1270: GAP-L — foreign category_id in a condition belongs to another user.
+	case errors.Is(err, domain.ErrRuleConditionForbidden):
+		return huma.Error403Forbidden("Access denied: condition category belongs to another user")
 	// ================================
 	// 400 Bad Request - Validation errors
 	// ================================
@@ -179,6 +185,11 @@ func MapError(err error) error {
 		return huma.Error400BadRequest("Invalid webhook signature format")
 	case errors.Is(err, services.ErrInvalidPageSizeNumber):
 		return huma.Error400BadRequest("page_size must be between 1 and 100")
+	// Issue #1270: GAP-L — rule validation failed (unknown event, unsupported operator, bad field).
+	// Strip the "invalid automation rule: " prefix to expose only the user-facing detail.
+	case errors.Is(err, domain.ErrInvalidRule):
+		detail := strings.TrimPrefix(err.Error(), "invalid automation rule: ")
+		return huma.Error400BadRequest(detail)
 
 	// ================================
 	// 503 Service Unavailable - External service failures

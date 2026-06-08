@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -53,6 +54,39 @@ const (
 	TriggerTypeSchedule TriggerType = "schedule" // Triggered by cron schedule (Issue #37)
 )
 
+// =============================================================================
+// Event Type Constants
+// =============================================================================
+
+// Event type constants for event-triggered automation rules.
+// These are the valid values for TriggerConfig.Event when TriggerType is "event".
+// Issue #35: Rules Engine Core - budget_updated event integration.
+// Issue #972: Savings Transfer Automation - budget_period_end event.
+const (
+	EventBudgetUpdated   = "budget_updated"    // Fired when budget income/spent amounts are recalculated
+	EventBudgetPeriodEnd = "budget_period_end" // Fired when a budget period ends (for rollover/savings rules)
+)
+
+// EventData key constants for rule trigger data maps.
+// These keys MUST match between the emitter (budget_period_close_check.go) and the
+// readers (calculateTransferAmount / calculateSavingsGoalAmount). Using constants
+// eliminates the class of bug where a reader accesses a different string than the
+// emitter publishes (e.g. "balance" vs "remaining").
+//
+// Issue #972: Savings Transfer Automation — key mismatch bug fix (GAP G).
+const (
+	EventDataKeyRemaining    = "remaining"     // Budget remaining amount after spending; emitted by period-close check
+	EventDataKeyAmount       = "amount"        // Budget total amount (income) for the period
+	EventDataKeyIncomeAmount = "income_amount" // Explicit income amount; emitted by period-close check
+	EventDataKeyTotalSpent   = "total_spent"   // Total spent in the period; emitted by period-close check
+	EventDataKeyPercentUsed  = "percent_used"  // Budget percent used (0-100+); emitted by period-close check via Budget.PercentUsed()
+	EventDataKeyBudgetID     = "budget_id"     // Budget UUID; emitted by period-close check
+	EventDataKeyBudgetName   = "budget_name"   // Human-readable budget name; emitted by period-close check
+	EventDataKeyPeriodStart  = "period_start"  // Period start date (YYYY-MM-DD); emitted by period-close check
+	EventDataKeyPeriodEnd    = "period_end"    // Period end date (YYYY-MM-DD); emitted by period-close check
+	EventDataKeyCategories   = "categories"    // Per-category metrics map (keyed by category ID); emitted by both emitters (#1270)
+)
+
 // validTriggerTypes is a set of all valid trigger types.
 var validTriggerTypes = map[TriggerType]bool{
 	TriggerTypeEvent:    true,
@@ -62,6 +96,61 @@ var validTriggerTypes = map[TriggerType]bool{
 // IsValid checks if the trigger type is valid.
 func (tt TriggerType) IsValid() bool {
 	return validTriggerTypes[tt]
+}
+
+// validEventTypes is the complete set of event names accepted for event-triggered rules.
+// This is checked by TriggerConfig.Validate to reject unknown event names at API ingestion.
+// See also validConditionFieldsByEvent for per-event condition-field restrictions.
+var validEventTypes = map[string]bool{
+	EventBudgetUpdated:   true,
+	EventBudgetPeriodEnd: true,
+	"transaction_created": true,
+	"balance_changed":     true,
+}
+
+// validConditionFieldsByEvent maps budget event types to their allowed condition fields.
+// For events present as keys, validateConditions enforces that every condition field
+// must be in the inner set. Events absent from this map (e.g. balance_changed,
+// transaction_created) do not have a field allowlist — their conditions are not
+// field-validated (the emitter owns the shape of that event's data).
+var validConditionFieldsByEvent = map[string]map[string]bool{
+	EventBudgetUpdated: {
+		"budget.percent_used":              true,
+		"budget.remaining_amount":          true,
+		"budget.total_spent":               true,
+		"budget_category.percent_used":     true,
+		"budget_category.spent_amount":     true,
+		"budget_category.remaining_amount": true,
+		"budget_category.allocated":        true, // Issue #1271 Item 5
+	},
+	EventBudgetPeriodEnd: {
+		"budget.percent_used":              true,
+		"budget.remaining_amount":          true,
+		"budget.total_spent":               true,
+		"budget_category.percent_used":     true,
+		"budget_category.spent_amount":     true,
+		"budget_category.remaining_amount": true,
+		"budget_category.allocated":        true, // Issue #1271 Item 5
+	},
+}
+
+// allowedConditionOperators is the set of operators supported by
+// validateConditions / evaluateCondition. ConditionOperatorBetween is
+// intentionally excluded because it is not handled in evaluateCondition.
+var allowedConditionOperators = map[ConditionOperator]bool{
+	ConditionOperatorEq:       true,
+	ConditionOperatorNeq:      true,
+	ConditionOperatorGt:       true,
+	ConditionOperatorGte:      true,
+	ConditionOperatorLt:       true,
+	ConditionOperatorLte:      true,
+	ConditionOperatorContains: true,
+}
+
+// AllowedConditionOperators returns the set of condition operators that are both
+// allowed at validation time and evaluable at execution time.
+func AllowedConditionOperators() map[ConditionOperator]bool {
+	return allowedConditionOperators
 }
 
 // =============================================================================
@@ -137,18 +226,20 @@ type SuggestionStatus string
 
 // Supported suggestion statuses (matches database CHECK constraint).
 const (
-	SuggestionStatusPending  SuggestionStatus = "pending"
-	SuggestionStatusAccepted SuggestionStatus = "accepted"
-	SuggestionStatusRejected SuggestionStatus = "rejected"
-	SuggestionStatusExpired  SuggestionStatus = "expired"
+	SuggestionStatusPending   SuggestionStatus = "pending"
+	SuggestionStatusAccepted  SuggestionStatus = "accepted"
+	SuggestionStatusRejected  SuggestionStatus = "rejected"
+	SuggestionStatusExpired   SuggestionStatus = "expired"
+	SuggestionStatusCompleted SuggestionStatus = "completed"
 )
 
 // validSuggestionStatuses is a set of all valid suggestion statuses.
 var validSuggestionStatuses = map[SuggestionStatus]bool{
-	SuggestionStatusPending:  true,
-	SuggestionStatusAccepted: true,
-	SuggestionStatusRejected: true,
-	SuggestionStatusExpired:  true,
+	SuggestionStatusPending:   true,
+	SuggestionStatusAccepted:  true,
+	SuggestionStatusRejected:  true,
+	SuggestionStatusExpired:   true,
+	SuggestionStatusCompleted: true,
 }
 
 // IsValid checks if the suggestion status is valid.
@@ -202,6 +293,9 @@ func (tc *TriggerConfig) Validate() error {
 		if tc.Event == "" {
 			return errors.New("event is required for event trigger type")
 		}
+		if !validEventTypes[tc.Event] {
+			return fmt.Errorf("unknown event type %q", tc.Event)
+		}
 	case TriggerTypeSchedule:
 		if tc.Cron == "" {
 			return errors.New("cron expression is required for schedule trigger type")
@@ -239,9 +333,11 @@ func ValidateCronExpression(expr string) error {
 
 // AutomationRuleCondition represents a condition that must be met for a rule to fire.
 type AutomationRuleCondition struct {
-	Field    string            `json:"field"`    // Field to evaluate: account.balance, budget.percent_used, budget_category.remaining, etc.
-	Operator ConditionOperator `json:"operator"` // Comparison operator
-	Value    interface{}       `json:"value"`    // Value to compare against
+	Field      string            `json:"field"`                // Field to evaluate: account.balance, budget.percent_used, budget_category.remaining, etc.
+	Operator   ConditionOperator `json:"operator"`             // Comparison operator
+	Value      interface{}       `json:"value"`                // Value to compare against
+	CategoryID string            `json:"category_id,omitempty"` // Optional category ID for category-scoped conditions
+	BudgetID   string            `json:"budget_id,omitempty"`   // Optional budget ID for budget-scoped conditions
 }
 
 // =============================================================================
@@ -254,9 +350,9 @@ type TransferAction struct {
 	ToAccountID       string  `json:"to_account_id"`
 	FromUserAccountID string  `json:"from_user_account_id,omitempty"` // Stable reference surviving re-links (Issue #1109)
 	ToUserAccountID   string  `json:"to_user_account_id,omitempty"`   // Stable reference surviving re-links (Issue #1109)
-	AmountType        string  `json:"amount_type,omitempty"`           // fixed, percentage, excess
+	AmountType        string  `json:"amount_type,omitempty"`          // fixed, percentage, excess, remaining, threshold (legacy)
 	Amount            float64 `json:"amount"`
-	Threshold         float64 `json:"threshold,omitempty"` // For excess type: minimum before transfer
+	Threshold         float64 `json:"threshold,omitempty"` // For excess/threshold types: minimum before transfer (must be ≥0)
 }
 
 // AlertAction defines the action for budget_alert rules.
@@ -283,12 +379,12 @@ type RolloverAction struct {
 // SavingsGoalAction defines the action for savings_goal rules.
 // Issue #36: Rule Executors - Creates transfer suggestions to contribute to savings goals.
 type SavingsGoalAction struct {
-	SavingsGoalID string   `json:"savings_goal_id"`         // Target savings goal
-	FromAccountID string   `json:"from_account_id"`         // Source account for transfer
-	AmountType    string   `json:"amount_type"`             // fixed, percentage, remaining
-	Amount        float64  `json:"amount,omitempty"`        // For fixed amount type
-	Percentage    *float64 `json:"percentage,omitempty"`    // For percentage amount type
-	Threshold     float64  `json:"threshold,omitempty"`     // Minimum balance threshold for remaining type
+	SavingsGoalID string   `json:"savings_goal_id"`      // Target savings goal
+	FromAccountID string   `json:"from_account_id"`      // Source account for transfer
+	AmountType    string   `json:"amount_type"`          // fixed, percentage, remaining
+	Amount        float64  `json:"amount,omitempty"`     // For fixed amount type
+	Percentage    *float64 `json:"percentage,omitempty"` // For percentage amount type
+	Threshold     float64  `json:"threshold,omitempty"`  // Minimum balance threshold for remaining type
 }
 
 // =============================================================================
@@ -338,6 +434,12 @@ func (r *AutomationRule) Validate() error {
 		return err
 	}
 
+	// Validate conditions — operator and CategoryID checks apply to all trigger types;
+	// field allowlists are only enforced for events that have a defined set.
+	if err := r.validateConditions(); err != nil {
+		return err
+	}
+
 	// Validate condition logic (default to AND if empty)
 	if r.ConditionLogic != "" && r.ConditionLogic != "AND" && r.ConditionLogic != "OR" {
 		return errors.New("condition_logic must be AND or OR")
@@ -345,6 +447,68 @@ func (r *AutomationRule) Validate() error {
 
 	// Validate actions based on rule type
 	return r.validateActions()
+}
+
+// validateConditions checks each condition's operator and field against the
+// allowlists for the rule's event type. It must only be called for event-type
+// triggers (caller responsibility).
+func (r *AutomationRule) validateConditions() error {
+	for _, condition := range r.Conditions {
+		if !allowedConditionOperators[condition.Operator] {
+			return fmt.Errorf("condition field %q has unsupported operator %q", condition.Field, condition.Operator)
+		}
+		// Only enforce field allowlist for events that have a defined field set.
+		// Events without an entry (e.g. balance_changed, transaction_created) do not
+		// have a field allowlist — their conditions are not field-validated here.
+		if allowedFields, hasAllowlist := validConditionFieldsByEvent[r.TriggerConfig.Event]; hasAllowlist {
+			if !allowedFields[condition.Field] {
+				return fmt.Errorf("condition field %q is not valid for event type %q", condition.Field, r.TriggerConfig.Event)
+			}
+		}
+	}
+	return nil
+}
+
+// BoundBudgetID returns the budget this rule is scoped to, derived from its
+// category-scoped conditions. Returns ("", false) when no condition binds a budget.
+// The result is AND/OR-agnostic: any category-scoped condition binds the whole rule (A-CR2).
+func (r *AutomationRule) BoundBudgetID() (string, bool) {
+	for _, c := range r.Conditions {
+		if strings.HasPrefix(c.Field, "budget_category.") && c.BudgetID != "" {
+			return c.BudgetID, true
+		}
+	}
+	return "", false
+}
+
+// ValidateForPersistence validates the rule for create/update. It calls Validate()
+// for static checks (wrapping any error as ErrInvalidRule), then additionally requires
+// scope IDs for category-scoped conditions and validates multi-budget constraint.
+func (r *AutomationRule) ValidateForPersistence() error {
+	if err := r.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRule, err)
+	}
+
+	// Validate category-scoped conditions and collect distinct BudgetIDs (single-pass).
+	budgetIDs := make(map[string]struct{})
+	for _, condition := range r.Conditions {
+		if !strings.HasPrefix(condition.Field, "budget_category.") {
+			continue
+		}
+		if condition.CategoryID == "" {
+			return fmt.Errorf("%w: condition field %q requires a category_id", ErrInvalidRule, condition.Field)
+		}
+		if condition.BudgetID == "" {
+			return fmt.Errorf("%w: condition field %q requires a budget_id", ErrInvalidRule, condition.Field)
+		}
+		budgetIDs[condition.BudgetID] = struct{}{}
+	}
+
+	// Multi-budget check: rule may bind at most one budget.
+	if len(budgetIDs) > 1 {
+		return fmt.Errorf("%w: a rule may bind at most one budget", ErrInvalidRule)
+	}
+	return nil
 }
 
 // validateActions validates the actions JSON based on rule type.
@@ -379,8 +543,28 @@ func (r *AutomationRule) validateTransferAction() error {
 	if action.ToAccountID == "" {
 		return errors.New("to_account_id is required for transfer_suggestion")
 	}
-	if action.Amount <= 0 {
+
+	// 'excess' and 'remaining' derive the transfer amount from triggerData at runtime, so amount=0 is valid.
+	// 'threshold' is a legacy income-based type (transfer income minus threshold); kept for backwards compatibility.
+	validAmountTypes := map[string]bool{"fixed": true, "percentage": true, "excess": true, "remaining": true, "threshold": true}
+	amountType := action.AmountType
+	if amountType == "" {
+		amountType = "fixed"
+	}
+	if !validAmountTypes[amountType] {
+		return errors.New("amount_type must be 'fixed', 'percentage', 'excess', 'remaining', or 'threshold' for transfer_suggestion")
+	}
+	// Only require a positive amount for types that use it as the direct transfer value.
+	if (amountType == "fixed" || amountType == "percentage") && action.Amount <= 0 {
 		return errors.New("amount must be positive for transfer_suggestion")
+	}
+	// GAP AG: percentage cannot exceed 100 (over-suggestion guard).
+	if amountType == "percentage" && action.Amount > 100 {
+		return errors.New("percentage must be between 0 and 100 for transfer_suggestion")
+	}
+	// Negative threshold produces nonsensical over-transfer amounts; reject at validation time.
+	if (amountType == "excess" || amountType == "threshold") && action.Threshold < 0 {
+		return errors.New("threshold must be non-negative for transfer_suggestion")
 	}
 
 	return nil
@@ -414,7 +598,8 @@ func (r *AutomationRule) validateRolloverAction() error {
 		return errors.New("source_budget_category_id is required for category_rollover")
 	}
 
-	validRolloverTypes := map[string]bool{"full": true, "capped": true, "percentage": true}
+	// "all" is accepted as a legacy alias for "full" (executor treats them identically).
+	validRolloverTypes := map[string]bool{"all": true, "full": true, "capped": true, "percentage": true}
 	if !validRolloverTypes[action.RolloverType] {
 		return errors.New("rollover_type must be 'full', 'capped', or 'percentage' for category_rollover")
 	}
@@ -425,6 +610,12 @@ func (r *AutomationRule) validateRolloverAction() error {
 
 	if action.RolloverType == "percentage" && action.Percentage == nil {
 		return errors.New("percentage is required when rollover_type is 'percentage'")
+	}
+
+	// GAP AG: rollover percentage must be in (0, 100] to prevent over-rollover.
+	if action.RolloverType == "percentage" && action.Percentage != nil &&
+		(*action.Percentage <= 0 || *action.Percentage > 100) {
+		return errors.New("percentage must be between 0 (exclusive) and 100 (inclusive) for category_rollover")
 	}
 
 	return nil
@@ -455,6 +646,12 @@ func (r *AutomationRule) validateSavingsGoalAction() error {
 
 	if action.AmountType == "percentage" && (action.Percentage == nil || *action.Percentage <= 0 || *action.Percentage > 100) {
 		return errors.New("percentage must be between 0 and 100 when amount_type is 'percentage'")
+	}
+
+	// GAP AG: a negative threshold for the 'remaining' type would cause calculateSavingsGoalAmount
+	// to over-suggest (remaining + |threshold| instead of remaining - threshold).
+	if action.AmountType == "remaining" && action.Threshold < 0 {
+		return errors.New("threshold must be non-negative when amount_type is 'remaining' for savings_goal")
 	}
 
 	return nil
@@ -544,24 +741,28 @@ func (e *RuleExecution) MarkFailed(errorCode, errorMessage string) {
 // TransferSuggestion represents a suggested money transfer.
 // IMPORTANT: No actual money movement - suggestions only (per CLAUDE.md).
 type TransferSuggestion struct {
-	ID                string           `json:"id" db:"id"`
-	UserID            string           `json:"user_id" db:"user_id"`
-	RuleID            *string          `json:"rule_id,omitempty" db:"rule_id"`
-	RuleExecutionID   *string          `json:"rule_execution_id,omitempty" db:"rule_execution_id"`
-	FromAccountID     *string          `json:"from_account_id,omitempty" db:"from_account_id"`
-	ToAccountID       *string          `json:"to_account_id,omitempty" db:"to_account_id"`
-	FromUserAccountID *string          `json:"from_user_account_id,omitempty" db:"from_user_account_id"` // Stable reference surviving re-links (Issue #1109)
-	ToUserAccountID   *string          `json:"to_user_account_id,omitempty" db:"to_user_account_id"`   // Stable reference surviving re-links (Issue #1109)
-	Amount            float64          `json:"amount" db:"amount"`
-	CurrencyCode      string           `json:"currency_code" db:"currency_code"`
-	Reason            *string          `json:"reason,omitempty" db:"reason"`
-	Source            SuggestionSource `json:"source" db:"source"`
-	Status            SuggestionStatus `json:"status" db:"status"`
-	ExpiresAt         *time.Time       `json:"expires_at,omitempty" db:"expires_at"`
-	UserActionAt      *time.Time       `json:"user_action_at,omitempty" db:"user_action_at"`
-	UserNotes         *string          `json:"user_notes,omitempty" db:"user_notes"`
-	CreatedAt         time.Time        `json:"created_at" db:"created_at"`
-	UpdatedAt         time.Time        `json:"updated_at" db:"updated_at"`
+	ID                   string           `json:"id" db:"id"`
+	UserID               string           `json:"user_id" db:"user_id"`
+	RuleID               *string          `json:"rule_id,omitempty" db:"rule_id"`
+	RuleExecutionID      *string          `json:"rule_execution_id,omitempty" db:"rule_execution_id"`
+	FromAccountID        *string          `json:"from_account_id,omitempty" db:"from_account_id"`
+	ToAccountID          *string          `json:"to_account_id,omitempty" db:"to_account_id"`
+	FromUserAccountID    *string          `json:"from_user_account_id,omitempty" db:"from_user_account_id"` // Stable reference surviving re-links (Issue #1109)
+	ToUserAccountID      *string          `json:"to_user_account_id,omitempty" db:"to_user_account_id"`     // Stable reference surviving re-links (Issue #1109)
+	Amount               float64          `json:"amount" db:"amount"`
+	CurrencyCode         string           `json:"currency_code" db:"currency_code"`
+	Reason               *string          `json:"reason,omitempty" db:"reason"`
+	Source               SuggestionSource `json:"source" db:"source"`
+	Status               SuggestionStatus `json:"status" db:"status"`
+	ExpiresAt            *time.Time       `json:"expires_at,omitempty"             db:"expires_at"`
+	UserActionAt         *time.Time       `json:"user_action_at,omitempty"         db:"user_action_at"`
+	UserNotes            *string          `json:"user_notes,omitempty"             db:"user_notes"`
+	CompletedAt          *time.Time       `json:"completed_at,omitempty"           db:"completed_at"`
+	MatchedTransactionID *string          `json:"matched_transaction_id,omitempty" db:"matched_transaction_id"`
+	ActualAmount         *float64         `json:"actual_amount,omitempty"          db:"actual_amount"`
+	CompletionSource     *string          `json:"completion_source,omitempty"      db:"completion_source"`
+	CreatedAt            time.Time        `json:"created_at" db:"created_at"`
+	UpdatedAt            time.Time        `json:"updated_at" db:"updated_at"`
 }
 
 // Validate checks that the transfer suggestion has all required fields and valid values.
@@ -599,6 +800,21 @@ func (s *TransferSuggestion) Reject(notes *string) {
 	s.Status = SuggestionStatusRejected
 	s.UserActionAt = &now
 	s.UserNotes = notes
+}
+
+// Complete marks the suggestion as completed after a transfer was detected or confirmed.
+// completionSource must be "exact_match" or "user_confirmed".
+func (s *TransferSuggestion) Complete(matchedTransactionID string, actualAmount float64, completionSource string) error {
+	if s.Status == SuggestionStatusCompleted {
+		return ErrTransferSuggestionAlreadyActioned
+	}
+	now := time.Now().UTC()
+	s.Status = SuggestionStatusCompleted
+	s.CompletedAt = &now
+	s.MatchedTransactionID = &matchedTransactionID
+	s.ActualAmount = &actualAmount
+	s.CompletionSource = &completionSource
+	return nil
 }
 
 // =============================================================================
@@ -681,9 +897,17 @@ type RuleExecutionsResponse struct {
 
 // Automation rule-related errors.
 var (
-	ErrAutomationRuleNotFound          = errors.New("automation rule not found")
-	ErrAutomationRuleAlreadyExists     = errors.New("automation rule with this name already exists")
-	ErrTransferSuggestionNotFound      = errors.New("transfer suggestion not found")
+	ErrAutomationRuleNotFound            = errors.New("automation rule not found")
+	ErrAutomationRuleAlreadyExists       = errors.New("automation rule with this name already exists")
+	ErrTransferSuggestionNotFound        = errors.New("transfer suggestion not found")
 	ErrTransferSuggestionAlreadyActioned = errors.New("transfer suggestion has already been accepted or rejected")
-	ErrRuleExecutionNotFound           = errors.New("rule execution not found")
+	ErrRuleExecutionNotFound             = errors.New("rule execution not found")
+
+	// Issue #1270: GAP-L — typed sentinels so the error mapper can return the correct HTTP status.
+	// ErrInvalidRule is returned (wrapped) when rule.Validate() fails due to bad client input
+	// (unknown event, unsupported operator, disallowed condition field). Maps to HTTP 400.
+	ErrInvalidRule = errors.New("invalid automation rule")
+	// ErrRuleConditionForbidden is returned when a condition's CategoryID does not belong to the
+	// requesting user (IDOR prevention). Maps to HTTP 403.
+	ErrRuleConditionForbidden = errors.New("automation rule condition access denied")
 )
