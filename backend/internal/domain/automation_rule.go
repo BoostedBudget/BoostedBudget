@@ -483,11 +483,14 @@ func (r *AutomationRule) BoundBudgetID() (string, bool) {
 
 // ValidateForPersistence validates the rule for create/update. It calls Validate()
 // for static checks (wrapping any error as ErrInvalidRule), then additionally requires
-// scope IDs for category-scoped conditions.
+// scope IDs for category-scoped conditions and validates multi-budget constraint.
 func (r *AutomationRule) ValidateForPersistence() error {
 	if err := r.Validate(); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRule, err)
 	}
+
+	// Validate category-scoped conditions and collect distinct BudgetIDs (single-pass).
+	budgetIDs := make(map[string]struct{})
 	for _, condition := range r.Conditions {
 		if !strings.HasPrefix(condition.Field, "budget_category.") {
 			continue
@@ -498,14 +501,10 @@ func (r *AutomationRule) ValidateForPersistence() error {
 		if condition.BudgetID == "" {
 			return fmt.Errorf("%w: condition field %q requires a budget_id", ErrInvalidRule, condition.Field)
 		}
+		budgetIDs[condition.BudgetID] = struct{}{}
 	}
-	// Multi-budget check: collect distinct BudgetIDs bound by category conditions
-	budgetIDs := make(map[string]struct{})
-	for _, condition := range r.Conditions {
-		if strings.HasPrefix(condition.Field, "budget_category.") && condition.BudgetID != "" {
-			budgetIDs[condition.BudgetID] = struct{}{}
-		}
-	}
+
+	// Multi-budget check: rule may bind at most one budget.
 	if len(budgetIDs) > 1 {
 		return fmt.Errorf("%w: a rule may bind at most one budget", ErrInvalidRule)
 	}

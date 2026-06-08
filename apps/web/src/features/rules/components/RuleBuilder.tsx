@@ -142,7 +142,6 @@ export function RuleBuilder() {
   // Initialize form from existing rule or pre-fill params
   // Note: Multiple setState calls in a single effect is intentional for form initialization
   // from external data. React 18+ batches these automatically.
-   
   useEffect(() => {
     if (existingRule) {
       setName(existingRule.name)
@@ -212,7 +211,6 @@ export function RuleBuilder() {
       }
     }
   }, [existingRule, prefilledType, prefilledBudgetId, prefilledCategoryId])
-   
 
   // Validate form
   const validate = useCallback((): FormErrors => {
