@@ -565,6 +565,8 @@ components:
     AutomationRuleCondition:
       additionalProperties: false
       properties:
+        category_id:
+          type: string
         field:
           type: string
         operator:

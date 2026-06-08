@@ -29,6 +29,7 @@
  */
 
 export interface AutomationRuleCondition {
+  category_id?: string;
   field: string;
   operator: string;
   value: unknown;
