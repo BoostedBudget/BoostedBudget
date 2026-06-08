@@ -89,6 +89,8 @@ const (
 	EventDataKeyPercentUsed = "percent_used"  // Percentage of budget/income consumed (0-100+)
 	EventDataKeyAmount      = "amount"        // Budget's target allocation amount
 	EventDataKeyRemaining   = "remaining"     // Budget amount minus total spent
+	EventDataKeyPeriodStart = "period_start"
+	EventDataKeyPeriodEnd   = "period_end"
 )
 
 // validConditionFieldsByEvent maps each supported event type to its set of
