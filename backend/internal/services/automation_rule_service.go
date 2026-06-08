@@ -182,9 +182,11 @@ func (s *automationRuleService) CreateRule(ctx context.Context, userID string, r
 		rule.ConditionLogic = "AND"
 	}
 
-	// Validate the rule — wrap with ErrInvalidRule so the HTTP layer returns 400 (not 500).
-	if err := rule.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", domain.ErrInvalidRule, err)
+	// ValidateForPersistence checks static rules (via Validate) AND requires scope IDs for
+	// category-scoped conditions. It already wraps errors with ErrInvalidRule so the HTTP
+	// layer returns 400 (not 500).
+	if err := rule.ValidateForPersistence(); err != nil {
+		return nil, err
 	}
 
 	// Verify referenced IDs (savings_goal_id, account IDs) belong to the rule owner (GAP AE).
@@ -259,9 +261,11 @@ func (s *automationRuleService) UpdateRule(ctx context.Context, userID, ruleID s
 		rule.Actions = *req.Actions
 	}
 
-	// Validate — wrap with ErrInvalidRule so the HTTP layer returns 400 (not 500).
-	if err := rule.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", domain.ErrInvalidRule, err)
+	// ValidateForPersistence checks static rules (via Validate) AND requires scope IDs for
+	// category-scoped conditions. It already wraps errors with ErrInvalidRule so the HTTP
+	// layer returns 400 (not 500).
+	if err := rule.ValidateForPersistence(); err != nil {
+		return nil, err
 	}
 
 	// Verify referenced IDs (savings_goal_id, account IDs) belong to the rule owner (GAP AE).

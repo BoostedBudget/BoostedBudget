@@ -2911,6 +2911,57 @@ func TestResolveAndVerifyUserAccount_AccountRepoNilFailOpen(t *testing.T) {
 		"nil accountRepo must still apply the resolved ID (fail-open; ownership check skipped)")
 }
 
+// ============================================================================
+// Issue #1271 Item 2 — A-CR1 brick risk: partial/legacy rule must not brick at execution
+// ============================================================================
+
+// TestExecuteRule_PartialScopedConditionDoesNotBrick verifies that ExecuteRule does NOT
+// return an error when a rule has a budget_category.* condition with empty CategoryID and
+// BudgetID. Such rules may exist as legacy data; they should evaluate to false (no match)
+// without bricking (hard error).
+func TestExecuteRule_PartialScopedConditionDoesNotBrick(t *testing.T) {
+	ctx := context.Background()
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+	svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	// Budget alert rule with a budget_category.percent_used condition that has empty
+	// CategoryID and BudgetID — simulating a legacy/partial rule from before #1270.
+	actionsJSON, _ := json.Marshal(map[string]interface{}{
+		"notification_channels": []string{"email"},
+		"threshold_type":        "percentage",
+		"threshold_value":       80,
+	})
+	rule := &domain.AutomationRule{
+		ID:       "rule-legacy-partial",
+		UserID:   "test-user-id",
+		Name:     "Legacy Partial Rule",
+		Enabled:  true,
+		RuleType: domain.RuleTypeBudgetAlert,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: "budget_updated",
+		},
+		Conditions: []domain.AutomationRuleCondition{
+			{
+				Field:      "budget_category.percent_used",
+				Operator:   domain.ConditionOperatorGte,
+				Value:      "80",
+				CategoryID: "", // deliberately empty — partial/legacy rule
+				BudgetID:   "", // deliberately empty — partial/legacy rule
+			},
+		},
+		ConditionLogic: "AND",
+		Actions:        actionsJSON,
+	}
+
+	// ExecuteRule must NOT return an error — the condition simply doesn't match.
+	_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+	assert.NoError(t, err, "ExecuteRule must not brick when CategoryID is empty; rule should evaluate to no-match")
+}
+
 // TestEvaluateConditionWithValue_BetweenIsNonEvaluable verifies that a condition with the
 // "between" operator evaluates to false at execution time (default-false path in the switch).
 // Validation rejects "between" before rules reach execution, but this pins the evaluator
