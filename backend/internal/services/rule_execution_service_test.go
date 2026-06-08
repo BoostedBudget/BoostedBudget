@@ -2985,3 +2985,224 @@ func TestEvaluateConditionWithValue_BetweenIsNonEvaluable(t *testing.T) {
 	assert.False(t, result2,
 		"between operator must be non-evaluable regardless of field value")
 }
+
+// =============================================================================
+// ProcessEventTrigger Budget Scoping Tests (A-CR2)
+// =============================================================================
+
+// TestProcessEventTrigger_SkipsRuleBoundToOtherBudget verifies that a rule whose
+// budget_category.* condition binds budget-X is NOT executed when the event carries
+// budget-Y — the A-CR2 OR-escape fix.
+func TestProcessEventTrigger_SkipsRuleBoundToOtherBudget(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-scope-1"
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID: "account-1",
+		ToAccountID:   "account-2",
+		AmountType:    "fixed",
+		Amount:        100.0,
+	})
+
+	ruleRepo := &mockAutomationRulesRepository{
+		rules: []*domain.AutomationRule{
+			{
+				ID:       "rule-budget-scope",
+				UserID:   userID,
+				Name:     "Category Rule for Budget X",
+				Enabled:  true,
+				Priority: 1,
+				RuleType: domain.RuleTypeTransferSuggestion,
+				TriggerConfig: domain.TriggerConfig{
+					Type:  domain.TriggerTypeEvent,
+					Event: domain.EventBudgetPeriodEnd,
+				},
+				Conditions: []domain.AutomationRuleCondition{
+					{Field: "budget_category.percent_used", Operator: domain.ConditionOperatorGte, Value: 80.0, CategoryID: "cat-1", BudgetID: "budget-X"},
+				},
+				ConditionLogic: "AND",
+				Actions:        actionsJSON,
+			},
+		},
+	}
+
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	// Event is for budget-Y, not budget-X
+	eventData := map[string]interface{}{
+		domain.EventDataKeyBudgetID: "budget-Y",
+	}
+
+	err := service.ProcessEventTrigger(ctx, userID, domain.EventBudgetPeriodEnd, eventData)
+	require.NoError(t, err)
+	// Rule must be entirely skipped — no execution record, no suggestion
+	assert.Empty(t, execRepo.executions, "rule bound to budget-X must be skipped when event is for budget-Y")
+	assert.Empty(t, suggestionRepo.suggestions, "no suggestion must be created when budget scope does not match")
+}
+
+// TestProcessEventTrigger_FiresRuleBoundToMatchingBudget verifies that a rule whose
+// budget_category.* condition binds budget-X IS executed when the event carries budget-X.
+func TestProcessEventTrigger_FiresRuleBoundToMatchingBudget(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-scope-2"
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID: "account-1",
+		ToAccountID:   "account-2",
+		AmountType:    "fixed",
+		Amount:        100.0,
+	})
+
+	ruleRepo := &mockAutomationRulesRepository{
+		rules: []*domain.AutomationRule{
+			{
+				ID:       "rule-budget-match",
+				UserID:   userID,
+				Name:     "Category Rule for Budget X",
+				Enabled:  true,
+				Priority: 1,
+				RuleType: domain.RuleTypeTransferSuggestion,
+				TriggerConfig: domain.TriggerConfig{
+					Type:  domain.TriggerTypeEvent,
+					Event: domain.EventBudgetPeriodEnd,
+				},
+				Conditions: []domain.AutomationRuleCondition{
+					{Field: "budget_category.percent_used", Operator: domain.ConditionOperatorGte, Value: 80.0, CategoryID: "cat-1", BudgetID: "budget-X"},
+				},
+				ConditionLogic: "AND",
+				Actions:        actionsJSON,
+			},
+		},
+	}
+
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	// Event is for the matching budget-X; populate categories so condition evaluates
+	eventData := map[string]interface{}{
+		domain.EventDataKeyBudgetID: "budget-X",
+		domain.EventDataKeyCategories: map[string]interface{}{
+			"cat-1": map[string]interface{}{
+				"percent_used": 90.0,
+			},
+		},
+	}
+
+	err := service.ProcessEventTrigger(ctx, userID, domain.EventBudgetPeriodEnd, eventData)
+	require.NoError(t, err)
+	// Rule must have been executed — suggestion repo should have a new entry
+	assert.NotEmpty(t, suggestionRepo.suggestions, "rule bound to budget-X must fire when event is also for budget-X")
+}
+
+// TestProcessEventTrigger_UnscopedRuleFiresForAnyBudget verifies that a rule with no
+// budget_category.* condition (not budget-scoped) fires regardless of the event's budget_id.
+func TestProcessEventTrigger_UnscopedRuleFiresForAnyBudget(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-scope-3"
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID: "account-1",
+		ToAccountID:   "account-2",
+		AmountType:    "fixed",
+		Amount:        100.0,
+	})
+
+	ruleRepo := &mockAutomationRulesRepository{
+		rules: []*domain.AutomationRule{
+			{
+				ID:       "rule-unscoped",
+				UserID:   userID,
+				Name:     "Unscoped Budget Rule",
+				Enabled:  true,
+				Priority: 1,
+				RuleType: domain.RuleTypeTransferSuggestion,
+				TriggerConfig: domain.TriggerConfig{
+					Type:  domain.TriggerTypeEvent,
+					Event: domain.EventBudgetPeriodEnd,
+				},
+				// Only budget.* condition — no budget_category.* so no budget binding
+				Conditions: []domain.AutomationRuleCondition{
+					{Field: "budget.percent_used", Operator: domain.ConditionOperatorGte, Value: 50.0},
+				},
+				ConditionLogic: "AND",
+				Actions:        actionsJSON,
+			},
+		},
+	}
+
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	eventData := map[string]interface{}{
+		domain.EventDataKeyBudgetID: "budget-any",
+		domain.EventDataKeyPercentUsed: 75.0,
+	}
+
+	err := service.ProcessEventTrigger(ctx, userID, domain.EventBudgetPeriodEnd, eventData)
+	require.NoError(t, err)
+	assert.NotEmpty(t, suggestionRepo.suggestions, "unscoped rule must fire for any budget_id")
+}
+
+// TestProcessEventTrigger_ORLogicDoesNotEscapeBudgetScope verifies the A-CR2 fix:
+// even with condition_logic=OR, a rule bound to budget-X must be fully skipped when
+// the event's budget_id is budget-Y. The OR logic must not bypass the scope guard.
+func TestProcessEventTrigger_ORLogicDoesNotEscapeBudgetScope(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-scope-4"
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID: "account-1",
+		ToAccountID:   "account-2",
+		AmountType:    "fixed",
+		Amount:        100.0,
+	})
+
+	ruleRepo := &mockAutomationRulesRepository{
+		rules: []*domain.AutomationRule{
+			{
+				ID:       "rule-or-escape",
+				UserID:   userID,
+				Name:     "OR Rule With Budget Scope",
+				Enabled:  true,
+				Priority: 1,
+				RuleType: domain.RuleTypeTransferSuggestion,
+				TriggerConfig: domain.TriggerConfig{
+					Type:  domain.TriggerTypeEvent,
+					Event: domain.EventBudgetPeriodEnd,
+				},
+				// OR logic: second condition (budget.percent_used) would be "true-ish" for any
+				// event carrying percent_used ≥ 0, but the rule is still budget-X-scoped via the
+				// first condition; it must be skipped entirely before any OR evaluation.
+				Conditions: []domain.AutomationRuleCondition{
+					{Field: "budget_category.percent_used", Operator: domain.ConditionOperatorGte, Value: 80.0, CategoryID: "cat-1", BudgetID: "budget-X"},
+					{Field: "budget.percent_used", Operator: domain.ConditionOperatorGte, Value: 0.0},
+				},
+				ConditionLogic: "OR",
+				Actions:        actionsJSON,
+			},
+		},
+	}
+
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	// Event is for budget-Y; percent_used satisfies the second condition but budget scope blocks
+	eventData := map[string]interface{}{
+		domain.EventDataKeyBudgetID:    "budget-Y",
+		domain.EventDataKeyPercentUsed: 90.0,
+	}
+
+	err := service.ProcessEventTrigger(ctx, userID, domain.EventBudgetPeriodEnd, eventData)
+	require.NoError(t, err)
+	assert.Empty(t, execRepo.executions, "OR-logic must not bypass budget scope guard (A-CR2)")
+	assert.Empty(t, suggestionRepo.suggestions, "no suggestion must be created when budget scope blocks the rule")
+}

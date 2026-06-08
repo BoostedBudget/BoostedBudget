@@ -461,6 +461,18 @@ func (r *AutomationRule) validateConditions() error {
 	return nil
 }
 
+// BoundBudgetID returns the budget this rule is scoped to, derived from its
+// category-scoped conditions. Returns ("", false) when no condition binds a budget.
+// The result is AND/OR-agnostic: any category-scoped condition binds the whole rule (A-CR2).
+func (r *AutomationRule) BoundBudgetID() (string, bool) {
+	for _, c := range r.Conditions {
+		if strings.HasPrefix(c.Field, "budget_category.") && c.BudgetID != "" {
+			return c.BudgetID, true
+		}
+	}
+	return "", false
+}
+
 // ValidateForPersistence validates the rule for create/update. It calls Validate()
 // for static checks (wrapping any error as ErrInvalidRule), then additionally requires
 // scope IDs for category-scoped conditions.
@@ -478,6 +490,16 @@ func (r *AutomationRule) ValidateForPersistence() error {
 		if condition.BudgetID == "" {
 			return fmt.Errorf("%w: condition field %q requires a budget_id", ErrInvalidRule, condition.Field)
 		}
+	}
+	// Multi-budget check: collect distinct BudgetIDs bound by category conditions
+	budgetIDs := make(map[string]struct{})
+	for _, condition := range r.Conditions {
+		if strings.HasPrefix(condition.Field, "budget_category.") && condition.BudgetID != "" {
+			budgetIDs[condition.BudgetID] = struct{}{}
+		}
+	}
+	if len(budgetIDs) > 1 {
+		return fmt.Errorf("%w: a rule may bind at most one budget", ErrInvalidRule)
 	}
 	return nil
 }
