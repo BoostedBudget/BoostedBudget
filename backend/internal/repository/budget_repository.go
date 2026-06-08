@@ -989,6 +989,9 @@ func (r *budgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryI
 		&matchLogicJSON,
 	)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrBudgetCategoryNotFound
+		}
 		return nil, err
 	}
 	return &bc, nil
