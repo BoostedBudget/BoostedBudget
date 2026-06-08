@@ -2043,15 +2043,16 @@ func TestEvaluateCondition_DottedFieldNormalization(t *testing.T) {
 			wantMatch: true,
 		},
 		{
-			// Issue #1270: spent_amount suffix alias → "total_spent" key in category map.
-			name:       "budget_category.spent_amount aliases to total_spent in category map",
+			// Issue #1270: spent_amount suffix alias → "spent" key in category map.
+			// Issue #1271: key renamed from "total_spent" to "spent".
+			name:       "budget_category.spent_amount aliases to spent in category map",
 			field:      "budget_category.spent_amount",
 			categoryID: "cat-abc",
 			operator:   domain.ConditionOperatorGt,
 			value:      "100",
 			data: map[string]interface{}{
 				domain.EventDataKeyCategories: map[string]interface{}{
-					"cat-abc": map[string]interface{}{"total_spent": 200.0},
+					"cat-abc": map[string]interface{}{"spent": 200.0},
 				},
 			},
 			wantMatch: true,
@@ -3251,4 +3252,157 @@ func TestProcessEventTrigger_ORLogicDoesNotEscapeBudgetScope(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, execRepo.executions, "OR-logic must not bypass budget scope guard (A-CR2)")
 	assert.Empty(t, suggestionRepo.suggestions, "no suggestion must be created when budget scope blocks the rule")
+}
+
+// =============================================================================
+// Issue #1271 Items 5+6: dual-shape reader, json.Number, budget-scope, key contract
+// =============================================================================
+
+// TestLookupFieldValue_TypedFloatShape verifies that lookupFieldValue resolves a
+// budget_category.spent_amount condition when the categories map uses the strongly-typed
+// map[string]map[string]float64 shape that BuildCategoryEventData now emits.
+func TestLookupFieldValue_TypedFloatShape(t *testing.T) {
+	condition := domain.AutomationRuleCondition{
+		Field:      "budget_category.spent_amount",
+		CategoryID: "cat-1",
+		BudgetID:   "budget-X",
+		Operator:   domain.ConditionOperatorGt,
+		Value:      "100",
+	}
+	data := map[string]interface{}{
+		domain.EventDataKeyBudgetID: "budget-X",
+		domain.EventDataKeyCategories: map[string]map[string]float64{
+			"cat-1": {
+				"spent":        200.0,
+				"remaining":    300.0,
+				"percent_used": 40.0,
+				"allocated":    500.0,
+			},
+		},
+	}
+	got := evaluateCondition(condition, data)
+	assert.True(t, got, "typed float64 shape must resolve spent_amount → spent key")
+}
+
+// TestLookupFieldValue_BudgetScopeMismatchReturnsFalse verifies that when a condition's
+// BudgetID does not match the event's budget_id, lookupFieldValue returns false.
+func TestLookupFieldValue_BudgetScopeMismatchReturnsFalse(t *testing.T) {
+	condition := domain.AutomationRuleCondition{
+		Field:      "budget_category.spent_amount",
+		CategoryID: "cat-1",
+		BudgetID:   "budget-Y", // mismatch: event carries budget-X
+		Operator:   domain.ConditionOperatorGt,
+		Value:      "100",
+	}
+	data := map[string]interface{}{
+		domain.EventDataKeyBudgetID: "budget-X",
+		domain.EventDataKeyCategories: map[string]map[string]float64{
+			"cat-1": {"spent": 200.0, "remaining": 300.0, "percent_used": 40.0, "allocated": 500.0},
+		},
+	}
+	got := evaluateCondition(condition, data)
+	assert.False(t, got, "budget scope mismatch must make condition return false")
+}
+
+// TestCompareNumeric_JSONNumber verifies that compareNumeric handles json.Number values
+// that arrive after a River JSON round-trip (JSON unmarshal into map[string]interface{}).
+func TestCompareNumeric_JSONNumber(t *testing.T) {
+	condition := domain.AutomationRuleCondition{
+		Field:      "budget_category.percent_used",
+		CategoryID: "cat-1",
+		BudgetID:   "budget-X",
+		Operator:   domain.ConditionOperatorGt,
+		Value:      "40",
+	}
+	data := map[string]interface{}{
+		domain.EventDataKeyBudgetID: "budget-X",
+		domain.EventDataKeyCategories: map[string]interface{}{
+			"cat-1": map[string]interface{}{
+				"percent_used": json.Number("42.5"),
+			},
+		},
+	}
+	got := evaluateCondition(condition, data)
+	assert.True(t, got, "json.Number must be handled by compareNumeric after River JSON round-trip")
+}
+
+// TestCategoryConditionFires_AfterRiverJSONRoundTrip simulates the full River
+// JSON round-trip: typed map → marshal → unmarshal into interface{} → evaluate.
+// This catches the json.Number issue that arises when River re-reads a job's args.
+func TestCategoryConditionFires_AfterRiverJSONRoundTrip(t *testing.T) {
+	// Build EventData with the strongly-typed categories map
+	original := map[string]interface{}{
+		domain.EventDataKeyBudgetID: "budget-X",
+		domain.EventDataKeyCategories: map[string]map[string]float64{
+			"cat-1": {
+				"percent_used": 35.0,
+				"remaining":    650.0,
+				"spent":        350.0,
+				"allocated":    1000.0,
+			},
+		},
+	}
+
+	// Marshal then unmarshal (River JSON round-trip)
+	raw, err := json.Marshal(original)
+	require.NoError(t, err)
+	var roundTripped map[string]interface{}
+	require.NoError(t, json.Unmarshal(raw, &roundTripped))
+
+	condition := domain.AutomationRuleCondition{
+		Field:      "budget_category.percent_used",
+		CategoryID: "cat-1",
+		BudgetID:   "budget-X",
+		Operator:   domain.ConditionOperatorGt,
+		Value:      "30",
+	}
+	got := evaluateCondition(condition, roundTripped)
+	assert.True(t, got, "category condition must evaluate correctly after River JSON round-trip")
+}
+
+// TestBudgetTotalSpentStillResolves is a regression guard that verifies the budget-level
+// total_spent field (emitted as domain.EventDataKeyTotalSpent) still resolves correctly.
+// This is separate from the category-level "spent" key rename.
+func TestBudgetTotalSpentStillResolves(t *testing.T) {
+	condition := domain.AutomationRuleCondition{
+		Field:    "budget.total_spent",
+		Operator: domain.ConditionOperatorGt,
+		Value:    "400",
+	}
+	data := map[string]interface{}{
+		domain.EventDataKeyTotalSpent: 500.0,
+		domain.EventDataKeyBudgetID:   "budget-X",
+	}
+	got := evaluateCondition(condition, data)
+	assert.True(t, got, "budget.total_spent must still resolve via EventDataKeyTotalSpent")
+}
+
+// TestCategoryEventDataKeyContract verifies that BuildCategoryEventData emits exactly
+// the keys {"percent_used", "remaining", "spent", "allocated"} — no more, no less.
+// This is a parity/lock test: if the emitter shape changes, this test fails immediately.
+// Issue #1271 Item 5: key contract enforcement.
+func TestCategoryEventDataKeyContract(t *testing.T) {
+	cat := domain.BudgetCategory{
+		ID:              "cat-contract",
+		BudgetID:        "budget-contract",
+		AllocatedAmount: 200.0,
+		SpentAmount:     80.0,
+	}
+	result := domain.BuildCategoryEventData([]domain.BudgetCategory{cat})
+
+	catMap, ok := result["cat-contract"]
+	require.True(t, ok, "expected category key in result")
+
+	expectedKeys := map[string]bool{
+		"percent_used": true,
+		"remaining":    true,
+		"spent":        true,
+		"allocated":    true,
+	}
+	// Every expected key must be present
+	for k := range expectedKeys {
+		assert.Contains(t, catMap, k, "expected key %q in category event data", k)
+	}
+	// No extra keys
+	assert.Len(t, catMap, len(expectedKeys), "category event data must have exactly %d keys", len(expectedKeys))
 }

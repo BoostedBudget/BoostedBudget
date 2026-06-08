@@ -83,6 +83,14 @@ func (m *MockBudgetRepository) GetCategoriesByBudgetID(ctx context.Context, budg
 	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
 }
 
+func (m *MockBudgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetIDs []string) (map[string][]domain.BudgetCategory, error) {
+	args := m.Called(ctx, budgetIDs)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string][]domain.BudgetCategory), args.Error(1)
+}
+
 func (m *MockBudgetRepository) UpdateCategory(ctx context.Context, category *domain.BudgetCategory) error {
 	args := m.Called(ctx, category)
 	return args.Error(0)

@@ -709,15 +709,17 @@ func TestRecalculateBudget_EmitsCategories(t *testing.T) {
 	categoriesRaw, ok := capturedEventData[domain.EventDataKeyCategories]
 	require.True(t, ok, "event data must contain 'categories' key")
 
-	catMap, ok := categoriesRaw.(map[string]interface{})
-	require.True(t, ok, "categories value must be map[string]interface{}")
+	// Issue #1271 Item 5: BuildCategoryEventData returns map[string]map[string]float64.
+	catMap, ok := categoriesRaw.(map[string]map[string]float64)
+	require.True(t, ok, "categories value must be map[string]map[string]float64")
 	require.Contains(t, catMap, "cat-groceries", "categories map must contain cat-groceries")
 
-	perCat, ok := catMap["cat-groceries"].(map[string]interface{})
-	require.True(t, ok)
+	perCat := catMap["cat-groceries"]
 	assert.Equal(t, 150.0/400.0*100, perCat["percent_used"], "percent_used for cat-groceries")
 	assert.Equal(t, 400.0-150.0, perCat["remaining"], "remaining for cat-groceries")
-	assert.Equal(t, 150.0, perCat["total_spent"], "total_spent for cat-groceries")
+	// Issue #1271 Item 5: key renamed from "total_spent" to "spent".
+	assert.Equal(t, 150.0, perCat["spent"], "spent for cat-groceries")
+	assert.Equal(t, 400.0, perCat["allocated"], "allocated for cat-groceries")
 
 	// Verify "remaining" key is present (from domain.EventDataKeyRemaining).
 	_, hasRemaining := capturedEventData[domain.EventDataKeyRemaining]
