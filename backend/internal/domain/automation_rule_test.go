@@ -170,12 +170,30 @@ func TestTriggerConfig_Validate(t *testing.T) {
 			name: "valid event trigger with filters",
 			config: TriggerConfig{
 				Type:  TriggerTypeEvent,
-				Event: "transaction_created",
+				Event: "budget_period_end",
 				Filters: map[string]interface{}{
 					"min_amount": 100,
 				},
 			},
 			wantErr: false,
+		},
+		{
+			name: "unknown event type returns error",
+			config: TriggerConfig{
+				Type:  TriggerTypeEvent,
+				Event: "transaction_created",
+			},
+			wantErr: true,
+			errMsg:  "unknown event type",
+		},
+		{
+			name: "another unknown event type returns error",
+			config: TriggerConfig{
+				Type:  TriggerTypeEvent,
+				Event: "balance_changed",
+			},
+			wantErr: true,
+			errMsg:  "unknown event type",
 		},
 		{
 			name: "valid schedule trigger",
@@ -215,6 +233,105 @@ func TestTriggerConfig_Validate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.config.Validate()
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// validateConditions Tests
+// =============================================================================
+
+func TestAutomationRule_validateConditions(t *testing.T) {
+	// Helper: build a minimal valid event-triggered rule.
+	validEventRule := func(event string, conditions []AutomationRuleCondition) AutomationRule {
+		return AutomationRule{
+			UserID:   "user-123",
+			Name:     "Test Rule",
+			RuleType: RuleTypeBudgetAlert,
+			TriggerConfig: TriggerConfig{
+				Type:  TriggerTypeEvent,
+				Event: event,
+			},
+			Conditions:     conditions,
+			ConditionLogic: "AND",
+			Actions:        json.RawMessage(`{"notification_channels":["email"],"threshold_type":"percentage","threshold_value":80}`),
+		}
+	}
+
+	tests := []struct {
+		name    string
+		rule    AutomationRule
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid budget.percent_used field with eq operator",
+			rule: validEventRule("budget_updated", []AutomationRuleCondition{
+				{Field: "budget.percent_used", Operator: ConditionOperatorEq, Value: 80},
+			}),
+			wantErr: false,
+		},
+		{
+			name: "valid budget_category.percent_used with CategoryID set",
+			rule: validEventRule("budget_updated", []AutomationRuleCondition{
+				{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1"},
+			}),
+			wantErr: false,
+		},
+		{
+			name: "unknown field returns not valid for event error",
+			rule: validEventRule("budget_updated", []AutomationRuleCondition{
+				{Field: "budget.typo_field", Operator: ConditionOperatorEq, Value: 80},
+			}),
+			wantErr: true,
+			errMsg:  "not valid for event",
+		},
+		{
+			name: "operator between returns unsupported operator error",
+			rule: validEventRule("budget_updated", []AutomationRuleCondition{
+				{Field: "budget.percent_used", Operator: ConditionOperatorBetween, Value: 80},
+			}),
+			wantErr: true,
+			errMsg:  "unsupported operator",
+		},
+		{
+			name: "budget_category field without CategoryID returns requires category_id error",
+			rule: validEventRule("budget_updated", []AutomationRuleCondition{
+				{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80},
+			}),
+			wantErr: true,
+			errMsg:  "requires a category_id",
+		},
+		{
+			name: "schedule-type trigger with conditions skips condition validation",
+			rule: AutomationRule{
+				UserID:   "user-123",
+				Name:     "Scheduled Transfer",
+				RuleType: RuleTypeTransferSuggestion,
+				TriggerConfig: TriggerConfig{
+					Type:     TriggerTypeSchedule,
+					Cron:     "0 0 1 * *",
+					Timezone: "America/New_York",
+				},
+				Conditions: []AutomationRuleCondition{
+					{Field: "account.balance", Operator: ConditionOperatorBetween, Value: 1000},
+				},
+				ConditionLogic: "AND",
+				Actions:        json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount":100}`),
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.rule.Validate()
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errMsg)
@@ -288,8 +405,9 @@ func TestAutomationRule_Validate_ConditionLogic(t *testing.T) {
 			Name:     "Test Rule",
 			RuleType: RuleTypeTransferSuggestion,
 			TriggerConfig: TriggerConfig{
-				Type:  TriggerTypeEvent,
-				Event: "budget_updated",
+				Type:     TriggerTypeSchedule,
+				Cron:     "0 0 1 * *",
+				Timezone: "America/New_York",
 			},
 			Conditions: []AutomationRuleCondition{
 				{Field: "account.balance", Operator: ConditionOperatorGt, Value: 1000},
@@ -331,8 +449,9 @@ func TestAutomationRule_Validate_TransferSuggestionRule(t *testing.T) {
 		Name:     "Excess Savings Transfer",
 		RuleType: RuleTypeTransferSuggestion,
 		TriggerConfig: TriggerConfig{
-			Type:  TriggerTypeEvent,
-			Event: "balance_changed",
+			Type:     TriggerTypeSchedule,
+			Cron:     "0 0 1 * *",
+			Timezone: "America/New_York",
 		},
 		Conditions: []AutomationRuleCondition{
 			{Field: "account.balance", Operator: ConditionOperatorGt, Value: 5000},
@@ -381,7 +500,7 @@ func TestAutomationRule_Validate_BudgetAlertRule(t *testing.T) {
 			Event: "budget_updated",
 		},
 		Conditions: []AutomationRuleCondition{
-			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80},
+			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1"},
 		},
 		ConditionLogic: "AND",
 		Actions:        json.RawMessage(`{"notification_channels":["email","push"],"threshold_type":"percentage","threshold_value":80}`),
@@ -419,7 +538,7 @@ func TestAutomationRule_Validate_CategoryRolloverRule(t *testing.T) {
 			Event: "budget_period_end",
 		},
 		Conditions: []AutomationRuleCondition{
-			{Field: "budget_category.remaining", Operator: ConditionOperatorGt, Value: 0},
+			{Field: "budget_category.remaining_amount", Operator: ConditionOperatorGt, Value: 0, CategoryID: "cat-1"},
 		},
 		ConditionLogic: "AND",
 		Actions:        json.RawMessage(`{"source_budget_category_id":"cat-1","rollover_type":"full"}`),
