@@ -333,6 +333,110 @@ func TestConditionEvaluation(t *testing.T) {
 		result := evaluateCondition(condition, data)
 		assert.False(t, result)
 	})
+
+	// Task 5: nested category lookup tests.
+
+	t.Run("budget_category field matches per-category value (match)", func(t *testing.T) {
+		condition := domain.AutomationRuleCondition{
+			Field:      "budget_category.percent_used",
+			Operator:   domain.ConditionOperatorGt,
+			Value:      "50",
+			CategoryID: "cat-1",
+		}
+		data := map[string]interface{}{
+			"categories": map[string]interface{}{
+				"cat-1": map[string]interface{}{
+					"percent_used": float64(75.0),
+				},
+			},
+		}
+		assert.True(t, evaluateCondition(condition, data))
+	})
+
+	t.Run("budget_category field no-match per-category value (no-match)", func(t *testing.T) {
+		condition := domain.AutomationRuleCondition{
+			Field:      "budget_category.percent_used",
+			Operator:   domain.ConditionOperatorGt,
+			Value:      "50",
+			CategoryID: "cat-1",
+		}
+		data := map[string]interface{}{
+			"categories": map[string]interface{}{
+				"cat-1": map[string]interface{}{
+					"percent_used": float64(30.0),
+				},
+			},
+		}
+		assert.False(t, evaluateCondition(condition, data))
+	})
+
+	t.Run("budget_category field returns false for missing CategoryID in EventData", func(t *testing.T) {
+		condition := domain.AutomationRuleCondition{
+			Field:      "budget_category.percent_used",
+			Operator:   domain.ConditionOperatorGt,
+			Value:      "50",
+			CategoryID: "cat-999",
+		}
+		data := map[string]interface{}{
+			"categories": map[string]interface{}{
+				"cat-1": map[string]interface{}{
+					"percent_used": float64(75.0),
+				},
+			},
+		}
+		assert.False(t, evaluateCondition(condition, data))
+	})
+
+	t.Run("budget_category field JSON round-trip float64 comparison works", func(t *testing.T) {
+		// River queue marshals/unmarshals EventData as JSON → floats stay float64.
+		condition := domain.AutomationRuleCondition{
+			Field:      "budget_category.percent_used",
+			Operator:   domain.ConditionOperatorGt,
+			Value:      "50",
+			CategoryID: "cat-1",
+		}
+		data := map[string]interface{}{
+			"categories": map[string]interface{}{
+				"cat-1": map[string]interface{}{
+					"percent_used": float64(75.0), // explicit float64 as JSON unmarshal produces
+				},
+			},
+		}
+		assert.True(t, evaluateCondition(condition, data))
+	})
+
+	t.Run("budget_category field reads per-category value not budget-level (regression)", func(t *testing.T) {
+		// EventData has percent_used=99.9 at budget level AND 50.0 in category.
+		// condition with budget_category.percent_used + CategoryID=cat-1 must read 50.0.
+		// gt "60" → false (proves 50.0 was read, not 99.9).
+		condition := domain.AutomationRuleCondition{
+			Field:      "budget_category.percent_used",
+			Operator:   domain.ConditionOperatorGt,
+			Value:      "60",
+			CategoryID: "cat-1",
+		}
+		data := map[string]interface{}{
+			"percent_used": float64(99.9), // budget-level — must NOT be used
+			"categories": map[string]interface{}{
+				"cat-1": map[string]interface{}{
+					"percent_used": float64(50.0),
+				},
+			},
+		}
+		assert.False(t, evaluateCondition(condition, data))
+	})
+
+	t.Run("budget.percent_used (flat field) still reads budget-level value", func(t *testing.T) {
+		condition := domain.AutomationRuleCondition{
+			Field:    "budget.percent_used",
+			Operator: domain.ConditionOperatorGt,
+			Value:    "50",
+		}
+		data := map[string]interface{}{
+			"percent_used": float64(80.0),
+		}
+		assert.True(t, evaluateCondition(condition, data))
+	})
 }
 
 // TestConditionLogic tests AND/OR condition logic.
@@ -1615,4 +1719,51 @@ func TestTestRule_PFCConditionPopulatesDisplay(t *testing.T) {
 	require.Len(t, result.ConditionResults, 1)
 	assert.Equal(t, "Food And Drink", result.ConditionResults[0].ValueDisplay)
 	assert.Equal(t, "Food And Drink", result.ConditionResults[0].ActualDisplay)
+}
+
+// TestTestRule_CategoryFieldActual verifies that TestRule returns the correct Actual
+// value from per-category data (not budget-level data) for budget_category.* fields.
+func TestTestRule_CategoryFieldActual(t *testing.T) {
+	ctx := context.Background()
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	actions, _ := json.Marshal(RuleActions{})
+	rule := &domain.AutomationRule{
+		ID:   "rule-cat-test",
+		Name: "Category dry-run",
+		Conditions: []domain.AutomationRuleCondition{
+			{
+				Field:      "budget_category.percent_used",
+				Operator:   domain.ConditionOperatorGt,
+				Value:      "60",
+				CategoryID: "cat-1",
+			},
+		},
+		ConditionLogic: "AND",
+		Actions:        actions,
+	}
+	// Budget-level percent_used is 99.9; cat-1's percent_used is 50.0.
+	// The condition uses gt "60" — should NOT match (50.0 < 60).
+	// Actual in ConditionResults must show 50.0, not 99.9.
+	triggerData := map[string]interface{}{
+		"percent_used": float64(99.9),
+		"categories": map[string]interface{}{
+			"cat-1": map[string]interface{}{
+				"percent_used": float64(50.0),
+			},
+		},
+	}
+
+	result, err := service.TestRule(ctx, rule, triggerData)
+	require.NoError(t, err)
+	require.Len(t, result.ConditionResults, 1)
+	// Condition must NOT be met (50.0 is not > 60).
+	assert.False(t, result.ConditionResults[0].Met)
+	// Actual must be the per-category value (50.0), not budget-level 99.9.
+	assert.Equal(t, float64(50.0), result.ConditionResults[0].Actual)
 }
