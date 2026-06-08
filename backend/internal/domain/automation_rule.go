@@ -145,6 +145,12 @@ var allowedConditionOperators = map[ConditionOperator]bool{
 	ConditionOperatorContains: true,
 }
 
+// AllowedConditionOperators returns the set of condition operators that are both
+// allowed at validation time and evaluable at execution time.
+func AllowedConditionOperators() map[ConditionOperator]bool {
+	return allowedConditionOperators
+}
+
 // =============================================================================
 // Condition Operators
 // =============================================================================

@@ -2986,6 +2986,52 @@ func TestEvaluateConditionWithValue_BetweenIsNonEvaluable(t *testing.T) {
 		"between operator must be non-evaluable regardless of field value")
 }
 
+// TestAllowedOperatorsAreEvaluable asserts parity between the validation-time
+// allowlist (domain.AllowedConditionOperators) and the execution-time evaluator
+// (evaluateConditionWithValue). Every operator in the allowlist must return true
+// for a value/condition pair that should logically match — ensuring no operator
+// can be added to the allowlist without also being handled in the evaluator.
+// Issue #1271 (Item 7 — A-CR3 parity test).
+func TestAllowedOperatorsAreEvaluable(t *testing.T) {
+	type probe struct {
+		fieldValue     interface{}
+		conditionValue interface{}
+	}
+
+	// For each allowed operator, supply a (fieldValue, conditionValue) pair that
+	// logically SHOULD match — a false result means the operator falls into the
+	// default-false branch and is therefore not evaluable.
+	probes := map[domain.ConditionOperator]probe{
+		domain.ConditionOperatorEq:       {fieldValue: 50.0, conditionValue: "50"},
+		domain.ConditionOperatorNeq:      {fieldValue: 50.0, conditionValue: "99"},
+		domain.ConditionOperatorGt:       {fieldValue: 50.0, conditionValue: "40"},
+		domain.ConditionOperatorGte:      {fieldValue: 50.0, conditionValue: "50"},
+		domain.ConditionOperatorLt:       {fieldValue: 50.0, conditionValue: "60"},
+		domain.ConditionOperatorLte:      {fieldValue: 50.0, conditionValue: "50"},
+		domain.ConditionOperatorContains: {fieldValue: "hello world", conditionValue: "hello"},
+	}
+
+	for op := range domain.AllowedConditionOperators() {
+		op := op // capture for parallel sub-tests
+		p, ok := probes[op]
+		if !ok {
+			t.Errorf("operator %q is in AllowedConditionOperators but has no probe in this test — add one", op)
+			continue
+		}
+
+		t.Run(string(op), func(t *testing.T) {
+			condition := domain.AutomationRuleCondition{
+				Field:    "budget.percent_used",
+				Operator: op,
+				Value:    p.conditionValue,
+			}
+			result := evaluateConditionWithValue(condition, p.fieldValue)
+			assert.True(t, result,
+				"operator %q is in AllowedConditionOperators but evaluateConditionWithValue returned false — it is not evaluable", op)
+		})
+	}
+}
+
 // =============================================================================
 // ProcessEventTrigger Budget Scoping Tests (A-CR2)
 // =============================================================================
