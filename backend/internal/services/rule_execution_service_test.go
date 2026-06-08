@@ -2910,3 +2910,27 @@ func TestResolveAndVerifyUserAccount_AccountRepoNilFailOpen(t *testing.T) {
 	assert.Equal(t, "user-account-new", resolvedID,
 		"nil accountRepo must still apply the resolved ID (fail-open; ownership check skipped)")
 }
+
+// TestEvaluateConditionWithValue_BetweenIsNonEvaluable verifies that a condition with the
+// "between" operator evaluates to false at execution time (default-false path in the switch).
+// Validation rejects "between" before rules reach execution, but this pins the evaluator
+// so that any future inadvertent "between" condition can't accidentally return true.
+// Issue #1270 (Codex LOW finding — evaluator default-false path untested).
+func TestEvaluateConditionWithValue_BetweenIsNonEvaluable(t *testing.T) {
+	condition := domain.AutomationRuleCondition{
+		Field:    "budget.percent_used",
+		Operator: domain.ConditionOperatorBetween,
+		Value:    "50,80",
+	}
+
+	// fieldValue clearly within the "50 to 80" range — if between were evaluable it
+	// would return true; the non-evaluable default must return false.
+	result := evaluateConditionWithValue(condition, 65.0)
+	assert.False(t, result,
+		"between operator must be non-evaluable at execution time (default-false path)")
+
+	// Also verify with a value outside any plausible range — must still be false.
+	result2 := evaluateConditionWithValue(condition, 99.0)
+	assert.False(t, result2,
+		"between operator must be non-evaluable regardless of field value")
+}
