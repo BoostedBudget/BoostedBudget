@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -62,6 +63,60 @@ var validTriggerTypes = map[TriggerType]bool{
 // IsValid checks if the trigger type is valid.
 func (tt TriggerType) IsValid() bool {
 	return validTriggerTypes[tt]
+}
+
+// =============================================================================
+// Event Names
+// =============================================================================
+
+// Event name constants for event-triggered rules.
+const (
+	EventBudgetUpdated   = "budget_updated"    // Fired when a budget's spend changes
+	EventBudgetPeriodEnd = "budget_period_end" // Fired at the end of a budget period
+)
+
+// =============================================================================
+// Event Data Keys
+// =============================================================================
+
+// EventDataKey constants for structured event data payloads.
+const (
+	EventDataKeyCategories = "categories" // List of category IDs relevant to the event
+)
+
+// validConditionFieldsByEvent maps each supported event type to its set of
+// allowed condition fields. Only event types present as keys are considered
+// valid; the inner set lists every field that may appear in a condition.
+var validConditionFieldsByEvent = map[string]map[string]bool{
+	EventBudgetUpdated: {
+		"budget.percent_used":              true,
+		"budget.remaining_amount":          true,
+		"budget.total_spent":               true,
+		"budget_category.percent_used":     true,
+		"budget_category.spent_amount":     true,
+		"budget_category.remaining_amount": true,
+	},
+	EventBudgetPeriodEnd: {
+		"budget.percent_used":              true,
+		"budget.remaining_amount":          true,
+		"budget.total_spent":               true,
+		"budget_category.percent_used":     true,
+		"budget_category.spent_amount":     true,
+		"budget_category.remaining_amount": true,
+	},
+}
+
+// allowedConditionOperators is the set of operators supported by
+// validateConditions / evaluateCondition. ConditionOperatorBetween is
+// intentionally excluded because it is not handled in evaluateCondition.
+var allowedConditionOperators = map[ConditionOperator]bool{
+	ConditionOperatorEq:       true,
+	ConditionOperatorNeq:      true,
+	ConditionOperatorGt:       true,
+	ConditionOperatorGte:      true,
+	ConditionOperatorLt:       true,
+	ConditionOperatorLte:      true,
+	ConditionOperatorContains: true,
 }
 
 // =============================================================================
@@ -202,6 +257,9 @@ func (tc *TriggerConfig) Validate() error {
 		if tc.Event == "" {
 			return errors.New("event is required for event trigger type")
 		}
+		if _, ok := validConditionFieldsByEvent[tc.Event]; !ok {
+			return fmt.Errorf("unknown event type %q", tc.Event)
+		}
 	case TriggerTypeSchedule:
 		if tc.Cron == "" {
 			return errors.New("cron expression is required for schedule trigger type")
@@ -339,6 +397,13 @@ func (r *AutomationRule) Validate() error {
 		return err
 	}
 
+	// Validate conditions — only for event-type triggers
+	if r.TriggerConfig.Type == TriggerTypeEvent {
+		if err := r.validateConditions(); err != nil {
+			return err
+		}
+	}
+
 	// Validate condition logic (default to AND if empty)
 	if r.ConditionLogic != "" && r.ConditionLogic != "AND" && r.ConditionLogic != "OR" {
 		return errors.New("condition_logic must be AND or OR")
@@ -346,6 +411,24 @@ func (r *AutomationRule) Validate() error {
 
 	// Validate actions based on rule type
 	return r.validateActions()
+}
+
+// validateConditions checks each condition's operator and field against the
+// allowlists for the rule's event type. It must only be called for event-type
+// triggers (caller responsibility).
+func (r *AutomationRule) validateConditions() error {
+	for _, condition := range r.Conditions {
+		if !allowedConditionOperators[condition.Operator] {
+			return fmt.Errorf("condition field %q has unsupported operator %q", condition.Field, condition.Operator)
+		}
+		if !validConditionFieldsByEvent[r.TriggerConfig.Event][condition.Field] {
+			return fmt.Errorf("condition field %q is not valid for event type %q", condition.Field, r.TriggerConfig.Event)
+		}
+		if strings.HasPrefix(condition.Field, "budget_category.") && condition.CategoryID == "" {
+			return fmt.Errorf("condition field %q requires a category_id", condition.Field)
+		}
+	}
+	return nil
 }
 
 // validateActions validates the actions JSON based on rule type.
