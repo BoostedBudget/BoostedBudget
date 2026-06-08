@@ -1398,3 +1398,97 @@ func TestConfirmMatch_MCP_IdempotencyKey_IncludesAmount_GAPBC(t *testing.T) {
 	assert.Equal(t, capturer1.capturedKey, capturer3.capturedKey,
 		"GAP BC: same actual_amount must produce the same scoped key (dedup still works)")
 }
+
+// amountCapturingService wraps mockTransferSuggestionService and records the actualAmount
+// passed to ConfirmTransferSuggestionMatch. Used by TestConfirmMatch_SubCent_... below.
+type amountCapturingService struct {
+	mockTransferSuggestionService
+	capturedAmount float64
+}
+
+func (m *amountCapturingService) ConfirmTransferSuggestionMatch(_ context.Context, _, _ string, actualAmount float64) (*domain.TransferSuggestion, error) {
+	m.capturedAmount = actualAmount
+	return m.confirmMatchResult, m.confirmMatchErr
+}
+
+// TestConfirmMatch_SubCent_IdempotencyRounding_GAPCG verifies GAP CG:
+// sub-cent actual_amount values must be rounded to 2dp at the handler level so that:
+//  1. The idempotency key fold uses the rounded amount (same key for 250.751 and 250.754).
+//  2. The service call (non-MCP path) receives the rounded 2dp amount, not the raw float.
+//
+// Without the fix: the key fold truncates at 2dp (so 250.751 and 250.754 share the same
+// scoped key), but the service call uses the raw float — two clients sending 250.751 and
+// 250.754 with the same base key collide on the cache key, and the fn for the first client
+// persists a different actual_amount than what the second client's request implies.
+func TestConfirmMatch_SubCent_IdempotencyRounding_GAPCG(t *testing.T) {
+	const secret = "mcp-cg-secret"
+	const userID = "user-cg-confirm"
+	const suggID = "sugg-cg-confirm"
+	const baseKey = "base-idem-key-cg"
+
+	confirmed := newTestSuggestionItem(suggID, userID)
+	confirmed.MatchedTransactionID = nil
+
+	t.Run("key fold uses 2dp rounded amount", func(t *testing.T) {
+		// Test via MCP path using idempotencyKeyCaptureMock (cacheHit=true → fn not called).
+		// Verifies the scoped key fold at line 238-239.
+		svc := &mockTransferSuggestionService{} // never called (cacheHit=true)
+
+		newHandler := func(capturer *idempotencyKeyCaptureMock) *TransferSuggestionHandler {
+			txMock := new(mockPgxTx)
+			txMock.On("Rollback", mock.Anything).Return(nil)
+			dbMock := new(mockOperationsDB)
+			dbMock.On("Begin", mock.Anything).Return(txMock, nil)
+			return NewTransferSuggestionHandler(svc, TransferSuggestionHandlerDeps{
+				DB:              dbMock,
+				MCPAuditRepo:    new(mockOperationsMCPAuditRepo),
+				MCPWorkerSecret: secret,
+				IdempotencyRepo: capturer,
+			})
+		}
+
+		// 250.751 → key must contain :250.75 (not :250.751 or :250.75100...)
+		capturer1 := &idempotencyKeyCaptureMock{returnResult: confirmed}
+		_, err := newHandler(capturer1).ConfirmMatch(context.Background(), &ConfirmTransferSuggestionMatchInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+			IdempotencyInput:   inputs.IdempotencyInput{IdempotencyKey: baseKey},
+			MCPContextInput:    inputs.MCPContextInput{MCPWorkerSecret: secret},
+			ID:                 suggID,
+			Body:               ConfirmMatchBody{ActualAmount: 250.751},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, capturer1.capturedKey, ":250.75",
+			"GAP CG: scoped key must embed the 2dp-rounded amount (250.751 → :250.75)")
+
+		// 250.754 → same 2dp fold → same key as 250.751.
+		capturer2 := &idempotencyKeyCaptureMock{returnResult: confirmed}
+		_, err = newHandler(capturer2).ConfirmMatch(context.Background(), &ConfirmTransferSuggestionMatchInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+			IdempotencyInput:   inputs.IdempotencyInput{IdempotencyKey: baseKey},
+			MCPContextInput:    inputs.MCPContextInput{MCPWorkerSecret: secret},
+			ID:                 suggID,
+			Body:               ConfirmMatchBody{ActualAmount: 250.754},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, capturer1.capturedKey, capturer2.capturedKey,
+			"GAP CG: 250.751 and 250.754 both round to 250.75 — must share the same scoped key")
+	})
+
+	t.Run("service call receives 2dp rounded amount (non-MCP path)", func(t *testing.T) {
+		// Test via the non-MCP path (line 278) where h.service IS the injected service mock,
+		// so amountCapturingService can record what actualAmount was passed.
+		svc := &amountCapturingService{}
+		svc.confirmMatchResult = confirmed
+
+		// No MCPWorkerSecret dep → IsMCPOrigin returns false → non-MCP path at line 278.
+		handler := NewTransferSuggestionHandler(svc)
+		_, err := handler.ConfirmMatch(context.Background(), &ConfirmTransferSuggestionMatchInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+			ID:                 suggID,
+			Body:               ConfirmMatchBody{ActualAmount: 250.751},
+		})
+		require.NoError(t, err)
+		assert.InDelta(t, 250.75, svc.capturedAmount, 0.0001,
+			"GAP CG: non-MCP service call must receive 2dp-rounded amount (250.751 → 250.75)")
+	})
+}

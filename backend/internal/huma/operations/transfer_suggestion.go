@@ -5,6 +5,7 @@ package operations
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"strconv"
 
@@ -198,6 +199,12 @@ type ConfirmTransferSuggestionMatchOutput struct {
 // Confirms a fuzzy-matched transfer suggestion with the actual transfer amount.
 // Supports MCP audit path when X-MCP-Worker-Secret is present and valid.
 func (h *TransferSuggestionHandler) ConfirmMatch(ctx context.Context, input *ConfirmTransferSuggestionMatchInput) (*ConfirmTransferSuggestionMatchOutput, error) {
+	// GAP CG: round actual_amount to 2dp once so that the idempotency-key fold and the
+	// service call always use the same canonical value. Without this, sub-cent inputs like
+	// 250.751 and 250.754 fold to the same ":250.75" key but call the service with
+	// different raw floats, causing the second call's cached body to reflect the wrong amount.
+	input.Body.ActualAmount = math.Round(input.Body.ActualAmount*100) / 100
+
 	fireConfirmAnalytics := func() {
 		if h.analytics != nil {
 			h.analytics.Capture(input.UserID, phclient.EventTransferSuggestionValidated, map[string]interface{}{

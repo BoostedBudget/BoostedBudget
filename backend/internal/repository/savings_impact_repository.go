@@ -188,8 +188,8 @@ func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID stri
 			NULLIF(ua.nickname, '')                      AS ua_nickname,
 			ua.account_name_hint                         AS ua_hint_encrypted
 		FROM transfer_suggestions ts
-		LEFT JOIN accounts a     ON a.id  = ts.to_account_id
-		LEFT JOIN user_accounts ua ON ua.id = ts.to_user_account_id
+		LEFT JOIN accounts a     ON a.id  = ts.to_account_id     AND a.user_id  = ts.user_id
+		LEFT JOIN user_accounts ua ON ua.id = ts.to_user_account_id AND ua.user_id = ts.user_id
 		WHERE ts.user_id = $1
 		  AND ts.status = 'completed'
 		  AND ts.actual_amount IS NOT NULL
