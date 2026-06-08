@@ -49,7 +49,8 @@ func NewAutomationRuleService(
 	ruleRepo repository.AutomationRulesRepository,
 ) *automationRuleService {
 	return &automationRuleService{
-		ruleRepo: ruleRepo,
+		ruleRepo:   ruleRepo,
+		budgetRepo: nil,
 	}
 }
 

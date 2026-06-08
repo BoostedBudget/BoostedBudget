@@ -330,7 +330,7 @@ describe('ConditionBuilder', () => {
     // Use a synthetic unknown field that won't appear in any event's field list
     const unknownFieldCondition: RuleCondition = { field: 'account.balance', operator: 'gte', value: 100 }
 
-    const { rerender } = render(
+    render(
       <ConditionBuilder
         conditions={[unknownFieldCondition]}
         logic="AND"

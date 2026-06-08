@@ -193,11 +193,9 @@ export const CONDITION_FIELD_OPTIONS: ConditionFieldOption[] = [
  * Maps each supported event name to the valid condition field options for that event.
  * Both budget_updated and budget_period_end share the same 6 fields backed by emitters.
  */
-const BUDGET_EVENT_FIELDS: ConditionFieldOption[] = CONDITION_FIELD_OPTIONS
-
 export const CONDITION_FIELDS_BY_EVENT: Record<string, ConditionFieldOption[]> = {
-  budget_updated: BUDGET_EVENT_FIELDS,
-  budget_period_end: BUDGET_EVENT_FIELDS,
+  budget_updated: CONDITION_FIELD_OPTIONS,
+  budget_period_end: CONDITION_FIELD_OPTIONS,
 }
 
 // =============================================================================

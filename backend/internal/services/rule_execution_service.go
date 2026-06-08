@@ -32,6 +32,17 @@ type RuleActions struct {
 // This allows us to track skipped executions separately in the service layer.
 const ExecutionStatusSkipped domain.ExecutionStatus = "completed"
 
+// markExecutionSkipped marks an execution as skipped with the given reason and updates the database.
+func (s *ruleExecutionService) markExecutionSkipped(ctx context.Context, execution *domain.RuleExecution, startTime time.Time, reason string) {
+	execution.Status = ExecutionStatusSkipped
+	completedAt := time.Now()
+	execution.CompletedAt = &completedAt
+	durationMs := int(time.Since(startTime).Milliseconds())
+	execution.ExecutionDurationMs = &durationMs
+	execution.OutputData, _ = json.Marshal(map[string]string{"skip_reason": reason})
+	_ = s.executionRepo.Update(ctx, execution)
+}
+
 // RuleExecutionService defines the interface for rule execution business logic.
 type RuleExecutionService interface {
 	// ExecuteRule executes a single rule with the given trigger data.
@@ -127,27 +138,13 @@ func (s *ruleExecutionService) ExecuteRule(ctx context.Context, rule *domain.Aut
 
 	// Check if rule is enabled
 	if !rule.Enabled {
-		execution.Status = ExecutionStatusSkipped
-		completedAt := time.Now()
-		execution.CompletedAt = &completedAt
-		durationMs := int(time.Since(startTime).Milliseconds())
-		execution.ExecutionDurationMs = &durationMs
-		skipReason := "rule disabled"
-		execution.OutputData, _ = json.Marshal(map[string]string{"skip_reason": skipReason})
-		_ = s.executionRepo.Update(ctx, execution)
+		s.markExecutionSkipped(ctx, execution, startTime, "rule disabled")
 		return execution, nil
 	}
 
 	// Evaluate conditions
 	if !evaluateConditions(rule.Conditions, rule.ConditionLogic, triggerData) {
-		execution.Status = ExecutionStatusSkipped
-		completedAt := time.Now()
-		execution.CompletedAt = &completedAt
-		durationMs := int(time.Since(startTime).Milliseconds())
-		execution.ExecutionDurationMs = &durationMs
-		skipReason := "conditions not met"
-		execution.OutputData, _ = json.Marshal(map[string]string{"skip_reason": skipReason})
-		_ = s.executionRepo.Update(ctx, execution)
+		s.markExecutionSkipped(ctx, execution, startTime, "conditions not met")
 		return execution, nil
 	}
 

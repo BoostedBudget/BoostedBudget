@@ -192,6 +192,31 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 	return budget, nil
 }
 
+// scanBudgetRow scans a budget row from a query result.
+func scanBudgetRow(rows interface {
+	Scan(dest ...interface{}) error
+}, budget *domain.Budget) ([]byte, error) {
+	var incomeSourcesJSON []byte
+	err := rows.Scan(
+		&budget.ID,
+		&budget.UserID,
+		&budget.Name,
+		&budget.Description,
+		&budget.Period,
+		&budget.StartDate,
+		&budget.EndDate,
+		&budget.Amount,
+		&budget.CurrencyCode,
+		&budget.IsActive,
+		&budget.CreatedAt,
+		&budget.UpdatedAt,
+		&budget.IncomeAmount,
+		&incomeSourcesJSON,
+		&budget.ExpectedIncome,
+	)
+	return incomeSourcesJSON, err
+}
+
 // GetByUserID retrieves all budgets for a specific user.
 func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.Budget, error) {
 	query := `
@@ -212,24 +237,7 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 	var budgets []*domain.Budget
 	for rows.Next() {
 		budget := &domain.Budget{}
-		var incomeSourcesJSON []byte
-		err := rows.Scan(
-			&budget.ID,
-			&budget.UserID,
-			&budget.Name,
-			&budget.Description,
-			&budget.Period,
-			&budget.StartDate,
-			&budget.EndDate,
-			&budget.Amount,
-			&budget.CurrencyCode,
-			&budget.IsActive,
-			&budget.CreatedAt,
-			&budget.UpdatedAt,
-			&budget.IncomeAmount,
-			&incomeSourcesJSON,
-			&budget.ExpectedIncome,
-		)
+		incomeSourcesJSON, err := scanBudgetRow(rows, budget)
 		if err != nil {
 			return nil, err
 		}
@@ -269,24 +277,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 	var budgets []*domain.Budget
 	for rows.Next() {
 		budget := &domain.Budget{}
-		var incomeSourcesJSON []byte
-		err := rows.Scan(
-			&budget.ID,
-			&budget.UserID,
-			&budget.Name,
-			&budget.Description,
-			&budget.Period,
-			&budget.StartDate,
-			&budget.EndDate,
-			&budget.Amount,
-			&budget.CurrencyCode,
-			&budget.IsActive,
-			&budget.CreatedAt,
-			&budget.UpdatedAt,
-			&budget.IncomeAmount,
-			&incomeSourcesJSON,
-			&budget.ExpectedIncome,
-		)
+		incomeSourcesJSON, err := scanBudgetRow(rows, budget)
 		if err != nil {
 			return nil, err
 		}
@@ -317,24 +308,7 @@ func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (
 	`
 
 	budget := &domain.Budget{}
-	var incomeSourcesJSON []byte
-	err := r.db.QueryRow(ctx, query, userID, name).Scan(
-		&budget.ID,
-		&budget.UserID,
-		&budget.Name,
-		&budget.Description,
-		&budget.Period,
-		&budget.StartDate,
-		&budget.EndDate,
-		&budget.Amount,
-		&budget.CurrencyCode,
-		&budget.IsActive,
-		&budget.CreatedAt,
-		&budget.UpdatedAt,
-		&budget.IncomeAmount,
-		&incomeSourcesJSON,
-		&budget.ExpectedIncome,
-	)
+	incomeSourcesJSON, err := scanBudgetRow(r.db.QueryRow(ctx, query, userID, name), budget)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrBudgetNotFound
