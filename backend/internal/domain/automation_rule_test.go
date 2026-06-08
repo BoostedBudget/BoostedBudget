@@ -63,6 +63,64 @@ func TestTriggerType_IsValid(t *testing.T) {
 // AutomationRuleCondition Tests
 // =============================================================================
 
+func TestAutomationRuleCondition_CategoryID_JSON_RoundTrip(t *testing.T) {
+	tests := []struct {
+		name          string
+		condition     AutomationRuleCondition
+		expectedJSON  string
+		expectKeyJSON bool
+	}{
+		{
+			name: "condition with category_id",
+			condition: AutomationRuleCondition{
+				Field:      "budget_category.percent_used",
+				Operator:   ConditionOperatorGte,
+				Value:      80,
+				CategoryID: "cat-123",
+			},
+			expectedJSON:  `"category_id":"cat-123"`,
+			expectKeyJSON: true,
+		},
+		{
+			name: "condition without category_id omits key",
+			condition: AutomationRuleCondition{
+				Field:    "account.balance",
+				Operator: ConditionOperatorGt,
+				Value:    1000,
+			},
+			expectedJSON:  `"category_id"`,
+			expectKeyJSON: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Marshal to JSON
+			jsonData, err := json.Marshal(tt.condition)
+			require.NoError(t, err)
+
+			// Check presence/absence of category_id key
+			jsonStr := string(jsonData)
+			if tt.expectKeyJSON {
+				assert.Contains(t, jsonStr, tt.expectedJSON)
+			} else {
+				assert.NotContains(t, jsonStr, tt.expectedJSON)
+			}
+
+			// Unmarshal back and verify round-trip for CategoryID
+			var unmarshal AutomationRuleCondition
+			err = json.Unmarshal(jsonData, &unmarshal)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.condition.Field, unmarshal.Field)
+			assert.Equal(t, tt.condition.Operator, unmarshal.Operator)
+			// Note: Value uses interface{}, which JSON unmarshaling converts to float64 for numbers
+			// So we only verify CategoryID round-trips correctly
+			assert.Equal(t, tt.condition.CategoryID, unmarshal.CategoryID)
+		})
+	}
+}
+
 func TestAutomationRuleConditionOperator_IsValid(t *testing.T) {
 	tests := []struct {
 		name     string
