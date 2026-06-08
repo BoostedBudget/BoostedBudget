@@ -1579,4 +1579,109 @@ func TestBudget_JSONMarshaling_WithIncomeFields(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// BuildCategoryEventData Tests (Issue #1270: Task 4)
+// =============================================================================
+
+// TestBuildCategoryEventData verifies that the helper returns the correct map
+// keyed by category ID with per-category metrics.
+func TestBuildCategoryEventData(t *testing.T) {
+	categories := []BudgetCategory{
+		{
+			ID:              "cat-food",
+			BudgetID:        "budget-1",
+			CategoryKind:    "pfc",
+			AllocatedAmount: 500.0,
+			SpentAmount:     200.0,
+		},
+		{
+			ID:              "cat-transport",
+			BudgetID:        "budget-1",
+			CategoryKind:    "pfc",
+			AllocatedAmount: 300.0,
+			SpentAmount:     300.0,
+		},
+	}
+
+	result := BuildCategoryEventData(categories)
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(result))
+	}
+
+	// Verify cat-food
+	foodRaw, ok := result["cat-food"]
+	if !ok {
+		t.Fatal("expected key 'cat-food' in result")
+	}
+	food, ok := foodRaw.(map[string]interface{})
+	if !ok {
+		t.Fatal("cat-food value is not map[string]interface{}")
+	}
+	if food["percent_used"] != 40.0 {
+		t.Errorf("cat-food percent_used: got %v, want 40.0", food["percent_used"])
+	}
+	if food["remaining"] != 300.0 {
+		t.Errorf("cat-food remaining: got %v, want 300.0", food["remaining"])
+	}
+	if food["total_spent"] != 200.0 {
+		t.Errorf("cat-food total_spent: got %v, want 200.0", food["total_spent"])
+	}
+
+	// Verify cat-transport (100% used)
+	transportRaw, ok := result["cat-transport"]
+	if !ok {
+		t.Fatal("expected key 'cat-transport' in result")
+	}
+	transport, ok := transportRaw.(map[string]interface{})
+	if !ok {
+		t.Fatal("cat-transport value is not map[string]interface{}")
+	}
+	if transport["percent_used"] != 100.0 {
+		t.Errorf("cat-transport percent_used: got %v, want 100.0", transport["percent_used"])
+	}
+	if transport["remaining"] != 0.0 {
+		t.Errorf("cat-transport remaining: got %v, want 0.0", transport["remaining"])
+	}
+	if transport["total_spent"] != 300.0 {
+		t.Errorf("cat-transport total_spent: got %v, want 300.0", transport["total_spent"])
+	}
+}
+
+// TestBuildCategoryEventData_ZeroAllocation verifies that a zero-allocation category
+// returns 0 for percent_used rather than NaN (division by zero guard).
+func TestBuildCategoryEventData_ZeroAllocation(t *testing.T) {
+	categories := []BudgetCategory{
+		{
+			ID:              "cat-zero",
+			BudgetID:        "budget-1",
+			CategoryKind:    "pfc",
+			AllocatedAmount: 0.0,
+			SpentAmount:     0.0,
+		},
+	}
+
+	result := BuildCategoryEventData(categories)
+
+	catRaw, ok := result["cat-zero"]
+	if !ok {
+		t.Fatal("expected key 'cat-zero' in result")
+	}
+	cat, ok := catRaw.(map[string]interface{})
+	if !ok {
+		t.Fatal("cat-zero value is not map[string]interface{}")
+	}
+	if cat["percent_used"] != 0.0 {
+		t.Errorf("zero-allocation percent_used: got %v, want 0.0 (not NaN)", cat["percent_used"])
+	}
+}
+
+// TestBuildCategoryEventData_Empty verifies that an empty categories slice returns an empty map.
+func TestBuildCategoryEventData_Empty(t *testing.T) {
+	result := BuildCategoryEventData([]BudgetCategory{})
+	if len(result) != 0 {
+		t.Errorf("expected empty map, got %d entries", len(result))
+	}
+}
+
 // Note: contains helper is defined in linked_item_test.go

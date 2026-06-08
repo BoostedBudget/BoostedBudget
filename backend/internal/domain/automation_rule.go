@@ -81,7 +81,14 @@ const (
 
 // EventDataKey constants for structured event data payloads.
 const (
-	EventDataKeyCategories = "categories" // List of category IDs relevant to the event
+	EventDataKeyCategories  = "categories"    // Per-category metrics map (keyed by category ID)
+	EventDataKeyBudgetID    = "budget_id"     // ID of the budget that triggered the event
+	EventDataKeyBudgetName  = "budget_name"   // Human-readable name of the budget
+	EventDataKeyIncomeAmount = "income_amount" // Actual income received in the budget period
+	EventDataKeyTotalSpent  = "total_spent"   // Total amount spent across top-level categories
+	EventDataKeyPercentUsed = "percent_used"  // Percentage of budget/income consumed (0-100+)
+	EventDataKeyAmount      = "amount"        // Budget's target allocation amount
+	EventDataKeyRemaining   = "remaining"     // Budget amount minus total spent
 )
 
 // validConditionFieldsByEvent maps each supported event type to its set of
