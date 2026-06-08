@@ -424,6 +424,7 @@ func main() {
 		// Issue #972 GAP AE: inject repos for create/update IDOR ownership validation.
 		automationRuleService.SetSavingsGoalRepo(savingsGoalRepo)
 		automationRuleService.SetAccountRepo(accountRepo)
+		automationRuleService.SetBudgetRepo(budgetRepo) // #1270: category ownership validation
 		appLogger.Info("Automation rule service initialized")
 
 		// Issue #37: Rule Execution Service

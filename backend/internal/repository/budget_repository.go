@@ -27,6 +27,9 @@ type BudgetRepository interface {
 	// BudgetCategory operations
 	CreateCategory(ctx context.Context, category *domain.BudgetCategory) error
 	GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
+	// GetCategoryByIDAndUser returns a budget category only if it belongs to the given user (via the parent budget).
+	// Returns an error if not found or not owned. Issue #1270: category ownership validation.
+	GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error)
 	UpdateCategory(ctx context.Context, category *domain.BudgetCategory) error
 	UpdateCategorySpentAmount(ctx context.Context, categoryID string, spentAmount float64) error
 	DeleteCategory(ctx context.Context, id, budgetID string) error
@@ -952,4 +955,44 @@ func (r *budgetRepository) GetTimezonesByUserIDs(ctx context.Context, userIDs []
 	}
 
 	return result, nil
+}
+
+// GetCategoryByIDAndUser returns a budget category only if it is owned by the given user.
+// Ownership is established through the parent budget (budget_categories has no user_id column).
+// Returns an error if the category does not exist or belongs to a different user.
+// Issue #1270: category ownership validation for automation rule conditions.
+func (r *budgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error) {
+	query := `
+		SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed, bc.custom_category_id,
+			bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
+			bc.tags, bc.match_logic
+		FROM budget_categories bc
+		JOIN budgets b ON b.id = bc.budget_id AND b.user_id = $2
+		WHERE bc.id = $1
+	`
+	var bc domain.BudgetCategory
+	var tagsJSON []byte
+	var matchLogicJSON []byte
+
+	err := r.db.QueryRow(ctx, query, categoryID, userID).Scan(
+		&bc.ID,
+		&bc.BudgetID,
+		&bc.CategoryKind,
+		&bc.PFCPrimary,
+		&bc.PFCDetailed,
+		&bc.CustomCategoryID,
+		&bc.AllocatedAmount,
+		&bc.SpentAmount,
+		&bc.CreatedAt,
+		&bc.UpdatedAt,
+		&tagsJSON,
+		&matchLogicJSON,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrBudgetCategoryNotFound
+		}
+		return nil, err
+	}
+	return &bc, nil
 }

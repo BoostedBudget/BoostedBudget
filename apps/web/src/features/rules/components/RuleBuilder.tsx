@@ -5,7 +5,7 @@
  * Main form for creating and editing automation rules.
  */
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
@@ -41,6 +41,7 @@ import {
   RolloverActionForm,
   SavingsGoalActionForm,
 } from './actions'
+import { useBudgets } from '../../budgets/hooks/useBudgets'
 
 interface FormErrors {
   name?: string
@@ -106,6 +107,9 @@ export function RuleBuilder() {
   // Mutations
   const createMutation = useCreateAutomationRule()
   const updateMutation = useUpdateAutomationRule()
+
+  // Budget data for condition category picker
+  const { budgets } = useBudgets()
 
   // Form state
   const [name, setName] = useState('')
@@ -224,6 +228,12 @@ export function RuleBuilder() {
 
     return newErrors
   }, [name, ruleType])
+
+  // Gather all categories across all budgets for the condition category picker
+  const allBudgetCategories = useMemo(
+    () => budgets.flatMap((b) => b.categories ?? []),
+    [budgets]
+  )
 
   // Get current action based on rule type
   const getCurrentAction = useCallback((): RuleAction | null => {
@@ -476,6 +486,8 @@ export function RuleBuilder() {
             logic={conditionLogic}
             onConditionsChange={setConditions}
             onLogicChange={setConditionLogic}
+            triggerEvent={triggerConfig.type === 'event' ? triggerConfig.event : undefined}
+            categories={allBudgetCategories}
           />
         </section>
 

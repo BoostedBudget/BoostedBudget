@@ -456,6 +456,22 @@ func (bc *BudgetCategory) PercentUsed() float64 {
 	return (bc.SpentAmount / bc.AllocatedAmount) * 100
 }
 
+// BuildCategoryEventData returns a map keyed by budget category ID suitable for
+// inclusion as the "categories" key in rules engine EventData.
+// Each value is a map with "percent_used", "remaining", and "total_spent" keys.
+// The zero-allocation guard in BudgetCategory.PercentUsed ensures no NaN values.
+func BuildCategoryEventData(categories []BudgetCategory) map[string]interface{} {
+	result := make(map[string]interface{}, len(categories))
+	for _, bc := range categories {
+		result[bc.ID] = map[string]interface{}{
+			"percent_used": bc.PercentUsed(),
+			"remaining":    bc.RemainingAmount(),
+			"total_spent":  bc.SpentAmount,
+		}
+	}
+	return result
+}
+
 // CreateBudgetRequest represents the request to create a new budget.
 type CreateBudgetRequest struct {
 	Name         string                        `json:"name" validate:"required,max=100"`

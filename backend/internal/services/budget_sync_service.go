@@ -161,18 +161,23 @@ func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domai
 	// Step 4: Trigger automation rules if event processor is set
 	// Issue #35: Rules Engine Core - budget_updated event
 	if s.eventProcessor != nil {
-		// Calculate percent used for condition evaluation
-		var percentUsed float64
-		if incomeAmount > 0 {
-			percentUsed = (totalSpent / incomeAmount) * 100
-		}
+		// Use the canonical Budget.PercentUsed() domain method so that budget_updated
+		// and budget_period_end report the same percent_used for identical budget state.
+		// The denominator is Budget.Amount (not incomeAmount), matching Budget.PercentUsed()
+		// and keeping both event types consistent for budget.percent_used conditions (#1270).
+		syncedBudget := &domain.Budget{Amount: budget.Amount, Categories: categories}
+		percentUsed := syncedBudget.PercentUsed()
+		remaining := syncedBudget.RemainingAmount()
 
 		eventData := map[string]interface{}{
-			"budget_id":     budget.ID,
-			"budget_name":   budget.Name,
-			"income_amount": incomeAmount,
-			"total_spent":   totalSpent,
-			"percent_used":  percentUsed,
+			domain.EventDataKeyBudgetID:     budget.ID,
+			domain.EventDataKeyBudgetName:   budget.Name,
+			domain.EventDataKeyIncomeAmount: incomeAmount,
+			domain.EventDataKeyTotalSpent:   totalSpent,
+			domain.EventDataKeyPercentUsed:  percentUsed,
+			domain.EventDataKeyAmount:       budget.Amount,
+			domain.EventDataKeyRemaining:    remaining,
+			domain.EventDataKeyCategories:   domain.BuildCategoryEventData(categories),
 		}
 
 		// Fire and forget - rule execution failures shouldn't fail budget sync
