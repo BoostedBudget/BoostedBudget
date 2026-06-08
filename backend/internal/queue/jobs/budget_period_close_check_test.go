@@ -859,6 +859,57 @@ func TestWorkAt_DeletesMarkerOnEnqueueFailure(t *testing.T) {
 	expirer.AssertExpectations(t)
 }
 
+// TestWorkAt_CategoryLoadFailure_DeletesMarkerForRetry verifies that when
+// GetCategoriesByBudgetID fails after InsertMarker succeeds, DeleteMarker is called
+// and Enqueue is NOT called — the next daily run will retry with categories present.
+// Without this clean-up, category-scoped rule conditions would miss permanently for the
+// period (the marker prevents re-evaluation). Issue #1270.
+func TestWorkAt_CategoryLoadFailure_DeletesMarkerForRetry(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2024, time.February, 1, 9, 0, 0, 0, time.UTC)
+
+	budget := newMonthlyBudget("budget-catfail", "user-catfail", time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	budgetRepo := &mockBudgetPeriodCheckRepo{}
+	periodEventsRepo := &mockBudgetPeriodEventsRepo{}
+	mockQueue := new(MockJobQueue)
+	expirer := new(mockTransferSuggestionExpirer)
+
+	expectedPeriodStart := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	expectedPeriodEnd := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
+
+	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).Return([]*domain.Budget{budget}, nil)
+	periodEventsRepo.On("HasMarker", ctx, "user-catfail", "budget-catfail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(false, nil)
+	// InsertMarker succeeds — the marker is now written.
+	periodEventsRepo.On("InsertMarker", ctx, "user-catfail", "budget-catfail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(true, nil)
+	// GetCategoriesByBudgetID fails with a transient error AFTER the marker is inserted.
+	budgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-catfail").Return(nil, errors.New("transient category query failure"))
+	// DeleteMarker must be called to clean up the orphaned marker so the next daily run can
+	// retry with categories — category-scoped conditions must not miss permanently.
+	periodEventsRepo.On("DeleteMarker", ctx, "user-catfail", "budget-catfail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(nil)
+	expirer.On("ExpirePending", ctx).Return(int64(0), nil)
+	expirer.On("ClearStaleReservations", ctx).Return(int64(0), nil)
+
+	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
+		BudgetRepo:                budgetRepo,
+		PeriodEventsRepo:          periodEventsRepo,
+		JobQueue:                  mockQueue,
+		TransferSuggestionExpirer: expirer,
+	})
+	job := newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{TriggerSource: "test-catfail"})
+
+	err := worker.workAt(ctx, job, now)
+	require.NoError(t, err) // category errors are logged, not propagated
+
+	// Enqueue must NOT have been called — the marker was cleaned up for retry.
+	mockQueue.AssertNotCalled(t, "Enqueue")
+	// DeleteMarker must have been called to un-suppress the next daily run.
+	periodEventsRepo.AssertCalled(t, "DeleteMarker", ctx, "user-catfail", "budget-catfail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd)
+	periodEventsRepo.AssertExpectations(t)
+	mockQueue.AssertExpectations(t)
+	expirer.AssertExpectations(t)
+}
+
 // =============================================================================
 // Timezone-aware period detection tests (Issue #972 Task 2e)
 // =============================================================================

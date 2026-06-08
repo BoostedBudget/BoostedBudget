@@ -262,16 +262,26 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 			}
 
 			// Load categories for per-category condition evaluation (#1270).
-			// On error, log a warning and proceed with an empty categories map so
-			// budget-level conditions still fire correctly.
+			// On error, delete the marker so the next daily run retries with fresh category
+			// data — category-scoped rule conditions must not permanently miss for the period.
 			cats, catErr := w.budgetRepo.GetCategoriesByBudgetID(ctx, budget.ID)
 			if catErr != nil {
-				w.logger.Warn("failed to load categories for period-end event data; category conditions will not evaluate",
+				w.logger.Warn("failed to load categories for period-end event data; deleting marker for retry",
 					"budget_id", budget.ID,
 					"user_id", budget.UserID,
 					"error", catErr,
 				)
-				cats = nil
+				if delErr := w.periodEventsRepo.DeleteMarker(ctx,
+					budget.UserID, budget.ID, periodStart, periodEnd, domain.EventBudgetPeriodEnd,
+				); delErr != nil {
+					w.logger.Error("failed to delete marker after category load failure",
+						"budget_id", budget.ID,
+						"user_id", budget.UserID,
+						"delete_error", delErr,
+					)
+				}
+				totalErrors++
+				continue
 			}
 			budget.Categories = cats
 
