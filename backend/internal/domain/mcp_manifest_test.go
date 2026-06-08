@@ -211,7 +211,7 @@ func TestMCPManifest_AnalyticsOpsAreInGoManifest(t *testing.T) {
 	}
 }
 
-// TestMCPManifest_Issue972_SavingsTransferEntries verifies that the three new
+// TestMCPManifest_Issue972_SavingsTransferEntries verifies that the four new
 // Issue #972 operation entries are present with the correct class.
 func TestMCPManifest_Issue972_SavingsTransferEntries(t *testing.T) {
 	type wantEntry struct {
@@ -223,6 +223,7 @@ func TestMCPManifest_Issue972_SavingsTransferEntries(t *testing.T) {
 		{"getSavingsImpactAggregate", domain.MCPClassRead},
 		{"getSavingsImpactMe", domain.MCPClassRead},
 		{"confirmTransferSuggestionMatch", domain.MCPClassWrite},
+		{"declineTransferSuggestionMatch", domain.MCPClassWrite}, // GAP CJ: was missing from test
 	}
 
 	for _, w := range want {
