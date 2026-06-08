@@ -245,9 +245,11 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 		}
 
 		// Unmarshal income_sources from JSON (Issue #491)
-		if err := json.Unmarshal(incomeSourcesJSON, &budget.IncomeSources); err != nil {
+		sources, err := unmarshalIncomeSources(incomeSourcesJSON)
+		if err != nil {
 			return nil, err
 		}
+		budget.IncomeSources = sources
 
 		budgets = append(budgets, budget)
 	}
@@ -302,9 +304,11 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 		}
 
 		// Unmarshal income_sources from JSON (Issue #491)
-		if err := json.Unmarshal(incomeSourcesJSON, &budget.IncomeSources); err != nil {
+		sources, err := unmarshalIncomeSources(incomeSourcesJSON)
+		if err != nil {
 			return nil, err
 		}
+		budget.IncomeSources = sources
 
 		budgets = append(budgets, budget)
 	}
@@ -620,6 +624,10 @@ func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetI
 		}
 
 		result[bc.BudgetID] = append(result[bc.BudgetID], bc)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	return result, nil

@@ -135,26 +135,14 @@ func (s *ruleExecutionService) ExecuteRule(ctx context.Context, rule *domain.Aut
 
 	// Check if rule is enabled
 	if !rule.Enabled {
-		execution.Status = ExecutionStatusSkipped
-		completedAt := time.Now()
-		execution.CompletedAt = &completedAt
-		durationMs := int(time.Since(startTime).Milliseconds())
-		execution.ExecutionDurationMs = &durationMs
-		skipReason := "rule disabled"
-		execution.OutputData, _ = json.Marshal(map[string]string{"skip_reason": skipReason})
+		s.markExecutionSkipped(execution, startTime, "rule disabled")
 		_ = s.executionRepo.Update(ctx, execution)
 		return execution, nil
 	}
 
 	// Evaluate conditions
 	if !evaluateConditions(rule.Conditions, rule.ConditionLogic, triggerData) {
-		execution.Status = ExecutionStatusSkipped
-		completedAt := time.Now()
-		execution.CompletedAt = &completedAt
-		durationMs := int(time.Since(startTime).Milliseconds())
-		execution.ExecutionDurationMs = &durationMs
-		skipReason := "conditions not met"
-		execution.OutputData, _ = json.Marshal(map[string]string{"skip_reason": skipReason})
+		s.markExecutionSkipped(execution, startTime, "conditions not met")
 		_ = s.executionRepo.Update(ctx, execution)
 		return execution, nil
 	}
@@ -820,6 +808,20 @@ func evaluateConditions(conditions []domain.AutomationRuleCondition, logic strin
 	return true
 }
 
+// normalizeSuffix maps UI field suffixes to engine keys.
+// Used by both normalizeConditionField and lookupFieldValue for consistency.
+func normalizeSuffix(suffix string) string {
+	switch suffix {
+	case "remaining_amount":
+		return "remaining"
+	case "spent_amount":
+		// Issue #1271 Item 5: emitter key renamed from "total_spent" to "spent"
+		return "spent"
+	default:
+		return suffix
+	}
+}
+
 // normalizeConditionField maps UI-built dotted field names (e.g. "budget.remaining_amount")
 // to flat engine keys (e.g. "remaining"). The rule-builder stores entity-prefixed names,
 // but event emitters publish flat keys. Without normalization, all UI-built conditions
@@ -828,8 +830,7 @@ func evaluateConditions(conditions []domain.AutomationRuleCondition, logic strin
 // Mapping:
 //   - Strip entity prefix: "budget_category.", "budget.", "account.", "transaction."
 //     (longer prefixes checked first)
-//   - Alias suffix changes: "remaining_amount" → "remaining", "spent_amount" → "total_spent"
-//   - Other suffixes pass through unchanged
+//   - Alias suffix changes via normalizeSuffix
 //   - Unknown/flat fields returned as-is
 func normalizeConditionField(field string) string {
 	// Strip entity prefix (longer prefixes must be checked first)
@@ -841,16 +842,7 @@ func normalizeConditionField(field string) string {
 			break
 		}
 	}
-
-	// Alias suffix names that differ between UI label and engine flat key
-	switch suffix {
-	case "remaining_amount":
-		return "remaining"
-	case "spent_amount":
-		// Issue #1271 Item 5: emitter key renamed from "total_spent" to "spent"
-		return "spent"
-	}
-	return suffix
+	return normalizeSuffix(suffix)
 }
 
 // lookupFieldValue resolves the condition field to its value in data.
@@ -872,14 +864,7 @@ func lookupFieldValue(condition domain.AutomationRuleCondition, data map[string]
 				return nil, false
 			}
 		}
-		suffix := condition.Field[len("budget_category."):]
-		switch suffix {
-		case "remaining_amount":
-			suffix = "remaining"
-		case "spent_amount":
-			// Issue #1271 Item 5: emitter key renamed from "total_spent" to "spent"
-			suffix = "spent"
-		}
+		suffix := normalizeSuffix(condition.Field[len("budget_category."):])
 		return lookupCategoryMetric(data[domain.EventDataKeyCategories], condition.CategoryID, suffix)
 	}
 	// Flat lookup with prefix stripping + suffix normalization.
@@ -896,25 +881,21 @@ func lookupCategoryMetric(categoriesRaw interface{}, categoryID, suffix string) 
 	switch cats := categoriesRaw.(type) {
 	case map[string]map[string]float64:
 		catMap, ok := cats[categoryID]
-		if !ok {
-			return nil, false
+		if ok {
+			if val, ok := catMap[suffix]; ok {
+				return val, true
+			}
 		}
-		val, ok := catMap[suffix]
-		return val, ok
 	case map[string]interface{}:
-		catRaw, ok := cats[categoryID]
-		if !ok {
-			return nil, false
+		if catRaw, ok := cats[categoryID]; ok {
+			if catMap, ok := catRaw.(map[string]interface{}); ok {
+				if val, ok := catMap[suffix]; ok {
+					return val, true
+				}
+			}
 		}
-		catMap, ok := catRaw.(map[string]interface{})
-		if !ok {
-			return nil, false
-		}
-		val, ok := catMap[suffix]
-		return val, ok
-	default:
-		return nil, false
 	}
+	return nil, false
 }
 
 // evaluateCondition evaluates a single condition against the data.
@@ -1030,6 +1011,17 @@ func containsValue(list, value string) bool {
 		}
 	}
 	return false
+}
+
+// markExecutionSkipped marks an execution as skipped with the given reason.
+// Sets status, completion time, duration, and output data in one place.
+func (s *ruleExecutionService) markExecutionSkipped(execution *domain.RuleExecution, startTime time.Time, reason string) {
+	execution.Status = ExecutionStatusSkipped
+	completedAt := time.Now()
+	execution.CompletedAt = &completedAt
+	durationMs := int(time.Since(startTime).Milliseconds())
+	execution.ExecutionDurationMs = &durationMs
+	execution.OutputData, _ = json.Marshal(map[string]string{"skip_reason": reason})
 }
 
 // Helper functions for optional pointers.

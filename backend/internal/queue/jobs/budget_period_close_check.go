@@ -178,14 +178,7 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 		// Deduplicate user IDs: a single user may own multiple budgets on this page.
 		var tzMap map[string]string
 		if w.userTimezones != nil {
-			seenUsers := make(map[string]struct{}, len(budgets))
-			userIDs := make([]string, 0, len(budgets))
-			for _, b := range budgets {
-				if _, dup := seenUsers[b.UserID]; !dup {
-					seenUsers[b.UserID] = struct{}{}
-					userIDs = append(userIDs, b.UserID)
-				}
-			}
+			userIDs := deduplicateUserIDs(budgets)
 			var tzErr error
 			tzMap, tzErr = w.userTimezones.GetTimezonesByUserIDs(ctx, userIDs)
 			if tzErr != nil {
@@ -425,6 +418,21 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 	)
 
 	return nil
+}
+
+// deduplicateUserIDs returns a deduplicated slice of user IDs from budgets.
+// A single user may own multiple budgets on a page, so deduplication
+// avoids redundant timezone lookups.
+func deduplicateUserIDs(budgets []*domain.Budget) []string {
+	seenUsers := make(map[string]struct{}, len(budgets))
+	userIDs := make([]string, 0, len(budgets))
+	for _, b := range budgets {
+		if _, dup := seenUsers[b.UserID]; !dup {
+			seenUsers[b.UserID] = struct{}{}
+			userIDs = append(userIDs, b.UserID)
+		}
+	}
+	return userIDs
 }
 
 // resolveLocation looks up the timezone for a user from the pre-fetched tzMap.

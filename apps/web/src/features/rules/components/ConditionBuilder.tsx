@@ -144,15 +144,12 @@ function ConditionRow({ condition, index, availableFields, budgets, onChange, on
   )
 
   // Group fields by category for optgroup
-  const groupedFields = availableFields.reduce(
+  const groupedFields = availableFields.reduce<Record<string, ConditionFieldOption[]>>(
     (acc, field) => {
-      if (!acc[field.category]) {
-        acc[field.category] = []
-      }
-      acc[field.category].push(field)
+      (acc[field.category] ??= []).push(field)
       return acc
     },
-    {} as Record<string, ConditionFieldOption[]>
+    {}
   )
 
   return (
@@ -325,7 +322,7 @@ export function ConditionBuilder({
     const validFields = new Set(availableFields.map((f) => f.value))
     const updated = conditions.map((c) => {
       if (!validFields.has(c.field)) {
-        return { ...c, field: availableFields[0]?.value ?? c.field, category_id: undefined }
+        return { ...c, field: availableFields[0]?.value ?? c.field, budget_id: undefined, category_id: undefined }
       }
       return c
     })
