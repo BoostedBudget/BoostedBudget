@@ -329,6 +329,7 @@ type AutomationRuleCondition struct {
 	Operator   ConditionOperator `json:"operator"`             // Comparison operator
 	Value      interface{}       `json:"value"`                // Value to compare against
 	CategoryID string            `json:"category_id,omitempty"` // Optional category ID for category-scoped conditions
+	BudgetID   string            `json:"budget_id,omitempty"`   // Optional budget ID for budget-scoped conditions
 }
 
 // =============================================================================
