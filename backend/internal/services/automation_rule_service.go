@@ -4,6 +4,8 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -38,7 +40,8 @@ type AutomationRuleService interface {
 
 // automationRuleService implements AutomationRuleService.
 type automationRuleService struct {
-	ruleRepo repository.AutomationRulesRepository
+	ruleRepo   repository.AutomationRulesRepository
+	budgetRepo repository.BudgetRepository
 }
 
 // NewAutomationRuleService creates a new AutomationRuleService instance.
@@ -48,6 +51,34 @@ func NewAutomationRuleService(
 	return &automationRuleService{
 		ruleRepo: ruleRepo,
 	}
+}
+
+// SetBudgetRepo sets the budget repository for category ownership validation.
+// Issue #1270: Task 3 — category ownership validation for conditions.
+func (s *automationRuleService) SetBudgetRepo(repo repository.BudgetRepository) {
+	s.budgetRepo = repo
+}
+
+// validateRuleReferenceOwnership checks that any category_id values referenced in
+// rule conditions are owned by the rule's user. Skips validation when budgetRepo
+// is not set (backward-compatible with existing callers that don't inject it).
+func (s *automationRuleService) validateRuleReferenceOwnership(ctx context.Context, rule *domain.AutomationRule) error {
+	if s.budgetRepo == nil {
+		return nil
+	}
+	for _, condition := range rule.Conditions {
+		if condition.CategoryID == "" {
+			continue
+		}
+		// Only budget_category.* fields carry a CategoryID; guard with prefix check for safety.
+		if !strings.HasPrefix(condition.Field, "budget_category.") {
+			continue
+		}
+		if _, err := s.budgetRepo.GetCategoryByIDAndUser(ctx, condition.CategoryID, rule.UserID); err != nil {
+			return fmt.Errorf("condition category_id does not belong to this user")
+		}
+	}
+	return nil
 }
 
 // CreateRule creates a new automation rule (unlimited rules for all tiers).
@@ -73,6 +104,11 @@ func (s *automationRuleService) CreateRule(ctx context.Context, userID string, r
 
 	// Validate the rule
 	if err := rule.Validate(); err != nil {
+		return nil, err
+	}
+
+	// Validate that any category_id values in conditions are owned by this user.
+	if err := s.validateRuleReferenceOwnership(ctx, rule); err != nil {
 		return nil, err
 	}
 
@@ -145,6 +181,11 @@ func (s *automationRuleService) UpdateRule(ctx context.Context, userID, ruleID s
 
 	// Validate
 	if err := rule.Validate(); err != nil {
+		return nil, err
+	}
+
+	// Validate that any category_id values in conditions are owned by this user.
+	if err := s.validateRuleReferenceOwnership(ctx, rule); err != nil {
 		return nil, err
 	}
 
