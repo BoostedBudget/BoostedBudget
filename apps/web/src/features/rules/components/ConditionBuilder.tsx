@@ -70,8 +70,7 @@ interface ConditionRowProps {
   disabled?: boolean
 }
 
-const selectClass = 'rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
-const inputClass = 'rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
+const formControlClass = 'rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
 
 function ConditionRow({ condition, index, availableFields, categories, onChange, onRemove, disabled }: ConditionRowProps) {
   const operators = getOperatorsForField(condition.field, availableFields)
@@ -151,7 +150,7 @@ function ConditionRow({ condition, index, availableFields, categories, onChange,
             value={condition.field}
             onChange={handleFieldChange}
             disabled={disabled}
-            className={selectClass}
+            className={formControlClass}
           >
             {Object.entries(groupedFields).map(([category, fields]) => (
               <optgroup key={category} label={category}>
@@ -175,7 +174,7 @@ function ConditionRow({ condition, index, availableFields, categories, onChange,
             value={condition.operator}
             onChange={handleOperatorChange}
             disabled={disabled}
-            className={selectClass}
+            className={formControlClass}
           >
             {operators.map((op) => (
               <option key={op} value={op}>
@@ -196,7 +195,7 @@ function ConditionRow({ condition, index, availableFields, categories, onChange,
             value={condition.value as string | number}
             onChange={handleValueChange}
             disabled={disabled}
-            className={inputClass}
+            className={formControlClass}
             placeholder={valueType === 'number' ? '0' : 'Enter value...'}
           />
         </div>
@@ -225,7 +224,7 @@ function ConditionRow({ condition, index, availableFields, categories, onChange,
             value={condition.category_id ?? ''}
             onChange={handleCategoryChange}
             disabled={disabled}
-            className={selectClass}
+            className={formControlClass}
           >
             <option value="">All Categories</option>
             {(categories ?? []).map((category) => (
