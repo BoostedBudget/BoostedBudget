@@ -239,9 +239,10 @@ func ValidateCronExpression(expr string) error {
 
 // AutomationRuleCondition represents a condition that must be met for a rule to fire.
 type AutomationRuleCondition struct {
-	Field    string            `json:"field"`    // Field to evaluate: account.balance, budget.percent_used, budget_category.remaining, etc.
-	Operator ConditionOperator `json:"operator"` // Comparison operator
-	Value    interface{}       `json:"value"`    // Value to compare against
+	Field      string            `json:"field"`                // Field to evaluate: account.balance, budget.percent_used, budget_category.remaining, etc.
+	Operator   ConditionOperator `json:"operator"`             // Comparison operator
+	Value      interface{}       `json:"value"`                // Value to compare against
+	CategoryID string            `json:"category_id,omitempty"` // Optional category ID for category-scoped conditions
 }
 
 // =============================================================================
