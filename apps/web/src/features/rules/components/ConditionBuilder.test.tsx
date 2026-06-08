@@ -324,4 +324,49 @@ describe('ConditionBuilder', () => {
     const options = Array.from(operatorSelect.querySelectorAll('option')).map((o) => (o as HTMLOptionElement).value)
     expect(options).not.toContain('between')
   })
+
+  it('should reset condition field when triggerEvent changes and existing field is no longer valid', () => {
+    const onConditionsChange = mock(() => {})
+    // Use a synthetic unknown field that won't appear in any event's field list
+    const unknownFieldCondition: RuleCondition = { field: 'account.balance', operator: 'gte', value: 100 }
+
+    const { rerender } = render(
+      <ConditionBuilder
+        conditions={[unknownFieldCondition]}
+        logic="AND"
+        onConditionsChange={onConditionsChange}
+        onLogicChange={() => {}}
+        triggerEvent="budget_updated"
+      />
+    )
+
+    // account.balance is not in CONDITION_FIELDS_BY_EVENT['budget_updated'], so useEffect
+    // should fire onConditionsChange with the first valid field
+    expect(onConditionsChange).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: 'budget.percent_used',
+          category_id: undefined,
+        }),
+      ])
+    )
+  })
+
+  it('should not call onConditionsChange when all conditions have valid fields', () => {
+    const onConditionsChange = mock(() => {})
+    const validCondition: RuleCondition = { field: 'budget.percent_used', operator: 'gte', value: 80 }
+
+    render(
+      <ConditionBuilder
+        conditions={[validCondition]}
+        logic="AND"
+        onConditionsChange={onConditionsChange}
+        onLogicChange={() => {}}
+        triggerEvent="budget_updated"
+      />
+    )
+
+    // budget.percent_used is valid for budget_updated — no reset should occur
+    expect(onConditionsChange).not.toHaveBeenCalled()
+  })
 })
