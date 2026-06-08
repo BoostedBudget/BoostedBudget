@@ -399,3 +399,97 @@ func TestGetUserImpact_DestinationAccountName_Integration(t *testing.T) {
 	assert.Nil(t, caseD.ToAccountName,
 		"case (d): ToAccountName must be nil when no name is available")
 }
+
+// TestGetUserImpact_CrossUserAccountName_Integration proves GAP CF: the destination
+// account JOIN in GetUserImpact must be user-scoped so that a cross-user account_id
+// stored in a transfer_suggestion does NOT leak another user's account name.
+//
+// Without the fix (AND a.user_id = ts.user_id / AND ua.user_id = ts.user_id), the
+// JOIN matches any account row with the given ID regardless of ownership and would
+// return the other user's account name. This is a defense-in-depth constraint on top
+// of IDOR ownership enforced at create/execute time (GAP AE).
+//
+// Only a real-PG test can catch this — pgxmock cannot validate JOIN predicate correctness.
+func TestGetUserImpact_CrossUserAccountName_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	repo := NewSavingsImpactRepositoryWithEncryptor(tx, newTestFieldEncryptor(t))
+
+	// Two users: the requester and another user whose accounts must stay private.
+	requesterID := uuid.New()
+	otherUserID := uuid.New()
+	for _, row := range []struct {
+		id    uuid.UUID
+		label string
+	}{
+		{requesterID, "cf-requester"},
+		{otherUserID, "cf-other"},
+	} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
+			VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		`, row.id, "test|"+row.id.String(), row.label+"-"+row.id.String()+"@example.com")
+		require.NoError(t, err, "seed user "+row.label)
+	}
+
+	// Seed a Plaid account owned by otherUserID (not the requester).
+	linkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-cf-token')
+	`, linkedItemID, otherUserID, "test-item-cf-"+linkedItemID.String())
+	require.NoError(t, err, "seed other user's linked_item")
+
+	otherAccountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, nickname)
+		VALUES ($1, $2, $3, 'plaid-cf-savings', 'OtherUser Savings', 'depository', 'Leaked Nickname')
+	`, otherAccountID, linkedItemID, otherUserID)
+	require.NoError(t, err, "seed other user's Plaid account")
+
+	// Seed a manual account owned by otherUserID.
+	otherUAID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id, nickname)
+		VALUES ($1, $2, 'inst-cf-ua', 'OtherUser Manual Savings')
+	`, otherUAID, otherUserID)
+	require.NoError(t, err, "seed other user's manual account")
+
+	// Seed completed suggestions for the REQUESTER that reference the OTHER user's account IDs.
+	// This simulates a cross-user foreign-key anomaly that the JOIN predicate must guard against.
+	now := time.Now().UTC()
+	otherAccountIDStr := otherAccountID.String()
+	otherUAIDStr := otherUAID.String()
+
+	// Case (e): completed suggestion referencing other user's Plaid account.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transfer_suggestions
+			(id, user_id, amount, source, status, completed_at, actual_amount, completion_source,
+			 to_account_id, created_at, updated_at)
+		VALUES ($1, $2, 100.00, 'rule', 'completed', $3, 100.00, 'exact_match', $4, $3, $3)
+	`, uuid.New(), requesterID, now, &otherAccountIDStr)
+	require.NoError(t, err, "seed suggestion with cross-user to_account_id")
+
+	// Case (f): completed suggestion referencing other user's manual account.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transfer_suggestions
+			(id, user_id, amount, source, status, completed_at, actual_amount, completion_source,
+			 to_user_account_id, created_at, updated_at)
+		VALUES ($1, $2, 200.00, 'rule', 'completed', $3, 200.00, 'exact_match', $4, $3, $3)
+	`, uuid.New(), requesterID, now, &otherUAIDStr)
+	require.NoError(t, err, "seed suggestion with cross-user to_user_account_id")
+
+	impact, err := repo.GetUserImpact(ctx, requesterID.String())
+	require.NoError(t, err, "GetUserImpact must not error")
+	require.Len(t, impact.RecentItems, 2, "both completed suggestions must appear")
+
+	for _, item := range impact.RecentItems {
+		assert.Nil(t, item.ToAccountName,
+			"cross-user account reference must NOT leak the other user's account name (GAP CF)")
+	}
+}
