@@ -167,16 +167,21 @@ func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domai
 			percentUsed = (totalSpent / incomeAmount) * 100
 		}
 
+		remaining := budget.Amount - totalSpent
+
 		eventData := map[string]interface{}{
-			"budget_id":     budget.ID,
-			"budget_name":   budget.Name,
-			"income_amount": incomeAmount,
-			"total_spent":   totalSpent,
-			"percent_used":  percentUsed,
+			domain.EventDataKeyBudgetID:     budget.ID,
+			domain.EventDataKeyBudgetName:   budget.Name,
+			domain.EventDataKeyIncomeAmount: incomeAmount,
+			domain.EventDataKeyTotalSpent:   totalSpent,
+			domain.EventDataKeyPercentUsed:  percentUsed,
+			domain.EventDataKeyAmount:       budget.Amount,
+			domain.EventDataKeyRemaining:    remaining,
+			domain.EventDataKeyCategories:   domain.BuildCategoryEventData(categories),
 		}
 
 		// Fire and forget - rule execution failures shouldn't fail budget sync
-		if err := s.eventProcessor.ProcessEventTrigger(ctx, budget.UserID, "budget_updated", eventData); err != nil {
+		if err := s.eventProcessor.ProcessEventTrigger(ctx, budget.UserID, domain.EventBudgetUpdated, eventData); err != nil {
 			s.logger.Warn("failed to process budget_updated event",
 				"budgetID", budget.ID,
 				"userID", budget.UserID,
