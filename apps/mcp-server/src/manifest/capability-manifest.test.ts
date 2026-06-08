@@ -242,10 +242,10 @@ describe('helper functions', () => {
 // ── Completeness: every known operationId is classified ───────────────────
 
 describe('completeness', () => {
-  it('covers all 151 known operationIds (no unknown ops in the spec)', async () => {
+  it('covers all 155 known operationIds (no unknown ops in the spec)', async () => {
     // We import the full list to ensure no ops are silently absent
     const { ALL_OPERATION_IDS } = await import('./capability-manifest')
-    expect(ALL_OPERATION_IDS.length).toBe(151)
+    expect(ALL_OPERATION_IDS.length).toBe(155)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified
@@ -273,5 +273,62 @@ describe('issue #1210: review workflow operations', () => {
     expect(entry?.confirmationRequired).toBe(true)
     expect(entry?.idempotent).toBe(true)
     expect(entry?.destructive).toBe(false)
+  })
+})
+
+// ── Issue #972: savings transfer automation operations ─────────────────────
+
+describe('issue #972: savings transfer automation operations', () => {
+  it('classifies getSavingsImpactAggregate as read (public aggregate, AI-tool-callable)', () => {
+    const entry = getCapability('getSavingsImpactAggregate')
+    expect(entry).toBeDefined()
+    expect(entry?.class).toBe('read')
+    expect(entry?.excluded).toBe(false)
+    expect(entry?.confirmationRequired).toBe(false)
+    expect(entry?.idempotent).toBe(true)
+  })
+
+  it('classifies getSavingsImpactMe as read (authed per-user, monitoring)', () => {
+    const entry = getCapability('getSavingsImpactMe')
+    expect(entry).toBeDefined()
+    expect(entry?.class).toBe('read')
+    expect(entry?.excluded).toBe(false)
+    expect(entry?.confirmationRequired).toBe(false)
+    expect(entry?.idempotent).toBe(true)
+  })
+
+  it('classifies confirmTransferSuggestionMatch as write (idempotent, carries idempotency key)', () => {
+    const entry = getCapability('confirmTransferSuggestionMatch')
+    expect(entry).toBeDefined()
+    expect(entry?.class).toBe('write')
+    expect(entry?.excluded).toBe(false)
+    expect(entry?.confirmationRequired).toBe(true)
+    expect(entry?.idempotent).toBe(true)
+    expect(entry?.destructive).toBe(false)
+  })
+
+  // GAP CJ: declineTransferSuggestionMatch ships in the manifest but was unasserted — regression guard.
+  it('classifies declineTransferSuggestionMatch as write (idempotent, releases reservation)', () => {
+    const entry = getCapability('declineTransferSuggestionMatch')
+    expect(entry).toBeDefined()
+    expect(entry?.class).toBe('write')
+    expect(entry?.excluded).toBe(false)
+    expect(entry?.confirmationRequired).toBe(true)
+    expect(entry?.idempotent).toBe(true)
+    expect(entry?.destructive).toBe(false)
+  })
+
+  it('isAllowed returns true for all four new operations', () => {
+    expect(isAllowed('getSavingsImpactAggregate')).toBe(true)
+    expect(isAllowed('getSavingsImpactMe')).toBe(true)
+    expect(isAllowed('confirmTransferSuggestionMatch')).toBe(true)
+    expect(isAllowed('declineTransferSuggestionMatch')).toBe(true)
+  })
+
+  it('isWrite returns true for write ops and false for reads', () => {
+    expect(isWrite('confirmTransferSuggestionMatch')).toBe(true)
+    expect(isWrite('declineTransferSuggestionMatch')).toBe(true)
+    expect(isWrite('getSavingsImpactAggregate')).toBe(false)
+    expect(isWrite('getSavingsImpactMe')).toBe(false)
   })
 })

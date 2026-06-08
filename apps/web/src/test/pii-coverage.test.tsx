@@ -47,6 +47,8 @@ import { mockUseGetAutomationRules } from '@/test/mocks/automation-rules-api'
 import { mockUseGetUserRules } from '@/test/mocks/auto-categorization-api'
 import { mockUseGetBudgets } from '@/test/mocks/budgets-api'
 import { mockUseNetWorthData } from '@/test/mocks/net-worth-hooks'
+import { mockUseSavingsImpactData } from '@/test/mocks/savings-impact-hooks'
+import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
 
 // --- Silence analytics in all tests (PostHog is no-op without POSTHOG_KEY) ---
 mock.module('@/shared/hooks/useTrackEvent', () => ({
@@ -66,6 +68,9 @@ const { AutoCategorizationPage } = await import(
   '@/features/auto-categorization/components/AutoCategorizationPage'
 )
 const { SpendingReportsPage } = await import('@/features/reports/SpendingReportsPage')
+const { SavingsImpactWidget } = await import(
+  '@/features/dashboard/widgets/SavingsImpactWidget'
+)
 
 // ---------------------------------------------------------------
 // Sentinel constants
@@ -80,6 +85,7 @@ const SENTINEL_RULE_NAME = 'SENTINEL_RULE_IJKL'
 const SENTINEL_GOAL_NAME = 'SENTINEL_GOAL_NOPQ'
 const SENTINEL_CATEGORY_NAME = 'SENTINEL_CATEGORY_RSTU'
 const SENTINEL_EMAIL = 'sentinel@pii-test.invalid'
+const SENTINEL_ACCOUNT_NAME = 'SENTINEL_ACCOUNT_ZXCV'
 
 // ---------------------------------------------------------------
 // Shared helpers
@@ -586,6 +592,57 @@ describe('PII coverage — Spending Reports page', () => {
     render(<SpendingReportsPage />, { wrapper: createWrapper() })
     const sentinels: PIISentinel[] = [
       { value: SENTINEL_MERCHANT, fieldDescription: 'merchant.name' },
+    ]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------
+// 11. SavingsImpactWidget — destination account name (GAP CC)
+// ---------------------------------------------------------------
+describe('PII coverage — SavingsImpactWidget destination name', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseDashboardContext.mockReturnValue({
+      filters: { startDate: '2024-01-01', endDate: '2024-01-31', accountTypes: undefined },
+      setFilters: mock(() => {}),
+      timeframe: 'this_month' as const,
+      setTimeframe: mock(() => {}),
+      isEditing: false,
+      setIsEditing: mock(() => {}),
+      hasAccounts: true,
+      accountsLoading: false,
+    })
+    mockUseSavingsImpactData.mockReturnValue({
+      data: {
+        total_amount: 500,
+        completed_count: 1,
+        month_amount: 500,
+        prev_month_amount: undefined,
+        recent_items: [
+          {
+            id: 'pii-gate-item',
+            amount: 500,
+            actual_amount: 500,
+            completed_at: '2024-04-01T12:00:00Z',
+            // Real user-controlled account name — must be masked (GAP CC).
+            to_account_name: SENTINEL_ACCOUNT_NAME,
+          },
+        ],
+      },
+      loading: false,
+      error: null,
+    })
+  })
+
+  test('masks destination account name', async () => {
+    render(
+      <SavingsImpactWidget widgetId="pii-test-savings" onRemove={() => {}} />,
+      { wrapper: createWrapper() },
+    )
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_ACCOUNT_NAME, fieldDescription: 'recent_item.to_account_name' },
     ]
     await waitForSentinels(sentinels)
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])

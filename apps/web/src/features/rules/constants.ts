@@ -312,7 +312,7 @@ export const AMOUNT_TYPE_OPTIONS: Array<{
   {
     value: 'percentage',
     label: 'Percentage',
-    description: 'Transfer a percentage of the balance',
+    description: 'Transfer a percentage of period income',
   },
   {
     value: 'excess',

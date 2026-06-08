@@ -72,6 +72,9 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
     if (formState.data_sharing_enabled !== undefined && formState.data_sharing_enabled !== settings.data_sharing_enabled) {
       updates.data_sharing_enabled = formState.data_sharing_enabled
     }
+    if (formState.include_in_aggregate_stats !== undefined && formState.include_in_aggregate_stats !== settings.include_in_aggregate_stats) {
+      updates.include_in_aggregate_stats = formState.include_in_aggregate_stats
+    }
     return updates
   }
 
@@ -261,6 +264,22 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
           </label>
           <p className="mt-2 ml-8 text-muted-foreground text-sm leading-relaxed">
             Share anonymized data with partners to improve financial services.
+          </p>
+        </div>
+
+        <div className="mb-6 pb-6 border-b border-muted last:border-b-0 last:mb-0 last:pb-0">
+          <label className="flex items-center cursor-pointer font-medium text-foreground">
+            <input
+              type="checkbox"
+              className="w-5 h-5 mr-3 cursor-pointer"
+              checked={formState.include_in_aggregate_stats ?? false}
+              onChange={() => handleToggle('include_in_aggregate_stats')}
+              aria-label="Include my transfers in aggregate statistics"
+            />
+            <span className="text-base font-semibold">Include My Transfers in Aggregate Statistics</span>
+          </label>
+          <p className="mt-2 ml-8 text-muted-foreground text-sm leading-relaxed">
+            Your transfer totals (anonymized) help us show social proof on our public page. Opt out at any time.
           </p>
         </div>
       </section>

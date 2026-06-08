@@ -176,7 +176,7 @@ func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domai
 		}
 
 		// Fire and forget - rule execution failures shouldn't fail budget sync
-		if err := s.eventProcessor.ProcessEventTrigger(ctx, budget.UserID, "budget_updated", eventData); err != nil {
+		if err := s.eventProcessor.ProcessEventTrigger(ctx, budget.UserID, domain.EventBudgetUpdated, eventData); err != nil {
 			s.logger.Warn("failed to process budget_updated event",
 				"budgetID", budget.ID,
 				"userID", budget.UserID,

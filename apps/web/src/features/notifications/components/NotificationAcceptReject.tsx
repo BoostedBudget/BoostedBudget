@@ -13,8 +13,8 @@ import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 
 interface NotificationAcceptRejectProps {
   suggestionId: string
-  amount: number
-  currencyCode: string
+  amount?: number
+  currencyCode?: string
 }
 
 type ActionStatus = 'pending' | 'accepted' | 'rejected'
@@ -47,8 +47,11 @@ export function NotificationAcceptReject({
         setStatus('accepted')
         invalidateAll()
         const savedAmount = data?.suggestion?.amount ?? amount
-        const savedCurrency = data?.suggestion?.currency_code ?? currencyCode
-        toast.success(`Saved ${formatAmount(savedAmount, savedCurrency)}!`)
+        const savedCurrency = data?.suggestion?.currency_code ?? currencyCode ?? 'USD'
+        const msg = savedAmount !== undefined
+          ? `Saved ${formatAmount(savedAmount, savedCurrency)}!`
+          : 'Transfer suggestion accepted!'
+        toast.success(msg)
         trackEvent(ANALYTICS_EVENTS.TRANSFER_SUGGESTION_ACCEPTED, {
           amount: savedAmount,
           source: 'notification_center',

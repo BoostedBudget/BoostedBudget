@@ -96,6 +96,12 @@ type AccountRepository interface {
 	// Returns empty slice if no accounts found (not an error).
 	GetByUserAccountAndStatus(ctx context.Context, userAccountID, status string) ([]domain.Account, error)
 
+	// GetByUserAccountIDAndUser retrieves an account by user_account_id with ownership validation.
+	// Returns ErrAccountNotFound if no account with that user_account_id belongs to userID.
+	// Used for IDOR protection when a TransferAction carries from_user_account_id/to_user_account_id
+	// (the stable account reference that survives Plaid re-links). Issue #972: GAP AE.
+	GetByUserAccountIDAndUser(ctx context.Context, userAccountID, userID string) (*domain.Account, error)
+
 	// GetByUserAccountID retrieves all accounts for a user_account (any status).
 	// This returns both active and replaced accounts for historical view.
 	// Issue #171: Plaid Re-Link Handling
@@ -599,6 +605,54 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 
 	var account domain.Account
 	err := r.db.QueryRow(ctx, query, accountID, userID).Scan(
+		&account.ID, &account.LinkedItemID, &account.UserID, &account.PlaidAccountID,
+		&account.Name, &account.OfficialName, &account.Type, &account.Subtype, &account.Mask,
+		&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
+		&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
+		&account.DisplayOrder, &account.IsHidden,
+		&account.UserAccountID,
+		&account.CreatedAt, &account.UpdatedAt,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrAccountNotFound
+		}
+		return nil, err
+	}
+
+	if err := r.decryptAccountPIIFields(&account); err != nil {
+		return nil, err
+	}
+
+	return &account, nil
+}
+
+// GetByUserAccountIDAndUser retrieves an account by user_account_id with ownership validation.
+// Returns ErrAccountNotFound if no account with that user_account_id belongs to userID.
+// Used for IDOR protection when a TransferAction carries from_user_account_id/to_user_account_id
+// (the stable account reference that survives Plaid re-links). Issue #972: GAP AE.
+//
+// Note: user_account_id is not unique — re-linked accounts share the same value (one active
+// + N replaced). LIMIT 1 with status='active' first ensures a deterministic result and
+// returns the current live account when the caller needs the account data.
+func (r *accountRepository) GetByUserAccountIDAndUser(ctx context.Context, userAccountID, userID string) (*domain.Account, error) {
+	query := `
+		SELECT id, linked_item_id, user_id, plaid_account_id,
+		       name, official_name, type, subtype, mask,
+		       current_balance, available_balance, currency_code,
+		       nickname, custom_color, custom_icon, custom_emoji,
+		       display_order, is_hidden,
+		       user_account_id,
+		       created_at, updated_at
+		FROM accounts
+		WHERE user_account_id = $1 AND user_id = $2
+		ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END
+		LIMIT 1
+	`
+
+	var account domain.Account
+	err := r.db.QueryRow(ctx, query, userAccountID, userID).Scan(
 		&account.ID, &account.LinkedItemID, &account.UserID, &account.PlaidAccountID,
 		&account.Name, &account.OfficialName, &account.Type, &account.Subtype, &account.Mask,
 		&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,

@@ -30,17 +30,14 @@ func TestRuleExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	actions := map[string]interface{}{
-		"transfer": map[string]interface{}{
-			"from_account_id":      "old-from-account",
-			"to_account_id":        "old-to-account",
-			"from_user_account_id": "stable-from-user-acct",
-			"to_user_account_id":   "stable-to-user-acct",
-			"amount_type":          "fixed",
-			"amount":               float64(100),
-		},
-	}
-	actionsJSON, _ := json.Marshal(actions)
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID:     "old-from-account",
+		ToAccountID:       "old-to-account",
+		FromUserAccountID: "stable-from-user-acct",
+		ToUserAccountID:   "stable-to-user-acct",
+		AmountType:        "fixed",
+		Amount:            100,
+	})
 
 	rule := &domain.AutomationRule{
 		ID:             "rule-chain-001",
@@ -87,15 +84,12 @@ func TestRuleExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T)
 	ctx := context.Background()
 	now := time.Now()
 
-	actions := map[string]interface{}{
-		"transfer": map[string]interface{}{
-			"from_account_id": "from-account-legacy",
-			"to_account_id":   "to-account-legacy",
-			"amount_type":     "fixed",
-			"amount":          float64(75),
-		},
-	}
-	actionsJSON, _ := json.Marshal(actions)
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID: "from-account-legacy",
+		ToAccountID:   "to-account-legacy",
+		AmountType:    "fixed",
+		Amount:        75,
+	})
 
 	rule := &domain.AutomationRule{
 		ID:             "rule-legacy-001",
@@ -154,17 +148,14 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing.
 	ctx := context.Background()
 	now := time.Now()
 
-	actions := map[string]interface{}{
-		"transfer": map[string]interface{}{
-			"from_account_id":      "replaced-from-account",
-			"to_account_id":        "replaced-to-account",
-			"from_user_account_id": "stable-from-uaid",
-			"to_user_account_id":   "stable-to-uaid",
-			"amount_type":          "fixed",
-			"amount":               float64(500),
-		},
-	}
-	actionsJSON, _ := json.Marshal(actions)
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID:     "replaced-from-account",
+		ToAccountID:       "replaced-to-account",
+		FromUserAccountID: "stable-from-uaid",
+		ToUserAccountID:   "stable-to-uaid",
+		AmountType:        "fixed",
+		Amount:            500,
+	})
 
 	rule := &domain.AutomationRule{
 		ID:             "rule-chain-resolver-001",
@@ -214,17 +205,14 @@ func TestRuleExecution_TransferAction_ChainResolver_NilFallback(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	actions := map[string]interface{}{
-		"transfer": map[string]interface{}{
-			"from_account_id":      "raw-from-account",
-			"to_account_id":        "raw-to-account",
-			"from_user_account_id": "stable-from-uaid",
-			"to_user_account_id":   "stable-to-uaid",
-			"amount_type":          "fixed",
-			"amount":               float64(100),
-		},
-	}
-	actionsJSON, _ := json.Marshal(actions)
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID:     "raw-from-account",
+		ToAccountID:       "raw-to-account",
+		FromUserAccountID: "stable-from-uaid",
+		ToUserAccountID:   "stable-to-uaid",
+		AmountType:        "fixed",
+		Amount:            100,
+	})
 
 	rule := &domain.AutomationRule{
 		ID:             "rule-chain-nil-001",
@@ -276,15 +264,12 @@ func TestRuleExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testin
 	now := time.Now()
 
 	// No from_user_account_id / to_user_account_id in action
-	actions := map[string]interface{}{
-		"transfer": map[string]interface{}{
-			"from_account_id": "raw-from-account-legacy",
-			"to_account_id":   "raw-to-account-legacy",
-			"amount_type":     "fixed",
-			"amount":          float64(75),
-		},
-	}
-	actionsJSON, _ := json.Marshal(actions)
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID: "raw-from-account-legacy",
+		ToAccountID:   "raw-to-account-legacy",
+		AmountType:    "fixed",
+		Amount:        75,
+	})
 
 	rule := &domain.AutomationRule{
 		ID:             "rule-legacy-empty-uaid",
@@ -326,16 +311,13 @@ func TestRuleExecution_SimulateAction_IncludesFromUserAccountID(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	actions := map[string]interface{}{
-		"transfer": map[string]interface{}{
-			"from_account_id":      "raw-from",
-			"to_account_id":        "raw-to",
-			"from_user_account_id": "stable-from-uaid",
-			"amount_type":          "fixed",
-			"amount":               float64(150),
-		},
-	}
-	actionsJSON, _ := json.Marshal(actions)
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID:     "raw-from",
+		ToAccountID:       "raw-to",
+		FromUserAccountID: "stable-from-uaid",
+		AmountType:        "fixed",
+		Amount:            150,
+	})
 
 	rule := &domain.AutomationRule{
 		ID:             "rule-simulate-uaid",
@@ -413,17 +395,14 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID_Depth2(t *t
 	ctx := context.Background()
 	now := time.Now()
 
-	actions := map[string]interface{}{
-		"transfer": map[string]interface{}{
-			"from_account_id":      "replaced-from-gen1",
-			"to_account_id":        "replaced-to-gen1",
-			"from_user_account_id": "stable-from-uaid-depth2",
-			"to_user_account_id":   "stable-to-uaid-depth2",
-			"amount_type":          "fixed",
-			"amount":               float64(1000),
-		},
-	}
-	actionsJSON, _ := json.Marshal(actions)
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID:     "replaced-from-gen1",
+		ToAccountID:       "replaced-to-gen1",
+		FromUserAccountID: "stable-from-uaid-depth2",
+		ToUserAccountID:   "stable-to-uaid-depth2",
+		AmountType:        "fixed",
+		Amount:            1000,
+	})
 
 	rule := &domain.AutomationRule{
 		ID:             "rule-depth2-chain-001",
