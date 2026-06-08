@@ -451,7 +451,7 @@ func TestCreateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	ruleRepo := &mockAutomationRulesRepository{}
 	budgetRepo := &MockBudgetRepository{}
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, victimCategoryID, attackerUserID).
-		Return((*domain.BudgetCategory)(nil), errors.New("not found"))
+		Return((*domain.BudgetCategory)(nil), domain.ErrBudgetCategoryNotFound)
 
 	svc := NewAutomationRuleService(ruleRepo)
 	svc.SetBudgetRepo(budgetRepo)
@@ -460,6 +460,30 @@ func TestCreateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	_, err := svc.CreateRule(ctx, attackerUserID, req)
 	require.Error(t, err, "CreateRule must reject a rule whose category_id belongs to a different user")
 	assert.Contains(t, err.Error(), "category_id", "error must identify the category_id ownership failure")
+}
+
+// TestCreateRule_CategoryCondition_DBError_Propagates verifies that an infrastructure error
+// from GetCategoryByIDAndUser is NOT silently converted to 403 — it must propagate as-is
+// so the HTTP layer returns 500. Issue #1270 (Codex LOW finding).
+func TestCreateRule_CategoryCondition_DBError_Propagates(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-alice"
+	categoryID := "cat-alice-1"
+	dbErr := errors.New("connection timeout")
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	budgetRepo := &MockBudgetRepository{}
+	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
+		Return((*domain.BudgetCategory)(nil), dbErr)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetBudgetRepo(budgetRepo)
+
+	req := budgetCategoryConditionRule(categoryID)
+	_, err := svc.CreateRule(ctx, userID, req)
+	require.Error(t, err, "CreateRule must fail on DB error")
+	assert.False(t, errors.Is(err, domain.ErrRuleConditionForbidden),
+		"a DB infrastructure error must not be wrapped as ErrRuleConditionForbidden (would cause 403 instead of 500)")
 }
 
 // TestCreateRule_CategoryCondition_NoBudgetRepo_SkipsCheck verifies that when SetBudgetRepo

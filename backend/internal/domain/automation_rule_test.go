@@ -316,7 +316,7 @@ func TestAutomationRule_validateConditions(t *testing.T) {
 			errMsg:  "requires a category_id",
 		},
 		{
-			name: "schedule-type trigger with conditions skips condition validation",
+			name: "schedule-type trigger rejects unsupported operator",
 			rule: AutomationRule{
 				UserID:   "user-123",
 				Name:     "Scheduled Transfer",
@@ -328,6 +328,26 @@ func TestAutomationRule_validateConditions(t *testing.T) {
 				},
 				Conditions: []AutomationRuleCondition{
 					{Field: "account.balance", Operator: ConditionOperatorBetween, Value: 1000},
+				},
+				ConditionLogic: "AND",
+				Actions:        json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount":100}`),
+			},
+			wantErr: true,
+			errMsg:  "unsupported operator",
+		},
+		{
+			name: "schedule-type trigger accepts valid operator",
+			rule: AutomationRule{
+				UserID:   "user-123",
+				Name:     "Scheduled Transfer",
+				RuleType: RuleTypeTransferSuggestion,
+				TriggerConfig: TriggerConfig{
+					Type:     TriggerTypeSchedule,
+					Cron:     "0 0 1 * *",
+					Timezone: "America/New_York",
+				},
+				Conditions: []AutomationRuleCondition{
+					{Field: "account.balance", Operator: ConditionOperatorGt, Value: 1000},
 				},
 				ConditionLogic: "AND",
 				Actions:        json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount":100}`),

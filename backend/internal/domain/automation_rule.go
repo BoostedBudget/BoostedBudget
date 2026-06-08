@@ -425,11 +425,10 @@ func (r *AutomationRule) Validate() error {
 		return err
 	}
 
-	// Validate conditions — only for event-type triggers
-	if r.TriggerConfig.Type == TriggerTypeEvent {
-		if err := r.validateConditions(); err != nil {
-			return err
-		}
+	// Validate conditions — operator and CategoryID checks apply to all trigger types;
+	// field allowlists are only enforced for events that have a defined set.
+	if err := r.validateConditions(); err != nil {
+		return err
 	}
 
 	// Validate condition logic (default to AND if empty)
@@ -855,4 +854,12 @@ var (
 	ErrTransferSuggestionNotFound        = errors.New("transfer suggestion not found")
 	ErrTransferSuggestionAlreadyActioned = errors.New("transfer suggestion has already been accepted or rejected")
 	ErrRuleExecutionNotFound             = errors.New("rule execution not found")
+
+	// Issue #1270: GAP-L — typed sentinels so the error mapper can return the correct HTTP status.
+	// ErrInvalidRule is returned (wrapped) when rule.Validate() fails due to bad client input
+	// (unknown event, unsupported operator, disallowed condition field). Maps to HTTP 400.
+	ErrInvalidRule = errors.New("invalid automation rule")
+	// ErrRuleConditionForbidden is returned when a condition's CategoryID does not belong to the
+	// requesting user (IDOR prevention). Maps to HTTP 403.
+	ErrRuleConditionForbidden = errors.New("automation rule condition access denied")
 )

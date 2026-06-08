@@ -4,6 +4,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -150,7 +151,10 @@ func (s *automationRuleService) validateRuleReferenceOwnership(ctx context.Conte
 				continue
 			}
 			if _, err := s.budgetRepo.GetCategoryByIDAndUser(ctx, condition.CategoryID, rule.UserID); err != nil {
-				return fmt.Errorf("condition category_id does not belong to this user")
+				if errors.Is(err, domain.ErrBudgetCategoryNotFound) {
+					return fmt.Errorf("%w: condition category_id does not belong to this user", domain.ErrRuleConditionForbidden)
+				}
+				return err
 			}
 		}
 	}
@@ -178,9 +182,9 @@ func (s *automationRuleService) CreateRule(ctx context.Context, userID string, r
 		rule.ConditionLogic = "AND"
 	}
 
-	// Validate the rule
+	// Validate the rule — wrap with ErrInvalidRule so the HTTP layer returns 400 (not 500).
 	if err := rule.Validate(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", domain.ErrInvalidRule, err)
 	}
 
 	// Verify referenced IDs (savings_goal_id, account IDs) belong to the rule owner (GAP AE).
@@ -255,9 +259,9 @@ func (s *automationRuleService) UpdateRule(ctx context.Context, userID, ruleID s
 		rule.Actions = *req.Actions
 	}
 
-	// Validate
+	// Validate — wrap with ErrInvalidRule so the HTTP layer returns 400 (not 500).
 	if err := rule.Validate(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", domain.ErrInvalidRule, err)
 	}
 
 	// Verify referenced IDs (savings_goal_id, account IDs) belong to the rule owner (GAP AE).

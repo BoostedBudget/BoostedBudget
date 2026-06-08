@@ -150,6 +150,9 @@ func MapError(err error) error {
 		return huma.Error403Forbidden("You are not allowed to update this field")
 	case errors.Is(err, repository.ErrNotificationAccessDenied):
 		return huma.Error403Forbidden("Access denied to this notification")
+	// Issue #1270: GAP-L — foreign category_id in a condition belongs to another user.
+	case errors.Is(err, domain.ErrRuleConditionForbidden):
+		return huma.Error403Forbidden("Access denied: condition category belongs to another user")
 	// ================================
 	// 400 Bad Request - Validation errors
 	// ================================
@@ -182,6 +185,11 @@ func MapError(err error) error {
 		return huma.Error400BadRequest("Invalid webhook signature format")
 	case errors.Is(err, services.ErrInvalidPageSizeNumber):
 		return huma.Error400BadRequest("page_size must be between 1 and 100")
+	// Issue #1270: GAP-L — rule validation failed (unknown event, unsupported operator, bad field).
+	// Strip the "invalid automation rule: " prefix to expose only the user-facing detail.
+	case errors.Is(err, domain.ErrInvalidRule):
+		detail := strings.TrimPrefix(err.Error(), "invalid automation rule: ")
+		return huma.Error400BadRequest(detail)
 
 	// ================================
 	// 503 Service Unavailable - External service failures
