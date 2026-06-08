@@ -219,7 +219,15 @@ func (s *ruleExecutionService) ProcessEventTrigger(ctx context.Context, userID, 
 	// Execute each matching rule. Errors are logged but do not abort the batch —
 	// one rule failing (e.g. transient DB error, missing repo) must not prevent
 	// other rules for the same user from firing on the same event.
+	eventBudgetID, _ := eventData[domain.EventDataKeyBudgetID].(string)
 	for _, rule := range rules {
+		// A-CR2: if the rule is scoped to a specific budget (via budget_category.* conditions),
+		// skip it entirely when the event belongs to a different budget. This closes the OR-escape
+		// bug where an OR-logic rule could fire via a non-category condition even though its
+		// budget_category condition is for a different budget.
+		if boundID, bound := rule.BoundBudgetID(); bound && boundID != eventBudgetID {
+			continue
+		}
 		_, execErr := s.ExecuteRule(ctx, rule, eventData)
 		if execErr != nil {
 			slog.Error("rule execution failed; continuing with remaining rules",
