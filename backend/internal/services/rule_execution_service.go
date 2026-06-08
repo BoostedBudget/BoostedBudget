@@ -19,29 +19,10 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
-// RuleActions is a wrapper for parsing action configurations from JSONB.
-type RuleActions struct {
-	Transfer    *domain.TransferAction    `json:"transfer,omitempty"`
-	Alert       *domain.AlertAction       `json:"alert,omitempty"`
-	Rollover    *domain.RolloverAction    `json:"rollover,omitempty"`
-	SavingsGoal *domain.SavingsGoalAction `json:"savings_goal,omitempty"`
-}
-
 // ExecutionStatusSkipped is a synthetic status for skipped executions.
 // In the database, this maps to "completed" with output_data containing skip_reason.
 // This allows us to track skipped executions separately in the service layer.
 const ExecutionStatusSkipped domain.ExecutionStatus = "completed"
-
-// markExecutionSkipped marks an execution as skipped with the given reason and updates the database.
-func (s *ruleExecutionService) markExecutionSkipped(ctx context.Context, execution *domain.RuleExecution, startTime time.Time, reason string) {
-	execution.Status = ExecutionStatusSkipped
-	completedAt := time.Now()
-	execution.CompletedAt = &completedAt
-	durationMs := int(time.Since(startTime).Milliseconds())
-	execution.ExecutionDurationMs = &durationMs
-	execution.OutputData, _ = json.Marshal(map[string]string{"skip_reason": reason})
-	_ = s.executionRepo.Update(ctx, execution)
-}
 
 // RuleExecutionService defines the interface for rule execution business logic.
 type RuleExecutionService interface {
@@ -61,7 +42,6 @@ type RuleExecutionService interface {
 	// TestRule performs a dry-run execution of a rule without persisting any changes.
 	// Issue #38: Rules API Endpoints - Test endpoint.
 	TestRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleTestResult, error)
-
 }
 
 // ruleExecutionService implements RuleExecutionService.
@@ -70,6 +50,7 @@ type ruleExecutionService struct {
 	suggestionRepo      repository.TransferSuggestionRepository
 	ruleRepo            repository.AutomationRulesRepository
 	savingsGoalRepo     repository.SavingsGoalRepository
+	accountRepo         repository.AccountRepository  // optional; for execution-time ownership checks (GAP AE)
 	notificationService NotificationService
 	notificationRepo    repository.NotificationRepository
 	analytics           phclient.Analytics
@@ -111,6 +92,13 @@ func (s *ruleExecutionService) SetNotificationRepo(repo repository.NotificationR
 	s.notificationRepo = repo
 }
 
+// SetAccountRepo injects the account repository for execution-time ownership checks.
+// When set, executeTransferSuggestion verifies from/to_account_id belong to the rule owner.
+// Issue #972: GAP AE defense-in-depth for already-persisted transfer rules.
+func (s *ruleExecutionService) SetAccountRepo(repo repository.AccountRepository) {
+	s.accountRepo = repo
+}
+
 // SetChainResolver injects the chain resolver to map user_account_id → active account_id.
 // Issue #1109: Used by executeTransferSuggestion and executeSavingsGoal.
 func (s *ruleExecutionService) SetChainResolver(resolver AccountChainResolver) {
@@ -119,6 +107,15 @@ func (s *ruleExecutionService) SetChainResolver(resolver AccountChainResolver) {
 
 // ExecuteRule executes a single rule with the given trigger data.
 func (s *ruleExecutionService) ExecuteRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleExecution, error) {
+	// Defense-in-depth: re-validate action completeness before dispatching.
+	// The service layer validates on create/update, but rules loaded directly from the
+	// DB or injected in tests may bypass that path. Re-validating here prevents a
+	// partial-field action (e.g. transfer without to_account_id) from creating a
+	// malformed suggestion. Cost: one cheap in-memory validation per execution.
+	if err := rule.Validate(); err != nil {
+		return nil, fmt.Errorf("rule validation failed: %w", err)
+	}
+
 	startTime := time.Now()
 
 	// Create execution record
@@ -138,13 +135,27 @@ func (s *ruleExecutionService) ExecuteRule(ctx context.Context, rule *domain.Aut
 
 	// Check if rule is enabled
 	if !rule.Enabled {
-		s.markExecutionSkipped(ctx, execution, startTime, "rule disabled")
+		execution.Status = ExecutionStatusSkipped
+		completedAt := time.Now()
+		execution.CompletedAt = &completedAt
+		durationMs := int(time.Since(startTime).Milliseconds())
+		execution.ExecutionDurationMs = &durationMs
+		skipReason := "rule disabled"
+		execution.OutputData, _ = json.Marshal(map[string]string{"skip_reason": skipReason})
+		_ = s.executionRepo.Update(ctx, execution)
 		return execution, nil
 	}
 
 	// Evaluate conditions
 	if !evaluateConditions(rule.Conditions, rule.ConditionLogic, triggerData) {
-		s.markExecutionSkipped(ctx, execution, startTime, "conditions not met")
+		execution.Status = ExecutionStatusSkipped
+		completedAt := time.Now()
+		execution.CompletedAt = &completedAt
+		durationMs := int(time.Since(startTime).Milliseconds())
+		execution.ExecutionDurationMs = &durationMs
+		skipReason := "conditions not met"
+		execution.OutputData, _ = json.Marshal(map[string]string{"skip_reason": skipReason})
+		_ = s.executionRepo.Update(ctx, execution)
 		return execution, nil
 	}
 
@@ -205,13 +216,18 @@ func (s *ruleExecutionService) ProcessEventTrigger(ctx context.Context, userID, 
 		return err
 	}
 
-	// Execute each matching rule
+	// Execute each matching rule. Errors are logged but do not abort the batch —
+	// one rule failing (e.g. transient DB error, missing repo) must not prevent
+	// other rules for the same user from firing on the same event.
 	for _, rule := range rules {
 		_, execErr := s.ExecuteRule(ctx, rule, eventData)
 		if execErr != nil {
-			// Log error but continue with other rules
-			// In production, this would be logged to a proper logging system
-			continue
+			slog.Error("rule execution failed; continuing with remaining rules",
+				"rule_id", rule.ID,
+				"user_id", rule.UserID,
+				"event_type", eventType,
+				"error", execErr,
+			)
 		}
 	}
 
@@ -246,11 +262,20 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 		TriggerDataUsed: triggerData,
 	}
 
-	// Evaluate each condition individually
+	// Evaluate each condition individually.
+	// Use lookupFieldValue for the Actual display so that budget_category.* conditions
+	// read from the nested categories map, and other fields resolve via
+	// normalizeConditionField. Fall back to the raw dotted field key for emitters
+	// (e.g. transaction events) that publish the full dotted name as-is.
 	conditionResults := make([]domain.ConditionEvalResult, len(rule.Conditions))
 	for i, condition := range rule.Conditions {
-		actual, _ := lookupFieldValue(condition, triggerData)
-		met := evaluateConditionWithValue(condition, actual)
+		actual, exists := lookupFieldValue(condition, triggerData)
+		if !exists && !strings.HasPrefix(condition.Field, "budget_category.") {
+			// Fallback: some emitters publish the dotted key verbatim (e.g.
+			// "transaction.pfc_primary") without stripping the entity prefix.
+			actual, exists = triggerData[condition.Field]
+		}
+		met := evaluateCondition(condition, triggerData)
 
 		conditionResults[i] = domain.ConditionEvalResult{
 			Field:    condition.Field,
@@ -258,6 +283,9 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 			Value:    condition.Value,
 			Actual:   actual,
 			Met:      met,
+		}
+		if !exists {
+			conditionResults[i].Actual = nil
 		}
 	}
 	result.ConditionResults = conditionResults
@@ -281,64 +309,75 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 
 // simulateAction returns a description of what action would occur without actually executing it.
 func (s *ruleExecutionService) simulateAction(rule *domain.AutomationRule, triggerData map[string]interface{}) (map[string]interface{}, error) {
-	var actions RuleActions
-	if err := json.Unmarshal(rule.Actions, &actions); err != nil {
-		return nil, fmt.Errorf("failed to parse actions: %w", err)
-	}
-
 	simulatedAction := make(map[string]interface{})
 
 	switch rule.RuleType {
 	case domain.RuleTypeTransferSuggestion:
-		if actions.Transfer == nil {
+		transfer, err := rule.ParseTransferAction()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse transfer action: %w", err)
+		}
+		if transfer.FromAccountID == "" {
 			return nil, fmt.Errorf("transfer action not defined")
 		}
-		amount := s.calculateTransferAmount(actions.Transfer, triggerData)
+		amount := s.calculateTransferAmount(transfer, triggerData)
 		simulatedAction["action_type"] = "transfer_suggestion"
-		simulatedAction["from_account_id"] = actions.Transfer.FromAccountID
-		simulatedAction["to_account_id"] = actions.Transfer.ToAccountID
+		simulatedAction["from_account_id"] = transfer.FromAccountID
+		simulatedAction["to_account_id"] = transfer.ToAccountID
 		simulatedAction["amount"] = amount
-		simulatedAction["amount_type"] = actions.Transfer.AmountType
+		simulatedAction["amount_type"] = transfer.AmountType
 		// Issue #1109: Expose stable user_account_id for transparency if available
-		if actions.Transfer.FromUserAccountID != "" {
-			simulatedAction["from_user_account_id"] = actions.Transfer.FromUserAccountID
+		if transfer.FromUserAccountID != "" {
+			simulatedAction["from_user_account_id"] = transfer.FromUserAccountID
 		}
 
 	case domain.RuleTypeBudgetAlert:
-		if actions.Alert == nil {
+		alert, err := rule.ParseAlertAction()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse alert action: %w", err)
+		}
+		if alert.ThresholdType == "" {
 			return nil, fmt.Errorf("alert action not defined")
 		}
 		simulatedAction["action_type"] = "budget_alert"
-		simulatedAction["notification_channels"] = actions.Alert.NotificationChannels
-		simulatedAction["threshold_type"] = actions.Alert.ThresholdType
-		simulatedAction["threshold_value"] = actions.Alert.ThresholdValue
+		simulatedAction["notification_channels"] = alert.NotificationChannels
+		simulatedAction["threshold_type"] = alert.ThresholdType
+		simulatedAction["threshold_value"] = alert.ThresholdValue
 
 	case domain.RuleTypeCategoryRollover:
-		if actions.Rollover == nil {
+		rollover, err := rule.ParseRolloverAction()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse rollover action: %w", err)
+		}
+		if rollover.RolloverType == "" {
 			return nil, fmt.Errorf("rollover action not defined")
 		}
 		remaining := 0.0
 		if r, ok := triggerData["remaining"].(float64); ok {
 			remaining = r
 		}
-		amount := s.calculateRolloverAmount(actions.Rollover, remaining)
+		amount := s.calculateRolloverAmount(rollover, remaining)
 		simulatedAction["action_type"] = "category_rollover"
-		simulatedAction["rollover_type"] = actions.Rollover.RolloverType
+		simulatedAction["rollover_type"] = rollover.RolloverType
 		simulatedAction["rollover_amount"] = amount
-		if actions.Rollover.SourceBudgetCategoryID != "" {
-			simulatedAction["source_category_id"] = actions.Rollover.SourceBudgetCategoryID
+		if rollover.SourceBudgetCategoryID != "" {
+			simulatedAction["source_category_id"] = rollover.SourceBudgetCategoryID
 		}
 
 	case domain.RuleTypeSavingsGoal:
-		if actions.SavingsGoal == nil {
+		savingsGoal, err := rule.ParseSavingsGoalAction()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse savings goal action: %w", err)
+		}
+		if savingsGoal.SavingsGoalID == "" {
 			return nil, fmt.Errorf("savings goal action not defined")
 		}
-		amount := s.calculateSavingsGoalAmount(actions.SavingsGoal, triggerData)
+		amount := s.calculateSavingsGoalAmount(savingsGoal, triggerData)
 		simulatedAction["action_type"] = "savings_goal"
-		simulatedAction["savings_goal_id"] = actions.SavingsGoal.SavingsGoalID
-		simulatedAction["from_account_id"] = actions.SavingsGoal.FromAccountID
+		simulatedAction["savings_goal_id"] = savingsGoal.SavingsGoalID
+		simulatedAction["from_account_id"] = savingsGoal.FromAccountID
 		simulatedAction["amount"] = amount
-		simulatedAction["amount_type"] = actions.SavingsGoal.AmountType
+		simulatedAction["amount_type"] = savingsGoal.AmountType
 
 	default:
 		return nil, fmt.Errorf("unknown rule type: %s", rule.RuleType)
@@ -349,25 +388,43 @@ func (s *ruleExecutionService) simulateAction(rule *domain.AutomationRule, trigg
 
 // executeTransferSuggestion creates a transfer suggestion from the rule action.
 func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, rule *domain.AutomationRule, executionID string, triggerData map[string]interface{}) error {
-	// Parse actions
-	var actions RuleActions
-	if err := json.Unmarshal(rule.Actions, &actions); err != nil {
-		return fmt.Errorf("failed to parse actions: %w", err)
+	transfer, err := rule.ParseTransferAction()
+	if err != nil {
+		return fmt.Errorf("failed to parse transfer action: %w", err)
 	}
-
-	if actions.Transfer == nil {
+	if transfer.FromAccountID == "" {
 		return fmt.Errorf("transfer action not defined")
 	}
 
-	transfer := actions.Transfer
+	// Execution-time ownership check (GAP AE defense-in-depth).
+	// The service layer rejects new rules with mismatched IDs; this guard protects
+	// already-persisted rules that may predate that check.
+	if s.accountRepo != nil {
+		if _, err := s.accountRepo.GetByIDAndUser(ctx, transfer.FromAccountID, rule.UserID); err != nil {
+			slog.Warn("transfer executor: from_account_id ownership mismatch; skipping rule",
+				"rule_id", rule.ID, "user_id", rule.UserID, "from_account_id", transfer.FromAccountID)
+			return nil
+		}
+		if transfer.ToAccountID != "" {
+			if _, err := s.accountRepo.GetByIDAndUser(ctx, transfer.ToAccountID, rule.UserID); err != nil {
+				slog.Warn("transfer executor: to_account_id ownership mismatch; skipping rule",
+					"rule_id", rule.ID, "user_id", rule.UserID, "to_account_id", transfer.ToAccountID)
+				return nil
+			}
+		}
+	}
 
-	// Calculate amount
+	// Calculate amount; skip if zero (no surplus to transfer for derived types).
 	amount := s.calculateTransferAmount(transfer, triggerData)
+	if amount <= 0 {
+		return nil
+	}
 
 	// Create reason string
 	reason := fmt.Sprintf("Rule '%s' triggered", rule.Name)
 
 	// Create suggestion
+	expiresAt := time.Now().UTC().Add(30 * 24 * time.Hour) // 30 days
 	suggestion := &domain.TransferSuggestion{
 		ID:              uuid.New().String(),
 		UserID:          rule.UserID,
@@ -380,27 +437,26 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 		Reason:          &reason,
 		Source:          domain.SuggestionSourceRule,
 		Status:          domain.SuggestionStatusPending,
+		ExpiresAt:       &expiresAt,
 	}
 
 	// Issue #1109: Resolve stable user_account_id → current active account_id (backfilled by migration 000070).
+	// Issue #972 GAP AE: after resolution, verify the resolved account still belongs to rule.UserID.
+	// Without this check an attacker could provide their own from_account_id (passes the guard above)
+	// plus a victim's from_user_account_id, and the unscoped resolver would overwrite FromAccountID
+	// with the victim's active account. The ownership check is the backstop.
 	if transfer.FromUserAccountID != "" {
 		suggestion.FromUserAccountID = ptrString(transfer.FromUserAccountID)
-		if s.chainResolver != nil {
-			if activeFromID, err := s.chainResolver.ResolveActiveID(ctx, transfer.FromUserAccountID); err == nil {
-				suggestion.FromAccountID = ptrString(activeFromID)
-			} else if !errors.Is(err, ErrNoActiveAccount) {
-				slog.Warn("chain resolve failed for from_account; using raw id", "error", err)
-			}
+		if skipRule, _ := s.resolveAndVerifyUserAccount(ctx, transfer.FromUserAccountID, rule.UserID, rule.ID,
+			func(activeID string) { suggestion.FromAccountID = ptrString(activeID) }, "from_account_id"); skipRule {
+			return nil
 		}
 	}
 	if transfer.ToUserAccountID != "" {
 		suggestion.ToUserAccountID = ptrString(transfer.ToUserAccountID)
-		if s.chainResolver != nil {
-			if activeToID, err := s.chainResolver.ResolveActiveID(ctx, transfer.ToUserAccountID); err == nil {
-				suggestion.ToAccountID = ptrString(activeToID)
-			} else if !errors.Is(err, ErrNoActiveAccount) {
-				slog.Warn("chain resolve failed for to_account; using raw id", "error", err)
-			}
+		if skipRule, _ := s.resolveAndVerifyUserAccount(ctx, transfer.ToUserAccountID, rule.UserID, rule.ID,
+			func(activeID string) { suggestion.ToAccountID = ptrString(activeID) }, "to_account_id"); skipRule {
+			return nil
 		}
 	}
 	if transfer.FromUserAccountID != "" || transfer.ToUserAccountID != "" {
@@ -413,6 +469,43 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 
 	s.createTransferSuggestionNotification(ctx, suggestion)
 	return nil
+}
+
+// resolveAndVerifyUserAccount resolves a user_account_id to its active account_id and verifies ownership.
+// Called during transfer suggestion execution to resolve stable identifiers across Plaid re-links.
+// If resolution succeeds, calls onResolve with the active ID. Returns (true, nil) if ownership fails
+// and the entire rule should be skipped; otherwise returns (false, nil).
+func (s *ruleExecutionService) resolveAndVerifyUserAccount(ctx context.Context, userAccountID, userID, ruleID string,
+	onResolve func(string), fieldName string) (bool, error) {
+	if s.chainResolver == nil {
+		return false, nil
+	}
+
+	activeID, err := s.chainResolver.ResolveActiveID(ctx, userAccountID)
+	if err != nil {
+		if !errors.Is(err, ErrNoActiveAccount) {
+			slog.Warn("chain resolve failed; using raw id", "error", err, "field", fieldName)
+		}
+		return false, nil
+	}
+
+	// Verify the resolved account belongs to this user before using it.
+	// If accountRepo is not configured, apply the resolved ID without an ownership check
+	// and log a warning — this is safe because (a) production always wires accountRepo
+	// (main.go:~1324) and (b) the service-layer validateRuleReferenceOwnership already
+	// validates from_user_account_id ownership at create/update time. Issue #972 GAP AE.
+	if s.accountRepo != nil {
+		if _, ownerErr := s.accountRepo.GetByIDAndUser(ctx, activeID, userID); ownerErr != nil {
+			slog.Warn("chain resolve: resolved account belongs to different user; skipping rule",
+				"rule_id", ruleID, "user_id", userID, "resolved_account_id", activeID, "field", fieldName)
+			return true, nil
+		}
+	} else {
+		slog.Warn("chain resolve: accountRepo not configured; applying resolved ID without ownership check (configure SetAccountRepo in production)",
+			"rule_id", ruleID, "user_id", userID, "field", fieldName)
+	}
+	onResolve(activeID)
+	return false, nil
 }
 
 // createTransferSuggestionNotification creates an accept_reject notification for a new transfer suggestion.
@@ -447,44 +540,68 @@ func (s *ruleExecutionService) createTransferSuggestionNotification(ctx context.
 	}
 }
 
-// calculateTransferAmount calculates the transfer amount based on action type.
+// calculateTransferAmount computes the transfer amount based on action type:
+// fixed: Amount directly; percentage: Amount% of budget income; remaining: full surplus;
+// excess: surplus above Threshold; threshold: legacy (use excess).
 func (s *ruleExecutionService) calculateTransferAmount(action *domain.TransferAction, triggerData map[string]interface{}) float64 {
-	switch action.AmountType {
-	case "fixed":
+	if action.AmountType == "fixed" {
 		return action.Amount
-	case "percentage":
-		if amt, ok := triggerData["amount"].(float64); ok {
+	}
+
+	if action.AmountType == "percentage" {
+		if amt, ok := triggerData[domain.EventDataKeyAmount].(float64); ok {
 			return amt * (action.Amount / 100)
 		}
-	case "remaining":
-		if remaining, ok := triggerData["remaining"].(float64); ok {
+		return 0
+	}
+
+	if action.AmountType == "remaining" {
+		if remaining, ok := triggerData[domain.EventDataKeyRemaining].(float64); ok {
 			return remaining
 		}
-	case "threshold":
-		if amt, ok := triggerData["amount"].(float64); ok {
-			if amt > action.Threshold {
-				return amt - action.Threshold
-			}
-		}
+		// Key absent (e.g. schedule trigger has no budget surplus data): no transfer.
+		return 0
 	}
+
+	if action.AmountType == "excess" {
+		remaining, ok := triggerData[domain.EventDataKeyRemaining].(float64)
+		if !ok {
+			return 0 // Key absent: no transfer (GAP AF)
+		}
+		if remaining > action.Threshold {
+			return remaining - action.Threshold
+		}
+		return 0 // Surplus below threshold: no transfer
+	}
+
+	if action.AmountType == "threshold" {
+		amt, ok := triggerData[domain.EventDataKeyAmount].(float64)
+		if !ok {
+			return 0 // Key absent: no transfer (GAP AF)
+		}
+		if amt > action.Threshold {
+			return amt - action.Threshold
+		}
+		return 0 // Amount does not exceed threshold: no transfer
+	}
+
+	// Unrecognized type defaults to fixed
 	return action.Amount
 }
 
 // executeBudgetAlert sends a budget alert notification.
 func (s *ruleExecutionService) executeBudgetAlert(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) error {
-	// Parse actions
-	var actions RuleActions
-	if err := json.Unmarshal(rule.Actions, &actions); err != nil {
-		return fmt.Errorf("failed to parse actions: %w", err)
+	alert, err := rule.ParseAlertAction()
+	if err != nil {
+		return fmt.Errorf("failed to parse alert action: %w", err)
 	}
-
-	if actions.Alert == nil {
+	if alert.ThresholdType == "" {
 		return fmt.Errorf("alert action not defined")
 	}
 
 	// Send notification if service is available
 	if s.notificationService != nil {
-		return s.notificationService.SendBudgetAlert(ctx, rule.UserID, actions.Alert, triggerData)
+		return s.notificationService.SendBudgetAlert(ctx, rule.UserID, alert, triggerData)
 	}
 
 	// If no notification service, just return success
@@ -494,17 +611,13 @@ func (s *ruleExecutionService) executeBudgetAlert(ctx context.Context, rule *dom
 
 // executeCategoryRollover creates a rollover suggestion.
 func (s *ruleExecutionService) executeCategoryRollover(ctx context.Context, rule *domain.AutomationRule, executionID string, triggerData map[string]interface{}) error {
-	// Parse actions
-	var actions RuleActions
-	if err := json.Unmarshal(rule.Actions, &actions); err != nil {
-		return fmt.Errorf("failed to parse actions: %w", err)
+	rollover, err := rule.ParseRolloverAction()
+	if err != nil {
+		return fmt.Errorf("failed to parse rollover action: %w", err)
 	}
-
-	if actions.Rollover == nil {
+	if rollover.RolloverType == "" {
 		return fmt.Errorf("rollover action not defined")
 	}
-
-	rollover := actions.Rollover
 
 	// Calculate rollover amount from trigger data
 	remaining := 0.0
@@ -572,26 +685,28 @@ func (s *ruleExecutionService) calculateRolloverAmount(action *domain.RolloverAc
 // executeSavingsGoal creates a transfer suggestion to contribute to a savings goal.
 // Issue #36: Rule Executors - Savings Goal Executor.
 func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *domain.AutomationRule, executionID string, triggerData map[string]interface{}) error {
-	// Parse actions
-	var actions RuleActions
-	if err := json.Unmarshal(rule.Actions, &actions); err != nil {
-		return fmt.Errorf("failed to parse actions: %w", err)
+	savingsGoalAction, err := rule.ParseSavingsGoalAction()
+	if err != nil {
+		return fmt.Errorf("failed to parse savings goal action: %w", err)
 	}
-
-	if actions.SavingsGoal == nil {
+	if savingsGoalAction.SavingsGoalID == "" {
 		return fmt.Errorf("savings goal action not defined")
 	}
 
-	savingsGoalAction := actions.SavingsGoal
-
-	// Get the savings goal to find the linked account
+	// Get the savings goal to find the linked account, enforcing ownership (GAP AE).
+	// GetByIDForUser returns ErrSavingsGoalNotFound if the goal belongs to a different user,
+	// preventing IDOR for already-persisted rules that bypassed service-layer validation.
 	if s.savingsGoalRepo == nil {
 		return fmt.Errorf("savings goal repository not configured")
 	}
 
-	goal, err := s.savingsGoalRepo.GetByID(ctx, savingsGoalAction.SavingsGoalID)
+	goal, err := s.savingsGoalRepo.GetByIDForUser(ctx, savingsGoalAction.SavingsGoalID, rule.UserID)
 	if err != nil {
-		return fmt.Errorf("savings goal not found: %w", err)
+		// Log but don't fail the batch — this rule is silently skipped.
+		slog.Warn("savings goal executor: goal not found or ownership mismatch; skipping rule",
+			"rule_id", rule.ID, "user_id", rule.UserID,
+			"savings_goal_id", savingsGoalAction.SavingsGoalID, "error", err)
+		return nil
 	}
 
 	// Calculate the contribution amount
@@ -616,6 +731,7 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 	}
 
 	// Create transfer suggestion from source account to savings goal's linked account.
+	expiresAt := time.Now().UTC().Add(30 * 24 * time.Hour) // 30 days
 	suggestion := &domain.TransferSuggestion{
 		ID:              uuid.New().String(),
 		UserID:          rule.UserID,
@@ -628,6 +744,7 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 		Reason:          &reason,
 		Source:          domain.SuggestionSourceRule,
 		Status:          domain.SuggestionStatusPending,
+		ExpiresAt:       &expiresAt,
 	}
 	// Propagate stable user_account_id so monitoring can re-resolve post-relink.
 	if goal.UserAccountID != nil {
@@ -644,26 +761,30 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 
 // calculateSavingsGoalAmount calculates the contribution amount based on action type.
 func (s *ruleExecutionService) calculateSavingsGoalAmount(action *domain.SavingsGoalAction, triggerData map[string]interface{}) float64 {
-	switch action.AmountType {
-	case "fixed":
+	if action.AmountType == "fixed" {
 		return action.Amount
-	case "percentage":
-		if action.Percentage != nil {
-			if amt, ok := triggerData["amount"].(float64); ok {
-				return amt * (*action.Percentage / 100)
-			}
+	}
+
+	if action.AmountType == "percentage" && action.Percentage != nil {
+		if amt, ok := triggerData[domain.EventDataKeyAmount].(float64); ok {
+			return amt * (*action.Percentage / 100)
 		}
 		return 0
-	case "remaining":
-		// Calculate remaining amount above threshold
-		if balance, ok := triggerData["balance"].(float64); ok {
-			remaining := balance - action.Threshold
-			if remaining > 0 {
-				return remaining
+	}
+
+	if action.AmountType == "remaining" {
+		// EventData key must match the emitter in budget_period_close_check.go which
+		// publishes "remaining" (not "balance"). See domain.EventDataKeyRemaining.
+		if remainingAmt, ok := triggerData[domain.EventDataKeyRemaining].(float64); ok {
+			contribution := remainingAmt - action.Threshold
+			if contribution > 0 {
+				return contribution
 			}
 		}
 		return 0
 	}
+
+	// Unrecognized type defaults to fixed
 	return action.Amount
 }
 
@@ -691,31 +812,36 @@ func evaluateConditions(conditions []domain.AutomationRuleCondition, logic strin
 	return true
 }
 
-// normalizeConditionField strips budget-namespace prefixes (budget., budget_category.)
-// and maps legacy suffix aliases so that condition fields match the flat keys
-// used in budget event data payloads.  Transaction and account fields retain
-// their full dotted names because their event data maps use the full key.
+// normalizeConditionField maps UI-built dotted field names (e.g. "budget.remaining_amount")
+// to flat engine keys (e.g. "remaining"). The rule-builder stores entity-prefixed names,
+// but event emitters publish flat keys. Without normalization, all UI-built conditions
+// would silently fail.
+//
+// Mapping:
+//   - Strip entity prefix: "budget_category.", "budget.", "account.", "transaction."
+//     (longer prefixes checked first)
+//   - Alias suffix changes: "remaining_amount" → "remaining", "spent_amount" → "total_spent"
+//   - Other suffixes pass through unchanged
+//   - Unknown/flat fields returned as-is
 func normalizeConditionField(field string) string {
-	// Strip budget-only namespace prefixes; budget_category.* is handled
-	// exclusively by lookupFieldValue's nested path, but we strip it here
-	// too as a safe fallback so flat callers don't break.
-	for _, prefix := range []string{
-		"budget_category.",
-		"budget.",
-	} {
-		if strings.HasPrefix(field, prefix) {
-			field = field[len(prefix):]
+	// Strip entity prefix (longer prefixes must be checked first)
+	prefixes := []string{"budget_category.", "budget.", "account.", "transaction."}
+	suffix := field
+	for _, p := range prefixes {
+		if strings.HasPrefix(field, p) {
+			suffix = field[len(p):]
 			break
 		}
 	}
-	// Map legacy / user-facing suffix aliases to canonical payload keys.
-	switch field {
+
+	// Alias suffix names that differ between UI label and engine flat key
+	switch suffix {
 	case "remaining_amount":
 		return "remaining"
 	case "spent_amount":
 		return "total_spent"
 	}
-	return field
+	return suffix
 }
 
 // lookupFieldValue resolves the condition field to its value in data.
@@ -724,6 +850,7 @@ func normalizeConditionField(field string) string {
 // data["categories"][condition.CategoryID][suffix] structure that category
 // emitters populate.  All other fields fall back to a flat lookup after
 // normalizing the field name via normalizeConditionField.
+// Issue #1270: GAP M — per-category condition evaluation.
 func lookupFieldValue(condition domain.AutomationRuleCondition, data map[string]interface{}) (interface{}, bool) {
 	if strings.HasPrefix(condition.Field, "budget_category.") {
 		categoriesRaw, ok := data[domain.EventDataKeyCategories]

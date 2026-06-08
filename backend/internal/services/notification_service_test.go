@@ -62,6 +62,14 @@ func (m *mockNotifRepo) MarkAllAsRead(ctx context.Context, userID string) (int64
 	return args.Get(0).(int64), args.Error(1)
 }
 
+func (m *mockNotifRepo) GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string, notificationType string) (*domain.Notification, error) {
+	args := m.Called(ctx, transferSuggestionID, notificationType)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Notification), args.Error(1)
+}
+
 // mockUserRepo is a mock implementation for getting user info.
 type mockUserRepo struct {
 	mock.Mock

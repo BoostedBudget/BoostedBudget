@@ -178,19 +178,26 @@ func TestTriggerConfig_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "unknown event type returns error",
+			name: "valid event trigger — transaction_created",
 			config: TriggerConfig{
 				Type:  TriggerTypeEvent,
 				Event: "transaction_created",
 			},
-			wantErr: true,
-			errMsg:  "unknown event type",
+			wantErr: false,
 		},
 		{
-			name: "another unknown event type returns error",
+			name: "valid event trigger — balance_changed",
 			config: TriggerConfig{
 				Type:  TriggerTypeEvent,
 				Event: "balance_changed",
+			},
+			wantErr: false,
+		},
+		{
+			name: "unknown event type returns error",
+			config: TriggerConfig{
+				Type:  TriggerTypeEvent,
+				Event: "foobar_event",
 			},
 			wantErr: true,
 			errMsg:  "unknown event type",
@@ -481,13 +488,140 @@ func TestAutomationRule_Validate_TransferSuggestionRule(t *testing.T) {
 		assert.Contains(t, err.Error(), "to_account_id")
 	})
 
-	t.Run("transfer suggestion requires positive amount", func(t *testing.T) {
+	t.Run("transfer suggestion requires positive amount for fixed type", func(t *testing.T) {
 		rule := validRule
-		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount":-100}`)
+		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"fixed","amount":-100}`)
 		err := rule.Validate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "amount must be positive")
 	})
+
+	// Issue #972 GAP AC: excess amount_type must be accepted even when amount=0 (threshold drives amount).
+	t.Run("excess amount_type with zero amount and threshold is valid", func(t *testing.T) {
+		rule := validRule
+		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"excess","amount":0,"threshold":50}`)
+		err := rule.Validate()
+		assert.NoError(t, err, "excess rules have amount=0; amount>0 check must be skipped for excess")
+	})
+
+	// Issue #972 GAP AC: remaining amount_type must be accepted when amount=0 (derived from triggerData).
+	t.Run("remaining amount_type with zero amount is valid", func(t *testing.T) {
+		rule := validRule
+		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"remaining","amount":0}`)
+		err := rule.Validate()
+		assert.NoError(t, err, "remaining rules have amount=0; amount>0 check must be skipped for remaining")
+	})
+
+	// Issue #972 GAP AC: invalid amount_type must be rejected.
+	t.Run("invalid amount_type is rejected", func(t *testing.T) {
+		rule := validRule
+		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"bogus","amount":100}`)
+		err := rule.Validate()
+		require.Error(t, err, "bogus amount_type must be rejected by validateTransferAction")
+		assert.Contains(t, err.Error(), "amount_type")
+	})
+
+	// Issue #972 GAP AC (Codex Q4): legacy 'threshold' type must still be accepted so saved rules keep firing.
+	t.Run("legacy threshold amount_type is valid", func(t *testing.T) {
+		rule := validRule
+		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"threshold","threshold":100}`)
+		err := rule.Validate()
+		assert.NoError(t, err, "threshold is a legacy amount_type and must remain valid")
+	})
+
+	// Issue #972 GAP AC (Codex Q6): negative threshold on excess rule must be rejected to prevent over-transfer.
+	t.Run("negative threshold on excess is rejected", func(t *testing.T) {
+		rule := validRule
+		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"excess","amount":0,"threshold":-10}`)
+		err := rule.Validate()
+		require.Error(t, err, "negative threshold must be rejected")
+		assert.Contains(t, err.Error(), "threshold")
+	})
+
+	// Issue #972 GAP AC (Codex Q6): negative threshold on legacy 'threshold' type is also rejected.
+	t.Run("negative threshold on threshold type is rejected", func(t *testing.T) {
+		rule := validRule
+		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"threshold","threshold":-5}`)
+		err := rule.Validate()
+		require.Error(t, err, "negative threshold must be rejected for threshold type too")
+		assert.Contains(t, err.Error(), "threshold")
+	})
+}
+
+// TestTransferAmountTypeContract_C9 verifies that every amount_type offered by the
+// frontend UI (TransferActionForm.tsx: fixed, percentage, excess) is accepted by
+// the backend validation allow-set, and that backend-only types (remaining, threshold)
+// are also valid. This is the C9 contract guard — it locks the UI⊆backend invariant
+// so a UI-offered type can never be silently rejected at create/update time.
+func TestTransferAmountTypeContract_C9(t *testing.T) {
+	baseRule := AutomationRule{
+		UserID:   "user-c9",
+		Name:     "Transfer Contract Test",
+		RuleType: RuleTypeTransferSuggestion,
+		TriggerConfig: TriggerConfig{
+			Type:  TriggerTypeEvent,
+			Event: "balance_changed",
+		},
+		ConditionLogic: "AND",
+	}
+
+	// UI-offered amount_types: the frontend exposes exactly these three.
+	// ALL must be accepted by the backend (UI ⊆ backend allow-set).
+	uiOfferedTypes := []struct {
+		amountType string
+		actions    string
+		desc       string
+	}{
+		{
+			amountType: "fixed",
+			actions:    `{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"fixed","amount":100}`,
+			desc:       "fixed — standard dollar amount (UI option 1/3)",
+		},
+		{
+			amountType: "percentage",
+			actions:    `{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"percentage","amount":10}`,
+			desc:       "percentage — % of period income (UI option 2/3); amount stores percentage value",
+		},
+		{
+			amountType: "excess",
+			actions:    `{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"excess","amount":0,"threshold":50}`,
+			desc:       "excess — surplus above threshold (UI option 3/3); amount=0 is valid",
+		},
+	}
+
+	for _, tt := range uiOfferedTypes {
+		t.Run("UI type "+tt.amountType+" must be accepted: "+tt.desc, func(t *testing.T) {
+			rule := baseRule
+			rule.Actions = json.RawMessage(tt.actions)
+			err := rule.Validate()
+			assert.NoError(t, err,
+				"amount_type %q is offered by the UI and must be accepted by validateTransferAction (UI ⊆ backend allow-set)",
+				tt.amountType)
+		})
+	}
+
+	// Backend-only amount_types (not in the UI but must remain valid for API-created rules).
+	backendOnlyTypes := []struct {
+		amountType string
+		actions    string
+	}{
+		{
+			amountType: "remaining",
+			actions:    `{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"remaining","amount":0}`,
+		},
+		{
+			amountType: "threshold",
+			actions:    `{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"threshold","threshold":100}`,
+		},
+	}
+	for _, tt := range backendOnlyTypes {
+		t.Run("backend-only type "+tt.amountType+" must also be accepted", func(t *testing.T) {
+			rule := baseRule
+			rule.Actions = json.RawMessage(tt.actions)
+			err := rule.Validate()
+			assert.NoError(t, err, "backend-only amount_type %q must remain valid for API-created rules", tt.amountType)
+		})
+	}
 }
 
 func TestAutomationRule_Validate_BudgetAlertRule(t *testing.T) {
@@ -703,6 +837,7 @@ func TestTransferSuggestionStatus_IsValid(t *testing.T) {
 		{"accepted is valid", SuggestionStatusAccepted, true},
 		{"rejected is valid", SuggestionStatusRejected, true},
 		{"expired is valid", SuggestionStatusExpired, true},
+		{"completed is valid", SuggestionStatusCompleted, true},
 		{"empty is invalid", SuggestionStatus(""), false},
 		{"unknown is invalid", SuggestionStatus("cancelled"), false},
 	}
@@ -819,6 +954,65 @@ func TestTransferSuggestion_Reject(t *testing.T) {
 	assert.Equal(t, "Not needed this month", *suggestion.UserNotes)
 }
 
+func TestTransferSuggestion_Complete(t *testing.T) {
+	t.Run("success case — pending suggestion", func(t *testing.T) {
+		suggestion := &TransferSuggestion{
+			Status: SuggestionStatusPending,
+		}
+
+		before := time.Now().UTC()
+		err := suggestion.Complete("txn-abc", 150.0, "exact_match")
+		after := time.Now().UTC()
+
+		require.NoError(t, err)
+		assert.Equal(t, SuggestionStatusCompleted, suggestion.Status)
+		assert.NotNil(t, suggestion.CompletedAt)
+		assert.True(t, !suggestion.CompletedAt.Before(before) && !suggestion.CompletedAt.After(after))
+		require.NotNil(t, suggestion.MatchedTransactionID)
+		assert.Equal(t, "txn-abc", *suggestion.MatchedTransactionID)
+		require.NotNil(t, suggestion.ActualAmount)
+		assert.Equal(t, 150.0, *suggestion.ActualAmount)
+		require.NotNil(t, suggestion.CompletionSource)
+		assert.Equal(t, "exact_match", *suggestion.CompletionSource)
+	})
+
+	t.Run("success case — accepted suggestion", func(t *testing.T) {
+		suggestion := &TransferSuggestion{
+			Status: SuggestionStatusAccepted,
+		}
+
+		err := suggestion.Complete("txn-def", 200.0, "user_confirmed")
+
+		require.NoError(t, err)
+		assert.Equal(t, SuggestionStatusCompleted, suggestion.Status)
+		assert.NotNil(t, suggestion.CompletedAt)
+	})
+
+	t.Run("already completed returns error", func(t *testing.T) {
+		suggestion := &TransferSuggestion{
+			Status: SuggestionStatusCompleted,
+		}
+
+		err := suggestion.Complete("txn-xyz", 100.0, "exact_match")
+
+		assert.ErrorIs(t, err, ErrTransferSuggestionAlreadyActioned)
+	})
+
+	t.Run("all completion fields populated", func(t *testing.T) {
+		suggestion := &TransferSuggestion{
+			Status: SuggestionStatusPending,
+		}
+
+		err := suggestion.Complete("txn-ghi", 75.50, "user_confirmed")
+		require.NoError(t, err)
+
+		assert.NotNil(t, suggestion.CompletedAt)
+		assert.NotNil(t, suggestion.MatchedTransactionID)
+		assert.NotNil(t, suggestion.ActualAmount)
+		assert.NotNil(t, suggestion.CompletionSource)
+	})
+}
+
 // =============================================================================
 // Error Constants Tests
 // =============================================================================
@@ -843,4 +1037,131 @@ func TestErrorConstants(t *testing.T) {
 		assert.False(t, messages[msg], "Duplicate error message: %s", msg)
 		messages[msg] = true
 	}
+}
+
+// =============================================================================
+// GAP AG — numeric bound validation tests
+// =============================================================================
+
+// TestValidateTransferAction_PercentageUpperBound verifies that a transfer rule with
+// amount_type:"percentage" rejects amounts > 100 (a percentage cannot exceed 100%).
+// Without this bound, API-crafted rules could set percentage=500 and over-suggest 5× income.
+func TestValidateTransferAction_PercentageUpperBound(t *testing.T) {
+	base := AutomationRule{
+		UserID:   "user-1",
+		Name:     "Transfer %",
+		RuleType: RuleTypeTransferSuggestion,
+		TriggerConfig: TriggerConfig{
+			Type:  TriggerTypeEvent,
+			Event: EventBudgetPeriodEnd,
+		},
+		ConditionLogic: "AND",
+	}
+
+	t.Run("percentage=200 is rejected (over 100%)", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"from_account_id":"a","to_account_id":"b","amount_type":"percentage","amount":200}`)
+		err := rule.Validate()
+		require.Error(t, err, "percentage > 100 must be rejected")
+		assert.Contains(t, err.Error(), "percentage")
+	})
+
+	t.Run("percentage=100 is accepted (exactly 100%)", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"from_account_id":"a","to_account_id":"b","amount_type":"percentage","amount":100}`)
+		err := rule.Validate()
+		assert.NoError(t, err, "exactly 100% must be valid")
+	})
+
+	t.Run("percentage=50 is accepted", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"from_account_id":"a","to_account_id":"b","amount_type":"percentage","amount":50}`)
+		err := rule.Validate()
+		assert.NoError(t, err)
+	})
+}
+
+// TestValidateSavingsGoalAction_RemainingThresholdBound verifies that a savings_goal rule
+// with amount_type:"remaining" rejects a negative threshold. A negative threshold would
+// make calculateSavingsGoalAmount compute remaining + |threshold| — an over-suggestion.
+func TestValidateSavingsGoalAction_RemainingThresholdBound(t *testing.T) {
+	base := AutomationRule{
+		UserID:   "user-1",
+		Name:     "SG remaining",
+		RuleType: RuleTypeSavingsGoal,
+		TriggerConfig: TriggerConfig{
+			Type:  TriggerTypeEvent,
+			Event: EventBudgetPeriodEnd,
+		},
+		ConditionLogic: "AND",
+	}
+
+	t.Run("remaining with negative threshold is rejected", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"savings_goal_id":"g","from_account_id":"a","amount_type":"remaining","threshold":-100}`)
+		err := rule.Validate()
+		require.Error(t, err, "negative threshold for remaining amount_type must be rejected")
+		assert.Contains(t, err.Error(), "threshold")
+	})
+
+	t.Run("remaining with threshold=0 is accepted (full remaining)", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"savings_goal_id":"g","from_account_id":"a","amount_type":"remaining","threshold":0}`)
+		err := rule.Validate()
+		assert.NoError(t, err, "threshold=0 means transfer full remaining amount")
+	})
+
+	t.Run("remaining with positive threshold is accepted", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"savings_goal_id":"g","from_account_id":"a","amount_type":"remaining","threshold":100}`)
+		err := rule.Validate()
+		assert.NoError(t, err, "positive threshold is valid for remaining type")
+	})
+}
+
+// TestValidateRolloverAction_PercentageBound verifies that a category_rollover rule with
+// rollover_type:"percentage" rejects out-of-range values (≤0 or >100).
+func TestValidateRolloverAction_PercentageBound(t *testing.T) {
+	base := AutomationRule{
+		UserID:   "user-1",
+		Name:     "Rollover %",
+		RuleType: RuleTypeCategoryRollover,
+		TriggerConfig: TriggerConfig{
+			Type:  TriggerTypeEvent,
+			Event: EventBudgetPeriodEnd,
+		},
+		ConditionLogic: "AND",
+	}
+
+	t.Run("rollover percentage=150 is rejected (over 100%)", func(t *testing.T) {
+		pct := float64(150)
+		rule := base
+		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":150}`)
+		_ = pct
+		err := rule.Validate()
+		require.Error(t, err, "rollover percentage > 100 must be rejected")
+		assert.Contains(t, err.Error(), "percentage")
+	})
+
+	t.Run("rollover percentage=0 is rejected (must be positive)", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":0}`)
+		err := rule.Validate()
+		require.Error(t, err, "rollover percentage=0 must be rejected")
+		assert.Contains(t, err.Error(), "percentage")
+	})
+
+	t.Run("rollover percentage=100 is accepted", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":100}`)
+		err := rule.Validate()
+		assert.NoError(t, err, "rollover percentage=100 must be valid")
+	})
+
+	t.Run("rollover percentage=50 is accepted", func(t *testing.T) {
+		rule := base
+		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":50}`)
+		err := rule.Validate()
+		assert.NoError(t, err)
+	})
 }

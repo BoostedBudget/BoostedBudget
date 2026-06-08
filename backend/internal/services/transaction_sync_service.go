@@ -53,6 +53,10 @@ type TransactionSyncService interface {
 		ctx context.Context,
 		linkedItem *domain.LinkedItem,
 	) (*domain.TransactionSyncResult, error)
+
+	// SetTransferCorrelationService wires in the TransferCorrelationService after construction.
+	// Issue #972: Savings transfer automation — B4 wiring.
+	SetTransferCorrelationService(svc TransferCorrelationService)
 }
 
 // transactionSyncService implements TransactionSyncService
@@ -70,6 +74,7 @@ type transactionSyncService struct {
 	ruleApplicationService    RuleApplicationService        // Issue #346: Apply categorization rules to new transactions
 	budgetSyncService         BudgetSyncService             // Issue #494: Sync budget amounts after transaction sync
 	transactionMonitorService TransactionMonitorService     // Issue #36: Auto-detect completed transfer suggestions
+	transferCorrelationSvc    TransferCorrelationService    // Issue #972: Correlate inflows against pending transfer suggestions
 }
 
 // NewTransactionSyncService creates a new TransactionSyncService instance
@@ -106,6 +111,13 @@ func NewTransactionSyncService(
 		budgetSyncService:         budgetSyncService,
 		transactionMonitorService: transactionMonitorService,
 	}
+}
+
+// SetTransferCorrelationService wires in the TransferCorrelationService.
+// Call after NewTransactionSyncService before the server starts serving requests.
+// Issue #972: Savings transfer automation — B4 wiring.
+func (s *transactionSyncService) SetTransferCorrelationService(svc TransferCorrelationService) {
+	s.transferCorrelationSvc = svc
 }
 
 // ProcessWebhook processes a single TRANSACTIONS webhook event
@@ -352,6 +364,14 @@ func (s *transactionSyncService) SyncTransactions(
 	if s.budgetSyncService != nil {
 		if err := s.budgetSyncService.RecalculateBudgetAmounts(ctx, linkedItem.UserID); err != nil {
 			s.logger.Warn("failed to sync budget amounts", "user_id", linkedItem.UserID, "error", err)
+		}
+	}
+
+	// Issue #972: Correlate inflows against pending transfer suggestions (non-fatal)
+	if s.transferCorrelationSvc != nil {
+		if err := s.transferCorrelationSvc.CorrelateForUser(ctx, linkedItem.UserID); err != nil {
+			s.logger.Error("transfer correlation failed", "user_id", linkedItem.UserID, "error", err)
+			// non-fatal: don't fail the sync if correlation errors
 		}
 	}
 

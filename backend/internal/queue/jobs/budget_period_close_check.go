@@ -31,6 +31,7 @@ type BudgetPeriodCheckRepository interface {
 	// GetAllActivePaginated returns all active budgets ordered by id ASC, paginated.
 	GetAllActivePaginated(ctx context.Context, limit int, offset int) ([]*domain.Budget, error)
 	// GetCategoriesByBudgetID returns all categories for a budget.
+	// Used to populate per-category EventData for budget_period_end rule evaluation (#1270).
 	GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
 }
 
@@ -260,11 +261,14 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 				continue
 			}
 
-			// Load categories so budget_category.* conditions can evaluate against real data.
+			// Load categories for per-category condition evaluation (#1270).
+			// On error, log a warning and proceed with an empty categories map so
+			// budget-level conditions still fire correctly.
 			cats, catErr := w.budgetRepo.GetCategoriesByBudgetID(ctx, budget.ID)
 			if catErr != nil {
-				w.logger.Warn("failed to load categories for budget period event",
+				w.logger.Warn("failed to load categories for period-end event data; category conditions will not evaluate",
 					"budget_id", budget.ID,
+					"user_id", budget.UserID,
 					"error", catErr,
 				)
 				cats = nil

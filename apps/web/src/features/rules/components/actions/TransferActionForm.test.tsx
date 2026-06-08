@@ -372,7 +372,10 @@ describe('TransferActionForm', () => {
         <TransferActionForm action={percentageAction} onChange={() => {}} />
       )
 
-      expect(screen.getByText(/transfer a percentage of the balance/i)).toBeInTheDocument()
+      // GAP AD: percentage is computed as % of period income, not balance.
+      // The description must say "income" and must NOT say "balance".
+      expect(screen.getByText(/transfer a percentage of period income/i)).toBeInTheDocument()
+      expect(screen.queryByText(/transfer a percentage of the balance/i)).not.toBeInTheDocument()
     })
   })
 

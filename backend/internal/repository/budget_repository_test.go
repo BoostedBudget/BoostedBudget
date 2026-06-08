@@ -1463,3 +1463,70 @@ func TestBudgetRepository_GetByName_ReturnsExpectedIncome(t *testing.T) {
 	assert.Equal(t, 500.00, budget.ExpectedIncome)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestBudgetRepository_GetTimezonesByUserIDs tests the batch timezone lookup (Issue #972).
+// Verifies: correct map returned for known IDs; missing IDs produce no map entry.
+func TestBudgetRepository_GetTimezonesByUserIDs(t *testing.T) {
+	t.Run("returns correct map for known user IDs", func(t *testing.T) {
+		mock, repo := setupBudgetMockDB(t)
+		defer mock.Close()
+
+		ctx := context.Background()
+		userID1 := uuid.New().String()
+		userID2 := uuid.New().String()
+
+		rows := pgxmock.NewRows([]string{"id", "coalesce"}).
+			AddRow(userID1, "America/New_York").
+			AddRow(userID2, "Europe/London")
+
+		mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, COALESCE(timezone, 'UTC') FROM users WHERE id = ANY($1)`)).
+			WithArgs(pgxmock.AnyArg()).
+			WillReturnRows(rows)
+
+		result, err := repo.GetTimezonesByUserIDs(ctx, []string{userID1, userID2})
+
+		require.NoError(t, err)
+		assert.Equal(t, "America/New_York", result[userID1])
+		assert.Equal(t, "Europe/London", result[userID2])
+		assert.Len(t, result, 2)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("missing user IDs produce no map entry", func(t *testing.T) {
+		mock, repo := setupBudgetMockDB(t)
+		defer mock.Close()
+
+		ctx := context.Background()
+		knownID := uuid.New().String()
+		missingID := uuid.New().String()
+
+		// Only the known user is returned by the DB (missing user has no row).
+		rows := pgxmock.NewRows([]string{"id", "coalesce"}).
+			AddRow(knownID, "UTC")
+
+		mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, COALESCE(timezone, 'UTC') FROM users WHERE id = ANY($1)`)).
+			WithArgs(pgxmock.AnyArg()).
+			WillReturnRows(rows)
+
+		result, err := repo.GetTimezonesByUserIDs(ctx, []string{knownID, missingID})
+
+		require.NoError(t, err)
+		assert.Equal(t, "UTC", result[knownID])
+		_, present := result[missingID]
+		assert.False(t, present, "missing user ID should not appear in map; caller defaults to UTC")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("empty input returns empty map without querying DB", func(t *testing.T) {
+		mock, repo := setupBudgetMockDB(t)
+		defer mock.Close()
+
+		ctx := context.Background()
+
+		result, err := repo.GetTimezonesByUserIDs(ctx, []string{})
+
+		require.NoError(t, err)
+		assert.Empty(t, result)
+		assert.NoError(t, mock.ExpectationsWereMet()) // no DB calls expected
+	})
+}

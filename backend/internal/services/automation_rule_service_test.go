@@ -1,5 +1,5 @@
-// Package services provides tests for automation rule service.
-// Issue #1270: Task 3 — category ownership validation in CreateRule/UpdateRule.
+// Package services provides tests for automation rule service ownership validation.
+// Issue #972: GAP AE — savings_goal/transfer rules must verify referenced IDs belong to the rule owner.
 package services
 
 import (
@@ -11,353 +11,480 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-// mockAutoRulesRepo is a minimal mock for AutomationRulesRepository.
-type mockAutoRulesRepo struct {
-	createErr error
-	updateErr error
-	rule      *domain.AutomationRule
-}
+// ============================================================================
+// Helpers
+// ============================================================================
 
-func (m *mockAutoRulesRepo) Create(ctx context.Context, rule *domain.AutomationRule) error {
-	return m.createErr
-}
-func (m *mockAutoRulesRepo) GetByID(ctx context.Context, id string) (*domain.AutomationRule, error) {
-	if m.rule == nil {
-		return nil, domain.ErrAutomationRuleNotFound
-	}
-	return m.rule, nil
-}
-func (m *mockAutoRulesRepo) GetByUserID(ctx context.Context, userID string) ([]*domain.AutomationRule, error) {
-	return nil, nil
-}
-func (m *mockAutoRulesRepo) GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.AutomationRule, error) {
-	return nil, nil
-}
-func (m *mockAutoRulesRepo) GetByName(ctx context.Context, userID, name string) (*domain.AutomationRule, error) {
-	return nil, nil
-}
-func (m *mockAutoRulesRepo) Update(ctx context.Context, rule *domain.AutomationRule) error {
-	return m.updateErr
-}
-func (m *mockAutoRulesRepo) Delete(ctx context.Context, id string) error { return nil }
-func (m *mockAutoRulesRepo) CountByUserID(ctx context.Context, userID string) (int, error) {
-	return 0, nil
-}
-func (m *mockAutoRulesRepo) IncrementExecutionCount(ctx context.Context, ruleID string) error {
-	return nil
-}
-func (m *mockAutoRulesRepo) UpdateLastSuccessful(ctx context.Context, ruleID string) error {
-	return nil
-}
-func (m *mockAutoRulesRepo) GetRulesByEventTrigger(ctx context.Context, userID, eventType string) ([]*domain.AutomationRule, error) {
-	return nil, nil
-}
-func (m *mockAutoRulesRepo) GetRulesByType(ctx context.Context, userID string, ruleType domain.RuleType) ([]*domain.AutomationRule, error) {
-	return nil, nil
-}
-func (m *mockAutoRulesRepo) GetRulesByScheduleTrigger(ctx context.Context) ([]*domain.AutomationRule, error) {
-	return nil, nil
-}
-
-// Ensure mockAutoRulesRepo satisfies repository.AutomationRulesRepository at compile time.
-var _ repository.AutomationRulesRepository = (*mockAutoRulesRepo)(nil)
-
-// mockBudgetRepoForAutoRule is a minimal mock for BudgetRepository used by automation rule tests.
-type mockBudgetRepoForAutoRule struct {
-	getCategoryErr error
-	category       *domain.BudgetCategory
-	// Track calls for assertion
-	calledWith [][]string
-}
-
-func (m *mockBudgetRepoForAutoRule) GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error) {
-	m.calledWith = append(m.calledWith, []string{categoryID, userID})
-	if m.getCategoryErr != nil {
-		return nil, m.getCategoryErr
-	}
-	return m.category, nil
-}
-
-// Remaining BudgetRepository interface methods — all no-ops for these tests.
-func (m *mockBudgetRepoForAutoRule) Create(ctx context.Context, budget *domain.Budget) error {
-	return nil
-}
-func (m *mockBudgetRepoForAutoRule) GetByID(ctx context.Context, id string) (*domain.Budget, error) {
-	return nil, nil
-}
-func (m *mockBudgetRepoForAutoRule) GetByUserID(ctx context.Context, userID string) ([]*domain.Budget, error) {
-	return nil, nil
-}
-func (m *mockBudgetRepoForAutoRule) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.Budget, error) {
-	return nil, nil
-}
-func (m *mockBudgetRepoForAutoRule) GetByName(ctx context.Context, userID, name string) (*domain.Budget, error) {
-	return nil, nil
-}
-func (m *mockBudgetRepoForAutoRule) Update(ctx context.Context, budget *domain.Budget) error {
-	return nil
-}
-func (m *mockBudgetRepoForAutoRule) Delete(ctx context.Context, id, userID string) error { return nil }
-func (m *mockBudgetRepoForAutoRule) CountByUserID(ctx context.Context, userID string) (int, error) {
-	return 0, nil
-}
-func (m *mockBudgetRepoForAutoRule) CreateCategory(ctx context.Context, category *domain.BudgetCategory) error {
-	return nil
-}
-func (m *mockBudgetRepoForAutoRule) GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
-	return nil, nil
-}
-func (m *mockBudgetRepoForAutoRule) UpdateCategory(ctx context.Context, category *domain.BudgetCategory) error {
-	return nil
-}
-func (m *mockBudgetRepoForAutoRule) UpdateCategorySpentAmount(ctx context.Context, categoryID string, spentAmount float64) error {
-	return nil
-}
-func (m *mockBudgetRepoForAutoRule) DeleteCategory(ctx context.Context, id, budgetID string) error {
-	return nil
-}
-func (m *mockBudgetRepoForAutoRule) GetCategoriesMatchingTransaction(ctx context.Context, userID string, effective *domain.EffectiveCategory) ([]domain.BudgetCategory, error) {
-	return nil, nil
-}
-func (m *mockBudgetRepoForAutoRule) UpdateBudgetIncome(ctx context.Context, budgetID string, incomeAmount float64) error {
-	return nil
-}
-func (m *mockBudgetRepoForAutoRule) AddIncomeSource(ctx context.Context, budgetID string, source domain.IncomeSource) error {
-	return nil
-}
-func (m *mockBudgetRepoForAutoRule) RemoveIncomeSource(ctx context.Context, budgetID string, sourceIndex int) error {
-	return nil
-}
-func (m *mockBudgetRepoForAutoRule) AdjustCategoryAllocatedAmount(ctx context.Context, categoryID string, delta float64) error {
-	return nil
-}
-
-// Ensure mockBudgetRepoForAutoRule satisfies repository.BudgetRepository at compile time.
-var _ repository.BudgetRepository = (*mockBudgetRepoForAutoRule)(nil)
-
-// buildTransferActions returns a valid JSON actions blob for a transfer_suggestion rule.
-func buildTransferActions(t *testing.T) json.RawMessage {
-	t.Helper()
-	action := domain.TransferAction{
-		FromAccountID: "acc-from",
-		ToAccountID:   "acc-to",
-		AmountType:    "fixed",
-		Amount:        100,
-	}
-	b, err := json.Marshal(action)
-	require.NoError(t, err)
+// savingsGoalRuleActions returns a marshalled savings_goal action JSON for the given IDs.
+func savingsGoalRuleActions(savingsGoalID, fromAccountID string) json.RawMessage {
+	b, _ := json.Marshal(map[string]interface{}{
+		"savings_goal_id":  savingsGoalID,
+		"from_account_id":  fromAccountID,
+		"amount_type":      "fixed",
+		"amount":           50.0,
+	})
 	return b
 }
 
-// TestAutomationRuleService_CreateRule_CategoryOwnership tests that CreateRule
-// validates category ownership when conditions reference a budget_category field.
-func TestAutomationRuleService_CreateRule_CategoryOwnership(t *testing.T) {
-	ctx := context.Background()
-	userID := "user-123"
-	categoryID := "cat-owned-456"
-
-	t.Run("foreign category_id in condition is rejected", func(t *testing.T) {
-		ruleRepo := &mockAutoRulesRepo{}
-		budgetRepo := &mockBudgetRepoForAutoRule{
-			getCategoryErr: errors.New("category not found or not owned by user"),
-		}
-
-		svc := NewAutomationRuleService(ruleRepo)
-		svc.SetBudgetRepo(budgetRepo)
-
-		conditions := []domain.AutomationRuleCondition{
-			{
-				Field:      "budget_category.remaining_amount",
-				Operator:   domain.ConditionOperatorLt,
-				Value:      "50",
-				CategoryID: "cat-foreign-999",
-			},
-		}
-
-		req := &domain.CreateAutomationRuleRequest{
-			Name:     "Budget Rule",
-			RuleType: domain.RuleTypeTransferSuggestion,
-			TriggerConfig: domain.TriggerConfig{
-				Type:  domain.TriggerTypeEvent,
-				Event: domain.EventBudgetUpdated,
-			},
-			Conditions:     conditions,
-			ConditionLogic: "AND",
-			Actions:        buildTransferActions(t),
-		}
-
-		_, err := svc.CreateRule(ctx, userID, req)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "condition category_id does not belong to this user")
+// transferRuleActions returns a marshalled transfer_suggestion action JSON.
+func transferRuleActions(fromAccountID, toAccountID string) json.RawMessage {
+	b, _ := json.Marshal(map[string]interface{}{
+		"from_account_id": fromAccountID,
+		"to_account_id":   toAccountID,
+		"amount_type":     "fixed",
+		"amount":          50.0,
 	})
-
-	t.Run("owned category_id in condition is accepted", func(t *testing.T) {
-		ruleRepo := &mockAutoRulesRepo{}
-		budgetRepo := &mockBudgetRepoForAutoRule{
-			category: &domain.BudgetCategory{
-				ID:       categoryID,
-				BudgetID: "budget-789",
-			},
-		}
-
-		svc := NewAutomationRuleService(ruleRepo)
-		svc.SetBudgetRepo(budgetRepo)
-
-		conditions := []domain.AutomationRuleCondition{
-			{
-				Field:      "budget_category.remaining_amount",
-				Operator:   domain.ConditionOperatorLt,
-				Value:      "50",
-				CategoryID: categoryID,
-			},
-		}
-
-		req := &domain.CreateAutomationRuleRequest{
-			Name:     "Budget Rule",
-			RuleType: domain.RuleTypeTransferSuggestion,
-			TriggerConfig: domain.TriggerConfig{
-				Type:  domain.TriggerTypeEvent,
-				Event: domain.EventBudgetUpdated,
-			},
-			Conditions:     conditions,
-			ConditionLogic: "AND",
-			Actions:        buildTransferActions(t),
-		}
-
-		_, err := svc.CreateRule(ctx, userID, req)
-		require.NoError(t, err)
-	})
-
-	t.Run("no budget_category condition skips ownership check", func(t *testing.T) {
-		ruleRepo := &mockAutoRulesRepo{}
-		// budgetRepo.GetCategoryByIDAndUser returns error, but it should NOT be called
-		budgetRepo := &mockBudgetRepoForAutoRule{
-			getCategoryErr: errors.New("should not be called"),
-		}
-
-		svc := NewAutomationRuleService(ruleRepo)
-		svc.SetBudgetRepo(budgetRepo)
-
-		// Scheduled trigger — conditions not evaluated; no category_id present
-		req := &domain.CreateAutomationRuleRequest{
-			Name:     "No Category Rule",
-			RuleType: domain.RuleTypeTransferSuggestion,
-			TriggerConfig: domain.TriggerConfig{
-				Type: domain.TriggerTypeSchedule,
-				Cron: "0 0 * * *",
-			},
-			ConditionLogic: "AND",
-			Actions:        buildTransferActions(t),
-		}
-
-		_, err := svc.CreateRule(ctx, userID, req)
-		require.NoError(t, err)
-		assert.Empty(t, budgetRepo.calledWith, "GetCategoryByIDAndUser should not be called for non-category conditions")
-	})
-
-	t.Run("no budget_repo set — condition with category_id still passes (nil guard)", func(t *testing.T) {
-		ruleRepo := &mockAutoRulesRepo{}
-
-		// Don't set budget repo — service is initialized without it
-		svc := NewAutomationRuleService(ruleRepo)
-		// No SetBudgetRepo call
-
-		// Scheduled trigger without conditions — should succeed with nil budgetRepo
-		req := &domain.CreateAutomationRuleRequest{
-			Name:     "No Repo Rule",
-			RuleType: domain.RuleTypeTransferSuggestion,
-			TriggerConfig: domain.TriggerConfig{
-				Type: domain.TriggerTypeSchedule,
-				Cron: "0 0 * * *",
-			},
-			ConditionLogic: "AND",
-			Actions:        buildTransferActions(t),
-		}
-
-		_, err := svc.CreateRule(ctx, userID, req)
-		require.NoError(t, err)
-	})
+	return b
 }
 
-// TestAutomationRuleService_UpdateRule_CategoryOwnership tests that UpdateRule
-// validates category ownership when conditions reference a budget_category field.
-func TestAutomationRuleService_UpdateRule_CategoryOwnership(t *testing.T) {
-	ctx := context.Background()
-	userID := "user-123"
-	ruleID := "rule-456"
+// transferRuleActionsWithUserAccountIDs returns a marshalled transfer_suggestion action JSON
+// that includes stable from_user_account_id/to_user_account_id fields (Issue #1109 re-link refs).
+func transferRuleActionsWithUserAccountIDs(fromAccountID, toAccountID, fromUserAccountID, toUserAccountID string) json.RawMessage {
+	b, _ := json.Marshal(map[string]interface{}{
+		"from_account_id":      fromAccountID,
+		"to_account_id":        toAccountID,
+		"from_user_account_id": fromUserAccountID,
+		"to_user_account_id":   toUserAccountID,
+		"amount_type":          "fixed",
+		"amount":               50.0,
+	})
+	return b
+}
 
-	actions := buildTransferActions(t)
+// newSavingsGoalRuleRequest builds a CreateAutomationRuleRequest for a savings_goal rule.
+func newSavingsGoalRuleRequest(savingsGoalID, fromAccountID string) *domain.CreateAutomationRuleRequest {
+	return &domain.CreateAutomationRuleRequest{
+		Name:     "my savings rule",
+		RuleType: domain.RuleTypeSavingsGoal,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Actions: savingsGoalRuleActions(savingsGoalID, fromAccountID),
+	}
+}
+
+// newTransferRuleRequest builds a CreateAutomationRuleRequest for a transfer_suggestion rule.
+func newTransferRuleRequest(fromAccountID, toAccountID string) *domain.CreateAutomationRuleRequest {
+	return &domain.CreateAutomationRuleRequest{
+		Name:     "my transfer rule",
+		RuleType: domain.RuleTypeTransferSuggestion,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Actions: transferRuleActions(fromAccountID, toAccountID),
+	}
+}
+
+// ============================================================================
+// Tests — CreateRule ownership validation (GAP AE)
+// ============================================================================
+
+// TestCreateRule_SavingsGoal_SavingsGoalIDOwnership verifies that CreateRule rejects
+// a savings_goal rule whose savings_goal_id belongs to a different user (IDOR prevention).
+func TestCreateRule_SavingsGoal_SavingsGoalIDOwnership(t *testing.T) {
+	ctx := context.Background()
+	ownerUserID := "user-owner"
+	attackerUserID := "user-attacker"
+	goalID := "goal-owned-by-other"
+	fromAccountID := "from-acct-attacker"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	goalRepo := &mockSavingsGoalRepository{
+		goals: []*domain.SavingsGoal{
+			{ID: goalID, UserID: ownerUserID}, // owned by DIFFERENT user
+		},
+	}
+	acctRepo := &MockAccountRepository{}
+	// from_account belongs to attacker — only savings_goal_id mismatch matters here
+	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, attackerUserID).
+		Return(&domain.Account{ID: fromAccountID}, nil)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetAccountRepo(acctRepo)
+
+	_, err := svc.CreateRule(ctx, attackerUserID, newSavingsGoalRuleRequest(goalID, fromAccountID))
+	require.Error(t, err, "CreateRule must reject a savings_goal rule referencing another user's goal")
+	assert.Contains(t, err.Error(), "savings_goal_id", "error must identify which ID failed ownership")
+}
+
+// TestCreateRule_SavingsGoal_FromAccountOwnership verifies that CreateRule rejects
+// a savings_goal rule whose from_account_id belongs to a different user.
+func TestCreateRule_SavingsGoal_FromAccountOwnership(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-a"
+	goalID := "goal-owned-by-user-a"
+	fromAccountID := "from-acct-owned-by-other"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	goalRepo := &mockSavingsGoalRepository{
+		goals: []*domain.SavingsGoal{
+			{ID: goalID, UserID: userID}, // goal belongs to the same user
+		},
+	}
+	acctRepo := &MockAccountRepository{}
+	// from_account belongs to a different user → GetByIDAndUser returns not found
+	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
+		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetAccountRepo(acctRepo)
+
+	_, err := svc.CreateRule(ctx, userID, newSavingsGoalRuleRequest(goalID, fromAccountID))
+	require.Error(t, err, "CreateRule must reject a savings_goal rule referencing another user's account")
+	assert.Contains(t, err.Error(), "from_account_id", "error must identify which ID failed ownership")
+}
+
+// TestCreateRule_SavingsGoal_HappyPath verifies that CreateRule accepts a valid
+// savings_goal rule where all referenced IDs belong to the rule owner.
+func TestCreateRule_SavingsGoal_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-a"
+	goalID := "goal-a"
+	fromAccountID := "from-acct-a"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	goalRepo := &mockSavingsGoalRepository{
+		goals: []*domain.SavingsGoal{
+			{ID: goalID, UserID: userID},
+		},
+	}
+	acctRepo := &MockAccountRepository{}
+	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
+		Return(&domain.Account{ID: fromAccountID}, nil)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetAccountRepo(acctRepo)
+
+	rule, err := svc.CreateRule(ctx, userID, newSavingsGoalRuleRequest(goalID, fromAccountID))
+	require.NoError(t, err, "CreateRule must succeed when all IDs belong to the rule owner")
+	assert.Equal(t, userID, rule.UserID)
+}
+
+// TestCreateRule_Transfer_FromAccountOwnership verifies that CreateRule rejects
+// a transfer rule whose from_account_id belongs to a different user.
+func TestCreateRule_Transfer_FromAccountOwnership(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-a"
+	fromAccountID := "from-acct-other"
+	toAccountID := "to-acct-user-a"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	acctRepo := &MockAccountRepository{}
+	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
+		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
+	// to_account_id check is not reached if from_account_id fails
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetAccountRepo(acctRepo)
+
+	_, err := svc.CreateRule(ctx, userID, newTransferRuleRequest(fromAccountID, toAccountID))
+	require.Error(t, err, "CreateRule must reject a transfer rule referencing another user's from_account_id")
+	assert.Contains(t, err.Error(), "from_account_id")
+}
+
+// TestCreateRule_Transfer_ToAccountOwnership verifies that CreateRule rejects
+// a transfer rule whose to_account_id belongs to a different user.
+func TestCreateRule_Transfer_ToAccountOwnership(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-a"
+	fromAccountID := "from-acct-user-a"
+	toAccountID := "to-acct-other"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	acctRepo := &MockAccountRepository{}
+	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
+		Return(&domain.Account{ID: fromAccountID}, nil)
+	acctRepo.On("GetByIDAndUser", mock.Anything, toAccountID, userID).
+		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetAccountRepo(acctRepo)
+
+	_, err := svc.CreateRule(ctx, userID, newTransferRuleRequest(fromAccountID, toAccountID))
+	require.Error(t, err, "CreateRule must reject a transfer rule referencing another user's to_account_id")
+	assert.Contains(t, err.Error(), "to_account_id")
+}
+
+// TestCreateRule_Transfer_HappyPath verifies that CreateRule accepts a transfer rule
+// where both account IDs belong to the rule owner.
+func TestCreateRule_Transfer_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-a"
+	fromAccountID := "from-a"
+	toAccountID := "to-a"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	acctRepo := &MockAccountRepository{}
+	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
+		Return(&domain.Account{ID: fromAccountID}, nil)
+	acctRepo.On("GetByIDAndUser", mock.Anything, toAccountID, userID).
+		Return(&domain.Account{ID: toAccountID}, nil)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetAccountRepo(acctRepo)
+
+	rule, err := svc.CreateRule(ctx, userID, newTransferRuleRequest(fromAccountID, toAccountID))
+	require.NoError(t, err)
+	assert.Equal(t, userID, rule.UserID)
+}
+
+// TestUpdateRule_OwnershipEnforced verifies that UpdateRule also enforces ID ownership.
+func TestUpdateRule_OwnershipEnforced(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-a"
+	ruleID := "rule-1"
+	goalID := "goal-other-user"
+	fromAccountID := "from-a"
 
 	existingRule := &domain.AutomationRule{
 		ID:       ruleID,
 		UserID:   userID,
-		Name:     "Existing Rule",
-		RuleType: domain.RuleTypeTransferSuggestion,
+		Name:     "existing",
 		Enabled:  true,
+		RuleType: domain.RuleTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
-			Event: domain.EventBudgetUpdated,
+			Event: domain.EventBudgetPeriodEnd,
 		},
+		Actions:        savingsGoalRuleActions("old-goal-id", fromAccountID),
 		ConditionLogic: "AND",
-		Actions:        actions,
 	}
 
-	t.Run("foreign category_id in updated condition is rejected", func(t *testing.T) {
-		ruleRepo := &mockAutoRulesRepo{rule: existingRule}
-		budgetRepo := &mockBudgetRepoForAutoRule{
-			getCategoryErr: errors.New("category not found or not owned by user"),
-		}
+	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.AutomationRule{existingRule}}
+	goalRepo := &mockSavingsGoalRepository{
+		goals: []*domain.SavingsGoal{
+			// goalID belongs to a different user, not userID
+		},
+	}
+	acctRepo := &MockAccountRepository{}
+	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
+		Return(&domain.Account{ID: fromAccountID}, nil)
 
-		svc := NewAutomationRuleService(ruleRepo)
-		svc.SetBudgetRepo(budgetRepo)
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetAccountRepo(acctRepo)
 
-		newConditions := []domain.AutomationRuleCondition{
-			{
-				Field:      "budget_category.remaining_amount",
-				Operator:   domain.ConditionOperatorLt,
-				Value:      "50",
-				CategoryID: "cat-foreign-999",
-			},
-		}
-
-		req := &domain.UpdateAutomationRuleRequest{
-			Conditions: &newConditions,
-		}
-
-		_, err := svc.UpdateRule(ctx, userID, ruleID, req)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "condition category_id does not belong to this user")
+	newActions := savingsGoalRuleActions(goalID, fromAccountID)
+	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateAutomationRuleRequest{
+		Actions: &newActions,
 	})
+	require.Error(t, err, "UpdateRule must reject updating to reference another user's goal")
+	assert.Contains(t, err.Error(), "savings_goal_id")
+}
 
-	t.Run("owned category_id in updated condition is accepted", func(t *testing.T) {
-		ruleRepo := &mockAutoRulesRepo{rule: existingRule}
-		budgetRepo := &mockBudgetRepoForAutoRule{
-			category: &domain.BudgetCategory{
-				ID:       "cat-owned",
-				BudgetID: "budget-789",
-			},
-		}
+// TestCreateRule_NoRepos_SkipsOwnershipCheck verifies that when repos are not injected
+// (e.g. in tests that don't set them), CreateRule silently skips the ownership check.
+// This preserves backward compatibility for tests and nil-guarded production paths.
+func TestCreateRule_NoRepos_SkipsOwnershipCheck(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-a"
+	ruleRepo := &mockAutomationRulesRepository{}
 
-		svc := NewAutomationRuleService(ruleRepo)
-		svc.SetBudgetRepo(budgetRepo)
+	svc := NewAutomationRuleService(ruleRepo)
+	// No SetSavingsGoalRepo or SetAccountRepo calls — repos are nil
 
-		newConditions := []domain.AutomationRuleCondition{
-			{
-				Field:      "budget_category.remaining_amount",
-				Operator:   domain.ConditionOperatorLt,
-				Value:      "50",
-				CategoryID: "cat-owned",
-			},
-		}
+	_, err := svc.CreateRule(ctx, userID, newSavingsGoalRuleRequest("any-goal", "any-account"))
+	require.NoError(t, err, "CreateRule must succeed when ownership repos are not configured (nil guard)")
+}
 
-		req := &domain.UpdateAutomationRuleRequest{
-			Conditions: &newConditions,
-		}
+// ============================================================================
+// Tests — chain-resolver IDOR (GAP AE, Issue #972)
+// ============================================================================
 
-		_, err := svc.UpdateRule(ctx, userID, ruleID, req)
-		require.NoError(t, err)
+// TestCreateRule_Transfer_FromUserAccountIDOwnership verifies that CreateRule rejects
+// a transfer rule whose from_user_account_id belongs to a different user.
+// This closes the chain-resolver IDOR attack: an attacker could supply their own
+// from_account_id (passes GetByIDAndUser check) but a victim's from_user_account_id —
+// the unscoped ResolveActiveID would then overwrite the suggestion with the victim's account.
+func TestCreateRule_Transfer_FromUserAccountIDOwnership(t *testing.T) {
+	ctx := context.Background()
+	attackerUserID := "user-attacker"
+	fromAccountID := "from-attacker"   // attacker's own account — passes standard check
+	toAccountID := "to-attacker"       // attacker's own account
+	fromUserAccountID := "ua-victim-1" // victim's stable re-link ref — must be rejected
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	acctRepo := &MockAccountRepository{}
+	// Both account IDs belong to the attacker (standard checks pass)
+	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, attackerUserID).
+		Return(&domain.Account{ID: fromAccountID}, nil)
+	acctRepo.On("GetByIDAndUser", mock.Anything, toAccountID, attackerUserID).
+		Return(&domain.Account{ID: toAccountID}, nil)
+	// from_user_account_id belongs to a different user — chain-resolver check must catch it
+	acctRepo.On("GetByUserAccountIDAndUser", mock.Anything, fromUserAccountID, attackerUserID).
+		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetAccountRepo(acctRepo)
+
+	actions := transferRuleActionsWithUserAccountIDs(fromAccountID, toAccountID, fromUserAccountID, "")
+	req := &domain.CreateAutomationRuleRequest{
+		Name:     "chain resolver idor test",
+		RuleType: domain.RuleTypeTransferSuggestion,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Actions: actions,
+	}
+	_, err := svc.CreateRule(ctx, attackerUserID, req)
+	require.Error(t, err, "CreateRule must reject a transfer rule with another user's from_user_account_id")
+	assert.Contains(t, err.Error(), "from_user_account_id", "error must identify the chain-resolver ref that failed ownership")
+}
+
+// TestCreateRule_Transfer_ToUserAccountIDOwnership verifies that CreateRule rejects
+// a transfer rule whose to_user_account_id belongs to a different user.
+func TestCreateRule_Transfer_ToUserAccountIDOwnership(t *testing.T) {
+	ctx := context.Background()
+	attackerUserID := "user-attacker"
+	fromAccountID := "from-attacker"
+	toAccountID := "to-attacker"
+	toUserAccountID := "ua-victim-2" // victim's stable re-link ref
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	acctRepo := &MockAccountRepository{}
+	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, attackerUserID).
+		Return(&domain.Account{ID: fromAccountID}, nil)
+	acctRepo.On("GetByIDAndUser", mock.Anything, toAccountID, attackerUserID).
+		Return(&domain.Account{ID: toAccountID}, nil)
+	acctRepo.On("GetByUserAccountIDAndUser", mock.Anything, toUserAccountID, attackerUserID).
+		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetAccountRepo(acctRepo)
+
+	actions := transferRuleActionsWithUserAccountIDs(fromAccountID, toAccountID, "", toUserAccountID)
+	req := &domain.CreateAutomationRuleRequest{
+		Name:     "chain resolver idor test to",
+		RuleType: domain.RuleTypeTransferSuggestion,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Actions: actions,
+	}
+	_, err := svc.CreateRule(ctx, attackerUserID, req)
+	require.Error(t, err, "CreateRule must reject a transfer rule with another user's to_user_account_id")
+	assert.Contains(t, err.Error(), "to_user_account_id", "error must identify the chain-resolver ref that failed ownership")
+}
+
+// ============================================================================
+// Tests — CreateRule category ownership validation (Issue #1270)
+// ============================================================================
+
+// budgetCategoryConditionRule builds a CreateAutomationRuleRequest with a single
+// budget_category.* condition for the given categoryID.
+func budgetCategoryConditionRule(categoryID string) *domain.CreateAutomationRuleRequest {
+	b, _ := json.Marshal(map[string]interface{}{
+		"savings_goal_id": "goal-1",
+		"from_account_id": "acct-1",
+		"amount_type":     "fixed",
+		"amount":          10.0,
 	})
+	return &domain.CreateAutomationRuleRequest{
+		Name:     "category condition rule",
+		RuleType: domain.RuleTypeSavingsGoal,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Conditions: []domain.AutomationRuleCondition{
+			{
+				Field:      "budget_category.percent_used",
+				CategoryID: categoryID,
+				Operator:   domain.ConditionOperatorGt,
+				Value:      "80",
+			},
+		},
+		Actions: b,
+	}
+}
+
+// TestCreateRule_CategoryCondition_AcceptsOwnedCategory verifies that CreateRule accepts
+// a rule whose budget_category.* condition references a category owned by the rule's user.
+// Issue #1270: SetBudgetRepo + GetCategoryByIDAndUser happy path.
+func TestCreateRule_CategoryCondition_AcceptsOwnedCategory(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-alice"
+	categoryID := "cat-alice-1"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	ruleRepo.rules = []*domain.AutomationRule{} // ensure Create stores the rule
+	budgetRepo := &MockBudgetRepository{}
+	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
+		Return(&domain.BudgetCategory{ID: categoryID}, nil)
+	goalRepo := &MockSavingsGoalRepository{}
+	goalRepo.On("GetByIDForUser", mock.Anything, "goal-1", userID).
+		Return(&domain.SavingsGoal{ID: "goal-1"}, nil)
+	acctRepo := &MockAccountRepository{}
+	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-1", userID).
+		Return(&domain.Account{ID: "acct-1"}, nil)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetBudgetRepo(budgetRepo)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetAccountRepo(acctRepo)
+
+	req := budgetCategoryConditionRule(categoryID)
+	rule, err := svc.CreateRule(ctx, userID, req)
+	require.NoError(t, err, "CreateRule must accept a rule whose category_id belongs to the user")
+	assert.NotNil(t, rule)
+}
+
+// TestCreateRule_CategoryCondition_RejectsForeignCategory verifies that CreateRule rejects
+// a rule whose budget_category.* condition references a category owned by a different user
+// (IDOR prevention). Issue #1270.
+func TestCreateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
+	ctx := context.Background()
+	attackerUserID := "user-attacker"
+	victimCategoryID := "cat-victim-99"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	budgetRepo := &MockBudgetRepository{}
+	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, victimCategoryID, attackerUserID).
+		Return((*domain.BudgetCategory)(nil), errors.New("not found"))
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetBudgetRepo(budgetRepo)
+
+	req := budgetCategoryConditionRule(victimCategoryID)
+	_, err := svc.CreateRule(ctx, attackerUserID, req)
+	require.Error(t, err, "CreateRule must reject a rule whose category_id belongs to a different user")
+	assert.Contains(t, err.Error(), "category_id", "error must identify the category_id ownership failure")
+}
+
+// TestCreateRule_CategoryCondition_NoBudgetRepo_SkipsCheck verifies that when SetBudgetRepo
+// is not called the category ownership check is skipped (backwards-compat for test setups that
+// don't inject budgetRepo). Issue #1270.
+func TestCreateRule_CategoryCondition_NoBudgetRepo_SkipsCheck(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-bob"
+	categoryID := "cat-any"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	goalRepo := &MockSavingsGoalRepository{}
+	goalRepo.On("GetByIDForUser", mock.Anything, "goal-1", userID).
+		Return(&domain.SavingsGoal{ID: "goal-1"}, nil)
+	acctRepo := &MockAccountRepository{}
+	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-1", userID).
+		Return(&domain.Account{ID: "acct-1"}, nil)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetAccountRepo(acctRepo)
+	// intentionally NOT calling svc.SetBudgetRepo
+
+	req := budgetCategoryConditionRule(categoryID)
+	rule, err := svc.CreateRule(ctx, userID, req)
+	require.NoError(t, err, "CreateRule must skip the category check when budgetRepo is not injected")
+	assert.NotNil(t, rule)
 }
