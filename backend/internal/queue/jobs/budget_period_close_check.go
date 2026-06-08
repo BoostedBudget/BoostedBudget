@@ -271,10 +271,14 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 					"user_id", budget.UserID,
 					"error", catErr,
 				)
+				// Delete the marker so the next daily run retries with categories present.
+				// If DeleteMarker also fails (dual DB failure), the marker stays and this
+				// period will not be retried — same pre-existing limitation as the
+				// enqueue-failure path below. Logged as Error to surface in monitoring.
 				if delErr := w.periodEventsRepo.DeleteMarker(ctx,
 					budget.UserID, budget.ID, periodStart, periodEnd, domain.EventBudgetPeriodEnd,
 				); delErr != nil {
-					w.logger.Error("failed to delete marker after category load failure",
+					w.logger.Error("failed to delete marker after category load failure; period may be permanently skipped",
 						"budget_id", budget.ID,
 						"user_id", budget.UserID,
 						"delete_error", delErr,
