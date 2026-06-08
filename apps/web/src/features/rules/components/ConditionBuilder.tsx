@@ -6,7 +6,7 @@
  * Supports AND/OR logic toggle.
  */
 
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -275,6 +275,21 @@ export function ConditionBuilder({
     triggerEvent && CONDITION_FIELDS_BY_EVENT[triggerEvent]
       ? CONDITION_FIELDS_BY_EVENT[triggerEvent]
       : CONDITION_FIELD_OPTIONS
+
+  // Reset conditions whose field is no longer valid when availableFields changes
+  useEffect(() => {
+    const validFields = new Set(availableFields.map((f) => f.value))
+    const updated = conditions.map((c) => {
+      if (!validFields.has(c.field)) {
+        return { ...c, field: availableFields[0]?.value ?? c.field, category_id: undefined }
+      }
+      return c
+    })
+    const changed = updated.some((c, i) => c.field !== conditions[i].field)
+    if (changed) {
+      onConditionsChange(updated)
+    }
+  }, [availableFields]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAdd = useCallback(() => {
     onConditionsChange([...conditions, createDefaultCondition(availableFields)])

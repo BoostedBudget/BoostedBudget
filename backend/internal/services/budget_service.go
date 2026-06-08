@@ -181,6 +181,11 @@ func (s *budgetService) GetBudgets(ctx context.Context, userID string) ([]*domai
 	}
 	for _, b := range budgets {
 		enrichBudgetPFCDisplay(b)
+		cats, err := s.budgetRepo.GetCategoriesByBudgetID(ctx, b.ID)
+		if err != nil {
+			return nil, err
+		}
+		b.Categories = cats
 	}
 	return budgets, nil
 }
@@ -193,6 +198,11 @@ func (s *budgetService) GetActiveBudgets(ctx context.Context, userID string) ([]
 	}
 	for _, b := range budgets {
 		enrichBudgetPFCDisplay(b)
+		cats, err := s.budgetRepo.GetCategoriesByBudgetID(ctx, b.ID)
+		if err != nil {
+			return nil, err
+		}
+		b.Categories = cats
 	}
 	return budgets, nil
 }

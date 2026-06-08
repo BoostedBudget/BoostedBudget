@@ -370,6 +370,8 @@ func TestBudgetService_GetBudgets_Success(t *testing.T) {
 
 	// Setup mocks
 	mockBudgetRepo.On("GetByUserID", ctx, userID).Return(expectedBudgets, nil)
+	mockBudgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-123").Return([]domain.BudgetCategory{}, nil)
+	mockBudgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-456").Return([]domain.BudgetCategory{}, nil)
 
 	// Execute
 	budgets, err := service.GetBudgets(ctx, userID)
@@ -396,6 +398,7 @@ func TestBudgetService_GetActiveBudgets_Success(t *testing.T) {
 
 	// Setup mocks
 	mockBudgetRepo.On("GetActiveByUserID", ctx, userID).Return(expectedBudgets, nil)
+	mockBudgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-123").Return([]domain.BudgetCategory{}, nil)
 
 	// Execute
 	budgets, err := service.GetActiveBudgets(ctx, userID)
