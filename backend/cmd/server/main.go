@@ -415,6 +415,7 @@ func main() {
 
 		// Issue #37: Automation Rule Service and Rule Scheduler
 		automationRuleService := services.NewAutomationRuleService(automationRuleRepo)
+		automationRuleService.SetBudgetRepo(budgetRepo)
 		appLogger.Info("Automation rule service initialized")
 
 		// Issue #37: Rule Execution Service
