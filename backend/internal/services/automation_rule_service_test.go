@@ -383,6 +383,8 @@ func TestCreateRule_Transfer_ToUserAccountIDOwnership(t *testing.T) {
 
 // budgetCategoryConditionRule builds a CreateAutomationRuleRequest with a single
 // budget_category.* condition for the given categoryID.
+// Issue #1271 Item 2: BudgetID is now required by ValidateForPersistence() in addition
+// to CategoryID; use a fixed sentinel budget ID so the rule passes persist validation.
 func budgetCategoryConditionRule(categoryID string) *domain.CreateAutomationRuleRequest {
 	b, _ := json.Marshal(map[string]interface{}{
 		"savings_goal_id": "goal-1",
@@ -401,6 +403,7 @@ func budgetCategoryConditionRule(categoryID string) *domain.CreateAutomationRule
 			{
 				Field:      "budget_category.percent_used",
 				CategoryID: categoryID,
+				BudgetID:   "budget-1",
 				Operator:   domain.ConditionOperatorGt,
 				Value:      "80",
 			},
@@ -554,6 +557,7 @@ func TestUpdateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 		{
 			Field:      "budget_category.percent_used",
 			CategoryID: victimCategoryID,
+			BudgetID:   "budget-1", // required by ValidateForPersistence() (Issue #1271 Item 2)
 			Operator:   domain.ConditionOperatorGt,
 			Value:      "80",
 		},

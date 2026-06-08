@@ -457,8 +457,26 @@ func (r *AutomationRule) validateConditions() error {
 				return fmt.Errorf("condition field %q is not valid for event type %q", condition.Field, r.TriggerConfig.Event)
 			}
 		}
-		if strings.HasPrefix(condition.Field, "budget_category.") && condition.CategoryID == "" {
-			return fmt.Errorf("condition field %q requires a category_id", condition.Field)
+	}
+	return nil
+}
+
+// ValidateForPersistence validates the rule for create/update. It calls Validate()
+// for static checks (wrapping any error as ErrInvalidRule), then additionally requires
+// scope IDs for category-scoped conditions.
+func (r *AutomationRule) ValidateForPersistence() error {
+	if err := r.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRule, err)
+	}
+	for _, condition := range r.Conditions {
+		if !strings.HasPrefix(condition.Field, "budget_category.") {
+			continue
+		}
+		if condition.CategoryID == "" {
+			return fmt.Errorf("%w: condition field %q requires a category_id", ErrInvalidRule, condition.Field)
+		}
+		if condition.BudgetID == "" {
+			return fmt.Errorf("%w: condition field %q requires a budget_id", ErrInvalidRule, condition.Field)
 		}
 	}
 	return nil
