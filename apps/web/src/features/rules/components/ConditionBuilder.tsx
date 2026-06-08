@@ -226,7 +226,7 @@ function ConditionRow({ condition, index, availableFields, categories, onChange,
             disabled={disabled}
             className={formControlClass}
           >
-            <option value="">All Categories</option>
+            <option value="" disabled>Select a category</option>
             {(categories ?? []).map((category) => (
               <option key={category.id} value={category.id}>
                 {formatBudgetCategoryLabel(category)}

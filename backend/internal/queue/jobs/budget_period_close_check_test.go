@@ -46,6 +46,14 @@ func (m *mockBudgetPeriodCheckRepo) GetAllActivePaginated(ctx context.Context, l
 	return args.Get(0).([]*domain.Budget), args.Error(1)
 }
 
+func (m *mockBudgetPeriodCheckRepo) GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
+	args := m.Called(ctx, budgetID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
+}
+
 // mockBudgetPeriodEventsRepo mocks BudgetPeriodEventsRepo.
 type mockBudgetPeriodEventsRepo struct {
 	mock.Mock
@@ -155,6 +163,8 @@ func TestBudgetPeriodCloseCheck_FiresEventOnPeriodClose(t *testing.T) {
 		Return(false, nil)
 	periodEventsRepo.On("InsertMarker", ctx, "user-1", "budget-1", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
 		Return(true, nil)
+	budgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-1").
+		Return(budget.Categories, nil)
 
 	// Capture the enqueued job to inspect EventData keys.
 	var capturedArgs RuleEvaluationArgs
@@ -760,6 +770,8 @@ func TestBudgetPeriodCloseCheckWorker_NoDuplicateEnqueueOnMarkerRace(t *testing.
 	periodEventsRepo.On("InsertMarker", ctx, "user-race", "budget-race",
 		mock.Anything, mock.Anything, domain.EventBudgetPeriodEnd).
 		Return(false, nil).Once()
+	budgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-race").
+		Return([]domain.BudgetCategory(nil), nil)
 
 	// Enqueue must be called exactly once (only the winner enqueues).
 	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
@@ -821,6 +833,7 @@ func TestWorkAt_DeletesMarkerOnEnqueueFailure(t *testing.T) {
 	periodEventsRepo.On("HasMarker", ctx, "user-fail", "budget-fail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(false, nil)
 	// InsertMarker succeeds (newly inserted row)
 	periodEventsRepo.On("InsertMarker", ctx, "user-fail", "budget-fail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(true, nil)
+	budgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-fail").Return([]domain.BudgetCategory(nil), nil)
 	// Enqueue fails with a transient error
 	mockQueue.On("Enqueue", ctx, mock.Anything, mock.Anything).Return(nil, errors.New("transient enqueue failure"))
 	// DeleteMarker must be called to clean up the orphaned marker so the next daily run can retry
@@ -980,6 +993,8 @@ func TestWorkAt_MarkerStableAfterTimezoneChange(t *testing.T) {
 	periodEventsRepo.On("InsertMarker", ctx, "user-tz-stable", "budget-tz-stable",
 		expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
 		Return(true, nil).Once()
+	budgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-tz-stable").
+		Return([]domain.BudgetCategory(nil), nil)
 	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
 		ea, ok := job.(RuleEvaluationArgs)
 		return ok && ea.UserID == "user-tz-stable"
@@ -1042,6 +1057,8 @@ func TestWorkAt_FallsBackToUTCWhenTimezoneNil(t *testing.T) {
 	periodEventsRepo.On("InsertMarker", ctx, "user-utcfb", "budget-utcfb",
 		expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
 		Return(true, nil)
+	budgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-utcfb").
+		Return([]domain.BudgetCategory(nil), nil)
 	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
 		evalArgs, ok := job.(RuleEvaluationArgs)
 		return ok && evalArgs.UserID == "user-utcfb" && evalArgs.EventType == domain.EventBudgetPeriodEnd

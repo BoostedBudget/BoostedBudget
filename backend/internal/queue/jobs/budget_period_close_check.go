@@ -30,6 +30,8 @@ func (BudgetPeriodCloseCheckArgs) Kind() string { return "budget_period_close_ch
 type BudgetPeriodCheckRepository interface {
 	// GetAllActivePaginated returns all active budgets ordered by id ASC, paginated.
 	GetAllActivePaginated(ctx context.Context, limit int, offset int) ([]*domain.Budget, error)
+	// GetCategoriesByBudgetID returns all categories for a budget.
+	GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
 }
 
 // UserTimezoneLookup provides batch timezone lookup for the period-close scanner.
@@ -257,6 +259,17 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 				totalSkipped++
 				continue
 			}
+
+			// Load categories so budget_category.* conditions can evaluate against real data.
+			cats, catErr := w.budgetRepo.GetCategoriesByBudgetID(ctx, budget.ID)
+			if catErr != nil {
+				w.logger.Warn("failed to load categories for budget period event",
+					"budget_id", budget.ID,
+					"error", catErr,
+				)
+				cats = nil
+			}
+			budget.Categories = cats
 
 			evalArgs := RuleEvaluationArgs{
 				UserID:    budget.UserID,
