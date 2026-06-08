@@ -211,6 +211,33 @@ func TestMCPManifest_AnalyticsOpsAreInGoManifest(t *testing.T) {
 	}
 }
 
+// TestMCPManifest_Issue972_SavingsTransferEntries verifies that the four new
+// Issue #972 operation entries are present with the correct class.
+func TestMCPManifest_Issue972_SavingsTransferEntries(t *testing.T) {
+	type wantEntry struct {
+		operationID string
+		wantClass   domain.MCPOperationClass
+	}
+
+	want := []wantEntry{
+		{"getSavingsImpactAggregate", domain.MCPClassRead},
+		{"getSavingsImpactMe", domain.MCPClassRead},
+		{"confirmTransferSuggestionMatch", domain.MCPClassWrite},
+		{"declineTransferSuggestionMatch", domain.MCPClassWrite}, // GAP CJ: was missing from test
+	}
+
+	for _, w := range want {
+		class, found := domain.MCPOperationManifest[w.operationID]
+		if !found {
+			t.Errorf("MCPOperationManifest missing entry for %q (Issue #972)", w.operationID)
+			continue
+		}
+		if class != w.wantClass {
+			t.Errorf("MCPOperationManifest[%q] = %q, want %q (Issue #972)", w.operationID, class, w.wantClass)
+		}
+	}
+}
+
 // TestMCPManifest_Issue1210_ReviewWorkflowEntries verifies that the new Issue #1210
 // operation entries are present with the correct class so a future rename can't
 // silently drop them.

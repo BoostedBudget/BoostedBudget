@@ -4,12 +4,10 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
-	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // Default matching parameters.
@@ -27,15 +25,13 @@ type PendingSuggestionRepository interface {
 	UpdateStatus(ctx context.Context, id string, status domain.SuggestionStatus, userNotes *string) error
 }
 
-// TransactionMonitorService monitors transactions to auto-accept matching suggestions.
+// TransactionMonitorService is a no-op stub retained for API compatibility.
+// Transfer detection is now handled by TransferCorrelationService.CorrelateForUser,
+// which is wired into the transaction sync pipeline (Issue #972 Task B4).
 type TransactionMonitorService interface {
-	// MonitorForMatches checks new transactions against pending suggestions.
-	// If a match is found, the suggestion is auto-accepted.
-	// Match criteria:
-	// - Transaction account matches suggestion's ToAccountID
-	// - Amount within tolerance (default 1 cent)
-	// - Transaction date within range of suggestion creation (default 7 days)
-	// - Negative transaction amount (inflow/credit/deposit under PFCv2)
+	// MonitorForMatches is a no-op stub preserved for interface compatibility.
+	// It no longer performs auto-accept; correlation is handled by
+	// TransferCorrelationService instead.
 	MonitorForMatches(ctx context.Context, userID string, newTransactions []*domain.Transaction) error
 }
 
@@ -55,51 +51,15 @@ func NewTransactionMonitorService(suggestionRepo PendingSuggestionRepository) Tr
 	}
 }
 
-// MonitorForMatches checks new transactions against pending suggestions.
+// MonitorForMatches is a no-op stub retained for interface compatibility.
+// Auto-accept logic has been removed in Issue #972: transfer correlation is now
+// handled by TransferCorrelationService.CorrelateForUser, which is wired in via
+// the transaction sync pipeline (Task B4).
 func (s *transactionMonitorService) MonitorForMatches(
 	ctx context.Context,
 	userID string,
 	newTransactions []*domain.Transaction,
 ) error {
-	// Early return if no transactions
-	if len(newTransactions) == 0 {
-		return nil
-	}
-
-	// Get pending suggestions for this user
-	suggestions, err := s.suggestionRepo.GetPendingByUserID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("failed to get pending suggestions: %w", err)
-	}
-
-	// No pending suggestions to match against
-	if len(suggestions) == 0 {
-		return nil
-	}
-
-	// Check each transaction against each suggestion
-	// Canary counter: each call that resolves suggestions uses chain-aware account matching (Issue #1109).
-	observability.AccountsReplacedFiltered.WithLabelValues("transaction_match").Inc()
-
-	for _, txn := range newTransactions {
-		for _, suggestion := range suggestions {
-			if s.isMatch(txn, suggestion) {
-				// Auto-accept the suggestion
-				// Use ExternalTransactionID as fallback (batch inserts don't return IDs)
-				txnIdentifier := txn.ID
-				if txnIdentifier == "" && txn.ExternalTransactionID != nil {
-					txnIdentifier = *txn.ExternalTransactionID
-				}
-				note := fmt.Sprintf("Auto-matched with transaction %s", txnIdentifier)
-				if err := s.suggestionRepo.UpdateStatus(ctx, suggestion.ID, domain.SuggestionStatusAccepted, &note); err != nil {
-					return fmt.Errorf("failed to auto-accept suggestion %s: %w", suggestion.ID, err)
-				}
-				// Mark suggestion as matched so we don't match it again
-				suggestion.Status = domain.SuggestionStatusAccepted
-			}
-		}
-	}
-
 	return nil
 }
 

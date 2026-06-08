@@ -48,6 +48,7 @@ func (r *privacyRepository) GetByUserID(ctx context.Context, userID string) (*do
 		       gdpr_advertising_consent, gdpr_consent_timestamp,
 		       marketing_emails_enabled, product_updates_enabled,
 		       security_alerts_enabled, data_sharing_enabled,
+		       include_in_aggregate_stats,
 		       created_at, updated_at
 		FROM privacy_settings
 		WHERE user_id = $1
@@ -65,6 +66,7 @@ func (r *privacyRepository) GetByUserID(ctx context.Context, userID string) (*do
 		&settings.ProductUpdatesEnabled,
 		&settings.SecurityAlertsEnabled,
 		&settings.DataSharingEnabled,
+		&settings.IncludeInAggregateStats,
 		&settings.CreatedAt,
 		&settings.UpdatedAt,
 	)
@@ -98,13 +100,15 @@ func (r *privacyRepository) Create(ctx context.Context, settings *domain.Privacy
 			gdpr_advertising_consent, gdpr_consent_timestamp,
 			marketing_emails_enabled, product_updates_enabled,
 			security_alerts_enabled, data_sharing_enabled,
+			include_in_aggregate_stats,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4,
 			$5, $6,
 			$7, $8,
 			$9, $10,
-			$11, $12
+			$11,
+			$12, $13
 		)
 	`
 
@@ -119,6 +123,7 @@ func (r *privacyRepository) Create(ctx context.Context, settings *domain.Privacy
 		settings.ProductUpdatesEnabled,
 		settings.SecurityAlertsEnabled,
 		settings.DataSharingEnabled,
+		settings.IncludeInAggregateStats,
 		settings.CreatedAt,
 		settings.UpdatedAt,
 	)
@@ -149,13 +154,15 @@ func (r *privacyRepository) CreateTx(ctx context.Context, tx pgx.Tx, settings *d
 			gdpr_advertising_consent, gdpr_consent_timestamp,
 			marketing_emails_enabled, product_updates_enabled,
 			security_alerts_enabled, data_sharing_enabled,
+			include_in_aggregate_stats,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4,
 			$5, $6,
 			$7, $8,
 			$9, $10,
-			$11, $12
+			$11,
+			$12, $13
 		)
 	`
 
@@ -170,6 +177,7 @@ func (r *privacyRepository) CreateTx(ctx context.Context, tx pgx.Tx, settings *d
 		settings.ProductUpdatesEnabled,
 		settings.SecurityAlertsEnabled,
 		settings.DataSharingEnabled,
+		settings.IncludeInAggregateStats,
 		settings.CreatedAt,
 		settings.UpdatedAt,
 	)
@@ -197,8 +205,9 @@ func (r *privacyRepository) Update(ctx context.Context, settings *domain.Privacy
 		    product_updates_enabled = $6,
 		    security_alerts_enabled = $7,
 		    data_sharing_enabled = $8,
-		    updated_at = $9
-		WHERE user_id = $10
+		    include_in_aggregate_stats = $9,
+		    updated_at = $10
+		WHERE user_id = $11
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -210,6 +219,7 @@ func (r *privacyRepository) Update(ctx context.Context, settings *domain.Privacy
 		settings.ProductUpdatesEnabled,
 		settings.SecurityAlertsEnabled,
 		settings.DataSharingEnabled,
+		settings.IncludeInAggregateStats,
 		settings.UpdatedAt,
 		settings.UserID,
 	)

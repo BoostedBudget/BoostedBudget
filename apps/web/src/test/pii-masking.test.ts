@@ -97,4 +97,30 @@ describe('scanForUnmaskedPII', () => {
     const root = el('div', {}, el('span', {}, '$0'));
     expect(scanForUnmaskedPII(root, []).length).toBeGreaterThan(0);
   });
+
+  test('flags PII in aria-label under a masked ancestor (attribute recorded verbatim)', () => {
+    const button = el('button', { 'aria-label': 'Transfer $1,234 to savings' }, 'Confirm')
+    const root = el('div', { 'data-ph-mask': '' }, button)
+    const violations = scanForUnmaskedPII(root, [])
+    expect(violations.length).toBeGreaterThan(0)
+    expect(violations.some((v) => v.via === 'aria-label')).toBe(true)
+  })
+
+  test('flags sentinel in title attribute under a masked ancestor', () => {
+    const inner = el('div', { title: 'SENTINEL_ATTR_ZX' }, 'safe text')
+    const root = el('div', { 'data-ph-mask': '' }, inner)
+    const sentinels = [{ value: 'SENTINEL_ATTR_ZX', fieldDescription: 'account_name' }]
+    const violations = scanForUnmaskedPII(root, sentinels)
+    expect(violations.length).toBeGreaterThan(0)
+    expect(violations[0].via).toBe('title')
+  })
+
+  test('does not flag value attribute on form controls (covered by maskAllInputs:true)', () => {
+    for (const tag of ['input', 'textarea', 'select']) {
+      const formEl = document.createElement(tag)
+      formEl.setAttribute('value', '$1,234')
+      const root = el('div', {}, formEl)
+      expect(scanForUnmaskedPII(root, [])).toEqual([])
+    }
+  })
 });

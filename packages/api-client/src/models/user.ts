@@ -56,6 +56,8 @@ export interface User {
   subscription_started_at?: string;
   subscription_status: string;
   subscription_tier: string;
+  timezone: string;
+  timezone_source: string;
   trial_days_remaining?: number;
   trial_ends_at?: string;
   trial_started_at?: string;

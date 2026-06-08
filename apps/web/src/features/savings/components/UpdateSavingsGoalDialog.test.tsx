@@ -12,8 +12,12 @@ mock.module('@/shared/hooks/useTrackEvent', () => ({
   useTrackEvent: () => mockUseTrackEvent(),
 }))
 
+import * as RealAnalyticsEvents from '@/shared/analytics/events'
+
 mock.module('@/shared/analytics/events', () => ({
+  ...RealAnalyticsEvents,
   ANALYTICS_EVENTS: {
+    ...RealAnalyticsEvents.ANALYTICS_EVENTS,
     SAVINGS_GOAL_EDITED: 'savings_goal_edited',
   },
 }))

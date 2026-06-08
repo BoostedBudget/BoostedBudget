@@ -32,7 +32,7 @@ const AMOUNT_TYPES: { value: AmountType; label: string; description: string }[] 
   {
     value: 'percentage',
     label: 'Percentage',
-    description: 'Transfer a percentage of the balance',
+    description: 'Transfer a percentage of period income',
   },
   {
     value: 'excess',

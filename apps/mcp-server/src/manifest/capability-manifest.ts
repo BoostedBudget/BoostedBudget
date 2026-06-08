@@ -262,6 +262,12 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getTransferSuggestions'),
   write('acceptTransferSuggestion', { idempotent: true }),
   write('rejectTransferSuggestion', { idempotent: true }),
+  write('confirmTransferSuggestionMatch', { idempotent: true }), // #972: carries idempotency key
+  write('declineTransferSuggestionMatch', { idempotent: true }), // #972: user-driven reservation release
+
+  // ── Savings Impact ────────────────────────────────────────────────────────
+  read('getSavingsImpactAggregate'), // #972: public aggregate, read-only
+  read('getSavingsImpactMe'),        // #972: authed per-user, read-only
 
   // ── User ────────────────────────────────────────────────────────────────
   excluded('requestDeletion', REASON_DELETION_INAPP),

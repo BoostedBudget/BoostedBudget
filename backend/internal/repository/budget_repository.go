@@ -42,6 +42,15 @@ type BudgetRepository interface {
 	// Envelope budgeting rollover operations (Issue #36: Rule Executors)
 	// AdjustCategoryAllocatedAmount adjusts the allocated amount by delta (can be positive or negative)
 	AdjustCategoryAllocatedAmount(ctx context.Context, categoryID string, delta float64) error
+
+	// GetAllActivePaginated returns all active budgets across all users, ordered by id ASC.
+	// "Active" means is_active = true. Used by the period-close scanner (Issue #972).
+	GetAllActivePaginated(ctx context.Context, limit int, offset int) ([]*domain.Budget, error)
+
+	// GetTimezonesByUserIDs returns a map of userID → timezone string for the given user IDs.
+	// Missing users are not included in the map; callers should default to "UTC" for absent keys.
+	// Used by the period-close scanner (Issue #972) to avoid N+1 timezone lookups.
+	GetTimezonesByUserIDs(ctx context.Context, userIDs []string) (map[string]string, error)
 }
 
 // budgetRepository implements BudgetRepository using PostgreSQL.
@@ -848,4 +857,99 @@ func (r *budgetRepository) AdjustCategoryAllocatedAmount(ctx context.Context, ca
 	}
 
 	return nil
+}
+
+// GetAllActivePaginated returns all active budgets across all users ordered by id ASC.
+// Used by the budget period-close scanner (Issue #972) to fan out across all budgets.
+func (r *budgetRepository) GetAllActivePaginated(ctx context.Context, limit int, offset int) ([]*domain.Budget, error) {
+	query := `
+		SELECT id, user_id, name, description, period, start_date, end_date,
+			amount, currency_code, is_active, created_at, updated_at,
+			income_amount, income_sources, expected_income
+		FROM budgets
+		WHERE is_active = true
+		ORDER BY id ASC
+		LIMIT $1 OFFSET $2
+	`
+
+	rows, err := r.db.Query(ctx, query, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var budgets []*domain.Budget
+	for rows.Next() {
+		budget := &domain.Budget{}
+		var incomeSourcesJSON []byte
+		err := rows.Scan(
+			&budget.ID,
+			&budget.UserID,
+			&budget.Name,
+			&budget.Description,
+			&budget.Period,
+			&budget.StartDate,
+			&budget.EndDate,
+			&budget.Amount,
+			&budget.CurrencyCode,
+			&budget.IsActive,
+			&budget.CreatedAt,
+			&budget.UpdatedAt,
+			&budget.IncomeAmount,
+			&incomeSourcesJSON,
+			&budget.ExpectedIncome,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		sources, err := unmarshalIncomeSources(incomeSourcesJSON)
+		if err != nil {
+			return nil, err
+		}
+		budget.IncomeSources = sources
+
+		budgets = append(budgets, budget)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if budgets == nil {
+		budgets = []*domain.Budget{}
+	}
+
+	return budgets, nil
+}
+
+// GetTimezonesByUserIDs returns a map of userID → timezone for the given set of user IDs.
+// Uses COALESCE so users with a NULL timezone column fall back to "UTC".
+// Missing user IDs produce no map entry; callers should default to "UTC" for absent keys.
+func (r *budgetRepository) GetTimezonesByUserIDs(ctx context.Context, userIDs []string) (map[string]string, error) {
+	if len(userIDs) == 0 {
+		return map[string]string{}, nil
+	}
+
+	query := `SELECT id, COALESCE(timezone, 'UTC') FROM users WHERE id = ANY($1)`
+
+	rows, err := r.db.Query(ctx, query, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]string, len(userIDs))
+	for rows.Next() {
+		var userID, tz string
+		if err := rows.Scan(&userID, &tz); err != nil {
+			return nil, err
+		}
+		result[userID] = tz
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
