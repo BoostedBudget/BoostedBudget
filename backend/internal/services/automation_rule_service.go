@@ -36,10 +36,6 @@ type AutomationRuleService interface {
 
 	// GetRulesByType retrieves enabled rules of a specific type.
 	GetRulesByType(ctx context.Context, userID string, ruleType domain.RuleType) ([]*domain.AutomationRule, error)
-
-	// SetBudgetRepo sets the budget repository for category ownership validation.
-	// Issue #1270: Task 3 — category ownership validation for conditions.
-	SetBudgetRepo(repo repository.BudgetRepository)
 }
 
 // automationRuleService implements AutomationRuleService.
@@ -51,7 +47,7 @@ type automationRuleService struct {
 // NewAutomationRuleService creates a new AutomationRuleService instance.
 func NewAutomationRuleService(
 	ruleRepo repository.AutomationRulesRepository,
-) AutomationRuleService {
+) *automationRuleService {
 	return &automationRuleService{
 		ruleRepo: ruleRepo,
 	}
