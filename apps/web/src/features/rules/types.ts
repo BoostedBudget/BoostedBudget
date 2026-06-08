@@ -56,6 +56,7 @@ export interface RuleCondition {
   operator: ConditionOperator
   value: unknown
   category_id?: string
+  budget_id?: string
 }
 
 // =============================================================================
