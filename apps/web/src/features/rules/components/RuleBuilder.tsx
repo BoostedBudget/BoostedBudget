@@ -5,7 +5,7 @@
  * Main form for creating and editing automation rules.
  */
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
@@ -142,7 +142,6 @@ export function RuleBuilder() {
   // Initialize form from existing rule or pre-fill params
   // Note: Multiple setState calls in a single effect is intentional for form initialization
   // from external data. React 18+ batches these automatically.
-   
   useEffect(() => {
     if (existingRule) {
       setName(existingRule.name)
@@ -212,7 +211,6 @@ export function RuleBuilder() {
       }
     }
   }, [existingRule, prefilledType, prefilledBudgetId, prefilledCategoryId])
-   
 
   // Validate form
   const validate = useCallback((): FormErrors => {
@@ -228,12 +226,6 @@ export function RuleBuilder() {
 
     return newErrors
   }, [name, ruleType])
-
-  // Gather all categories across all budgets for the condition category picker
-  const allBudgetCategories = useMemo(
-    () => budgets.flatMap((b) => b.categories ?? []),
-    [budgets]
-  )
 
   // Get current action based on rule type
   const getCurrentAction = useCallback((): RuleAction | null => {
@@ -487,7 +479,7 @@ export function RuleBuilder() {
             onConditionsChange={setConditions}
             onLogicChange={setConditionLogic}
             triggerEvent={triggerConfig.type === 'event' ? triggerConfig.event : undefined}
-            categories={allBudgetCategories}
+            budgets={budgets}
           />
         </section>
 

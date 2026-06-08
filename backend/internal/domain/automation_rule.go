@@ -121,6 +121,7 @@ var validConditionFieldsByEvent = map[string]map[string]bool{
 		"budget_category.percent_used":     true,
 		"budget_category.spent_amount":     true,
 		"budget_category.remaining_amount": true,
+		"budget_category.allocated":        true, // Issue #1271 Item 5
 	},
 	EventBudgetPeriodEnd: {
 		"budget.percent_used":              true,
@@ -129,6 +130,7 @@ var validConditionFieldsByEvent = map[string]map[string]bool{
 		"budget_category.percent_used":     true,
 		"budget_category.spent_amount":     true,
 		"budget_category.remaining_amount": true,
+		"budget_category.allocated":        true, // Issue #1271 Item 5
 	},
 }
 
@@ -143,6 +145,12 @@ var allowedConditionOperators = map[ConditionOperator]bool{
 	ConditionOperatorLt:       true,
 	ConditionOperatorLte:      true,
 	ConditionOperatorContains: true,
+}
+
+// AllowedConditionOperators returns the set of condition operators that are both
+// allowed at validation time and evaluable at execution time.
+func AllowedConditionOperators() map[ConditionOperator]bool {
+	return allowedConditionOperators
 }
 
 // =============================================================================
@@ -329,6 +337,7 @@ type AutomationRuleCondition struct {
 	Operator   ConditionOperator `json:"operator"`             // Comparison operator
 	Value      interface{}       `json:"value"`                // Value to compare against
 	CategoryID string            `json:"category_id,omitempty"` // Optional category ID for category-scoped conditions
+	BudgetID   string            `json:"budget_id,omitempty"`   // Optional budget ID for budget-scoped conditions
 }
 
 // =============================================================================
@@ -456,9 +465,48 @@ func (r *AutomationRule) validateConditions() error {
 				return fmt.Errorf("condition field %q is not valid for event type %q", condition.Field, r.TriggerConfig.Event)
 			}
 		}
-		if strings.HasPrefix(condition.Field, "budget_category.") && condition.CategoryID == "" {
-			return fmt.Errorf("condition field %q requires a category_id", condition.Field)
+	}
+	return nil
+}
+
+// BoundBudgetID returns the budget this rule is scoped to, derived from its
+// category-scoped conditions. Returns ("", false) when no condition binds a budget.
+// The result is AND/OR-agnostic: any category-scoped condition binds the whole rule (A-CR2).
+func (r *AutomationRule) BoundBudgetID() (string, bool) {
+	for _, c := range r.Conditions {
+		if strings.HasPrefix(c.Field, "budget_category.") && c.BudgetID != "" {
+			return c.BudgetID, true
 		}
+	}
+	return "", false
+}
+
+// ValidateForPersistence validates the rule for create/update. It calls Validate()
+// for static checks (wrapping any error as ErrInvalidRule), then additionally requires
+// scope IDs for category-scoped conditions and validates multi-budget constraint.
+func (r *AutomationRule) ValidateForPersistence() error {
+	if err := r.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRule, err)
+	}
+
+	// Validate category-scoped conditions and collect distinct BudgetIDs (single-pass).
+	budgetIDs := make(map[string]struct{})
+	for _, condition := range r.Conditions {
+		if !strings.HasPrefix(condition.Field, "budget_category.") {
+			continue
+		}
+		if condition.CategoryID == "" {
+			return fmt.Errorf("%w: condition field %q requires a category_id", ErrInvalidRule, condition.Field)
+		}
+		if condition.BudgetID == "" {
+			return fmt.Errorf("%w: condition field %q requires a budget_id", ErrInvalidRule, condition.Field)
+		}
+		budgetIDs[condition.BudgetID] = struct{}{}
+	}
+
+	// Multi-budget check: rule may bind at most one budget.
+	if len(budgetIDs) > 1 {
+		return fmt.Errorf("%w: a rule may bind at most one budget", ErrInvalidRule)
 	}
 	return nil
 }

@@ -565,6 +565,8 @@ components:
     AutomationRuleCondition:
       additionalProperties: false
       properties:
+        budget_id:
+          type: string
         category_id:
           type: string
         field:

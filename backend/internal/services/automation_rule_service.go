@@ -150,11 +150,19 @@ func (s *automationRuleService) validateRuleReferenceOwnership(ctx context.Conte
 			if !strings.HasPrefix(condition.Field, "budget_category.") {
 				continue
 			}
-			if _, err := s.budgetRepo.GetCategoryByIDAndUser(ctx, condition.CategoryID, rule.UserID); err != nil {
+			cat, err := s.budgetRepo.GetCategoryByIDAndUser(ctx, condition.CategoryID, rule.UserID)
+			if err != nil {
 				if errors.Is(err, domain.ErrBudgetCategoryNotFound) {
 					return fmt.Errorf("%w: condition category_id does not belong to this user", domain.ErrRuleConditionForbidden)
 				}
 				return err
+			}
+			// Issue #1271 (A-CR4): verify the category belongs to the specified budget.
+			// cat.BudgetID is trusted (resolved via GetCategoryByIDAndUser JOIN on user_id).
+			// A mismatch means the caller named a real category but paired it with a different
+			// budget → invalid request (400), not a 403.
+			if condition.BudgetID != "" && cat.BudgetID != condition.BudgetID {
+				return fmt.Errorf("%w: condition category_id is not in the selected budget_id", domain.ErrInvalidRule)
 			}
 		}
 	}
@@ -182,9 +190,11 @@ func (s *automationRuleService) CreateRule(ctx context.Context, userID string, r
 		rule.ConditionLogic = "AND"
 	}
 
-	// Validate the rule — wrap with ErrInvalidRule so the HTTP layer returns 400 (not 500).
-	if err := rule.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", domain.ErrInvalidRule, err)
+	// ValidateForPersistence checks static rules (via Validate) AND requires scope IDs for
+	// category-scoped conditions. It already wraps errors with ErrInvalidRule so the HTTP
+	// layer returns 400 (not 500).
+	if err := rule.ValidateForPersistence(); err != nil {
+		return nil, err
 	}
 
 	// Verify referenced IDs (savings_goal_id, account IDs) belong to the rule owner (GAP AE).
@@ -259,9 +269,11 @@ func (s *automationRuleService) UpdateRule(ctx context.Context, userID, ruleID s
 		rule.Actions = *req.Actions
 	}
 
-	// Validate — wrap with ErrInvalidRule so the HTTP layer returns 400 (not 500).
-	if err := rule.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", domain.ErrInvalidRule, err)
+	// ValidateForPersistence checks static rules (via Validate) AND requires scope IDs for
+	// category-scoped conditions. It already wraps errors with ErrInvalidRule so the HTTP
+	// layer returns 400 (not 500).
+	if err := rule.ValidateForPersistence(); err != nil {
+		return nil, err
 	}
 
 	// Verify referenced IDs (savings_goal_id, account IDs) belong to the rule owner (GAP AE).

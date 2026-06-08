@@ -1863,6 +1863,107 @@ func TestTestRule_PFCConditionPopulatesDisplay(t *testing.T) {
 	assert.Equal(t, "Food And Drink", result.ConditionResults[0].ActualDisplay)
 }
 
+// TestTestRule_CategoryScopedActualPopulated verifies that TestRule sets Actual to the
+// category metric value from the nested categories map for budget_category.* conditions (A-CR9).
+func TestTestRule_CategoryScopedActualPopulated(t *testing.T) {
+	ctx := context.Background()
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	rule := &domain.AutomationRule{
+		ID:   "rule-cat-actual",
+		Name: "Category Actual Test",
+		Conditions: []domain.AutomationRuleCondition{
+			{
+				Field:      "budget_category.percent_used",
+				Operator:   domain.ConditionOperatorGte,
+				Value:      "50",
+				BudgetID:   "B1",
+				CategoryID: "C1",
+			},
+		},
+		ConditionLogic: "AND",
+		Actions:        json.RawMessage(`{}`),
+	}
+
+	t.Run("interface shape (River JSON round-trip)", func(t *testing.T) {
+		triggerData := map[string]interface{}{
+			"budget_id": "B1",
+			"categories": map[string]interface{}{
+				"C1": map[string]interface{}{"percent_used": 85.0},
+			},
+		}
+		result, err := service.TestRule(ctx, rule, triggerData)
+		require.NoError(t, err)
+		require.Len(t, result.ConditionResults, 1)
+		assert.Equal(t, float64(85), result.ConditionResults[0].Actual)
+		assert.True(t, result.ConditionResults[0].Met)
+	})
+
+	t.Run("typed map shape (in-process path)", func(t *testing.T) {
+		triggerData := map[string]interface{}{
+			"budget_id":  "B1",
+			"categories": map[string]map[string]float64{"C1": {"percent_used": 85.0}},
+		}
+		result, err := service.TestRule(ctx, rule, triggerData)
+		require.NoError(t, err)
+		require.Len(t, result.ConditionResults, 1)
+		assert.Equal(t, float64(85), result.ConditionResults[0].Actual)
+		assert.True(t, result.ConditionResults[0].Met)
+	})
+}
+
+// TestTestRule_CategoryActualNilForMissingCategory verifies that TestRule sets Actual=nil
+// when the category is absent from event data (A-CR9: missing/deleted category → nil).
+func TestTestRule_CategoryActualNilForMissingCategory(t *testing.T) {
+	ctx := context.Background()
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	rule := &domain.AutomationRule{
+		ID:   "rule-cat-nil",
+		Name: "Category Nil Test",
+		Conditions: []domain.AutomationRuleCondition{
+			{
+				Field:      "budget_category.percent_used",
+				Operator:   domain.ConditionOperatorGte,
+				Value:      "50",
+				BudgetID:   "B1",
+				CategoryID: "C1",
+			},
+		},
+		ConditionLogic: "AND",
+		Actions:        json.RawMessage(`{}`),
+	}
+
+	t.Run("empty categories map", func(t *testing.T) {
+		triggerData := map[string]interface{}{
+			"budget_id":  "B1",
+			"categories": map[string]interface{}{},
+		}
+		result, err := service.TestRule(ctx, rule, triggerData)
+		require.NoError(t, err)
+		require.Len(t, result.ConditionResults, 1)
+		assert.Nil(t, result.ConditionResults[0].Actual)
+		assert.False(t, result.ConditionResults[0].Met)
+	})
+
+	t.Run("categories key absent", func(t *testing.T) {
+		triggerData := map[string]interface{}{"budget_id": "B1"}
+		result, err := service.TestRule(ctx, rule, triggerData)
+		require.NoError(t, err)
+		require.Len(t, result.ConditionResults, 1)
+		assert.Nil(t, result.ConditionResults[0].Actual)
+		assert.False(t, result.ConditionResults[0].Met)
+	})
+}
+
 // TestRuleExecutionService_ExpiresAt verifies that suggestions created by
 // executeTransferSuggestion and executeSavingsGoal have ExpiresAt set ~30 days
 // in the future.
@@ -2043,15 +2144,16 @@ func TestEvaluateCondition_DottedFieldNormalization(t *testing.T) {
 			wantMatch: true,
 		},
 		{
-			// Issue #1270: spent_amount suffix alias → "total_spent" key in category map.
-			name:       "budget_category.spent_amount aliases to total_spent in category map",
+			// Issue #1270: spent_amount suffix alias → "spent" key in category map.
+			// Issue #1271: key renamed from "total_spent" to "spent".
+			name:       "budget_category.spent_amount aliases to spent in category map",
 			field:      "budget_category.spent_amount",
 			categoryID: "cat-abc",
 			operator:   domain.ConditionOperatorGt,
 			value:      "100",
 			data: map[string]interface{}{
 				domain.EventDataKeyCategories: map[string]interface{}{
-					"cat-abc": map[string]interface{}{"total_spent": 200.0},
+					"cat-abc": map[string]interface{}{"spent": 200.0},
 				},
 			},
 			wantMatch: true,
@@ -2911,6 +3013,57 @@ func TestResolveAndVerifyUserAccount_AccountRepoNilFailOpen(t *testing.T) {
 		"nil accountRepo must still apply the resolved ID (fail-open; ownership check skipped)")
 }
 
+// ============================================================================
+// Issue #1271 Item 2 — A-CR1 brick risk: partial/legacy rule must not brick at execution
+// ============================================================================
+
+// TestExecuteRule_PartialScopedConditionDoesNotBrick verifies that ExecuteRule does NOT
+// return an error when a rule has a budget_category.* condition with empty CategoryID and
+// BudgetID. Such rules may exist as legacy data; they should evaluate to false (no match)
+// without bricking (hard error).
+func TestExecuteRule_PartialScopedConditionDoesNotBrick(t *testing.T) {
+	ctx := context.Background()
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	ruleRepo := &mockAutomationRulesRepository{}
+	svc := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	// Budget alert rule with a budget_category.percent_used condition that has empty
+	// CategoryID and BudgetID — simulating a legacy/partial rule from before #1270.
+	actionsJSON, _ := json.Marshal(map[string]interface{}{
+		"notification_channels": []string{"email"},
+		"threshold_type":        "percentage",
+		"threshold_value":       80,
+	})
+	rule := &domain.AutomationRule{
+		ID:       "rule-legacy-partial",
+		UserID:   "test-user-id",
+		Name:     "Legacy Partial Rule",
+		Enabled:  true,
+		RuleType: domain.RuleTypeBudgetAlert,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: "budget_updated",
+		},
+		Conditions: []domain.AutomationRuleCondition{
+			{
+				Field:      "budget_category.percent_used",
+				Operator:   domain.ConditionOperatorGte,
+				Value:      "80",
+				CategoryID: "", // deliberately empty — partial/legacy rule
+				BudgetID:   "", // deliberately empty — partial/legacy rule
+			},
+		},
+		ConditionLogic: "AND",
+		Actions:        actionsJSON,
+	}
+
+	// ExecuteRule must NOT return an error — the condition simply doesn't match.
+	_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+	assert.NoError(t, err, "ExecuteRule must not brick when CategoryID is empty; rule should evaluate to no-match")
+}
+
 // TestEvaluateConditionWithValue_BetweenIsNonEvaluable verifies that a condition with the
 // "between" operator evaluates to false at execution time (default-false path in the switch).
 // Validation rejects "between" before rules reach execution, but this pins the evaluator
@@ -2933,4 +3086,424 @@ func TestEvaluateConditionWithValue_BetweenIsNonEvaluable(t *testing.T) {
 	result2 := evaluateConditionWithValue(condition, 99.0)
 	assert.False(t, result2,
 		"between operator must be non-evaluable regardless of field value")
+}
+
+// TestAllowedOperatorsAreEvaluable asserts parity between the validation-time
+// allowlist (domain.AllowedConditionOperators) and the execution-time evaluator
+// (evaluateConditionWithValue). Every operator in the allowlist must return true
+// for a value/condition pair that should logically match — ensuring no operator
+// can be added to the allowlist without also being handled in the evaluator.
+// Issue #1271 (Item 7 — A-CR3 parity test).
+func TestAllowedOperatorsAreEvaluable(t *testing.T) {
+	type probe struct {
+		fieldValue     interface{}
+		conditionValue interface{}
+	}
+
+	// For each allowed operator, supply a (fieldValue, conditionValue) pair that
+	// logically SHOULD match — a false result means the operator falls into the
+	// default-false branch and is therefore not evaluable.
+	probes := map[domain.ConditionOperator]probe{
+		domain.ConditionOperatorEq:       {fieldValue: 50.0, conditionValue: "50"},
+		domain.ConditionOperatorNeq:      {fieldValue: 50.0, conditionValue: "99"},
+		domain.ConditionOperatorGt:       {fieldValue: 50.0, conditionValue: "40"},
+		domain.ConditionOperatorGte:      {fieldValue: 50.0, conditionValue: "50"},
+		domain.ConditionOperatorLt:       {fieldValue: 50.0, conditionValue: "60"},
+		domain.ConditionOperatorLte:      {fieldValue: 50.0, conditionValue: "50"},
+		domain.ConditionOperatorContains: {fieldValue: "hello world", conditionValue: "hello"},
+	}
+
+	for op := range domain.AllowedConditionOperators() {
+		op := op // capture for parallel sub-tests
+		p, ok := probes[op]
+		if !ok {
+			t.Errorf("operator %q is in AllowedConditionOperators but has no probe in this test — add one", op)
+			continue
+		}
+
+		t.Run(string(op), func(t *testing.T) {
+			condition := domain.AutomationRuleCondition{
+				Field:    "budget.percent_used",
+				Operator: op,
+				Value:    p.conditionValue,
+			}
+			result := evaluateConditionWithValue(condition, p.fieldValue)
+			assert.True(t, result,
+				"operator %q is in AllowedConditionOperators but evaluateConditionWithValue returned false — it is not evaluable", op)
+		})
+	}
+}
+
+// =============================================================================
+// ProcessEventTrigger Budget Scoping Tests (A-CR2)
+// =============================================================================
+
+// TestProcessEventTrigger_SkipsRuleBoundToOtherBudget verifies that a rule whose
+// budget_category.* condition binds budget-X is NOT executed when the event carries
+// budget-Y — the A-CR2 OR-escape fix.
+func TestProcessEventTrigger_SkipsRuleBoundToOtherBudget(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-scope-1"
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID: "account-1",
+		ToAccountID:   "account-2",
+		AmountType:    "fixed",
+		Amount:        100.0,
+	})
+
+	ruleRepo := &mockAutomationRulesRepository{
+		rules: []*domain.AutomationRule{
+			{
+				ID:       "rule-budget-scope",
+				UserID:   userID,
+				Name:     "Category Rule for Budget X",
+				Enabled:  true,
+				Priority: 1,
+				RuleType: domain.RuleTypeTransferSuggestion,
+				TriggerConfig: domain.TriggerConfig{
+					Type:  domain.TriggerTypeEvent,
+					Event: domain.EventBudgetPeriodEnd,
+				},
+				Conditions: []domain.AutomationRuleCondition{
+					{Field: "budget_category.percent_used", Operator: domain.ConditionOperatorGte, Value: 80.0, CategoryID: "cat-1", BudgetID: "budget-X"},
+				},
+				ConditionLogic: "AND",
+				Actions:        actionsJSON,
+			},
+		},
+	}
+
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	// Event is for budget-Y, not budget-X
+	eventData := map[string]interface{}{
+		domain.EventDataKeyBudgetID: "budget-Y",
+	}
+
+	err := service.ProcessEventTrigger(ctx, userID, domain.EventBudgetPeriodEnd, eventData)
+	require.NoError(t, err)
+	// Rule must be entirely skipped — no execution record, no suggestion
+	assert.Empty(t, execRepo.executions, "rule bound to budget-X must be skipped when event is for budget-Y")
+	assert.Empty(t, suggestionRepo.suggestions, "no suggestion must be created when budget scope does not match")
+}
+
+// TestProcessEventTrigger_FiresRuleBoundToMatchingBudget verifies that a rule whose
+// budget_category.* condition binds budget-X IS executed when the event carries budget-X.
+func TestProcessEventTrigger_FiresRuleBoundToMatchingBudget(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-scope-2"
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID: "account-1",
+		ToAccountID:   "account-2",
+		AmountType:    "fixed",
+		Amount:        100.0,
+	})
+
+	ruleRepo := &mockAutomationRulesRepository{
+		rules: []*domain.AutomationRule{
+			{
+				ID:       "rule-budget-match",
+				UserID:   userID,
+				Name:     "Category Rule for Budget X",
+				Enabled:  true,
+				Priority: 1,
+				RuleType: domain.RuleTypeTransferSuggestion,
+				TriggerConfig: domain.TriggerConfig{
+					Type:  domain.TriggerTypeEvent,
+					Event: domain.EventBudgetPeriodEnd,
+				},
+				Conditions: []domain.AutomationRuleCondition{
+					{Field: "budget_category.percent_used", Operator: domain.ConditionOperatorGte, Value: 80.0, CategoryID: "cat-1", BudgetID: "budget-X"},
+				},
+				ConditionLogic: "AND",
+				Actions:        actionsJSON,
+			},
+		},
+	}
+
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	// Event is for the matching budget-X; populate categories so condition evaluates
+	eventData := map[string]interface{}{
+		domain.EventDataKeyBudgetID: "budget-X",
+		domain.EventDataKeyCategories: map[string]interface{}{
+			"cat-1": map[string]interface{}{
+				"percent_used": 90.0,
+			},
+		},
+	}
+
+	err := service.ProcessEventTrigger(ctx, userID, domain.EventBudgetPeriodEnd, eventData)
+	require.NoError(t, err)
+	// Rule must have been executed — suggestion repo should have a new entry
+	assert.NotEmpty(t, suggestionRepo.suggestions, "rule bound to budget-X must fire when event is also for budget-X")
+}
+
+// TestProcessEventTrigger_UnscopedRuleFiresForAnyBudget verifies that a rule with no
+// budget_category.* condition (not budget-scoped) fires regardless of the event's budget_id.
+func TestProcessEventTrigger_UnscopedRuleFiresForAnyBudget(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-scope-3"
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID: "account-1",
+		ToAccountID:   "account-2",
+		AmountType:    "fixed",
+		Amount:        100.0,
+	})
+
+	ruleRepo := &mockAutomationRulesRepository{
+		rules: []*domain.AutomationRule{
+			{
+				ID:       "rule-unscoped",
+				UserID:   userID,
+				Name:     "Unscoped Budget Rule",
+				Enabled:  true,
+				Priority: 1,
+				RuleType: domain.RuleTypeTransferSuggestion,
+				TriggerConfig: domain.TriggerConfig{
+					Type:  domain.TriggerTypeEvent,
+					Event: domain.EventBudgetPeriodEnd,
+				},
+				// Only budget.* condition — no budget_category.* so no budget binding
+				Conditions: []domain.AutomationRuleCondition{
+					{Field: "budget.percent_used", Operator: domain.ConditionOperatorGte, Value: 50.0},
+				},
+				ConditionLogic: "AND",
+				Actions:        actionsJSON,
+			},
+		},
+	}
+
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	eventData := map[string]interface{}{
+		domain.EventDataKeyBudgetID: "budget-any",
+		domain.EventDataKeyPercentUsed: 75.0,
+	}
+
+	err := service.ProcessEventTrigger(ctx, userID, domain.EventBudgetPeriodEnd, eventData)
+	require.NoError(t, err)
+	assert.NotEmpty(t, suggestionRepo.suggestions, "unscoped rule must fire for any budget_id")
+}
+
+// TestProcessEventTrigger_ORLogicDoesNotEscapeBudgetScope verifies the A-CR2 fix:
+// even with condition_logic=OR, a rule bound to budget-X must be fully skipped when
+// the event's budget_id is budget-Y. The OR logic must not bypass the scope guard.
+func TestProcessEventTrigger_ORLogicDoesNotEscapeBudgetScope(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-scope-4"
+
+	execRepo := &mockRuleExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID: "account-1",
+		ToAccountID:   "account-2",
+		AmountType:    "fixed",
+		Amount:        100.0,
+	})
+
+	ruleRepo := &mockAutomationRulesRepository{
+		rules: []*domain.AutomationRule{
+			{
+				ID:       "rule-or-escape",
+				UserID:   userID,
+				Name:     "OR Rule With Budget Scope",
+				Enabled:  true,
+				Priority: 1,
+				RuleType: domain.RuleTypeTransferSuggestion,
+				TriggerConfig: domain.TriggerConfig{
+					Type:  domain.TriggerTypeEvent,
+					Event: domain.EventBudgetPeriodEnd,
+				},
+				// OR logic: second condition (budget.percent_used) would be "true-ish" for any
+				// event carrying percent_used ≥ 0, but the rule is still budget-X-scoped via the
+				// first condition; it must be skipped entirely before any OR evaluation.
+				Conditions: []domain.AutomationRuleCondition{
+					{Field: "budget_category.percent_used", Operator: domain.ConditionOperatorGte, Value: 80.0, CategoryID: "cat-1", BudgetID: "budget-X"},
+					{Field: "budget.percent_used", Operator: domain.ConditionOperatorGte, Value: 0.0},
+				},
+				ConditionLogic: "OR",
+				Actions:        actionsJSON,
+			},
+		},
+	}
+
+	service := NewRuleExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+
+	// Event is for budget-Y; percent_used satisfies the second condition but budget scope blocks
+	eventData := map[string]interface{}{
+		domain.EventDataKeyBudgetID:    "budget-Y",
+		domain.EventDataKeyPercentUsed: 90.0,
+	}
+
+	err := service.ProcessEventTrigger(ctx, userID, domain.EventBudgetPeriodEnd, eventData)
+	require.NoError(t, err)
+	assert.Empty(t, execRepo.executions, "OR-logic must not bypass budget scope guard (A-CR2)")
+	assert.Empty(t, suggestionRepo.suggestions, "no suggestion must be created when budget scope blocks the rule")
+}
+
+// =============================================================================
+// Issue #1271 Items 5+6: dual-shape reader, json.Number, budget-scope, key contract
+// =============================================================================
+
+// TestLookupFieldValue_TypedFloatShape verifies that lookupFieldValue resolves a
+// budget_category.spent_amount condition when the categories map uses the strongly-typed
+// map[string]map[string]float64 shape that BuildCategoryEventData now emits.
+func TestLookupFieldValue_TypedFloatShape(t *testing.T) {
+	condition := domain.AutomationRuleCondition{
+		Field:      "budget_category.spent_amount",
+		CategoryID: "cat-1",
+		BudgetID:   "budget-X",
+		Operator:   domain.ConditionOperatorGt,
+		Value:      "100",
+	}
+	data := map[string]interface{}{
+		domain.EventDataKeyBudgetID: "budget-X",
+		domain.EventDataKeyCategories: map[string]map[string]float64{
+			"cat-1": {
+				"spent":        200.0,
+				"remaining":    300.0,
+				"percent_used": 40.0,
+				"allocated":    500.0,
+			},
+		},
+	}
+	got := evaluateCondition(condition, data)
+	assert.True(t, got, "typed float64 shape must resolve spent_amount → spent key")
+}
+
+// TestLookupFieldValue_BudgetScopeMismatchReturnsFalse verifies that when a condition's
+// BudgetID does not match the event's budget_id, lookupFieldValue returns false.
+func TestLookupFieldValue_BudgetScopeMismatchReturnsFalse(t *testing.T) {
+	condition := domain.AutomationRuleCondition{
+		Field:      "budget_category.spent_amount",
+		CategoryID: "cat-1",
+		BudgetID:   "budget-Y", // mismatch: event carries budget-X
+		Operator:   domain.ConditionOperatorGt,
+		Value:      "100",
+	}
+	data := map[string]interface{}{
+		domain.EventDataKeyBudgetID: "budget-X",
+		domain.EventDataKeyCategories: map[string]map[string]float64{
+			"cat-1": {"spent": 200.0, "remaining": 300.0, "percent_used": 40.0, "allocated": 500.0},
+		},
+	}
+	got := evaluateCondition(condition, data)
+	assert.False(t, got, "budget scope mismatch must make condition return false")
+}
+
+// TestCompareNumeric_JSONNumber verifies that compareNumeric handles json.Number values
+// that arrive after a River JSON round-trip (JSON unmarshal into map[string]interface{}).
+func TestCompareNumeric_JSONNumber(t *testing.T) {
+	condition := domain.AutomationRuleCondition{
+		Field:      "budget_category.percent_used",
+		CategoryID: "cat-1",
+		BudgetID:   "budget-X",
+		Operator:   domain.ConditionOperatorGt,
+		Value:      "40",
+	}
+	data := map[string]interface{}{
+		domain.EventDataKeyBudgetID: "budget-X",
+		domain.EventDataKeyCategories: map[string]interface{}{
+			"cat-1": map[string]interface{}{
+				"percent_used": json.Number("42.5"),
+			},
+		},
+	}
+	got := evaluateCondition(condition, data)
+	assert.True(t, got, "json.Number must be handled by compareNumeric after River JSON round-trip")
+}
+
+// TestCategoryConditionFires_AfterRiverJSONRoundTrip simulates the full River
+// JSON round-trip: typed map → marshal → unmarshal into interface{} → evaluate.
+// This catches the json.Number issue that arises when River re-reads a job's args.
+func TestCategoryConditionFires_AfterRiverJSONRoundTrip(t *testing.T) {
+	// Build EventData with the strongly-typed categories map
+	original := map[string]interface{}{
+		domain.EventDataKeyBudgetID: "budget-X",
+		domain.EventDataKeyCategories: map[string]map[string]float64{
+			"cat-1": {
+				"percent_used": 35.0,
+				"remaining":    650.0,
+				"spent":        350.0,
+				"allocated":    1000.0,
+			},
+		},
+	}
+
+	// Marshal then unmarshal (River JSON round-trip)
+	raw, err := json.Marshal(original)
+	require.NoError(t, err)
+	var roundTripped map[string]interface{}
+	require.NoError(t, json.Unmarshal(raw, &roundTripped))
+
+	condition := domain.AutomationRuleCondition{
+		Field:      "budget_category.percent_used",
+		CategoryID: "cat-1",
+		BudgetID:   "budget-X",
+		Operator:   domain.ConditionOperatorGt,
+		Value:      "30",
+	}
+	got := evaluateCondition(condition, roundTripped)
+	assert.True(t, got, "category condition must evaluate correctly after River JSON round-trip")
+}
+
+// TestBudgetTotalSpentStillResolves is a regression guard that verifies the budget-level
+// total_spent field (emitted as domain.EventDataKeyTotalSpent) still resolves correctly.
+// This is separate from the category-level "spent" key rename.
+func TestBudgetTotalSpentStillResolves(t *testing.T) {
+	condition := domain.AutomationRuleCondition{
+		Field:    "budget.total_spent",
+		Operator: domain.ConditionOperatorGt,
+		Value:    "400",
+	}
+	data := map[string]interface{}{
+		domain.EventDataKeyTotalSpent: 500.0,
+		domain.EventDataKeyBudgetID:   "budget-X",
+	}
+	got := evaluateCondition(condition, data)
+	assert.True(t, got, "budget.total_spent must still resolve via EventDataKeyTotalSpent")
+}
+
+// TestCategoryEventDataKeyContract verifies that BuildCategoryEventData emits exactly
+// the keys {"percent_used", "remaining", "spent", "allocated"} — no more, no less.
+// This is a parity/lock test: if the emitter shape changes, this test fails immediately.
+// Issue #1271 Item 5: key contract enforcement.
+func TestCategoryEventDataKeyContract(t *testing.T) {
+	cat := domain.BudgetCategory{
+		ID:              "cat-contract",
+		BudgetID:        "budget-contract",
+		AllocatedAmount: 200.0,
+		SpentAmount:     80.0,
+	}
+	result := domain.BuildCategoryEventData([]domain.BudgetCategory{cat})
+
+	catMap, ok := result["cat-contract"]
+	require.True(t, ok, "expected category key in result")
+
+	expectedKeys := map[string]bool{
+		"percent_used": true,
+		"remaining":    true,
+		"spent":        true,
+		"allocated":    true,
+	}
+	// Every expected key must be present
+	for k := range expectedKeys {
+		assert.Contains(t, catMap, k, "expected key %q in category event data", k)
+	}
+	// No extra keys
+	assert.Len(t, catMap, len(expectedKeys), "category event data must have exactly %d keys", len(expectedKeys))
 }

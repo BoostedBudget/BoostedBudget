@@ -27,6 +27,10 @@ type BudgetRepository interface {
 	// BudgetCategory operations
 	CreateCategory(ctx context.Context, category *domain.BudgetCategory) error
 	GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
+	// GetCategoriesByBudgetIDs batch-loads categories for multiple budgets in a single query.
+	// Returns a map from budget ID to its categories. Returns an empty map (not nil) when
+	// budgetIDs is empty. Used by the period-close scanner for batched page loading (Issue #1271).
+	GetCategoriesByBudgetIDs(ctx context.Context, budgetIDs []string) (map[string][]domain.BudgetCategory, error)
 	// GetCategoryByIDAndUser returns a budget category only if it belongs to the given user (via the parent budget).
 	// Returns an error if not found or not owned. Issue #1270: category ownership validation.
 	GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error)
@@ -241,9 +245,11 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 		}
 
 		// Unmarshal income_sources from JSON (Issue #491)
-		if err := json.Unmarshal(incomeSourcesJSON, &budget.IncomeSources); err != nil {
+		sources, err := unmarshalIncomeSources(incomeSourcesJSON)
+		if err != nil {
 			return nil, err
 		}
+		budget.IncomeSources = sources
 
 		budgets = append(budgets, budget)
 	}
@@ -298,9 +304,11 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 		}
 
 		// Unmarshal income_sources from JSON (Issue #491)
-		if err := json.Unmarshal(incomeSourcesJSON, &budget.IncomeSources); err != nil {
+		sources, err := unmarshalIncomeSources(incomeSourcesJSON)
+		if err != nil {
 			return nil, err
 		}
+		budget.IncomeSources = sources
 
 		budgets = append(budgets, budget)
 	}
@@ -559,6 +567,70 @@ func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID
 	}
 
 	return categories, nil
+}
+
+// GetCategoriesByBudgetIDs batch-loads categories for multiple budgets in a single query.
+// Uses the same SELECT as GetCategoriesByBudgetID with WHERE bc.budget_id = ANY($1).
+// Returns an empty map (not nil) when budgetIDs is empty. Issue #1271 Item 6.
+func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetIDs []string) (map[string][]domain.BudgetCategory, error) {
+	if len(budgetIDs) == 0 {
+		return map[string][]domain.BudgetCategory{}, nil
+	}
+
+	query := `
+		SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed, bc.custom_category_id,
+			bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
+			bc.tags, bc.match_logic,
+			cc.parent_id, cc.parent_pfc_primary
+		FROM budget_categories bc
+		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
+		WHERE bc.budget_id = ANY($1)
+		ORDER BY bc.budget_id ASC, bc.created_at ASC
+	`
+
+	rows, err := r.db.Query(ctx, query, budgetIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string][]domain.BudgetCategory)
+	for rows.Next() {
+		var bc domain.BudgetCategory
+		var tagsJSON []byte
+
+		err := rows.Scan(
+			&bc.ID,
+			&bc.BudgetID,
+			&bc.CategoryKind,
+			&bc.PFCPrimary,
+			&bc.PFCDetailed,
+			&bc.CustomCategoryID,
+			&bc.AllocatedAmount,
+			&bc.SpentAmount,
+			&bc.CreatedAt,
+			&bc.UpdatedAt,
+			&tagsJSON,
+			&bc.MatchLogic,
+			&bc.CustomParentID,
+			&bc.CustomParentPFCPrimary,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := json.Unmarshal(tagsJSON, &bc.Tags); err != nil {
+			return nil, err
+		}
+
+		result[bc.BudgetID] = append(result[bc.BudgetID], bc)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
 // UpdateCategory updates an existing budget category.

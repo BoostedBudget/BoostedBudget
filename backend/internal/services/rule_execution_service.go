@@ -135,26 +135,14 @@ func (s *ruleExecutionService) ExecuteRule(ctx context.Context, rule *domain.Aut
 
 	// Check if rule is enabled
 	if !rule.Enabled {
-		execution.Status = ExecutionStatusSkipped
-		completedAt := time.Now()
-		execution.CompletedAt = &completedAt
-		durationMs := int(time.Since(startTime).Milliseconds())
-		execution.ExecutionDurationMs = &durationMs
-		skipReason := "rule disabled"
-		execution.OutputData, _ = json.Marshal(map[string]string{"skip_reason": skipReason})
+		s.markExecutionSkipped(execution, startTime, "rule disabled")
 		_ = s.executionRepo.Update(ctx, execution)
 		return execution, nil
 	}
 
 	// Evaluate conditions
 	if !evaluateConditions(rule.Conditions, rule.ConditionLogic, triggerData) {
-		execution.Status = ExecutionStatusSkipped
-		completedAt := time.Now()
-		execution.CompletedAt = &completedAt
-		durationMs := int(time.Since(startTime).Milliseconds())
-		execution.ExecutionDurationMs = &durationMs
-		skipReason := "conditions not met"
-		execution.OutputData, _ = json.Marshal(map[string]string{"skip_reason": skipReason})
+		s.markExecutionSkipped(execution, startTime, "conditions not met")
 		_ = s.executionRepo.Update(ctx, execution)
 		return execution, nil
 	}
@@ -219,7 +207,15 @@ func (s *ruleExecutionService) ProcessEventTrigger(ctx context.Context, userID, 
 	// Execute each matching rule. Errors are logged but do not abort the batch —
 	// one rule failing (e.g. transient DB error, missing repo) must not prevent
 	// other rules for the same user from firing on the same event.
+	eventBudgetID, _ := eventData[domain.EventDataKeyBudgetID].(string)
 	for _, rule := range rules {
+		// A-CR2: if the rule is scoped to a specific budget (via budget_category.* conditions),
+		// skip it entirely when the event belongs to a different budget. This closes the OR-escape
+		// bug where an OR-logic rule could fire via a non-category condition even though its
+		// budget_category condition is for a different budget.
+		if boundID, bound := rule.BoundBudgetID(); bound && boundID != eventBudgetID {
+			continue
+		}
 		_, execErr := s.ExecuteRule(ctx, rule, eventData)
 		if execErr != nil {
 			slog.Error("rule execution failed; continuing with remaining rules",
@@ -812,6 +808,20 @@ func evaluateConditions(conditions []domain.AutomationRuleCondition, logic strin
 	return true
 }
 
+// normalizeSuffix maps UI field suffixes to engine keys.
+// Used by both normalizeConditionField and lookupFieldValue for consistency.
+func normalizeSuffix(suffix string) string {
+	switch suffix {
+	case "remaining_amount":
+		return "remaining"
+	case "spent_amount":
+		// Issue #1271 Item 5: emitter key renamed from "total_spent" to "spent"
+		return "spent"
+	default:
+		return suffix
+	}
+}
+
 // normalizeConditionField maps UI-built dotted field names (e.g. "budget.remaining_amount")
 // to flat engine keys (e.g. "remaining"). The rule-builder stores entity-prefixed names,
 // but event emitters publish flat keys. Without normalization, all UI-built conditions
@@ -820,8 +830,7 @@ func evaluateConditions(conditions []domain.AutomationRuleCondition, logic strin
 // Mapping:
 //   - Strip entity prefix: "budget_category.", "budget.", "account.", "transaction."
 //     (longer prefixes checked first)
-//   - Alias suffix changes: "remaining_amount" → "remaining", "spent_amount" → "total_spent"
-//   - Other suffixes pass through unchanged
+//   - Alias suffix changes via normalizeSuffix
 //   - Unknown/flat fields returned as-is
 func normalizeConditionField(field string) string {
 	// Strip entity prefix (longer prefixes must be checked first)
@@ -833,58 +842,60 @@ func normalizeConditionField(field string) string {
 			break
 		}
 	}
-
-	// Alias suffix names that differ between UI label and engine flat key
-	switch suffix {
-	case "remaining_amount":
-		return "remaining"
-	case "spent_amount":
-		return "total_spent"
-	}
-	return suffix
+	return normalizeSuffix(suffix)
 }
 
 // lookupFieldValue resolves the condition field to its value in data.
 //
 // For budget_category.* fields the value is read from the nested
 // data["categories"][condition.CategoryID][suffix] structure that category
-// emitters populate.  All other fields fall back to a flat lookup after
-// normalizing the field name via normalizeConditionField.
+// emitters populate. Handles both the typed map[string]map[string]float64
+// shape (from BuildCategoryEventData) and the map[string]interface{} shape
+// that arrives after a River JSON round-trip.
+// All other fields fall back to a flat lookup after normalizing the field name
+// via normalizeConditionField.
 // Issue #1270: GAP M — per-category condition evaluation.
+// Issue #1271 Items 5+6: dual-shape reader, budget-scope guard.
 func lookupFieldValue(condition domain.AutomationRuleCondition, data map[string]interface{}) (interface{}, bool) {
 	if strings.HasPrefix(condition.Field, "budget_category.") {
-		categoriesRaw, ok := data[domain.EventDataKeyCategories]
-		if !ok {
-			return nil, false
+		// Defense-in-depth budget scope check (primary guard is in ProcessEventTrigger).
+		if condition.BudgetID != "" {
+			if eventBudgetID, _ := data[domain.EventDataKeyBudgetID].(string); eventBudgetID != condition.BudgetID {
+				return nil, false
+			}
 		}
-		categories, ok := categoriesRaw.(map[string]interface{})
-		if !ok {
-			return nil, false
-		}
-		catRaw, ok := categories[condition.CategoryID]
-		if !ok {
-			return nil, false
-		}
-		catMap, ok := catRaw.(map[string]interface{})
-		if !ok {
-			return nil, false
-		}
-		// Strip "budget_category." prefix then apply the same suffix aliases
-		// that normalizeConditionField uses.
-		suffix := condition.Field[len("budget_category."):]
-		switch suffix {
-		case "remaining_amount":
-			suffix = "remaining"
-		case "spent_amount":
-			suffix = "total_spent"
-		}
-		val, ok := catMap[suffix]
-		return val, ok
+		suffix := normalizeSuffix(condition.Field[len("budget_category."):])
+		return lookupCategoryMetric(data[domain.EventDataKeyCategories], condition.CategoryID, suffix)
 	}
 	// Flat lookup with prefix stripping + suffix normalization.
 	normalizedField := normalizeConditionField(condition.Field)
 	val, ok := data[normalizedField]
 	return val, ok
+}
+
+// lookupCategoryMetric extracts a metric value from a categories map for a given category
+// and key suffix. Handles both the typed map[string]map[string]float64 shape emitted by
+// BuildCategoryEventData and the map[string]interface{} shape that arrives after a River
+// JSON round-trip (where numeric values become json.Number). Issue #1271 Item 6.
+func lookupCategoryMetric(categoriesRaw interface{}, categoryID, suffix string) (interface{}, bool) {
+	switch cats := categoriesRaw.(type) {
+	case map[string]map[string]float64:
+		catMap, ok := cats[categoryID]
+		if ok {
+			if val, ok := catMap[suffix]; ok {
+				return val, true
+			}
+		}
+	case map[string]interface{}:
+		if catRaw, ok := cats[categoryID]; ok {
+			if catMap, ok := catRaw.(map[string]interface{}); ok {
+				if val, ok := catMap[suffix]; ok {
+					return val, true
+				}
+			}
+		}
+	}
+	return nil, false
 }
 
 // evaluateCondition evaluates a single condition against the data.
@@ -952,6 +963,16 @@ func compareNumeric(fieldValue interface{}, conditionValue string, operator stri
 		fieldNum = float64(v)
 	case int64:
 		fieldNum = float64(v)
+	case json.Number:
+		// json.Number arrives after a River JSON round-trip where numbers are
+		// unmarshalled into interface{} (encoding/json uses json.Number when
+		// UseNumber() is configured, or when map[string]interface{} re-reads
+		// the EventData). Issue #1271 Item 6.
+		f, err := v.Float64()
+		if err != nil {
+			return false
+		}
+		fieldNum = f
 	case string:
 		var err error
 		fieldNum, err = strconv.ParseFloat(v, 64)
@@ -990,6 +1011,17 @@ func containsValue(list, value string) bool {
 		}
 	}
 	return false
+}
+
+// markExecutionSkipped marks an execution as skipped with the given reason.
+// Sets status, completion time, duration, and output data in one place.
+func (s *ruleExecutionService) markExecutionSkipped(execution *domain.RuleExecution, startTime time.Time, reason string) {
+	execution.Status = ExecutionStatusSkipped
+	completedAt := time.Now()
+	execution.CompletedAt = &completedAt
+	durationMs := int(time.Since(startTime).Milliseconds())
+	execution.ExecutionDurationMs = &durationMs
+	execution.OutputData, _ = json.Marshal(map[string]string{"skip_reason": reason})
 }
 
 // Helper functions for optional pointers.

@@ -280,6 +280,7 @@ export function useRuleForm(options?: UseRuleFormOptions): UseRuleFormReturn {
             operator: c.operator,
             value: c.value,
             ...(c.category_id ? { category_id: c.category_id } : {}),
+            ...(c.budget_id ? { budget_id: c.budget_id } : {}),
           }))
         : undefined,
       condition_logic: formState.conditions.length > 1 ? formState.conditionLogic : undefined,

@@ -186,6 +186,13 @@ export const CONDITION_FIELD_OPTIONS: ConditionFieldOption[] = [
     operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte'],
     valueType: 'number',
   },
+  {
+    value: 'budget_category.allocated',
+    label: 'Category Allocated',
+    category: 'Budget Category',
+    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte'],
+    valueType: 'number',
+  },
 ]
 
 /**

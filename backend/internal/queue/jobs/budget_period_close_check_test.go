@@ -46,14 +46,14 @@ func (m *mockBudgetPeriodCheckRepo) GetAllActivePaginated(ctx context.Context, l
 	return args.Get(0).([]*domain.Budget), args.Error(1)
 }
 
-// GetCategoriesByBudgetID is called by the worker after InsertMarker succeeds to load
-// per-category data for the EventDataKeyCategories emitter (Issue #1270).
-func (m *mockBudgetPeriodCheckRepo) GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
-	args := m.Called(ctx, budgetID)
+// GetCategoriesByBudgetIDs batch-loads categories for a page of budget IDs.
+// Issue #1271 Item 6: replaced per-budget GetCategoriesByBudgetID with batch version.
+func (m *mockBudgetPeriodCheckRepo) GetCategoriesByBudgetIDs(ctx context.Context, budgetIDs []string) (map[string][]domain.BudgetCategory, error) {
+	args := m.Called(ctx, budgetIDs)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
+	return args.Get(0).(map[string][]domain.BudgetCategory), args.Error(1)
 }
 
 // mockBudgetPeriodEventsRepo mocks BudgetPeriodEventsRepo.
@@ -165,9 +165,9 @@ func TestBudgetPeriodCloseCheck_FiresEventOnPeriodClose(t *testing.T) {
 		Return(false, nil)
 	periodEventsRepo.On("InsertMarker", ctx, "user-1", "budget-1", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
 		Return(true, nil)
-	// Issue #1270: categories are loaded after InsertMarker succeeds.
-	budgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-1").
-		Return(budget.Categories, nil)
+	// Issue #1271 Item 6: batch load after all InsertMarkers for this page.
+	budgetRepo.On("GetCategoriesByBudgetIDs", ctx, []string{"budget-1"}).
+		Return(map[string][]domain.BudgetCategory{"budget-1": budget.Categories}, nil)
 
 	// Capture the enqueued job to inspect EventData keys.
 	var capturedArgs RuleEvaluationArgs
@@ -208,11 +208,12 @@ func TestBudgetPeriodCloseCheck_FiresEventOnPeriodClose(t *testing.T) {
 	assert.InDelta(t, 20.0, capturedArgs.EventData[domain.EventDataKeyPercentUsed], 0.001, "percent_used must match Budget.PercentUsed()")
 
 	// Issue #1270: categories map must be present in EventData for per-category conditions.
+	// Issue #1271 Item 5: BuildCategoryEventData now returns map[string]map[string]float64.
 	// Budget has one category (cat-1) so the map must be non-nil and have one entry.
 	categoriesRaw := capturedArgs.EventData[domain.EventDataKeyCategories]
 	require.NotNil(t, categoriesRaw, "EventDataKeyCategories must be emitted for budget_period_end")
-	categories, ok := categoriesRaw.(map[string]interface{})
-	require.True(t, ok, "EventDataKeyCategories must be map[string]interface{}")
+	categories, ok := categoriesRaw.(map[string]map[string]float64)
+	require.True(t, ok, "EventDataKeyCategories must be map[string]map[string]float64")
 	assert.Contains(t, categories, "cat-1", "categories map must contain the budget's category ID as key")
 }
 
@@ -768,9 +769,10 @@ func TestBudgetPeriodCloseCheckWorker_NoDuplicateEnqueueOnMarkerRace(t *testing.
 	periodEventsRepo.On("InsertMarker", ctx, "user-race", "budget-race",
 		mock.Anything, mock.Anything, domain.EventBudgetPeriodEnd).
 		Return(false, nil).Once()
-	// Issue #1270: categories loaded after the winning InsertMarker.
-	budgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-race").
-		Return(nil, nil).Once()
+	// Issue #1271 Item 6: batch category load happens after HasMarker but before InsertMarker.
+	// Both workers call it (both see HasMarker=false), so set up for two calls.
+	budgetRepo.On("GetCategoriesByBudgetIDs", ctx, []string{"budget-race"}).
+		Return(map[string][]domain.BudgetCategory{}, nil)
 
 	// Enqueue must be called exactly once (only the winner enqueues).
 	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
@@ -832,8 +834,9 @@ func TestWorkAt_DeletesMarkerOnEnqueueFailure(t *testing.T) {
 	periodEventsRepo.On("HasMarker", ctx, "user-fail", "budget-fail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(false, nil)
 	// InsertMarker succeeds (newly inserted row)
 	periodEventsRepo.On("InsertMarker", ctx, "user-fail", "budget-fail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(true, nil)
-	// Issue #1270: categories loaded after InsertMarker succeeds (before Enqueue).
-	budgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-fail").Return(nil, nil)
+	// Issue #1271 Item 6: batch categories loaded after InsertMarker succeeds (before Enqueue).
+	budgetRepo.On("GetCategoriesByBudgetIDs", ctx, []string{"budget-fail"}).
+		Return(map[string][]domain.BudgetCategory{}, nil)
 	// Enqueue fails with a transient error
 	mockQueue.On("Enqueue", ctx, mock.Anything, mock.Anything).Return(nil, errors.New("transient enqueue failure"))
 	// DeleteMarker must be called to clean up the orphaned marker so the next daily run can retry
@@ -859,12 +862,12 @@ func TestWorkAt_DeletesMarkerOnEnqueueFailure(t *testing.T) {
 	expirer.AssertExpectations(t)
 }
 
-// TestWorkAt_CategoryLoadFailure_DeletesMarkerForRetry verifies that when
-// GetCategoriesByBudgetID fails after InsertMarker succeeds, DeleteMarker is called
-// and Enqueue is NOT called — the next daily run will retry with categories present.
-// Without this clean-up, category-scoped rule conditions would miss permanently for the
-// period (the marker prevents re-evaluation). Issue #1270.
-func TestWorkAt_CategoryLoadFailure_DeletesMarkerForRetry(t *testing.T) {
+// TestWorkAt_CategoryLoadFailure_SkipsPageEntirely verifies that when
+// GetCategoriesByBudgetIDs (batch) fails after HasMarker returns false, no InsertMarker
+// is called and Enqueue is NOT called. The failure is recorded in totalErrors and the
+// loop moves to the next page — no orphaned markers are left behind.
+// Issue #1271 Item 6: batch category pre-load after HasMarker, before InsertMarker.
+func TestWorkAt_CategoryLoadFailure_SkipsPageEntirely(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2024, time.February, 1, 9, 0, 0, 0, time.UTC)
 
@@ -879,14 +882,11 @@ func TestWorkAt_CategoryLoadFailure_DeletesMarkerForRetry(t *testing.T) {
 	expectedPeriodEnd := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
 
 	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).Return([]*domain.Budget{budget}, nil)
+	// HasMarker is called before the batch load (to build the needs-emit list)
 	periodEventsRepo.On("HasMarker", ctx, "user-catfail", "budget-catfail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(false, nil)
-	// InsertMarker succeeds — the marker is now written.
-	periodEventsRepo.On("InsertMarker", ctx, "user-catfail", "budget-catfail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(true, nil)
-	// GetCategoriesByBudgetID fails with a transient error AFTER the marker is inserted.
-	budgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-catfail").Return(nil, errors.New("transient category query failure"))
-	// DeleteMarker must be called to clean up the orphaned marker so the next daily run can
-	// retry with categories — category-scoped conditions must not miss permanently.
-	periodEventsRepo.On("DeleteMarker", ctx, "user-catfail", "budget-catfail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(nil)
+	// GetCategoriesByBudgetIDs fails AFTER HasMarker passes — batch load is between
+	// HasMarker and InsertMarker so no orphaned markers are created.
+	budgetRepo.On("GetCategoriesByBudgetIDs", ctx, []string{"budget-catfail"}).Return(nil, errors.New("transient category batch query failure"))
 	expirer.On("ExpirePending", ctx).Return(int64(0), nil)
 	expirer.On("ClearStaleReservations", ctx).Return(int64(0), nil)
 
@@ -901,12 +901,62 @@ func TestWorkAt_CategoryLoadFailure_DeletesMarkerForRetry(t *testing.T) {
 	err := worker.workAt(ctx, job, now)
 	require.NoError(t, err) // category errors are logged, not propagated
 
-	// Enqueue must NOT have been called — the marker was cleaned up for retry.
+	// InsertMarker must NOT have been called — batch load failed before InsertMarker.
+	periodEventsRepo.AssertNotCalled(t, "InsertMarker")
+	// Enqueue must NOT have been called.
 	mockQueue.AssertNotCalled(t, "Enqueue")
-	// DeleteMarker must have been called to un-suppress the next daily run.
-	periodEventsRepo.AssertCalled(t, "DeleteMarker", ctx, "user-catfail", "budget-catfail", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd)
-	periodEventsRepo.AssertExpectations(t)
 	mockQueue.AssertExpectations(t)
+	periodEventsRepo.AssertExpectations(t)
+	expirer.AssertExpectations(t)
+}
+
+// TestWorkAt_EmptyCategories_StillEmits verifies that when GetCategoriesByBudgetIDs
+// returns an empty map (budget has no categories), the worker still emits the
+// budget_period_end event. Budget-level conditions (not category-scoped) must still fire.
+// Issue #1271 Item 6.
+func TestWorkAt_EmptyCategories_StillEmits(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2024, time.February, 1, 9, 0, 0, 0, time.UTC)
+
+	budget := newMonthlyBudget("budget-empty", "user-empty", time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	expectedPeriodStart := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	expectedPeriodEnd := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
+
+	budgetRepo := &mockBudgetPeriodCheckRepo{}
+	periodEventsRepo := &mockBudgetPeriodEventsRepo{}
+	mockQueue := new(MockJobQueue)
+	expirer := new(mockTransferSuggestionExpirer)
+
+	budgetRepo.On("GetAllActivePaginated", ctx, budgetPeriodCheckPageSize, 0).Return([]*domain.Budget{budget}, nil)
+	periodEventsRepo.On("HasMarker", ctx, "user-empty", "budget-empty", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(false, nil)
+	periodEventsRepo.On("InsertMarker", ctx, "user-empty", "budget-empty", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).Return(true, nil)
+	// Empty categories map — no error
+	budgetRepo.On("GetCategoriesByBudgetIDs", ctx, []string{"budget-empty"}).
+		Return(map[string][]domain.BudgetCategory{}, nil)
+	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		ea, ok := job.(RuleEvaluationArgs)
+		return ok && ea.UserID == "user-empty" && ea.EventType == domain.EventBudgetPeriodEnd
+	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil).Once()
+	expirer.On("ExpirePending", ctx).Return(int64(0), nil)
+	expirer.On("ClearStaleReservations", ctx).Return(int64(0), nil)
+
+	worker := NewBudgetPeriodCloseCheckWorker(BudgetPeriodCloseCheckWorkerDeps{
+		BudgetRepo:                budgetRepo,
+		PeriodEventsRepo:          periodEventsRepo,
+		JobQueue:                  mockQueue,
+		TransferSuggestionExpirer: expirer,
+	})
+	job := newTestBudgetPeriodCloseCheckJob(BudgetPeriodCloseCheckArgs{TriggerSource: "test-empty-cats"})
+
+	err := worker.workAt(ctx, job, now)
+	require.NoError(t, err)
+
+	// InsertMarker and Enqueue must both have been called — empty categories is not an error.
+	periodEventsRepo.AssertCalled(t, "InsertMarker", ctx, "user-empty", "budget-empty", expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd)
+	mockQueue.AssertNumberOfCalls(t, "Enqueue", 1)
+	mockQueue.AssertExpectations(t)
+	periodEventsRepo.AssertExpectations(t)
 	expirer.AssertExpectations(t)
 }
 
@@ -1044,9 +1094,9 @@ func TestWorkAt_MarkerStableAfterTimezoneChange(t *testing.T) {
 	periodEventsRepo.On("InsertMarker", ctx, "user-tz-stable", "budget-tz-stable",
 		expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
 		Return(true, nil).Once()
-	// Issue #1270: categories loaded after InsertMarker succeeds.
-	budgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-tz-stable").
-		Return(nil, nil).Once()
+	// Issue #1271 Item 6: batch category load after InsertMarker succeeds.
+	budgetRepo.On("GetCategoriesByBudgetIDs", ctx, []string{"budget-tz-stable"}).
+		Return(map[string][]domain.BudgetCategory{}, nil).Once()
 	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
 		ea, ok := job.(RuleEvaluationArgs)
 		return ok && ea.UserID == "user-tz-stable"
@@ -1109,8 +1159,9 @@ func TestWorkAt_FallsBackToUTCWhenTimezoneNil(t *testing.T) {
 	periodEventsRepo.On("InsertMarker", ctx, "user-utcfb", "budget-utcfb",
 		expectedPeriodStart, expectedPeriodEnd, domain.EventBudgetPeriodEnd).
 		Return(true, nil)
-	// Issue #1270: categories loaded after InsertMarker succeeds.
-	budgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-utcfb").Return(nil, nil)
+	// Issue #1271 Item 6: batch category load after InsertMarker succeeds.
+	budgetRepo.On("GetCategoriesByBudgetIDs", ctx, []string{"budget-utcfb"}).
+		Return(map[string][]domain.BudgetCategory{}, nil)
 	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
 		evalArgs, ok := job.(RuleEvaluationArgs)
 		return ok && evalArgs.UserID == "user-utcfb" && evalArgs.EventType == domain.EventBudgetPeriodEnd
