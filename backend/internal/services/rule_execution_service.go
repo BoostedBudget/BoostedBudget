@@ -252,8 +252,8 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 	// Evaluate each condition individually
 	conditionResults := make([]domain.ConditionEvalResult, len(rule.Conditions))
 	for i, condition := range rule.Conditions {
-		actual, exists := lookupFieldValue(condition, triggerData)
-		met := evaluateCondition(condition, triggerData)
+		actual, _ := lookupFieldValue(condition, triggerData)
+		met := evaluateConditionWithValue(condition, actual)
 
 		conditionResults[i] = domain.ConditionEvalResult{
 			Field:    condition.Field,
@@ -261,10 +261,6 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 			Value:    condition.Value,
 			Actual:   actual,
 			Met:      met,
-		}
-
-		if !exists {
-			conditionResults[i].Actual = nil
 		}
 	}
 	result.ConditionResults = conditionResults
@@ -773,6 +769,15 @@ func lookupFieldValue(condition domain.AutomationRuleCondition, data map[string]
 func evaluateCondition(condition domain.AutomationRuleCondition, data map[string]interface{}) bool {
 	fieldValue, exists := lookupFieldValue(condition, data)
 	if !exists {
+		return false
+	}
+	return evaluateConditionWithValue(condition, fieldValue)
+}
+
+// evaluateConditionWithValue evaluates a condition against a pre-looked-up value,
+// avoiding a second map lookup when the caller already holds the value.
+func evaluateConditionWithValue(condition domain.AutomationRuleCondition, fieldValue interface{}) bool {
+	if fieldValue == nil {
 		return false
 	}
 
