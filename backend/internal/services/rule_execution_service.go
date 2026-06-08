@@ -263,16 +263,16 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 	}
 
 	// Evaluate each condition individually.
-	// Use normalizeConditionField for the Actual lookup so that dotted UI-built fields
-	// (e.g. "budget.remaining_amount") resolve to the real EventData value ("remaining")
-	// — the same normalization applied inside evaluateCondition for Met.
-	// Fall back to the raw field if the normalized key misses: some emitters (e.g.
-	// transaction-trigger EventData) publish the full dotted key as-is.
+	// Use lookupFieldValue for the Actual display so that budget_category.* conditions
+	// read from the nested categories map, and other fields resolve via
+	// normalizeConditionField. Fall back to the raw dotted field key for emitters
+	// (e.g. transaction events) that publish the full dotted name as-is.
 	conditionResults := make([]domain.ConditionEvalResult, len(rule.Conditions))
 	for i, condition := range rule.Conditions {
-		normalizedField := normalizeConditionField(condition.Field)
-		actual, exists := triggerData[normalizedField]
-		if !exists && normalizedField != condition.Field {
+		actual, exists := lookupFieldValue(condition, triggerData)
+		if !exists && !strings.HasPrefix(condition.Field, "budget_category.") {
+			// Fallback: some emitters publish the dotted key verbatim (e.g.
+			// "transaction.pfc_primary") without stripping the entity prefix.
 			actual, exists = triggerData[condition.Field]
 		}
 		met := evaluateCondition(condition, triggerData)
@@ -284,7 +284,6 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 			Actual:   actual,
 			Met:      met,
 		}
-
 		if !exists {
 			conditionResults[i].Actual = nil
 		}
@@ -845,15 +844,64 @@ func normalizeConditionField(field string) string {
 	return suffix
 }
 
+// lookupFieldValue resolves the condition field to its value in data.
+//
+// For budget_category.* fields the value is read from the nested
+// data["categories"][condition.CategoryID][suffix] structure that category
+// emitters populate.  All other fields fall back to a flat lookup after
+// normalizing the field name via normalizeConditionField.
+// Issue #1270: GAP M — per-category condition evaluation.
+func lookupFieldValue(condition domain.AutomationRuleCondition, data map[string]interface{}) (interface{}, bool) {
+	if strings.HasPrefix(condition.Field, "budget_category.") {
+		categoriesRaw, ok := data[domain.EventDataKeyCategories]
+		if !ok {
+			return nil, false
+		}
+		categories, ok := categoriesRaw.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		catRaw, ok := categories[condition.CategoryID]
+		if !ok {
+			return nil, false
+		}
+		catMap, ok := catRaw.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		// Strip "budget_category." prefix then apply the same suffix aliases
+		// that normalizeConditionField uses.
+		suffix := condition.Field[len("budget_category."):]
+		switch suffix {
+		case "remaining_amount":
+			suffix = "remaining"
+		case "spent_amount":
+			suffix = "total_spent"
+		}
+		val, ok := catMap[suffix]
+		return val, ok
+	}
+	// Flat lookup with prefix stripping + suffix normalization.
+	normalizedField := normalizeConditionField(condition.Field)
+	val, ok := data[normalizedField]
+	return val, ok
+}
+
 // evaluateCondition evaluates a single condition against the data.
 // Supports both short form (eq, neq, gt, gte, lt, lte) and long form
 // (equals, not_equals, greater_than, etc.) operator names.
 func evaluateCondition(condition domain.AutomationRuleCondition, data map[string]interface{}) bool {
-	// Normalize the stored field name from the UI dotted form to the flat engine key.
-	// e.g. "budget.remaining_amount" → "remaining", "account.balance" → "balance".
-	normalizedField := normalizeConditionField(condition.Field)
-	fieldValue, exists := data[normalizedField]
+	fieldValue, exists := lookupFieldValue(condition, data)
 	if !exists {
+		return false
+	}
+	return evaluateConditionWithValue(condition, fieldValue)
+}
+
+// evaluateConditionWithValue evaluates a condition against a pre-looked-up value,
+// avoiding a second map lookup when the caller already holds the value.
+func evaluateConditionWithValue(condition domain.AutomationRuleCondition, fieldValue interface{}) bool {
+	if fieldValue == nil {
 		return false
 	}
 

@@ -5,6 +5,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -374,4 +375,302 @@ func TestCreateRule_Transfer_ToUserAccountIDOwnership(t *testing.T) {
 	_, err := svc.CreateRule(ctx, attackerUserID, req)
 	require.Error(t, err, "CreateRule must reject a transfer rule with another user's to_user_account_id")
 	assert.Contains(t, err.Error(), "to_user_account_id", "error must identify the chain-resolver ref that failed ownership")
+}
+
+// ============================================================================
+// Tests — CreateRule category ownership validation (Issue #1270)
+// ============================================================================
+
+// budgetCategoryConditionRule builds a CreateAutomationRuleRequest with a single
+// budget_category.* condition for the given categoryID.
+func budgetCategoryConditionRule(categoryID string) *domain.CreateAutomationRuleRequest {
+	b, _ := json.Marshal(map[string]interface{}{
+		"savings_goal_id": "goal-1",
+		"from_account_id": "acct-1",
+		"amount_type":     "fixed",
+		"amount":          10.0,
+	})
+	return &domain.CreateAutomationRuleRequest{
+		Name:     "category condition rule",
+		RuleType: domain.RuleTypeSavingsGoal,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Conditions: []domain.AutomationRuleCondition{
+			{
+				Field:      "budget_category.percent_used",
+				CategoryID: categoryID,
+				Operator:   domain.ConditionOperatorGt,
+				Value:      "80",
+			},
+		},
+		Actions: b,
+	}
+}
+
+// TestCreateRule_CategoryCondition_AcceptsOwnedCategory verifies that CreateRule accepts
+// a rule whose budget_category.* condition references a category owned by the rule's user.
+// Issue #1270: SetBudgetRepo + GetCategoryByIDAndUser happy path.
+func TestCreateRule_CategoryCondition_AcceptsOwnedCategory(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-alice"
+	categoryID := "cat-alice-1"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	ruleRepo.rules = []*domain.AutomationRule{} // ensure Create stores the rule
+	budgetRepo := &MockBudgetRepository{}
+	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
+		Return(&domain.BudgetCategory{ID: categoryID}, nil)
+	goalRepo := &MockSavingsGoalRepository{}
+	goalRepo.On("GetByIDForUser", mock.Anything, "goal-1", userID).
+		Return(&domain.SavingsGoal{ID: "goal-1"}, nil)
+	acctRepo := &MockAccountRepository{}
+	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-1", userID).
+		Return(&domain.Account{ID: "acct-1"}, nil)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetBudgetRepo(budgetRepo)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetAccountRepo(acctRepo)
+
+	req := budgetCategoryConditionRule(categoryID)
+	rule, err := svc.CreateRule(ctx, userID, req)
+	require.NoError(t, err, "CreateRule must accept a rule whose category_id belongs to the user")
+	assert.NotNil(t, rule)
+}
+
+// TestCreateRule_CategoryCondition_RejectsForeignCategory verifies that CreateRule rejects
+// a rule whose budget_category.* condition references a category owned by a different user
+// (IDOR prevention). Issue #1270.
+func TestCreateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
+	ctx := context.Background()
+	attackerUserID := "user-attacker"
+	victimCategoryID := "cat-victim-99"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	budgetRepo := &MockBudgetRepository{}
+	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, victimCategoryID, attackerUserID).
+		Return((*domain.BudgetCategory)(nil), domain.ErrBudgetCategoryNotFound)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetBudgetRepo(budgetRepo)
+
+	req := budgetCategoryConditionRule(victimCategoryID)
+	_, err := svc.CreateRule(ctx, attackerUserID, req)
+	require.Error(t, err, "CreateRule must reject a rule whose category_id belongs to a different user")
+	assert.Contains(t, err.Error(), "category_id", "error must identify the category_id ownership failure")
+}
+
+// TestCreateRule_CategoryCondition_DBError_Propagates verifies that an infrastructure error
+// from GetCategoryByIDAndUser is NOT silently converted to 403 — it must propagate as-is
+// so the HTTP layer returns 500. Issue #1270 (Codex LOW finding).
+func TestCreateRule_CategoryCondition_DBError_Propagates(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-alice"
+	categoryID := "cat-alice-1"
+	dbErr := errors.New("connection timeout")
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	budgetRepo := &MockBudgetRepository{}
+	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
+		Return((*domain.BudgetCategory)(nil), dbErr)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetBudgetRepo(budgetRepo)
+
+	req := budgetCategoryConditionRule(categoryID)
+	_, err := svc.CreateRule(ctx, userID, req)
+	require.Error(t, err, "CreateRule must fail on DB error")
+	assert.False(t, errors.Is(err, domain.ErrRuleConditionForbidden),
+		"a DB infrastructure error must not be wrapped as ErrRuleConditionForbidden (would cause 403 instead of 500)")
+}
+
+// TestCreateRule_CategoryCondition_RejectsForeignCategory_SentinelWrapped strengthens the
+// foreign-category rejection test to assert the error is wrapped as ErrRuleConditionForbidden,
+// not just contain the text "category_id". Issue #1270 (Codex LOW finding).
+func TestCreateRule_CategoryCondition_RejectsForeignCategory_SentinelWrapped(t *testing.T) {
+	ctx := context.Background()
+	attackerUserID := "user-attacker-2"
+	victimCategoryID := "cat-victim-sentinel"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	budgetRepo := &MockBudgetRepository{}
+	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, victimCategoryID, attackerUserID).
+		Return((*domain.BudgetCategory)(nil), domain.ErrBudgetCategoryNotFound)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetBudgetRepo(budgetRepo)
+
+	req := budgetCategoryConditionRule(victimCategoryID)
+	_, err := svc.CreateRule(ctx, attackerUserID, req)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrRuleConditionForbidden),
+		"foreign category rejection must be wrapped as ErrRuleConditionForbidden for correct 403 mapping")
+}
+
+// TestUpdateRule_CategoryCondition_RejectsForeignCategory verifies that UpdateRule rejects
+// an update that introduces a budget_category.* condition referencing a category owned by a
+// different user. UpdateRule routes through the same validateRuleReferenceOwnership as CreateRule,
+// so this pins the UpdateRule entry point. Issue #1270 (Codex LOW finding — only CreateRule tested).
+func TestUpdateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-bob"
+	ruleID := "rule-update-cat"
+	victimCategoryID := "cat-victim-update"
+
+	existingRule := &domain.AutomationRule{
+		ID:       ruleID,
+		UserID:   userID,
+		Name:     "existing rule",
+		Enabled:  true,
+		RuleType: domain.RuleTypeSavingsGoal,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Actions:        savingsGoalRuleActions("goal-ok", "acct-ok"),
+		ConditionLogic: "AND",
+	}
+
+	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.AutomationRule{existingRule}}
+	budgetRepo := &MockBudgetRepository{}
+	// GetCategoryByIDAndUser returns not-found → the category belongs to another user.
+	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, victimCategoryID, userID).
+		Return((*domain.BudgetCategory)(nil), domain.ErrBudgetCategoryNotFound)
+	goalRepo := &MockSavingsGoalRepository{}
+	goalRepo.On("GetByIDForUser", mock.Anything, "goal-ok", userID).
+		Return(&domain.SavingsGoal{ID: "goal-ok"}, nil)
+	acctRepo := &MockAccountRepository{}
+	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-ok", userID).
+		Return(&domain.Account{ID: "acct-ok"}, nil)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetBudgetRepo(budgetRepo)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetAccountRepo(acctRepo)
+
+	newConditions := []domain.AutomationRuleCondition{
+		{
+			Field:      "budget_category.percent_used",
+			CategoryID: victimCategoryID,
+			Operator:   domain.ConditionOperatorGt,
+			Value:      "80",
+		},
+	}
+	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateAutomationRuleRequest{
+		Conditions: &newConditions,
+	})
+	require.Error(t, err, "UpdateRule must reject an update introducing a foreign category condition")
+	assert.True(t, errors.Is(err, domain.ErrRuleConditionForbidden),
+		"foreign category rejection must be wrapped as ErrRuleConditionForbidden")
+	assert.Contains(t, err.Error(), "category_id", "error must identify the category_id ownership failure")
+}
+
+// TestCreateRule_InvalidConditions_WrapsErrInvalidRule verifies that CreateRule wraps
+// field-allowlist violations (from rule.Validate()) as domain.ErrInvalidRule so the HTTP
+// layer returns 400, not 500. Issue #1270 (Codex LOW finding — mapper tested, not service).
+func TestCreateRule_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-invalid-cond"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	svc := NewAutomationRuleService(ruleRepo)
+
+	// budget_category.invalid_field is not in validConditionFieldsByEvent for budget_period_end.
+	b, _ := json.Marshal(map[string]interface{}{
+		"savings_goal_id": "goal-x",
+		"from_account_id": "acct-x",
+		"amount_type":     "fixed",
+		"amount":          10.0,
+	})
+	req := &domain.CreateAutomationRuleRequest{
+		Name:     "bad field rule",
+		RuleType: domain.RuleTypeSavingsGoal,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Conditions: []domain.AutomationRuleCondition{
+			{
+				Field:    "budget_category.invalid_field",
+				Operator: domain.ConditionOperatorGt,
+				Value:    "80",
+			},
+		},
+		Actions: b,
+	}
+
+	_, err := svc.CreateRule(ctx, userID, req)
+	require.Error(t, err, "CreateRule must reject conditions with an unknown field")
+	assert.True(t, errors.Is(err, domain.ErrInvalidRule),
+		"field-allowlist violation must be wrapped as domain.ErrInvalidRule for 400 mapping")
+}
+
+// TestUpdateRule_InvalidConditions_WrapsErrInvalidRule verifies that UpdateRule wraps
+// field-allowlist violations as domain.ErrInvalidRule (same contract as CreateRule).
+// Issue #1270 (Codex LOW finding — only CreateRule sentinel wrapping was covered).
+func TestUpdateRule_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-invalid-update"
+	ruleID := "rule-bad-cond"
+
+	existingRule := &domain.AutomationRule{
+		ID:       ruleID,
+		UserID:   userID,
+		Name:     "existing valid rule",
+		Enabled:  true,
+		RuleType: domain.RuleTypeSavingsGoal,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Actions:        savingsGoalRuleActions("goal-y", "acct-y"),
+		ConditionLogic: "AND",
+	}
+
+	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.AutomationRule{existingRule}}
+	svc := NewAutomationRuleService(ruleRepo)
+
+	// Try to update with an invalid condition field.
+	invalidConditions := []domain.AutomationRuleCondition{
+		{
+			Field:    "budget_category.invalid_field",
+			Operator: domain.ConditionOperatorGt,
+			Value:    "80",
+		},
+	}
+	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateAutomationRuleRequest{
+		Conditions: &invalidConditions,
+	})
+	require.Error(t, err, "UpdateRule must reject conditions with an unknown field")
+	assert.True(t, errors.Is(err, domain.ErrInvalidRule),
+		"field-allowlist violation in UpdateRule must be wrapped as domain.ErrInvalidRule for 400 mapping")
+}
+
+// TestCreateRule_CategoryCondition_NoBudgetRepo_SkipsCheck verifies that when SetBudgetRepo
+// is not called the category ownership check is skipped (backwards-compat for test setups that
+// don't inject budgetRepo). Issue #1270.
+func TestCreateRule_CategoryCondition_NoBudgetRepo_SkipsCheck(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-bob"
+	categoryID := "cat-any"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	goalRepo := &MockSavingsGoalRepository{}
+	goalRepo.On("GetByIDForUser", mock.Anything, "goal-1", userID).
+		Return(&domain.SavingsGoal{ID: "goal-1"}, nil)
+	acctRepo := &MockAccountRepository{}
+	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-1", userID).
+		Return(&domain.Account{ID: "acct-1"}, nil)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetAccountRepo(acctRepo)
+	// intentionally NOT calling svc.SetBudgetRepo
+
+	req := budgetCategoryConditionRule(categoryID)
+	rule, err := svc.CreateRule(ctx, userID, req)
+	require.NoError(t, err, "CreateRule must skip the category check when budgetRepo is not injected")
+	assert.NotNil(t, rule)
 }

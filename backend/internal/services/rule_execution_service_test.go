@@ -1242,6 +1242,8 @@ func TestSavingsGoalExecutor(t *testing.T) {
 
 		// Create rule without savings goal action — ExecuteRule now validates first via
 		// rule.Validate(), so the error is caught before the execution record is created.
+		// Use "budget_period_end" (a valid event) so that event-name validation passes and
+		// Validate() proceeds to check savings_goal_id.
 		actionsJSON := json.RawMessage(`{}`)
 		rule := &domain.AutomationRule{
 			ID:             "rule-savings-bad",
@@ -1249,7 +1251,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 			Name:           "Bad Savings Rule",
 			Enabled:        true,
 			RuleType:       domain.RuleTypeSavingsGoal,
-			TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "test"},
+			TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
 			ConditionLogic: "AND",
 			Actions:        actionsJSON,
 		}
@@ -1986,12 +1988,13 @@ func TestRuleExecutionService_ExpiresAt(t *testing.T) {
 // Issue #972: GAP M – normalization shim.
 func TestEvaluateCondition_DottedFieldNormalization(t *testing.T) {
 	tests := []struct {
-		name      string
-		field     string
-		operator  domain.ConditionOperator
-		value     string
-		data      map[string]interface{}
-		wantMatch bool
+		name       string
+		field      string
+		categoryID string // non-empty only for budget_category.* tests (Issue #1270)
+		operator   domain.ConditionOperator
+		value      string
+		data       map[string]interface{}
+		wantMatch  bool
 	}{
 		{
 			name:      "budget.remaining_amount maps to remaining (gt, matches)",
@@ -2026,31 +2029,62 @@ func TestEvaluateCondition_DottedFieldNormalization(t *testing.T) {
 			wantMatch: true,
 		},
 		{
-			name:      "budget_category.remaining_amount maps to remaining",
-			field:     "budget_category.remaining_amount",
-			operator:  domain.ConditionOperatorLt,
-			value:     "50",
-			data:      map[string]interface{}{"remaining": 30.0},
+			// Issue #1270: budget_category.* uses nested categories[CategoryID] lookup.
+			name:       "budget_category.remaining_amount uses nested category lookup",
+			field:      "budget_category.remaining_amount",
+			categoryID: "cat-abc",
+			operator:   domain.ConditionOperatorLt,
+			value:      "50",
+			data: map[string]interface{}{
+				domain.EventDataKeyCategories: map[string]interface{}{
+					"cat-abc": map[string]interface{}{"remaining": 30.0},
+				},
+			},
 			wantMatch: true,
 		},
 		{
-			name:      "budget_category.spent_amount maps to total_spent",
-			field:     "budget_category.spent_amount",
-			operator:  domain.ConditionOperatorGt,
-			value:     "100",
-			data:      map[string]interface{}{"total_spent": 200.0},
+			// Issue #1270: spent_amount suffix alias → "total_spent" key in category map.
+			name:       "budget_category.spent_amount aliases to total_spent in category map",
+			field:      "budget_category.spent_amount",
+			categoryID: "cat-abc",
+			operator:   domain.ConditionOperatorGt,
+			value:      "100",
+			data: map[string]interface{}{
+				domain.EventDataKeyCategories: map[string]interface{}{
+					"cat-abc": map[string]interface{}{"total_spent": 200.0},
+				},
+			},
 			wantMatch: true,
 		},
 		{
-			// budget_category.percent_used prefix-stripping works. Note: category-level
-			// percent_used requires per-category EventData (deferred to follow-up issue #1271);
-			// budget-level budget.percent_used IS now emitted (Issue #972 A-min fix).
-			name:      "budget_category.percent_used maps to percent_used (prefix stripping works)",
-			field:     "budget_category.percent_used",
-			operator:  domain.ConditionOperatorGt,
-			value:     "50",
-			data:      map[string]interface{}{"percent_used": 80.0},
+			// Issue #1270: budget_category.percent_used reads from per-category data (no
+			// longer falls through to flat budget-level percent_used).
+			name:       "budget_category.percent_used reads per-category data",
+			field:      "budget_category.percent_used",
+			categoryID: "cat-abc",
+			operator:   domain.ConditionOperatorGt,
+			value:      "50",
+			data: map[string]interface{}{
+				domain.EventDataKeyCategories: map[string]interface{}{
+					"cat-abc": map[string]interface{}{"percent_used": 80.0},
+				},
+			},
 			wantMatch: true,
+		},
+		{
+			// Regression: budget_category.* without a matching CategoryID returns false
+			// (no category found → no match).
+			name:       "budget_category.* with wrong category ID returns false",
+			field:      "budget_category.remaining_amount",
+			categoryID: "cat-other",
+			operator:   domain.ConditionOperatorLt,
+			value:      "50",
+			data: map[string]interface{}{
+				domain.EventDataKeyCategories: map[string]interface{}{
+					"cat-abc": map[string]interface{}{"remaining": 30.0},
+				},
+			},
+			wantMatch: false,
 		},
 		{
 			name:      "account.balance maps to balance",
@@ -2100,9 +2134,10 @@ func TestEvaluateCondition_DottedFieldNormalization(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			condition := domain.AutomationRuleCondition{
-				Field:    tc.field,
-				Operator: tc.operator,
-				Value:    tc.value,
+				Field:      tc.field,
+				CategoryID: tc.categoryID,
+				Operator:   tc.operator,
+				Value:      tc.value,
 			}
 			got := evaluateCondition(condition, tc.data)
 			assert.Equal(t, tc.wantMatch, got)
@@ -2114,7 +2149,7 @@ func TestEvaluateCondition_DottedFieldNormalization(t *testing.T) {
 // is present in the map emitted by the period-close worker. This is a drift guard —
 // if either the emitter or the readers are updated and the constants diverge, this
 // test fails. Issue #972: GAP J – emitter/reader parity.
-// Note: category-level percent_used requires per-category fan-out (deferred to #1271).
+// Issue #1270: EventDataKeyCategories added to emitted set.
 func TestEventDataKeyContract(t *testing.T) {
 	// Keys emitted by the period-close worker (budget_period_close_check.go).
 	emittedKeys := map[string]bool{
@@ -2126,6 +2161,7 @@ func TestEventDataKeyContract(t *testing.T) {
 		domain.EventDataKeyPercentUsed:  true, // Issue #972 A-min: emitted via Budget.PercentUsed()
 		domain.EventDataKeyPeriodStart:  true,
 		domain.EventDataKeyPeriodEnd:    true,
+		domain.EventDataKeyCategories:   true, // Issue #1270: per-category data map
 	}
 
 	// Keys that calculateTransferAmount reads.
@@ -2873,4 +2909,28 @@ func TestResolveAndVerifyUserAccount_AccountRepoNilFailOpen(t *testing.T) {
 	assert.False(t, skip, "nil accountRepo must not skip the rule (fail-open)")
 	assert.Equal(t, "user-account-new", resolvedID,
 		"nil accountRepo must still apply the resolved ID (fail-open; ownership check skipped)")
+}
+
+// TestEvaluateConditionWithValue_BetweenIsNonEvaluable verifies that a condition with the
+// "between" operator evaluates to false at execution time (default-false path in the switch).
+// Validation rejects "between" before rules reach execution, but this pins the evaluator
+// so that any future inadvertent "between" condition can't accidentally return true.
+// Issue #1270 (Codex LOW finding — evaluator default-false path untested).
+func TestEvaluateConditionWithValue_BetweenIsNonEvaluable(t *testing.T) {
+	condition := domain.AutomationRuleCondition{
+		Field:    "budget.percent_used",
+		Operator: domain.ConditionOperatorBetween,
+		Value:    "50,80",
+	}
+
+	// fieldValue clearly within the "50 to 80" range — if between were evaluable it
+	// would return true; the non-evaluable default must return false.
+	result := evaluateConditionWithValue(condition, 65.0)
+	assert.False(t, result,
+		"between operator must be non-evaluable at execution time (default-false path)")
+
+	// Also verify with a value outside any plausible range — must still be false.
+	result2 := evaluateConditionWithValue(condition, 99.0)
+	assert.False(t, result2,
+		"between operator must be non-evaluable regardless of field value")
 }

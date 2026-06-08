@@ -146,6 +146,15 @@ func (m *MockBudgetRepository) AdjustCategoryAllocatedAmount(ctx context.Context
 	return args.Error(0)
 }
 
+// GetCategoryByIDAndUser retrieves a category scoped to a user (Issue #1270: ownership validation).
+func (m *MockBudgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error) {
+	args := m.Called(ctx, categoryID, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.BudgetCategory), args.Error(1)
+}
+
 // MockTransactionRepositoryForBudget is a minimal mock for transaction repository
 // Only mocking methods needed by BudgetService
 type MockTransactionRepositoryForBudget struct {
@@ -379,6 +388,8 @@ func TestBudgetService_GetBudgets_Success(t *testing.T) {
 
 	// Setup mocks
 	mockBudgetRepo.On("GetByUserID", ctx, userID).Return(expectedBudgets, nil)
+	mockBudgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-123").Return([]domain.BudgetCategory{}, nil)
+	mockBudgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-456").Return([]domain.BudgetCategory{}, nil)
 
 	// Execute
 	budgets, err := service.GetBudgets(ctx, userID)
@@ -405,6 +416,7 @@ func TestBudgetService_GetActiveBudgets_Success(t *testing.T) {
 
 	// Setup mocks
 	mockBudgetRepo.On("GetActiveByUserID", ctx, userID).Return(expectedBudgets, nil)
+	mockBudgetRepo.On("GetCategoriesByBudgetID", ctx, "budget-123").Return([]domain.BudgetCategory{}, nil)
 
 	// Execute
 	budgets, err := service.GetActiveBudgets(ctx, userID)

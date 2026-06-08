@@ -68,16 +68,6 @@ export const EVENT_TYPE_OPTIONS: Array<{ value: EventType; label: string; descri
     description: 'Fires after budget recalculation',
   },
   {
-    value: 'transaction_created',
-    label: 'Transaction Created',
-    description: 'Fires when new transactions are synced',
-  },
-  {
-    value: 'balance_changed',
-    label: 'Balance Changed',
-    description: 'Fires when account balance changes',
-  },
-  {
     value: 'budget_period_end',
     label: 'Budget Period End',
     description: 'Fires when a budget period ends',
@@ -152,41 +142,26 @@ export interface ConditionFieldOption {
 }
 
 export const CONDITION_FIELD_OPTIONS: ConditionFieldOption[] = [
-  // Account fields
-  {
-    value: 'account.balance',
-    label: 'Account Balance',
-    category: 'Account',
-    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between'],
-    valueType: 'number',
-  },
-  {
-    value: 'account.type',
-    label: 'Account Type',
-    category: 'Account',
-    operators: ['eq', 'neq'],
-    valueType: 'select',
-  },
   // Budget fields
   {
     value: 'budget.percent_used',
     label: 'Budget % Used',
     category: 'Budget',
-    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between'],
+    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte'],
     valueType: 'number',
   },
   {
     value: 'budget.total_spent',
     label: 'Budget Total Spent',
     category: 'Budget',
-    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between'],
+    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte'],
     valueType: 'number',
   },
   {
     value: 'budget.remaining_amount',
     label: 'Budget Remaining',
     category: 'Budget',
-    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between'],
+    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte'],
     valueType: 'number',
   },
   // Budget category fields
@@ -194,39 +169,34 @@ export const CONDITION_FIELD_OPTIONS: ConditionFieldOption[] = [
     value: 'budget_category.percent_used',
     label: 'Category % Used',
     category: 'Budget Category',
-    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between'],
+    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte'],
     valueType: 'number',
   },
   {
     value: 'budget_category.spent_amount',
     label: 'Category Spent',
     category: 'Budget Category',
-    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between'],
+    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte'],
     valueType: 'number',
   },
   {
     value: 'budget_category.remaining_amount',
     label: 'Category Remaining',
     category: 'Budget Category',
-    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between'],
+    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte'],
     valueType: 'number',
-  },
-  // Transaction fields
-  {
-    value: 'transaction.amount',
-    label: 'Transaction Amount',
-    category: 'Transaction',
-    operators: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between'],
-    valueType: 'number',
-  },
-  {
-    value: 'transaction.merchant',
-    label: 'Merchant Name',
-    category: 'Transaction',
-    operators: ['eq', 'neq', 'contains'],
-    valueType: 'string',
   },
 ]
+
+/**
+ * Per-event field allowlists.
+ * Maps each supported event name to the valid condition field options for that event.
+ * Both budget_updated and budget_period_end share the same 6 fields backed by emitters.
+ */
+export const CONDITION_FIELDS_BY_EVENT: Record<string, ConditionFieldOption[]> = {
+  budget_updated: CONDITION_FIELD_OPTIONS,
+  budget_period_end: CONDITION_FIELD_OPTIONS,
+}
 
 // =============================================================================
 // Condition Operator Labels
@@ -239,7 +209,6 @@ export const CONDITION_OPERATOR_LABELS: Record<ConditionOperator, string> = {
   gte: 'greater than or equal',
   lt: 'less than',
   lte: 'less than or equal',
-  between: 'between',
   contains: 'contains',
 }
 

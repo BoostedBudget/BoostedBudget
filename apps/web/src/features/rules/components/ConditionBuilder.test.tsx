@@ -2,10 +2,40 @@ import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { ConditionBuilder } from './ConditionBuilder'
 import type { RuleCondition } from '../types'
+import type { BudgetCategory } from '../../budgets/types'
 
 const sampleConditions: RuleCondition[] = [
   { field: 'budget.percent_used', operator: 'gte', value: 80 },
-  { field: 'account.balance', operator: 'lt', value: 100 },
+  { field: 'budget.remaining_amount', operator: 'lt', value: 100 },
+]
+
+const sampleCategories: BudgetCategory[] = [
+  {
+    id: 'cat-1',
+    budget_id: 'budget-1',
+    category_kind: 'pfc',
+    pfc_primary: 'Food and Drink',
+    pfc_primary_display: 'Food & Drink',
+    allocated_amount: 500,
+    spent_amount: 200,
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-01T00:00:00Z',
+    tags: [],
+    match_logic: 'any',
+  },
+  {
+    id: 'cat-2',
+    budget_id: 'budget-1',
+    category_kind: 'pfc',
+    pfc_primary: 'Travel',
+    pfc_primary_display: 'Travel',
+    allocated_amount: 300,
+    spent_amount: 100,
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-01T00:00:00Z',
+    tags: [],
+    match_logic: 'any',
+  },
 ]
 
 const renderConditionBuilder = (props: Partial<Parameters<typeof ConditionBuilder>[0]> = {}) =>
@@ -15,6 +45,7 @@ const renderConditionBuilder = (props: Partial<Parameters<typeof ConditionBuilde
       logic="AND"
       onConditionsChange={() => {}}
       onLogicChange={() => {}}
+      triggerEvent="budget_updated"
       {...props}
     />
   )
@@ -74,11 +105,11 @@ describe('ConditionBuilder', () => {
     })
 
     fireEvent.change(screen.getByLabelText(/field/i), {
-      target: { value: 'account.balance' },
+      target: { value: 'budget.total_spent' },
     })
 
     expect(onConditionsChange).toHaveBeenCalledWith([
-      expect.objectContaining({ field: 'account.balance' }),
+      expect.objectContaining({ field: 'budget.total_spent' }),
     ])
   })
 
@@ -181,5 +212,161 @@ describe('ConditionBuilder', () => {
     expect(screen.getByLabelText(/field/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/operator/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/value/i)).toBeInTheDocument()
+  })
+
+  // Task 6: per-event field filtering and category picker tests
+
+  it('should only show fields valid for the given trigger event (budget_updated)', () => {
+    const budgetCondition: RuleCondition = { field: 'budget.percent_used', operator: 'gte', value: 80 }
+    renderConditionBuilder({
+      conditions: [budgetCondition],
+      triggerEvent: 'budget_updated',
+    })
+
+    const fieldSelect = screen.getByLabelText(/field/i)
+    // budget.percent_used should be present
+    expect(fieldSelect).toBeInTheDocument()
+    const options = Array.from(fieldSelect.querySelectorAll('option')).map((o) => (o as HTMLOptionElement).value)
+    expect(options).toContain('budget.percent_used')
+    expect(options).toContain('budget.remaining_amount')
+    expect(options).toContain('budget.total_spent')
+    expect(options).toContain('budget_category.percent_used')
+    expect(options).toContain('budget_category.spent_amount')
+    expect(options).toContain('budget_category.remaining_amount')
+    // account.balance and transaction fields should NOT appear
+    expect(options).not.toContain('account.balance')
+    expect(options).not.toContain('transaction.amount')
+  })
+
+  it('should show category picker when selected field starts with budget_category.', () => {
+    const categoryCondition: RuleCondition = {
+      field: 'budget_category.percent_used',
+      operator: 'gte',
+      value: 80,
+      category_id: undefined,
+    }
+    renderConditionBuilder({
+      conditions: [categoryCondition],
+      triggerEvent: 'budget_updated',
+      categories: sampleCategories,
+    })
+
+    expect(screen.getByLabelText(/category/i)).toBeInTheDocument()
+  })
+
+  it('should not show category picker when selected field is not budget_category.*', () => {
+    const budgetCondition: RuleCondition = { field: 'budget.percent_used', operator: 'gte', value: 80 }
+    renderConditionBuilder({
+      conditions: [budgetCondition],
+      triggerEvent: 'budget_updated',
+      categories: sampleCategories,
+    })
+
+    expect(screen.queryByLabelText(/category/i)).not.toBeInTheDocument()
+  })
+
+  it('should write category_id to condition when category picker changes', () => {
+    const onConditionsChange = mock(() => {})
+    const categoryCondition: RuleCondition = {
+      field: 'budget_category.percent_used',
+      operator: 'gte',
+      value: 80,
+      category_id: undefined,
+    }
+    renderConditionBuilder({
+      conditions: [categoryCondition],
+      triggerEvent: 'budget_updated',
+      categories: sampleCategories,
+      onConditionsChange,
+    })
+
+    fireEvent.change(screen.getByLabelText(/category/i), {
+      target: { value: 'cat-1' },
+    })
+
+    expect(onConditionsChange).toHaveBeenCalledWith([
+      expect.objectContaining({ category_id: 'cat-1' }),
+    ])
+  })
+
+  it('should clear category_id when field changes away from budget_category.*', () => {
+    const onConditionsChange = mock(() => {})
+    const categoryCondition: RuleCondition = {
+      field: 'budget_category.percent_used',
+      operator: 'gte',
+      value: 80,
+      category_id: 'cat-1',
+    }
+    renderConditionBuilder({
+      conditions: [categoryCondition],
+      triggerEvent: 'budget_updated',
+      categories: sampleCategories,
+      onConditionsChange,
+    })
+
+    fireEvent.change(screen.getByLabelText(/field/i), {
+      target: { value: 'budget.percent_used' },
+    })
+
+    expect(onConditionsChange).toHaveBeenCalledWith([
+      expect.objectContaining({ field: 'budget.percent_used', category_id: undefined }),
+    ])
+  })
+
+  it('should not include between operator in the operator select', () => {
+    const budgetCondition: RuleCondition = { field: 'budget.percent_used', operator: 'gte', value: 80 }
+    renderConditionBuilder({
+      conditions: [budgetCondition],
+      triggerEvent: 'budget_updated',
+    })
+
+    const operatorSelect = screen.getByLabelText(/operator/i)
+    const options = Array.from(operatorSelect.querySelectorAll('option')).map((o) => (o as HTMLOptionElement).value)
+    expect(options).not.toContain('between')
+  })
+
+  it('should reset condition field when triggerEvent changes and existing field is no longer valid', () => {
+    const onConditionsChange = mock(() => {})
+    // Use a synthetic unknown field that won't appear in any event's field list
+    const unknownFieldCondition: RuleCondition = { field: 'account.balance', operator: 'gte', value: 100 }
+
+    render(
+      <ConditionBuilder
+        conditions={[unknownFieldCondition]}
+        logic="AND"
+        onConditionsChange={onConditionsChange}
+        onLogicChange={() => {}}
+        triggerEvent="budget_updated"
+      />
+    )
+
+    // account.balance is not in CONDITION_FIELDS_BY_EVENT['budget_updated'], so useEffect
+    // should fire onConditionsChange with the first valid field
+    expect(onConditionsChange).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: 'budget.percent_used',
+          category_id: undefined,
+        }),
+      ])
+    )
+  })
+
+  it('should not call onConditionsChange when all conditions have valid fields', () => {
+    const onConditionsChange = mock(() => {})
+    const validCondition: RuleCondition = { field: 'budget.percent_used', operator: 'gte', value: 80 }
+
+    render(
+      <ConditionBuilder
+        conditions={[validCondition]}
+        logic="AND"
+        onConditionsChange={onConditionsChange}
+        onLogicChange={() => {}}
+        triggerEvent="budget_updated"
+      />
+    )
+
+    // budget.percent_used is valid for budget_updated — no reset should occur
+    expect(onConditionsChange).not.toHaveBeenCalled()
   })
 })

@@ -30,6 +30,9 @@ func (BudgetPeriodCloseCheckArgs) Kind() string { return "budget_period_close_ch
 type BudgetPeriodCheckRepository interface {
 	// GetAllActivePaginated returns all active budgets ordered by id ASC, paginated.
 	GetAllActivePaginated(ctx context.Context, limit int, offset int) ([]*domain.Budget, error)
+	// GetCategoriesByBudgetID returns all categories for a budget.
+	// Used to populate per-category EventData for budget_period_end rule evaluation (#1270).
+	GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
 }
 
 // UserTimezoneLookup provides batch timezone lookup for the period-close scanner.
@@ -258,6 +261,34 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 				continue
 			}
 
+			// Load categories for per-category condition evaluation (#1270).
+			// On error, delete the marker so the next daily run retries with fresh category
+			// data — category-scoped rule conditions must not permanently miss for the period.
+			cats, catErr := w.budgetRepo.GetCategoriesByBudgetID(ctx, budget.ID)
+			if catErr != nil {
+				w.logger.Warn("failed to load categories for period-end event data; deleting marker for retry",
+					"budget_id", budget.ID,
+					"user_id", budget.UserID,
+					"error", catErr,
+				)
+				// Delete the marker so the next daily run retries with categories present.
+				// If DeleteMarker also fails (dual DB failure), the marker stays and this
+				// period will not be retried — same pre-existing limitation as the
+				// enqueue-failure path below. Logged as Error to surface in monitoring.
+				if delErr := w.periodEventsRepo.DeleteMarker(ctx,
+					budget.UserID, budget.ID, periodStart, periodEnd, domain.EventBudgetPeriodEnd,
+				); delErr != nil {
+					w.logger.Error("failed to delete marker after category load failure; period may be permanently skipped",
+						"budget_id", budget.ID,
+						"user_id", budget.UserID,
+						"delete_error", delErr,
+					)
+				}
+				totalErrors++
+				continue
+			}
+			budget.Categories = cats
+
 			evalArgs := RuleEvaluationArgs{
 				UserID:    budget.UserID,
 				EventType: domain.EventBudgetPeriodEnd,
@@ -275,6 +306,7 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 					domain.EventDataKeyPercentUsed:  budget.PercentUsed(),
 					domain.EventDataKeyPeriodStart:  periodStart.Format("2006-01-02"),
 					domain.EventDataKeyPeriodEnd:    periodEnd.Format("2006-01-02"),
+					domain.EventDataKeyCategories:   domain.BuildCategoryEventData(budget.Categories),
 				},
 			}
 
