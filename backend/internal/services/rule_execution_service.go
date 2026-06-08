@@ -252,7 +252,7 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 	// Evaluate each condition individually
 	conditionResults := make([]domain.ConditionEvalResult, len(rule.Conditions))
 	for i, condition := range rule.Conditions {
-		actual, exists := triggerData[condition.Field]
+		actual, exists := lookupFieldValue(condition, triggerData)
 		met := evaluateCondition(condition, triggerData)
 
 		conditionResults[i] = domain.ConditionEvalResult{
@@ -698,11 +698,80 @@ func evaluateConditions(conditions []domain.AutomationRuleCondition, logic strin
 	return true
 }
 
+// normalizeConditionField strips budget-namespace prefixes (budget., budget_category.)
+// and maps legacy suffix aliases so that condition fields match the flat keys
+// used in budget event data payloads.  Transaction and account fields retain
+// their full dotted names because their event data maps use the full key.
+func normalizeConditionField(field string) string {
+	// Strip budget-only namespace prefixes; budget_category.* is handled
+	// exclusively by lookupFieldValue's nested path, but we strip it here
+	// too as a safe fallback so flat callers don't break.
+	for _, prefix := range []string{
+		"budget_category.",
+		"budget.",
+	} {
+		if strings.HasPrefix(field, prefix) {
+			field = field[len(prefix):]
+			break
+		}
+	}
+	// Map legacy / user-facing suffix aliases to canonical payload keys.
+	switch field {
+	case "remaining_amount":
+		return "remaining"
+	case "spent_amount":
+		return "total_spent"
+	}
+	return field
+}
+
+// lookupFieldValue resolves the condition field to its value in data.
+//
+// For budget_category.* fields the value is read from the nested
+// data["categories"][condition.CategoryID][suffix] structure that category
+// emitters populate.  All other fields fall back to a flat lookup after
+// normalizing the field name via normalizeConditionField.
+func lookupFieldValue(condition domain.AutomationRuleCondition, data map[string]interface{}) (interface{}, bool) {
+	if strings.HasPrefix(condition.Field, "budget_category.") {
+		categoriesRaw, ok := data[domain.EventDataKeyCategories]
+		if !ok {
+			return nil, false
+		}
+		categories, ok := categoriesRaw.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		catRaw, ok := categories[condition.CategoryID]
+		if !ok {
+			return nil, false
+		}
+		catMap, ok := catRaw.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		// Strip "budget_category." prefix then apply the same suffix aliases
+		// that normalizeConditionField uses.
+		suffix := condition.Field[len("budget_category."):]
+		switch suffix {
+		case "remaining_amount":
+			suffix = "remaining"
+		case "spent_amount":
+			suffix = "total_spent"
+		}
+		val, ok := catMap[suffix]
+		return val, ok
+	}
+	// Flat lookup with prefix stripping + suffix normalization.
+	normalizedField := normalizeConditionField(condition.Field)
+	val, ok := data[normalizedField]
+	return val, ok
+}
+
 // evaluateCondition evaluates a single condition against the data.
 // Supports both short form (eq, neq, gt, gte, lt, lte) and long form
 // (equals, not_equals, greater_than, etc.) operator names.
 func evaluateCondition(condition domain.AutomationRuleCondition, data map[string]interface{}) bool {
-	fieldValue, exists := data[condition.Field]
+	fieldValue, exists := lookupFieldValue(condition, data)
 	if !exists {
 		return false
 	}
