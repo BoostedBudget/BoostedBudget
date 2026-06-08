@@ -121,6 +121,62 @@ func TestAutomationRuleCondition_CategoryID_JSON_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestAutomationRuleCondition_BudgetIDRoundTrips(t *testing.T) {
+	tests := []struct {
+		name          string
+		condition     AutomationRuleCondition
+		expectedJSON  string
+		expectKeyJSON bool
+	}{
+		{
+			name: "condition with budget_id",
+			condition: AutomationRuleCondition{
+				Field:    "budget.percent_used",
+				Operator: ConditionOperatorGte,
+				Value:    80,
+				BudgetID: "budget-123",
+			},
+			expectedJSON:  `"budget_id":"budget-123"`,
+			expectKeyJSON: true,
+		},
+		{
+			name: "condition without budget_id omits key",
+			condition: AutomationRuleCondition{
+				Field:    "account.balance",
+				Operator: ConditionOperatorGt,
+				Value:    1000,
+			},
+			expectedJSON:  `"budget_id"`,
+			expectKeyJSON: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Marshal to JSON
+			jsonData, err := json.Marshal(tt.condition)
+			require.NoError(t, err)
+
+			// Check presence/absence of budget_id key
+			jsonStr := string(jsonData)
+			if tt.expectKeyJSON {
+				assert.Contains(t, jsonStr, tt.expectedJSON)
+			} else {
+				assert.NotContains(t, jsonStr, tt.expectedJSON)
+			}
+
+			// Unmarshal back and verify round-trip for BudgetID
+			var unmarshaled AutomationRuleCondition
+			err = json.Unmarshal(jsonData, &unmarshaled)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.condition.Field, unmarshaled.Field)
+			assert.Equal(t, tt.condition.Operator, unmarshaled.Operator)
+			assert.Equal(t, tt.condition.BudgetID, unmarshaled.BudgetID)
+		})
+	}
+}
+
 func TestAutomationRuleConditionOperator_IsValid(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -308,12 +364,14 @@ func TestAutomationRule_validateConditions(t *testing.T) {
 			errMsg:  "unsupported operator",
 		},
 		{
-			name: "budget_category field without CategoryID returns requires category_id error",
+			// Issue #1271 Item 2: Validate() no longer rejects missing CategoryID.
+			// The strict check moved to ValidateForPersistence() (used by create/update).
+			// ExecuteRule uses Validate() so that legacy/partial rules don't brick.
+			name: "budget_category field without CategoryID is accepted by Validate()",
 			rule: validEventRule("budget_updated", []AutomationRuleCondition{
 				{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80},
 			}),
-			wantErr: true,
-			errMsg:  "requires a category_id",
+			wantErr: false,
 		},
 		{
 			name: "schedule-type trigger rejects unsupported operator",
@@ -1184,4 +1242,171 @@ func TestValidateRolloverAction_PercentageBound(t *testing.T) {
 		err := rule.Validate()
 		assert.NoError(t, err)
 	})
+}
+
+// =============================================================================
+// Issue #1271 Item 2 — strict-create/fail-safe-execute validation split (A-CR1)
+// =============================================================================
+
+// TestValidate_DoesNotRequireScopeIDs verifies that Validate() (used by ExecuteRule) does
+// NOT reject a budget_category.* condition that is missing CategoryID or BudgetID. Legacy /
+// partial rules must be allowed to run without bricking.
+func TestValidate_DoesNotRequireScopeIDs(t *testing.T) {
+	rule := AutomationRule{
+		UserID:   "user-1",
+		Name:     "partial rule",
+		RuleType: RuleTypeBudgetAlert,
+		TriggerConfig: TriggerConfig{
+			Type:  TriggerTypeEvent,
+			Event: "budget_updated",
+		},
+		Conditions: []AutomationRuleCondition{
+			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80},
+		},
+		ConditionLogic: "AND",
+		Actions:        json.RawMessage(`{"notification_channels":["email"],"threshold_type":"percentage","threshold_value":80}`),
+	}
+	err := rule.Validate()
+	assert.NoError(t, err, "Validate() must not require CategoryID — that check belongs in ValidateForPersistence()")
+}
+
+// TestValidateForPersistence_RequiresCategoryID verifies that ValidateForPersistence() rejects
+// a budget_category.* condition with an empty CategoryID.
+func TestValidateForPersistence_RequiresCategoryID(t *testing.T) {
+	rule := AutomationRule{
+		UserID:   "user-1",
+		Name:     "partial rule",
+		RuleType: RuleTypeBudgetAlert,
+		TriggerConfig: TriggerConfig{
+			Type:  TriggerTypeEvent,
+			Event: "budget_updated",
+		},
+		Conditions: []AutomationRuleCondition{
+			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80},
+		},
+		ConditionLogic: "AND",
+		Actions:        json.RawMessage(`{"notification_channels":["email"],"threshold_type":"percentage","threshold_value":80}`),
+	}
+	err := rule.ValidateForPersistence()
+	require.Error(t, err, "ValidateForPersistence() must reject a missing CategoryID")
+	assert.ErrorIs(t, err, ErrInvalidRule)
+	assert.Contains(t, err.Error(), "category_id")
+}
+
+// TestValidateForPersistence_RequiresBudgetID verifies that ValidateForPersistence() rejects
+// a budget_category.* condition that has CategoryID but no BudgetID.
+func TestValidateForPersistence_RequiresBudgetID(t *testing.T) {
+	rule := AutomationRule{
+		UserID:   "user-1",
+		Name:     "partial rule",
+		RuleType: RuleTypeBudgetAlert,
+		TriggerConfig: TriggerConfig{
+			Type:  TriggerTypeEvent,
+			Event: "budget_updated",
+		},
+		Conditions: []AutomationRuleCondition{
+			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1"},
+		},
+		ConditionLogic: "AND",
+		Actions:        json.RawMessage(`{"notification_channels":["email"],"threshold_type":"percentage","threshold_value":80}`),
+	}
+	err := rule.ValidateForPersistence()
+	require.Error(t, err, "ValidateForPersistence() must reject a missing BudgetID")
+	assert.ErrorIs(t, err, ErrInvalidRule)
+	assert.Contains(t, err.Error(), "budget_id")
+}
+
+// TestValidateForPersistence_PassesWhenBothPresent verifies that ValidateForPersistence()
+// accepts a budget_category.* condition that has both CategoryID and BudgetID set.
+func TestValidateForPersistence_PassesWhenBothPresent(t *testing.T) {
+	rule := AutomationRule{
+		UserID:   "user-1",
+		Name:     "fully scoped rule",
+		RuleType: RuleTypeBudgetAlert,
+		TriggerConfig: TriggerConfig{
+			Type:  TriggerTypeEvent,
+			Event: "budget_updated",
+		},
+		Conditions: []AutomationRuleCondition{
+			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1", BudgetID: "budget-1"},
+		},
+		ConditionLogic: "AND",
+		Actions:        json.RawMessage(`{"notification_channels":["email"],"threshold_type":"percentage","threshold_value":80}`),
+	}
+	err := rule.ValidateForPersistence()
+	assert.NoError(t, err, "ValidateForPersistence() must accept a condition with both CategoryID and BudgetID")
+}
+
+// =============================================================================
+// BoundBudgetID Tests (A-CR2)
+// =============================================================================
+
+// TestBoundBudgetID_SingleBudget verifies that BoundBudgetID returns the budget ID
+// from the first budget_category.* condition that has a BudgetID set.
+func TestBoundBudgetID_SingleBudget(t *testing.T) {
+	rule := AutomationRule{
+		Conditions: []AutomationRuleCondition{
+			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1", BudgetID: "budget-X"},
+			{Field: "budget.percent_used", Operator: ConditionOperatorGte, Value: 50},
+		},
+	}
+	id, bound := rule.BoundBudgetID()
+	assert.True(t, bound, "BoundBudgetID should return bound=true when a budget_category.* condition has a BudgetID")
+	assert.Equal(t, "budget-X", id)
+}
+
+// TestBoundBudgetID_None verifies that BoundBudgetID returns ("", false) when no
+// condition has a budget_category.* field with a BudgetID.
+func TestBoundBudgetID_None(t *testing.T) {
+	rule := AutomationRule{
+		Conditions: []AutomationRuleCondition{
+			{Field: "budget.percent_used", Operator: ConditionOperatorGte, Value: 50},
+		},
+	}
+	id, bound := rule.BoundBudgetID()
+	assert.False(t, bound, "BoundBudgetID should return bound=false when no budget_category.* condition has a BudgetID")
+	assert.Equal(t, "", id)
+}
+
+// TestBoundBudgetID_IgnoresNonCategoryConditions verifies that BoundBudgetID ignores
+// BudgetID set on non-budget_category.* conditions (only category-scoped fields count).
+func TestBoundBudgetID_IgnoresNonCategoryConditions(t *testing.T) {
+	rule := AutomationRule{
+		Conditions: []AutomationRuleCondition{
+			// budget.* condition with BudgetID set — should be ignored
+			{Field: "budget.percent_used", Operator: ConditionOperatorGte, Value: 50, BudgetID: "budget-X"},
+			// budget_category.* condition WITHOUT BudgetID
+			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1"},
+		},
+	}
+	id, bound := rule.BoundBudgetID()
+	assert.False(t, bound, "BoundBudgetID should only count budget_category.* fields; budget.* BudgetID must be ignored")
+	assert.Equal(t, "", id)
+}
+
+// =============================================================================
+// ValidateForPersistence Multi-Budget Tests (A-CR2)
+// =============================================================================
+
+// TestValidateForPersistence_RejectsMultipleBudgets verifies that ValidateForPersistence()
+// rejects a rule whose budget_category.* conditions bind more than one distinct budget.
+func TestValidateForPersistence_RejectsMultipleBudgets(t *testing.T) {
+	rule := AutomationRule{
+		UserID:   "user-1",
+		Name:     "multi-budget rule",
+		RuleType: RuleTypeBudgetAlert,
+		TriggerConfig: TriggerConfig{
+			Type:  TriggerTypeEvent,
+			Event: "budget_updated",
+		},
+		Conditions: []AutomationRuleCondition{
+			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1", BudgetID: "budget-X"},
+			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 60, CategoryID: "cat-2", BudgetID: "budget-Y"},
+		},
+		ConditionLogic: "AND",
+		Actions:        json.RawMessage(`{"notification_channels":["email"],"threshold_type":"percentage","threshold_value":80}`),
+	}
+	err := rule.ValidateForPersistence()
+	require.Error(t, err, "ValidateForPersistence() must reject a rule binding more than one budget")
+	assert.ErrorIs(t, err, ErrInvalidRule)
 }

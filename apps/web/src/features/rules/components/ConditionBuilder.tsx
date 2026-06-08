@@ -16,7 +16,7 @@ import {
   type ConditionFieldOption,
 } from '../constants'
 import type { RuleCondition, ConditionLogic, ConditionOperator } from '../types'
-import type { BudgetCategory } from '../../budgets/types'
+import type { Budget } from '../../budgets/types'
 import { formatBudgetCategoryLabel } from '../../budgets/types'
 
 export interface ConditionBuilderProps {
@@ -30,8 +30,8 @@ export interface ConditionBuilderProps {
   onLogicChange: (logic: ConditionLogic) => void
   /** The trigger event name — used to filter which fields are available */
   triggerEvent?: string
-  /** Budget categories available for budget_category.* condition fields */
-  categories?: BudgetCategory[]
+  /** Budgets available for budget→category scoping on budget_category.* condition fields */
+  budgets?: Budget[]
   /** Disable all controls */
   disabled?: boolean
   /** Additional CSS class */
@@ -64,7 +64,7 @@ interface ConditionRowProps {
   condition: RuleCondition
   index: number
   availableFields: ConditionFieldOption[]
-  categories?: BudgetCategory[]
+  budgets?: Budget[]
   onChange: (index: number, condition: RuleCondition) => void
   onRemove: (index: number) => void
   disabled?: boolean
@@ -72,10 +72,16 @@ interface ConditionRowProps {
 
 const formControlClass = 'rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
 
-function ConditionRow({ condition, index, availableFields, categories, onChange, onRemove, disabled }: ConditionRowProps) {
+function ConditionRow({ condition, index, availableFields, budgets, onChange, onRemove, disabled }: ConditionRowProps) {
   const operators = getOperatorsForField(condition.field, availableFields)
   const valueType = getValueTypeForField(condition.field, availableFields)
   const isCategoryField = condition.field.startsWith('budget_category.')
+
+  // Derive budget/category scoping
+  const selectedBudget = budgets?.find((b) => b.id === condition.budget_id) ?? null
+  const scopedCategories = selectedBudget?.categories ?? []
+  const budgetMissing = !!condition.budget_id && !budgets?.some((b) => b.id === condition.budget_id)
+  const categoryMissing = !!condition.category_id && !scopedCategories.some((c) => c.id === condition.category_id)
 
   const handleFieldChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -88,10 +94,11 @@ function ConditionRow({ condition, index, availableFields, categories, onChange,
         field: newField,
         operator: newOperators[0],
         value: newValueType === 'number' ? 0 : '',
+        budget_id: isCat ? condition.budget_id : undefined,
         category_id: isCat ? condition.category_id : undefined,
       })
     },
-    [index, availableFields, condition.category_id, onChange]
+    [index, availableFields, condition.budget_id, condition.category_id, onChange]
   )
 
   const handleOperatorChange = useCallback(
@@ -115,6 +122,17 @@ function ConditionRow({ condition, index, availableFields, categories, onChange,
     [index, condition, valueType, onChange]
   )
 
+  const handleBudgetChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      onChange(index, {
+        ...condition,
+        budget_id: e.target.value || undefined,
+        category_id: undefined,
+      })
+    },
+    [index, condition, onChange]
+  )
+
   const handleCategoryChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
       onChange(index, {
@@ -126,15 +144,12 @@ function ConditionRow({ condition, index, availableFields, categories, onChange,
   )
 
   // Group fields by category for optgroup
-  const groupedFields = availableFields.reduce(
+  const groupedFields = availableFields.reduce<Record<string, ConditionFieldOption[]>>(
     (acc, field) => {
-      if (!acc[field.category]) {
-        acc[field.category] = []
-      }
-      acc[field.category].push(field)
+      (acc[field.category] ??= []).push(field)
       return acc
     },
-    {} as Record<string, ConditionFieldOption[]>
+    {}
   )
 
   return (
@@ -213,8 +228,32 @@ function ConditionRow({ condition, index, availableFields, categories, onChange,
         </button>
       </div>
 
-      {/* Category picker — only shown for budget_category.* fields */}
+      {/* Budget picker — only shown for budget_category.* fields */}
       {isCategoryField && (
+        <div className="flex flex-col gap-1">
+          <label htmlFor={`condition-budget-${index}`} className="text-xs font-medium text-muted-foreground">
+            Budget
+          </label>
+          <select
+            id={`condition-budget-${index}`}
+            value={condition.budget_id ?? ''}
+            onChange={handleBudgetChange}
+            disabled={disabled}
+            className={formControlClass}
+          >
+            <option value="" disabled>Select a budget…</option>
+            {budgetMissing && (
+              <option value={condition.budget_id} disabled>(deleted — re-select)</option>
+            )}
+            {(budgets ?? []).map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* Category picker — only shown for budget_category.* fields with a budget selected */}
+      {isCategoryField && condition.budget_id && (
         <div className="flex flex-col gap-1">
           <label htmlFor={`condition-category-${index}`} className="text-xs font-medium text-muted-foreground">
             Category
@@ -227,7 +266,10 @@ function ConditionRow({ condition, index, availableFields, categories, onChange,
             className={formControlClass}
           >
             <option value="" disabled>Select a category</option>
-            {(categories ?? []).map((category) => (
+            {categoryMissing && (
+              <option value={condition.category_id} disabled>(deleted — re-select)</option>
+            )}
+            {scopedCategories.map((category) => (
               <option key={category.id} value={category.id}>
                 {formatBudgetCategoryLabel(category)}
               </option>
@@ -265,7 +307,7 @@ export function ConditionBuilder({
   onConditionsChange,
   onLogicChange,
   triggerEvent,
-  categories,
+  budgets,
   disabled = false,
   className = '',
 }: ConditionBuilderProps) {
@@ -280,7 +322,7 @@ export function ConditionBuilder({
     const validFields = new Set(availableFields.map((f) => f.value))
     const updated = conditions.map((c) => {
       if (!validFields.has(c.field)) {
-        return { ...c, field: availableFields[0]?.value ?? c.field, category_id: undefined }
+        return { ...c, field: availableFields[0]?.value ?? c.field, budget_id: undefined, category_id: undefined }
       }
       return c
     })
@@ -372,7 +414,7 @@ export function ConditionBuilder({
               condition={condition}
               index={index}
               availableFields={availableFields}
-              categories={categories}
+              budgets={budgets}
               onChange={handleChange}
               onRemove={handleRemove}
               disabled={disabled}
