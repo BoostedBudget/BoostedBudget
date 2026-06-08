@@ -307,14 +307,27 @@ describe('issue #972: savings transfer automation operations', () => {
     expect(entry?.destructive).toBe(false)
   })
 
-  it('isAllowed returns true for all three new operations', () => {
+  // GAP CJ: declineTransferSuggestionMatch ships in the manifest but was unasserted — regression guard.
+  it('classifies declineTransferSuggestionMatch as write (idempotent, releases reservation)', () => {
+    const entry = getCapability('declineTransferSuggestionMatch')
+    expect(entry).toBeDefined()
+    expect(entry?.class).toBe('write')
+    expect(entry?.excluded).toBe(false)
+    expect(entry?.confirmationRequired).toBe(true)
+    expect(entry?.idempotent).toBe(true)
+    expect(entry?.destructive).toBe(false)
+  })
+
+  it('isAllowed returns true for all four new operations', () => {
     expect(isAllowed('getSavingsImpactAggregate')).toBe(true)
     expect(isAllowed('getSavingsImpactMe')).toBe(true)
     expect(isAllowed('confirmTransferSuggestionMatch')).toBe(true)
+    expect(isAllowed('declineTransferSuggestionMatch')).toBe(true)
   })
 
-  it('isWrite returns true for confirmTransferSuggestionMatch and false for reads', () => {
+  it('isWrite returns true for write ops and false for reads', () => {
     expect(isWrite('confirmTransferSuggestionMatch')).toBe(true)
+    expect(isWrite('declineTransferSuggestionMatch')).toBe(true)
     expect(isWrite('getSavingsImpactAggregate')).toBe(false)
     expect(isWrite('getSavingsImpactMe')).toBe(false)
   })
