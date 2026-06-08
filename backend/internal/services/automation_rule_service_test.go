@@ -424,7 +424,7 @@ func TestCreateRule_CategoryCondition_AcceptsOwnedCategory(t *testing.T) {
 	ruleRepo.rules = []*domain.AutomationRule{} // ensure Create stores the rule
 	budgetRepo := &MockBudgetRepository{}
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
-		Return(&domain.BudgetCategory{ID: categoryID}, nil)
+		Return(&domain.BudgetCategory{ID: categoryID, BudgetID: "budget-1"}, nil)
 	goalRepo := &MockSavingsGoalRepository{}
 	goalRepo.On("GetByIDForUser", mock.Anything, "goal-1", userID).
 		Return(&domain.SavingsGoal{ID: "goal-1"}, nil)
@@ -677,4 +677,121 @@ func TestCreateRule_CategoryCondition_NoBudgetRepo_SkipsCheck(t *testing.T) {
 	rule, err := svc.CreateRule(ctx, userID, req)
 	require.NoError(t, err, "CreateRule must skip the category check when budgetRepo is not injected")
 	assert.NotNil(t, rule)
+}
+
+// ============================================================================
+// Tests — category-not-in-budget ownership chain (Issue #1271 Item 3, A-CR4)
+// ============================================================================
+
+// TestCreateRule_CategoryNotInSelectedBudget_Returns400 verifies that CreateRule rejects
+// a rule whose condition references a category that belongs to the user but lives in a
+// different budget than the one specified in condition.BudgetID. The category IS owned by
+// the user (GetCategoryByIDAndUser succeeds) but cat.BudgetID != condition.BudgetID → 400.
+func TestCreateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-alice"
+	categoryID := "cat-1"
+
+	ruleRepo := &mockAutomationRulesRepository{}
+	budgetRepo := &MockBudgetRepository{}
+	// Category is owned by the user but lives in "budget-OTHER", not "budget-MINE".
+	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
+		Return(&domain.BudgetCategory{ID: categoryID, BudgetID: "budget-OTHER"}, nil)
+	goalRepo := &MockSavingsGoalRepository{}
+	goalRepo.On("GetByIDForUser", mock.Anything, "goal-1", userID).
+		Return(&domain.SavingsGoal{ID: "goal-1"}, nil)
+	acctRepo := &MockAccountRepository{}
+	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-1", userID).
+		Return(&domain.Account{ID: "acct-1"}, nil)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetBudgetRepo(budgetRepo)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetAccountRepo(acctRepo)
+
+	// Build a request with condition.BudgetID = "budget-MINE" (different from cat's budget).
+	b, _ := json.Marshal(map[string]interface{}{
+		"savings_goal_id": "goal-1",
+		"from_account_id": "acct-1",
+		"amount_type":     "fixed",
+		"amount":          10.0,
+	})
+	req := &domain.CreateAutomationRuleRequest{
+		Name:     "category-not-in-budget rule",
+		RuleType: domain.RuleTypeSavingsGoal,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Conditions: []domain.AutomationRuleCondition{
+			{
+				Field:      "budget_category.percent_used",
+				CategoryID: categoryID,
+				BudgetID:   "budget-MINE",
+				Operator:   domain.ConditionOperatorGt,
+				Value:      "80",
+			},
+		},
+		Actions: b,
+	}
+	_, err := svc.CreateRule(ctx, userID, req)
+	require.Error(t, err, "CreateRule must reject a condition whose category is not in the selected budget")
+	assert.True(t, errors.Is(err, domain.ErrInvalidRule),
+		"category-not-in-budget must be wrapped as domain.ErrInvalidRule (400), got: %v", err)
+}
+
+// TestUpdateRule_CategoryNotInSelectedBudget_Returns400 verifies that UpdateRule applies
+// the same category-not-in-budget check as CreateRule. Issue #1271 Item 3 (A-CR4).
+func TestUpdateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-bob"
+	ruleID := "rule-update-budget-check"
+	categoryID := "cat-1"
+
+	existingRule := &domain.AutomationRule{
+		ID:       ruleID,
+		UserID:   userID,
+		Name:     "existing rule",
+		Enabled:  true,
+		RuleType: domain.RuleTypeSavingsGoal,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Actions:        savingsGoalRuleActions("goal-ok", "acct-ok"),
+		ConditionLogic: "AND",
+	}
+
+	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.AutomationRule{existingRule}}
+	budgetRepo := &MockBudgetRepository{}
+	// Category is owned by the user but lives in "budget-OTHER", not "budget-MINE".
+	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
+		Return(&domain.BudgetCategory{ID: categoryID, BudgetID: "budget-OTHER"}, nil)
+	goalRepo := &MockSavingsGoalRepository{}
+	goalRepo.On("GetByIDForUser", mock.Anything, "goal-ok", userID).
+		Return(&domain.SavingsGoal{ID: "goal-ok"}, nil)
+	acctRepo := &MockAccountRepository{}
+	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-ok", userID).
+		Return(&domain.Account{ID: "acct-ok"}, nil)
+
+	svc := NewAutomationRuleService(ruleRepo)
+	svc.SetBudgetRepo(budgetRepo)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetAccountRepo(acctRepo)
+
+	newConditions := []domain.AutomationRuleCondition{
+		{
+			Field:      "budget_category.percent_used",
+			CategoryID: categoryID,
+			BudgetID:   "budget-MINE",
+			Operator:   domain.ConditionOperatorGt,
+			Value:      "80",
+		},
+	}
+	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateAutomationRuleRequest{
+		Conditions: &newConditions,
+	})
+	require.Error(t, err, "UpdateRule must reject a condition whose category is not in the selected budget")
+	assert.True(t, errors.Is(err, domain.ErrInvalidRule),
+		"category-not-in-budget must be wrapped as domain.ErrInvalidRule (400), got: %v", err)
 }
