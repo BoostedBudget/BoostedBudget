@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -42,6 +43,11 @@ type BudgetRepository interface {
 	// Envelope budgeting rollover operations (Issue #36: Rule Executors)
 	// AdjustCategoryAllocatedAmount adjusts the allocated amount by delta (can be positive or negative)
 	AdjustCategoryAllocatedAmount(ctx context.Context, categoryID string, delta float64) error
+
+	// GetCategoryByIDAndUser retrieves a budget category by its ID, scoped to the given user via
+	// a JOIN to the budgets table. Returns an error if the category does not exist or belongs to a
+	// different user. Used for ownership validation in the automation rule service (Issue #1270).
+	GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error)
 }
 
 // budgetRepository implements BudgetRepository using PostgreSQL.
@@ -848,4 +854,29 @@ func (r *budgetRepository) AdjustCategoryAllocatedAmount(ctx context.Context, ca
 	}
 
 	return nil
+}
+
+// GetCategoryByIDAndUser retrieves a budget category by ID, scoped to the given user.
+// It JOINs budget_categories to budgets to perform ownership validation, since
+// budget_categories has no user_id column.
+// Returns an error if the category does not exist or belongs to a different user.
+// Issue #1270: Category ownership validation for automation rule conditions.
+func (r *budgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error) {
+	query := `
+		SELECT bc.id, bc.budget_id
+		FROM budget_categories bc
+		JOIN budgets b ON b.id = bc.budget_id
+		WHERE bc.id = $1 AND b.user_id = $2
+	`
+
+	var bc domain.BudgetCategory
+	err := r.db.QueryRow(ctx, query, categoryID, userID).Scan(&bc.ID, &bc.BudgetID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("category not found or not owned by user")
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &bc, nil
 }
