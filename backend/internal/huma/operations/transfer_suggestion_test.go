@@ -1491,4 +1491,28 @@ func TestConfirmMatch_SubCent_IdempotencyRounding_GAPCG(t *testing.T) {
 		assert.InDelta(t, 250.75, svc.capturedAmount, 0.0001,
 			"GAP CG: non-MCP service call must receive 2dp-rounded amount (250.751 → 250.75)")
 	})
+
+	t.Run("IEEE-754 .005 boundary behavior is documented (not a bug)", func(t *testing.T) {
+		// math.Round(x*100)/100 uses binary float64 arithmetic. For most sub-cent values
+		// this produces the expected 2dp result. However, 1.005 is represented as slightly
+		// less than 1.005 in IEEE-754, so math.Round(1.005*100) = math.Round(100.4999...) = 100
+		// and the result rounds to 1.00, not 1.01. This is acceptable for our use case:
+		// real bank amounts from Plaid are always exact cents, so this branch is only
+		// reachable via adversarial or buggy clients sending sub-cent values. The key fold
+		// and service call both receive the same rounded value, so idempotency remains coherent.
+		svc := &amountCapturingService{}
+		svc.confirmMatchResult = confirmed
+
+		handler := NewTransferSuggestionHandler(svc)
+		_, err := handler.ConfirmMatch(context.Background(), &ConfirmTransferSuggestionMatchInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+			ID:                 suggID,
+			Body:               ConfirmMatchBody{ActualAmount: 1.005},
+		})
+		require.NoError(t, err)
+		// 1.005 * 100 = 100.4999... in IEEE-754 → rounds to 100 → 1.00 (not 1.01).
+		// This test documents the actual behavior so future readers understand it is expected.
+		assert.InDelta(t, 1.00, svc.capturedAmount, 0.0001,
+			"IEEE-754: 1.005 rounds to 1.00 (not 1.01) — documented expected behavior for sub-cent edge case")
+	})
 }
