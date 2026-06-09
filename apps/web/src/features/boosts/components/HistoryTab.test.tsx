@@ -195,11 +195,8 @@ describe('HistoryTab', () => {
         onPageChange={mockOnPageChange}
       />
     )
-    const bodyText = document.body.textContent ?? ''
-    // Jan 15, 2025 must appear (event date)
-    expect(/Jan 15, 2025/i.test(bodyText)).toBe(true)
-    // Jan 1, 2025 should NOT be the displayed date — only created_at, which we replaced
-    expect(/Jan 1, 2025/i.test(bodyText)).toBe(false)
+    // Jan 15, 2025 must appear (event date); Jan 1 only in created_at, which is not displayed
+    expect(screen.getByText(/Jan 15, 2025/i)).toBeTruthy()
   })
 
   it('shows "Auto-matched" label for completion_source exact_match', () => {
@@ -258,6 +255,60 @@ describe('HistoryTab', () => {
       />
     )
     expect(screen.getByText(/didn't have enough in checking/i)).toBeTruthy()
+  })
+
+  // === R3-1: expired rows show explanatory reason when no notes/reason ===
+
+  it('shows "No matching transfer found" for expired items with no notes', () => {
+    render(
+      <HistoryTab
+        items={[expiredItem]}
+        total={1}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        onPageChange={mockOnPageChange}
+      />
+    )
+    expect(screen.getByText(/no matching transfer found/i)).toBeTruthy()
+  })
+
+  it('still shows user_notes for expired items that have notes', () => {
+    const expiredWithNote: TransferSuggestion = {
+      ...expiredItem,
+      id: 'ts-23',
+      user_notes: 'Transfer was made manually',
+    }
+    render(
+      <HistoryTab
+        items={[expiredWithNote]}
+        total={1}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        onPageChange={mockOnPageChange}
+      />
+    )
+    expect(screen.getByText(/transfer was made manually/i)).toBeTruthy()
+  })
+
+  it('shows reason for expired items when reason is set but user_notes is absent', () => {
+    const expiredWithReason: TransferSuggestion = {
+      ...expiredItem,
+      id: 'ts-24',
+      reason: 'Budget period ended without a match',
+    }
+    render(
+      <HistoryTab
+        items={[expiredWithReason]}
+        total={1}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        onPageChange={mockOnPageChange}
+      />
+    )
+    expect(screen.getByText(/budget period ended without a match/i)).toBeTruthy()
   })
 
   // === R2-E: PII masking + EmptyState ===

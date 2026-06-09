@@ -1537,6 +1537,17 @@
       "excluded": false
     },
     {
+      "operationId": "cancelTransferSuggestion",
+      "method": "POST",
+      "path": "/api/v1/transfer-suggestions/{id}/cancel",
+      "summary": "Cancel a transfer suggestion",
+      "tags": [
+        "TransferSuggestions"
+      ],
+      "manifestClass": "write",
+      "excluded": false
+    },
+    {
       "operationId": "confirmTransferSuggestionMatch",
       "method": "POST",
       "path": "/api/v1/transfer-suggestions/{id}/confirm-match",

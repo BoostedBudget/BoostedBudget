@@ -429,6 +429,10 @@ export function createApiClient(mutator: FetchMutator) {
       acceptTransferSuggestion(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: `/api/v1/transfer-suggestions/${id}/accept`, method: 'PATCH', data, signal })
       },
+      /** POST /api/v1/transfer-suggestions/{id}/cancel */
+      cancelTransferSuggestion(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/transfer-suggestions/${id}/cancel`, method: 'POST', data, signal })
+      },
       /** POST /api/v1/transfer-suggestions/{id}/confirm-match */
       confirmTransferSuggestionMatch(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: `/api/v1/transfer-suggestions/${id}/confirm-match`, method: 'POST', data, signal })

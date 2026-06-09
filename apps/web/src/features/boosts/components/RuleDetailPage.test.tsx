@@ -53,6 +53,22 @@ describe('RuleDetailPage', () => {
     expect(screen.getByText('Save Extra Cash')).toBeTruthy()
   })
 
+  it('masks rule name with data-ph-mask in the heading (PII — rule names can contain financial context)', () => {
+    const { container } = renderDetail()
+    const maskedSpan = container.querySelector('h1 [data-ph-mask]')
+    expect(maskedSpan).toBeTruthy()
+    expect(maskedSpan?.textContent).toBe('Save Extra Cash')
+  })
+
+  it('masks rule description with data-ph-mask (PII — descriptions can contain financial context)', () => {
+    const { container } = renderDetail()
+    const allMasked = container.querySelectorAll('[data-ph-mask]')
+    const descMasked = Array.from(allMasked).some(
+      (el) => el.textContent === 'Transfer surplus to high-yield savings'
+    )
+    expect(descMasked).toBe(true)
+  })
+
   it('renders a back link to the rules tab', () => {
     renderDetail()
     const bodyText = document.body.textContent ?? ''

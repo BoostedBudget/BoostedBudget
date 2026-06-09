@@ -152,9 +152,9 @@ export function RuleTable({
       minSize: 160,
       render: (row) => (
         <div className="flex flex-col gap-1">
-          <span className="font-medium text-foreground">{row.name}</span>
+          <span className="font-medium text-foreground" data-ph-mask>{row.name}</span>
           {row.description && (
-            <span className="text-xs text-muted-foreground">{row.description}</span>
+            <span className="text-xs text-muted-foreground" data-ph-mask>{row.description}</span>
           )}
         </div>
       ),

@@ -58,10 +58,10 @@ export function RuleDetailPage() {
       </div>
 
       <div>
-        <h1 className="text-2xl font-semibold text-foreground">{rule.name}</h1>
+        <h1 className="text-2xl font-semibold text-foreground"><span data-ph-mask>{rule.name}</span></h1>
         <p className="mt-1 text-sm text-muted-foreground">{typeLabel}</p>
         {rule.description && (
-          <p className="mt-2 text-sm text-muted-foreground">{rule.description}</p>
+          <p className="mt-2 text-sm text-muted-foreground"><span data-ph-mask>{rule.description}</span></p>
         )}
       </div>
 
