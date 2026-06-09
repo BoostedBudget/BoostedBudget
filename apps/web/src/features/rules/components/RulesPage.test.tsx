@@ -710,6 +710,69 @@ describe('RulesPage', () => {
         )
       })
     })
+
+    // R10-a (#1267): segment must remain reachable in the filtered-empty state.
+    // Previously, the rules.length===0 early-return fired BEFORE the segment JSX
+    // was rendered, so users with only budget_alert/category_rollover rules could
+    // not click "All rules" to reach them from the Boosts tab.
+    it('renders segment when showTypeSegment is true and the filtered query returns no rules', async () => {
+      mockUseGetAutomationRules.mockReturnValue({
+        data: [],
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAutomationRules,
+      })
+
+      renderWithProviders(<RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+
+      await waitFor(() => {
+        expect(screen.getByRole('group', { name: /rule type filter/i })).toBeInTheDocument()
+      })
+      expect(screen.getByRole('button', { name: /transfer & savings/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /all rules/i })).toBeInTheDocument()
+    })
+
+    it('clicking All rules in filtered-empty state fires boosts_rules_filter_changed and clears rule_type', async () => {
+      mockUseGetAutomationRules.mockReturnValue({
+        data: [],
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAutomationRules,
+      })
+
+      renderWithProviders(<RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /all rules/i })).toBeInTheDocument())
+      mockUseGetAutomationRules.mockClear()
+      mockTrackEvent.mockClear()
+      fireEvent.click(screen.getByRole('button', { name: /all rules/i }))
+
+      await waitFor(() => {
+        const lastCallParams = mockUseGetAutomationRules.mock.calls.at(-1)?.[0]
+        expect(lastCallParams).toBeUndefined()
+        expect(mockTrackEvent).toHaveBeenCalledWith(
+          'boosts_rules_filter_changed',
+          expect.objectContaining({ filter: 'all' })
+        )
+      })
+    })
+
+    it('does NOT render segment in filtered-empty state when showTypeSegment is false', async () => {
+      mockUseGetAutomationRules.mockReturnValue({
+        data: [],
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAutomationRules,
+      })
+
+      renderWithProviders(<RulesPage />)
+
+      await waitFor(() => {
+        // The genuine empty state (no rules at all, no segment) renders
+        expect(screen.getByText(/no automation rules yet/i)).toBeInTheDocument()
+      })
+      expect(screen.queryByRole('group', { name: /rule type filter/i })).not.toBeInTheDocument()
+    })
   })
 
   // R9-c (#1267): Optimistic toggle cache-key regression test.
