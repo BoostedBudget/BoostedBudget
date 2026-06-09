@@ -89,6 +89,25 @@ describe('formatRuleConditionsSummary', () => {
     expect(result).toContain('When')
     expect(result).toContain('≥')
   })
+
+  // R4-4: label-map regression guard — every CONDITION_FIELD_OPTIONS entry must produce its human label
+  const fieldLabelCases: Array<[string, string]> = [
+    ['budget.percent_used', 'Budget % Used'],
+    ['budget.total_spent', 'Budget Total Spent'],
+    ['budget.remaining_amount', 'Budget Remaining'],
+    ['budget_category.percent_used', 'Category % Used'],
+    ['budget_category.spent_amount', 'Category Spent'],
+    ['budget_category.remaining_amount', 'Category Remaining'],
+    ['budget_category.allocated', 'Category Allocated'],
+  ]
+
+  fieldLabelCases.forEach(([field, expectedLabel]) => {
+    it(`renders human label "${expectedLabel}" for field "${field}"`, () => {
+      const conds: AutomationRuleCondition[] = [{ field, operator: 'gte', value: 10 }]
+      const result = formatRuleConditionsSummary(conds)
+      expect(result).toContain(expectedLabel)
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -13,7 +13,9 @@ import { HistoryTab } from './HistoryTab'
 
 const mockOnPageChange = mock((_offset: number) => {})
 
-// created_at is old (Jan 1); completed_at is recent (Jan 15) — event date must show Jan 15
+// created_at is old (Jan 1); completed_at is Jan 15; updated_at is Jan 20 (later than completed_at).
+// The event-date column must show Jan 15 (completed_at), NOT Jan 20 (updated_at).
+// The distinction between completed_at and updated_at is intentional — regression guard for R4-5.
 const completedItem: TransferSuggestion = {
   id: 'ts-20',
   status: 'completed',
@@ -22,7 +24,7 @@ const completedItem: TransferSuggestion = {
   source: 'rule',
   user_id: 'u1',
   created_at: '2025-01-01T10:00:00Z',
-  updated_at: '2025-01-15T10:00:00Z',
+  updated_at: '2025-01-20T10:00:00Z',
   completed_at: '2025-01-15T10:00:00Z',
 }
 
@@ -49,6 +51,7 @@ const expiredItem: TransferSuggestion = {
 }
 
 // Auto-matched completed item (exact_match + matched_transaction_at)
+// updated_at (Feb 20) intentionally differs from completed_at (Feb 15) — R4-5 regression guard
 const autoMatchedItem: TransferSuggestion = {
   id: 'ts-30',
   status: 'completed',
@@ -57,7 +60,7 @@ const autoMatchedItem: TransferSuggestion = {
   source: 'rule',
   user_id: 'u1',
   created_at: '2025-02-01T08:00:00Z',
-  updated_at: '2025-02-15T09:00:00Z',
+  updated_at: '2025-02-20T09:00:00Z',
   completed_at: '2025-02-15T09:00:00Z',
   completion_source: 'exact_match',
   matched_transaction_at: '2025-02-15T09:00:00Z',

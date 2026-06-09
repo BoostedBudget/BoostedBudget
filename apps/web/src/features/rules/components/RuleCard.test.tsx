@@ -359,6 +359,24 @@ describe('RuleCard', () => {
       const masked = container.querySelectorAll('[data-ph-mask]')
       expect(masked.length).toBeGreaterThanOrEqual(2)
     })
+
+    it('masks condition summary with data-ph-mask (PII — condition values can be currency amounts)', () => {
+      // R4-1: budget.total_spent is a currency field — condition summary "When Budget Total Spent ≥ 500"
+      // must be masked just like the action summary on the line below it.
+      const ruleWithAmountCondition = {
+        ...mockRule,
+        conditions: [{ field: 'budget.total_spent', operator: 'gte', value: 500 }],
+      }
+      const { container } = render(<RuleCard rule={ruleWithAmountCondition} />)
+      // At least: rule.name mask + condition summary mask (+ optional action mask)
+      const masked = container.querySelectorAll('[data-ph-mask]')
+      expect(masked.length).toBeGreaterThanOrEqual(2)
+      // Specifically, an element with data-ph-mask must contain "Budget Total Spent"
+      const conditionMasked = Array.from(masked).some((el) =>
+        el.textContent?.includes('Budget Total Spent')
+      )
+      expect(conditionMasked).toBe(true)
+    })
   })
 
   describe('Read-only guarding (W6)', () => {

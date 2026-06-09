@@ -322,6 +322,31 @@ describe('RulesPage', () => {
     })
   })
 
+  it('masks rule name with data-ph-mask in delete-confirmation dialog (PII — session replay)', async () => {
+    // R4-3: the rule name is interpolated into the dialog description. Session replay records
+    // unmasked DOM text; the name must be wrapped in a data-ph-mask span.
+    renderWithProviders(<RulesPage />)
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /delete/i }).length).toBeGreaterThan(0)
+    })
+
+    const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
+    fireEvent.click(deleteButtons[0])
+
+    await waitFor(() => {
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    })
+
+    // The rule name ("Daily Budget Check") must appear inside a data-ph-mask element
+    const dialog = screen.getByRole('alertdialog')
+    const maskedEls = dialog.querySelectorAll('[data-ph-mask]')
+    const nameIsMasked = Array.from(maskedEls).some((el) =>
+      el.textContent?.includes('Daily Budget Check')
+    )
+    expect(nameIsMasked).toBe(true)
+  })
+
   it('should call delete mutation when confirmed', async () => {
     renderWithProviders(<RulesPage />)
 

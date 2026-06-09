@@ -289,7 +289,9 @@ export function RulesPage() {
         onOpenChange={(open) => !open && handleDeleteCancel()}
         onConfirm={handleDeleteConfirm}
         title="Delete Rule"
-        description={deleteConfirm ? `Are you sure you want to delete "${deleteConfirm.name}"? This action cannot be undone.` : ''}
+        description={deleteConfirm ? (
+          <>Are you sure you want to delete &ldquo;<span data-ph-mask>{deleteConfirm.name}</span>&rdquo;? This action cannot be undone.</>
+        ) : ''}
         variant="destructive"
         loading={deleteMutation.isPending}
       />
