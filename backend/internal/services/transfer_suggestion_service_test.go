@@ -1375,3 +1375,58 @@ func TestTransferSuggestionService_CancelAccepted_PendingAlsoTransitions(t *test
 	assert.Equal(t, domain.SuggestionStatusRejected, result.Status)
 	suggestionRepo.AssertExpectations(t)
 }
+
+func TestTransferSuggestionService_CancelAccepted_FiresAnalytics(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+	analytics := new(mockGDPRAnalytics)
+
+	svc := NewTransferSuggestionService(suggestionRepo)
+	svc.SetGDPRAnalytics(analytics)
+
+	userID := "user-abc"
+	suggestionID := "sugg-abc"
+
+	suggestion := &domain.TransferSuggestion{
+		ID:     suggestionID,
+		UserID: userID,
+		Status: domain.SuggestionStatusAccepted,
+	}
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("CancelAcceptedSuggestion", ctx, suggestionID, (*string)(nil)).Return(nil)
+	analytics.On("CaptureIfConsented", mock.Anything, userID, phclient.TransferSuggestionCanceled, mock.AnythingOfType("map[string]interface {}")).Return()
+
+	result, err := svc.CancelAcceptedSuggestion(ctx, userID, suggestionID, nil)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	analytics.AssertExpectations(t)
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_CancelAccepted_NoAnalyticsWhenNil(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+
+	// No analytics set — should not panic.
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-abc"
+	suggestionID := "sugg-abc"
+
+	suggestion := &domain.TransferSuggestion{
+		ID:     suggestionID,
+		UserID: userID,
+		Status: domain.SuggestionStatusAccepted,
+	}
+
+	suggestionRepo.On("GetByID", ctx, suggestionID).Return(suggestion, nil)
+	suggestionRepo.On("CancelAcceptedSuggestion", ctx, suggestionID, (*string)(nil)).Return(nil)
+
+	result, err := svc.CancelAcceptedSuggestion(ctx, userID, suggestionID, nil)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	suggestionRepo.AssertExpectations(t)
+}

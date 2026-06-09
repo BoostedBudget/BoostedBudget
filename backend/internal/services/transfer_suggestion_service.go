@@ -317,5 +317,14 @@ func (s *transferSuggestionService) CancelAcceptedSuggestion(
 		suggestion.UserNotes = notes
 	}
 
+	if s.gdprAnalytics != nil {
+		s.gdprAnalytics.CaptureIfConsented(ctx, userID, phclient.TransferSuggestionCanceled, map[string]interface{}{
+			"amount":        suggestion.Amount,
+			"currency_code": suggestion.CurrencyCode,
+			"source":        string(suggestion.Source),
+			"rule_id":       suggestion.RuleID,
+		})
+	}
+
 	return suggestion, nil
 }
