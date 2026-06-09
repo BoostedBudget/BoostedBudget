@@ -210,17 +210,52 @@ export function RulesPage({ showTypeSegment = false, ruleTypeFilter }: RulesPage
     )
   }
 
+  // Rule-type segment: shown on Boosts → Rules tab (#1267 R8-1c).
+  // Defined before the empty-state early-return so it is always reachable, even when
+  // the filtered query returns zero results (R10-a: prevents orphaning non-transfer rules).
+  const ruleTypeSegment = showTypeSegment ? (
+    <div
+      role="group"
+      aria-label="Rule type filter"
+      className="mb-4 flex gap-2"
+    >
+      <Button
+        variant={activeRuleTypeFilter ? 'default' : 'outline'}
+        size="sm"
+        onClick={() => handleSegmentChange(ruleTypeFilter)}
+      >
+        Transfer &amp; Savings
+      </Button>
+      <Button
+        variant={!activeRuleTypeFilter ? 'default' : 'outline'}
+        size="sm"
+        onClick={() => handleSegmentChange(undefined)}
+      >
+        All rules
+      </Button>
+    </div>
+  ) : null
+
   // Empty state (guarded: during initial load, show skeleton in table instead)
   if (!isLoading && rules.length === 0) {
     return (
       <div className="mx-auto max-w-[1200px] p-6">
+        {ruleTypeSegment}
         <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <h1 className="text-2xl font-semibold text-foreground">Automation Rules</h1>
         </header>
         <EmptyState
           icon={<Zap />}
-          title="No automation rules yet"
-          description="Create your first automation rule to automatically manage your budgets, transfers, and savings."
+          title={
+            activeRuleTypeFilter
+              ? 'No transfer or savings rules'
+              : 'No automation rules yet'
+          }
+          description={
+            activeRuleTypeFilter
+              ? 'You have no transfer suggestion or savings goal rules. Switch to "All rules" to see your other rule types, or create a new one.'
+              : 'Create your first automation rule to automatically manage your budgets, transfers, and savings.'
+          }
           action={
             <ReadOnlyGuard>
               <Button onClick={handleCreateRule}>
@@ -236,29 +271,7 @@ export function RulesPage({ showTypeSegment = false, ruleTypeFilter }: RulesPage
 
   return (
     <div className="mx-auto max-w-[1200px] p-6">
-      {/* Rule-type segment: shown on Boosts → Rules tab to scope default to transfer-generating types (#1267 R8-1c) */}
-      {showTypeSegment && (
-        <div
-          role="group"
-          aria-label="Rule type filter"
-          className="mb-4 flex gap-2"
-        >
-          <Button
-            variant={activeRuleTypeFilter ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => handleSegmentChange(ruleTypeFilter)}
-          >
-            Transfer &amp; Savings
-          </Button>
-          <Button
-            variant={!activeRuleTypeFilter ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => handleSegmentChange(undefined)}
-          >
-            All rules
-          </Button>
-        </div>
-      )}
+      {ruleTypeSegment}
 
       <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
