@@ -85,6 +85,13 @@ type TransferSuggestionRepository interface {
 	// Only reservations are cleared; suggestion status is not changed (accepted stays accepted).
 	// Returns the number of rows updated.
 	ClearStaleReservations(ctx context.Context) (int64, error)
+
+	// GetByUserIDStatuses retrieves suggestions for a user filtered by a set of statuses,
+	// ordered most-recent-first, with pagination. Returns (items, totalCount, error).
+	// totalCount reflects all matching rows across all pages (for UI pagination).
+	// A nil or empty statuses slice falls back to pending-only semantics (backward compat
+	// with GetPendingByUserID).
+	GetByUserIDStatuses(ctx context.Context, userID string, statuses []domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, int, error)
 }
 
 // transferSuggestionRepository implements TransferSuggestionRepository using PostgreSQL.
@@ -555,6 +562,94 @@ func (r *transferSuggestionRepository) GetActiveByUserID(ctx context.Context, us
 	`
 
 	return r.querySuggestions(ctx, query, userID)
+}
+
+// GetByUserIDStatuses retrieves suggestions for a user filtered by a set of statuses,
+// ordered most-recent-first, with pagination. Returns (items, totalCount, error).
+// totalCount reflects all matching rows across all pages (for UI pagination), using
+// COUNT(*) OVER() so only a single DB round-trip is needed.
+// A nil or empty statuses slice falls back to pending-only (backward compat).
+func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, userID string, statuses []domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, int, error) {
+	const selectClause = `
+		SELECT id, user_id, rule_id, rule_execution_id,
+			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
+			amount, currency_code,
+			reason, source, status, expires_at,
+			user_action_at, user_notes, created_at, updated_at,
+			completed_at, matched_transaction_id, actual_amount, completion_source,
+			COUNT(*) OVER() AS total_count
+		FROM transfer_suggestions
+	`
+
+	var query string
+	var args []interface{}
+
+	if len(statuses) == 0 {
+		// Backward-compat: no status filter → pending only (no limit/offset applied,
+		// matching GetPendingByUserID semantics used by the notification center).
+		query = selectClause + `
+			WHERE user_id = $1 AND status = 'pending'
+			ORDER BY created_at DESC
+		`
+		args = []interface{}{userID}
+	} else {
+		// Convert []SuggestionStatus to []string for pgx array binding.
+		statusStrs := make([]string, len(statuses))
+		for i, s := range statuses {
+			statusStrs[i] = string(s)
+		}
+		query = selectClause + `
+			WHERE user_id = $1 AND status = ANY($2)
+			ORDER BY created_at DESC
+			LIMIT $3 OFFSET $4
+		`
+		args = []interface{}{userID, statusStrs, limit, offset}
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var suggestions []*domain.TransferSuggestion
+	var total int
+	for rows.Next() {
+		s := &domain.TransferSuggestion{}
+		if err := rows.Scan(
+			&s.ID,
+			&s.UserID,
+			&s.RuleID,
+			&s.RuleExecutionID,
+			&s.FromAccountID,
+			&s.ToAccountID,
+			&s.FromUserAccountID,
+			&s.ToUserAccountID,
+			&s.Amount,
+			&s.CurrencyCode,
+			&s.Reason,
+			&s.Source,
+			&s.Status,
+			&s.ExpiresAt,
+			&s.UserActionAt,
+			&s.UserNotes,
+			&s.CreatedAt,
+			&s.UpdatedAt,
+			&s.CompletedAt,
+			&s.MatchedTransactionID,
+			&s.ActualAmount,
+			&s.CompletionSource,
+			&total,
+		); err != nil {
+			return nil, 0, err
+		}
+		suggestions = append(suggestions, s)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	return suggestions, total, nil
 }
 
 // scanSuggestion scans a single suggestion from a row.

@@ -91,7 +91,7 @@ export function useGettingStarted(): UseGettingStartedReturn {
       label: 'Create an automation rule',
       description: 'Set up rules to automate budget alerts and financial actions',
       complete: (automationRulesQuery.data?.length ?? 0) > 0,
-      href: '/rules',
+      href: '/boosts',
     },
     {
       id: 'set-up-auto-categorization',

@@ -69,7 +69,7 @@ const mockUser = {
 
 function renderWithProviders(
   ui: React.ReactElement,
-  { route = '/rules/new' } = {}
+  { route = '/boosts/new' } = {}
 ) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -81,8 +81,8 @@ function renderWithProviders(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[route]}>
         <Routes>
-          <Route path="/rules/new" element={ui} />
-          <Route path="/rules/:id/edit" element={ui} />
+          <Route path="/boosts/new" element={ui} />
+          <Route path="/boosts/:id/edit" element={ui} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>
@@ -344,7 +344,7 @@ describe('RuleBuilder', () => {
       fireEvent.click(saveButton)
 
       await waitFor(() => {
-        expect(mockNavigate).toHaveBeenCalledWith('/rules')
+        expect(mockNavigate).toHaveBeenCalledWith('/boosts')
       })
     })
   })
@@ -360,7 +360,7 @@ describe('RuleBuilder', () => {
       const cancelButton = screen.getByRole('button', { name: /cancel/i })
       fireEvent.click(cancelButton)
 
-      expect(mockNavigate).toHaveBeenCalledWith('/rules')
+      expect(mockNavigate).toHaveBeenCalledWith('/boosts')
     })
   })
 

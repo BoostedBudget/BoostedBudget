@@ -65,8 +65,8 @@ const BudgetDetailPage = lazy(() =>
 const AutoCategorizationPageWrapper = lazy(() =>
   import('./features/auto-categorization/components/AutoCategorizationPageWrapper').then(m => ({ default: m.AutoCategorizationPageWrapper }))
 )
-const RulesPage = lazy(() =>
-  import('./features/rules').then(m => ({ default: m.RulesPage }))
+const BoostsPage = lazy(() =>
+  import('./features/boosts').then(m => ({ default: m.BoostsPage }))
 )
 const RuleBuilder = lazy(() =>
   import('./features/rules').then(m => ({ default: m.RuleBuilder }))
@@ -358,19 +358,19 @@ function App() {
               }
             />
             <Route
-              path="/rules"
+              path="/boosts"
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
                     <Suspense fallback={<PageSkeleton />}>
-                      <RulesPage />
+                      <BoostsPage />
                     </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
             />
             <Route
-              path="/rules/new"
+              path="/boosts/new"
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -382,7 +382,7 @@ function App() {
               }
             />
             <Route
-              path="/rules/:id/edit"
+              path="/boosts/:id/edit"
               element={
                 <ProtectedRoute>
                   <PremiumRoute>

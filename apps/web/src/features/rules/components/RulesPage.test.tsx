@@ -85,7 +85,7 @@ const mockUser = {
   updated_at: '2024-01-01T00:00:00Z',
 }
 
-function renderWithProviders(ui: React.ReactElement, { initialUrl = '/rules' } = {}) {
+function renderWithProviders(ui: React.ReactElement, { initialUrl = '/boosts' } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -473,7 +473,7 @@ describe('RulesPage', () => {
         error: null,
         refetch: mockRefetchAutomationRules,
       })
-      renderWithProviders(<RulesPage />, { initialUrl: '/rules?sort=name:asc' })
+      renderWithProviders(<RulesPage />, { initialUrl: '/boosts?sort=name:asc' })
 
       fireEvent.click(screen.getByTitle('Table view'))
 
@@ -530,7 +530,7 @@ describe('RulesPage', () => {
         error: null,
         refetch: mockRefetchAutomationRules,
       })
-      renderWithProviders(<RulesPage />, { initialUrl: '/rules?sort=lastRun:desc' })
+      renderWithProviders(<RulesPage />, { initialUrl: '/boosts?sort=lastRun:desc' })
 
       fireEvent.click(screen.getByTitle('Table view'))
 

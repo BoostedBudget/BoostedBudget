@@ -33,6 +33,10 @@ type TransferSuggestionRepository interface {
 	// GAP AV: expectedTxnID is the matched_transaction_id the caller observed at read time.
 	// If the reservation was reclaimed between read and write, returns ErrTransferSuggestionAlreadyActioned.
 	ClearMatchedTransactionID(ctx context.Context, id string, expectedTxnID *string) error
+
+	// GetByUserIDStatuses retrieves suggestions filtered by status slice with pagination.
+	// A nil/empty slice falls back to pending-only semantics.
+	GetByUserIDStatuses(ctx context.Context, userID string, statuses []domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, int, error)
 }
 
 // TransferSuggestionService handles transfer suggestion operations.
@@ -60,6 +64,11 @@ type TransferSuggestionService interface {
 	// Returns ErrTransferSuggestionNotFound if suggestion doesn't exist or belongs to a different user.
 	// Returns ErrTransferSuggestionAlreadyActioned if status is completed, rejected, or expired.
 	DeclineTransferSuggestionMatch(ctx context.Context, userID, suggestionID string) (*domain.TransferSuggestion, error)
+
+	// GetSuggestionsByStatus returns suggestions for a user filtered by status, with pagination.
+	// Returns (items, totalCount, error). A nil statuses slice defaults to pending-only semantics.
+	// Used by the /boosts review page for the Active Recommendations, Awaiting Match, and History tabs.
+	GetSuggestionsByStatus(ctx context.Context, userID string, statuses []domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, int, error)
 }
 
 // transferSuggestionService implements TransferSuggestionService.
@@ -216,6 +225,18 @@ func (s *transferSuggestionService) ConfirmTransferSuggestionMatch(
 	suggestion.CompletionSource = &completionSource
 
 	return suggestion, nil
+}
+
+// GetSuggestionsByStatus returns suggestions for a user filtered by status, with pagination.
+// Delegates directly to the repository; no business logic is applied beyond ownership
+// (the repo already filters by userID). A nil statuses slice uses pending-only semantics.
+func (s *transferSuggestionService) GetSuggestionsByStatus(
+	ctx context.Context,
+	userID string,
+	statuses []domain.SuggestionStatus,
+	limit, offset int,
+) ([]*domain.TransferSuggestion, int, error) {
+	return s.suggestionRepo.GetByUserIDStatuses(ctx, userID, statuses, limit, offset)
 }
 
 // DeclineTransferSuggestionMatch releases the fuzzy-match reservation on a pending/accepted

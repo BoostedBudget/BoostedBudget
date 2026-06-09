@@ -5,6 +5,7 @@ package operations
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"net/http"
 	"strconv"
@@ -57,14 +58,31 @@ func NewTransferSuggestionHandler(service services.TransferSuggestionService, de
 
 // --- Input / Output types ---
 
-// GetTransferSuggestionsInput is the input for listing pending transfer suggestions.
+// GetTransferSuggestionsInput is the input for listing transfer suggestions.
+// When Status is empty, returns pending-only (backward compat with notification center).
 type GetTransferSuggestionsInput struct {
 	inputs.AuthenticatedInput
+	// Status is an optional comma-separated list of suggestion statuses to filter by.
+	// Valid values: pending, accepted, rejected, expired, completed.
+	// When omitted, returns all pending suggestions (backward compat).
+	Status string `query:"status" doc:"Comma-separated list of statuses to filter by (e.g. completed,rejected,expired). Omit for pending-only." required:"false"`
+	// Limit is the maximum number of suggestions to return (1-100, default 20).
+	Limit int `query:"limit" default:"20" minimum:"1" maximum:"100" doc:"Maximum number of suggestions to return."`
+	// Offset is the number of suggestions to skip for pagination (default 0).
+	Offset int `query:"offset" default:"0" minimum:"0" doc:"Number of suggestions to skip for pagination."`
 }
 
-// GetTransferSuggestionsOutput is the response for listing pending transfer suggestions.
+// TransferSuggestionListResponse is the paginated envelope for listing transfer suggestions.
+type TransferSuggestionListResponse struct {
+	Items  []*domain.TransferSuggestion `json:"items" doc:"List of transfer suggestions"`
+	Total  int                          `json:"total" doc:"Total number of matching suggestions across all pages"`
+	Limit  int                          `json:"limit" doc:"Maximum results per page as requested"`
+	Offset int                          `json:"offset" doc:"Number of results skipped"`
+}
+
+// GetTransferSuggestionsOutput is the response for listing transfer suggestions.
 type GetTransferSuggestionsOutput struct {
-	Body []*domain.TransferSuggestion
+	Body TransferSuggestionListResponse
 }
 
 // AcceptTransferSuggestionInput is the input for accepting a transfer suggestion.
@@ -113,22 +131,92 @@ func maskReservation(s *domain.TransferSuggestion) *domain.TransferSuggestion {
 // --- Handler Methods ---
 
 // GetTransferSuggestions handles GET /api/v1/transfer-suggestions.
-// Returns all pending transfer suggestions for the authenticated user.
+// When no status param is provided, returns pending suggestions (backward compat with
+// notification center). When status is provided as a CSV, filters by those statuses
+// and returns a paginated envelope with total count.
 func (h *TransferSuggestionHandler) GetTransferSuggestions(ctx context.Context, input *GetTransferSuggestionsInput) (*GetTransferSuggestionsOutput, error) {
-	suggestions, err := h.service.GetPendingSuggestions(ctx, input.UserID)
-	if err != nil {
-		return nil, humaerrors.LoggingMapError(ctx, err)
+	var items []*domain.TransferSuggestion
+	var total int
+
+	if input.Status == "" {
+		// Legacy path: no status param → pending only (notification center compat).
+		pending, err := h.service.GetPendingSuggestions(ctx, input.UserID)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		if pending == nil {
+			pending = []*domain.TransferSuggestion{}
+		}
+		items = pending
+		total = len(pending)
+	} else {
+		// Filtered path: parse and validate the CSV status list.
+		statuses, err := parseSuggestionStatuses(input.Status)
+		if err != nil {
+			return nil, huma.Error422UnprocessableEntity(err.Error())
+		}
+		filtered, t, err := h.service.GetSuggestionsByStatus(ctx, input.UserID, statuses, input.Limit, input.Offset)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		if filtered == nil {
+			filtered = []*domain.TransferSuggestion{}
+		}
+		items = filtered
+		total = t
 	}
 
-	if suggestions == nil {
-		suggestions = []*domain.TransferSuggestion{}
+	for i := range items {
+		maskReservation(items[i])
 	}
 
-	for i := range suggestions {
-		maskReservation(suggestions[i])
+	limit := input.Limit
+	if limit == 0 {
+		limit = 20
 	}
 
-	return &GetTransferSuggestionsOutput{Body: suggestions}, nil
+	return &GetTransferSuggestionsOutput{Body: TransferSuggestionListResponse{
+		Items:  items,
+		Total:  total,
+		Limit:  limit,
+		Offset: input.Offset,
+	}}, nil
+}
+
+// parseSuggestionStatuses parses a comma-separated status string and validates each value.
+// Returns a 422-ready error if any value is unknown.
+func parseSuggestionStatuses(csv string) ([]domain.SuggestionStatus, error) {
+	parts := splitCSV(csv)
+	statuses := make([]domain.SuggestionStatus, 0, len(parts))
+	for _, p := range parts {
+		s := domain.SuggestionStatus(p)
+		if !s.IsValid() {
+			return nil, fmt.Errorf("invalid status %q: must be one of pending, accepted, rejected, expired, completed", p)
+		}
+		statuses = append(statuses, s)
+	}
+	return statuses, nil
+}
+
+// splitCSV splits a comma-separated string into trimmed, non-empty parts.
+func splitCSV(s string) []string {
+	var parts []string
+	start := 0
+	for i := 0; i <= len(s); i++ {
+		if i == len(s) || s[i] == ',' {
+			part := ""
+			for j := start; j < i; j++ {
+				if s[j] != ' ' {
+					part += string(s[j])
+				}
+			}
+			if part != "" {
+				parts = append(parts, part)
+			}
+			start = i + 1
+		}
+	}
+	return parts
 }
 
 // AcceptTransferSuggestion handles PATCH /api/v1/transfer-suggestions/{id}/accept.
