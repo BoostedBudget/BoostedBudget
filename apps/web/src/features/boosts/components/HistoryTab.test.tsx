@@ -2,7 +2,7 @@
  * HistoryTab Tests
  * Issue #1267: Boosts page — completed/rejected/expired history with pagination
  *
- * TDD RED: Tests written before implementation.
+ * Gap W3: event-date column, completion_source labels, matched-tx date, rejected reason.
  */
 
 import { describe, it, expect, mock } from 'bun:test'
@@ -13,6 +13,7 @@ import { HistoryTab } from './HistoryTab'
 
 const mockOnPageChange = mock((_offset: number) => {})
 
+// created_at is old (Jan 1); completed_at is recent (Jan 15) — event date must show Jan 15
 const completedItem: TransferSuggestion = {
   id: 'ts-20',
   status: 'completed',
@@ -20,9 +21,9 @@ const completedItem: TransferSuggestion = {
   currency_code: 'USD',
   source: 'rule',
   user_id: 'u1',
-  created_at: '2025-01-10T10:00:00Z',
-  updated_at: '2025-01-12T10:00:00Z',
-  completed_at: '2025-01-12T10:00:00Z',
+  created_at: '2025-01-01T10:00:00Z',
+  updated_at: '2025-01-15T10:00:00Z',
+  completed_at: '2025-01-15T10:00:00Z',
 }
 
 const rejectedItem: TransferSuggestion = {
@@ -45,6 +46,48 @@ const expiredItem: TransferSuggestion = {
   user_id: 'u1',
   created_at: '2025-01-01T10:00:00Z',
   updated_at: '2025-01-08T10:00:00Z',
+}
+
+// Auto-matched completed item (exact_match + matched_transaction_at)
+const autoMatchedItem: TransferSuggestion = {
+  id: 'ts-30',
+  status: 'completed',
+  amount: 500,
+  currency_code: 'USD',
+  source: 'rule',
+  user_id: 'u1',
+  created_at: '2025-02-01T08:00:00Z',
+  updated_at: '2025-02-15T09:00:00Z',
+  completed_at: '2025-02-15T09:00:00Z',
+  completion_source: 'exact_match',
+  matched_transaction_at: '2025-02-15T09:00:00Z',
+}
+
+// Manually confirmed completed item
+const manualConfirmedItem: TransferSuggestion = {
+  id: 'ts-31',
+  status: 'completed',
+  amount: 400,
+  currency_code: 'USD',
+  source: 'rule',
+  user_id: 'u1',
+  created_at: '2025-03-05T10:00:00Z',
+  updated_at: '2025-03-14T12:00:00Z',
+  completed_at: '2025-03-14T12:00:00Z',
+  completion_source: 'user_confirmed',
+}
+
+// Rejected item with user_notes as the rejection reason
+const rejectedWithReasonItem: TransferSuggestion = {
+  id: 'ts-32',
+  status: 'rejected',
+  amount: 200,
+  currency_code: 'USD',
+  source: 'rule',
+  user_id: 'u1',
+  created_at: '2025-01-08T10:00:00Z',
+  updated_at: '2025-01-09T10:00:00Z',
+  user_notes: "Didn't have enough in checking",
 }
 
 describe('HistoryTab', () => {
@@ -136,5 +179,84 @@ describe('HistoryTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /next page/i }))
     // offset for page 2 = limit * (page - 1) = 20 * 1 = 20
     expect(mockOnPageChange).toHaveBeenCalledWith(20)
+  })
+
+  // === Gap W3: event-date, completion_source labels, matched-tx date, rejected reason ===
+
+  it('shows event date from completed_at (not created_at) for completed items', () => {
+    // completedItem: created Jan 1, completed Jan 15 — must see Jan 15
+    render(
+      <HistoryTab
+        items={[completedItem]}
+        total={1}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        onPageChange={mockOnPageChange}
+      />
+    )
+    const bodyText = document.body.textContent ?? ''
+    // Jan 15, 2025 must appear (event date)
+    expect(/Jan 15, 2025/i.test(bodyText)).toBe(true)
+    // Jan 1, 2025 should NOT be the displayed date — only created_at, which we replaced
+    expect(/Jan 1, 2025/i.test(bodyText)).toBe(false)
+  })
+
+  it('shows "Auto-matched" label for completion_source exact_match', () => {
+    render(
+      <HistoryTab
+        items={[autoMatchedItem]}
+        total={1}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        onPageChange={mockOnPageChange}
+      />
+    )
+    expect(screen.getByText(/auto-matched/i)).toBeTruthy()
+  })
+
+  it('shows "You confirmed" label for completion_source user_confirmed', () => {
+    render(
+      <HistoryTab
+        items={[manualConfirmedItem]}
+        total={1}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        onPageChange={mockOnPageChange}
+      />
+    )
+    expect(screen.getByText(/you confirmed/i)).toBeTruthy()
+  })
+
+  it('shows matched transaction date when matched_transaction_at is present', () => {
+    render(
+      <HistoryTab
+        items={[autoMatchedItem]}
+        total={1}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        onPageChange={mockOnPageChange}
+      />
+    )
+    // matched_transaction_at is Feb 15, 2025 — should appear in the row
+    const bodyText = document.body.textContent ?? ''
+    expect(/Feb 15, 2025/i.test(bodyText)).toBe(true)
+  })
+
+  it('shows user_notes as rejected reason for rejected items', () => {
+    render(
+      <HistoryTab
+        items={[rejectedWithReasonItem]}
+        total={1}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        onPageChange={mockOnPageChange}
+      />
+    )
+    expect(screen.getByText(/didn't have enough in checking/i)).toBeTruthy()
   })
 })

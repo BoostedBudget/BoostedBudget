@@ -68,6 +68,9 @@ const AutoCategorizationPageWrapper = lazy(() =>
 const BoostsPage = lazy(() =>
   import('./features/boosts').then(m => ({ default: m.BoostsPage }))
 )
+const RuleDetailPage = lazy(() =>
+  import('./features/boosts').then(m => ({ default: m.RuleDetailPage }))
+)
 const RuleBuilder = lazy(() =>
   import('./features/rules').then(m => ({ default: m.RuleBuilder }))
 )
@@ -376,6 +379,18 @@ function App() {
                   <PremiumRoute>
                     <Suspense fallback={<PageSkeleton />}>
                       <RuleBuilder />
+                    </Suspense>
+                  </PremiumRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/boosts/:id"
+              element={
+                <ProtectedRoute>
+                  <PremiumRoute>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <RuleDetailPage />
                     </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>

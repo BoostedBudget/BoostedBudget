@@ -262,6 +262,7 @@ export function RulesPage() {
                   onDelete={handleDeleteClick}
                   onToggle={handleToggleRule}
                   onTest={handleTestRule}
+                  onViewExecutions={(r) => navigate(`/boosts/${r.id}`)}
                   loading={toggleMutation.isPending || deleteMutation.isPending || testMutation.isPending}
                 />
               ))}
@@ -274,6 +275,7 @@ export function RulesPage() {
             onDelete={handleDeleteClick}
             onToggle={handleToggleRule}
             onTest={handleTestRule}
+            onRowClick={(rule) => navigate(`/boosts/${rule.id}`)}
             loading={isLoading || toggleMutation.isPending || deleteMutation.isPending || testMutation.isPending}
             sort={sort}
             onSortChange={setSort}

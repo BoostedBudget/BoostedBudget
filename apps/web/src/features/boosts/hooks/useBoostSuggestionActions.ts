@@ -1,10 +1,10 @@
-// Issue #1267: Boosts page — accept/reject/confirm-match/decline-match with invalidation + analytics
+// Issue #1267: Boosts page — accept/reject/confirm-match/cancel with invalidation + analytics
 import { useQueryClient } from '@tanstack/react-query'
 import {
   useAcceptTransferSuggestion,
   useRejectTransferSuggestion,
   useConfirmTransferSuggestionMatch,
-  useDeclineTransferSuggestionMatch,
+  useCancelTransferSuggestion,
   getGetTransferSuggestionsQueryKey,
 } from '@boostedbudget/api-client/endpoints/transfer-suggestions/transfer-suggestions'
 import { getGetSavingsImpactMeQueryKey } from '@boostedbudget/api-client/endpoints/savings-impact/savings-impact'
@@ -16,11 +16,11 @@ export interface UseBoostSuggestionActionsResult {
   accept: (suggestionId: string) => void
   /** Reject a pending suggestion */
   reject: (suggestionId: string) => void
-  /** Confirm that an awaiting-match suggestion has been fulfilled */
+  /** Confirm that an awaiting-match suggestion has been fulfilled (requires a fuzzy-match reservation) */
   confirmMatch: (suggestionId: string, actualAmount: number) => void
-  /** Decline a fuzzy-match prompt for an awaiting-match suggestion */
-  declineMatch: (suggestionId: string) => void
-  /** True while any of the four mutations is in-flight */
+  /** Cancel a pending/accepted suggestion, transitioning it to rejected so it leaves the Awaiting tab */
+  cancelAccepted: (suggestionId: string) => void
+  /** True while any mutation is in-flight */
   isPending: boolean
   /** Last error from any mutation, or null */
   error: Error | null
@@ -30,16 +30,10 @@ export function useBoostSuggestionActions(): UseBoostSuggestionActionsResult {
   const queryClient = useQueryClient()
   const trackEvent = useTrackEvent()
 
-  const invalidateSuggestions = () =>
-    queryClient.invalidateQueries({ queryKey: getGetTransferSuggestionsQueryKey() })
-
-  const invalidateSavingsImpact = () =>
-    queryClient.invalidateQueries({ queryKey: getGetSavingsImpactMeQueryKey() })
-
   const acceptMutation = useAcceptTransferSuggestion({
     mutation: {
       onSuccess: (data) => {
-        invalidateSuggestions()
+        queryClient.invalidateQueries({ queryKey: getGetTransferSuggestionsQueryKey() })
         trackEvent(ANALYTICS_EVENTS.TRANSFER_SUGGESTION_ACCEPTED, {
           amount: data?.suggestion?.amount,
           source: 'boosts_page',
@@ -52,7 +46,7 @@ export function useBoostSuggestionActions(): UseBoostSuggestionActionsResult {
   const rejectMutation = useRejectTransferSuggestion({
     mutation: {
       onSuccess: () => {
-        invalidateSuggestions()
+        queryClient.invalidateQueries({ queryKey: getGetTransferSuggestionsQueryKey() })
         trackEvent(ANALYTICS_EVENTS.TRANSFER_SUGGESTION_REJECTED, { source: 'boosts_page' })
       },
       onError: (err) => console.error('[Boosts] reject failed:', err),
@@ -62,33 +56,33 @@ export function useBoostSuggestionActions(): UseBoostSuggestionActionsResult {
   const confirmMatchMutation = useConfirmTransferSuggestionMatch({
     mutation: {
       onSuccess: () => {
-        invalidateSuggestions()
+        queryClient.invalidateQueries({ queryKey: getGetTransferSuggestionsQueryKey() })
         // Also refresh the summary header — completed count + total moved change after a confirmed match
-        invalidateSavingsImpact()
+        queryClient.invalidateQueries({ queryKey: getGetSavingsImpactMeQueryKey() })
         trackEvent(ANALYTICS_EVENTS.TRANSFER_SUGGESTION_MATCH_CONFIRMED, { source: 'boosts_page' })
       },
       onError: (err) => console.error('[Boosts] confirm-match failed:', err),
     },
   })
 
-  const declineMatchMutation = useDeclineTransferSuggestionMatch({
+  const cancelMutation = useCancelTransferSuggestion({
     mutation: {
       onSuccess: () => {
-        invalidateSuggestions()
-        trackEvent(ANALYTICS_EVENTS.TRANSFER_SUGGESTION_MATCH_DECLINED, { source: 'boosts_page' })
+        queryClient.invalidateQueries({ queryKey: getGetTransferSuggestionsQueryKey() })
+        trackEvent(ANALYTICS_EVENTS.TRANSFER_SUGGESTION_REJECTED, { source: 'boosts_page' })
       },
-      onError: (err) => console.error('[Boosts] decline-match failed:', err),
+      onError: (err) => console.error('[Boosts] cancel-accepted failed:', err),
     },
   })
 
-  const mutations = [acceptMutation, rejectMutation, confirmMatchMutation, declineMatchMutation]
+  const mutations = [acceptMutation, rejectMutation, confirmMatchMutation, cancelMutation]
 
   return {
     accept: (suggestionId: string) => acceptMutation.mutate({ id: suggestionId, data: {} }),
     reject: (suggestionId: string) => rejectMutation.mutate({ id: suggestionId, data: {} }),
     confirmMatch: (suggestionId: string, actualAmount: number) =>
       confirmMatchMutation.mutate({ id: suggestionId, data: { actual_amount: actualAmount } }),
-    declineMatch: (suggestionId: string) => declineMatchMutation.mutate({ id: suggestionId }),
+    cancelAccepted: (suggestionId: string) => cancelMutation.mutate({ id: suggestionId, data: {} }),
     isPending: mutations.some((m) => m.isPending),
     error: mutations.map((m) => m.error).find(Boolean) ?? null,
   }

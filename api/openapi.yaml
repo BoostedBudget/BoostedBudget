@@ -1012,6 +1012,38 @@ components:
         - subscription_id
         - message
       type: object
+    CancelTransferSuggestionInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CancelTransferSuggestionInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        notes:
+          description: Optional notes for the cancellation
+          type: string
+      type: object
+    CancelTransferSuggestionOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CancelTransferSuggestionOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          type: string
+        suggestion:
+          $ref: "#/components/schemas/TransferSuggestion"
+      required:
+        - message
+        - suggestion
+      type: object
     CashFlowHistoryResponse:
       additionalProperties: false
       properties:
@@ -4811,6 +4843,8 @@ components:
         amount:
           format: double
           type: number
+        can_confirm_match:
+          type: boolean
         completed_at:
           format: date-time
           type: string
@@ -4826,9 +4860,14 @@ components:
           type: string
         from_account_id:
           type: string
+        from_account_name:
+          type: string
         from_user_account_id:
           type: string
         id:
+          type: string
+        matched_transaction_at:
+          format: date-time
           type: string
         matched_transaction_id:
           type: string
@@ -4838,11 +4877,15 @@ components:
           type: string
         rule_id:
           type: string
+        rule_name:
+          type: string
         source:
           type: string
         status:
           type: string
         to_account_id:
+          type: string
+        to_account_name:
           type: string
         to_user_account_id:
           type: string
@@ -10967,6 +11010,42 @@ paths:
       security:
         - clerk: []
       summary: Accept a transfer suggestion
+      tags:
+        - TransferSuggestions
+  /api/v1/transfer-suggestions/{id}/cancel:
+    post:
+      description: Cancels a pending or accepted suggestion, transitioning it to rejected so it leaves the Awaiting Match tab. Distinct from decline-match (which only clears the fuzzy-match reservation without changing status).
+      operationId: cancelTransferSuggestion
+      parameters:
+        - description: Transfer suggestion UUID to cancel
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Transfer suggestion UUID to cancel
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelTransferSuggestionInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelTransferSuggestionOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Cancel a transfer suggestion
       tags:
         - TransferSuggestions
   /api/v1/transfer-suggestions/{id}/confirm-match:

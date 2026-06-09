@@ -1,6 +1,6 @@
 /**
  * useBoostSuggestionActions Hook Tests
- * Issue #1267: Boosts page — accept/reject/confirm-match/decline-match actions
+ * Issue #1267: Boosts page — accept/reject/confirm-match/cancel-accepted actions
  *
  * TDD: Tests written before implementation.
  * Analytics tests pattern mirrors NotificationAcceptReject.test.tsx (working):
@@ -14,11 +14,11 @@ import {
   mockUseAcceptTransferSuggestion,
   mockUseRejectTransferSuggestion,
   mockUseConfirmTransferSuggestionMatch,
-  mockUseDeclineTransferSuggestionMatch,
+  mockUseCancelTransferSuggestion,
   mockAcceptTransferSuggestionMutateAsync,
   mockRejectTransferSuggestionMutateAsync,
   mockConfirmTransferSuggestionMatchMutateAsync,
-  mockDeclineTransferSuggestionMatchMutate,
+  mockCancelTransferSuggestionMutate,
   getGetTransferSuggestionsQueryKey,
 } from '@/test/mocks/transfer-suggestions-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
@@ -36,11 +36,11 @@ describe('useBoostSuggestionActions', () => {
     mockUseAcceptTransferSuggestion.mockClear()
     mockUseRejectTransferSuggestion.mockClear()
     mockUseConfirmTransferSuggestionMatch.mockClear()
-    mockUseDeclineTransferSuggestionMatch.mockClear()
+    mockUseCancelTransferSuggestion.mockClear()
     mockAcceptTransferSuggestionMutateAsync.mockClear()
     mockRejectTransferSuggestionMutateAsync.mockClear()
     mockConfirmTransferSuggestionMatchMutateAsync.mockClear()
-    mockDeclineTransferSuggestionMatchMutate.mockClear()
+    mockCancelTransferSuggestionMutate.mockClear()
     mockTrackEvent.mockClear()
 
     mockUseAcceptTransferSuggestion.mockReturnValue({
@@ -58,20 +58,20 @@ describe('useBoostSuggestionActions', () => {
       mutateAsync: mockConfirmTransferSuggestionMatchMutateAsync,
       isPending: false,
     })
-    mockUseDeclineTransferSuggestionMatch.mockReturnValue({
-      mutate: mockDeclineTransferSuggestionMatchMutate,
-      mutateAsync: mockDeclineTransferSuggestionMatchMutate,
+    mockUseCancelTransferSuggestion.mockReturnValue({
+      mutate: mockCancelTransferSuggestionMutate,
+      mutateAsync: mockCancelTransferSuggestionMutate,
       isPending: false,
     })
   })
 
-  it('returns accept, reject, confirmMatch, declineMatch action functions', () => {
+  it('returns accept, reject, confirmMatch, cancelAccepted action functions', () => {
     const { result } = renderHook(() => useBoostSuggestionActions(), { wrapper: createQueryWrapper() })
 
     expect(typeof result.current.accept).toBe('function')
     expect(typeof result.current.reject).toBe('function')
     expect(typeof result.current.confirmMatch).toBe('function')
-    expect(typeof result.current.declineMatch).toBe('function')
+    expect(typeof result.current.cancelAccepted).toBe('function')
   })
 
   it('fires accept mutation with suggestion id', () => {
@@ -101,11 +101,11 @@ describe('useBoostSuggestionActions', () => {
     )
   })
 
-  it('fires declineMatch mutation with suggestion id', () => {
+  it('fires cancelAccepted mutation with suggestion id', () => {
     const { result } = renderHook(() => useBoostSuggestionActions(), { wrapper: createQueryWrapper() })
-    result.current.declineMatch('ts-4')
+    result.current.cancelAccepted('ts-4')
 
-    expect(mockDeclineTransferSuggestionMatchMutate).toHaveBeenCalledWith(
+    expect(mockCancelTransferSuggestionMutate).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'ts-4' })
     )
   })

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -26,8 +27,13 @@ type TransferSuggestionRepository interface {
 	// GetPendingByUserID retrieves all pending suggestions for a user.
 	GetPendingByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error)
 
-	// UpdateStatus updates the status of a suggestion.
+	// UpdateStatus updates the status of a pending suggestion.
 	UpdateStatus(ctx context.Context, id string, status domain.SuggestionStatus, userNotes *string) error
+
+	// CancelAcceptedSuggestion atomically transitions a pending or accepted suggestion to
+	// rejected, clearing matched_transaction_id. Unlike UpdateStatus (which only matches
+	// status='pending'), this handles accepted suggestions for the Awaiting Match tab cancel action.
+	CancelAcceptedSuggestion(ctx context.Context, id string, userNotes *string) error
 
 	// Update updates a suggestion record.
 	Update(ctx context.Context, suggestion *domain.TransferSuggestion) error
@@ -96,12 +102,25 @@ type TransferSuggestionRepository interface {
 
 // transferSuggestionRepository implements TransferSuggestionRepository using PostgreSQL.
 type transferSuggestionRepository struct {
-	db DB
+	db  DB
+	// enc is used by GetByUserIDStatuses to decrypt user_accounts.account_name_hint
+	// (encrypted at rest) when resolving account display names. Nil is safe — the
+	// plaintext nickname/name path still works; only ciphertext hints are skipped.
+	enc *appcrypto.FieldEncryptor
 }
 
-// NewTransferSuggestionRepository creates a new TransferSuggestionRepository instance.
+// NewTransferSuggestionRepository creates a new TransferSuggestionRepository without an
+// encryptor. Account names will use plaintext fields (nickname, name) only; encrypted
+// account_name_hint values will not be decrypted.
 func NewTransferSuggestionRepository(db DB) TransferSuggestionRepository {
 	return &transferSuggestionRepository{db: db}
+}
+
+// NewTransferSuggestionRepositoryWithEncryptor creates a new TransferSuggestionRepository
+// with an encryptor for decrypting user_accounts.account_name_hint (encrypted at rest).
+// This is the constructor used in production (main.go).
+func NewTransferSuggestionRepositoryWithEncryptor(db DB, enc *appcrypto.FieldEncryptor) TransferSuggestionRepository {
+	return &transferSuggestionRepository{db: db, enc: enc}
 }
 
 // Create creates a new transfer suggestion.
@@ -255,6 +274,38 @@ func (r *transferSuggestionRepository) UpdateStatus(ctx context.Context, id stri
 			return domain.ErrTransferSuggestionNotFound
 		}
 		// Row exists but status != 'pending' — a concurrent action already processed it.
+		return domain.ErrTransferSuggestionAlreadyActioned
+	}
+
+	return nil
+}
+
+// CancelAcceptedSuggestion transitions a pending or accepted suggestion to rejected and
+// clears matched_transaction_id. The WHERE status IN ('pending','accepted') predicate
+// handles accepted suggestions — UpdateStatus cannot, as it only matches 'pending'.
+func (r *transferSuggestionRepository) CancelAcceptedSuggestion(ctx context.Context, id string, userNotes *string) error {
+	now := time.Now()
+
+	query := `
+		UPDATE transfer_suggestions
+		SET status = 'rejected',
+		    user_action_at = $1,
+		    user_notes = $2,
+		    updated_at = $3,
+		    matched_transaction_id = NULL
+		WHERE id = $4 AND status IN ('pending', 'accepted')
+	`
+
+	ct, err := r.db.Exec(ctx, query, now, userNotes, now, id)
+	if err != nil {
+		return err
+	}
+
+	if ct.RowsAffected() == 0 {
+		_, getErr := r.GetByID(ctx, id)
+		if getErr != nil {
+			return domain.ErrTransferSuggestionNotFound
+		}
 		return domain.ErrTransferSuggestionAlreadyActioned
 	}
 
@@ -565,20 +616,41 @@ func (r *transferSuggestionRepository) GetActiveByUserID(ctx context.Context, us
 }
 
 // GetByUserIDStatuses retrieves suggestions for a user filtered by a set of statuses,
-// ordered most-recent-first, with pagination. Returns (items, totalCount, error).
+// ordered by event-time (COALESCE(completed_at, user_action_at, updated_at, created_at) DESC),
+// with pagination. Returns (items, totalCount, error).
 // totalCount reflects all matching rows across all pages (for UI pagination), using
 // COUNT(*) OVER() so only a single DB round-trip is needed.
 // A nil or empty statuses slice falls back to pending-only (backward compat).
+//
+// Enriched fields (ToAccountName, FromAccountName, RuleName, MatchedTransactionAt) are
+// populated via LEFT JOINs to accounts, user_accounts, rules, and transactions.
 func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, userID string, statuses []domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, int, error) {
+	// selectClause includes LEFT JOINs for enriched display fields and uses event-time ordering.
+	// resolveDestinationName resolution order: Plaid nickname > Plaid name > UA nickname > UA hint.
 	const selectClause = `
-		SELECT id, user_id, rule_id, rule_execution_id,
-			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
-			amount, currency_code,
-			reason, source, status, expires_at,
-			user_action_at, user_notes, created_at, updated_at,
-			completed_at, matched_transaction_id, actual_amount, completion_source,
-			COUNT(*) OVER() AS total_count
-		FROM transfer_suggestions
+		SELECT
+			ts.id, ts.user_id, ts.rule_id, ts.rule_execution_id,
+			ts.from_account_id, ts.to_account_id, ts.from_user_account_id, ts.to_user_account_id,
+			ts.amount, ts.currency_code,
+			ts.reason, ts.source, ts.status, ts.expires_at,
+			ts.user_action_at, ts.user_notes, ts.created_at, ts.updated_at,
+			ts.completed_at, ts.matched_transaction_id, ts.actual_amount, ts.completion_source,
+			COUNT(*) OVER() AS total_count,
+			COALESCE(NULLIF(to_acc.nickname, ''), to_acc.name)      AS to_plaid_name,
+			NULLIF(to_ua.nickname, '')                               AS to_ua_nickname,
+			to_ua.account_name_hint                                  AS to_ua_hint_enc,
+			COALESCE(NULLIF(from_acc.nickname, ''), from_acc.name)  AS from_plaid_name,
+			NULLIF(from_ua.nickname, '')                             AS from_ua_nickname,
+			from_ua.account_name_hint                                AS from_ua_hint_enc,
+			r.name                                                   AS rule_name,
+			txn.created_at                                           AS matched_transaction_at
+		FROM transfer_suggestions ts
+		LEFT JOIN accounts     to_acc   ON to_acc.id   = ts.to_account_id       AND to_acc.user_id   = ts.user_id
+		LEFT JOIN user_accounts to_ua   ON to_ua.id    = ts.to_user_account_id  AND to_ua.user_id    = ts.user_id
+		LEFT JOIN accounts     from_acc ON from_acc.id = ts.from_account_id     AND from_acc.user_id = ts.user_id
+		LEFT JOIN user_accounts from_ua ON from_ua.id  = ts.from_user_account_id AND from_ua.user_id = ts.user_id
+		LEFT JOIN rules        r        ON r.id         = ts.rule_id
+		LEFT JOIN transactions txn      ON txn.id       = ts.matched_transaction_id
 	`
 
 	var query string
@@ -588,8 +660,8 @@ func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, 
 		// Backward-compat: no status filter → pending only (no limit/offset applied,
 		// matching GetPendingByUserID semantics used by the notification center).
 		query = selectClause + `
-			WHERE user_id = $1 AND status = 'pending'
-			ORDER BY created_at DESC
+			WHERE ts.user_id = $1 AND ts.status = 'pending'
+			ORDER BY COALESCE(ts.completed_at, ts.user_action_at, ts.updated_at, ts.created_at) DESC
 		`
 		args = []interface{}{userID}
 	} else {
@@ -599,8 +671,8 @@ func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, 
 			statusStrs[i] = string(s)
 		}
 		query = selectClause + `
-			WHERE user_id = $1 AND status = ANY($2)
-			ORDER BY created_at DESC
+			WHERE ts.user_id = $1 AND ts.status = ANY($2)
+			ORDER BY COALESCE(ts.completed_at, ts.user_action_at, ts.updated_at, ts.created_at) DESC
 			LIMIT $3 OFFSET $4
 		`
 		args = []interface{}{userID, statusStrs, limit, offset}
@@ -616,6 +688,11 @@ func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, 
 	var total int
 	for rows.Next() {
 		s := &domain.TransferSuggestion{}
+		var toPlaidName, toUANickname, toUAHintEnc *string
+		var fromPlaidName, fromUANickname, fromUAHintEnc *string
+		var ruleName *string
+		var matchedTxnAt *time.Time
+
 		if err := rows.Scan(
 			&s.ID,
 			&s.UserID,
@@ -640,9 +717,24 @@ func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, 
 			&s.ActualAmount,
 			&s.CompletionSource,
 			&total,
+			&toPlaidName,
+			&toUANickname,
+			&toUAHintEnc,
+			&fromPlaidName,
+			&fromUANickname,
+			&fromUAHintEnc,
+			&ruleName,
+			&matchedTxnAt,
 		); err != nil {
 			return nil, 0, err
 		}
+
+		// Resolve enriched display names using the same resolution order as savings_impact_repository.
+		s.ToAccountName = resolveDestinationName(toPlaidName, toUANickname, toUAHintEnc, r.enc)
+		s.FromAccountName = resolveDestinationName(fromPlaidName, fromUANickname, fromUAHintEnc, r.enc)
+		s.RuleName = ruleName
+		s.MatchedTransactionAt = matchedTxnAt
+
 		suggestions = append(suggestions, s)
 	}
 	if err = rows.Err(); err != nil {

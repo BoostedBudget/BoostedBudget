@@ -1,0 +1,81 @@
+/**
+ * RuleDetailPage Tests
+ * Issue #1267 Gap W5: /boosts/:id — rule detail + recent execution history
+ *
+ * TDD RED: Tests written before implementation.
+ */
+
+import { describe, it, expect, beforeEach } from 'bun:test'
+import { render, screen } from '@testing-library/react'
+import React from 'react'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import type { AutomationRule } from '@boostedbudget/api-client/models'
+import { mockUseGetAutomationRuleByID } from '@/test/mocks/automation-rules-api'
+import { RuleDetailPage } from './RuleDetailPage'
+
+const mockRule: AutomationRule = {
+  id: 'rule-detail-1',
+  user_id: 'u1',
+  name: 'Save Extra Cash',
+  description: 'Transfer surplus to high-yield savings',
+  rule_type: 'transfer_suggestion',
+  enabled: true,
+  priority: 10,
+  execution_count: 8,
+  trigger_config: { type: 'schedule', cron: '0 9 * * 1', timezone: 'America/New_York' },
+  conditions: [{ field: 'budget.percent_used', operator: 'lte', value: 70 }],
+  condition_logic: 'AND',
+  actions: { amount: 200 },
+  created_at: '2025-01-01T00:00:00Z',
+  updated_at: '2025-01-10T00:00:00Z',
+}
+
+const renderDetail = (id = 'rule-detail-1') =>
+  render(
+    <MemoryRouter initialEntries={[`/boosts/${id}`]}>
+      <Routes>
+        <Route path="/boosts/:id" element={<RuleDetailPage />} />
+      </Routes>
+    </MemoryRouter>
+  )
+
+describe('RuleDetailPage', () => {
+  beforeEach(() => {
+    mockUseGetAutomationRuleByID.mockReturnValue({
+      data: mockRule,
+      isLoading: false,
+      error: null,
+    })
+  })
+
+  it('renders the rule name as the page heading', () => {
+    renderDetail()
+    expect(screen.getByText('Save Extra Cash')).toBeTruthy()
+  })
+
+  it('renders a back link to the rules tab', () => {
+    renderDetail()
+    const bodyText = document.body.textContent ?? ''
+    expect(/back.*rules|rules/i.test(bodyText)).toBe(true)
+  })
+
+  it('renders RuleExecutionHistory section', () => {
+    renderDetail()
+    // RuleExecutionHistory renders "No executions yet" when empty (mock returns [])
+    const bodyText = document.body.textContent ?? ''
+    expect(/recent executions|executions/i.test(bodyText)).toBe(true)
+  })
+
+  it('shows loading state when rule is loading', () => {
+    mockUseGetAutomationRuleByID.mockReturnValue({ data: null, isLoading: true, error: null })
+    const { container } = renderDetail()
+    expect(container.querySelector('.animate-pulse') || screen.queryByText(/loading/i)).toBeTruthy()
+  })
+
+  it('shows not-found message when rule fetch returns null', () => {
+    mockUseGetAutomationRuleByID.mockReturnValue({ data: null, isLoading: false, error: null })
+    renderDetail('nonexistent-id')
+    const bodyText = document.body.textContent ?? ''
+    expect(/not found|not exist|couldn't find/i.test(bodyText)).toBe(true)
+  })
+})

@@ -167,6 +167,10 @@ func (h *TransferSuggestionHandler) GetTransferSuggestions(ctx context.Context, 
 	}
 
 	for i := range items {
+		// Compute can_confirm_match BEFORE masking clears matched_transaction_id.
+		canConfirm := items[i].MatchedTransactionID != nil &&
+			items[i].Status == domain.SuggestionStatusAccepted
+		items[i].CanConfirmMatch = &canConfirm
 		maskReservation(items[i])
 	}
 
@@ -462,6 +466,38 @@ func (h *TransferSuggestionHandler) DeclineMatch(ctx context.Context, input *Dec
 	return buildOutput(suggestion, true), nil
 }
 
+// CancelTransferSuggestionInput is the input for cancelling a pending/accepted suggestion.
+type CancelTransferSuggestionInput struct {
+	inputs.AuthenticatedInput
+	ID   string `path:"id" doc:"Transfer suggestion UUID to cancel"`
+	Body struct {
+		Notes *string `json:"notes,omitempty" doc:"Optional notes for the cancellation"`
+	}
+}
+
+// CancelTransferSuggestionOutput is the response for cancelling a transfer suggestion.
+type CancelTransferSuggestionOutput struct {
+	Body struct {
+		Message    string                     `json:"message"`
+		Suggestion *domain.TransferSuggestion `json:"suggestion"`
+	}
+}
+
+// CancelSuggestion handles POST /api/v1/transfer-suggestions/{id}/cancel.
+// Transitions a pending or accepted suggestion to rejected so it leaves the Awaiting Match tab.
+// Distinct from decline-match, which only clears the fuzzy-match reservation.
+func (h *TransferSuggestionHandler) CancelSuggestion(ctx context.Context, input *CancelTransferSuggestionInput) (*CancelTransferSuggestionOutput, error) {
+	suggestion, err := h.service.CancelAcceptedSuggestion(ctx, input.UserID, input.ID, input.Body.Notes)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	output := &CancelTransferSuggestionOutput{}
+	output.Body.Message = "Transfer suggestion cancelled"
+	output.Body.Suggestion = maskReservation(suggestion)
+	return output, nil
+}
+
 // RegisterTransferSuggestionRoutes registers transfer suggestion routes with the Huma API.
 func RegisterTransferSuggestionRoutes(api huma.API, handler *TransferSuggestionHandler) {
 	// GET /api/v1/transfer-suggestions — list pending suggestions for authenticated user
@@ -520,4 +556,16 @@ func RegisterTransferSuggestionRoutes(api huma.API, handler *TransferSuggestionH
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusOK,
 	}, handler.DeclineMatch)
+
+	// POST /api/v1/transfer-suggestions/{id}/cancel — cancel a pending/accepted suggestion
+	huma.Register(api, huma.Operation{
+		OperationID:   "cancelTransferSuggestion",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/transfer-suggestions/{id}/cancel",
+		Summary:       "Cancel a transfer suggestion",
+		Description:   "Cancels a pending or accepted suggestion, transitioning it to rejected so it leaves the Awaiting Match tab. Distinct from decline-match (which only clears the fuzzy-match reservation without changing status).",
+		Tags:          []string{"TransferSuggestions"},
+		Security:      []map[string][]string{{"clerk": {}}},
+		DefaultStatus: http.StatusOK,
+	}, handler.CancelSuggestion)
 }

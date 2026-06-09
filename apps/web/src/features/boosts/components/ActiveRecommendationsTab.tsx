@@ -1,10 +1,11 @@
 import { Check, X } from 'lucide-react'
 import type { TransferSuggestion } from '@boostedbudget/api-client/models'
 import { Button } from '@/components/ui/button'
+import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
 
-const COLUMN_IDS = ['date', 'amount', 'reason', 'actions']
+const COLUMN_IDS = ['date', 'amount', 'destination', 'context', 'actions']
 
 const formatCurrency = (amount: number, currency: string) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount)
@@ -62,12 +63,27 @@ export function ActiveRecommendationsTab({
       render: (item) => formatCurrency(item.amount, item.currency_code),
     },
     {
-      id: 'reason',
-      header: 'Reason',
+      id: 'destination',
+      header: 'Move To',
+      defaultSize: 160,
+      minSize: 110,
+      render: (item) => (
+        <span className="text-sm font-medium">{item.to_account_name ?? '—'}</span>
+      ),
+    },
+    {
+      id: 'context',
+      header: 'Context',
       resizable: true,
-      defaultSize: 280,
-      minSize: 160,
-      render: (item) => <span className="text-sm text-muted-foreground">{item.reason ?? '—'}</span>,
+      defaultSize: 240,
+      minSize: 140,
+      render: (item) => (
+        <div className="flex flex-col gap-0.5">
+          {item.rule_name && <span className="text-sm text-muted-foreground">{item.rule_name}</span>}
+          {item.reason && <span className="text-xs text-muted-foreground">{item.reason}</span>}
+          {!item.rule_name && !item.reason && <span className="text-sm text-muted-foreground">—</span>}
+        </div>
+      ),
     },
     {
       id: 'actions',
@@ -75,28 +91,30 @@ export function ActiveRecommendationsTab({
       defaultSize: 160,
       minSize: 140,
       render: (item) => (
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="default"
-            disabled={isPending}
-            onClick={() => onAccept(item.id)}
-            aria-label="Accept transfer suggestion"
-          >
-            <Check className="h-3.5 w-3.5 mr-1" />
-            Accept
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={isPending}
-            onClick={() => onReject(item.id)}
-            aria-label="Reject transfer suggestion"
-          >
-            <X className="h-3.5 w-3.5 mr-1" />
-            Reject
-          </Button>
-        </div>
+        <ReadOnlyGuard>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="default"
+              disabled={isPending}
+              onClick={() => onAccept(item.id)}
+              aria-label="Accept transfer suggestion"
+            >
+              <Check className="h-3.5 w-3.5 mr-1" />
+              Accept
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={isPending}
+              onClick={() => onReject(item.id)}
+              aria-label="Reject transfer suggestion"
+            >
+              <X className="h-3.5 w-3.5 mr-1" />
+              Reject
+            </Button>
+          </div>
+        </ReadOnlyGuard>
       ),
     },
   ]

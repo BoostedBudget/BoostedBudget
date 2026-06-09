@@ -1136,3 +1136,237 @@ func TestGetByUserIDStatuses_LimitOffset_Integration(t *testing.T) {
 	assert.Equal(t, 5, total3, "total must be consistent on last page")
 	assert.Len(t, page3, 1, "last page must return only the remaining item")
 }
+
+// TestGetByUserIDStatuses_Enrichment_Integration proves that GetByUserIDStatuses
+// populates the derived enrichment fields (ToAccountName, FromAccountName, RuleName,
+// MatchedTransactionAt) when the underlying rows have those relationships.
+// These fields come from JOINs and cannot be tested with pgxmock.
+func TestGetByUserIDStatuses_Enrichment_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+	`, userID, "test|enr-"+userID.String(), "enr-"+userID.String()+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	// Seed linked_item → from-account (Plaid) and to-account (Plaid) with distinct names.
+	linkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-enr-token')
+	`, linkedItemID, userID, "item-enr-"+linkedItemID.String())
+	require.NoError(t, err, "seed linked_item")
+
+	fromAccID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, 'plaid-from-checking', 'Checking Account', 'depository')
+	`, fromAccID, linkedItemID, userID)
+	require.NoError(t, err, "seed from-account")
+
+	toAccID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, nickname, type)
+		VALUES ($1, $2, $3, 'plaid-to-savings', 'Savings', 'Emergency Fund', 'savings')
+	`, toAccID, linkedItemID, userID)
+	require.NoError(t, err, "seed to-account with nickname")
+
+	// Seed a rule so we have a rule_name to join.
+	ruleID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO rules (id, user_id, name, enabled, priority, rule_type, trigger_config, conditions, condition_logic, actions, created_at, updated_at)
+		VALUES ($1, $2, 'Save Extra Cash', true, 0, 'budget_rollover',
+		        '{"type":"scheduled","cron":"0 0 1 * *"}'::jsonb,
+		        '[]'::jsonb, 'AND', '[]'::jsonb, NOW(), NOW())
+	`, ruleID, userID)
+	require.NoError(t, err, "seed rule")
+
+	// Seed a transaction (for the matched_transaction_at enrichment).
+	txnID := uuid.New()
+	txnCreatedAt := time.Now().Add(-2 * time.Hour)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transactions (id, user_id, account_id, linked_item_id, source, amount, date, name, created_at)
+		VALUES ($1, $2, $3, $4, 'plaid', -300.00, '2024-03-01', 'Transfer', $5)
+	`, txnID, userID, toAccID, linkedItemID, txnCreatedAt)
+	require.NoError(t, err, "seed transaction")
+
+	// Seed a completed suggestion linked to the rule, from-account, to-account, and matched transaction.
+	suggID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transfer_suggestions
+			(id, user_id, rule_id, from_account_id, to_account_id,
+			 amount, source, status, matched_transaction_id, actual_amount, completion_source,
+			 completed_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5,
+		        300.00, 'rule', 'completed', $6, 300.00, 'exact_match',
+		        NOW(), NOW(), NOW())
+	`, suggID, userID, ruleID, fromAccID, toAccID, txnID)
+	require.NoError(t, err, "seed completed suggestion")
+
+	repo := NewTransferSuggestionRepository(tx)
+
+	items, total, err := repo.GetByUserIDStatuses(ctx, userID.String(),
+		[]domain.SuggestionStatus{domain.SuggestionStatusCompleted}, 10, 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, items, 1)
+
+	got := items[0]
+	assert.Equal(t, suggID, got.ID)
+
+	// to_account_name: nickname wins over name when set.
+	require.NotNil(t, got.ToAccountName, "ToAccountName must be populated from to-account JOIN")
+	assert.Equal(t, "Emergency Fund", *got.ToAccountName)
+
+	// from_account_name: no nickname → name used.
+	require.NotNil(t, got.FromAccountName, "FromAccountName must be populated from from-account JOIN")
+	assert.Equal(t, "Checking Account", *got.FromAccountName)
+
+	// rule_name from rules JOIN.
+	require.NotNil(t, got.RuleName, "RuleName must be populated from rules JOIN")
+	assert.Equal(t, "Save Extra Cash", *got.RuleName)
+
+	// matched_transaction_at from transactions JOIN.
+	require.NotNil(t, got.MatchedTransactionAt, "MatchedTransactionAt must be populated from transactions JOIN")
+	assert.WithinDuration(t, txnCreatedAt, *got.MatchedTransactionAt, time.Second)
+}
+
+// TestGetByUserIDStatuses_EventTimeOrdering_Integration proves that results are ordered
+// by event-time (COALESCE(completed_at, user_action_at, updated_at, created_at) DESC)
+// rather than raw created_at DESC. A suggestion created long ago but completed recently
+// must sort above a suggestion created recently but never actioned.
+func TestGetByUserIDStatuses_EventTimeOrdering_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+	`, userID, "test|ord-"+userID.String(), "ord-"+userID.String()+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	// "old-completed": created 10 minutes ago, completed 1 minute ago (high event time).
+	oldCreated := time.Now().Add(-10 * time.Minute)
+	recentCompleted := time.Now().Add(-1 * time.Minute)
+	oldCompletedID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transfer_suggestions
+			(id, user_id, amount, source, status, completed_at, created_at, updated_at)
+		VALUES ($1, $2, 100.00, 'rule', 'completed', $3, $4, $3)
+	`, oldCompletedID, userID, recentCompleted, oldCreated)
+	require.NoError(t, err, "seed old-created/recent-completed suggestion")
+
+	// "new-rejected": created 5 minutes ago, rejected 8 minutes ago (lower event time).
+	newCreated := time.Now().Add(-5 * time.Minute)
+	olderRejected := time.Now().Add(-8 * time.Minute)
+	newRejectedID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transfer_suggestions
+			(id, user_id, amount, source, status, user_action_at, created_at, updated_at)
+		VALUES ($1, $2, 100.00, 'rule', 'rejected', $3, $4, $3)
+	`, newRejectedID, userID, olderRejected, newCreated)
+	require.NoError(t, err, "seed newer-created/older-event suggestion")
+
+	repo := NewTransferSuggestionRepository(tx)
+
+	items, total, err := repo.GetByUserIDStatuses(ctx, userID.String(),
+		[]domain.SuggestionStatus{domain.SuggestionStatusCompleted, domain.SuggestionStatusRejected},
+		10, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+	require.Len(t, items, 2)
+
+	// old-completed (event time = completed_at = 1 min ago) must be first.
+	assert.Equal(t, oldCompletedID, items[0].ID,
+		"suggestion completed more recently must sort first, even if created earlier")
+	assert.Equal(t, newRejectedID, items[1].ID,
+		"suggestion with older event time must sort second, even if created more recently")
+}
+
+// TestCancelAcceptedSuggestion_Integration proves that CancelAcceptedSuggestion:
+//   - Transitions pending → rejected (succeeds).
+//   - Transitions accepted → rejected (the fix for the bug where UpdateStatus silently
+//     no-ops on accepted rows due to WHERE status='pending').
+//   - Clears matched_transaction_id in the same UPDATE.
+//   - Returns ErrTransferSuggestionAlreadyActioned for completed/rejected/expired rows.
+func TestCancelAcceptedSuggestion_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+	`, userID, "test|"+userID.String(), "cancel-accepted-"+userID.String()+"@example.com")
+	require.NoError(t, err)
+
+	insert := func(status string, matchedTxnID *string) string {
+		id := uuid.New().String()
+		if matchedTxnID != nil {
+			_, err = tx.Exec(ctx, `
+				INSERT INTO transfer_suggestions (id, user_id, amount, source, status, matched_transaction_id, created_at, updated_at)
+				VALUES ($1, $2, 100.00, 'rule', $3, $4, NOW(), NOW())
+			`, id, userID, status, *matchedTxnID)
+		} else {
+			_, err = tx.Exec(ctx, `
+				INSERT INTO transfer_suggestions (id, user_id, amount, source, status, created_at, updated_at)
+				VALUES ($1, $2, 100.00, 'rule', $3, NOW(), NOW())
+			`, id, userID, status)
+		}
+		require.NoError(t, err)
+		return id
+	}
+
+	repo := NewTransferSuggestionRepository(tx)
+
+	// pending → rejected.
+	pendingID := insert("pending", nil)
+	err = repo.CancelAcceptedSuggestion(ctx, pendingID, nil)
+	require.NoError(t, err, "CancelAcceptedSuggestion on pending must succeed")
+	s, err := repo.GetByID(ctx, pendingID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.SuggestionStatusRejected, s.Status)
+
+	// accepted → rejected (this is the bug fix — UpdateStatus would silently no-op here).
+	txnID := "txn-reserved-" + uuid.New().String()
+	acceptedID := insert("accepted", &txnID)
+	err = repo.CancelAcceptedSuggestion(ctx, acceptedID, nil)
+	require.NoError(t, err, "CancelAcceptedSuggestion on accepted must succeed")
+	s, err = repo.GetByID(ctx, acceptedID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.SuggestionStatusRejected, s.Status)
+	assert.Nil(t, s.MatchedTransactionID, "matched_transaction_id must be cleared on cancel")
+
+	// completed → AlreadyActioned.
+	completedID := insert("completed", nil)
+	err = repo.CancelAcceptedSuggestion(ctx, completedID, nil)
+	require.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned,
+		"CancelAcceptedSuggestion on completed must return AlreadyActioned")
+
+	// rejected → AlreadyActioned.
+	rejectedID := insert("rejected", nil)
+	err = repo.CancelAcceptedSuggestion(ctx, rejectedID, nil)
+	require.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned,
+		"CancelAcceptedSuggestion on rejected must return AlreadyActioned")
+
+	// not found → ErrTransferSuggestionNotFound.
+	err = repo.CancelAcceptedSuggestion(ctx, uuid.New().String(), nil)
+	require.ErrorIs(t, err, domain.ErrTransferSuggestionNotFound,
+		"CancelAcceptedSuggestion on non-existent ID must return NotFound")
+}
