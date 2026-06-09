@@ -4866,6 +4866,41 @@ components:
         - created_at
         - updated_at
       type: object
+    TransferSuggestionListResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/TransferSuggestionListResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          description: List of transfer suggestions
+          items:
+            $ref: "#/components/schemas/TransferSuggestion"
+          type:
+            - array
+            - "null"
+        limit:
+          description: Maximum results per page as requested
+          format: int64
+          type: integer
+        offset:
+          description: Number of results skipped
+          format: int64
+          type: integer
+        total:
+          description: Total number of matching suggestions across all pages
+          format: int64
+          type: integer
+      required:
+        - items
+        - total
+        - limit
+        - offset
+      type: object
     TriggerAutomationRuleInputBody:
       additionalProperties: false
       properties:
@@ -10851,16 +10886,41 @@ paths:
     get:
       description: Returns all pending transfer suggestions for the authenticated user.
       operationId: getTransferSuggestions
+      parameters:
+        - description: Comma-separated list of statuses to filter by (e.g. completed,rejected,expired). Omit for pending-only.
+          explode: false
+          in: query
+          name: status
+          schema:
+            description: Comma-separated list of statuses to filter by (e.g. completed,rejected,expired). Omit for pending-only.
+            type: string
+        - description: Maximum number of suggestions to return.
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 20
+            description: Maximum number of suggestions to return.
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+        - description: Number of suggestions to skip for pagination.
+          explode: false
+          in: query
+          name: offset
+          schema:
+            default: 0
+            description: Number of suggestions to skip for pagination.
+            format: int64
+            minimum: 0
+            type: integer
       responses:
         "200":
           content:
             application/json:
               schema:
-                items:
-                  $ref: "#/components/schemas/TransferSuggestion"
-                type:
-                  - array
-                  - "null"
+                $ref: "#/components/schemas/TransferSuggestionListResponse"
           description: OK
         default:
           content:

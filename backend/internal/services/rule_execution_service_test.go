@@ -276,6 +276,33 @@ func (m *mockTransferSuggestionRepository) ClearStaleReservations(_ context.Cont
 	return 0, nil
 }
 
+func (m *mockTransferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, userID string, statuses []domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, int, error) {
+	statusSet := make(map[domain.SuggestionStatus]bool, len(statuses))
+	for _, s := range statuses {
+		statusSet[s] = true
+	}
+	if len(statusSet) == 0 {
+		statusSet[domain.SuggestionStatusPending] = true
+	}
+	var result []*domain.TransferSuggestion
+	for _, s := range m.suggestions {
+		if s.UserID == userID && statusSet[s.Status] {
+			result = append(result, s)
+		}
+	}
+	total := len(result)
+	// Apply pagination.
+	if offset < len(result) {
+		result = result[offset:]
+	} else {
+		result = nil
+	}
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+	return result, total, nil
+}
+
 // TestConditionEvaluation tests the condition matching logic.
 func TestConditionEvaluation(t *testing.T) {
 	t.Run("evaluates equals operator", func(t *testing.T) {

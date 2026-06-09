@@ -107,12 +107,12 @@ export function RulesPage() {
 
   // Handlers
   const handleCreateRule = useCallback(() => {
-    navigate('/rules/new')
+    navigate('/boosts/new')
   }, [navigate])
 
   const handleEditRule = useCallback(
     (rule: AutomationRule) => {
-      navigate(`/rules/${rule.id}/edit`)
+      navigate(`/boosts/${rule.id}/edit`)
     },
     [navigate]
   )

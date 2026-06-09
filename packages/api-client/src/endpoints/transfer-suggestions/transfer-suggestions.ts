@@ -53,9 +53,10 @@ import type {
   ConfirmTransferSuggestionMatchOutputBody,
   DeclineTransferSuggestionMatchOutputBody,
   ErrorModel,
+  GetTransferSuggestionsParams,
   RejectTransferSuggestionInputBody,
   RejectTransferSuggestionOutputBody,
-  TransferSuggestion
+  TransferSuggestionListResponse
 } from '../../models';
 
 import { customInstance } from '../../client';
@@ -98,13 +99,14 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
  * @summary Get pending transfer suggestions
  */
 export const getTransferSuggestions = (
-
+    params?: GetTransferSuggestionsParams,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
-      return customInstance<TransferSuggestion[] | null>(
-      {url: `/api/v1/transfer-suggestions`, method: 'GET', signal
+      return customInstance<TransferSuggestionListResponse>(
+      {url: `/api/v1/transfer-suggestions`, method: 'GET',
+        params, signal
     },
       options);
     }
@@ -112,23 +114,23 @@ export const getTransferSuggestions = (
 
 
 
-export const getGetTransferSuggestionsQueryKey = () => {
+export const getGetTransferSuggestionsQueryKey = (params?: GetTransferSuggestionsParams,) => {
     return [
-    `/api/v1/transfer-suggestions`
+    `/api/v1/transfer-suggestions`, ...(params ? [params] : [])
     ] as const;
     }
 
 
-export const getGetTransferSuggestionsQueryOptions = <TData = Awaited<ReturnType<typeof getTransferSuggestions>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransferSuggestions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export const getGetTransferSuggestionsQueryOptions = <TData = Awaited<ReturnType<typeof getTransferSuggestions>>, TError = ErrorType<ErrorModel>>(params?: GetTransferSuggestionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransferSuggestions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getGetTransferSuggestionsQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getGetTransferSuggestionsQueryKey(params);
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTransferSuggestions>>> = ({ signal }) => getTransferSuggestions(requestOptions, signal);
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTransferSuggestions>>> = ({ signal }) => getTransferSuggestions(params, requestOptions, signal);
 
 
 
@@ -142,7 +144,7 @@ export type GetTransferSuggestionsQueryError = ErrorType<ErrorModel>
 
 
 export function useGetTransferSuggestions<TData = Awaited<ReturnType<typeof getTransferSuggestions>>, TError = ErrorType<ErrorModel>>(
-  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransferSuggestions>>, TError, TData>> & Pick<
+ params: undefined |  GetTransferSuggestionsParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransferSuggestions>>, TError, TData>> & Pick<
         DefinedInitialDataOptions<
           Awaited<ReturnType<typeof getTransferSuggestions>>,
           TError,
@@ -152,7 +154,7 @@ export function useGetTransferSuggestions<TData = Awaited<ReturnType<typeof getT
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetTransferSuggestions<TData = Awaited<ReturnType<typeof getTransferSuggestions>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransferSuggestions>>, TError, TData>> & Pick<
+ params?: GetTransferSuggestionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransferSuggestions>>, TError, TData>> & Pick<
         UndefinedInitialDataOptions<
           Awaited<ReturnType<typeof getTransferSuggestions>>,
           TError,
@@ -162,7 +164,7 @@ export function useGetTransferSuggestions<TData = Awaited<ReturnType<typeof getT
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetTransferSuggestions<TData = Awaited<ReturnType<typeof getTransferSuggestions>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransferSuggestions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ params?: GetTransferSuggestionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransferSuggestions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -170,11 +172,11 @@ export function useGetTransferSuggestions<TData = Awaited<ReturnType<typeof getT
  */
 
 export function useGetTransferSuggestions<TData = Awaited<ReturnType<typeof getTransferSuggestions>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransferSuggestions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ params?: GetTransferSuggestionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransferSuggestions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
-  const queryOptions = getGetTransferSuggestionsQueryOptions(options)
+  const queryOptions = getGetTransferSuggestionsQueryOptions(params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

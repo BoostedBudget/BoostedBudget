@@ -963,3 +963,176 @@ func TestClearStaleReservations_ClosesMatchNotifications_Integration(t *testing.
 	assert.False(t, freshRead,
 		"fresh suggestion's notification must NOT be closed (expiry not yet reached)")
 }
+
+// TestGetByUserIDStatuses_ReturnsFilteredByStatus_Integration proves that
+// GetByUserIDStatuses returns only the rows matching the requested status slice
+// and orders them most-recent-first.
+//
+// pgxmock cannot verify the ANY($2) array binding or ORDER BY — this requires
+// a real Postgres connection.
+func TestGetByUserIDStatuses_ReturnsFilteredByStatus_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+	`, userID, "test|filter-"+userID.String(), "status-filter-"+userID.String()+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	// Seed one suggestion of each status, with distinct created_at times so ordering is deterministic.
+	type statusEntry struct {
+		id     string
+		status domain.SuggestionStatus
+	}
+	statuses := []statusEntry{
+		{uuid.New().String(), domain.SuggestionStatusPending},
+		{uuid.New().String(), domain.SuggestionStatusAccepted},
+		{uuid.New().String(), domain.SuggestionStatusRejected},
+		{uuid.New().String(), domain.SuggestionStatusExpired},
+		{uuid.New().String(), domain.SuggestionStatusCompleted},
+	}
+	base := time.Now().Add(-5 * time.Minute)
+	for i, entry := range statuses {
+		createdAt := base.Add(time.Duration(i) * time.Minute)
+		_, err = tx.Exec(ctx, `
+			INSERT INTO transfer_suggestions
+				(id, user_id, amount, source, status, created_at, updated_at)
+			VALUES ($1, $2, 100.00, 'rule', $3, $4, $4)
+		`, entry.id, userID, string(entry.status), createdAt)
+		require.NoError(t, err, "seed suggestion status=%s", entry.status)
+	}
+
+	repo := NewTransferSuggestionRepository(tx)
+
+	// Query accepted only — expect exactly the accepted row.
+	items, total, err := repo.GetByUserIDStatuses(ctx, userID.String(),
+		[]domain.SuggestionStatus{domain.SuggestionStatusAccepted}, 50, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 1, total, "total must equal the count of accepted rows")
+	require.Len(t, items, 1, "items must contain exactly the accepted suggestion")
+	assert.Equal(t, string(domain.SuggestionStatusAccepted), string(items[0].Status))
+
+	// Query completed+rejected+expired — expect 3 rows, most-recent-first.
+	items, total, err = repo.GetByUserIDStatuses(ctx, userID.String(),
+		[]domain.SuggestionStatus{
+			domain.SuggestionStatusCompleted,
+			domain.SuggestionStatusRejected,
+			domain.SuggestionStatusExpired,
+		}, 50, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 3, total, "total must equal count of completed+rejected+expired rows")
+	require.Len(t, items, 3, "items must contain completed, rejected, expired")
+
+	// Verify most-recent-first ordering by created_at.
+	for i := 0; i < len(items)-1; i++ {
+		assert.True(t, !items[i].CreatedAt.Before(items[i+1].CreatedAt),
+			"items must be ordered most-recent-first (index %d vs %d)", i, i+1)
+	}
+}
+
+// TestGetByUserIDStatuses_EmptySlice_ReturnsPendingOnly_Integration proves that
+// passing a nil status slice preserves the original pending-only semantics,
+// matching the existing GetPendingByUserID contract.
+func TestGetByUserIDStatuses_EmptySlice_ReturnsPendingOnly_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+	`, userID, "test|empty-"+userID.String(), "empty-slice-"+userID.String()+"@example.com")
+	require.NoError(t, err)
+
+	// Seed one pending and one completed suggestion.
+	pendingID := uuid.New().String()
+	completedID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, created_at, updated_at)
+		VALUES ($1, $2, 200.00, 'rule', 'pending', NOW(), NOW()),
+		       ($3, $2, 200.00, 'rule', 'completed', NOW() - interval '1 minute', NOW())
+	`, pendingID, userID, completedID)
+	require.NoError(t, err)
+
+	repo := NewTransferSuggestionRepository(tx)
+
+	// nil/empty slice → pending only.
+	items, total, err := repo.GetByUserIDStatuses(ctx, userID.String(), nil, 50, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 1, total, "empty-slice call must return exactly the pending row (total=1)")
+	require.Len(t, items, 1)
+	assert.Equal(t, string(domain.SuggestionStatusPending), string(items[0].Status))
+	assert.Equal(t, pendingID, items[0].ID)
+}
+
+// TestGetByUserIDStatuses_LimitOffset_Integration proves that limit and offset
+// are respected and that total reflects the full filtered count (not just the
+// page size), enabling UI pagination.
+func TestGetByUserIDStatuses_LimitOffset_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+	`, userID, "test|page-"+userID.String(), "page-"+userID.String()+"@example.com")
+	require.NoError(t, err)
+
+	// Seed 5 completed suggestions with distinct created_at times.
+	base := time.Now().Add(-10 * time.Minute)
+	var suggIDs [5]string
+	for i := range suggIDs {
+		suggIDs[i] = uuid.New().String()
+		createdAt := base.Add(time.Duration(i) * time.Minute)
+		_, err = tx.Exec(ctx, `
+			INSERT INTO transfer_suggestions
+				(id, user_id, amount, source, status, created_at, updated_at)
+			VALUES ($1, $2, 50.00, 'rule', 'completed', $3, $3)
+		`, suggIDs[i], userID, createdAt)
+		require.NoError(t, err)
+	}
+
+	repo := NewTransferSuggestionRepository(tx)
+
+	// Page 1: limit=2, offset=0 → 2 items, total=5.
+	page1, total, err := repo.GetByUserIDStatuses(ctx, userID.String(),
+		[]domain.SuggestionStatus{domain.SuggestionStatusCompleted}, 2, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 5, total, "total must reflect all 5 completed rows, not just page size")
+	assert.Len(t, page1, 2, "page 1 must return exactly 2 items")
+
+	// Page 2: limit=2, offset=2 → 2 items, total=5.
+	page2, total2, err := repo.GetByUserIDStatuses(ctx, userID.String(),
+		[]domain.SuggestionStatus{domain.SuggestionStatusCompleted}, 2, 2)
+	require.NoError(t, err)
+	assert.Equal(t, 5, total2, "total must be consistent across pages")
+	assert.Len(t, page2, 2, "page 2 must return exactly 2 items")
+
+	// Pages must not overlap.
+	page1IDs := map[string]bool{page1[0].ID: true, page1[1].ID: true}
+	for _, item := range page2 {
+		assert.False(t, page1IDs[item.ID], "page 2 must not repeat items from page 1")
+	}
+
+	// Last page: limit=2, offset=4 → 1 item, total=5.
+	page3, total3, err := repo.GetByUserIDStatuses(ctx, userID.String(),
+		[]domain.SuggestionStatus{domain.SuggestionStatusCompleted}, 2, 4)
+	require.NoError(t, err)
+	assert.Equal(t, 5, total3, "total must be consistent on last page")
+	assert.Len(t, page3, 1, "last page must return only the remaining item")
+}

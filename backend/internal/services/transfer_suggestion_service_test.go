@@ -102,6 +102,14 @@ func (m *mockTransferSuggestionRepo) ClearMatchedTransactionID(ctx context.Conte
 	return args.Error(0)
 }
 
+func (m *mockTransferSuggestionRepo) GetByUserIDStatuses(ctx context.Context, userID string, statuses []domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, int, error) {
+	args := m.Called(ctx, userID, statuses, limit, offset)
+	if args.Get(0) == nil {
+		return nil, args.Int(1), args.Error(2)
+	}
+	return args.Get(0).([]*domain.TransferSuggestion), args.Int(1), args.Error(2)
+}
+
 // =============================================================================
 // Test Helpers
 // =============================================================================
@@ -1142,5 +1150,81 @@ func TestConfirmTransferSuggestionMatch_StaleReservation_RejectsWithAlreadyActio
 	// GAP AU: must reject to prevent double-count
 	assert.Nil(t, result)
 	assert.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned)
+	suggestionRepo.AssertExpectations(t)
+}
+
+// =============================================================================
+// GetSuggestionsByStatus Tests (#1267 Boosts page)
+// =============================================================================
+
+func TestTransferSuggestionService_GetSuggestionsByStatus_DefaultsToPending(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-123"
+	pending := createTestTransferSuggestion(userID)
+	pending.Status = domain.SuggestionStatusPending
+
+	// nil status slice → pending only semantics: delegates to GetByUserIDStatuses with nil
+	suggestionRepo.On("GetByUserIDStatuses", ctx, userID,
+		[]domain.SuggestionStatus(nil), 20, 0).
+		Return([]*domain.TransferSuggestion{pending}, 1, nil)
+
+	items, total, err := svc.GetSuggestionsByStatus(ctx, userID, nil, 20, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	require.Len(t, items, 1)
+	assert.Equal(t, domain.SuggestionStatusPending, items[0].Status)
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_GetSuggestionsByStatus_FiltersAndPaginates(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-456"
+	statuses := []domain.SuggestionStatus{
+		domain.SuggestionStatusCompleted,
+		domain.SuggestionStatusRejected,
+	}
+	completed := createTestTransferSuggestion(userID)
+	completed.ID = "sugg-completed"
+	completed.Status = domain.SuggestionStatusCompleted
+
+	suggestionRepo.On("GetByUserIDStatuses", ctx, userID, statuses, 10, 5).
+		Return([]*domain.TransferSuggestion{completed}, 15, nil)
+
+	items, total, err := svc.GetSuggestionsByStatus(ctx, userID, statuses, 10, 5)
+
+	require.NoError(t, err)
+	assert.Equal(t, 15, total)
+	require.Len(t, items, 1)
+	assert.Equal(t, "sugg-completed", items[0].ID)
+	suggestionRepo.AssertExpectations(t)
+}
+
+func TestTransferSuggestionService_GetSuggestionsByStatus_PropagatesRepoError(t *testing.T) {
+	ctx := context.Background()
+	suggestionRepo := new(mockTransferSuggestionRepo)
+
+	svc := NewTransferSuggestionService(suggestionRepo)
+
+	userID := "user-789"
+	statuses := []domain.SuggestionStatus{domain.SuggestionStatusAccepted}
+	repoErr := errors.New("db connection error")
+
+	suggestionRepo.On("GetByUserIDStatuses", ctx, userID, statuses, 20, 0).
+		Return(nil, 0, repoErr)
+
+	items, total, err := svc.GetSuggestionsByStatus(ctx, userID, statuses, 20, 0)
+
+	assert.ErrorIs(t, err, repoErr)
+	assert.Nil(t, items)
+	assert.Equal(t, 0, total)
 	suggestionRepo.AssertExpectations(t)
 }

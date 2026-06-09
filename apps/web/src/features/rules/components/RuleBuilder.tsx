@@ -301,7 +301,7 @@ export function RuleBuilder() {
         })
         trackEvent(ANALYTICS_EVENTS.RULE_CREATED)
       }
-      navigate('/rules')
+      navigate('/boosts')
     } catch {
       // Error handling is done by React Query
     }
@@ -326,7 +326,7 @@ export function RuleBuilder() {
 
   // Handle cancel
   const handleCancel = useCallback(() => {
-    navigate('/rules')
+    navigate('/boosts')
   }, [navigate])
 
   // Handle rule type change

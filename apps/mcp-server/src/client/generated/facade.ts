@@ -422,8 +422,8 @@ export function createApiClient(mutator: FetchMutator) {
     } as const,
     transfersuggestions: {
       /** GET /api/v1/transfer-suggestions */
-      getTransferSuggestions(signal?: AbortSignal): Promise<unknown> {
-        return mutator({ url: '/api/v1/transfer-suggestions', method: 'GET', signal })
+      getTransferSuggestions(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/transfer-suggestions', method: 'GET', params, signal })
       },
       /** PATCH /api/v1/transfer-suggestions/{id}/accept */
       acceptTransferSuggestion(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
