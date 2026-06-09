@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { ReadOnlyProvider } from '@/auth/ReadOnlyContext'
 import { RuleBuilder } from './RuleBuilder'
 import type { AutomationRule } from '@boostedbudget/api-client/models'
 
@@ -447,6 +448,45 @@ describe('RuleBuilder', () => {
       expect(screen.getByLabelText(/description/i)).toBeInTheDocument()
       expect(screen.getByLabelText(/rule type/i)).toBeInTheDocument()
       expect(screen.getByLabelText(/priority/i)).toBeInTheDocument()
+    })
+  })
+
+  describe('Read-only guarding (R2-D)', () => {
+    function renderReadOnly() {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      })
+      return render(
+        <ReadOnlyProvider isReadOnly={true}>
+          <QueryClientProvider client={queryClient}>
+            <MemoryRouter initialEntries={['/boosts/new']}>
+              <Routes>
+                <Route path="/boosts/new" element={<RuleBuilder />} />
+              </Routes>
+            </MemoryRouter>
+          </QueryClientProvider>
+        </ReadOnlyProvider>
+      )
+    }
+
+    it('wraps save/submit controls in ReadOnlyGuard in read-only mode', async () => {
+      const { container } = renderReadOnly()
+      // ReadOnlyGuard applies .pointer-events-none to its wrapper in read-only mode
+      await waitFor(() => {
+        expect(container.querySelector('.pointer-events-none')).toBeTruthy()
+      })
+    })
+
+    it('does not render Save button as interactive when read-only', async () => {
+      renderReadOnly()
+      await waitFor(() => {
+        // The save button should still be in the DOM (defense-in-depth) but guarded
+        const saveBtn = screen.queryByLabelText(/save rule/i)
+        if (saveBtn) {
+          // If it's present, it should be inside a read-only guard container
+          expect(saveBtn.closest('.pointer-events-none')).toBeTruthy()
+        }
+      })
     })
   })
 })

@@ -11,6 +11,8 @@ import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { ArrowLeft, Save } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
+import { useReadOnly } from '@/auth/ReadOnlyContext'
 import {
   useCreateAutomationRule,
   useUpdateAutomationRule,
@@ -92,6 +94,7 @@ export function RuleBuilder() {
   const { id } = useParams<{ id: string }>()
   const [searchParams] = useSearchParams()
   const isEditMode = !!id
+  const { isReadOnly } = useReadOnly()
 
   // Pre-fill from query params
   const prefilledType = searchParams.get('type') as RuleType | null
@@ -245,6 +248,9 @@ export function RuleBuilder() {
 
   // Handle save
   const handleSave = useCallback(async () => {
+    // Defense-in-depth: backend 403s for read-only users, but also block client-side
+    // to prevent form submissions triggered via keyboard (Enter key on inputs).
+    if (isReadOnly) return
     setSubmitted(true)
     const validationErrors = validate()
     setErrors(validationErrors)
@@ -306,6 +312,7 @@ export function RuleBuilder() {
       // Error handling is done by React Query
     }
   }, [
+    isReadOnly,
     validate,
     getCurrentAction,
     name,
@@ -514,26 +521,29 @@ export function RuleBuilder() {
           </section>
         )}
 
-        {/* Form Actions */}
-        <div className="flex justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onClick={handleCancel}
-            className="inline-flex items-center gap-2 rounded-lg bg-muted px-5 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/80 dark:bg-muted/50 dark:hover:bg-muted/40"
-            aria-label="Cancel"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={isPending}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:h-4 [&>svg]:w-4"
-            aria-label="Save rule"
-          >
-            <Save aria-hidden="true" />
-            {isPending ? 'Saving...' : 'Save Rule'}
-          </button>
-        </div>
+        {/* Form Actions — wrapped in ReadOnlyGuard: backend 403s anyway, but guard
+            the UI controls as defense-in-depth (trial/read-only accounts see no submit) */}
+        <ReadOnlyGuard>
+          <div className="flex justify-end gap-3 pt-2">
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="inline-flex items-center gap-2 rounded-lg bg-muted px-5 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/80 dark:bg-muted/50 dark:hover:bg-muted/40"
+              aria-label="Cancel"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isPending}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:h-4 [&>svg]:w-4"
+              aria-label="Save rule"
+            >
+              <Save aria-hidden="true" />
+              {isPending ? 'Saving...' : 'Save Rule'}
+            </button>
+          </div>
+        </ReadOnlyGuard>
       </form>
     </div>
   )

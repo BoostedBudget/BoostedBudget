@@ -1,7 +1,8 @@
 // Issue #1267 Gap W5: /boosts/:id — rule detail + recent execution history (last 5)
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, AlertCircle } from 'lucide-react'
 import { useGetAutomationRuleByID } from '@boostedbudget/api-client/endpoints/automation-rules/automation-rules'
+import { EmptyState } from '@/components/ui/empty-state'
 import { RULE_TYPE_LABELS } from '@/features/rules/constants'
 import { RuleExecutionHistory } from '@/features/rules/components/RuleExecutionHistory'
 import type { RuleType } from '@/features/rules/types'
@@ -23,16 +24,21 @@ export function RuleDetailPage() {
 
   if (!rule) {
     return (
-      <div className="p-6 text-center text-muted-foreground">
-        <p className="text-base font-medium">Rule not found</p>
-        <p className="mt-1 text-sm">We couldn't find a rule with this ID.</p>
-        <Link
-          to="/boosts?tab=rules"
-          className="mt-4 inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to Rules
-        </Link>
+      <div className="flex flex-col items-center justify-center p-6">
+        <EmptyState
+          icon={<AlertCircle />}
+          title="Rule not found"
+          description="We couldn't find a rule with this ID."
+          action={
+            <Link
+              to="/boosts?tab=rules"
+              className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to Rules
+            </Link>
+          }
+        />
       </div>
     )
   }
@@ -60,7 +66,6 @@ export function RuleDetailPage() {
       </div>
 
       <section>
-        <h2 className="mb-3 text-lg font-medium text-foreground">Recent Executions</h2>
         <RuleExecutionHistory ruleId={id ?? ''} limit={5} />
       </section>
     </div>

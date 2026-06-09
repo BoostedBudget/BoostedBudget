@@ -11,14 +11,20 @@ import type { AutomationRule } from '@boostedbudget/api-client/models'
 import { formatRelativeTime } from '@/shared/dates'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, SortState } from '@/shared/components/DataTable'
+import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
+import { EmptyState } from '@/components/ui/empty-state'
 import { RULE_TYPE_LABELS } from '../constants'
+import { formatRuleConditionsSummary, formatRuleActionSummary } from '../utils'
 import type { RuleType } from '../types'
 
 export type SortColumn = 'name' | 'type' | 'status' | 'trigger' | 'lastRun' | 'priority'
 export type SortDirection = 'asc' | 'desc'
 
 // eslint-disable-next-line react-refresh/only-export-components
-export const RULE_COLUMN_IDS = ['select', 'name', 'type', 'status', 'trigger', 'lastRun', 'priority'] as const
+export const RULE_COLUMN_IDS = ['select', 'name', 'type', 'status', 'trigger', 'lastRun', 'priority', 'details'] as const
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const RULE_SORTABLE_COLUMNS = new Set([
@@ -178,16 +184,9 @@ export function RuleTable({
       minSize: 90,
       maxSize: 160,
       render: (row) => (
-        <span
-          className={cn(
-            'inline-flex items-center rounded-md px-2 py-1 text-xs font-medium',
-            row.enabled
-              ? 'bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300'
-              : 'bg-muted text-muted-foreground'
-          )}
-        >
+        <Badge variant={row.enabled ? 'success' : 'secondary'}>
           {row.enabled ? 'Enabled' : 'Disabled'}
-        </span>
+        </Badge>
       ),
     },
     {
@@ -249,18 +248,39 @@ export function RuleTable({
       maxSize: 140,
       render: (row) => <span className="tabular-nums text-muted-foreground">{row.priority}</span>,
     },
+    {
+      id: 'details',
+      header: 'Details',
+      resizable: true,
+      reorderable: true,
+      hideable: true,
+      defaultSize: 240,
+      minSize: 160,
+      render: (row) => {
+        const conditionSummary = formatRuleConditionsSummary(row.conditions, row.condition_logic)
+        const actionSummary = formatRuleActionSummary(row.rule_type, row.actions)
+        return (
+          <div className="flex flex-col gap-0.5">
+            {conditionSummary && (
+              <span className="text-xs text-muted-foreground italic">{conditionSummary}</span>
+            )}
+            {actionSummary && (
+              <span className="text-xs text-muted-foreground italic">{actionSummary}</span>
+            )}
+          </div>
+        )
+      },
+    },
   ]
 
   if (!loading && rules.length === 0) {
     return (
-      <div
-        className={cn(
-          'rounded-lg border border-dashed border-border bg-card px-6 py-12 text-center text-muted-foreground',
-          className
-        )}
-      >
-        <p>No rules found. Create your first automation rule to get started.</p>
-      </div>
+      <EmptyState
+        icon={<Zap />}
+        title="No rules found"
+        description="Create your first automation rule to get started."
+        className={className}
+      />
     )
   }
 
@@ -278,6 +298,7 @@ export function RuleTable({
       onRowClick={onRowClick}
       columnSizing={sizing}
       onColumnSizingChange={onSizingChange}
+      maskedColumnIds={['details']}
       tableId="rules"
       columnOrder={columnOrder}
       onColumnOrderChange={onColumnOrderChange}
@@ -286,75 +307,66 @@ export function RuleTable({
       rowClassName={(row) =>
         cn(
           onRowClick && 'rule-table__row--clickable',
-          selectedIds.includes(row.id) && 'bg-blue-50 hover:bg-blue-100 dark:bg-blue-900 dark:hover:bg-blue-800'
+          selectedIds.includes(row.id) && 'bg-accent'
         )
       }
       className={cn(loading && 'rule-table--loading', className)}
       rowActions={
         hasActions
           ? (row) => (
-              <div className="flex items-center justify-end gap-2">
-                {onToggle && (
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={row.enabled}
-                    onClick={() => handleToggle(row)}
-                    disabled={loading}
-                    className={cn(
-                      'relative h-5 w-9 shrink-0 cursor-pointer rounded-full border-none transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-                      row.enabled
-                        ? 'bg-green-500 dark:bg-green-600'
-                        : 'bg-muted-foreground/30 dark:bg-muted-foreground/20'
-                    )}
-                    aria-label={row.enabled ? 'Disable rule' : 'Enable rule'}
-                    title={row.enabled ? 'Disable rule' : 'Enable rule'}
-                  >
-                    <span
-                      className={cn(
-                        'absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform',
-                        row.enabled && 'translate-x-4'
-                      )}
+              <ReadOnlyGuard>
+                <div className="flex items-center justify-end gap-2">
+                  {onToggle && (
+                    <Switch
+                      checked={row.enabled}
+                      onCheckedChange={() => handleToggle(row)}
+                      disabled={loading}
+                      aria-label={row.enabled ? 'Disable rule' : 'Enable rule'}
+                      title={row.enabled ? 'Disable rule' : 'Enable rule'}
                     />
-                  </button>
-                )}
-                {onTest && (
-                  <button
-                    type="button"
-                    onClick={() => onTest(row)}
-                    disabled={loading}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:h-4 [&>svg]:w-4"
-                    aria-label="Backtest rule"
-                    title="Backtest - See what this rule would have done with your recent data"
-                  >
-                    <Play aria-hidden="true" />
-                  </button>
-                )}
-                {onEdit && (
-                  <button
-                    type="button"
-                    onClick={() => onEdit(row)}
-                    disabled={loading}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:h-4 [&>svg]:w-4"
-                    aria-label="Edit rule"
-                    title="Edit rule"
-                  >
-                    <Edit aria-hidden="true" />
-                  </button>
-                )}
-                {onDelete && (
-                  <button
-                    type="button"
-                    onClick={() => onDelete(row)}
-                    disabled={loading}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-red-50 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-900 dark:hover:text-red-400 [&>svg]:h-4 [&>svg]:w-4"
-                    aria-label="Delete rule"
-                    title="Delete rule"
-                  >
-                    <Trash2 aria-hidden="true" />
-                  </button>
-                )}
-              </div>
+                  )}
+                  {onTest && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => onTest(row)}
+                      disabled={loading}
+                      aria-label="Backtest rule"
+                      title="Backtest - See what this rule would have done with your recent data"
+                    >
+                      <Play aria-hidden="true" />
+                    </Button>
+                  )}
+                  {onEdit && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => onEdit(row)}
+                      disabled={loading}
+                      aria-label="Edit rule"
+                      title="Edit rule"
+                    >
+                      <Edit aria-hidden="true" />
+                    </Button>
+                  )}
+                  {onDelete && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => onDelete(row)}
+                      disabled={loading}
+                      aria-label="Delete rule"
+                      title="Delete rule"
+                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                    >
+                      <Trash2 aria-hidden="true" />
+                    </Button>
+                  )}
+                </div>
+              </ReadOnlyGuard>
             )
           : undefined
       }

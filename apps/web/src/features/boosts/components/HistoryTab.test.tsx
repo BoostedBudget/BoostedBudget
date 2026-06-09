@@ -259,4 +259,35 @@ describe('HistoryTab', () => {
     )
     expect(screen.getByText(/didn't have enough in checking/i)).toBeTruthy()
   })
+
+  // === R2-E: PII masking + EmptyState ===
+
+  it('masks amount and notes columns (≥2 ph-mask tds per row)', () => {
+    const { container } = render(
+      <HistoryTab
+        items={[completedItem]}
+        total={1}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        onPageChange={mockOnPageChange}
+      />
+    )
+    const masked = container.querySelectorAll('[data-ph-mask]')
+    expect(masked.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('renders EmptyState component (data-slot="empty-state") for empty items', () => {
+    const { container } = render(
+      <HistoryTab
+        items={[]}
+        total={0}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        onPageChange={mockOnPageChange}
+      />
+    )
+    expect(container.querySelector('[data-slot="empty-state"]')).toBeTruthy()
+  })
 })

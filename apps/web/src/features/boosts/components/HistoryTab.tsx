@@ -1,15 +1,12 @@
+import { History } from 'lucide-react'
 import type { TransferSuggestion } from '@boostedbudget/api-client/models'
+import { EmptyState } from '@/components/ui/empty-state'
 import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
+import { formatCurrency, formatDate } from '../constants'
 import { SuggestionStatusBadge } from './SuggestionStatusBadge'
 
 const COLUMN_IDS = ['event_date', 'amount', 'status', 'source', 'notes']
-
-const formatCurrency = (amount: number, currency: string) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount)
-
-const formatDate = (iso: string) =>
-  new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
 /** Most-informative timestamp: completed > acted-on > updated > created */
 const eventDate = (item: TransferSuggestion): string =>
@@ -46,23 +43,6 @@ export function HistoryTab({
   const currentPage = Math.floor(offset / limit) + 1
   const totalPages = Math.ceil(total / limit)
   const showPagination = total > limit
-
-  if (isLoading) {
-    return (
-      <div className="animate-pulse space-y-3 p-4">
-        {[0, 1, 2].map((i) => <div key={i} className="h-12 rounded bg-muted" />)}
-      </div>
-    )
-  }
-
-  if (items.length === 0) {
-    return (
-      <div className="py-16 text-center text-muted-foreground">
-        <p className="text-base font-medium">No completed or past suggestions yet</p>
-        <p className="text-sm mt-1">Your accepted, rejected, and expired suggestions will appear here.</p>
-      </div>
-    )
-  }
 
   const columns: ColumnDef<TransferSuggestion>[] = [
     {
@@ -132,7 +112,16 @@ export function HistoryTab({
         onFiltersChange={() => {}}
         columnSizing={sizing}
         onColumnSizingChange={onSizingChange}
-        maskedColumnIds={['amount']}
+        loading={isLoading}
+        skeletonRows={3}
+        maskedColumnIds={['amount', 'notes']}
+        emptyState={
+          <EmptyState
+            icon={<History />}
+            title="No completed or past suggestions yet"
+            description="Your accepted, rejected, and expired suggestions will appear here."
+          />
+        }
       />
       {showPagination && (
         <div className="p-4 border-t border-border">

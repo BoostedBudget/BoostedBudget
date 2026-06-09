@@ -773,8 +773,8 @@ type TransferSuggestion struct {
 	MatchedTransactionAt *time.Time `json:"matched_transaction_at,omitempty" db:"-"`
 
 	// CanConfirmMatch is a server-derived flag set by the API handler before masking.
-	// True when matched_transaction_id is non-nil (a fuzzy-match reservation exists) so
-	// the Boosts UI can enable/disable the "Mark Done" button accurately.
+	// True when the suggestion is accepted AND holds a reservation (matched_transaction_id
+	// non-nil), allowing the Boosts UI to enable the "Mark Done" button accurately.
 	// Computed before maskReservation clears matched_transaction_id, so the UI always
 	// receives the correct value regardless of the masking applied.
 	CanConfirmMatch *bool `json:"can_confirm_match,omitempty" db:"-"`

@@ -1,17 +1,13 @@
-import { Check, X } from 'lucide-react'
+import { Check, X, TrendingUp } from 'lucide-react'
 import type { TransferSuggestion } from '@boostedbudget/api-client/models'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
+import { formatCurrency, formatDate } from '../constants'
 
 const COLUMN_IDS = ['date', 'amount', 'destination', 'context', 'actions']
-
-const formatCurrency = (amount: number, currency: string) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount)
-
-const formatDate = (iso: string) =>
-  new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
 export interface ActiveRecommendationsTabProps {
   items: TransferSuggestion[]
@@ -29,23 +25,6 @@ export function ActiveRecommendationsTab({
   isPending,
 }: ActiveRecommendationsTabProps) {
   const { sizing, onSizingChange } = useTablePreferences('boosts-active', COLUMN_IDS)
-
-  if (isLoading) {
-    return (
-      <div className="animate-pulse space-y-3 p-4">
-        {[0, 1, 2].map((i) => <div key={i} className="h-12 rounded bg-muted" />)}
-      </div>
-    )
-  }
-
-  if (items.length === 0) {
-    return (
-      <div className="py-16 text-center text-muted-foreground">
-        <p className="text-base font-medium">No active recommendations</p>
-        <p className="text-sm mt-1">Your budgets are on track — we'll notify you when there's a move to make.</p>
-      </div>
-    )
-  }
 
   const columns: ColumnDef<TransferSuggestion>[] = [
     {
@@ -68,7 +47,7 @@ export function ActiveRecommendationsTab({
       defaultSize: 160,
       minSize: 110,
       render: (item) => (
-        <span className="text-sm font-medium">{item.to_account_name ?? '—'}</span>
+        <span className="text-sm font-medium">{item.to_account_name ?? 'No destination'}</span>
       ),
     },
     {
@@ -131,7 +110,16 @@ export function ActiveRecommendationsTab({
       onFiltersChange={() => {}}
       columnSizing={sizing}
       onColumnSizingChange={onSizingChange}
-      maskedColumnIds={['amount']}
+      loading={isLoading}
+      skeletonRows={3}
+      maskedColumnIds={['amount', 'destination', 'context']}
+      emptyState={
+        <EmptyState
+          icon={<TrendingUp />}
+          title="No active recommendations"
+          description="Your budgets are on track — we'll notify you when there's a move to make."
+        />
+      }
     />
   )
 }
